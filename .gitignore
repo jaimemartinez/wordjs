@@ -23,6 +23,11 @@ backend/wordjs-config.json
 **/wordjs-config*.json
 gateway/gateway-config.json
 gateway-registry.json
+# The host policy the backend pushes to the gateway (POST /host-policy) and its write-in-progress temp
+# files. Per-install state: a copy committed or shipped would make another install answer 421 on every
+# address but the one it names.
+gateway/gateway-host-policy.json
+gateway/gateway-host-policy.json.*.tmp
 **/certs/
 *.key
 *.crt

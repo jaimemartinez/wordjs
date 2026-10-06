@@ -84,6 +84,17 @@ const AUDIT_ACTIONS = Object.freeze({
     // ── Configuration ───────────────────────────────────────────────────────────────────────────────
     SETTINGS_UPDATE: 'settings.update',
 
+    // ── The site's addresses (core/site-address) ─────────────────────────────────────────────────────
+    // Each change of where the site lives is recorded with {from, to, added, removed, via, force}: the
+    // main address is the base of every emailed link, so a move is security-relevant on its own.
+    SITE_ADDRESS_CANONICAL: 'site.address.canonical',
+    SITE_ADDRESS_ALIASES: 'site.address.aliases',
+    SITE_ADDRESS_POLICY: 'site.address.policy',
+    // An AUTOMATIC change: the same host moving http → https with the gateway, the repair of the old
+    // `https,http://host` corruption. Separate from canonical so "which moves did a person make" is one query.
+    SITE_ADDRESS_REPAIR: 'site.address.repair',
+    SITE_ADDRESS_CONFLICT_RESOLVED: 'site.address.conflict_resolved',
+
     // ── The log about the log ───────────────────────────────────────────────────────────────────────
     AUDIT_PRUNE: 'audit.prune'
 } as const);

@@ -168,6 +168,12 @@ function upstreamPath(target, requestUrl) {
  * (`next/dist/server/lib/router-utils/proxy-request.js`). The backend's Origin/Referer CSRF check and
  * its host guards therefore see exactly what they saw through the rewrite.
  *
+ * `x-forwarded-proto` is PINNED to the scheme this server received the request on. Copying the
+ * client's own value through would let a plain-http client claim https: a backend on this machine
+ * believes forwarded headers from a loopback hop that addressed it as loopback, and that claim decides
+ * the session cookie's Secure flag and whether a non-canonical address may sign in. A replica behind a
+ * TLS-terminating balancer therefore reports `http`, which can only refuse a sign-in, never grant one.
+ *
  * Streaming is the point, not a detail: `/api/v1/collab/:id/stream` is a live SSE channel, so the
  * response is piped straight through with no buffering, no aggregation and NO proxy timeout (Next's
  * proxy imposes 30s, which its 15s keepalive stays under — here there is nothing to trip over at
@@ -182,6 +188,7 @@ function proxyToBackend(req, res, target, options) {
     const headers = Object.assign({}, req.headers, {
         host: base.host,
         'x-forwarded-host': req.headers.host || '',
+        'x-forwarded-proto': req.socket && req.socket.encrypted ? 'https' : 'http',
     });
     // Hop-by-hop headers belong to THIS connection and must not be relayed to the next one.
     delete headers.connection;

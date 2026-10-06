@@ -9,6 +9,11 @@ const express = require('express');
 const router = express.Router();
 const Post = require('../models/Post');
 const { getOption } = require('../core/options');
+// THE ONE LINK BASE (core/site-address): the `siteurl` mirror, else the configured main address. These
+// documents are cached publicly and read by crawlers, so they must never print the Host a request
+// happened to carry — that fallback let anyone who reached the site under another name (an IP, an
+// alias, a forged Host) write that name into the sitemap, robots.txt and every feed.
+const { linkBase } = require('../core/site-address');
 const { generateSitemap, generateRobotsTxt, generateRssFeed } = require('../core/seo-helper');
 const {
     SITEMAP_MAX_URLS,
@@ -190,8 +195,8 @@ async function sitemapGroups(content: any[], siteUrl: string) {
  * moment: while the site is small the children do not exist (a chunk URL is a 404, not a second copy
  * of the same URLs), and while it is chunked the index advertises every child that answers.
  */
-async function sitemapPlan(req: Request) {
-    const siteUrl = await getOption('siteurl', `${req.protocol}://${req.get('host')}`);
+async function sitemapPlan() {
+    const siteUrl = await linkBase();
     const content = await loadSitemapContent();
     const visible = content.filter((post: any) => post.postStatus === 'publish' && !post.noindex && post.postName);
     const chunked = visible.length + 1 > SITEMAP_MAX_URLS; // + the homepage
@@ -222,7 +227,7 @@ async function sitemapPlan(req: Request) {
  */
 router.get('/sitemap.xml', async (req: Request, res: Response) => {
     try {
-        const plan = await sitemapPlan(req);
+        const plan = await sitemapPlan();
 
         const xml = plan.chunked
             ? generateSitemapIndex(plan.chunks, { siteUrl: plan.siteUrl })
@@ -264,7 +269,7 @@ router.get('/sitemap.xml', async (req: Request, res: Response) => {
  */
 router.get('/sitemap-:kind-:page.xml', async (req: Request, res: Response) => {
     try {
-        const plan = await sitemapPlan(req);
+        const plan = await sitemapPlan();
 
         // The chunk is looked up in the SAME list the index advertises, so a name the index never
         // printed is a 404 rather than an empty urlset — including every chunk of a site that has
@@ -302,7 +307,7 @@ router.get('/sitemap-:kind-:page.xml', async (req: Request, res: Response) => {
  */
 router.get('/robots.txt', async (req: Request, res: Response) => {
     try {
-        const siteUrl = await getOption('siteurl', `${req.protocol}://${req.get('host')}`);
+        const siteUrl = await linkBase();
         const robotsTxt = generateRobotsTxt(siteUrl, publicSeoUrl(siteUrl, 'sitemap.xml'));
 
         res.set('Content-Type', 'text/plain');
@@ -341,8 +346,8 @@ router.get('/robots.txt', async (req: Request, res: Response) => {
  * The item count comes from `posts_per_rss` when an admin has set it and otherwise stays at the 20
  * this route has always sent — see resolveFeedLimit for why `posts_per_page` is NOT the fallback.
  */
-async function feedChannel(req: Request) {
-    const siteUrl = await getOption('siteurl', `${req.protocol}://${req.get('host')}`);
+async function feedChannel() {
+    const siteUrl = await linkBase();
     return {
         siteUrl,
         title: await getOption('blogname', 'WordJS Site'),
@@ -361,7 +366,7 @@ function sendFeed(res: Response, contentType: string, body: string) {
 
 router.get('/feed.xml', async (req: Request, res: Response) => {
     try {
-        const channel = await feedChannel(req);
+        const channel = await feedChannel();
         const posts = await Post.findAll({ type: 'post', status: 'publish', limit: channel.limit });
         // The self link is stated rather than left to the generator's default: that default is
         // `<siteUrl>/feed`, an address nothing has ever served, so this channel was the only one
@@ -392,7 +397,7 @@ router.get('/feed.xml', async (req: Request, res: Response) => {
  */
 router.get('/feed.atom', async (req: Request, res: Response) => {
     try {
-        const channel = await feedChannel(req);
+        const channel = await feedChannel();
         const posts = await Post.findAll({ type: 'post', status: 'publish', limit: channel.limit });
         const xml = generateAtomFeed(feedItems(posts, channel), {
             ...channel,
@@ -423,7 +428,7 @@ router.get('/feed.atom', async (req: Request, res: Response) => {
  */
 router.get('/feed.json', async (req: Request, res: Response) => {
     try {
-        const channel = await feedChannel(req);
+        const channel = await feedChannel();
         const posts = await Post.findAll({ type: 'post', status: 'publish', limit: channel.limit });
         const json = generateJsonFeed(feedItems(posts, channel), {
             ...channel,
@@ -447,7 +452,7 @@ router.get('/feed.json', async (req: Request, res: Response) => {
  * everything a reader can tell apart, so a category feed cannot end up shaped unlike the site feed.
  */
 async function sendScopedRss(req: Request, res: Response, scope: { posts: any[]; name: string; link: string; selfPath: string }) {
-    const channel = await feedChannel(req);
+    const channel = await feedChannel();
     const xml = generateRssFeed(scope.posts, {
         ...channel,
         title: `${channel.title} — ${scope.name}`,
@@ -513,7 +518,7 @@ async function sendTermFeed(req: Request, res: Response, taxonomy: string, prefi
     if (!term) return feedNotFound(res);
 
     const canonical = String(term.slug || slug);
-    const channel = await feedChannel(req);
+    const channel = await feedChannel();
     const posts = await postsInTerm(term.term_taxonomy_id, channel.limit);
 
     await sendScopedRss(req, res, {
@@ -643,7 +648,7 @@ router.get('/author/:slug/feed.xml', async (req: Request, res: Response) => {
         // output: the lookup above accepts it for a nicename-less row so an old subscription keeps
         // working, but a channel that printed it would publish the sign-in name of an account.
         const canonical = String(user.user_nicename || user.id);
-        const channel = await feedChannel(req);
+        const channel = await feedChannel();
         const posts = await Post.findAll({ type: 'post', status: 'publish', author: user.id, limit: channel.limit });
 
         await sendScopedRss(req, res, {
@@ -675,7 +680,7 @@ router.get('/author/:slug/feed.xml', async (req: Request, res: Response) => {
  */
 router.get('/comments/feed.xml', async (req: Request, res: Response) => {
     try {
-        const channel = await feedChannel(req);
+        const channel = await feedChannel();
 
         // APPROVED comments on PUBLISHED, unprotected content only, and only the columns a reader may
         // see: the public comments API withholds the commenter's e-mail and IP from everyone but a

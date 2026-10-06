@@ -56,14 +56,21 @@ Both variables live in `.env`:
 | Variable | Default | Notes |
 |---|---|---|
 | `WORDJS_INSTALL_TOKEN` | *(empty)* | Must be **≥ 16 characters** or it is ignored with a warning and a random token is minted. Setting it here (step 1) is the recommended path. Empty is fine — the app mints one and writes it to `backend/data/install-token` (`0600`) in the `wordjs-data` volume; read it with `docker compose exec wordjs cat /app/backend/data/install-token`, **not** from the logs, where it appears only under `WORDJS_PRINT_INSTALL_TOKEN=1` (or on a TTY) |
-| `WORDJS_SITE_URL` | `http://localhost:3000` | **Only written into the config when `WORDJS_PRESEED_CONFIG=1`**, which this stack does not set. In setup mode the origin that lands in `siteUrl` is the one the wizard POSTs to `/api/v1/setup/install` — here the variable just decorates the entrypoint's "finish setup at …" log line |
+| `WORDJS_SITE_URL` | `http://localhost:3000` | **A suggestion for the install wizard, not the site's address.** The wizard prefills its *Site address* field with the address you are browsing and, when this value is not a loopback address, offers it as "the server's suggested address". It never overrides an installed main address. It is written into the config only under `WORDJS_PRESEED_CONFIG=1`, which this stack does not set, and it also labels the entrypoint's "finish setup at …" log line |
 
-Serving on a real domain? **Run the wizard at that domain** — the origin you install from is what gets
-written to `siteUrl` and feeds the CSRF/CORS origin checks. Terminate TLS in your proxy and forward the
-original `Host`: the app compares it against the configured `siteUrl` and answers `409` on a mismatch.
-Setting `WORDJS_SITE_URL=https://example.com` does not do that for you unless you also set
-`WORDJS_PRESEED_CONFIG=1` — which skips the wizard entirely and creates no administrator. Set it anyway
-for the log line, and so a later pre-seed of the same site agrees with what the wizard wrote.
+Serving on a real domain? **Set the wizard's *Site address* to that domain** (`https://example.com`):
+the main address is the base of every link and email the site sends. Set `WORDJS_SITE_URL` to it as well
+and the wizard offers it with one click, even when you run the wizard through `http://localhost:3000`.
+The site then answers that domain, any other address you add later (Settings → Site address, or
+`docker compose exec wordjs npm run site -- add https://www.example.com`), `localhost` and, by default,
+IP addresses; any other name gets `421`.
+
+Terminate TLS in your proxy and **forward the browser's `Host`** (nginx: `proxy_set_header Host $host`).
+A proxy that sends its upstream name instead (`wordjs:3000`, nginx's default `$proxy_host`) gets `421`,
+and the log says the proxy is not forwarding `Host`. To let addresses other than the main one sign in
+over https, also add `WORDJS_TRUST_PROXY` under the service's `environment:` in `docker-compose.yml`,
+set to the proxy's address or network (e.g. `172.16.0.0/12` for a proxy container on a compose
+network); otherwise the app sees plain http inside the container and only the main address can sign in. See [`documentation/site-address.md`](../../documentation/site-address.md).
 
 ## Data and backups
 

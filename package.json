@@ -25,6 +25,7 @@
     "install:setup": "cd setup && npm install",
     "setup": "node setup/index.js --install",
     "migrate": "node setup/index.js --migrate",
+    "site": "node backend/scripts/site-address.js",
     "cluster": "node scripts/cluster.js",
     "node:join": "node scripts/node-join.js",
     "gate:separate": "node scripts/separate-mode-gate.mjs",

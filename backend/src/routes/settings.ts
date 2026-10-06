@@ -127,10 +127,22 @@ const ALL_SETTINGS = [
 // nothing reconciles a value written by hand — the site would render a structure the theme never
 // declared, until the next activation silently replaced it. ('active_theme_mods' is deliberately NOT
 // here: the customizer saves through this very API, and the overlay sanitizes it at render time.)
+// 'siteurl' / 'home' are MIRRORS of the site's main address, written only by core/site-address together
+// with wordjs-config.json (PUT /api/v1/site-address/canonical: session, MFA, password, audit, notice to
+// every administrator). Written here they had no validator and no re-authentication, and they are the
+// base of every password-reset link — a settings save could redirect the site's tokens to any host.
 const DEDICATED_WRITE_API = new Set([
     'site_chrome_header', 'site_chrome_footer', 'site_chrome_announcement',
     'template', 'stylesheet', 'active_theme_layout',
+    'siteurl', 'home',
 ]);
+
+/** Where a key that refuses the generic writers is changed instead, for the 400 that names it. */
+function dedicatedApiFor(key: string): string {
+    if (key.startsWith('site_chrome_')) return 'PUT /api/v1/chrome/:part';
+    if (key === 'siteurl' || key === 'home') return 'PUT /api/v1/site-address/canonical (Settings → Site address)';
+    return 'POST /api/v1/themes/:slug/activate';
+}
 
 // Public settings that are DERIVED, not stored. Computed per request from the memoized theme scan
 // (core/themes), so they add no SQL and no fs to the read path — and deliberately absent from
@@ -569,7 +581,7 @@ router.put('/:key', authenticate, isAdmin, asyncHandler(async (req: Request, res
         return res.status(400).json({
             code: 'rest_invalid_param',
             message: DEDICATED_WRITE_API.has(key)
-                ? 'This setting is managed by its dedicated API (PUT /api/v1/chrome/:part).'
+                ? `This setting is managed by its dedicated API (${dedicatedApiFor(key)}).`
                 : 'Invalid setting key.',
             data: { status: 400 }
         });

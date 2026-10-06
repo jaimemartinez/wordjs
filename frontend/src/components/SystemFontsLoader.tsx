@@ -1,8 +1,19 @@
 "use client";
 
 import { useEffect } from "react";
-import { apiGet } from "@/lib/api";
+import { apiGet, isHostNotAllowed } from "@/lib/api";
 import { buildFontFaceCss, type WjsFont } from "@/lib/fontFaceCss";
+
+/**
+ * Whether a failed /fonts read is worth reporting. Two refusals are expected and are not font failures,
+ * so neither is surfaced (either would also raise the dev error overlay): during first-run setup the API
+ * answers "not installed", and on an address the site does not serve it answers 421, which the root
+ * layout's HostNotAllowedNotice already explains to the visitor.
+ */
+export function isFontLoadFailure(error: unknown): boolean {
+    if (isHostNotAllowed(error)) return false;
+    return !/not installed/i.test((error as { message?: string } | null)?.message || '');
+}
 
 // Client-side @font-face injector. The public <head> already carries these faces from SSR (see
 // app/layout.tsx) so first paint is correct; this refreshes them on the client to pick up fonts
@@ -29,13 +40,8 @@ export function SystemFontsLoader() {
                     styleEl.textContent = css;
                 }
 
-            } catch (error: any) {
-                // During first-run setup the API legitimately returns "not installed";
-                // that's expected, so don't surface it as an error (it would trigger the
-                // dev error overlay on the install wizard).
-                if (!/not installed/i.test(error?.message || '')) {
-                    console.error("Failed to load system fonts:", error);
-                }
+            } catch (error: unknown) {
+                if (isFontLoadFailure(error)) console.error("Failed to load system fonts:", error);
             }
         };
 

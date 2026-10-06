@@ -12,7 +12,6 @@ const dns = require('dns').promises;
 // canonically, prove containment on the value that is RETURNED.
 const { resolveCertDir, resolveWithin } = require('./safe-path');
 
-const CONFIG_PATH = path.resolve(__dirname, '../../wordjs-config.json');
 const DATA_DIR = path.resolve(__dirname, '../../data/ssl'); // Store ACME account keys here
 const LIVE_DIR = path.resolve(__dirname, '../../ssl/live'); // Store real certs here
 const WWW_ROOT = path.resolve(__dirname, '../../public'); // For HTTP-01
@@ -39,6 +38,104 @@ function certFile(domainDir: string, name: string): string {
 function writePrivateKey(filePath: string, content: any) {
     fs.writeFileSync(filePath, content, { mode: 0o600 });
     try { fs.chmodSync(filePath, 0o600); } catch { /* chmod is a no-op on some filesystems (e.g. Windows) */ }
+}
+
+/**
+ * THE GATEWAY'S CONTROL PLANE — every call this module makes to the gateway (certificate upload, the
+ * TLS/port switch, the main address, the host policy, the info probe) goes through ONE dialler.
+ *
+ * WHERE: on a cluster-ENROLLED node (scripts/node-join.js: `advertiseHost` is set, the same discriminator
+ * frontend-purge's purgeTransport and the installer's isEnrolledConfig use), the configured `gatewayHost`
+ * on `gatewayInternalPort` — the gateway is another machine, and its identity is verified by its own name,
+ * which is what the cluster CA issued it for (scripts/cluster.js). Everywhere else the loopback address on
+ * `gatewayInternalPort`, verified as `localhost`, exactly as before. These calls used to be pinned to
+ * `https://127.0.0.1:3100`, so a separate-mode backend could never push a certificate or an address to
+ * its gateway, and a gateway moved to another internal port silently stopped hearing about TLS changes.
+ *
+ * WHY NOT gatewayHost ALONE: single-host installs made before the enrolment model also carry a
+ * gatewayHost — the installer wrote `gateway.<domain>` (or the raw IP of an IP install) there, a name that
+ * usually does not resolve, and an address the gateway's internal listener (bound to 127.0.0.1 by
+ * default) does not answer on. Dialling it broke the SSL switch, the certificate push after every ACME
+ * renewal and the R1 upgrade on every such install. Their service certificates carry localhost and
+ * 127.0.0.1, so the loopback dial still verifies.
+ *
+ * WITH WHAT: the cluster CA and this node's CN=backend identity, resolved by the ONE resolver for those
+ * paths (frontend-purge clusterCertPaths: anchored to the installation, absolute paths untouched).
+ * Verification is never relaxed: these requests carry private keys and the site's identity.
+ */
+/** The error code of a node that has no cluster identity yet (never enrolled / installed standalone). */
+const NO_CLUSTER_IDENTITY = 'WJS_NO_CLUSTER_IDENTITY';
+
+function gatewayControlTarget(cfg: any): { hostname: string; port: number; servername?: string } {
+    const configured = typeof cfg.gatewayHost === 'string' ? cfg.gatewayHost.trim().replace(/^\[(.*)\]$/, '$1') : '';
+    const port = Number(cfg.gatewayInternalPort) || 3100;
+    if (!configured || configured.toLowerCase() === 'localhost' || !cfg.advertiseHost) {
+        return { hostname: '127.0.0.1', port, servername: 'localhost' };
+    }
+    return { hostname: configured, port };
+}
+
+function gatewayControlRequest(method: 'GET' | 'POST', urlPath: string, body: unknown, timeoutMs: number): Promise<{ status: number; text: string }> {
+    const cfg = require('./configManager').getConfig() || {};
+    const { clusterCertPaths } = require('./frontend-purge');
+    const paths = clusterCertPaths(cfg);
+    if (!cfg.mtls || !fs.existsSync(paths.key)) {
+        return Promise.reject(Object.assign(new Error('Backend mTLS Key not found'), { code: NO_CLUSTER_IDENTITY }));
+    }
+    const https = require('https');
+    const target = gatewayControlTarget(cfg);
+    const payload = body === null ? null : JSON.stringify(body);
+    return new Promise((resolve, reject) => {
+        const req = https.request({
+            method,
+            hostname: target.hostname,
+            port: target.port,
+            path: urlPath,
+            ...(target.servername ? { servername: target.servername } : {}),
+            key: fs.readFileSync(paths.key),
+            cert: fs.readFileSync(paths.cert),
+            ca: fs.existsSync(paths.ca) ? fs.readFileSync(paths.ca) : undefined,
+            rejectUnauthorized: true,
+            // A pooled agent keyed on these options would outlive a certificate rotation: one-shot sockets.
+            agent: false,
+            timeout: timeoutMs,
+            headers: payload === null ? {} : { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+        }, (res: any) => {
+            let text = '';
+            res.on('data', (chunk: any) => { text += chunk; });
+            res.on('end', () => resolve({ status: res.statusCode, text }));
+        });
+        req.on('timeout', () => req.destroy(new Error('Gateway control plane timed out')));
+        req.on('error', (e: any) => reject(e));
+        if (payload !== null) req.write(payload);
+        req.end();
+    });
+}
+
+/** The gateway's own error text for a non-200 answer, else a generic one. */
+function gatewayError(status: number, text: string): Error {
+    try {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed.error === 'string') return new Error(parsed.error);
+    } catch { /* not JSON */ }
+    return new Error(`Gateway returned ${status}`);
+}
+
+/**
+ * The names ONE certificate order covers (multi-identifier ACME: the main address and its www/apex twin
+ * can share one certificate). Each name must be storable as a certificate directory name — the same gate
+ * the single-name flow always had, applied BEFORE any CA work — and the first one names the directory.
+ * Duplicates collapse, order is kept, and Let's Encrypt's cap of 100 names per order is enforced here.
+ */
+function certificateNames(input: unknown): string[] {
+    const list = (Array.isArray(input) ? input : [input]).map((d) => String(d === undefined || d === null ? '' : d).trim().toLowerCase());
+    const names = [...new Set(list.filter((d) => d !== ''))];
+    if (names.length === 0) throw new Error('Invalid domain "" — expected a DNS name such as "example.com".');
+    if (names.length > 100) throw new Error('A certificate can cover at most 100 names.');
+    for (const name of names) {
+        if (resolveCertDir(LIVE_DIR, name) === null) throw new Error(`Invalid domain ${JSON.stringify(name)} — expected a DNS name such as "example.com".`);
+    }
+    return names;
 }
 
 class CertManager {
@@ -122,104 +219,104 @@ class CertManager {
         return this.client.finalizeOrder(order, csr);
     }
 
-    async createOrder(domain: string, type = 'http-01') {
+    /**
+     * Open ONE order for every name and return, per authorization, what proving it takes. An
+     * authorization the CA already validated (Let's Encrypt reuses them for ~30 days) comes back WITHOUT
+     * a challenge menu and needs nothing but finalization — demanding a challenge there used to leave an
+     * already-proven name permanently unable to obtain a certificate, by EITHER method; that is exactly
+     * the state a successful validation followed by a failed finalize leaves behind.
+     */
+    async createOrderFor(domains: string[], type = 'http-01') {
         if (!this.client) throw new Error('Client not initialized. Call initClient first.');
 
-        const order = await this.client.createOrder({ identifiers: [{ type: 'dns', value: domain }] });
+        const order = await this.client.createOrder({ identifiers: domains.map((value) => ({ type: 'dns', value })) });
         const authorizations = await this.client.getAuthorizations(order);
-        const authz = authorizations[0];
-
-        // ALREADY PROVEN. A CA reuses an authorization it has validated (Let's Encrypt: ~30 days), and
-        // returns it WITHOUT the challenge menu a pending one offers — there is nothing left to prove.
-        // Demanding a challenge here threw "Challenge type <type> not found for this domain" and left a
-        // domain that had ALREADY passed validation permanently unable to obtain a certificate by
-        // EITHER method: the order is `ready` and needs nothing but finalization. Exactly what a
-        // successful validation followed by a failed finalize leaves behind.
-        if (authz.status === 'valid') {
-            return {
-                orderUrl: order.url,
-                authzUrl: authz.url,
-                alreadyValid: true,
-                challenge: null,
-                keyAuthorization: null,
-                dnsRecord: `_acme-challenge.${domain}`
-            };
+        const out = [];
+        for (let i = 0; i < authorizations.length; i++) {
+            const authz = authorizations[i];
+            const domain = (authz.identifier && authz.identifier.value) || domains[i] || domains[0];
+            if (authz.status === 'valid') {
+                out.push({ domain, authzUrl: authz.url, alreadyValid: true, challenge: null, keyAuthorization: null, dnsRecord: `_acme-challenge.${domain}` });
+                continue;
+            }
+            const challenge = authz.challenges.find((c: any) => c.type === type);
+            if (!challenge) throw new Error(`Challenge type ${type} not found for this domain (${domain}).`);
+            // getChallengeKeyAuthorization() is challenge-type-aware — for http-01 it returns the file
+            // content (`token.thumbprint`), for dns-01 the FINAL TXT value, ALREADY digested per RFC 8555
+            // §8.4 (base64url(sha256(`token.thumbprint`))). Never hash it again.
+            const keyAuthorization = await this.client.getChallengeKeyAuthorization(challenge);
+            out.push({ domain, authzUrl: authz.url, alreadyValid: false, challenge, keyAuthorization, dnsRecord: `_acme-challenge.${domain}` });
         }
+        return { orderUrl: order.url, authorizations: out };
+    }
 
-        const challenge = authz.challenges.find((c: any) => c.type === type);
-
-        if (!challenge) throw new Error(`Challenge type ${type} not found for this domain.`);
-
-        const keyAuthorization = await this.client.getChallengeKeyAuthorization(challenge);
-
-        // State to return to UI.
-        // NOTE: getChallengeKeyAuthorization() is challenge-type-aware — for http-01 it returns the
-        // file content (`token.thumbprint`), for dns-01 it returns the FINAL TXT value, ALREADY
-        // digested per RFC 8555 §8.4 (base64url(sha256(`token.thumbprint`))). Never hash it again.
+    /** One name, in the shape the two-step DNS-01 flow hands to the browser and back. */
+    async createOrder(domain: string, type = 'http-01') {
+        const { orderUrl, authorizations } = await this.createOrderFor([domain], type);
+        const authz = authorizations[0];
         return {
-            orderUrl: order.url,
-            challenge,
-            authzUrl: authz.url,
-            keyAuthorization,
-            dnsRecord: `_acme-challenge.${domain}` // For DNS-01
+            orderUrl,
+            authzUrl: authz.authzUrl,
+            ...(authz.alreadyValid ? { alreadyValid: true } : {}),
+            challenge: authz.challenge,
+            keyAuthorization: authz.keyAuthorization,
+            dnsRecord: authz.dnsRecord,
         };
     }
 
     /**
-     * Start DNS-01 Challenge Flow
-     * Returns the TXT record details for user to add to their DNS
+     * Auto-provision over HTTP-01: one order, one certificate, for one name or several (the first names
+     * the storage directory and the certificate's CN; every name is a subjectAltName). Each name's
+     * challenge is served and completed, then all of them are awaited, then the order is finalized.
      */
-    /**
-     * Auto Provision HTTP-01
-     */
-    async provisionAutoHTTP(domain: string, email: string, useStaging = false) {
+    async provisionAutoHTTP(domainOrDomains: string | string[], email: string, useStaging = false) {
         try {
-            // The name is resolved to its storage directory BEFORE any network work: a name that
-            // cannot be stored must not cost the CA an order, and refusing here means the value used
-            // at step 5 is the one that was proved contained (not a re-join of the raw argument).
-            const domainDir = resolveCertDir(LIVE_DIR, domain);
-            if (domainDir === null) throw new Error(`Invalid domain ${JSON.stringify(String(domain))} — expected a DNS name such as "example.com".`);
-            console.log(`[CertManager] Starting HTTP-01 provisioning for ${domain}...`);
+            // The names are resolved to a storage directory BEFORE any network work: a name that cannot
+            // be stored must not cost the CA an order, and refusing here means the value used at step 5
+            // is the one that was proved contained (not a re-join of the raw argument).
+            const domains = certificateNames(domainOrDomains);
+            const domain = domains[0];
+            const domainDir = resolveCertDir(LIVE_DIR, domain) as string;
+            console.log(`[CertManager] Starting HTTP-01 provisioning for ${domains.join(', ')}...`);
             await this.initClient(email, useStaging);
 
-            // 1. Create Order
-            const orderData = await this.createOrder(domain, 'http-01');
+            // 1. Create the order
+            const orderData = await this.createOrderFor(domains, 'http-01');
 
-            // The CA may already hold a VALID authorization for this domain (it reuses them for about
-            // a month). Then there is no challenge to serve and port 80 is not needed at all — the
-            // order only has to be finalized. This is the state a successful validation followed by a
-            // failed finalize leaves behind, so skipping straight to step 4 is what recovers it.
-            if (orderData.alreadyValid) {
-                console.log('[CertManager] Authorization already valid at the CA — no challenge needed, finalizing.');
-            } else {
-                console.log('[CertManager] Order created. Challenge token:', orderData.challenge.token);
+            // The CA may already hold a VALID authorization for a name (it reuses them for about a
+            // month). Then there is no challenge to serve and port 80 is not needed for it — only the
+            // pending ones are proved, and an order whose names are all valid goes straight to step 4.
+            const pending = orderData.authorizations.filter((a: any) => !a.alreadyValid);
+            if (pending.length === 0) console.log('[CertManager] Every authorization is already valid at the CA — finalizing.');
+            for (const authz of pending) {
+                console.log(`[CertManager] Challenge for ${authz.domain}: token ${authz.challenge.token}`);
 
-                // 2. Write Challenge File
-                await this.writeChallengeFile(orderData.challenge.token, orderData.keyAuthorization);
-                console.log('[CertManager] Challenge file written.');
+                // 2. Write the challenge file
+                await this.writeChallengeFile(authz.challenge.token, authz.keyAuthorization);
 
-                // 3. Best-effort LOCAL pre-flight: it fetches http://<domain>/.well-known/... from THIS
+                // 3. Best-effort LOCAL pre-flight: it fetches http://<name>/.well-known/... from THIS
                 // machine. Behind NAT without hairpin the server often cannot reach its own public
                 // hostname even though the CA can, so a miss here must not abort the order —
                 // completeChallenge + waitForValidStatus below get the CA's authoritative verdict.
                 try {
                     await this.client.verifyChallenge(
-                        { url: orderData.authzUrl, identifier: { type: 'dns', value: domain } },
-                        orderData.challenge
+                        { url: authz.authzUrl, identifier: { type: 'dns', value: authz.domain } },
+                        authz.challenge
                     );
                 } catch (preErr: any) {
-                    console.warn('[CertManager] Local http-01 pre-verify inconclusive (continuing — the CA decides):', preErr && preErr.message);
+                    console.warn(`[CertManager] Local http-01 pre-verify for ${authz.domain} inconclusive (continuing — the CA decides):`, preErr && preErr.message);
                 }
-                await this.client.completeChallenge(orderData.challenge);
-                console.log('[CertManager] Challenge completed. Waiting for validation...');
-
-                await this.client.waitForValidStatus(orderData.challenge);
-                console.log('[CertManager] Challenge validated.');
+                await this.client.completeChallenge(authz.challenge);
+            }
+            for (const authz of pending) {
+                await this.client.waitForValidStatus(authz.challenge);
+                console.log(`[CertManager] Challenge for ${authz.domain} validated.`);
             }
 
-            // 4. Finalize
+            // 4. Finalize — every name in the CSR, or the CA refuses an order whose identifiers differ.
             const [key, csr] = await acme.forge.createCsr({
                 commonName: domain,
+                ...(domains.length > 1 ? { altNames: domains } : {}),
             });
 
             const finalized = await this.finalizeOrderByUrl(orderData.orderUrl, csr);
@@ -239,7 +336,7 @@ class CertManager {
             await this.pushCertToGateway(key.toString(), cert.toString());
             console.log('[CertManager] Certificate pushed to Gateway.');
 
-            return { success: true, message: 'Certificate provisioned and installed.' };
+            return { success: true, message: 'Certificate provisioned and installed.', domains };
 
         } catch (e) {
             console.error('[CertManager] Auto HTTP Provision Error:', e);
@@ -446,69 +543,39 @@ class CertManager {
             return this.installCertEmbedded(keyContent, certContent);
         }
         try {
-            // Read backend config for mTLS
-            let backendConfig: any = {};
-            if (fs.existsSync(CONFIG_PATH)) {
-                backendConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-            }
-
-            const MTLS_KEY = (backendConfig.mtls && backendConfig.mtls.key) ? path.resolve(__dirname, '../../' + backendConfig.mtls.key) : null;
-            const MTLS_CERT = (backendConfig.mtls && backendConfig.mtls.cert) ? path.resolve(__dirname, '../../' + backendConfig.mtls.cert) : null;
-            const MTLS_CA = (backendConfig.mtls && backendConfig.mtls.ca) ? path.resolve(__dirname, '../../' + backendConfig.mtls.ca) : null;
-
-            if (!MTLS_KEY || !fs.existsSync(MTLS_KEY)) throw new Error('Backend mTLS Key not found');
-
-            const https = require('https');
-            // SECURITY: validate the gateway's server cert. We hand the freshly-issued PRIVATE KEY to
-            // this connection, so a co-resident process that port-steals 127.0.0.1:3100 must not be able
-            // to receive it. The cluster CA is loaded as `ca`, and the gateway-internal cert carries
-            // 'localhost' + '127.0.0.1' SANs (certManager.generateServiceCert), so verifying against
-            // servername 'localhost' succeeds for the genuine gateway and fails for an impostor.
-            const agent = new https.Agent({
-                key: fs.readFileSync(MTLS_KEY),
-                cert: fs.readFileSync(MTLS_CERT),
-                ca: MTLS_CA && fs.existsSync(MTLS_CA) ? fs.readFileSync(MTLS_CA) : undefined,
-                rejectUnauthorized: true,
-                servername: 'localhost'
-            });
-
-            const gatewayUrl = `https://127.0.0.1:3100/cert-upload`;
-
-            const postData = JSON.stringify({ key: keyContent, cert: certContent });
-
-            return new Promise((resolve, reject) => {
-                const req = https.request(gatewayUrl, {
-                    method: 'POST',
-                    agent: agent,
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Content-Length': Buffer.byteLength(postData)
-                    }
-                }, (res: any) => {
-                    let data = '';
-                    res.on('data', (chunk: any) => data += chunk);
-                    res.on('end', () => {
-                        if (res.statusCode === 200) {
-                            resolve(JSON.parse(data));
-                        } else {
-                            try {
-                                const err = JSON.parse(data);
-                                reject(new Error(err.error || `Gateway returned ${res.statusCode}`));
-                            } catch (e) {
-                                reject(new Error(`Gateway returned ${res.statusCode}`));
-                            }
-                        }
-                    });
-                });
-
-                req.on('error', (e: any) => reject(e));
-                req.write(postData);
-                req.end();
-            });
+            // SECURITY: the gateway's server certificate is verified against the cluster CA before the
+            // freshly-issued PRIVATE KEY is sent, so a co-resident process that port-steals the control
+            // port cannot receive it (see gatewayControlRequest).
+            const { status, text } = await gatewayControlRequest('POST', '/cert-upload', { key: keyContent, cert: certContent }, 15000);
+            if (status !== 200) throw gatewayError(status, text);
+            return JSON.parse(text);
         } catch (e) {
             console.error('[CertManager] Push Error:', e);
             throw e;
         }
+    }
+
+    /**
+     * Tell the gateway the site's main address (core/site-address commit): it rebuilds its own links and
+     * pages from it. Same control plane, same identity and verification as the certificate push.
+     */
+    async pushSiteUrlToGateway(siteUrl: string) {
+        const { status, text } = await gatewayControlRequest('POST', '/config-update', { siteUrl }, 5000);
+        if (status !== 200) throw gatewayError(status, text);
+        return JSON.parse(text);
+    }
+
+    /**
+     * Tell the gateway which addresses the site answers (core/site-address builds the body): the inputs of
+     * host-policy buildPolicy — `{ enforce, config: { siteUrl, siteAliases, hostPolicy, trustProxy }, env,
+     * nodeEnv }`, the shape the gateway's sanitizePolicyPush accepts. The gateway stores it and its workers
+     * enforce it at the edge (pages, static trees, uploads, WebSockets, redirect aliases, R4) without a
+     * restart. Same control plane, identity and verification as every other call here.
+     */
+    async pushHostPolicyToGateway(body: { enforce: boolean; config: Record<string, unknown>; env: Record<string, string>; nodeEnv: string | null }) {
+        const { status, text } = await gatewayControlRequest('POST', '/host-policy', body, 5000);
+        if (status !== 200) throw gatewayError(status, text);
+        return JSON.parse(text);
     }
 
     /**
@@ -719,79 +786,20 @@ class CertManager {
         }
 
         try {
-            // Read backend config to find cert paths for mTLS
-            let backendConfig: any = {};
-            if (fs.existsSync(CONFIG_PATH)) {
-                backendConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+            const { status, text } = await gatewayControlRequest('GET', '/info', null, 2000);
+            if (status !== 200) return { ...defaultResult, error: `Gateway returned ${status}` };
+            try {
+                return JSON.parse(text);
+            } catch {
+                return { ...defaultResult, error: 'Invalid JSON from Gateway' };
             }
-
-            const MTLS_KEY = (backendConfig.mtls && backendConfig.mtls.key) ? path.resolve(__dirname, '../../' + backendConfig.mtls.key) : null;
-            const MTLS_CERT = (backendConfig.mtls && backendConfig.mtls.cert) ? path.resolve(__dirname, '../../' + backendConfig.mtls.cert) : null;
-            const MTLS_CA = (backendConfig.mtls && backendConfig.mtls.ca) ? path.resolve(__dirname, '../../' + backendConfig.mtls.ca) : null;
-
-            if (!MTLS_KEY || !fs.existsSync(MTLS_KEY)) throw new Error('Backend mTLS Key not found');
-
-            const https = require('https');
-            // SECURITY: validate the gateway's server cert against the cluster CA. The stale comment
-            // (rejectUnauthorized:false "because localhost might not match the CN") is wrong: the
-            // gateway-internal cert carries 'localhost' + '127.0.0.1' SANs, so verifying with
-            // servername 'localhost' matches the genuine gateway and rejects any impostor on :3100.
-            const agent = new https.Agent({
-                key: fs.readFileSync(MTLS_KEY),
-                cert: fs.readFileSync(MTLS_CERT),
-                ca: MTLS_CA && fs.existsSync(MTLS_CA) ? fs.readFileSync(MTLS_CA) : undefined,
-                rejectUnauthorized: true,
-                servername: 'localhost'
-            });
-
-            const gatewayUrl = `https://127.0.0.1:3100/info`; // Default internal port
-            // Note: If GatewayInternalPort is dynamic, we should read it from wordjs-config if available or assume standard.
-
-            // Should read gatewayInternalPort from backend config if we want to be safe?
-            // backendConfig doesn't usually track gateway's internal port unless we added it.
-            // Let's assume 3100 as per common setup.
-
-            const axios = require('axios'); // Ensure axios is available or use native https
-            // We'll use native https request to avoid implicit dependency if axios is separate, 
-            // but axios is in package.json (checked previously).
-
-            // Using a simple promise wrapper for https.get to minimize deps if needed, but axios is cleaner.
-            // Let's use axios if we are sure it's there. package.json showed it.
-            // But wait, CertManager shouldn't carry heavy deps if not needed.
-            // Let's use native https to be safe and robust.
-
-            return new Promise((resolve, reject) => {
-                const req = https.request(gatewayUrl, {
-                    method: 'GET',
-                    agent: agent,
-                    timeout: 2000
-                }, (res: any) => {
-                    let data = '';
-                    res.on('data', (chunk: any) => data += chunk);
-                    res.on('end', () => {
-                        if (res.statusCode === 200) {
-                            try {
-                                resolve(JSON.parse(data));
-                            } catch (e) {
-                                resolve({ ...defaultResult, error: 'Invalid JSON from Gateway' });
-                            }
-                        } else {
-                            resolve({ ...defaultResult, error: `Gateway returned ${res.statusCode}` });
-                        }
-                    });
-                });
-
-                req.on('error', (e: any) => {
-                    console.error('[CertManager] Gateway connection failed:', e.message);
-                    resolve({ ...defaultResult, error: 'Gateway Unreachable' });
-                });
-
-                req.end();
-            });
-
         } catch (e) {
-            console.error('[CertManager] getConfig Error:', e);
-            return { ...defaultResult, error: e.message };
+            if (e && e.code === NO_CLUSTER_IDENTITY) {
+                console.error('[CertManager] getConfig Error:', e);
+                return { ...defaultResult, error: e.message };
+            }
+            console.error('[CertManager] Gateway connection failed:', e && e.message);
+            return { ...defaultResult, error: 'Gateway Unreachable' };
         }
     }
 
@@ -812,17 +820,33 @@ class CertManager {
      * issuer-type classification. Returns null when no parseable local cert exists.
      */
     readLocalCertValidTo(domain: string): string | null {
+        const local = this.readLocalCert(domain);
+        return local ? local.validTo : null;
+    }
+
+    /**
+     * The certificate we last obtained for `domain` (its directory names it), read from disk: its expiry
+     * and every DNS name it covers (subjectAltName; the CN when a certificate carries no SAN at all).
+     * Null when no parseable certificate exists.
+     */
+    readLocalCert(domain: string): { validTo: string; names: string[] } | null {
         try {
-            // Same facade as the writer. The domain here comes from config (acme.domains[0] / the
-            // siteUrl host), but "the value happens to be trusted today" is not a property the READ
-            // should depend on — and a reader that accepts names the writer rejects would answer
-            // about a file the writer could never have produced.
+            // Same facade as the writer. The domain here comes from config (acme.domains / the siteUrl
+            // host), but "the value happens to be trusted today" is not a property the READ should
+            // depend on — and a reader that accepts names the writer rejects would answer about a file
+            // the writer could never have produced.
             const dir = resolveCertDir(LIVE_DIR, domain);
             if (dir === null) return null;
             const p = resolveWithin(dir, 'fullchain.pem');
             if (p && fs.existsSync(p)) {
                 const x509 = new (require('crypto').X509Certificate)(fs.readFileSync(p));
-                return x509.validTo;
+                const names = String(x509.subjectAltName || '').split(',').map((part: string) => part.trim())
+                    .filter((part: string) => part.startsWith('DNS:')).map((part: string) => part.slice(4).toLowerCase());
+                if (names.length === 0) {
+                    const cn = /CN=([^\n,]+)/.exec(String(x509.subject || ''));
+                    if (cn) names.push(cn[1].trim().toLowerCase());
+                }
+                return { validTo: x509.validTo, names };
             }
         } catch { /* unparseable → treat as absent */ }
         return null;
@@ -867,12 +891,16 @@ class CertManager {
             return record({ ok: false, skipped: true, reason: 'dns-01-manual', error: 'DNS-01 auto-renewal needs manual TXT publishing — use the DNS flow in the admin UI.' });
         }
 
-        // Resolve the primary domain to maintain (first configured domain, else the siteUrl host).
-        let domain = (Array.isArray(acme.domains) && acme.domains[0]) || '';
-        if (!domain && config.siteUrl) {
-            try { domain = new URL(config.siteUrl).hostname; } catch { /* ignore */ }
+        // The names to maintain: EVERY configured domain, in one certificate (the first names it), else
+        // the siteUrl host. Renewing only acme.domains[0] left every other configured name uncovered.
+        let candidates: string[] = Array.isArray(acme.domains) ? acme.domains.filter((d: any) => typeof d === 'string' && d.trim() !== '') : [];
+        if (candidates.length === 0 && config.siteUrl) {
+            try { candidates = [new URL(config.siteUrl).hostname]; } catch { /* ignore */ }
         }
-        if (!domain) return record({ ok: false, error: 'No domain configured for ACME (set acme.domains or siteUrl).' });
+        if (candidates.length === 0) return record({ ok: false, error: 'No domain configured for ACME (set acme.domains or siteUrl).' });
+        let domains: string[];
+        try { domains = certificateNames(candidates); } catch (e: any) { return record({ ok: false, error: e.message }); }
+        const domain = domains[0];
         if (!acme.email) return record({ ok: false, error: 'No ACME account email configured.' });
 
         const threshold = Number(acme.renewBeforeDays) > 0 ? Number(acme.renewBeforeDays) : 30;
@@ -882,7 +910,11 @@ class CertManager {
         // real Let's Encrypt cert, whose "Let's Encrypt" string lives in the issuer O=). Prefer the
         // locally-saved cert on disk; fall back to what the gateway reports. A non-finite result means
         // there is no parseable cert yet → first issuance, which legitimately proceeds.
-        let validTo = this.readLocalCertValidTo(domain);
+        const local = this.readLocalCert(domain);
+        let validTo = local ? local.validTo : null;
+        // A certificate that does not cover every configured name is due NOW, whatever its expiry: a
+        // name the administrator just added (the www twin) would otherwise wait months for the renewal.
+        const uncovered = local ? domains.filter((d) => !local.names.includes(d)) : [];
         if (!validTo) {
             try {
                 const cfg = await this.getConfig();
@@ -896,7 +928,7 @@ class CertManager {
         }
         const days = this.daysUntil(validTo);
 
-        if (!force && Number.isFinite(days) && days > threshold) {
+        if (!force && Number.isFinite(days) && days > threshold && uncovered.length === 0) {
             return { skipped: true, reason: 'not_due', domain, daysRemaining: Math.round(days), validTo };
         }
 
@@ -913,9 +945,9 @@ class CertManager {
 
         // Due (or forced, or no cert yet) → provision (provisionAutoHTTP saves locally + pushes to gateway).
         try {
-            console.log(`[CertManager] Auto-renewal: provisioning '${domain}' (staging=${!!acme.staging}, force=${force}, daysRemaining=${Number.isFinite(days) ? Math.round(days) : 'n/a'})`);
-            await this.provisionAutoHTTP(domain, acme.email, !!acme.staging);
-            return record({ ok: true, domain, validTo: this.readLocalCertValidTo(domain) });
+            console.log(`[CertManager] Auto-renewal: provisioning ${domains.join(', ')} (staging=${!!acme.staging}, force=${force}, daysRemaining=${Number.isFinite(days) ? Math.round(days) : 'n/a'}${uncovered.length ? `, not yet covered: ${uncovered.join(', ')}` : ''})`);
+            await this.provisionAutoHTTP(domains, acme.email, !!acme.staging);
+            return record({ ok: true, domain, domains, validTo: this.readLocalCertValidTo(domain) });
         } catch (e) {
             console.error('[CertManager] Auto-renewal failed:', e.message);
             return record({ ok: false, domain, error: e.message });
@@ -957,64 +989,15 @@ class CertManager {
      */
     async updateGatewayConfig(port: any, sslEnabled: any) {
         try {
-            // Read mTLS config from local file (only for authentication, not for storing gateway config)
-            let backendConfig: any = {};
-            if (fs.existsSync(CONFIG_PATH)) {
-                backendConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-            }
-
-            const MTLS_KEY = (backendConfig.mtls && backendConfig.mtls.key) ? path.resolve(__dirname, '../../' + backendConfig.mtls.key) : null;
-            const MTLS_CERT = (backendConfig.mtls && backendConfig.mtls.cert) ? path.resolve(__dirname, '../../' + backendConfig.mtls.cert) : null;
-            const MTLS_CA = (backendConfig.mtls && backendConfig.mtls.ca) ? path.resolve(__dirname, '../../' + backendConfig.mtls.ca) : null;
-
-            if (!MTLS_KEY || !fs.existsSync(MTLS_KEY)) throw new Error('Backend mTLS Key not found');
-
-            const https = require('https');
-            // SECURITY: validate the gateway's server cert against the cluster CA (servername 'localhost'
-            // matches the gateway-internal cert SANs) so config-update can't be hijacked by a co-resident
-            // process occupying 127.0.0.1:3100.
-            const agent = new https.Agent({
-                key: fs.readFileSync(MTLS_KEY),
-                cert: fs.readFileSync(MTLS_CERT),
-                ca: MTLS_CA && fs.existsSync(MTLS_CA) ? fs.readFileSync(MTLS_CA) : undefined,
-                rejectUnauthorized: true,
-                servername: 'localhost'
-            });
-
-            const gatewayUrl = `https://127.0.0.1:3100/config-update`;
-            const postData = JSON.stringify({
+            const { status, text } = await gatewayControlRequest('POST', '/config-update', {
                 port: port ? parseInt(port) : undefined,
                 sslEnabled: typeof sslEnabled !== 'undefined' ? !!sslEnabled : undefined
-                // Gateway will calculate siteUrl itself based on these values
-            });
-
-            return new Promise((resolve, reject) => {
-                const req = https.request(gatewayUrl, {
-                    method: 'POST',
-                    agent: agent,
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Content-Length': Buffer.byteLength(postData)
-                    }
-                }, (res: any) => {
-                    let data = '';
-                    res.on('data', (chunk: any) => data += chunk);
-                    res.on('end', () => {
-                        if (res.statusCode === 200) {
-                            const result = JSON.parse(data);
-                            console.log('[CertManager] Gateway configuration pushed successfully.');
-                            resolve(result);
-                        } else {
-                            reject(new Error(`Gateway returned ${res.statusCode}`));
-                        }
-                    });
-                });
-
-                req.on('error', (e: any) => reject(e));
-                req.write(postData);
-                req.end();
-            });
-
+                // The gateway recomputes its own siteUrl from these; the backend compares the answer
+                // with the main address (core/site-address noteGatewaySiteUrl, REDTEAM R1).
+            }, 5000);
+            if (status !== 200) throw new Error(`Gateway returned ${status}`);
+            console.log('[CertManager] Gateway configuration pushed successfully.');
+            return JSON.parse(text);
         } catch (e) {
             console.error('[CertManager] Config Push Error:', e);
             throw e;

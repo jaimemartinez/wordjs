@@ -86,6 +86,34 @@ describe('release packager — agent/assistant directories never ship', () => {
     });
 
     /**
+     * THE GATEWAY'S PUSHED HOST POLICY (gateway/gateway-host-policy.json, written by POST /host-policy,
+     * plus the temp file an interrupted push leaves next to it) is per-install state: shipped or
+     * committed, it makes another install answer 421 on every address but the one it names. Asked by
+     * NAME, in a packager that cannot reach git — the structural "untracked does not ship" rule would
+     * hide a missing entry wherever git can answer, and an archive extraction is exactly where it cannot.
+     */
+    test('the gateway\'s pushed host policy never ships, and git never tracks it', (t: any) => {
+        const rels = ['gateway/gateway-host-policy.json', 'gateway/gateway-host-policy.json.4242.tmp', 'gateway/src/host-edge.js'];
+        const script = `const path = require('path');
+const { shouldIgnore } = require(${JSON.stringify(path.join(ROOT_DIR, 'scripts', 'make-release.js'))});
+const root = ${JSON.stringify(ROOT_DIR)};
+const rels = ${JSON.stringify(rels)};
+process.stdout.write('\\nRESULT ' + JSON.stringify(rels.map((r) => shouldIgnore(path.join(root, ...r.split('/'))))) + '\\n');`;
+        const run = spawnSync(process.execPath, ['-e', script], { cwd: ROOT_DIR, encoding: 'utf8', env: { ...process.env, PATH: '' } });
+        assert.strictEqual(run.status, 0, run.stderr);
+        assert.match(run.stdout, /git unavailable/, 'the child must run the name-list fallback, not the git rule');
+        const line = run.stdout.split('\n').find((l: string) => l.startsWith('RESULT '));
+        assert.deepStrictEqual(JSON.parse(String(line).slice('RESULT '.length)), [true, true, false],
+            'the policy file and its temp sibling are excluded by name; the gateway source next to them still ships');
+
+        if (!runnableOrSkip(t, packagerCanConsultGit(), 'no git work tree: .gitignore cannot be evaluated')) return;
+        for (const rel of rels.slice(0, 2)) {
+            const ignored = spawnSync('git', ['check-ignore', '-q', '--no-index', rel], { cwd: ROOT_DIR });
+            assert.strictEqual(ignored.status, 0, `.gitignore must cover ${rel}`);
+        }
+    });
+
+    /**
      * LA REGLA ESTRUCTURAL, que es la que de verdad cierra la clase: lo que git no trackea es local
      * del desarrollador y no viaja, salvo los artefactos de build que se envían a propósito. Una
      * lista de NOMBRES siempre va un paso por detrás — se le escapó `.claude/`, y en cuanto se

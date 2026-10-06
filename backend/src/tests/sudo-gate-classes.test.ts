@@ -84,7 +84,7 @@ const metaOf = (userId: number, key: string) => dbAsync.get(
 /** Every persona that a per-door test needs its OWN copy of, so one door's failures never fund another's. */
 const DOOR_PERSONAS = ['doorMe', 'doorTwin', 'doorMfa', 'doorMfaEnable', 'doorSessions', 'doorPassword'];
 /** …and the doors that need a privileged caller to be reachable at all (DELETE /plugins/:slug is isAdmin). */
-const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin'];
+const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy'];
 
 before(async () => {
     await database.init({ driver: 'sqlite-native' });
@@ -648,6 +648,16 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
                 .send({ password: pw }),
             alsoExpect: (r) => r.status === 404,   // past the credential, refused on the merits
         },
+        // The site-address writes (routes/site-address.ts): the password is checked BEFORE the body, so a
+        // body without `rev` exercises the door and is then refused on the merits — 400 naming `rev` —
+        // without anything being written.
+        ...(['canonical', 'aliases', 'policy'] as const).map((what) => ({
+            site: `site-address.ts PUT /${what}`, name: `PUT /site-address/${what}`,
+            persona: `doorSite${what[0].toUpperCase()}${what.slice(1)}`,
+            send: (p: string, pw: string) => request(app).put(`${B}/site-address/${what}`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw }),
+            alsoExpect: (r: any) => r.status === 400 && JSON.stringify(r.body.data && r.body.data.params) === '["rev"]',
+        })),
     ];
 
     // ── THE BIJECTION: the rows and the call sites are the same set ──────────────────────────────

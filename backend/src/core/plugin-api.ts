@@ -54,11 +54,15 @@ const UPLOADS_DIR = path.join(ROOT_DIR, 'uploads');
 const PROTECTED_OPTION_RE = /secret|passw(or)?d|pwd|priv(ate)?[_-]?key|privatekey|dkim|\bkey\b|[_-]key\b|key$|api[_-]?key|token|\bsalt\b|jwt|credential|encryption|signing|certificate|\.pem|access[_-]?key/i;
 // Security-critical option NAMES that PROTECTED_OPTION_RE misses (no secret-ish word) but control
 // authorization / site integrity. Writing 'wordjs_user_roles' rewrites the role->capability map =
-// full privilege escalation; 'active_plugins' enables/disables plugins; 'siteurl' can break the
-// migration/host guard. Off-limits (read AND write) to untrusted plugins.
+// full privilege escalation; 'active_plugins' enables/disables plugins; 'siteurl' is the base of every
+// emailed link (password reset included). Off-limits (read AND write) to untrusted plugins.
 const PROTECTED_OPTION_NAMES = new Set([
     'wordjs_user_roles', 'user_roles', 'roles', 'active_plugins', 'default_role',
     'users_can_register', 'admin_email', 'siteurl', 'site_url', 'home',
+    // 'site_address_rev' is the mirror of the config's site-address revision; core/site-address compares
+    // it with the file to decide whether a change made at the server still has to be applied. A plugin
+    // that could write it could make the backend skip (or replay) a change of the site's address.
+    'site_address_rev',
     // 'admin_notices' is rendered in the admin dashboard; a plugin holding an admin-granted settings:write
     // could otherwise stash HTML there for an admin-context stored XSS. Off-limits to plugins.
     'admin_notices',
@@ -764,10 +768,12 @@ function createPluginApi(slug: string) {
         },
 
         // Non-secret site info (grant: settings:read). Avoids needing the (blocked) protected-option
-        // reads of siteurl/home/admin_email; never exposes secrets.
+        // reads of siteurl/home/admin_email; never exposes secrets. url()/domain() are the site's ONE link
+        // base (core/site-address linkBase): plugins build mail domains, HELO names and payment return
+        // URLs from them, so they follow the main address and never an alias or a request's Host.
         site: {
-            async url() { verifyPermission('settings', 'read'); const { getOption } = require('./options'); return getOption('siteurl', await getOption('home', 'http://localhost')); },
-            async domain() { verifyPermission('settings', 'read'); const { getOption } = require('./options'); try { return new URL(await getOption('siteurl', await getOption('home', 'http://localhost'))).hostname; } catch { return 'localhost'; } },
+            async url() { verifyPermission('settings', 'read'); return require('./site-address').linkBase(); },
+            async domain() { verifyPermission('settings', 'read'); try { return await require('./site-address').linkHostname(); } catch { return 'localhost'; } },
             async adminEmail() { verifyPermission('settings', 'read'); const { getOption } = require('./options'); return getOption('admin_email', ''); },
         },
 

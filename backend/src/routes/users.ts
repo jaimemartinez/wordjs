@@ -11,7 +11,23 @@ const User = require('../models/User');
 // THE DOCTRINE OF THIS ROUTER: an API token — even an administrator's — must never drive an
 // account-security operation. It is enforced ONCE, for every route, by refuseHeadlessAccountSecurity
 // below — never route by route, which is how it came to cover 2 routes out of 8.
-const { authenticate, sessionOnly } = require('../middleware/auth');
+const { authenticate, sessionOnly, sessionBoundToSecondaryAddress } = require('../middleware/auth');
+
+/**
+ * A session started at a secondary address (an alias, an IP, a tunnel name) is bound to it and dies when
+ * that address is removed. Creating an account, or changing SOMEONE ELSE'S account, would turn that
+ * revocable session into lasting access the removal cannot reach — the same reason it may not mint an
+ * API token (routes/auth.ts POST /tokens). Those operations need a main-address (or loopback) session.
+ */
+function refuseBoundSession(req: Request, res: Response): boolean {
+    if (!sessionBoundToSecondaryAddress(req)) return false;
+    res.status(403).json({
+        code: 'rest_account_bound_session',
+        message: 'Accounts can only be created or changed from a session started at the main address.',
+        data: { status: 403 }
+    });
+    return true;
+}
 const { can, isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { getRoles } = require('../core/roles');
@@ -462,6 +478,7 @@ router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
  *               $ref: '#/components/schemas/RestError'
  */
 router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    if (refuseBoundSession(req, res)) return;
     const { username, email, password, displayName, role = 'subscriber', personalEmail } = req.body;
 
     if (!username || !email || !password) {
@@ -1150,6 +1167,7 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
 
     // Users can edit themselves, admins can edit anyone
     const isOwn = req.user.id === userId;
+    if (!isOwn && refuseBoundSession(req, res)) return;
     if (!isOwn && !req.user.can('edit_users')) {
         return res.status(403).json({
             code: 'rest_forbidden',

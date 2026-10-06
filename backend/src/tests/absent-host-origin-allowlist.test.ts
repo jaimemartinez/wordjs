@@ -24,40 +24,32 @@
  * middleware/ so a THIRD copy cannot be added without triage.
  *
  * THE DERIVED INVENTORY (every construction of the shape in backend/src/routes + backend/src/middleware,
- * plus the two in index.ts, which is the same question asked at the app root):
+ * plus index.ts, which is the same question asked at the app root):
  *
  *   middleware/auth.ts  csrfProtection allow-list ....... REAL — fixed in the previous round; regression-
  *                                                        guarded here, because a twin that drifts is how
- *                                                        this class survived.
+ *                                                        this class survived. Its host now comes from
+ *                                                        core/host-policy requestHost(), which answers
+ *                                                        `undefined` (never '') for an absent Host.
  *   routes/collab.ts    sameOrigin allow-list ........... REAL — the open twin. Gates GET /collab/:id/
  *                                                        stream, which the global CSRF middleware never
  *                                                        sees (it only runs on state-changing methods),
  *                                                        so it is the ONLY gate on a live draft feed.
- *   routes/setup.ts     POST /setup/migrate newSiteUrl .. REAL — second order: it PERSISTS the derived
- *                                                        origin as config.siteUrl / the `siteurl` option,
- *                                                        and config.site.url is itself an entry of both
- *                                                        allow-lists above. An absent Host wrote
- *                                                        'http://undefined' onto that allow-list
- *                                                        permanently. Its own sibling POST /setup/install
- *                                                        already validates the same value and rejects it.
- *   routes/setup.ts     GET /setup/status detectedUrl ... NOT a defect. Builds a string it only REPORTS;
- *                                                        it writes nothing and authorises nothing, and
- *                                                        the one decision it derives already fails closed
- *                                                        (storedUrl !== 'undefined' ⇒ mismatch: true).
- *   routes/setup.ts     POST /setup/install siteUrl ..... NOT a defect. pickInstallHost() coerces the
- *                                                        absent header to '' and HOST_PATTERN rejects it
- *                                                        with a 400 before any URL is built.
- *   routes/seo.ts ×3    sitemap/robots/feed siteUrl ..... NOT this class. No allow-list and no
- *                                                        authorisation — it is the DEFAULT for the
- *                                                        `siteurl` option, used only on a site that has
- *                                                        none, and every Host value poisons those
- *                                                        generated URLs equally. A Host-in-generated-URLs
- *                                                        problem, not an allow-list one.
- *   index.ts:154        CORS same-origin ................ NOT a defect. Already fails closed:
- *                                                        `hostnameOnly(fwd || req.headers.host || '')`
- *                                                        then `if (effectiveHost && …)`.
- *   index.ts:799        migration-mismatch guard ........ NOT a defect. `|| ''` then a guard that
- *                                                        requires a truthy detectedHost; builds no origin.
+ *   routes/setup.ts     POST /setup/migrate ............. GONE — it persisted an origin derived from the
+ *                                                        request (an absent Host once wrote
+ *                                                        'http://undefined' onto both allow-lists). It is
+ *                                                        a 410 stub that reads nothing.
+ *   routes/setup.ts     GET /setup/status ............... reads no host any more.
+ *   routes/setup.ts     POST /setup/install siteUrl ..... NOT a defect. installSiteAddress() takes the
+ *                                                        host from requestAuthority() and validates the
+ *                                                        whole origin with parseSiteUrl(); an absent Host
+ *                                                        is a 400 before any URL is built.
+ *   routes/seo.ts ×3    sitemap/robots/feed siteUrl ..... GONE — the request fallback for the `siteurl`
+ *                                                        option was removed; the base is core/site-address
+ *                                                        linkBase(), which never reads the request.
+ *   index.ts            CORS same-origin ................ NOT a defect. requestHost() is `undefined` for
+ *                                                        an absent Host and the match requires it defined.
+ *   index.ts            migration-mismatch guard ........ GONE — replaced by the host gate (core/host-policy).
  */
 
 const { test, describe, before, after } = require('node:test');
@@ -223,24 +215,19 @@ describe("CLASS — an absent Host puts NO entry on the allow-list, at EVERY gat
         });
     }
 
-    // MEMBER: routes/setup.ts POST /setup/migrate. Second order, and the reason it belongs to THIS class
-    // rather than to a Host-validation one: what it derives is written to config.siteUrl and to the
-    // `siteurl` option, and config.site.url is an entry of BOTH allow-lists above — so an absent Host
-    // there installs 'http://undefined' as a same-origin PERMANENTLY, surviving every restart.
-    //
-    // The endpoint itself cannot be reached in a unit suite (it 400s on `!isInstalled()` and then demands
-    // real administrator credentials), so what is pinned is the derivation it must consume — the very one
-    // its sibling POST /setup/install has always used — plus the absence of the raw, unvalidated read.
-    test('routes/setup.ts /migrate: the site host derivation refuses an absent Host', () => {
+    // MEMBER: routes/setup.ts POST /setup/install — the one endpoint left that PERSISTS a site origin
+    // (config.siteUrl, which config.site.url and therefore BOTH allow-lists above read). Its old twin,
+    // POST /setup/migrate, wrote 'http://undefined' there on a host-less request and is now gone. The
+    // install handler cannot run in a unit suite, so what is pinned is the derivation it consumes, over
+    // the same host-less request shape the raw-socket tests above deliver.
+    test('routes/setup.ts /install: an absent Host derives NO site address (400), never "http://undefined"', () => {
         const setup = require('../routes/setup');
-        assert.strictEqual(typeof setup.pickInstallHost, 'function');
-        assert.strictEqual(setup.pickInstallHost(undefined, undefined), '',
-            'an absent X-Forwarded-Host and an absent Host must collapse to the empty string, never to "undefined"');
-        assert.ok(setup.INSTALL_HOST_PATTERN instanceof RegExp,
-            'the host allow-pattern must be shared with /migrate, not redeclared inside the /install handler');
-        assert.strictEqual(setup.INSTALL_HOST_PATTERN.test(''), false, 'an absent host must not validate');
-        assert.strictEqual(setup.INSTALL_HOST_PATTERN.test('undefined'), true,
-            'the pattern accepts the LABEL "undefined" — which is exactly why the empty string, and not a "undefined" string, must be what an absent Host produces');
+        const hostless = { headers: {}, socket: { remoteAddress: '127.0.0.1' }, body: {} };
+        const r = setup.installSiteAddress(hostless);
+        assert.ok(r && typeof r.error === 'string', `an absent Host must be refused, got ${JSON.stringify(r)}`);
+        // The LABEL `undefined` is a legal host name; it is accepted only when it really is the Host.
+        const named = setup.installSiteAddress({ headers: { host: 'undefined' }, socket: { remoteAddress: '203.0.113.5' }, body: {} });
+        assert.strictEqual(named.site && named.site.origin, 'http://undefined');
     });
 });
 
@@ -261,24 +248,81 @@ describe('RATCHET — the inventory of origin-from-Host constructions', () => {
 
     const read = (rel: string) => stripComments(fs.readFileSync(path.join(SRC, rel), 'utf8').replace(/\r\n/g, '\n'));
 
-    // A file belongs to this class when it BOTH reads a host header and builds an origin by
-    // interpolation — `http://${…}` / `https://${…}` / `${protocol}://${…}`.
-    const HOST_HEADER_READ = /req\.get\(['"](?:x-forwarded-host|host)['"]\)/i;
+    // An origin built by interpolation — `http://${…}` / `https://${…}` / `${protocol}://${…}`.
     const ORIGIN_TEMPLATE = /`(?:https?|\$\{[^}]+\}):\/\/\$\{/;
 
-    const scan = (dir: string) =>
-        fs.readdirSync(path.join(SRC, dir))
-            .filter((f: string) => f.endsWith('.ts'))
-            .map((f: string) => `${dir}/${f}`)
-            .filter((rel: string) => { const s = read(rel); return HOST_HEADER_READ.test(s) && ORIGIN_TEMPLATE.test(s); })
-            .sort();
+    /**
+     * Blank every comment (line and block, wherever it starts) but keep string literals, so a header
+     * name inside code — `req.headers['x-forwarded-host']` — still counts, while the prose that explains
+     * why nobody may write it does not.
+     */
+    const codeOnly = (src: string) => {
+        const out = src.split('');
+        let i = 0;
+        while (i < src.length) {
+            const c = src[i];
+            const d = src[i + 1];
+            if (c === '/' && d === '/') {
+                while (i < src.length && src[i] !== '\n') { out[i] = ' '; i++; }
+            } else if (c === '/' && d === '*') {
+                while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) { if (src[i] !== '\n') out[i] = ' '; i++; }
+                if (i < src.length) { out[i] = ' '; out[i + 1] = ' '; i += 2; }
+            } else if (c === '"' || c === "'" || c === '`') {
+                i++;
+                while (i < src.length && src[i] !== c) i += src[i] === '\\' ? 2 : 1;
+                i++;
+            } else {
+                i++;
+            }
+        }
+        return out.join('');
+    };
 
-    test('no UNREVIEWED file in routes/ or middleware/ builds an origin from a host header', () => {
-        // Triaged above, in the header of this file. A file appearing here that is not in this list is a
-        // NEW member of the class: decide what its undefined authorises before adding it.
-        const REVIEWED = ['middleware/auth.ts', 'routes/seo.ts', 'routes/setup.ts'];
-        assert.deepStrictEqual([...scan('routes'), ...scan('middleware')].sort(), REVIEWED,
-            'a new origin-from-Host construction appeared in routes/ or middleware/ — triage it against the inventory at the top of this file');
+    /**
+     * REDTEAM R11 — every spelling of "which host / which scheme did this request use", case-insensitive:
+     * the forwarded headers by name (X-Forwarded-Host, X-Forwarded-Proto, Forwarded), Host by any
+     * accessor (req.get / req.header / req.headers.host / req.headers['host']), and Express's own
+     * derivations of them (req.hostname, req.protocol, req.secure, which read the forwarded headers
+     * under `trust proxy`). Each one is a second answer to a question core/host-policy answers once.
+     */
+    const HOST_OR_SCHEME_READ = /x-forwarded-host|x-forwarded-proto|\b(?:req|request)\.(?:get|header)\(\s*['"`](?:host|forwarded)['"`]|\b(?:req|request)\.headers(?:\.(?:host|forwarded)\b|\[\s*['"`](?:host|forwarded)['"`]\s*\])|\b(?:req|request)\.(?:hostname|protocol|secure)\b/i;
+
+    const walkSources = (dir: string, acc: string[] = []): string[] => {
+        for (const entry of fs.readdirSync(path.join(SRC, dir), { withFileTypes: true })) {
+            const rel = dir ? `${dir}/${entry.name}` : entry.name;
+            if (entry.isDirectory()) { if (entry.name !== 'tests') walkSources(rel, acc); continue; }
+            if (/\.(ts|js)$/.test(entry.name) && !entry.name.endsWith('.d.ts')) acc.push(rel);
+        }
+        return acc;
+    };
+
+    test('scanner positive control: every spelling is caught in code and ignored in comments', () => {
+        const spellings = [
+            "req.get('x-forwarded-host')", "req.headers['X-Forwarded-Proto']", "req.get('Host')", "req.header('host')",
+            'req.headers.host', "req.headers['host']", 'req.hostname', 'req.protocol', 'req.secure', "req.headers.forwarded",
+        ];
+        for (const s of spellings) {
+            assert.ok(HOST_OR_SCHEME_READ.test(codeOnly(`const v = ${s};`)), `${s} must be caught`);
+            assert.ok(!HOST_OR_SCHEME_READ.test(codeOnly(`// ${s}\n/* ${s} */`)), `${s} in a comment must not be caught`);
+        }
+        assert.ok(!HOST_OR_SCHEME_READ.test(codeOnly("const ip = req.headers['x-forwarded-for'];")), 'X-Forwarded-For is client-ip.ts\'s business, not this rule\'s');
+    });
+
+    test('outside core/host-policy.js, nothing in backend/src reads the request\'s host or scheme (R11)', () => {
+        // PENDING: files that still read it and are being moved onto core/host-policy by the site-address
+        // work. The list must stay HONEST — an entry that no longer reads is a stale exemption and fails
+        // below, so it has to be removed in the change that fixes the file.
+        // routes/seo.ts left it when its sitemap/robots/feed base moved onto core/site-address linkBase().
+        const PENDING: string[] = [];
+        const offenders = walkSources('')
+            .filter((rel) => rel !== 'core/host-policy.js')
+            .filter((rel) => HOST_OR_SCHEME_READ.test(codeOnly(fs.readFileSync(path.join(SRC, rel), 'utf8'))))
+            .sort();
+        assert.deepStrictEqual(offenders.filter((rel) => !PENDING.includes(rel)), [],
+            'a file reads the request\'s host or scheme itself — use core/host-policy (requestAuthority / requestHost / trustedScheme), or req.siteHost behind the gate');
+        for (const rel of PENDING) {
+            assert.ok(offenders.includes(rel), `${rel} no longer reads the host — remove it from PENDING`);
+        }
     });
 
     test('there is exactly ONE implementation of the same-origin allow-list', () => {
@@ -297,17 +341,11 @@ describe('RATCHET — the inventory of origin-from-Host constructions', () => {
         assert.strictEqual(built, 2, 'both scheme entries must live inside that one guarded spread — an unguarded one is the defect');
     });
 
-    test('routes/setup.ts keeps only the ONE raw host read that authorises nothing', () => {
-        // GET /setup/status may keep it: it reports a string and derives one boolean that already fails
-        // closed. POST /setup/migrate may not: it persists what it derives into the allow-list's source.
-        const raw = (read('routes/setup.ts').match(/req\.get\('x-forwarded-host'\) \|\| req\.get\('host'\)/g) || []).length;
-        assert.strictEqual(raw, 1,
-            'only GET /setup/status (display-only) may read the host unvalidated; /migrate must use pickInstallHost + INSTALL_HOST_PATTERN like /install does');
-    });
-
-    test('index.ts asks the same question and already fails closed', () => {
+    test('index.ts asks the same question through the same derivation, and fails closed', () => {
         const index = read('index.ts');
-        assert.match(index, /hostnameOnly\(fwdHost \|\| req\.headers\.host \|\| ''\)/, 'the CORS gate must keep coercing an absent Host');
-        assert.match(index, /if \(effectiveHost && originHost === effectiveHost\)/, 'and must keep requiring a truthy host before matching');
+        assert.match(index, /const requestHost = hostPolicy\.requestHost\(req, policy\);/,
+            'the CORS gate must take the request host from core/host-policy, like csrfProtection');
+        assert.match(index, /if \(requestHost !== undefined\s*&& hostPolicy\.serialize\(originAuthority\) === requestHost/,
+            'and must require a defined host before matching');
     });
 });

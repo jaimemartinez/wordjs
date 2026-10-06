@@ -146,17 +146,79 @@ app.use(helmet({
 }));
 app.disable('x-powered-by');
 
+// THE HOST GATE — which of the site's addresses this request was sent to, and whether the site answers
+// there at all. Mounted right after helmet and BEFORE CORS, cookies, the limiters and CSRF, so an
+// address the site does not answer is refused (421 rest_host_not_allowed, no-store, no redirect and no
+// hint of the real address) before anything else spends work on it or puts a header on the response.
+// The algorithm and its eight steps live in core/host-policy hostGateFactory; the policy it applies is
+// the one process-wide provider middleware/auth.ts owns (siteHostPolicy), so the gate, CORS, CSRF, the
+// cookie rules and /setup can never read two different answers.
+//
+// What is NOT gated is exactly what the old migration guard never saw (static trees, ACME, probes —
+// core/host-policy EXEMPT_PATHS). Unlike that guard, /api/v1/setup/* IS gated once the site is
+// installed: it was the guard's blind spot, and the one route there that outlived the install
+// (/migrate) was a password oracle on any host.
+//
+// `req.siteHost` is informational. No authorisation decision reads it; an accepted address grants
+// nothing (links, cookie domains and allow-lists never come from it).
+const hostPolicy: typeof import('./core/host-policy') = require('./core/host-policy');
+const { siteHostPolicy } = require('./middleware/auth');
+
+/**
+ * The two conditions the gate reports, as persistent admin notices (core/admin-notices upserts by id,
+ * queues until the database is reachable and never throws at its caller). The gate itself reports each
+ * once per process; the notice is what an operator who never reads the boot log still meets.
+ */
+const SITE_ADDRESS_NOTICES: Record<string, { id: string; level: 'error' | 'warning'; title: string; message: string }> = {
+    'missing-canonical': {
+        id: 'site.address.missing-canonical',
+        level: 'error',
+        title: 'The site has no valid main address.',
+        message: 'siteUrl in wordjs-config.json is missing or invalid, so every address is answered and links may point to the wrong place. Set it in Settings → Site address, or on the server with: npm run site -- canonical https://your-domain',
+    },
+    'proxy-collapse': {
+        id: 'site.address.proxy-collapse',
+        level: 'warning',
+        title: 'A reverse proxy is hiding the address visitors use.',
+        message: 'Requests from other machines reach WordJS with a localhost Host, so the address check cannot see which name they used. Make the proxy forward the browser\'s Host (nginx: proxy_set_header Host $host).',
+    },
+};
+function raiseSiteAddressNotice(kind: string): void {
+    const notice = SITE_ADDRESS_NOTICES[kind];
+    if (!notice) return;
+    try {
+        require('./core/admin-notices').pushAdminNotice(notice).catch(() => { /* a lost notice must never break a request */ });
+    } catch { /* same: the gate's own log line still carries the message */ }
+}
+
+app.use(hostPolicy.hostGateFactory({
+    getPolicy: siteHostPolicy.get,
+    // Through the module object on every call (as the install funnel below does), so a test that
+    // stages an installed site by replacing configManager.isInstalled reaches the gate too.
+    isInstalled: () => require('./core/configManager').isInstalled(),
+    onNotice: raiseSiteAddressNotice,
+}));
+// The same provider, published for the monolith's edge check (phase 2): it must judge the address
+// with the policy the backend applies, not a copy built from another read of the config.
+app.hostPolicy = siteHostPolicy;
+
 // CORS — zero-config by design. A request's credentialed cross-origin access is granted only when it
 // is one of:
-//   1) an explicitly CONFIGURED public origin (siteUrl / frontendUrl / gatewayUrl, set post-setup);
+//   1) an explicitly CONFIGURED public origin (siteUrl / frontendUrl, set post-setup). gatewayUrl is
+//      deliberately NOT one (REDTEAM R3): it is the address this backend's own SSR and control plane
+//      dial, never a page a browser runs, and keeping it here left a retired domain with credentialed
+//      CORS long after a move. Aliases are never added: every accepted address is its own origin;
 //   2) SAME-ORIGIN — the monolith serves the frontend AND the API from ONE origin (incl. behind a
-//      reverse proxy), so the install wizard and app calls are same-origin. We detect this by matching
-//      the request's Origin hostname to the `Host` header the request arrived on. `Host` is set by the
-//      browser to the REAL target and is a forbidden header for fetch/XHR, so cross-origin JS cannot
-//      forge it: a cross-site attacker's request carries Origin=attacker but Host=victim and never
-//      matches. (Behind a proxy this needs `proxy_set_header Host $host`, which the migration guard
-//      also requires — so no per-deployment CORS config is needed for `npx create-wordjs` + nginx.)
-//   3) localhost, in development only.
+//      reverse proxy), so the install wizard and app calls are same-origin. Detected by matching the
+//      Origin's host:port AND scheme to the address the request was sent to (core/host-policy
+//      requestAuthority / trustedScheme — Host, or X-Forwarded-Host/-Proto only from a trusted hop).
+//      `Host` is set by the browser to the REAL target and is a forbidden header for fetch/XHR, so
+//      cross-origin JS cannot forge it: a cross-site attacker's request carries Origin=attacker but
+//      Host=victim and never matches. host:port, not hostname: a page on https://example.com:8443 is
+//      another origin and must not get a credentialed read of https://example.com. And the scheme
+//      (REDTEAM R14): http://example.com is another origin than https://example.com — a network
+//      attacker who can inject into the plain-http page must not be handed the https API's answers;
+//   3) a loopback origin (localhost, 127/8, [::1]), in development only.
 // Reflecting an ARBITRARY origin with credentials:true would be an account-takeover hole, so anything
 // else gets no CORS headers (the browser blocks it). We omit the header instead of throwing, so a
 // blocked cross-origin probe doesn't spam the logs.
@@ -168,7 +230,6 @@ const CORS_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
 // unreachable in the browser, before the gate could even see it. The listing does not weaken anything:
 // only an origin that already passed the check above is ever answered with these headers.
 const CORS_HEADERS = ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Install-Token', 'X-CSRF-Token'];
-const hostnameOnly = (v: string): string => { try { return new URL('http://' + v).hostname.toLowerCase(); } catch { return ''; } };
 app.use(cors((req: any, done: any) => {
     const base = { credentials: true, methods: CORS_METHODS, allowedHeaders: CORS_HEADERS };
     const allow = () => done(null, { ...base, origin: true });   // reflect this origin + allow credentials
@@ -178,22 +239,29 @@ app.use(cors((req: any, done: any) => {
     if (!origin) return allow(); // no Origin: curl / server-to-server / same-origin navigation — nothing to gate
 
     // (1) configured public origins
-    if ([config.site.url, config.frontendUrl, config.gatewayUrl].filter(Boolean).indexOf(origin) !== -1) return allow();
+    if ([config.site.url, config.frontendUrl].filter(Boolean).indexOf(origin) !== -1) return allow();
 
-    let originHost: string;
-    try { originHost = new URL(origin).hostname.toLowerCase(); } catch { return deny(); }
+    let originUrl: URL;
+    try { originUrl = new URL(origin); } catch { return deny(); }
+    // Through the one parser, so `EXAMPLE.com.` and `example.com` are the same host on both sides and an
+    // unparseable authority (`null`, file://, a userinfo trick) matches nothing.
+    const originAuthority = hostPolicy.parseHost(originUrl.host);
+    if (!originAuthority) return deny();
+    const policy = siteHostPolicy.get();
 
-    // (2) same-origin (Origin host === the host the request was actually sent to). Behind the gateway
-    // (changeOrigin:true) req.headers.host is the internal upstream (127.0.0.1:PORT), so matching on the raw
-    // Host would treat ANY `http://127.0.0.1[:port]` page as same-origin and hand it credentialed CORS. Use
-    // the gateway-PINNED X-Forwarded-Host first (it strips any client-supplied value), then fall back to Host
-    // for the direct monolith — the exact same trusted-host derivation csrfProtection uses, so the two agree.
-    const fwdHost = String(req.headers['x-forwarded-host'] || '').split(',')[0].trim();
-    const effectiveHost = hostnameOnly(fwdHost || req.headers.host || '');
-    if (effectiveHost && originHost === effectiveHost) return allow();
+    // (2) same-origin: host:port and scheme of the address this request was actually sent to. Behind the
+    // gateway (changeOrigin:true) `Host` is the internal upstream (127.0.0.1:PORT), and matching on it
+    // would treat ANY `http://127.0.0.1[:port]` page as same-origin; requestHost() takes the forwarded
+    // host from that trusted hop instead — the same derivation csrfProtection uses, so the two agree.
+    // An absent or malformed host is undefined and matches nothing.
+    const requestHost = hostPolicy.requestHost(req, policy);
+    if (requestHost !== undefined
+        && hostPolicy.serialize(originAuthority) === requestHost
+        && originUrl.protocol === `${hostPolicy.trustedScheme(req, policy)}:`) return allow();
 
-    // (3) dev localhost
-    if (config.nodeEnv === 'development' && (originHost === 'localhost' || originHost === '127.0.0.1' || originHost === '::1')) return allow();
+    // (3) development: any loopback origin, whatever its port ([::1] included — the old comparison
+    // against the bare string '::1' could never match, because URL hostnames keep IPv6 brackets).
+    if (policy.dev && hostPolicy.isLoopbackAuthority(originAuthority)) return allow();
 
     return deny();
 }));
@@ -443,11 +511,10 @@ app.use(`${config.api.prefix}/media`, uploadLimiter);
 app.use(`${config.api.prefix}/themes/upload`, uploadLimiter);
 app.use(`${config.api.prefix}/plugins/upload`, uploadLimiter);
 app.use(`${config.api.prefix}/backups`, uploadLimiter); // Apply limiter to backups too
-// #26: /setup/migrate authenticates attacker-supplied admin credentials and — necessarily, per #25 — cannot
-// record login failures to trip the account lockout, so it was an unthrottled password oracle. Cap it under the
-// strict authLimiter (10/hr/IP) — much tighter than the setupLimiter (20/15min) below. This more-specific mount
-// is registered FIRST so authLimiter is the binding constraint; the /setup setupLimiter still also applies
-// (defense in depth). Pair with the uniform-response fix in routes/setup.ts.
+// #26: /setup/migrate used to authenticate attacker-supplied admin credentials, an oracle this strict
+// authLimiter (10/hr/IP) capped. The route is now a 410 stub that evaluates no credential (routes/setup.ts);
+// the mount stays for ONE release, so a client still hammering the old door keeps the old budget instead of
+// silently gaining a looser one. Registered before the /setup setupLimiter, which also still applies.
 app.use(`${config.api.prefix}/setup/migrate`, authLimiter);
 app.use(`${config.api.prefix}/setup`, setupLimiter); // tight cap on the public install/test-db endpoints
 // Exact-path mount (like /auth/mfa above) so the admin's authenticated /forms/submissions viewer never
@@ -926,9 +993,12 @@ app.get('/readyz', async (req: Request, res: Response) => {
     }
 });
 
-// Installation and Migration Guard Middleware
+// THE INSTALL FUNNEL — before installation, every request outside the static trees, /health and the
+// wizard's own /setup endpoints answers 503 setup_required (the client's one navigation: to /install).
+// It used to be half of the "installation and migration guard"; the other half, the 409
+// migration_required for a host other than siteUrl, is gone: the host gate above decides which
+// addresses the site answers, and nothing here reads the request's host any more.
 app.use((req: Request, res: Response, next: NextFunction) => {
-    // Bypass for static files, health check, and setup endpoints
     if (
         req.path.startsWith('/uploads') ||
         req.path.startsWith('/themes') ||
@@ -939,69 +1009,13 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     ) {
         return next();
     }
-
-    const { isInstalled, getConfig } = require('./core/configManager');
-
-    // 1. Check if installed
-    if (!isInstalled()) {
+    if (!require('./core/configManager').isInstalled()) {
         return res.status(503).json({
             error: 'setup_required',
             message: 'WordJS is not installed.',
             redirect: '/install'
         });
     }
-
-    // 2. Check for URL Mismatch (Migration needed)
-    const currentConfig = getConfig();
-    if (currentConfig && currentConfig.siteUrl) {
-        // Prioritize X-Forwarded-Host (set by the monolith/Next proxy or a standard reverse
-        // proxy), fall back to the raw Host header.
-        const rawHostHeader = req.get('x-forwarded-host') || req.get('host') || '';
-
-        try {
-            // Compare HOSTNAMES ONLY — strip protocol, any :port, path and trailing slash from
-            // both sides. Behind a TLS-terminating reverse proxy the public host carries no :port
-            // (e.g. example.com on 443) while siteUrl/upstream Host may still carry :3000;
-            // comparing host:port there falsely fired "migration_required" and locked admins out
-            // of the ENTIRE API on every request (login succeeded, the next call 409'd → the UI
-            // bounced to /migration). Hostnames still catch a genuine domain change, which is the
-            // only situation migration should trigger.
-            // Parse the hostname with the WHATWG URL parser (the same one every base-URL builder uses)
-            // rather than a naive .split(':')[0]. SEC: a value like `localhost:1@evil.example` makes the
-            // naive split return 'localhost' (it reads the userinfo as host:port) while new URL() returns
-            // 'evil.example' — a parser differential that let a crafted Host header slip past this guard
-            // AND poison the SSR canonical/og:url base. Parsing consistently closes the gap (the crafted
-            // host now resolves to its true hostname and correctly trips the mismatch).
-            const hostnameOf = (v: string): string => {
-                let s = String(v || '').trim();
-                if (!s) return '';
-                if (!/^https?:\/\//i.test(s)) s = 'http://' + s;
-                try { return new URL(s).hostname.toLowerCase(); } catch { return ''; }
-            };
-            const configuredHost = hostnameOf(currentConfig.siteUrl);
-            const detectedHost = hostnameOf(rawHostHeader);
-
-            // Loopback is always allowed: direct backend access, the SSR loopback server, health
-            // probes and CLI tooling must never be bounced to /migration.
-            const isLoopback =
-                detectedHost === 'localhost' || detectedHost === '127.0.0.1' || detectedHost === '::1';
-
-            if (configuredHost && detectedHost && configuredHost !== detectedHost && !isLoopback) {
-                return res.status(409).json({
-                    error: 'migration_required',
-                    message: 'Site URL mismatch detected.',
-                    redirect: '/migration',
-                    details: {
-                        configured: configuredHost,
-                        detected: detectedHost
-                    }
-                });
-            }
-        } catch (e) {
-            console.error('Migration check error:', e);
-        }
-    }
-
     next();
 });
 
@@ -1176,7 +1190,7 @@ async function initialize() {
         // member — e.g. a compromised frontend node holding CN=frontend, or a self-enrolled attacker — could
         // open a DIRECT connection to backend:PORT and bypass the entire gateway edge, forging
         // X-Forwarded-For / X-Forwarded-Host to defeat the per-IP login throttle, CSRF same-origin and the
-        // migration guard (all of which trust the gateway to pin those headers). Pin the peer identity to the
+        // host gate (all of which trust the gateway to pin those headers). Pin the peer identity to the
         // gateway, mirroring the gateway's own CN allow-lists (proxy-config createUpstreamAgent /
         // requireIdentity). Enforced at the TLS layer so a rogue peer is dropped before any HTTP is parsed.
         const ALLOWED_PEER_CNS = new Set(['gateway-internal', 'gateway']);
@@ -1319,16 +1333,21 @@ async function initialize() {
                 });
             };
 
-            // NEW: Self-Sync logic - Fetch official URL from Gateway and update DB
+            // Compare the gateway's own idea of the site's address with the main address.
+            //
+            // It COMPARES; it no longer writes. This used to copy the gateway's siteUrl straight into
+            // `siteurl`/`home`, so a second writer of the site's identity ran on every boot — and since the
+            // gateway recomputes its URL from its own port and TLS switch, a restart could silently move
+            // every emailed link. core/site-address noteGatewaySiteUrl decides instead: the same host going
+            // http → https is applied (audited) at once, because leaving reset links on http:// after SSL
+            // was switched on discloses tokens (REDTEAM R1); anything else is shown to the administrator.
             //
             // ONLY OVER AN AUTHENTICATED CHANNEL. THE CLASS: a decision taken from data a PEER
             // supplied, when a verified attribute is available — here, the peer's cluster certificate.
-            // `siteurl`/`home` are the site's identity: every admin link, every password-reset mail and
-            // every canonical tag is built from them. Without mTLS this request goes to the gateway's
-            // PUBLIC port with `rejectUnauthorized: false`, i.e. to whoever answers on that address,
-            // and its reply used to be written straight into the options table. The pre-enrolment
-            // bootstrap exists so a fresh install can REGISTER; it is not an identity that may rewrite
-            // the site's own URL, so this leg simply does not run until the cluster identity is on disk.
+            // Without mTLS this request goes to the gateway's PUBLIC port with `rejectUnauthorized: false`,
+            // i.e. to whoever answers on that address. The pre-enrolment bootstrap exists so a fresh install
+            // can REGISTER; it is not an identity whose answer may move the site's address, so this leg
+            // simply does not run until the cluster identity is on disk.
             const syncFromGateway = async () => {
                 const useMtls = Object.keys(clientOpts).length > 0;
                 if (!useMtls) return;
@@ -1356,18 +1375,14 @@ async function initialize() {
                                 try {
                                     const info = JSON.parse(body);
                                     if (info.siteUrl) {
-                                        const { getOption, updateOption } = require('./core/options');
-                                        const currentDbUrl = await getOption('siteurl');
-
-                                        if (currentDbUrl !== info.siteUrl) {
-                                            console.log(`[Sync] 🔄 Site URL Mismatch! Updating DB: ${currentDbUrl} -> ${info.siteUrl}`);
-                                            await updateOption('siteurl', info.siteUrl);
-                                            await updateOption('home', info.siteUrl);
-                                            console.log('[Sync] ✅ DB Options synchronized with Gateway.');
-                                        }
+                                        // Registration can finish before the database is up; the
+                                        // comparison needs the reconciled addresses, so it waits for them.
+                                        const siteAddress = require('./core/site-address');
+                                        await siteAddress.whenReconciled();
+                                        await siteAddress.noteGatewaySiteUrl(info.siteUrl);
                                     }
                                 } catch (e) {
-                                    console.warn('[Sync] Failed to parse Gateway info:', e.message);
+                                    console.warn('[Sync] Could not compare the gateway\'s site address:', e.message);
                                 }
                             }
                             resolve();
@@ -1409,6 +1424,11 @@ async function initialize() {
                 } else {
                     console.log('🏁 All services successfully registered with Gateway.');
                     await syncFromGateway();
+                    // Arm the gateway's address check with the addresses this backend answers (core/
+                    // site-address): the push at the end of the boot reconcile may have run before the
+                    // gateway listened, and a gateway on a fresh machine has no policy stored. Before
+                    // install it is told not to enforce. Never fatal; a failure is logged there.
+                    await require('./core/site-address').armGateway().catch(() => null);
                 }
             };
 
@@ -1482,6 +1502,19 @@ async function initialize() {
         // hot option readers then serve from memory instead of one SELECT per option per request.
         const preloaded = await require('./core/options').preloadAutoloadedOptions();
         if (preloaded) console.log(`⚡ Option cache primed: ${preloaded} autoloaded options`);
+
+        // The site's addresses: bring wordjs-config.json (the master) and the `siteurl`/`home` mirrors
+        // into agreement — the legacy upgrade, a change `npm run site` made while the server was down —
+        // then keep watching the file so a change made at the server applies within seconds. Never
+        // fatal: a site that cannot reconcile keeps serving exactly as before and says why.
+        try {
+            const siteAddress = require('./core/site-address');
+            const { state } = await siteAddress.reconcileAtBoot();
+            if (state !== 'ok') console.log(`🌐 Site address: ${state}`);
+            siteAddress.startWatching();
+        } catch (e: any) {
+            console.error(`❌ Site address reconciliation failed: ${e && e.message}`);
+        }
 
         // Load the per-plugin permission grants (Android-style, default-deny). Then a one-time,
         // non-breaking backfill: grandfather the manifest-declared permissions of plugins that are

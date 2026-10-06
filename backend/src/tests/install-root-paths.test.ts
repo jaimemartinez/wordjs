@@ -305,7 +305,8 @@ describe('the installation anchor (class: cwd-resolved paths)', () => {
     /** file → the finding that owns it. Not this group's files to fix; this gate stops the set growing. */
     const KNOWN_MTLS_RECOMPUTERS: Record<string, string> = {
         'core/system-health.ts': 'verify3 #40 — /health/details reports NOT_CONFIGURED while the node does mTLS',
-        'core/cert-manager.ts': 'verify3 #42 — concatenation relocates an absolute configured path',
+        // core/cert-manager.ts (verify3 #42) left this list when its gateway calls moved onto one dialler
+        // that consumes clusterCertPaths(config).
     };
 
     function backendSources(dir: string, acc: string[] = []): string[] {

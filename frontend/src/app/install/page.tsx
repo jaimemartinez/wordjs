@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { apiPost, apiGet } from "@/lib/api";
 import { parseInstallToken, scrubInstallTokenFromUrl } from "@/lib/installToken";
+import { currentAddressAsAlias, installLanding, installSuggestion, isLanName, parseSiteAddress } from "@/lib/siteAddress";
 import { FaServer, FaUserShield, FaMagic, FaCheckCircle, FaArrowRight, FaArrowLeft, FaDatabase, FaExclamationTriangle } from 'react-icons/fa';
 
 type DbDriver = 'sqlite-native' | 'sqlite-legacy' | 'postgres' | 'mysql';
@@ -36,11 +37,19 @@ export default function InstallPage() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
     const [stageMsg, setStageMsg] = useState("");
+    // The main address, prefilled from the address being browsed (REDTEAM R6) and editable. The server's
+    // WORDJS_SITE_URL is only ever OFFERED next to it (see installSuggestion for why it never prefills).
     const [siteUrl, setSiteUrl] = useState("");
+    const [here, setHere] = useState("");
+    const [suggestedUrl, setSuggestedUrl] = useState<string | null>(null);
+    // "Also accept this address": keep answering on the name being browsed when the chosen main
+    // address is a different one. On by default — it is the address the admin is using right now —
+    // except for a .local name, which anyone on the LAN can claim and so is only ever opted into.
+    const [acceptHere, setAcceptHere] = useState<boolean | null>(null);
     const stageTimer = useRef<ReturnType<typeof setInterval> | null>(null);
     // Set when install succeeds but no email provider is registered — we pause on a warning screen
     // (instead of auto-redirecting) so the admin learns password recovery won't work before moving on.
-    const [installWarning, setInstallWarning] = useState<{ redirectTo: string } | null>(null);
+    const [installWarning, setInstallWarning] = useState<{ href: string; external: boolean } | null>(null);
 
     // Step 1: Site
     const [siteName, setSiteName] = useState("");
@@ -70,6 +79,7 @@ export default function InstallPage() {
     useEffect(() => {
         // Compute origin after mount to avoid an SSR/client hydration mismatch.
         setSiteUrl(window.location.origin);
+        setHere(window.location.origin);
         // Prefill the install token from the clickable `…/install#token=…` URL the server terminal
         // prints. The token rides in the FRAGMENT precisely because a fragment is never sent to the
         // server (no access logs, no Referer); `?token=` is still accepted as a fallback so a
@@ -85,11 +95,26 @@ export default function InstallPage() {
                     window.location.pathname, window.location.search, window.location.hash));
             }
         } catch { /* no URL access — manual paste still works */ }
-        apiGet<{ installed: boolean }>('/setup/status')
-            .then(data => { if (data.installed) router.push('/login'); })
+        apiGet<{ installed: boolean; suggestedSiteUrl?: string }>('/setup/status')
+            .then(data => {
+                if (data.installed) router.push('/login');
+                else setSuggestedUrl(installSuggestion(window.location.origin, data.suggestedSiteUrl));
+            })
             .catch(() => { });
         return () => { if (stageTimer.current) clearInterval(stageTimer.current); };
     }, [router]);
+
+    const chosenSite = parseSiteAddress(siteUrl);
+    const aliasForHere = chosenSite ? currentAddressAsAlias(here, chosenSite.origin) : null;
+    const hereIsLocal = !!aliasForHere && isLanName(parseSiteAddress(aliasForHere)?.hostname ?? "");
+    const acceptingHere = !!aliasForHere && (acceptHere ?? !hereIsLocal);
+
+    // After the install: an absolute landing is on the main address (this one will not sign the admin
+    // in), so it is a full navigation; a path stays in the app.
+    const land = (to: { href: string; external: boolean }) => {
+        if (to.external) window.location.assign(to.href);
+        else router.push(to.href);
+    };
 
     const pgConn = () => ({ host: dbHost, port: dbPort, user: dbUser, password: dbPassword, database: dbName, ssl: dbSsl });
     const needsConn = dbDriver === 'postgres' || dbDriver === 'mysql';
@@ -114,6 +139,7 @@ export default function InstallPage() {
         if (!emailValid) { setError('Please enter a valid admin email.'); return; }
         if (!pwValid) { setError('Password must be at least 10 characters.'); return; }
         if (!pwMatch) { setError('Passwords do not match.'); return; }
+        if (!chosenSite) { setError('Enter a valid site address.'); setStep(1); return; }
 
         setLoading(true);
         setError("");
@@ -126,7 +152,7 @@ export default function InstallPage() {
         }, 1200);
 
         try {
-            const res = await apiPost<{ success: boolean; redirectTo?: string; emailProviderAvailable?: boolean }>('/setup/install', {
+            const res = await apiPost<{ success: boolean; redirectTo?: string; siteUrl?: string; autoLoginSkipped?: string; emailProviderAvailable?: boolean }>('/setup/install', {
                 siteName,
                 siteDescription,
                 adminUser,
@@ -134,22 +160,27 @@ export default function InstallPage() {
                 adminPassword,
                 dbDriver,
                 ...(needsConn ? { db: pgConn() } : {}),
-                frontendUrl: siteUrl || window.location.origin,
+                // Always explicit, so the backend never derives the main address from request headers
+                // (a proxy's X-Forwarded-Proto or a port-forward's Host would otherwise decide it).
+                siteUrl: chosenSite.origin,
+                frontendUrl: chosenSite.origin,
+                // The backend stores the address THIS request was sent to; the page only asks for it.
+                ...(acceptingHere ? { acceptCurrentAddress: true, ...(hereIsLocal ? { confirmLocal: true } : {}) } : {}),
                 installToken,
                 demoContent
             });
             if (stageTimer.current) clearInterval(stageTimer.current);
-            const redirectTo = res?.redirectTo || '/login?installed=true';
+            const landing = installLanding(res, window.location.origin);
             // A fresh site has no mail plugin, so there is no email provider and no self-service password
             // recovery. Pause on a warning screen so the admin knows before landing in /admin.
             if (res && res.emailProviderAvailable === false) {
-                setInstallWarning({ redirectTo });
+                setInstallWarning(landing);
                 setLoading(false);
                 setStageMsg("");
                 return;
             }
-            // Auto-login sets an HttpOnly cookie on the response, so redirectTo can be /admin.
-            router.push(redirectTo);
+            // Auto-login sets an HttpOnly cookie on the response, so the landing can be /admin.
+            land(landing);
         } catch (err: any) {
             if (stageTimer.current) clearInterval(stageTimer.current);
             setError(err.message || "Installation failed.");
@@ -195,7 +226,7 @@ export default function InstallPage() {
                             </div>
                             <button
                                 type="button"
-                                onClick={() => router.push(installWarning.redirectTo)}
+                                onClick={() => land(installWarning)}
                                 className="w-full flex items-center justify-center bg-blue-600 text-white py-3.5 px-6 rounded-lg font-semibold hover:bg-blue-700 transition-all"
                             >
                                 Continue to Dashboard <FaArrowRight className="ml-2" aria-hidden="true" />
@@ -280,9 +311,30 @@ export default function InstallPage() {
                                             <span className="block text-xs text-gray-500 mt-0.5">A designed home page (built with the visual editor), a welcome post, an About page and a menu — so your site looks alive from minute one. You can delete it all later.</span>
                                         </span>
                                     </label>
-                                    {siteUrl && <p className="text-xs text-gray-500">This site will be installed at <span className="font-mono font-semibold">{siteUrl}</span></p>}
+                                    <div className="group">
+                                        <label className={labelCls} htmlFor="install-site-url">Site Address</label>
+                                        <input id="install-site-url" type="url" required className={inputCls} value={siteUrl} onChange={(e) => setSiteUrl(e.target.value)} placeholder="https://example.com" autoComplete="off" spellCheck={false} />
+                                        {siteUrl && !chosenSite
+                                            ? <p className="text-xs text-red-600 mt-1">Enter an address like https://example.com (http or https, an optional port, no path).</p>
+                                            : <p className="text-xs text-gray-500 mt-1">The main address: every link, email, feed and sitemap uses it. You can add other addresses later in Settings &rarr; Site address.</p>}
+                                        {suggestedUrl && suggestedUrl !== chosenSite?.origin && (
+                                            <button type="button" onClick={() => setSiteUrl(suggestedUrl)} className="mt-2 text-xs font-semibold text-blue-600 hover:text-blue-700">
+                                                Use the server&rsquo;s suggested address: <span className="font-mono">{suggestedUrl}</span>
+                                            </button>
+                                        )}
+                                    </div>
+                                    {aliasForHere && (
+                                        <label className="flex items-start gap-3 cursor-pointer select-none rounded-lg border border-gray-200 p-3.5 hover:border-gray-300 transition-colors">
+                                            <input type="checkbox" checked={acceptingHere} onChange={(e) => setAcceptHere(e.target.checked)} className="mt-0.5 h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-gray-400" />
+                                            <span>
+                                                <span className="block text-sm font-semibold text-gray-800">Also accept <span className="font-mono">{aliasForHere}</span></span>
+                                                <span className="block text-xs text-gray-500 mt-0.5">The address you are using now keeps working as an additional address. It is never used in links.</span>
+                                                {hereIsLocal && <span className="block text-xs text-amber-700 mt-0.5">.local names can be claimed by anyone on your local network; accept it only if you understand that.</span>}
+                                            </span>
+                                        </label>
+                                    )}
                                     <div className="pt-4">
-                                        <button type="button" onClick={() => setStep(2)} disabled={!siteName.trim() || !installToken.trim()}
+                                        <button type="button" onClick={() => setStep(2)} disabled={!siteName.trim() || !installToken.trim() || !chosenSite}
                                             className="w-full flex items-center justify-center bg-gray-900 text-white py-3.5 px-6 rounded-lg font-semibold hover:bg-gray-800 focus:ring-4 focus:ring-gray-300 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl transform hover:-translate-y-0.5">
                                             Next Step <FaArrowRight className="ml-2" aria-hidden="true" />
                                         </button>

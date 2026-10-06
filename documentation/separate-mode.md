@@ -211,8 +211,15 @@ curl -k -X POST https://<gateway-ip>:3000/api/v1/setup/install \
   -d '{"siteName":"…","adminUser":"admin","adminEmail":"…","adminPassword":"…","dbDriver":"sqlite-native","demoContent":true}'
 ```
 
-Install **through the gateway**, not straight at the backend: the wizard derives `siteUrl` from the
-request, and the address you install on becomes the site's canonical origin.
+Install **through the gateway**, not straight at the backend. The browser wizard always sends the
+address in its **Site address** field (prefilled with the address you are browsing) as `siteUrl`; the
+headless call above sends none, so the backend takes the address the request was sent to, as the
+gateway reports it (the gateway is a trusted hop: its mTLS certificate identifies it). Either way that
+address becomes the site's **main address**: the base of every link, and the name the gateway and the
+backend answer on. Add any other name browsers use (a DNS name next to the IP, a `www` twin) in
+Settings → Site address or with `npm run site -- add <url>` on the backend node, or it gets `421`. The
+backend pushes the resulting policy to the gateway (`POST /host-policy`), so pages and static files on
+an undeclared name are refused at the gateway too. See [site-address.md](site-address.md).
 
 ### Cache purge across machines — instant, via the gateway
 
@@ -280,7 +287,7 @@ which is shorter and already instant.
 | `gatewaySecret` | all three configs | written automatically by `init`/`node-join` |
 | `revalidateSecret` | gateway + every frontend | minted by `init`, handed out by `/enroll`, and re-fetched by a frontend that lacks it (`GET /revalidate-secret`, mTLS `CN=frontend`); authenticates cache purges. A mismatch means purges are refused (403) and content falls back to TTL freshness |
 | cluster CA (`cluster-ca.crt`) | all three `certs/` | distributed automatically by enrollment |
-| `siteUrl` | gateway + backend | its **hostname** must match the host browsers reach the gateway on, or the backend's migration guard 409s `migration_required` (scheme and port are ignored; loopback is always exempt) |
+| `siteUrl` and the site's other addresses | backend (the master), pushed to the gateway | the host browsers reach the gateway on must be the main address, one of the other addresses, loopback or (with the default `ipLiterals: any`) an IP address, or the gateway and the backend answer `421 rest_host_not_allowed`. Change them on the backend only (Settings → Site address, or `npm run site`); the backend pushes the policy to the gateway (`POST /host-policy`) and the new `siteUrl` (`/config-update`). The frontend node keeps its own copy of `siteUrl` from enrollment, used to name the public host on SSR reads: after changing the main address, update it in the frontend's `wordjs-config.json` too (and `internalApiUrl`, if it named the old main address). Frontend SSR reaches the gateway at its `internalApiUrl`, usually an IP: with `hostPolicy.ipLiterals` set to `own` or `none`, add that address as another address. See [site-address.md](site-address.md) |
 | `jwtSecret` | backend only | only needs to match if you run **multiple** backends |
 
 The SQLite DB and `uploads/` stay on the **backend** node; the frontend reaches uploads through the
@@ -309,7 +316,7 @@ mode:
 |---|---|
 | 1 | **Enrollment** — the gateway is the CA (private key `0600`, gateway only), join tokens are single-use, each node holds a `CN=<role>` leaf that verifies against that CA, and the registry names the real node addresses |
 | 2 | **Mutual TLS** — the internal ports refuse a request with **no** client certificate, answer one that presents the right certificate, and reject a **valid certificate of another role** claiming routes that are not its own |
-| 3 | **Install** — installed *through the gateway*, the recorded public origin is the gateway and never the backend's internal address, and API calls afterwards are 200 rather than 409 `migration_required` |
+| 3 | **Install** — installed *through the gateway*, the recorded public origin is the gateway and never the backend's internal address, and API calls through the gateway afterwards answer 200 (the original symptom was `409 migration_required` on every call; an address the site does not answer is `421` today) |
 | 4 | **Identity** — survives the install **and a restart**: the backend still trusts the gateway's CA, and the CA private key is not on the backend |
 | 5 | **Public site** — HTML carrying `wp-block-*` classes, `/public/css/wordjs-ui.css` served 200 at its real size, plus an editor round-trip (create a page with blocks, save, read it back) |
 

@@ -26,10 +26,110 @@ try {
   console.warn('[NextConfig] Failed to read root package.json version:', e.message);
 }
 
+/** The slice of backend/src/core/host-policy.js this file uses (types: host-policy.d.ts). */
+interface HostPolicyModule {
+  buildPolicy(input: { config?: Record<string, any> | null; env?: Record<string, string | undefined>; nodeEnv?: string }): {
+    canonical: { hostname: string } | null;
+    aliases: Map<string, unknown>;
+    envHosts: Map<string, unknown>;
+    devOrigins: Set<string>;
+  };
+  addressesFromInterfaces(interfaces: unknown): Set<string>;
+}
+
+type InterfaceMap = Record<string, Array<{ address: string; family: string | number; internal: boolean }> | null | undefined>;
+
+/**
+ * The hosts `next dev` may serve its own resources to (`allowedDevOrigins`). Next 16 answers 403 to the
+ * /_next/* chunks and the HMR socket for any Origin that is not localhost, so a page opened at another
+ * address never hydrates and the admin hangs on its spinner (the phone-on-the-LAN case).
+ *
+ * The list is the BACKEND's development host policy, computed by the backend's own module, so an
+ * address the API answers on in development is an address the dev server serves its chunks to, and
+ * nothing more: this machine's addresses (IPv6 bracketed, the way Next compares an Origin's hostname),
+ * the configured main address and aliases, WORDJS_ALLOWED_HOSTS and WORDJS_DEV_ORIGINS. A frontend
+ * deployed without the backend tree falls back to the machine's addresses plus WORDJS_DEV_ORIGINS.
+ * Only `next dev` reads the result; `next build` and `next start` ignore allowedDevOrigins.
+ */
+export function resolveAllowedDevOrigins(input: {
+  hostPolicy: HostPolicyModule | null;
+  config: Record<string, any> | null;
+  env: Record<string, string | undefined>;
+  interfaces: InterfaceMap;
+}): string[] {
+  const hosts = new Set<string>();
+  const hp = input.hostPolicy;
+  if (hp) {
+    for (const address of hp.addressesFromInterfaces(input.interfaces)) hosts.add(address);
+    const policy = hp.buildPolicy({ config: input.config, env: input.env, nodeEnv: 'development' });
+    if (policy.canonical) hosts.add(policy.canonical.hostname);
+    for (const name of policy.aliases.keys()) hosts.add(name);
+    for (const name of policy.envHosts.keys()) hosts.add(name);
+    for (const name of policy.devOrigins) hosts.add(name);
+    return [...hosts];
+  }
+  for (const list of Object.values(input.interfaces)) {
+    for (const entry of list || []) {
+      if (!entry || entry.internal || typeof entry.address !== 'string') continue;
+      const family = entry.family === 'IPv4' || entry.family === 4 ? 4 : entry.family === 'IPv6' || entry.family === 6 ? 6 : 0;
+      const address = entry.address.split('%')[0].toLowerCase();
+      // Link-local addresses (169.254/16, fe80::/10) are never how a browser reaches this machine.
+      if (family === 4 && !address.startsWith('169.254.')) hosts.add(address);
+      if (family === 6 && !/^fe[89ab]/.test(address)) hosts.add(`[${address}]`);
+    }
+  }
+  for (const item of String(input.env.WORDJS_DEV_ORIGINS || '').split(',')) {
+    const text = item.trim().toLowerCase();
+    if (!text) continue;
+    try {
+      hosts.add(text.includes('://') ? new URL(text).hostname : text.replace(/:\d+$/, ''));
+    } catch {
+      // Not a URL: the backend ignores it too.
+    }
+  }
+  return [...hosts];
+}
+
+/**
+ * The inputs of resolveAllowedDevOrigins, read from disk and the OS: the backend's host-policy module
+ * beside this frontend (when the backend tree is there), the site config (the distributed copy first,
+ * then the monolith's backend config, the same order as rewrites() below) and the network interfaces.
+ */
+export function loadAllowedDevOrigins(frontendDir: string, env: Record<string, string | undefined>): string[] {
+  const fs = require('fs');
+  const os = require('os');
+  let hostPolicy: HostPolicyModule | null = null;
+  try {
+    hostPolicy = require(path.resolve(frontendDir, '../backend/src/core/host-policy.js'));
+  } catch {
+    // A frontend deployed on its own machine has no backend tree: use the fallback.
+  }
+  let config: Record<string, any> | null = null;
+  try {
+    const configPath = [path.resolve(frontendDir, 'wordjs-config.json'), path.resolve(frontendDir, '../backend/wordjs-config.json')]
+      .find((candidate: string) => fs.existsSync(candidate));
+    if (configPath) config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  } catch (e: any) {
+    console.warn('[NextConfig] Failed to read wordjs-config.json for allowedDevOrigins:', e.message);
+  }
+  let interfaces: InterfaceMap = {};
+  try {
+    interfaces = os.networkInterfaces();
+  } catch {
+    // Some sandboxes refuse interface enumeration: localhost only, which is Next's default.
+  }
+  return resolveAllowedDevOrigins({ hostPolicy, config, env, interfaces });
+}
+
+// Only `next dev` consults the list (the `next` CLI and the monolith set NODE_ENV before this file
+// loads), so builds and production starts neither read the site config here nor enumerate interfaces.
+const allowedDevOrigins = process.env.NODE_ENV === 'development' ? loadAllowedDevOrigins(__dirname, process.env) : [];
+
 const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_WORDJS_VERSION: wordjsVersion,
   },
+  allowedDevOrigins,
   // Don't advertise the framework: Next.js emits `X-Powered-By: Next.js` by default, which the gateway
   // proxies straight through (helmet on the gateway only strips its OWN Express header). Removing it at
   // the source drops the version-fingerprint header in every deploy mode (audit F-09).

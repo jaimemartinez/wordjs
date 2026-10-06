@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
+import { SITE_ADDRESS_SETTINGS_PATH } from "@/lib/siteAddress";
 import { settingsApi, MediaItem, postsApi, Post, rolesApi, Role } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
 import MediaPickerModal from "@/components/MediaPickerModal";
@@ -212,6 +214,25 @@ export default function SettingsPage() {
                         </div>
                     </div>
                 )}
+
+                {/* The site address has its own screen: every change there is sudo-gated, audited and
+                    notified, so it is deliberately NOT a field of this bulk form (PUT /settings refuses
+                    siteurl/home). */}
+                <div className="mb-8 flex flex-col lg:flex-row lg:items-center justify-between gap-4 rounded-3xl border-2 border-gray-50 bg-white px-6 py-5 shadow-xl shadow-gray-100/50">
+                    <div className="flex min-w-0 flex-1 items-start gap-4">
+                        <i className="fa-solid fa-globe text-blue-500 text-xl mt-0.5" aria-hidden="true"></i>
+                        <div>
+                            <h2 className="text-sm font-bold text-gray-900">{t('settings.siteAddress.title')}</h2>
+                            <p className="text-sm text-gray-500 mt-1 leading-relaxed">{t('settings.siteAddress.help')}</p>
+                        </div>
+                    </div>
+                    <Link
+                        href={SITE_ADDRESS_SETTINGS_PATH}
+                        className="inline-flex shrink-0 items-center justify-center gap-2 rounded-2xl bg-gray-900 px-5 py-3 text-sm font-bold text-white hover:bg-gray-800 whitespace-nowrap"
+                    >
+                        {t('settings.siteAddress.open')} <i className="fa-solid fa-arrow-right" aria-hidden="true"></i>
+                    </Link>
+                </div>
 
                 <form onSubmit={handleSubmit} className="space-y-8">
                     {/* General Settings Section */}

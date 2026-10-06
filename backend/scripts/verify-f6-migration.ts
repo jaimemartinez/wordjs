@@ -59,7 +59,7 @@ const MAX_RESPONSE_ANY_OCCURRENCES = 0;
 /** Boundary files that still contain at least one `req: any`. A brand-new untyped route file raises it. */
 const MAX_UNTYPED_BOUNDARY_FILES = 0;
 /** Boundary files that are FULLY migrated: at least one typed `req` and not one `req: any` left. */
-const MIN_FULLY_TYPED_BOUNDARY_FILES = 44;
+const MIN_FULLY_TYPED_BOUNDARY_FILES = 45;
 /**
  * Does this workflow actually HAND `needle` to a runner, inside a `run:` step?
  *

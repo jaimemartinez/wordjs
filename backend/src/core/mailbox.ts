@@ -128,8 +128,8 @@ async function getMailDomain(): Promise<string> {
         if (published) return published;
     } catch { /* option store unavailable — fall through to the site URL */ }
     try {
-        const url = await getOption('siteurl', await getOption('home', 'http://localhost'));
-        return new URL(String(url)).hostname.toLowerCase();
+        // The site's link base (core/site-address): the same host every outgoing link uses.
+        return (await require('./site-address').linkHostname()).toLowerCase();
     } catch { return ''; }
 }
 

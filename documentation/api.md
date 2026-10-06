@@ -88,9 +88,9 @@ All state-changing requests (`POST`/`PUT`/`PATCH`/`DELETE`) under the API prefix
 **Same-origin signal:**
 
 *   The `Origin` (or, as a fallback, `Referer`) must match the configured site URL / frontend URL or the request host — an **exact** origin comparison, never a prefix match.
-*   Behind the gateway it honors `X-Forwarded-Host` (the gateway pins it to the real client host) when computing the expected origin.
+*   Behind the gateway it honors `X-Forwarded-Host` (the gateway pins it to the real client host) when computing the expected origin — only from a trusted hop (the mTLS gateway, a loopback peer that addressed a loopback name, or an address-based `trustProxy` peer); from anyone else the request's own `Host` is used. See [site-address.md](site-address.md#which-header-names-the-host).
 *   When **both** `Origin` and `Referer` are absent the request is **rejected** (`403 rest_csrf_invalid`, fail-closed) **unless** it carries a real `Authorization: Bearer <token>` (a genuine server-to-server caller that can't be CSRF'd via an ambient cookie). Cookie-only header-less requests are blocked.
-*   Exactly two paths skip **both** halves — `/setup/install` and `/setup/test-db` — because they run before an origin (or any user) exists. The exemption is an **enumerated set** (`CSRF_EXEMPT_PATHS` in `backend/src/middleware/auth.ts`), not the `/setup` subtree: `POST /setup/migrate` survives installation and authenticates raw credentials from the body, so it needs no ambient cookie and stays subject to the same-origin check. The match is made on the sub-path derived from `req.originalUrl`, **not** on `req.path`: `csrfProtection` is mounted *with* the API prefix, and Express strips a mount path from `req.url` before the middleware runs, so a comparison against the full `/api/v1/setup/install` could never be true. Until that was corrected the documented exemption was dead code and a headless installer following this page got a misleading `403 rest_csrf_invalid` on a site with no users.
+*   Exactly two paths skip **both** halves — `/setup/install` and `/setup/test-db` — because they run before an origin (or any user) exists. The exemption is an **enumerated set** (`CSRF_EXEMPT_PATHS` in `backend/src/middleware/auth.ts`), not the `/setup` subtree: `POST /setup/migrate` survives installation (it now answers `410 rest_migrate_removed` and evaluates nothing) and stays subject to the same-origin check. The match is made on the sub-path derived from `req.originalUrl`, **not** on `req.path`: `csrfProtection` is mounted *with* the API prefix, and Express strips a mount path from `req.url` before the middleware runs, so a comparison against the full `/api/v1/setup/install` could never be true. Until that was corrected the documented exemption was dead code and a headless installer following this page got a misleading `403 rest_csrf_invalid` on a site with no users.
 
 **Double-submit token:**
 
@@ -158,6 +158,8 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 ### 5.2 Common Error Codes
 *   `rest_not_logged_in` (401)
 *   `rest_forbidden` (403)
+*   `rest_host_not_allowed` (421) — the request was sent to an address the site does not answer (not its main address, another declared address, loopback or an accepted IP). No redirect, `Cache-Control: no-store`. `rest_invalid_host` (400) — the `Host` is malformed or repeated. See [site-address.md](site-address.md).
+*   `rest_insecure_transport` (403) — a session may not be started at this address: `data.reason` is `transport` (an https site reached over plain http) or `address` (sign-in is not enabled here). `rest_token_bound_session` (403) — `POST /auth/tokens` refuses a session started on an address other than the main one or loopback (an API token carries no address binding, so it would outlive that address).
 *   `rest_csrf_token` (403) — a cookie-authenticated `POST`/`PUT`/`PATCH`/`DELETE` carried no `X-CSRF-Token` header matching its `wjs_csrf` cookie (missing header, missing cookie, or a mismatch). See §2.4 and the CSRF section of `documentation/security.md`.
 *   `rest_csrf_invalid` (403) — the same-origin half of the same gate refused the request: its `Origin`/`Referer` did not match the site, or both were absent on a cookie-only (non-Bearer) request. See §2.4 and the CSRF section of `documentation/security.md`.
 *   `rest_no_route` (404)
@@ -344,7 +346,8 @@ Base path: `/api/v1/users` (`backend/src/routes/users.ts`). `PUT /me` is declare
 | `GET`  | `/themes/:slug/templates`   | Admin | Page templates the theme ships as `templates/*.json`: `{ slug, templates: string[] }` (file names without `.json`, sorted; empty list when the theme has no `templates/` dir). `400 { error }` for an invalid slug. Feeds the editor's `_wjs_template` picker |
 | `GET`  | `/themes/mods/export`       | Admin | Download the **active** theme's customizer mods as a JSON file (`Content-Disposition: attachment; filename="<slug>-customizer-mods.json"`): `{ theme, exportedAt, mods }`, where `mods` is the sanitized `active_theme_mods` map, safe to re-import |
 | `POST` | `/themes/mods/import`       | Admin | Import customizer mods for the active theme. Body is either a bare `{ "--wjs-*": "value" }` map or the export wrapper `{ theme, mods }`. Validated **strictly**: any non-`--wjs-*` key or unacceptable value fails the whole import with `400 { error, errors: [{ key, code, message }] }` and nothing is written; on success writes `active_theme_mods`, purges the public site and returns `200 { applied: true, count }` |
-| `GET`  | `/setup/status`             | No    | Check if site is installed (not token-gated)        |
+| `GET`  | `/setup/status`             | No    | `{ installed }`, plus `suggestedSiteUrl` (from `WORDJS_SITE_URL`, never a loopback address) before install. Reads no request host; behind the host gate once installed |
+| `*`    | `/setup/migrate`            | —     | Removed: `410 rest_migrate_removed` for every method, nothing read or written. Change the address in Settings → Site address or with `npm run site` |
 | `POST` | `/setup/test-db`            | Token | Validate a DB connection before install (install-token gated) |
 | `POST` | `/setup/install`            | Token | Run the installation wizard (install-token gated)   |
 | `GET`  | `/export`                   | Admin | Download a logical site export (JSON)               |
@@ -650,6 +653,23 @@ Base path `/api/internal` — note this is **outside** the `/api/v1` prefix, so 
 The secret is compared in **constant time** and a request is refused when no secret is configured (rather than matching an empty default); `401` on mismatch, `400` on a missing/out-of-range port. A port identical to the current one is acknowledged **without** restarting, so a flood of repeats can't force a restart loop; a real change is persisted and the process exits so the supervisor respawns it.
 
 > **Not an endpoint:** `backend/src/routes/frontend.ts` (the legacy Handlebars public renderer) is **deliberately not mounted** — the public site is rendered by Next.js in both split and monolith mode. It stays on disk only as a legacy/monolith-render fallback (`backend/src/index.ts`).
+
+<a id="site-address"></a>
+### 6.22 Site address 🌐
+Base path `/api/v1/site-address` (`backend/src/routes/site-address.ts`; the model and every rule live in `backend/src/core/site-address.ts` and `core/host-policy.js`). The main address, the other addresses the site answers on, and the IP policy. Operator guide: [site-address.md](site-address.md).
+
+**Every route** — reads included, because the answer lists the server's own IP addresses — requires `authenticate` → `isAdmin` (role administrator) → `sessionOnly` (a `wjt_` API token gets `403 rest_token_management_forbidden`), plus the global CSRF and MFA-policy gates. **Every write** additionally requires `currentPassword` (`403 rest_bad_current_password`) and `rev`, the revision the client read (`409 rest_site_address_stale` when it moved). No value is ever taken from the request's `Host`.
+
+| Method | Endpoint | Body | Description |
+| :----- | :------- | :--- | :---------- |
+| `GET`  | `/` | — | `{ rev, canonical, aliases[] (with lastSeen), envHosts, ipLiterals, ipLiteralsSource, ipSignIn, ownAddresses, devOrigins, dev, connectedVia: { host, cls }, recentlyRefused[], conflict?, gatewayDrift?, notices? }` |
+| `PUT`  | `/canonical` | `{ url, oldAddress: 'keep' \| 'redirect' \| 'drop', currentPassword, rev, force? }` | Change the main address. The old one becomes an alias (`keep`, default), a redirecting alias, or is dropped; `frontendUrl` / `gatewayUrl` follow when they named exactly the old main address |
+| `PUT`  | `/aliases` | `{ aliases: [{ url, mode?, label?, signIn?, expiresAt? }], currentPassword, rev, force?, confirmLocal? }` | Replace the whole list (at most 50). New tunnel names default to a 7-day expiry; a new `.local` name needs `confirmLocal: true` (`400 rest_site_address_confirm_local`) |
+| `PUT`  | `/policy` | `{ ipLiterals: 'any' \| 'own' \| 'none', ipSignIn?, currentPassword, rev }` | Which IP literals are answered, and whether sessions may be started on them in production |
+
+Write responses are `{ rev, warnings, unchanged? }` (a no-op answers `200 { unchanged: true }` and writes, audits and notifies nothing). Refusals: `400 rest_invalid_param` / `rest_invalid_site_address` (the value: `http(s)://host[:port]`, no path, user name, query, wildcard or list); `409 rest_site_address_in_use` with `data.dependents: [{ kind: 'gatewayUrl' | 'frontendUrl' | 'recent-use', host, detail }]` when a removed address is still in use (`force: true` overrides and is audited); `503 rest_config_unreadable` (nothing written); `500 rest_site_address_rollback` (the database refused the mirrors and the config file was restored) or `500 rest_site_address_write_failed` (the config file could not be written; nothing changed). Every change writes `wordjs-config.json` and the `siteurl` / `home` / `site_address_rev` options together, pushes the policy to the gateway in split and separate mode, purges the frontend caches, audits `site.address.*`, and notifies every administrator.
+
+`POST /api/v1/system/certs/config` (§6.5) additionally returns `canonicalUpgraded` (the same host moved from http to https and the main address followed) or `suggestCanonical` (the gateway now reports another address; the certificates page opens the Change dialog prefilled with it).
 
 ---
 

@@ -36,7 +36,7 @@ const express = require('express');
 const router = express.Router();
 
 const jwt = require('jsonwebtoken');
-const { authenticate, trustedHost, sameOriginAllowList } = require('../middleware/auth');
+const { authenticate, trustedHost, originMatchesHost, sameOriginAllowList, sessionAddressStillAccepted } = require('../middleware/auth');
 const { asyncHandler, offStack } = require('../middleware/errorHandler');
 const { canEditPostRecord, isRestExposedPostType } = require('../core/post-capabilities');
 const config = require('../config/app');
@@ -103,10 +103,10 @@ function sameOrigin(req: Request): boolean {
     }
     if (!requestOrigin) return false;
 
+    // The host comes from core/host-policy requestAuthority (X-Forwarded-Host only from a trusted hop) and
+    // both sides go through the one parser, so this check and csrfProtection cannot answer differently.
     const host = trustedHost(req);
-    try {
-        if (new URL(requestOrigin).host === host) return true;
-    } catch { return false; }
+    if (originMatchesHost(requestOrigin, host)) return true;
 
     const allowed: string[] = sameOriginAllowList(host);
     return allowed.some((a: string) => { try { return new URL(a).origin === requestOrigin; } catch { return false; } });
@@ -237,6 +237,9 @@ function makeRevalidate(req: Request, postId: number): () => Promise<boolean> {
                 return false; // caducado, revocado por firma, manipulado… o simplemente no es un JWT
             }
             if (decoded.purpose) return false;
+            // The same address binding authenticate() applies: a live stream opened by a session minted
+            // on an alias closes once that alias is removed or expires (REDTEAM R2).
+            if (!sessionAddressStillAccepted(decoded)) return false;
             if (Number(decoded.userId) !== Number(userId)) return false;
             user = await User.findById(userId);
             if (!user) return false;

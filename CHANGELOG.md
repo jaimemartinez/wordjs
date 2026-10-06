@@ -31,6 +31,46 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   test packages a throwaway repository and checks that untracked plugin and theme directories — and the
   paths listed in `.release-exclude` — do not reach the bundle, and fails if the packager names an
   individual plugin or theme.
+- **The site has one main address and any number of other addresses; every other name gets `421`.**
+  The migration guard (409 `migration_required` plus a `/migration` page that asked for an administrator
+  password on any host and repointed the site at the request's `Host`) is replaced by a host policy
+  (`backend/src/core/host-policy.js`, byte-identical copy in the gateway) and a single writer
+  (`core/site-address.ts`). The main address (`siteUrl`) is the only base for links built outside the
+  browser, and it changes only through **Settings → Site address** (administrator browser session, MFA
+  policy, current password, revision check, audit, a notice to every administrator) or on the server with
+  the new **`npm run site`** CLI (`list`, `check`, `add`, `remove`, `canonical`, `ip-literals`,
+  `ip-signin`). Other addresses (aliases, optionally expiring or redirecting with a 308) are declared in
+  the same places or in `WORDJS_ALLOWED_HOSTS`; loopback and IP literals are always answered, because they
+  cannot be used for DNS rebinding (`hostPolicy.ipLiterals` / `WORDJS_IP_HOSTS` narrows that, and an IP
+  that arrives through an untrusted proxy is refused). An undeclared name gets `421 rest_host_not_allowed`
+  with no redirect on every API path, `/api/v1/setup/*` included once installed, and — at the monolith and
+  gateway edges — a static 421 page for pages, static files and WebSockets too; a malformed or repeated
+  `Host` gets `400`. In split and separate mode the backend pushes the policy to the gateway
+  (`POST /host-policy`, mTLS CN `backend`) after every change, at boot and after every registration.
+  `X-Forwarded-Host` / `-Proto` are believed only from a trusted hop (the mTLS gateway, a loopback peer
+  that addressed a loopback name, or an address-based `trustProxy` peer, whose forwarded host is believed
+  only when the `Host` it sent is an IP, loopback or single-label name), which closes the `127.0.0.1:4000`
+  forged-`X-Forwarded-Host` rebinding path; the gateway also drops a client's `X-Forwarded-Proto`.
+  Sign-in on an address other than the main one follows new rules in production: IP literals, tunnel
+  names and `.local` names are off by default (`hostPolicy.ipSignIn` / per-alias `signIn` opt in), and on
+  an https site the connection must really be https (`403 rest_insecure_transport`). Every session except
+  a loopback one is bound to the address it was started on, the main address included: removing that
+  address (or dropping the old main address in a move) revokes its sessions, a refresh keeps the
+  binding, and a session from an address other than the main one cannot mint API tokens. Reset and verification links, feeds, the sitemap and plugin `site.url()` never
+  come from the request any more; `PUT /settings` refuses `siteurl` / `home`; `POST /setup/migrate`
+  answers `410`. After an SSL toggle in split mode the main address follows the same host from http to
+  https at once (audited) instead of at the next restart. Guide: `documentation/site-address.md`.
+
+  **Upgrading.** Nothing to migrate by hand: at the first boot the config and the database are
+  reconciled, and if they name different main addresses nothing is written and administrators get a
+  banner to choose. No name is accepted automatically, so declare any other name browsers use (a `www`
+  twin, a LAN name) or it gets 421. A reverse proxy must forward the browser's `Host`
+  (`proxy_set_header Host $host`). A frontend replica that reaches a backend directly
+  (`WORDJS_BACKEND_URL`, or SSR via `internalApiUrl` to another machine) needs `WORDJS_TRUST_PROXY` on that
+  backend set to the replica addresses, or every proxied call is 421. `WORDJS_SITE_URL` is now only the
+  install wizard's suggested address (its new **Site address** field is prefilled from the address being
+  browsed). The Helm chart exports `WORDJS_ALLOWED_HOSTS` from `siteUrl`, the ingress hosts (new
+  `ingress.extraHosts`) and the new `allowedHosts`, and `trustProxy` as `WORDJS_TRUST_PROXY`.
 
 - **Remaining dependency advisories with a fix are closed.** Frontend: DOMPurify 3.4.16 (GHSA-p98j-92pf-mc4p,
   GHSA-6688-9rhm-gjv2), and js-yaml and brace-expansion moved to fixed releases in the lint toolchain;

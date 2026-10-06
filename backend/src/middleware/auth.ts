@@ -4,6 +4,7 @@
  */
 
 import type { Request, Response, NextFunction, CookieOptions } from 'express';
+import type { SiteHost, PolicyProvider } from '../core/host-policy';
 
 /**
  * The marks this file stamps on the request — `user`, `apiToken`, `isHeadless` — are declared ONCE, in
@@ -19,6 +20,126 @@ const config = require('../config/app');
 const User = require('../models/User');
 const ApiToken = require('../models/ApiToken');
 const mfa = require('../core/mfa');
+const hostPolicy: typeof import('../core/host-policy') = require('../core/host-policy');
+
+/**
+ * THE SITE'S ADDRESS POLICY — one memoised provider for the whole backend process.
+ *
+ * It lives here, not in index.ts, because every consumer of "which address was this request sent to"
+ * already imports this module (the CSRF gate below, routes/collab.ts, routes/auth.ts, routes/setup.ts)
+ * and index.ts cannot be imported by any of them without a cycle. index.ts mounts the host gate with
+ * `siteHostPolicy.get` and publishes the same provider as `app.hostPolicy`, so the gate, the cookie
+ * rules and the same-origin checks can never read two different policies.
+ *
+ * Both readers go through the live module objects on every call: configManager.getConfig returns the
+ * same object until the file's mtime changes (that identity IS the memo key), and config.nodeEnv is
+ * read live because the installer and the tests change it after this module is first required.
+ */
+const siteHostPolicy: PolicyProvider = hostPolicy.createPolicyProvider({
+    getConfig: () => require('../core/configManager').getConfig(),
+    nodeEnv: () => config.nodeEnv,
+});
+
+/**
+ * What the host gate (core/host-policy hostGateFactory) attached to this request, or null when it did
+ * not classify it: the gate is not mounted (a test harness, a plugin isolate), the request carried no
+ * Host at all (HTTP/1.0), the site is not installed yet, or the config has no valid siteUrl. Every
+ * reader treats null as "today's behaviour", never as a grant.
+ */
+function siteHostOf(req: Request): SiteHost | null {
+    const value = (req as { siteHost?: SiteHost }).siteHost;
+    return value && typeof value === 'object' ? value : null;
+}
+
+/**
+ * Count this request towards the "address still in use" interlock of the site-address API. Only a
+ * request that AUTHENTICATED counts: an anonymous client must not be able to keep an old address alive
+ * just by requesting it (REDTEAM R7), and the tracker itself records declared addresses only.
+ */
+function noteAuthenticatedUse(req: Request): void {
+    const siteHost = siteHostOf(req);
+    if (siteHost) hostPolicy.noteAuthenticatedUse({ siteHost });
+}
+
+/**
+ * The `mh` claim of the session JWT that authenticated this request (null for a session without one), set
+ * by verifyAndAttachUser only — never by optionalAuth, so a fresh sign-in that happens to carry an old
+ * cookie is bound by the address it signs in on. Kept in a WeakMap rather than on `req`, so nothing else
+ * on the request (a route, a plugin, a body parser) can set or clear it.
+ */
+const SESSION_MINTED_ON = new WeakMap<object, string | null>();
+
+/**
+ * THE ADDRESS A SESSION WAS MINTED ON (REDTEAM R2) — so that retiring an address retires its sessions.
+ *
+ * A session JWT is a 7-day bearer token that says nothing about where it came from. Minted on an alias, a
+ * tunnel name, an IP or a development origin, it outlives the address: the alias is removed, the tunnel
+ * name is handed to the next customer, DHCP gives the IP to another device — and the cookie a returning
+ * browser still sends to that name, now someone else's, replays against the site with any Host. So a
+ * session carries `mh` (the hostname it was minted on) and expires no later than the alias it was minted
+ * on. The MAIN address is no exception: it is the address most often retired (a move to a new domain with
+ * `oldAddress: 'drop'`), and a retired name can lapse into someone else's hands like any other. Its
+ * sessions carry their hostname and no expiry cap; 'keep' and 'redirect' turn the old main address into an
+ * alias, so they keep working there, while 'drop' ends them. Only loopback sessions carry nothing: a
+ * loopback name always means this machine and can never be handed to anyone else.
+ *
+ * A credential minted FROM a session (POST /auth/refresh, or any later caller of generateToken on an
+ * authenticated request) is never less bound than the session presented: the binding that session carried
+ * is kept, whatever address the new request used. Otherwise whoever replays an alias-bound cookie on the
+ * main address (or on loopback) would come away with an unbound, full-lifetime session that outlives the
+ * alias (review finding #1).
+ */
+function sessionAddressClaims(req?: Request): { mh: string; notAfterSeconds: number | null } | null {
+    const presented = req ? SESSION_MINTED_ON.get(req) : undefined;
+    if (typeof presented === 'string') {
+        const verdict = hostPolicy.classify(hostPolicy.parseHost(presented), siteHostPolicy.get());
+        return { mh: presented, notAfterSeconds: expirySeconds(verdict.entry) };
+    }
+    const siteHost = req ? siteHostOf(req) : null;
+    if (!siteHost || siteHost.cls === 'loopback') return null;
+    return { mh: siteHost.hostname, notAfterSeconds: expirySeconds(siteHost.entry) };
+}
+
+/** A declared address's own end (an alias `expiresAt`) in JWT seconds, or null when it has none. */
+function expirySeconds(entry: unknown): number | null {
+    const expiresAt = entry && typeof entry === 'object' && 'expiresAt' in entry ? (entry as { expiresAt: unknown }).expiresAt : null;
+    return typeof expiresAt === 'number' ? Math.floor(expiresAt / 1000) : null;
+}
+
+/**
+ * Was this request authenticated by a session minted somewhere other than the main address or loopback?
+ * POST /auth/tokens refuses those: an API token carries no binding, so minting one would let an alias
+ * session (whose cookie the next holder of the name may receive) outlive the alias (review finding #1).
+ * Judged against the CURRENT policy: a session from an old main address that was kept as an alias counts
+ * as an alias session.
+ */
+function sessionBoundToSecondaryAddress(req: Request): boolean {
+    const mintedOn = SESSION_MINTED_ON.get(req);
+    if (typeof mintedOn !== 'string') return false;
+    const cls = hostPolicy.classify(hostPolicy.parseHost(mintedOn), siteHostPolicy.get()).cls;
+    return cls !== 'canonical' && cls !== 'loopback';
+}
+
+/**
+ * Is the address this session was minted on still one the site answers? Judged from the CLAIM against
+ * the current policy, never from the request's own Host, so the SSR loopback hop and the gateway (which
+ * reach the API on other addresses with the browser's cookie) are unaffected. A session without `mh`
+ * (loopback, or minted before this existed) is never refused here. Once the alias is removed or expires,
+ * the main address is dropped, the WORDJS_ALLOWED_HOSTS entry is gone, the IP policy no longer accepts
+ * that IP, or the development origin is not honoured (production), every session minted there stops
+ * authenticating.
+ *
+ * While the config has no valid main address the host gate answers every address (and raises the
+ * missing-canonical error); the sessions follow it instead of all being revoked at once — a broken or
+ * half-edited siteUrl must not sign out every main-address session on the site.
+ */
+function sessionAddressStillAccepted(decoded: any): boolean {
+    if (!decoded || decoded.mh === undefined) return true;
+    if (typeof decoded.mh !== 'string') return false;
+    const policy = siteHostPolicy.get();
+    if (!policy.canonical) return true;
+    return hostPolicy.classify(hostPolicy.parseHost(decoded.mh), policy).cls !== 'unknown';
+}
 
 // Normalize the API prefix once (e.g. '/api/v1', no trailing slash) for resource extraction below.
 const API_PREFIX = String(config.api?.prefix || '/api/v1').replace(/\/+$/, '');
@@ -140,6 +261,9 @@ async function mfaComplianceGate(req: Request, res: Response, next: NextFunction
     try { decoded = jwt.verify(token, config.jwt.secret, { algorithms: ['HS256'] }); }
     catch { return next(); } // invalid/expired — the route's authenticate will 401 it
     if (!decoded || decoded.purpose) return next(); // challenge/special-purpose tokens are not sessions
+    // A session minted on an address the site no longer answers is no session: the route's own
+    // authenticate refuses it, and asking it to enrol in 2FA first would be the wrong answer.
+    if (!sessionAddressStillAccepted(decoded)) return next();
 
     // A valid, non-exempt session is present — the only question left is compliance. If we can't determine
     // it, fail CLOSED for this one request (the enrollment/logout allowlist above stays reachable, so the
@@ -228,6 +352,15 @@ async function verifyAndAttachUser(token: string, req: Request, res: Response, n
             return res.status(401).json({ code: 'rest_token_invalid', message: 'Invalid token.', data: { status: 401 } });
         }
 
+        // REDTEAM R2: a session minted on an address the site has stopped answering is retired with it.
+        if (!sessionAddressStillAccepted(decoded)) {
+            return res.status(401).json({
+                code: 'rest_token_revoked',
+                message: 'This session was started at an address this site no longer answers. Please log in again.',
+                data: { status: 401 }
+            });
+        }
+
         const user = await User.findById(decoded.userId);
 
         if (!user) {
@@ -253,7 +386,11 @@ async function verifyAndAttachUser(token: string, req: Request, res: Response, n
             });
         }
 
+        // Remember which address this session is bound to, so a credential minted from it (refresh) keeps
+        // the binding and POST /auth/tokens can refuse a session from a secondary address.
+        SESSION_MINTED_ON.set(req, typeof decoded.mh === 'string' ? decoded.mh : null);
         req.user = user;
+        noteAuthenticatedUse(req);
         next();
     } catch (error) {
         if (error.name === 'TokenExpiredError') {
@@ -312,6 +449,7 @@ async function verifyApiTokenAndAttachUser(token: string, req: Request, res: Res
         req.user = user;
         markHeadless(req, record);
         ApiToken.touch(record.id);
+        noteAuthenticatedUse(req);
         next();
     } catch (error) {
         return res.status(401).json({
@@ -439,16 +577,46 @@ function csrfCookie(req: Request): string | null {
  * the CSRF options to be DERIVED from the session options rather than written out a second time. A
  * function, not a const, because the tests (and the installer) mutate `config` after this module is
  * first required — a load-time snapshot would freeze `secure:false` on a site that later gets HTTPS.
+ *
+ * Pass the request whenever there is one: `secure` depends on WHICH ADDRESS the cookie is being set
+ * for (see sessionCookieSecure). Without a request it answers the site-wide rule, which is also what
+ * the path used by clearSessionCookies needs.
  */
-function sessionCookieOptions(): CookieOptions {
-    const siteUsesHttps = config.siteUrl?.startsWith('https://') || config.ssl?.enabled;
+function sessionCookieOptions(req?: Request): CookieOptions {
     return {
         httpOnly: true,
-        secure: siteUsesHttps, // Send over HTTPS if site uses it
+        secure: sessionCookieSecure(req),
         sameSite: 'lax', // Protect against CSRF while allowing normal navigation
         maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
         path: '/'
     };
+}
+
+/**
+ * Should the session cookie for THIS request carry `Secure`?
+ *
+ * Cookies are host-only (no Domain attribute anywhere), so each accepted address holds its own
+ * session and the answer is per address:
+ *
+ *   · the main address and loopback keep the site-wide rule exactly as it always was: Secure when the
+ *     site URL is https or the listener serves TLS. Nothing changes for an existing install there;
+ *   · any other accepted address (an alias, a WORDJS_ALLOWED_HOSTS entry, an IP literal, a development
+ *     origin) gets Secure when it was DECLARED https or when this request really arrived over TLS. The
+ *     site-wide rule cannot be reused for them: an https site reached at http://192.168.1.50:3000
+ *     would hand the browser a Secure cookie over plain http, which the browser drops — the login
+ *     "succeeds" and the next request is anonymous — while the token still crossed the wire in clear.
+ *     Whether a session may be minted there AT ALL is a separate question, answered by
+ *     signInRefusal below; this only decides the attribute of a cookie that is allowed.
+ *
+ * `undefined` from the legacy expression is kept as-is (falsy), so the options object an existing
+ * caller receives for the main address is byte-for-byte what it was.
+ */
+function sessionCookieSecure(req?: Request): boolean | undefined {
+    const legacy = config.siteUrl?.startsWith('https://') || config.ssl?.enabled;
+    const siteHost = req ? siteHostOf(req) : null;
+    if (!siteHost || siteHost.cls === 'canonical' || siteHost.cls === 'loopback') return legacy;
+    const declaredHttps = !!siteHost.entry && siteHost.entry.scheme === 'https';
+    return declaredHttps || siteHost.scheme === 'https';
 }
 
 /**
@@ -481,7 +649,9 @@ function csrfCookieOptions(sessionOptions?: CookieOptions): CookieOptions {
 function ensureCsrfCookie(req: Request, res: Response): void {
     if (!sessionCookie(req)) return; // no ambient cookie authority → nothing to protect
     if (csrfCookie(req)) return;     // already has one — never rotate outside issueSessionCookie
-    res.cookie(CSRF_COOKIE, newCsrfToken(), csrfCookieOptions());
+    // The request's own session options: the partner of a cookie set for an alias must carry the
+    // alias's Secure attribute, not the main address's.
+    res.cookie(CSRF_COOKIE, newCsrfToken(), csrfCookieOptions(sessionCookieOptions(req)));
 }
 
 /**
@@ -621,9 +791,85 @@ function issueSessionCookie(req: Request, res: Response, token: string, options:
         });
         return true;
     }
+    // The one door is also where the address rule lives, so login, register, refresh, MFA completion
+    // and the installer's auto-login all obey it without each remembering to ask.
+    if (refuseInsecureSignIn(req, res)) return true;
     res.cookie(SESSION_COOKIE, token, options);
     res.cookie(CSRF_COOKIE, newCsrfToken(), csrfCookieOptions(options));
     return false;
+}
+
+/** Why a session may not be minted on this request: the connection, or the address itself. */
+type SignInRefusal = 'transport' | 'address';
+
+/**
+ * THE SIGN-IN RULE — may a session be minted on the address this request was sent to?
+ *
+ * Before the site answered several addresses, no session ever existed anywhere but the main address and
+ * loopback: every other host got 409. Accepting more addresses must not quietly turn each of them into
+ * a place where a 7-day bearer cookie is handed out, so outside development (where everything is allowed,
+ * which is what keeps "my phone on the LAN IP" working) the rule is:
+ *
+ *   · the main address and loopback: unchanged — always allowed, exactly as before;
+ *   · the address must be ENABLED for sign-in ('address'). An alias or WORDJS_ALLOWED_HOSTS entry uses
+ *     its declared `signIn` (core/host-policy computes the default). IP literals, tunnel names and .local
+ *     names default to NO whatever their scheme (REDTEAM R2): the JWT outlives the name, and whoever is
+ *     handed that IP by DHCP, that tunnel name by the service or that .local name over mDNS next
+ *     receives a returning victim's cookie. An IP is enabled only by an explicit alias `signIn: true`
+ *     or by the site-wide `hostPolicy.ipSignIn`;
+ *   · on an https site, the connection must REALLY be https ('transport'), judged from the trusted
+ *     transport (REDTEAM R9), not from the scheme the address was declared with: an https alias reached
+ *     over plain http would otherwise send `Set-Cookie: wordjs_token=…` in clear text — the browser drops
+ *     a Secure cookie, a sniffer does not. The single relaxation is an alias DECLARED as http with an
+ *     explicit `signIn: true`: the operator wrote down that sessions travel in clear on that address.
+ *
+ * A request the gate did not classify (no siteHost: gate not mounted, no Host, not installed, no valid
+ * siteUrl) keeps today's behaviour. Nothing here is authorisation: it only decides whether a cookie is
+ * minted, never what an existing session may do.
+ */
+function signInRefusal(req: Request): SignInRefusal | null {
+    const siteHost = siteHostOf(req);
+    if (!siteHost) return null;
+    const policy = siteHostPolicy.get();
+    if (policy.dev) return null;
+    if (siteHost.cls === 'canonical' || siteHost.cls === 'loopback') return null;
+
+    const insecure = siteHost.scheme !== 'https' && !!policy.canonical && policy.canonical.scheme === 'https';
+    const entry = siteHost.entry && 'risk' in siteHost.entry ? siteHost.entry : null;
+    let enabled = false;
+    let declaredHttpSignIn = false;
+    if (entry && (siteHost.cls === 'alias' || siteHost.cls === 'env')) {
+        const explicit = 'signInExplicit' in entry && entry.signInExplicit === true;
+        // An explicit per-address choice always wins; otherwise an IP-literal entry follows the
+        // site-wide IP opt-in, and every other entry its computed default.
+        enabled = (explicit || entry.risk !== 'ip') ? entry.signIn === true : policy.ipSignIn === true;
+        declaredHttpSignIn = explicit && entry.signIn === true && entry.scheme === 'http';
+    } else if (siteHost.cls === 'ip') {
+        enabled = policy.ipSignIn === true;
+    }
+    // 'dev' only exists in development, which returned above; anything unforeseen fails closed.
+    if (!enabled) return insecure ? 'transport' : 'address';
+    if (insecure && !declaredHttpSignIn) return 'transport';
+    return null;
+}
+
+/**
+ * Answer 403 `rest_insecure_transport` when the sign-in rule refuses this request. Returns true when it
+ * refused and already sent the response (the caller must return), false otherwise — the same "true
+ * means handled" convention as issueSessionCookie. Used by issueSessionCookie itself and, ahead of any
+ * credential check, by POST /auth/login and /auth/register (REDTEAM R13).
+ */
+function refuseInsecureSignIn(req: Request, res: Response): boolean {
+    const reason = signInRefusal(req);
+    if (!reason) return false;
+    res.status(403).json({
+        code: 'rest_insecure_transport',
+        message: reason === 'transport'
+            ? 'Signing in over an unencrypted connection is not allowed at this address. Open the site at its main address to sign in.'
+            : 'Signing in is not enabled at this address. Open the site at its main address to sign in.',
+        data: { status: 403, reason }
+    });
+    return true;
 }
 
 /**
@@ -766,6 +1012,7 @@ async function optionalAuth(req: Request, res: Response, next: NextFunction) {
                 req.user = user;
                 markHeadless(req, record);
                 ApiToken.touch(record.id);
+                noteAuthenticatedUse(req);
             } else {
                 req.user = null;
             }
@@ -777,8 +1024,9 @@ async function optionalAuth(req: Request, res: Response, next: NextFunction) {
 
     try {
         const decoded = jwt.verify(token, config.jwt.secret, { algorithms: ['HS256'] });
-        // Special-purpose tokens (e.g. the MFA challenge) are never a session — treat as anonymous.
-        if (decoded.purpose) { req.user = null; return next(); }
+        // Special-purpose tokens (e.g. the MFA challenge) are never a session — treat as anonymous, and so
+        // is a session minted on an address the site no longer answers (see sessionAddressStillAccepted).
+        if (decoded.purpose || !sessionAddressStillAccepted(decoded)) { req.user = null; return next(); }
         const user = await User.findById(decoded.userId);
         // Honor token revocation here too (see verifyAndAttachUser): treat a revoked token as anonymous.
         // Use <= so a token issued in the same second as logout/password-change is also revoked.
@@ -787,6 +1035,7 @@ async function optionalAuth(req: Request, res: Response, next: NextFunction) {
             req.user = null;
         } else {
             req.user = user;
+            if (user) noteAuthenticatedUse(req);
         }
     } catch (e) {
         req.user = null;
@@ -796,17 +1045,21 @@ async function optionalAuth(req: Request, res: Response, next: NextFunction) {
 }
 
 /**
- * Generate JWT token for user
+ * Generate the session JWT for user. Pass the request whenever the token is minted FOR one (every
+ * cookie-issuing route does): a session minted on any address but loopback is bound to that address
+ * (`mh`) and capped at that alias's expiry, and one minted from an authenticated session keeps that
+ * session's binding — see sessionAddressClaims.
  */
-function generateToken(user: any) {
-    return jwt.sign(
-        {
-            userId: user.id,
-            username: user.userLogin
-        },
-        config.jwt.secret,
-        { expiresIn: config.jwt.expiresIn }
-    );
+function generateToken(user: any, req?: Request) {
+    const claims: Record<string, unknown> = { userId: user.id, username: user.userLogin };
+    const address = sessionAddressClaims(req);
+    if (address) claims.mh = address.mh;
+    const token = jwt.sign(claims, config.jwt.secret, { expiresIn: config.jwt.expiresIn });
+    if (!address || address.notAfterSeconds === null) return token;
+    // The configured lifetime is a duration string the signer interprets; compare its result with the
+    // alias's own end and re-sign with the earlier one, so the session never outlives the address.
+    const { exp } = jwt.decode(token) as { exp: number };
+    return exp <= address.notAfterSeconds ? token : jwt.sign({ ...claims, exp: address.notAfterSeconds }, config.jwt.secret);
 }
 
 /**
@@ -819,17 +1072,40 @@ function verifyToken(token: string) {
 /**
  * THE HOST THIS REQUEST WAS ACTUALLY SENT TO — one derivation, for every gate that asks.
  *
- * Behind the gateway (changeOrigin:true) `req.get('Host')` is the INTERNAL upstream address
- * (127.0.0.1:PORT), so a same-origin check against it could never match a real browser request. The
- * gateway forwards the browser's own Host as X-Forwarded-Host (xfwd:true) and STRIPS any client-supplied
- * value, so honor that first and fall back to Host for the direct/monolith case. First hop if a list.
+ * Delegated to core/host-policy requestAuthority, the same function the host gate, CORS and /setup use.
+ * Behind the gateway (changeOrigin:true) `Host` is the INTERNAL upstream address (127.0.0.1:PORT), so
+ * the browser's own Host arrives as X-Forwarded-Host — but that header is honoured ONLY from a trusted
+ * hop (the mTLS gateway, a loopback peer that addressed a loopback authority, or the operator's
+ * address-based trustProxy). It used to be honoured from anyone: a DNS-rebinding page reaching
+ * 127.0.0.1:4000 sends `Host: rebind.attacker:4000` (Host is a forbidden header) but may add any
+ * X-Forwarded-Host it likes, and was then judged as the site itself.
  *
- * `undefined` when there is no host to derive — deliberately NOT ''. Callers compare it to
- * `new URL(origin).host`, and '' equals `new URL('file://').host`, which would be a different hole.
+ * Normalised `host[:port]` (lower-case, one trailing dot removed, IPv6 bracketed), or `undefined` when
+ * there is no host or it is malformed — deliberately NOT ''. Callers compare it to an Origin's host,
+ * and '' equals `new URL('file://').host`, which would be a different hole.
  */
 function trustedHost(req: Request): string | undefined {
-    const fwdHost = (req.get('X-Forwarded-Host') || '').split(',')[0].trim();
-    return fwdHost || req.get('Host') || undefined;
+    return hostPolicy.requestHost(req, siteHostPolicy.get());
+}
+
+/**
+ * The `host[:port]` an Origin (or a Referer's origin) names, through the SAME parser and serialiser as
+ * the request side, so a page on `example.com.` or `EXAMPLE.com` keeps matching the host it was served
+ * from. `undefined` for anything that is not a parseable http(s) authority — `null`, `file://`, a
+ * userinfo trick — so it can never equal a real host.
+ */
+function originAuthority(origin: string): string | undefined {
+    try {
+        const parsed = hostPolicy.parseHost(new URL(origin).host);
+        return parsed ? hostPolicy.serialize(parsed) : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+/** Does this Origin name exactly the host the request was sent to? Fails closed on an absent host. */
+function originMatchesHost(origin: string, host: string | undefined): boolean {
+    return host !== undefined && originAuthority(origin) === host;
 }
 
 /**
@@ -863,7 +1139,9 @@ function sameOriginAllowList(host: string | undefined): string[] {
  * CSRF Protection for state-changing requests — TWO independent checks, AND-ed.
  *
  *  1. ORIGIN PINNING (this function): Origin/Referer must be an exact match for one of our own
- *     origins, with the gateway-pinned X-Forwarded-Host as the trusted host. Fails closed when both
+ *     origins, with trustedHost() (Host, or X-Forwarded-Host from a trusted hop) as the request's own
+ *     host. Aliases are deliberately NOT on the allow-list: each address is its own origin and only
+ *     ever vouches for itself. Fails closed when both
  *     headers are absent, unless the caller is a Bearer client.
  *  2. DOUBLE-SUBMIT TOKEN (`csrfTokenGate`, reached from every accepting branch below): a
  *     cookie-authenticated mutating request must echo the non-httpOnly `wjs_csrf` cookie back in
@@ -921,16 +1199,9 @@ function csrfProtection(req: Request, res: Response, next: NextFunction) {
         }
     }
 
-    // Allow requests from same host
-    if (requestOrigin) {
-        try {
-            const originHost = new URL(requestOrigin).host;
-            if (originHost === host) {
-                return csrfTokenGate(req, res, next);
-            }
-        } catch {
-            // Invalid origin URL
-        }
+    // Allow requests from same host (host:port, both sides normalised by the one parser).
+    if (requestOrigin && originMatchesHost(requestOrigin, host)) {
+        return csrfTokenGate(req, res, next);
     }
 
     // No Origin AND no Referer.
@@ -987,13 +1258,27 @@ module.exports = {
     // asks the question (csrfProtection here, sameOrigin() in routes/collab.ts). Exported so there is
     // nothing left to copy.
     trustedHost,
+    originMatchesHost,
     sameOriginAllowList,
     mfaComplianceGate,
+    // The site's address policy (one provider per process; index.ts mounts the host gate with it and
+    // publishes it as app.hostPolicy) and what the gate attached to a request.
+    siteHostPolicy,
+    siteHostOf,
     // Headless (API-token) boundary — one mark, one cookie door, one session-only guard.
     isHeadless,
     issueSessionCookie,
     sessionOnly,
     SESSION_COOKIE,
+    // The sign-in rule behind that door, exposed for the UX pre-checks (login/register refuse before a
+    // password is evaluated; GET /auth/me tells the login screen not to render the form).
+    signInRefusal,
+    refuseInsecureSignIn,
+    // Sessions bound to the address they were minted on (REDTEAM R2): the check every verifier of a
+    // session JWT outside this file must also apply (routes/collab.ts re-verifies its live streams),
+    // and the question POST /auth/tokens asks before minting an unbound credential from a session.
+    sessionAddressStillAccepted,
+    sessionBoundToSecondaryAddress,
     // Double-submit CSRF token — the cookie's name/options and the header the client must echo, so
     // routes/auth.ts (logout) and the tests consume the same definitions the gate enforces.
     CSRF_COOKIE,

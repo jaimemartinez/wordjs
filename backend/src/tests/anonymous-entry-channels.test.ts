@@ -50,13 +50,14 @@ const bcrypt = require('bcryptjs');
 /**
  * THE INSTALLATION THIS FILE RUNS AGAINST IS STAGED, NOT INHERITED.
  *
- * `/setup/migrate` — the rescue door the last gate in this file is about — starts with
+ * `/setup/migrate` — the removed rescue door the last gate in this file is about — used to start with
  * `if (!isInstalled()) return 400`, and `isInstalled()` reads `wordjs-config.json` resolved from the
  * CWD AT LOAD TIME (core/configManager). So the gate only ever reached the code it exists to test
  * because the developer's own machine happens to have an installed site at `backend/`. From a clean
  * checkout — which is all CI ever has, and all a release tarball ever has — the file is absent, the
- * route answers `400 Not installed`, and the hostage property is never exercised at all. State git
- * does not carry was standing in for a fixture.
+ * route answers `400 Not installed`, and the property is never exercised at all. State git does not
+ * carry was standing in for a fixture. (The 410 stub reads no install state, but the gate still asserts
+ * against an installed site: that is the state in which the old door was alive.)
  *
  * Worse in the other direction: with the real config file in reach, anything in this run that calls
  * `saveConfig` (frontend-purge's `ensureSecret`, for one) writes into the DEVELOPER'S LIVE
@@ -84,8 +85,8 @@ const config = require('../config/app');
 assert.strictEqual(
     require('../core/configManager').CONFIG_FILE,
     path.join(TMP_INSTALL, 'wordjs-config.json'),
-    'the staged config is not the file configManager reads — /setup/migrate would answer 400 Not installed ' +
-    'and the rescue-door gate below would prove nothing');
+    'the staged config is not the file configManager reads — the gates below would run against whatever ' +
+    'installation the machine happens to have, and could write into it');
 assert.strictEqual(require('../core/configManager').isInstalled(), true,
     'precondition: the staged installation must read as installed');
 
@@ -1052,52 +1053,39 @@ test('the escalating wait bounds THROUGHPUT, not just latency: a burst cannot al
 });
 
 /**
- * THE SAME HOSTAGE SHAPE, ON THE ONE DOOR THAT MUST NEVER JAM.
+ * THE OLD RESCUE DOOR IS GONE, AND WITH IT THE ANONYMOUS CREDENTIAL ORACLE.
  *
- * POST /setup/migrate authenticates raw credentials from an ANONYMOUS body, and it used to read
- * `isLoginLocked` BEFORE authenticating and 429 on it. Ten wrong passwords against {username:'admin'}
- * therefore answered the real administrator — holding the CORRECT password — with the attacker's own 429,
- * and `clearLoginFails` only runs after a successful admin authentication, which the lock itself prevents.
- * This is the WORST door in the codebase to jam: during a domain move the Installation/Migration Guard
- * 409s every non-/setup route, /auth/login included, so /setup/migrate is the only way to repair siteUrl.
- * The site is down and its escape hatch says "too many attempts".
- *
- * The bucket is armed through the ROUTE first (producer proof), so this is not a fixture arguing with a
- * constant it invented; after that the same proven key is armed directly, because paying the real ladder
- * twelve times over is time this gate does not need to spend to state its property.
+ * POST /setup/migrate authenticated raw credentials from an ANONYMOUS body on whatever host the request
+ * named, then repointed the site there. It was the door this file spent a gate on keeping un-jammable
+ * (an anonymous flood must not make it refuse the real administrator), because during a domain move the
+ * old migration guard 409'd every other route. The host gate replaced that guard — the main address,
+ * localhost, this server's IPs and the CLI always work — so the door itself was removed: every method now
+ * answers 410 rest_migrate_removed and evaluates NOTHING. The property this gate pins is the stronger one:
+ * no credential is looked at (so no failure is counted and there is nothing to jam or to guess against),
+ * and nothing is written, whatever the body or the state of the old 'migrate' bucket.
  */
-test('an anonymous flood at /setup/migrate cannot make the rescue door refuse a credential', async () => {
+test('/setup/migrate evaluates no credential and writes nothing — 410 for every method', async () => {
     const auth = require('../routes/auth');
     const key = auth.lockBucket('migrate', await auth.resolveLockIdentifier(OWNER));
     await auth.clearLoginFails(key);
+    const configBefore = fs.readFileSync(require('../core/configManager').CONFIG_FILE, 'utf8');
 
-    // PRODUCER PROOF: one real anonymous request, and the bucket it writes is the one armed below.
-    const first = await request(app).post(`${B}/setup/migrate`).send({ username: OWNER, password: 'wrong' });
-    assert.strictEqual(first.status, 401, `the uniform refusal must be 401, got ${first.status} ${JSON.stringify(first.body)}`);
-    assert.strictEqual(await auth.loginFailCount(key), 1,
-        'the route must be shown to write the bucket this test then arms — otherwise the rest proves nothing');
+    for (const password of ['wrong', PASSWORD]) {
+        const res = await request(app).post(`${B}/setup/migrate`).send({ username: OWNER, password });
+        assert.strictEqual(res.status, 410, `got ${res.status} ${JSON.stringify(res.body)}`);
+        assert.strictEqual(res.body.code, 'rest_migrate_removed');
+    }
+    assert.strictEqual(await auth.loginFailCount(key), 0, 'a credential was evaluated: the removed door still counts failures');
 
-    // Arm well past the OLD lockout threshold (10).
+    // A bucket filled under the old door changes nothing: there is no lock to read any more.
     for (let i = 0; i < 12; i++) await auth.recordLoginFail(key);
-    assert.ok(await auth.loginFailCount(key) >= 12, 'precondition: the bucket really is full');
-
-    // CONTROL, so "nothing locks any more" cannot pass this test: the same twelve failures on a LOCKING
-    // purpose do arm a lock. The migrate bucket is unlocked because its purpose is count-only, not because
-    // the store stopped working.
-    const control = auth.lockBucket('login', `${OWNER}-migrate-control`);
-    for (let i = 0; i < 12; i++) await auth.recordLoginFail(control);
-    assert.strictEqual(await auth.isLoginLocked(control), true, 'the control bucket must really be armed');
-    assert.strictEqual(await auth.isLoginLocked(key), false,
-        'the migrate bucket armed a LOCK. It is a count-only purpose: its failures must buy a wait, not a refusal');
-
-    // …and the door itself answers on the merits, never with a lockout.
-    const after = await request(app).post(`${B}/setup/migrate`).send({ username: OWNER, password: PASSWORD });
-    assert.notStrictEqual(after.status, 429,
-        `the rescue door refused a credential because of a failure count: ${after.status} ${JSON.stringify(after.body)}`);
-    assert.strictEqual(after.status, 401,
-        `expected the uniform 401 (this account is not an administrator), got ${after.status} ${JSON.stringify(after.body)}`);
+    for (const method of ['post', 'get', 'put', 'delete']) {
+        const res = await (request(app) as any)[method](`${B}/setup/migrate`).send({ username: OWNER, password: PASSWORD });
+        assert.strictEqual(res.status, 410, `${method.toUpperCase()}: ${res.status} ${JSON.stringify(res.body)}`);
+    }
+    assert.strictEqual(fs.readFileSync(require('../core/configManager').CONFIG_FILE, 'utf8'), configBefore,
+        'the staged installation must be untouched');
 
     await auth.clearLoginFails(key);
-    await auth.clearLoginFails(control);
 });
 

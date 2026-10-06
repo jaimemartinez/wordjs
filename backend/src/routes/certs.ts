@@ -31,7 +31,10 @@ router.use(isAdmin);
  * /system/certs/auto-provision:
  *   post:
  *     summary: Provision a certificate over ACME HTTP-01
- *     description: Runs the whole HTTP-01 flow and installs the result on the gateway. Administrator only.
+ *     description: >-
+ *       Runs the whole HTTP-01 flow and installs the result on the gateway. `domains` orders ONE
+ *       certificate for several names (the first names it; every name must answer the challenge);
+ *       `domain` is the single-name form. Administrator only.
  *     tags: [Certificates]
  *     security:
  *       - bearerAuth: []
@@ -49,10 +52,14 @@ router.use(isAdmin);
  *         application/json:
  *           schema:
  *             type: object
- *             required: [domain, email]
+ *             required: [email]
  *             properties:
  *               domain:
  *                 type: string
+ *               domains:
+ *                 type: array
+ *                 items:
+ *                   type: string
  *               email:
  *                 type: string
  *                 description: The ACME account email.
@@ -100,10 +107,11 @@ router.use(isAdmin);
  */
 router.post('/auto-provision', async (req: Request, res: Response) => {
     try {
-        const { domain, email, staging } = req.body;
-        if (!domain || !email) return res.status(400).json({ error: 'Domain and Email required' });
+        const { domain, domains, email, staging } = req.body;
+        const names = Array.isArray(domains) && domains.length ? domains : domain;
+        if (!names || !email) return res.status(400).json({ error: 'Domain and Email required' });
 
-        const result = await certManager.provisionAutoHTTP(domain, email, !!staging);
+        const result = await certManager.provisionAutoHTTP(names, email, !!staging);
         res.json(result);
     } catch (e) {
         console.error('Provision Error:', e);
@@ -141,10 +149,14 @@ router.post('/auto-provision', async (req: Request, res: Response) => {
  *         application/json:
  *           schema:
  *             type: object
- *             required: [domain, email]
+ *             required: [email]
  *             properties:
  *               domain:
  *                 type: string
+ *               domains:
+ *                 type: array
+ *                 items:
+ *                   type: string
  *               email:
  *                 type: string
  *               staging:
@@ -631,11 +643,26 @@ router.post('/check', async (req: Request, res: Response) => {
  *                 type: boolean
  *     responses:
  *       200:
- *         description: The gateway's answer to the configuration push
+ *         description: >-
+ *           The gateway's answer to the configuration push, plus what it means for the site's main
+ *           address — `canonicalUpgraded` when the same host moved from http to https and the main
+ *           address followed automatically, or `suggestCanonical` when the gateway now reports another
+ *           address that only an administrator may adopt (Settings → Site address).
  *         content:
  *           application/json:
  *             schema:
  *               type: object
+ *               properties:
+ *                 siteUrl:
+ *                   type: string
+ *                 canonicalUpgraded:
+ *                   type: string
+ *                 suggestCanonical:
+ *                   type: string
+ *                 siteAddressWarnings:
+ *                   type: array
+ *                   items:
+ *                     type: string
  *       401:
  *         description: "rest_not_logged_in — no valid credential."
  *         content:
@@ -667,7 +694,25 @@ router.post('/config', async (req: Request, res: Response) => {
             await certManager.ensureGatewayCert();
         }
 
-        res.json(result);
+        // The gateway recomputed its own address from the new port / TLS switch and answered it. Compare
+        // it with the main address: the same host moving http → https is applied at once (REDTEAM R1 —
+        // otherwise every reset token keeps being emailed as an http:// link); anything else is only
+        // SUGGESTED, so the admin screen can open the change dialog prefilled. A failure here never
+        // fails the TLS change itself, which the gateway has already applied.
+        const addressUpdate: Record<string, unknown> = {};
+        try {
+            const outcome = await require('../core/site-address').noteGatewaySiteUrl(result && result.siteUrl);
+            if (outcome.outcome === 'upgraded') {
+                addressUpdate.canonicalUpgraded = outcome.canonical;
+                if (outcome.warnings && outcome.warnings.length) addressUpdate.siteAddressWarnings = outcome.warnings;
+            } else if (outcome.outcome === 'drift') {
+                addressUpdate.suggestCanonical = outcome.gateway;
+            }
+        } catch (e: any) {
+            console.warn('Site address check after the gateway change failed:', e && e.message);
+        }
+
+        res.json({ ...result, ...addressUpdate });
     } catch (e) {
         console.error('Gateway Config Write Error:', e);
         res.status(500).json({ error: publicErrorText(e, 'The gateway configuration could not be updated.') });

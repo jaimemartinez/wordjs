@@ -542,18 +542,38 @@ const config: AppConfig = {
 };
 
 // Refresh the request-time runtime fields from wordjs-config.json WITHOUT a process restart. Called after
-// the config is persisted (setup install, settings save) so a just-set siteUrl is honored immediately by
-// CSRF / CORS / the allowed-origins list. Without this, config.site.url keeps its boot-time value and every
-// POST from the freshly-configured origin is CSRF-blocked ("rest_csrf_invalid") until the process restarts.
-function reloadFromFile() {
+// the config is persisted (setup install, settings save, a site-address change) so a just-set siteUrl is
+// honored immediately by CSRF / CORS / the allowed-origins list. Without this, config.site.url keeps its
+// boot-time value and every POST from the freshly-configured origin is CSRF-blocked ("rest_csrf_invalid")
+// until the process restarts.
+//
+// `fresh` is the object core/configManager just wrote; without it the file is read here. Passing it
+// matters: this module's configPath is anchored to the backend directory while configManager's is the
+// cwd, and the runtime must reflect the bytes that were actually written.
+//
+// The site-address keys are refreshed as well, because a change of main address is applied live:
+//   · siteAliases / hostPolicy / siteAddress — the host gate reads them through its policy provider from
+//     the file, but anything reading this runtime object must not see a pre-change copy;
+//   · gatewayUrl — a move rewrites it when it named the old main address (REDTEAM R3);
+//   · ssl.enabled — derived from siteUrl exactly as at load. Keeping the boot-time value after an
+//     https → http move would keep marking the session cookie Secure on a plain-http site: every sign-in
+//     would "succeed" into a cookie the browser then refuses to send back.
+// A site-address key absent from the file is cleared rather than kept, so a removed list is really gone.
+function reloadFromFile(fresh?: any) {
     try {
-        const fresh = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-        if (fresh.siteUrl) { config.site.url = fresh.siteUrl; (config as any).siteUrl = fresh.siteUrl; }
-        if (fresh.frontendUrl) (config as any).frontendUrl = fresh.frontendUrl;
-        if (fresh.siteName) config.site.name = fresh.siteName;
-        if (fresh.siteDescription) config.site.description = fresh.siteDescription;
+        const next = fresh && typeof fresh === 'object' ? fresh : JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        if (next.siteUrl) { config.site.url = next.siteUrl; (config as any).siteUrl = next.siteUrl; }
+        if (next.frontendUrl) (config as any).frontendUrl = next.frontendUrl;
+        if (next.gatewayUrl) (config as any).gatewayUrl = next.gatewayUrl;
+        if (next.siteName) config.site.name = next.siteName;
+        if (next.siteDescription) config.site.description = next.siteDescription;
+        for (const key of ['siteAliases', 'hostPolicy', 'siteAddress']) {
+            if (next[key] === undefined) delete (config as any)[key];
+            else (config as any)[key] = next[key];
+        }
+        config.ssl = { ...config.ssl, enabled: !!(next.ssl?.enabled || String(next.siteUrl || config.siteUrl || '').startsWith('https:')) };
         return true;
-    } catch (e) {
+    } catch {
         return false;
     }
 }
