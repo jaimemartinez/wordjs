@@ -81,6 +81,17 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   read-only income, so the balance is complete without entering anything twice. Totals (income, expenses,
   balance) and a per-category breakdown follow the date, type, category, source and text filters; the
   filtered ledger exports to Excel (summary and entries).
+- **Conference Manager 2.13.0 — a lodging explorer you can walk into.** Hotel assignment, in the admin and in
+  the coordinator portal, now opens on the hotels (beds taken and free, rooms full or with space), enters a
+  hotel to see every room with its occupants' full names and free beds, and enters a room to see each occupant
+  in full: location, family group, document, email, phone, payment status, registration code and the
+  conference's own fields. *Volver*, breadcrumbs and Esc step back one level; *Anterior / Siguiente* walk the
+  rooms; the last hotel and room are remembered per browser tab. From a room you assign people to a free bed
+  (searchable, optionally moving someone from another room), move or unassign an occupant, with the same
+  rules the server enforces (allotted locations, frozen or validated arrangements, capacity). In a
+  women-only or men-only room the picker lists that gender first and flags the others. Everything the
+  previous board did still works inside the explorer (dragging people from the unassigned panel onto a hotel
+  or room, the location filter, pool rooms), and the lodging tile in the attendee view jumps to the room.
 
 ### Fixed
 

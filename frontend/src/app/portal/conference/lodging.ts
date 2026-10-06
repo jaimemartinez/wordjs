@@ -129,7 +129,8 @@ export const roomsWithSpace = (rooms: LodgingRoom[] | null | undefined): Lodging
     (Array.isArray(rooms) ? rooms : []).filter((r) => freeBeds(r) > 0);
 
 // ---------------------------------------------------------------------------------------------------
-// Drag & drop (the decisions behind LodgingTab's native HTML5 DnD; the server re-validates every drop)
+// Drag & drop (the decisions behind LodgingExplorer's native HTML5 DnD and its pickers — see
+// lodgingView.ts assignCandidates / moveTargets; the server re-validates every drop)
 // ---------------------------------------------------------------------------------------------------
 
 /** Why a drop is refused client-side: `same` = the attendee is already there (no-op), `full` = no free bed, `unknown` = an id not in the payload. */

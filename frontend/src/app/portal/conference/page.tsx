@@ -354,6 +354,13 @@ function LocationPortalContent() {
                 headers: portalAuthHeaders()
             });
         } catch { /* clearing local state below is enough to log out this tab */ }
+        // Forget the lodging explorer's remembered place on this device (it is per location anyway).
+        try {
+            for (let i = sessionStorage.length - 1; i >= 0; i--) {
+                const k = sessionStorage.key(i);
+                if (k && k.startsWith("cm.portal.lodging.explorer.")) sessionStorage.removeItem(k);
+            }
+        } catch { /* storage unavailable: nothing to forget */ }
         setToken(null);
         setMyLocation(null);
         setInscriptions([]);
@@ -683,8 +690,11 @@ function LocationPortalContent() {
                     ))}
                 </div>
 
+                {/* storageScope ties the lodging explorer's remembered hotel/room to THIS location, so a shared
+                    device never reopens another coordinator's place. */}
                 {tab === 'lodging' ? (
-                    <Hospedajes authHeaders={portalAuthHeaders} onLocationRefresh={refreshMyLocation} />
+                    <Hospedajes authHeaders={portalAuthHeaders} onLocationRefresh={refreshMyLocation}
+                        storageScope={myLocation ? `${myLocation.conference_id ?? ""}:${myLocation.id}` : undefined} />
                 ) : (
                 <Card className="animate-in slide-in-from-bottom-4 duration-500">
                     <CardHeader

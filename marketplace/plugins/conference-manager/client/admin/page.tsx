@@ -18,22 +18,19 @@ import { buildXlsx, downloadXlsx } from "../lib/xlsx";
 import { availableColumns, defaultColumnKeys, filterRoster, buildRosterSheet, buildHotelReport, exportFilename, transportByPerson } from "../lib/exports";
 import { StatCard } from "../../../../../frontend/src/components/ui/StatCard";
 import { ActionCard } from "../../../../../frontend/src/components/ui/ActionCard";
+// Lodging explorer (2.13.0) and the pure helpers it shares with this page (status meta, display
+// names, field values, {placeholder} filling) — they live in lib/lodgingView.ts so the explorer never
+// imports this file.
+import LodgingExplorer from "./LodgingExplorer";
+import { fieldVal, fillVars, lodgingStatusMeta, personDisplayName, withName, indexOccupants } from "../lib/lodgingView";
 
 // Register plugin translations
 registerTranslations(translations);
 
 type View = 'list' | 'dashboard' | 'inscriptions' | 'lodging' | 'transport' | 'accounting' | 'locations' | 'reports' | 'assignment' | 'fields' | 'pricing';
 
-// Lodging status of a location (draft | submitted | validated): i18n key + badge classes, shared by the
-// locations cards, the review modal and the inscriptions assign modal.
-const LODGING_STATUS_META: Record<string, { key: string; fallback: string; cls: string; icon: string }> = {
-    draft: { key: 'lodging.status.draft', fallback: 'Borrador', cls: 'bg-gray-100 text-gray-500', icon: 'fa-pen-ruler' },
-    submitted: { key: 'lodging.status.submitted', fallback: 'Enviado a validación', cls: 'bg-amber-50 text-amber-700 border border-amber-200', icon: 'fa-paper-plane' },
-    validated: { key: 'lodging.status.validated', fallback: 'Validado', cls: 'bg-emerald-50 text-emerald-700 border border-emerald-200', icon: 'fa-circle-check' },
-};
-const lodgingStatusMeta = (status?: string | null) => LODGING_STATUS_META[status || 'draft'] || LODGING_STATUS_META.draft;
-// t() has no interpolation; the few keys that name a location carry a literal {name} placeholder.
-const withName = (text: string, name: string) => String(text || '').split('{name}').join(name);
+// LODGING_STATUS_META / lodgingStatusMeta and withName ({name} placeholder; t() has no interpolation)
+// moved to lib/lodgingView.ts in 2.13.0.
 
 function ConferenceManagerContent() {
     const { currentConference, conferences, setCurrentConference, refreshConferences, loading } = useConference();
@@ -52,7 +49,16 @@ function ConferenceManagerContent() {
 
     const setView = (newView: View) => {
         setViewState(newView);
-        localStorage.setItem('conference-manager:view', newView);
+        try { localStorage.setItem('conference-manager:view', newView); } catch { /* blocked storage */ }
+    };
+
+    // «Ver ocupación» (Hoteles y habitaciones) → the lodging explorer in «Asignación», opened at that
+    // hotel / room. The explorer consumes the focus once and clears it (onFocusConsumed); it never goes
+    // through the browser history (the admin lives inside the Next.js app router).
+    const [lodgingFocus, setLodgingFocus] = useState<{ hotelId: number; roomId?: number | null } | null>(null);
+    const openLodgingExplorer = (focus: { hotelId: number; roomId?: number | null }) => {
+        setLodgingFocus({ hotelId: Number(focus.hotelId), roomId: focus.roomId != null ? Number(focus.roomId) : null });
+        setView('assignment');
     };
 
     // Cuando se selecciona una conferencia, cambiar a dashboard
@@ -139,11 +145,11 @@ function ConferenceManagerContent() {
                 <div className="h-full bg-white rounded-xl shadow-sm border border-gray-200 p-6 overflow-auto flex flex-col">
                     {view === 'dashboard' && <ConferenceDashboard conferenceId={currentConference.id} onNavigate={setView} />}
                     {view === 'inscriptions' && <InscriptionsPage conferenceId={currentConference.id} />}
-                    {view === 'lodging' && <LodgingPage conferenceId={currentConference.id} />}
+                    {view === 'lodging' && <LodgingPage conferenceId={currentConference.id} onOpenExplorer={openLodgingExplorer} />}
                     {view === 'transport' && <TransportPage conferenceId={currentConference.id} slug={currentConference.slug} />}
                     {view === 'accounting' && <AccountingPage conferenceId={currentConference.id} slug={currentConference.slug} />}
                     {view === 'locations' && <LocationsPage conferenceId={currentConference.id} />}
-                    {view === 'assignment' && <AssignmentPage conferenceId={currentConference.id} />}
+                    {view === 'assignment' && <AssignmentPage conferenceId={currentConference.id} focus={lodgingFocus} onFocusConsumed={() => setLodgingFocus(null)} />}
                     {view === 'fields' && <FieldsPage conferenceId={currentConference.id} />}
                     {view === 'pricing' && <PricingPage conferenceId={currentConference.id} />}
                     {view === 'reports' && <ReportsPage conferenceId={currentConference.id} />}
@@ -659,13 +665,8 @@ function ConferenceDashboard({ conferenceId, onNavigate }: { conferenceId: numbe
 
 // Inscriptions Component
 // The registration form is the source of truth: attendee data lives in real columns named after each
-// field (with a custom_data fallback for legacy rows). These read a field's value + build a display name.
-const fieldVal = (person: any, field: any) => {
-    const v = person?.[field.name];
-    if (v !== undefined && v !== null && v !== '') return v;
-    const cd = person?.custom_data?.[field.name];
-    return (cd !== undefined && cd !== null && cd !== '') ? cd : '';
-};
+// field (with a custom_data fallback for legacy rows). fieldVal / personDisplayName read a field's value
+// and build a display name — both live in lib/lodgingView.ts (shared with the lodging explorer).
 // Registration-code viewer (admin-only): the Code 128 barcode of an attendee's reg_code, with print,
 // SVG download and copy. The SVG is generated locally from a code of a fixed alphabet (escaped anyway).
 function BarcodeModal({ code, name, onClose }: { code: string; name: string; onClose: () => void }) {
@@ -906,19 +907,6 @@ function ExcelExportModal({ conferenceId, slug, onClose }: { conferenceId: numbe
         </div>
     );
 }
-
-const personDisplayName = (person: any, fields: any[]) => {
-    const fl = fields || [];
-    // Prefer the fields tagged with the name roles; fall back to the first 1-2 form fields.
-    const named = ['first_name', 'last_name']
-        .map(role => fl.find((f: any) => f.role === role))
-        .filter(Boolean)
-        .map((f: any) => fieldVal(person, f))
-        .filter(v => v !== '' && v != null);
-    const parts = named.length ? named : fl.map((f: any) => fieldVal(person, f)).filter(v => v !== '' && v != null).slice(0, 2);
-    const name = parts.join(' ').trim();
-    return name || `#${person?.id ?? ''}`;
-};
 
 function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
     const { t } = useI18n();
@@ -1967,8 +1955,119 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
     );
 }
 
+/**
+ * One room tile of «Hoteles y habitaciones». The tile is a plain container: its one action (open the
+ * explorer at this room, or toggle it in selection mode) is a real <button>, and the delete button is
+ * its SIBLING — never an interactive control nested in a role=button, whose children screen readers
+ * flatten (axe nested-interactive). `names` = the occupants' display names, sorted.
+ */
+function LodgingRoomTile({ room, names, selecting, selected, onActivate, onDelete, t }: {
+    room: Room; names: string[]; selecting: boolean; selected: boolean;
+    onActivate?: () => void; onDelete: () => void; t: (k: string) => string;
+}) {
+    const cap = room.capacity || 0;
+    const occ = room.occupied || 0;
+    const isFull = cap > 0 && occ >= cap;
+    const occupancyPercent = cap > 0 ? Math.min(100, (occ / cap) * 100) : 0;
+    const badge = room.location_id != null ? (room.location_name || `#${room.location_id}`) : null;
+    const shownNames = names.slice(0, 3);
+    const openLabel = fillVars(t('explorer.tile.open') || 'Ver ocupación de la habitación {n}', { n: room.room_number });
+    const actionLabel = selecting
+        ? fillVars(t('explorer.tile.select') || 'Seleccionar la habitación {n}', { n: room.room_number })
+        : `${openLabel} (${occ}/${room.capacity ?? 0})${names.length ? `: ${names.join(', ')}` : ''}`;
+    const Body: any = onActivate ? 'button' : 'div';
+    const bodyProps = onActivate
+        ? { type: 'button', onClick: onActivate, 'aria-label': actionLabel, 'aria-pressed': selecting ? selected : undefined, title: selecting ? undefined : openLabel }
+        : {};
+    return (
+        <div
+            data-room-tile={room.id}
+            className={`
+            group/room rounded-3xl border-2 transition-all duration-300 relative overflow-hidden
+            ${selected
+                ? 'bg-indigo-50 border-indigo-500 shadow-lg'
+                : isFull
+                    ? 'bg-white border-rose-100 shadow-sm opacity-80'
+                    : 'bg-white border-white shadow-sm hover:border-blue-400 hover:shadow-xl hover:-translate-y-1'}
+        `}>
+            {/* Decor first: the body below is positioned and paints over it. */}
+            {isFull && <div className="absolute inset-0 bg-rose-50/10 pointer-events-none"></div>}
+            <Body
+                {...bodyProps}
+                className={`relative w-full h-full text-left p-4 sm:p-5 flex flex-col justify-between gap-3 min-h-[9rem] rounded-3xl ${onActivate ? 'cursor-pointer focus:outline-none focus-visible:ring-4 focus-visible:ring-inset focus-visible:ring-blue-200' : ''}`}
+            >
+                {/* pr-7 keeps the room number / badges clear of the delete button above it. */}
+                <div className="flex justify-between items-start gap-2 pr-7 w-full">
+                    <div className="min-w-0">
+                        <span className="font-black text-xl text-gray-900 italic tracking-tighter">{room.room_number}</span>
+                        {badge && (
+                            <div className="mt-0.5 max-w-full truncate px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-600 text-[8px] font-black uppercase tracking-widest" title={badge}>
+                                <i className="fa-solid fa-map-pin mr-1" aria-hidden="true"></i>{badge}
+                            </div>
+                        )}
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                        {selecting && (
+                            <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[8px] border-2 ${selected ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-gray-200 text-transparent'}`} aria-hidden="true">
+                                <i className="fa-solid fa-check"></i>
+                            </div>
+                        )}
+                        {room.notes && (
+                            <div className="w-5 h-5 rounded-full bg-blue-50 flex items-center justify-center text-blue-400 group-hover/room:bg-blue-100 transition-colors" title={room.notes}>
+                                <i className="fa-solid fa-info text-[8px]" aria-hidden="true"></i>
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                {/* Who sleeps here: the first 3 names (wrapping, never cut to «Mar…»), then «+N». */}
+                <ul className="space-y-0.5 min-w-0 w-full">
+                    {shownNames.map((n, i) => (
+                        <li key={i} className="text-sm leading-snug font-semibold text-gray-700 break-words line-clamp-2" title={n}>{n}</li>
+                    ))}
+                    {names.length > shownNames.length && (
+                        <li className="text-[10px] font-bold text-gray-400">{fillVars(t('explorer.tile.more') || '+{n} más', { n: names.length - shownNames.length })}</li>
+                    )}
+                    {occ === 0 && (
+                        <li className="text-[10px] font-bold text-gray-300 italic">{t('explorer.tile.empty') || 'Sin ocupantes'}</li>
+                    )}
+                </ul>
+
+                <div className="space-y-3 w-full">
+                    <div className="flex justify-between items-end">
+                        <span className={`text-[10px] font-black uppercase tracking-widest ${isFull ? 'text-rose-500' : 'text-gray-400'}`}>
+                            {isFull ? (t('explorer.tile.full') || 'Completa') : (t('explorer.tile.free') || 'Libre')}
+                        </span>
+                        <span className="text-xs font-bold text-gray-900">
+                            {room.occupied || 0}<span className="text-gray-300">/</span>{room.capacity}
+                        </span>
+                    </div>
+
+                    <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden" aria-hidden="true">
+                        <div
+                            className={`h-full rounded-full transition-all duration-500 ${isFull ? 'bg-rose-500' : 'bg-blue-500'}`}
+                            style={{ width: `${occupancyPercent}%` }}
+                        ></div>
+                    </div>
+                </div>
+            </Body>
+            <button
+                type="button"
+                onClick={onDelete}
+                title={t('delete.room') || 'Eliminar habitación'}
+                aria-label={`${t('delete.room') || 'Eliminar habitación'} ${room.room_number}`}
+                className="absolute top-4 right-4 sm:top-5 sm:right-5 z-10 w-6 h-6 rounded-full flex items-center justify-center text-gray-300 hover:text-rose-600 hover:bg-rose-50 transition-colors opacity-0 group-hover/room:opacity-100 group-focus-within/room:opacity-100 focus:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-300 [@media(hover:none)]:opacity-100"
+            >
+                <i className="fa-solid fa-trash-can text-[9px]" aria-hidden="true"></i>
+            </button>
+        </div>
+    );
+}
+
 // Lodging Component
-function LodgingPage({ conferenceId }: { conferenceId: number }) {
+// `onOpenExplorer`: a room tile (outside selection mode) or a hotel's «Ver ocupación» opens the lodging
+// explorer in «Asignación» at that hotel / room (see ConferenceManagerContent.openLodgingExplorer).
+function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; onOpenExplorer?: (focus: { hotelId: number; roomId?: number | null }) => void }) {
     const { t } = useI18n(); // Get t() function
     const { addToast } = useToast();
     const { currentConference: lodgingConf } = useConference();
@@ -1995,6 +2094,25 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
     const [selectHotel, setSelectHotel] = useState<number | null>(null);
     const [selectedRooms, setSelectedRooms] = useState<Set<number>>(new Set());
     const [allotting, setAllotting] = useState<number | null>(null);
+    // Who sleeps in each room, for the names on the tiles. A failed load only hides the names: the
+    // counts keep coming from GET /hotels (room.occupied). Only the latest of overlapping loads lands.
+    const [people, setPeople] = useState<Inscription[]>([]);
+    const [formFields, setFormFields] = useState<ConferenceField[]>([]);
+    const peopleSeq = useRef(0);
+    const occupantsByRoom = useMemo(() => indexOccupants(people), [people]);
+
+    const fetchPeople = async () => {
+        if (!conferenceId) return;
+        const seq = ++peopleSeq.current;
+        try {
+            const [ins, flds] = await Promise.all([conferenceApi.getInscriptions(conferenceId), conferenceApi.getFields(conferenceId)]);
+            if (seq !== peopleSeq.current) return;
+            setPeople(ins || []);
+            setFormFields(flds || []);
+        } catch (e) {
+            console.error(e);
+        }
+    };
 
     const fetchHotels = async () => {
         if (!conferenceId) return;
@@ -2022,6 +2140,7 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
     useEffect(() => {
         fetchHotels();
         fetchLocations();
+        fetchPeople();
     }, [conferenceId]);
 
     // Allot the whole hotel, or only the selected tiles, to the location picked in that hotel's select.
@@ -2085,6 +2204,7 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
             await conferenceApi.deleteHotel(hotel.id);
             addToast(t('hotel.deleted') || 'Hotel eliminado', 'success');
             fetchHotels();
+            fetchPeople();
         } catch (error: any) {
             addToast(error?.message || 'Error', 'error');
         }
@@ -2096,6 +2216,7 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
             await conferenceApi.deleteRoom(room.id);
             addToast(t('room.deleted') || 'Habitación eliminada', 'success');
             fetchHotels();
+            fetchPeople();
         } catch (error: any) {
             addToast(error?.message || 'Error', 'error');
         }
@@ -2189,7 +2310,15 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
                                 </div>
                             </div>
                         </div>
-                        <div className="flex items-center gap-3">
+                        <div className="flex flex-wrap items-center gap-3">
+                            {onOpenExplorer && (
+                                <button
+                                    onClick={() => onOpenExplorer({ hotelId: hotel.id })}
+                                    className="bg-gray-900 text-white px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-600 transition-all flex items-center gap-2 shadow-sm focus:outline-none focus-visible:ring-4 focus-visible:ring-indigo-200"
+                                >
+                                    <i className="fa-solid fa-door-open text-[10px]"></i> {t('explorer.hotel.view') || 'Ver ocupación'}
+                                </button>
+                            )}
                             <button
                                 onClick={() => setShowRoomModal(hotel.id)}
                                 className="bg-white border-2 border-gray-100 px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-gray-500 hover:border-blue-500 hover:text-white hover:bg-blue-600 transition-all flex items-center gap-2 shadow-sm"
@@ -2214,7 +2343,7 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
                         </div>
                     </div>
 
-                    <div className="p-8 bg-gray-50/30">
+                    <div className="p-4 sm:p-8 bg-gray-50/30">
                         {(hotel.rooms && hotel.rooms.length > 0) && (
                             <div className="mb-6 p-4 bg-white rounded-2xl border border-gray-100 shadow-sm flex flex-col lg:flex-row lg:items-center gap-3">
                                 <div className="flex items-center gap-3 min-w-0">
@@ -2274,83 +2403,32 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
                                 <p className="text-[10px] uppercase tracking-widest opacity-40 mt-1">Añade habitaciones para comenzar</p>
                             </div>
                         ) : (
-                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+                            <>
+                            {onOpenExplorer && selectHotel !== hotel.id && (
+                                <p className="mb-3 text-[11px] text-gray-400 font-medium"><i className="fa-solid fa-hand-pointer mr-1.5"></i>{t('explorer.tile.hint') || 'Pulsa una habitación para ver quién duerme ahí y gestionar sus camas.'}</p>
+                            )}
+                            <div className="grid grid-cols-1 min-[440px]:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3 sm:gap-4">
                                 {hotel.rooms.map(room => {
-                                    const cap = room.capacity || 0;
-                                    const occ = room.occupied || 0;
-                                    const isFull = cap > 0 && occ >= cap;
-                                    const occupancyPercent = cap > 0 ? Math.min(100, (occ / cap) * 100) : 0;
                                     const selecting = selectHotel === hotel.id;
-                                    const selected = selecting && selectedRooms.has(room.id);
-                                    const badge = room.location_id != null ? (room.location_name || `#${room.location_id}`) : null;
-
+                                    // Outside selection mode a tile opens the explorer at this room; in it, it toggles the selection.
+                                    const activate = selecting
+                                        ? () => toggleRoomSelected(room.id)
+                                        : onOpenExplorer ? () => onOpenExplorer({ hotelId: hotel.id, roomId: room.id }) : undefined;
                                     return (
-                                        <div
+                                        <LodgingRoomTile
                                             key={room.id}
-                                            onClick={selecting ? () => toggleRoomSelected(room.id) : undefined}
-                                            className={`
-                                            group/room p-5 rounded-3xl border-2 transition-all duration-300 relative overflow-hidden flex flex-col justify-between h-32
-                                            ${selecting ? 'cursor-pointer' : ''}
-                                            ${selected
-                                                ? 'bg-indigo-50 border-indigo-500 shadow-lg'
-                                                : isFull
-                                                    ? 'bg-white border-rose-100 shadow-sm opacity-80'
-                                                    : 'bg-white border-white shadow-sm hover:border-blue-400 hover:shadow-xl hover:-translate-y-1'}
-                                        `}>
-                                            <div className="flex justify-between items-start z-10">
-                                                <div className="min-w-0">
-                                                    <span className="font-black text-xl text-gray-900 italic tracking-tighter">{room.room_number}</span>
-                                                    {badge && (
-                                                        <div className="mt-0.5 max-w-full truncate px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-600 text-[8px] font-black uppercase tracking-widest" title={badge}>
-                                                            <i className="fa-solid fa-map-pin mr-1"></i>{badge}
-                                                        </div>
-                                                    )}
-                                                </div>
-                                                <div className="flex items-center gap-1.5">
-                                                    {selecting && (
-                                                        <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[8px] border-2 ${selected ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-gray-200 text-transparent'}`}>
-                                                            <i className="fa-solid fa-check"></i>
-                                                        </div>
-                                                    )}
-                                                    {room.notes && (
-                                                        <div className="w-5 h-5 rounded-full bg-blue-50 flex items-center justify-center text-blue-400 group-hover/room:bg-blue-100 transition-colors" title={room.notes}>
-                                                            <i className="fa-solid fa-info text-[8px]"></i>
-                                                        </div>
-                                                    )}
-                                                    <button
-                                                        onClick={e => { e.stopPropagation(); handleDeleteRoom(room); }}
-                                                        title={t('delete.room') || 'Eliminar habitación'}
-                                                        className="w-5 h-5 rounded-full flex items-center justify-center text-gray-300 hover:text-rose-600 hover:bg-rose-50 transition-colors opacity-0 group-hover/room:opacity-100 [@media(hover:none)]:opacity-100"
-                                                    >
-                                                        <i className="fa-solid fa-trash-can text-[8px]"></i>
-                                                    </button>
-                                                </div>
-                                            </div>
-
-                                            <div className="space-y-3 z-10">
-                                                <div className="flex justify-between items-end">
-                                                    <span className={`text-[10px] font-black uppercase tracking-widest ${isFull ? 'text-rose-500' : 'text-gray-400'}`}>
-                                                        {isFull ? 'Completa' : 'Libre'}
-                                                    </span>
-                                                    <span className="text-xs font-bold text-gray-900">
-                                                        {room.occupied || 0}<span className="text-gray-300">/</span>{room.capacity}
-                                                    </span>
-                                                </div>
-
-                                                <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
-                                                    <div
-                                                        className={`h-full rounded-full transition-all duration-500 ${isFull ? 'bg-rose-500' : 'bg-blue-500'}`}
-                                                        style={{ width: `${occupancyPercent}%` }}
-                                                    ></div>
-                                                </div>
-                                            </div>
-
-                                            {/* Decor */}
-                                            {isFull && <div className="absolute inset-0 bg-rose-50/10 pointer-events-none"></div>}
-                                        </div>
+                                            room={room}
+                                            names={(occupantsByRoom.get(Number(room.id)) || []).map(p => personDisplayName(p, formFields)).sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }))}
+                                            selecting={selecting}
+                                            selected={selecting && selectedRooms.has(room.id)}
+                                            onActivate={activate}
+                                            onDelete={() => handleDeleteRoom(room)}
+                                            t={t}
+                                        />
                                     );
                                 })}
                             </div>
+                            </>
                         )}
                     </div>
                 </div>
@@ -3567,589 +3645,14 @@ function PredicateEditor({ fields, value, onChange, label }: any) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Accommodation board (AssignmentPage): who sleeps where, editable by drag & drop.
-//
-// Contract: a chip carries its inscription id in dataTransfer 'text/plain' (and in `dragging`
-// state, for browsers that hide the payload during dragover). Room tiles and the "Sin asignar"
-// panel are drop targets. A drop is refused CLIENT-SIDE (toast, no request) when the room is full,
-// allotted to another location, or its location is frozen; the server re-checks every one of
-// those (400/409) and a rejected move is reverted from the optimistic update. Attendees of a
-// frozen location (lodging submitted/validated) and cancelled attendees are never draggable.
+// Accommodation (AssignmentPage): who sleeps where. Since 2.13.0 it is the lodging explorer
+// (./LodgingExplorer.tsx) — «Hoteles › Hotel › Habitación» with the same drag & drop contract,
+// room picker and frozen / cancelled protections the 2.5.0 board had.
 // ---------------------------------------------------------------------------------------------
-const BOARD_CHIP_CAP = 300;
-// t() has no interpolation: fill literal {key} placeholders.
-const fillVars = (text: string, vars: Record<string, string | number>) =>
-    Object.entries(vars).reduce((s, [k, v]) => s.split(`{${k}}`).join(String(v)), String(text || ''));
 
-// The drag payload's private MIME type: a drop only counts when a chip of this board started the drag
-// (text/plain alone would also accept "101" selected on the page or dragged from another window).
-const BOARD_DRAG_TYPE = 'application/x-cm-inscription';
-
-function AccommodationBoard({ inscriptions, hotels, locations, fields, onMove, pending, loading, runSummary, boardRef }: {
-    inscriptions: Inscription[];
-    hotels: Hotel[];
-    locations: Location[];
-    fields: ConferenceField[];
-    onMove: (inscriptionId: number, roomId: number | null) => Promise<boolean>;
-    pending: Set<number>;
-    loading: boolean;
-    runSummary: { assigned: number; remaining: number } | null;
-    boardRef: React.RefObject<HTMLDivElement>;
-}) {
-    const { t } = useI18n();
-    const { addToast } = useToast();
-    const [search, setSearch] = useState('');
-    const [locFilter, setLocFilter] = useState<string>('');
-    // null = the default (every hotel open, so "who went where" needs no clicks); a Set once the admin
-    // toggles something. A fresh run resets it so the rooms it just filled are visible.
-    const [openHotels, setOpenHotels] = useState<Set<number> | null>(null);
-    useEffect(() => { if (runSummary) setOpenHotels(null); }, [runSummary]);
-    const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
-    const [dragging, setDragging] = useState<number | null>(null);
-    const [over, setOver] = useState<string | null>(null);
-    const [modalTarget, setModalTarget] = useState<Inscription | null>(null);
-    const [moving, setMoving] = useState(false);
-
-    const locById = useMemo(() => {
-        const m = new Map<number, Location>();
-        for (const l of locations) m.set(Number(l.id), l);
-        return m;
-    }, [locations]);
-    const locFrozen = (id: number | null | undefined) => id != null && isLodgingFrozen(locById.get(Number(id))?.lodging_status);
-    const isCancelled = (p: Inscription) => p.status === 'cancelled';
-    // The pre-checks mirror the server, which reads the location_id COLUMN only (roomAllows and
-    // assertLocationNotFrozen never resolve a legacy `location` label by name) — seedLocationId is for display.
-    const rawLocationId = (p: Inscription): number | null => (p.location_id == null ? null : Number(p.location_id));
-    // Why a chip can't be dragged (i18n key) — null when it can.
-    const dragBlock = (p: Inscription): string | null => {
-        if (isCancelled(p)) return 'board.cancelled';
-        if (locFrozen(rawLocationId(p))) return 'board.frozen';
-        if (pending.has(p.id)) return 'board.moving';
-        return null;
-    };
-    const roomsById = useMemo(() => {
-        const m = new Map<number, Room & { hotel: Hotel }>();
-        for (const h of hotels) for (const r of (h.rooms || [])) m.set(Number(r.id), { ...r, hotel: h });
-        return m;
-    }, [hotels]);
-    const occupantsByRoom = useMemo(() => {
-        const m = new Map<number, Inscription[]>();
-        for (const p of inscriptions) {
-            if (p.room_id == null) continue;
-            const k = Number(p.room_id);
-            if (!m.has(k)) m.set(k, []);
-            m.get(k)!.push(p);
-        }
-        return m;
-    }, [inscriptions]);
-    // Beds taken, computed from the attendee list (not room.occupied) so optimistic moves show at once.
-    // Every row with a room_id counts — the server's capacity check and the Hospedaje tiles count the
-    // same way (a legacy cancelled row that still holds a room takes its bed until it is unassigned).
-    const occupiedOf = (roomId: number) => (occupantsByRoom.get(Number(roomId)) || []).length;
-    // Why `p` can't be dropped into `room` (i18n key) — null when the move is allowed. The attendee's own
-    // frozen location is dragBlock's business; an allotted room of a frozen location is simply "foreign"
-    // to anyone else (the server answers 400 «asignada a la localidad …», not 409).
-    const dropBlock = (p: Inscription | null, room: Room): string | null => {
-        if (!p) return null;
-        if (Number(p.room_id) === Number(room.id)) return null;
-        if (room.location_id != null && Number(room.location_id) !== rawLocationId(p)) return 'board.room.foreign';
-        if (occupiedOf(room.id) >= (room.capacity || 0)) return 'board.room.full';
-        return null;
-    };
-
-    // "Sin asignar": non-cancelled attendees without a room, filtered, grouped by location.
-    const unassignedGroups = useMemo(() => {
-        const q = search.trim().toLowerCase();
-        const groups = new Map<string, { name: string; frozen: boolean; people: Inscription[] }>();
-        let total = 0;
-        for (const p of inscriptions) {
-            if (p.room_id != null || p.status === 'cancelled') continue;
-            const locId = seedLocationId(p, locations);
-            if (locFilter && String(locId ?? '') !== locFilter) continue;
-            const loc = locId == null ? null : locById.get(Number(locId)) || null;
-            const locName = loc?.name || p.location || '';
-            const name = personDisplayName(p, fields);
-            if (q && !`${name} ${p.family_group || ''} ${locName}`.toLowerCase().includes(q)) continue;
-            const key = locId == null ? '' : String(locId);
-            if (!groups.has(key)) groups.set(key, { name: locName, frozen: !!loc && isLodgingFrozen(loc.lodging_status), people: [] });
-            groups.get(key)!.people.push(p);
-            total++;
-        }
-        const list = Array.from(groups.entries()).map(([key, g]) => ({ key, ...g }));
-        list.sort((a, b) => (a.name || '￿').localeCompare(b.name || '￿'));
-        return { list, total };
-    }, [inscriptions, locations, locById, fields, search, locFilter]);
-    const unassignedTotal = useMemo(() => inscriptions.filter(p => p.room_id == null && p.status !== 'cancelled').length, [inscriptions]);
-
-    const hotelOpen = (h: Hotel) => openHotels ? openHotels.has(h.id) : true;
-    const toggleHotel = (h: Hotel) => {
-        const next = new Set(openHotels || hotels.map(x => x.id));
-        if (hotelOpen(h)) next.delete(h.id); else next.add(h.id);
-        setOpenHotels(next);
-    };
-    const toggleGroup = (key: string) => {
-        const next = new Set(collapsedGroups);
-        if (next.has(key)) next.delete(key); else next.add(key);
-        setCollapsedGroups(next);
-    };
-
-    // --- DnD -------------------------------------------------------------------------------
-    const draggedPerson = dragging == null ? null : inscriptions.find(p => p.id === dragging) || null;
-    // Only a drag that one of our chips started is ours: the private type is set in onChipDragStart.
-    // (`dragging` covers browsers that hide the types list during dragover.)
-    const isBoardDrag = (e: React.DragEvent) => dragging != null || Array.from(e.dataTransfer.types || []).includes(BOARD_DRAG_TYPE);
-    const readDragId = (e: React.DragEvent) => {
-        if (!Array.from(e.dataTransfer.types || []).includes(BOARD_DRAG_TYPE)) return dragging;
-        const n = Number(e.dataTransfer.getData(BOARD_DRAG_TYPE));
-        return Number.isInteger(n) && n > 0 ? n : dragging;
-    };
-    const onChipDragStart = (p: Inscription) => (e: React.DragEvent) => {
-        e.dataTransfer.setData(BOARD_DRAG_TYPE, String(p.id));
-        e.dataTransfer.setData('text/plain', personDisplayName(p, fields));
-        e.dataTransfer.effectAllowed = 'move';
-        setDragging(p.id);
-    };
-    const onChipDragEnd = () => { setDragging(null); setOver(null); };
-    // dropEffect stays 'move' even for a refused target: a dragover that ends in 'none' cancels the drop
-    // (no `drop` event fires), which would make the explanatory toast in onRoomDrop unreachable. The rose
-    // ring shows the refusal while hovering; the toast says why on release.
-    const onRoomDragOver = (room: Room) => (e: React.DragEvent) => {
-        if (!isBoardDrag(e)) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-        if (over !== `room:${room.id}`) setOver(`room:${room.id}`);
-    };
-    const onRoomDrop = (room: Room) => async (e: React.DragEvent) => {
-        if (!isBoardDrag(e)) return;
-        e.preventDefault();
-        setOver(null);
-        const id = readDragId(e);
-        setDragging(null);
-        if (id == null) return;
-        const p = inscriptions.find(x => x.id === id);
-        if (!p) return;
-        const why = dragBlock(p) || dropBlock(p, room);
-        if (why) { addToast(t(why), 'error'); return; }
-        if (Number(p.room_id) === Number(room.id)) return;
-        await onMove(id, room.id);
-    };
-    const onUnassignedDragOver = (e: React.DragEvent) => {
-        if (!isBoardDrag(e)) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-        if (over !== 'unassigned') setOver('unassigned');
-    };
-    const onUnassignedDrop = async (e: React.DragEvent) => {
-        if (!isBoardDrag(e)) return;
-        e.preventDefault();
-        setOver(null);
-        const id = readDragId(e);
-        setDragging(null);
-        if (id == null) return;
-        const p = inscriptions.find(x => x.id === id);
-        if (!p || p.room_id == null) return;
-        const why = dragBlock(p);
-        if (why) { addToast(t(why), 'error'); return; }
-        await onMove(id, null);
-    };
-    const leaveTarget = (key: string) => (e: React.DragEvent) => {
-        // Children fire dragleave too; only clear when the pointer really left the target.
-        if (e.currentTarget.contains(e.relatedTarget as Node)) return;
-        if (over === key) setOver(null);
-    };
-
-    const modalMove = async (roomId: number | null) => {
-        if (!modalTarget || moving) return;
-        setMoving(true);
-        try {
-            const ok = await onMove(modalTarget.id, roomId);
-            if (ok) setModalTarget(null);
-        } finally {
-            setMoving(false);
-        }
-    };
-
-    // --- Rendering helpers ----------------------------------------------------------------
-    const roomLabel = (room: Room) => {
-        const hotelName = roomsById.get(Number(room.id))?.hotel?.name;
-        return hotelName ? `${hotelName} · ${room.room_number}` : String(room.room_number);
-    };
-    const renderChip = (p: Inscription) => {
-        const block = dragBlock(p);
-        const g = String(p.gender || '').toUpperCase().charAt(0);
-        const isDragging = dragging === p.id;
-        return (
-            <div
-                key={p.id}
-                draggable={!block}
-                onDragStart={block ? undefined : onChipDragStart(p)}
-                onDragEnd={onChipDragEnd}
-                title={block ? t(block) : personDisplayName(p, fields)}
-                className={`inline-flex items-center gap-1.5 pl-1.5 pr-1 py-1 rounded-full border text-[11px] font-bold max-w-full transition-all select-none ${block
-                    ? 'bg-gray-50 border-gray-100 text-gray-400 opacity-60 cursor-not-allowed'
-                    : isDragging
-                        ? 'bg-indigo-100 border-indigo-300 text-indigo-700 opacity-50 cursor-grabbing'
-                        : 'bg-white border-gray-200 text-gray-700 cursor-grab active:cursor-grabbing hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 shadow-sm'}`}
-            >
-                {g && (
-                    <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-black shrink-0 ${g === 'F' ? 'bg-pink-100 text-pink-600' : 'bg-blue-100 text-blue-600'}`}>{g}</span>
-                )}
-                <span className="truncate">{personDisplayName(p, fields)}</span>
-                {p.family_group && (
-                    <span className="px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700 text-[8px] font-black uppercase tracking-widest truncate max-w-[6rem]" title={p.family_group}>
-                        <i className="fa-solid fa-people-roof mr-1"></i>{p.family_group}
-                    </span>
-                )}
-                {block === 'board.frozen' && <i className="fa-solid fa-lock text-[8px] text-amber-500"></i>}
-                {block === 'board.moving' && <i className="fa-solid fa-spinner fa-spin text-[8px] text-indigo-400"></i>}
-                <button
-                    type="button"
-                    onClick={e => { e.stopPropagation(); setModalTarget(p); }}
-                    title={t('board.options') || 'Opciones de habitación'}
-                    aria-label={t('board.options') || 'Opciones de habitación'}
-                    className="w-5 h-5 rounded-full flex items-center justify-center text-gray-400 hover:bg-gray-100 hover:text-indigo-600 transition-colors shrink-0"
-                >
-                    <i className="fa-solid fa-ellipsis text-[9px]"></i>
-                </button>
-            </div>
-        );
-    };
-
-    // Chips rendered under the cap, group by group (the note tells the admin to search instead).
-    let renderedChips = 0;
-    // The page spinner recipe, shown in both panels while the first load is in flight so the empty-state
-    // copy ("Todos tienen habitación", "No hay hoteles") only appears once the data has arrived.
-    const spinner = (
-        <div className="p-12 text-center">
-            <div className="inline-block w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('loading')}</p>
-        </div>
-    );
-
-    return (
-        <div ref={boardRef} tabIndex={-1} className="bg-white rounded-3xl border border-gray-100 overflow-hidden shadow-xl shadow-gray-100/30 outline-none focus-visible:ring-4 focus-visible:ring-indigo-100">
-            <div className="bg-gray-50/50 border-b border-gray-100 px-8 py-6 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                <div className="flex items-center gap-4 min-w-0">
-                    <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white shadow-lg shadow-indigo-200 shrink-0">
-                        <i className="fa-solid fa-bed"></i>
-                    </div>
-                    <div className="min-w-0">
-                        <h3 className="text-xl font-black text-gray-900 italic tracking-tighter leading-none">{t('board.title') || 'Acomodación'}</h3>
-                        <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-2">{t('board.subtitle') || 'Arrastra un participante a una habitación'}</p>
-                    </div>
-                    {runSummary && (
-                        <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-indigo-50 border border-indigo-100 text-indigo-700 text-[10px] font-black uppercase tracking-widest whitespace-nowrap">
-                            <i className="fa-solid fa-wand-magic-sparkles text-[9px]"></i>
-                            {fillVars(t('board.run.summary') || 'Asignados: {n} · Pendientes: {m}', { n: runSummary.assigned, m: runSummary.remaining })}
-                        </div>
-                    )}
-                </div>
-                <div className="flex flex-wrap items-center gap-3">
-                    <select
-                        value={locFilter}
-                        onChange={e => setLocFilter(e.target.value)}
-                        className="border-2 border-gray-100 rounded-xl px-3 py-2 bg-white focus:border-indigo-500 transition-all outline-none text-gray-900 font-medium text-xs"
-                    >
-                        <option value="">{t('board.all.locations') || 'Todas las localidades'}</option>
-                        {locations.map(l => <option key={l.id} value={String(l.id)}>{l.name}</option>)}
-                    </select>
-                    {!loading && (
-                        <div className="flex items-center gap-2 px-3 py-1.5 bg-white rounded-lg border border-gray-100 text-[10px] font-black uppercase tracking-widest text-amber-600">
-                            <i className="fa-solid fa-user-clock text-[9px]"></i>
-                            {fillVars(t('board.unassigned.count') || '{n} sin asignar', { n: unassignedTotal })}
-                        </div>
-                    )}
-                </div>
-            </div>
-
-            <div className="grid grid-cols-1 xl:grid-cols-[minmax(260px,320px)_1fr]">
-                {/* Unassigned panel — also a drop target that clears the room. */}
-                <div
-                    onDragOver={onUnassignedDragOver}
-                    onDragLeave={leaveTarget('unassigned')}
-                    onDrop={onUnassignedDrop}
-                    className={`border-b xl:border-b-0 xl:border-r border-gray-100 p-6 flex flex-col gap-4 transition-all ${over === 'unassigned' && draggedPerson && draggedPerson.room_id != null ? 'bg-rose-50/60 ring-4 ring-inset ring-rose-200' : 'bg-gray-50/30'}`}
-                >
-                    <div className="flex items-center justify-between gap-3">
-                        <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('board.unassigned') || 'Sin asignar'}</h4>
-                        <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 text-[9px] font-black">{unassignedGroups.total}</span>
-                    </div>
-                    <div className="relative">
-                        <i className="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-gray-300 text-xs"></i>
-                        <input
-                            value={search}
-                            onChange={e => setSearch(e.target.value)}
-                            placeholder={t('board.search') || 'Buscar participante…'}
-                            className="w-full border-2 border-gray-100 rounded-xl pl-9 pr-3 py-2.5 bg-white focus:border-indigo-500 transition-all outline-none text-gray-900 font-medium text-xs placeholder:text-gray-300"
-                        />
-                    </div>
-                    {dragging != null && draggedPerson && draggedPerson.room_id != null && (
-                        <div className="text-[10px] font-bold text-rose-500 uppercase tracking-widest text-center py-2 border-2 border-dashed border-rose-200 rounded-xl">
-                            <i className="fa-solid fa-arrow-down mr-1"></i>{t('board.drop.here') || 'Suelta aquí para quitar la habitación'}
-                        </div>
-                    )}
-                    <div className="space-y-3 xl:max-h-[70vh] xl:overflow-y-auto modern-scrollbar pr-1">
-                        {loading ? spinner : unassignedGroups.total === 0 ? (
-                            <div className="text-center py-10 text-gray-300">
-                                <i className="fa-solid fa-circle-check text-2xl mb-2 opacity-40"></i>
-                                <p className="text-[10px] font-black uppercase tracking-widest opacity-60">{unassignedTotal === 0 ? (t('board.no.unassigned') || 'Todos tienen habitación') : (t('board.no.results') || 'Sin resultados')}</p>
-                            </div>
-                        ) : unassignedGroups.list.map(g => {
-                            if (renderedChips >= BOARD_CHIP_CAP) return null;
-                            const collapsed = collapsedGroups.has(g.key);
-                            const budget = BOARD_CHIP_CAP - renderedChips;
-                            const shown = collapsed ? [] : g.people.slice(0, budget);
-                            renderedChips += shown.length;
-                            return (
-                                <div key={g.key || '__none'} className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-                                    <button
-                                        type="button"
-                                        onClick={() => toggleGroup(g.key)}
-                                        className="w-full flex items-center justify-between gap-2 px-4 py-2.5 hover:bg-gray-50 transition-colors"
-                                    >
-                                        <span className="flex items-center gap-2 min-w-0">
-                                            <i className={`fa-solid fa-chevron-${collapsed ? 'right' : 'down'} text-[8px] text-gray-300`}></i>
-                                            <span className="text-[10px] font-black uppercase tracking-widest text-gray-600 truncate">{g.name || (t('board.no.location') || 'Sin localidad')}</span>
-                                            {g.frozen && <i className="fa-solid fa-lock text-[9px] text-amber-500" title={t('board.frozen')}></i>}
-                                        </span>
-                                        <span className="text-[9px] font-black text-gray-400">{g.people.length}</span>
-                                    </button>
-                                    {!collapsed && (
-                                        <div className="px-3 pb-3 flex flex-wrap gap-1.5">
-                                            {shown.map(renderChip)}
-                                        </div>
-                                    )}
-                                </div>
-                            );
-                        })}
-                        {unassignedGroups.total > BOARD_CHIP_CAP && (
-                            <p className="text-[10px] text-gray-400 font-medium text-center px-2">
-                                {fillVars(t('board.showing') || 'Mostrando {n} de {total} — usa el buscador', { n: Math.min(BOARD_CHIP_CAP, unassignedGroups.total), total: unassignedGroups.total })}
-                            </p>
-                        )}
-                    </div>
-                </div>
-
-                {/* Hotels → rooms */}
-                <div className="p-6 space-y-4 min-w-0">
-                    {loading ? spinner : hotels.length === 0 ? (
-                        <div className="text-center py-16 text-gray-300 bg-gray-50/50 rounded-3xl border-2 border-dashed border-gray-200">
-                            <i className="fa-solid fa-hotel text-3xl mb-3 opacity-30"></i>
-                            <p className="text-[10px] font-black uppercase tracking-widest opacity-60">{t('no.hotels') || 'No hay hoteles configurados.'}</p>
-                        </div>
-                    ) : hotels.map(hotel => {
-                        const rooms = hotel.rooms || [];
-                        const beds = rooms.reduce((a, r) => a + (r.capacity || 0), 0);
-                        const used = rooms.reduce((a, r) => a + occupiedOf(r.id), 0);
-                        const isOpen = hotelOpen(hotel);
-                        return (
-                            <div key={hotel.id} className="rounded-3xl border border-gray-100 bg-white shadow-sm overflow-hidden">
-                                <button
-                                    type="button"
-                                    onClick={() => toggleHotel(hotel)}
-                                    title={t('board.toggle') || 'Mostrar u ocultar'}
-                                    className="w-full flex items-center gap-4 px-6 py-4 hover:bg-gray-50/70 transition-colors text-left"
-                                >
-                                    <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center text-blue-600 text-lg shrink-0">
-                                        <i className="fa-solid fa-hotel"></i>
-                                    </div>
-                                    <div className="min-w-0 flex-1">
-                                        <div className="text-lg font-black text-gray-900 italic tracking-tighter leading-none truncate">{hotel.name}</div>
-                                        <div className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-1.5">
-                                            <span className={used >= beds && beds > 0 ? 'text-rose-500' : 'text-gray-600'}>{used}/{beds}</span> {t('board.beds.occupied') || 'camas ocupadas'} · {rooms.length} {t('board.rooms') || 'habitaciones'}
-                                        </div>
-                                    </div>
-                                    <i className={`fa-solid fa-chevron-${isOpen ? 'up' : 'down'} text-gray-300 text-xs shrink-0`}></i>
-                                </button>
-                                {isOpen && (
-                                    rooms.length === 0 ? (
-                                        <div className="px-6 pb-6 text-xs text-gray-300 italic">{t('no.rooms') || 'Sin habitaciones'}</div>
-                                    ) : (
-                                        <div className="px-6 pb-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-3">
-                                            {rooms.map(room => {
-                                                const occupants = occupantsByRoom.get(Number(room.id)) || [];
-                                                const visible = locFilter ? occupants.filter(p => String(seedLocationId(p, locations) ?? '') === locFilter) : occupants;
-                                                const hidden = occupants.length - visible.length;
-                                                const cap = room.capacity || 0;
-                                                const occ = occupiedOf(room.id);
-                                                const isFull = cap > 0 && occ >= cap;
-                                                const pct = cap > 0 ? Math.min(100, (occ / cap) * 100) : 0;
-                                                const badge = room.location_id != null ? (room.location_name || locById.get(Number(room.location_id))?.name || `#${room.location_id}`) : null;
-                                                const frozen = room.location_id != null && locFrozen(room.location_id);
-                                                const isOver = over === `room:${room.id}`;
-                                                const why = isOver && draggedPerson ? dropBlock(draggedPerson, room) : null;
-                                                const ring = isOver && draggedPerson
-                                                    ? (why ? 'ring-4 ring-rose-200 border-rose-400 bg-rose-50/40' : 'ring-4 ring-indigo-200 border-indigo-400 bg-indigo-50/40')
-                                                    : isFull ? 'border-rose-100' : 'border-gray-100 hover:border-indigo-200';
-                                                return (
-                                                    <div
-                                                        key={room.id}
-                                                        onDragOver={onRoomDragOver(room)}
-                                                        onDragLeave={leaveTarget(`room:${room.id}`)}
-                                                        onDrop={onRoomDrop(room)}
-                                                        className={`rounded-2xl border-2 bg-white p-4 flex flex-col gap-3 transition-all min-h-[8rem] ${ring}`}
-                                                    >
-                                                        <div className="flex items-start justify-between gap-2">
-                                                            <div className="min-w-0">
-                                                                <div className="font-black text-lg text-gray-900 italic tracking-tighter leading-none">{room.room_number}</div>
-                                                                <div className="flex flex-wrap items-center gap-1 mt-1.5">
-                                                                    {badge && (
-                                                                        <span className="px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-600 text-[8px] font-black uppercase tracking-widest truncate max-w-[9rem]" title={badge}>
-                                                                            <i className="fa-solid fa-map-pin mr-1"></i>{badge}
-                                                                        </span>
-                                                                    )}
-                                                                    {frozen && (
-                                                                        <span className="px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700 text-[8px] font-black uppercase tracking-widest" title={t('board.frozen')}>
-                                                                            <i className="fa-solid fa-lock"></i>
-                                                                        </span>
-                                                                    )}
-                                                                    {room.gender && room.gender !== 'Mixed' && (
-                                                                        <span className={`px-1.5 py-0.5 rounded-md text-[8px] font-black ${room.gender === 'F' ? 'bg-pink-50 text-pink-600' : 'bg-blue-50 text-blue-600'}`}>{room.gender}</span>
-                                                                    )}
-                                                                </div>
-                                                            </div>
-                                                            <div className={`text-xs font-bold whitespace-nowrap ${isFull ? 'text-rose-500' : 'text-gray-900'}`}>
-                                                                {occ}<span className="text-gray-300">/</span>{cap}
-                                                            </div>
-                                                        </div>
-                                                        <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
-                                                            <div className={`h-full rounded-full transition-all duration-500 ${isFull ? 'bg-rose-500' : 'bg-indigo-500'}`} style={{ width: `${pct}%` }}></div>
-                                                        </div>
-                                                        <div className="flex flex-wrap gap-1.5 flex-1 content-start">
-                                                            {visible.map(renderChip)}
-                                                            {hidden > 0 && (
-                                                                <span className="text-[9px] font-bold text-gray-300 self-center">{fillVars(t('board.hidden.occupants') || '+{n} de otras localidades', { n: hidden })}</span>
-                                                            )}
-                                                            {occupants.length === 0 && (
-                                                                <span className="w-full text-center text-[9px] font-black uppercase tracking-widest text-gray-300 py-2 border border-dashed border-gray-200 rounded-xl">
-                                                                    {t('board.empty.room') || 'Arrastra aquí'}
-                                                                </span>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    )
-                                )}
-                            </div>
-                        );
-                    })}
-                </div>
-            </div>
-
-            {/* Keyboard / touch path: the same room picker the inscriptions list uses. */}
-            {modalTarget && (() => {
-                const targetLocId = seedLocationId(modalTarget, locations);
-                const targetLoc = targetLocId == null ? null : locById.get(Number(targetLocId)) || null;
-                // Frozen by the column the server checks (a name-only legacy row is movable server-side).
-                const frozen = !!targetLoc && locFrozen(rawLocationId(modalTarget));
-                const cancelled = isCancelled(modalTarget);
-                const currentRoom = modalTarget.room_id != null ? roomsById.get(Number(modalTarget.room_id)) : null;
-                return (
-                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-200">
-                        <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200">
-                            <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-center justify-between">
-                                <div className="min-w-0">
-                                    <h3 className="font-black text-xl text-gray-900 italic tracking-tighter">{t('assign.room') || 'Asignar habitación'}</h3>
-                                    <p className="text-xs text-gray-500 mt-0.5 truncate">
-                                        {personDisplayName(modalTarget, fields)}
-                                        {targetLoc && <span className="text-gray-400"> · {targetLoc.name}</span>}
-                                        {currentRoom && <span className="text-indigo-500"> · {roomLabel(currentRoom)}</span>}
-                                    </p>
-                                </div>
-                                <button onClick={() => setModalTarget(null)} className="text-gray-400 hover:text-gray-600 transition-colors p-2 hover:bg-gray-100 rounded-xl">
-                                    <i className="fa-solid fa-xmark text-lg"></i>
-                                </button>
-                            </div>
-                            <div className="p-8 max-h-[65vh] overflow-y-auto modern-scrollbar">
-                                {frozen ? (
-                                    <div className="p-6 rounded-2xl bg-amber-50 border border-amber-200 flex items-start gap-4">
-                                        <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center shrink-0">
-                                            <i className="fa-solid fa-lock"></i>
-                                        </div>
-                                        <div>
-                                            <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest ${lodgingStatusMeta(targetLoc!.lodging_status).cls}`}>
-                                                {t(lodgingStatusMeta(targetLoc!.lodging_status).key) || lodgingStatusMeta(targetLoc!.lodging_status).fallback}
-                                            </span>
-                                            <p className="text-sm text-amber-800 font-medium leading-relaxed mt-1">
-                                                {withName(t('lodging.frozen.notice') || 'El hospedaje de la localidad «{name}» está en validación o validado. Reábrelo desde Localidades antes de cambiar la habitación de este participante.', targetLoc!.name)}
-                                            </p>
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <>
-                                        {modalTarget.room_id != null && (
-                                            <button
-                                                type="button"
-                                                disabled={moving}
-                                                onClick={() => modalMove(null)}
-                                                className="w-full mb-4 px-4 py-3 rounded-xl border-2 border-dashed border-rose-200 text-rose-600 font-bold text-sm hover:bg-rose-50 transition flex items-center justify-center gap-2 disabled:opacity-50"
-                                            >
-                                                <i className="fa-solid fa-xmark"></i> {t('unassign.room') || 'Quitar asignación actual'}
-                                            </button>
-                                        )}
-                                        {cancelled ? (
-                                            <p className="text-xs text-gray-400 italic text-center py-4">{t('board.cancelled') || 'Participante cancelado'}</p>
-                                        ) : hotels.length === 0 ? (
-                                            <div className="text-center py-10 text-gray-400 bg-gray-50 rounded-xl border border-dashed">
-                                                <i className="fa-solid fa-hotel text-3xl mb-3 opacity-30"></i>
-                                                <p className="font-medium text-sm">{t('no.hotels') || 'No hay hoteles configurados.'}</p>
-                                            </div>
-                                        ) : (
-                                            <div className="space-y-6">
-                                                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{t('board.assign.modal.hint') || 'Elige una habitación con camas libres'}</p>
-                                                {hotels.map(hotel => (
-                                                    <div key={hotel.id}>
-                                                        <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">{hotel.name}</h4>
-                                                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                                                            {(hotel.rooms || []).map(room => {
-                                                                const current = Number(modalTarget.room_id) === Number(room.id);
-                                                                const why = current ? null : dropBlock(modalTarget, room);
-                                                                const roomLoc = room.location_id != null ? (room.location_name || `#${room.location_id}`) : null;
-                                                                return (
-                                                                    <button
-                                                                        key={room.id}
-                                                                        type="button"
-                                                                        disabled={!!why || current || moving}
-                                                                        title={why ? t(why) : undefined}
-                                                                        onClick={() => modalMove(room.id)}
-                                                                        className={`px-3 py-2.5 rounded-xl border-2 text-left transition-all ${current
-                                                                            ? 'border-indigo-500 bg-indigo-50'
-                                                                            : why
-                                                                                ? 'border-gray-100 bg-gray-50 opacity-50 cursor-not-allowed'
-                                                                                : 'border-gray-100 hover:border-emerald-400 hover:bg-emerald-50'}`}
-                                                                    >
-                                                                        <div className="font-black text-sm text-gray-900">{room.room_number}</div>
-                                                                        {roomLoc && (
-                                                                            <div className={`text-[9px] font-black uppercase tracking-widest truncate ${why === 'board.room.foreign' ? 'text-rose-500' : 'text-indigo-500'}`}>
-                                                                                <i className="fa-solid fa-map-pin mr-1"></i>{roomLoc}
-                                                                            </div>
-                                                                        )}
-                                                                        <div className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">{occupiedOf(room.id)}/{room.capacity}</div>
-                                                                    </button>
-                                                                );
-                                                            })}
-                                                            {(hotel.rooms || []).length === 0 && (
-                                                                <div className="col-span-full text-xs text-gray-300 italic">{t('no.rooms') || 'Sin habitaciones'}</div>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        )}
-                                    </>
-                                )}
-                            </div>
-                        </div>
-                    </div>
-                );
-            })()}
-        </div>
-    );
-}
-
-function AssignmentPage({ conferenceId }: { conferenceId: number }) {
+// `focus` / `onFocusConsumed`: «Ver ocupación» in «Hoteles y habitaciones» opens the explorer at a
+// hotel (and room) once — see ConferenceManagerContent.openLodgingExplorer.
+function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId: number; focus?: { hotelId: number; roomId?: number | null } | null; onFocusConsumed?: () => void }) {
     const { t } = useI18n();
     const { addToast } = useToast();
     const [rules, setRules] = useState<AssignmentRule[]>([]);
@@ -4159,12 +3662,15 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
     const [loading, setLoading] = useState(true);
     const [showRuleModal, setShowRuleModal] = useState(false);
     const [runReport, setRunReport] = useState<any>(null);
-    // The accommodation board's data: every attendee, every hotel with its rooms, every location.
+    // The lodging explorer's data: every attendee, every hotel with its rooms, every location.
     const [inscriptions, setInscriptions] = useState<Inscription[]>([]);
     const [hotels, setHotels] = useState<Hotel[]>([]);
     const [locations, setLocations] = useState<Location[]>([]);
-    // Attendees with a move in flight: the board refuses a second drag of the same chip until it settles.
+    // Attendees with a move in flight: the explorer refuses a second move of the same attendee until it settles.
     const [pending, setPending] = useState<Set<number>>(() => new Set());
+    // The latest load failed: the explorer then keeps its remembered place (it would otherwise fit it to
+    // the empty lists and forget it) and offers a retry instead of «No hay hoteles configurados».
+    const [loadFailed, setLoadFailed] = useState(false);
     const boardRef = useRef<HTMLDivElement>(null);
     const reportRef = useRef<HTMLDivElement>(null);
     // Reload ordering: two overlapping reloads may resolve out of order; only the latest one is applied.
@@ -4203,6 +3709,7 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
             setInscriptions(inscriptionsData || []);
             setHotels(hotelsData || []);
             setLocations(locData?.locations || []);
+            setLoadFailed(false);
             // Cancelled attendees are neither placed by the engine nor listed by the board — the header
             // counts (and the run button's gate) leave them out too.
             const live = (inscriptionsData || []).filter(i => i.status !== 'cancelled');
@@ -4210,6 +3717,7 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
             setStats({ total: live.length, assigned, unassigned: live.length - assigned });
         } catch (e) {
             console.error(e);
+            if (seq === loadSeq.current) setLoadFailed(true);
         } finally {
             if (!silent && seq === loadSeq.current) setLoading(false);
         }
@@ -4469,8 +3977,10 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
                 </div>
             )}
 
-            {/* Who sleeps where — always visible, editable by drag & drop (see AccommodationBoard). */}
-            <AccommodationBoard
+            {/* Who sleeps where — «Hoteles › Hotel › Habitación», editable by drag & drop and pickers. */}
+            <LodgingExplorer
+                key={conferenceId}
+                conferenceId={conferenceId}
                 inscriptions={inscriptions}
                 hotels={hotels}
                 locations={locations}
@@ -4480,6 +3990,11 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
                 loading={loading}
                 runSummary={runSummary}
                 boardRef={boardRef}
+                focus={focus}
+                onFocusConsumed={onFocusConsumed}
+                suspendKeys={showRuleModal}
+                loadFailed={loadFailed}
+                onRetry={() => loadData()}
             />
 
             <div className="bg-white rounded-3xl border border-gray-100 overflow-hidden shadow-xl shadow-gray-100/30">
@@ -4560,7 +4075,7 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
 
             {showRuleModal && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
-                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg border border-gray-100 max-h-[92vh] overflow-y-auto animate-in zoom-in-95 duration-200">
+                    <div role="dialog" aria-modal="true" className="bg-white rounded-3xl shadow-2xl w-full max-w-lg border border-gray-100 max-h-[92vh] overflow-y-auto animate-in zoom-in-95 duration-200">
                         <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-center justify-between sticky top-0 z-10">
                             <div>
                                 <h3 className="font-black text-xl text-gray-900 italic tracking-tighter">{ruleForm.id ? 'Editar regla' : t('add.rule')}</h3>
