@@ -14,8 +14,10 @@
  *
  * The token authorizes exactly the FIRST communication (enrollment); everything after is mTLS.
  *
- * node-forge only — no openssl on the gateway. Reuses the same cert recipe as setup/index.js so the
- * issued certs are interchangeable with a single-host `npm run setup`.
+ * node-forge builds and signs the certs — no openssl binary on the gateway. Reuses the same cert recipe
+ * as setup/index.js so the issued certs are interchangeable with a single-host `npm run setup`. The one
+ * signature VERIFICATION done here (an enrolment CSR's self-signature) goes through Node's own crypto
+ * (OpenSSL, built into Node), not node-forge — see verifyCsrSignature().
  */
 const forge = require('node-forge');
 const fs = require('fs');
@@ -95,16 +97,57 @@ function issueIdentity({ caKeyPem, caCertPem, cn, sans = [], days = 825 }) {
     return { keyPem: pki.privateKeyToPem(keys.privateKey), certPem };
 }
 
+// The ONE CSR signature algorithm enrolment accepts: sha256WithRSAEncryption (RSASSA-PKCS1-v1_5 over
+// SHA-256). It is what `openssl req` signs with by default and what scripts/node-join.js asks for
+// explicitly. Anything else — sha1/sha384/sha512WithRSAEncryption, RSASSA-PSS, … — is refused by name,
+// never verified. A Map, so an OID string can never resolve to an inherited Object property.
+const CSR_SIGNATURE_HASHES = new Map([[pki.oids.sha256WithRSAEncryption, 'sha256']]);
+
+/**
+ * Verify a parsed CSR's self-signature — the proof that the enrolling node holds the private key of the
+ * public key we are about to certify — with Node's crypto (OpenSSL), NOT node-forge's csr.verify().
+ *
+ * WHY. node-forge's RSASSA-PKCS1-v1_5 verifier (every release up to and including 1.4.0, no fixed
+ * version: npm advisory 1240912) accepts a DigestInfo whose DigestAlgorithm carries extra nested
+ * elements — attacker-chosen bytes inside the signed block, the raw material of a Bleichenbacher-style
+ * forgery. OpenSSL builds the one DigestInfo that is valid for the hash and compares it byte for byte.
+ *
+ * forge is still used to PARSE the request and to produce the exact bytes that were signed: the DER of
+ * the CertificationRequestInfo — the subtree captured when the PEM was parsed (re-encoding it reproduces
+ * the original bytes, attributes and extensionRequest included), or, when absent, one rebuilt from the
+ * parsed fields. That is the same input forge's own verify() digested, so only the RSA check changes.
+ *
+ * Throws for an unsupported signature algorithm; returns false for a signature that does not verify.
+ */
+function verifyCsrSignature(csr) {
+    const hash = CSR_SIGNATURE_HASHES.get(csr.signatureOid);
+    if (!hash) {
+        const name = pki.oids[csr.signatureOid] || 'unknown algorithm';
+        throw new Error(`CSR signature algorithm ${name} (${csr.signatureOid}) is not supported — only sha256WithRSAEncryption is accepted`);
+    }
+    const requestInfo = csr.certificationRequestInfo || pki.getCertificationRequestInfo(csr);
+    const signedBytes = Buffer.from(forge.asn1.toDer(requestInfo).getBytes(), 'binary');
+    const signature = Buffer.from(String(csr.signature || ''), 'binary');
+    try {
+        return crypto.verify(hash, signedBytes, {
+            key: pki.publicKeyToPem(csr.publicKey),
+            padding: crypto.constants.RSA_PKCS1_PADDING
+        }, signature);
+    } catch {
+        return false; // a key or signature OpenSSL cannot even process is not a proof of possession
+    }
+}
+
 /**
  * Sign a CSR (PEM, e.g. produced by `openssl req`) into a leaf identity cert. SECURITY: the subject CN
  * is FORCED to `cn` (derived from the join token's role) — the CSR's own subject is ignored so a node
  * holding a backend token can never obtain a frontend identity. Only the CSR's public key is trusted
- * (after verifying its self-signature). Returns the cert PEM.
+ * (after verifying its sha256WithRSAEncryption self-signature with OpenSSL). Returns the cert PEM.
  */
 function signCsr({ caKeyPem, caCertPem, csrPem, cn, sans = [], days = 825 }) {
     const csr = pki.certificationRequestFromPem(csrPem);
-    if (!csr.verify()) throw new Error('CSR self-signature is invalid');
     if (!csr.publicKey) throw new Error('CSR has no public key');
+    if (!verifyCsrSignature(csr)) throw new Error('CSR self-signature is invalid');
     return signPublicKey({ caKeyPem, caCertPem, publicKey: csr.publicKey, cn, sans, days });
 }
 
