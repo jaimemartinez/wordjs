@@ -158,6 +158,19 @@ export type ReportRoom = { id: number; room_number: string; capacity: number; lo
 export type ReportHotel = { id: number; name: string; address?: string | null; rooms?: ReportRoom[] };
 
 /**
+ * The sheets without the column titled `header` (in every sheet that has it; rows keep their alignment).
+ * Used to drop «Código» for a role that never receives registration codes — an always-empty column reads
+ * as missing data.
+ */
+export function withoutColumn(sheets: XlsxSheet[], header: string): XlsxSheet[] {
+    return sheets.map((s) => {
+        const i = s.columns.findIndex((c) => c.header === header);
+        if (i < 0) return s;
+        return { ...s, columns: s.columns.filter((_, k) => k !== i), rows: s.rows.map((r) => (r.length > i ? r.filter((_, k) => k !== i) : r)) };
+    });
+}
+
+/**
  * Hotel assignment report: "Resumen" (one row per hotel) + one sheet per hotel listing every room
  * (bold room line: number, capacity, occupancy, allotted location) followed by its occupants.
  */

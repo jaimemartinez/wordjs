@@ -13,6 +13,10 @@
  * 4. Reporte: per service totals, per location, who is pending / served, Excel export.
  *
  * Entitlement and every counter are computed by the server; this page never decides who may eat.
+ *
+ * Staff roles (2.15.0): Plan / Por persona / Reporte need Alimentación › ver (editing the plan and the
+ * per-person adjustments needs › gestionar); Entrega and «Modo escáner» need Entrega de comidas › operar
+ * — the kitchen can deliver without seeing (or touching) the plan. Administrators see everything.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../../../../../frontend/src/contexts/I18nContext";
@@ -20,12 +24,13 @@ import { useToast } from "../../../../../frontend/src/contexts/ToastContext";
 import { useModal } from "@/contexts/ModalContext";
 import { conferenceApi } from "../lib/conference";
 import { buildXlsx, downloadXlsx } from "../lib/xlsx";
-import { exportFilename } from "../lib/exports";
+import { exportFilename, withoutColumn } from "../lib/exports";
 import {
     MEALS, DEFAULT_WINDOWS, buildMealReportWorkbook, chunk, columnState, dateRange, filterReportRows, groupByDay,
     normalizeCode, pickCurrentService, planKey, planSet, rowState, serviceWindow, sortServices, stampDayTime, stampTime,
 } from "../lib/meals";
 import { MealScanner, PersonSearch, VerdictCard, MEAL_ICON, dayLabel, mealName, serviceName, servedLine, isOffline, useMealDelivery, useTx, makeTxn, createFeedback } from "./MealScanner";
+import { usePerms, ReadOnlyNotice } from "./perms";
 
 type Tab = 'plan' | 'people' | 'delivery' | 'report';
 const TABS: Tab[] = ['plan', 'people', 'delivery', 'report'];
@@ -78,10 +83,16 @@ export default function MealsPage({ conferenceId, slug, conference }: { conferen
     const tx = useTx();
     const { language } = useI18n();
     const { addToast } = useToast();
+    const perms = usePerms();
+    const canPlan = perms.can('meals');
+    const canDeliver = perms.can('meals_delivery', 'manage');
+    // The sub-tabs this role may open, in order; a saved tab it may not open falls back to the first.
+    const allowedTabs = TABS.filter((k) => (k === 'delivery' ? canDeliver : canPlan));
     const [tab, setTabState] = useState<Tab>(() => {
         try { const v = localStorage.getItem(TAB_KEY) as Tab; return TABS.includes(v) ? v : 'plan'; } catch { return 'plan'; }
     });
     const setTab = (v: Tab) => { setTabState(v); try { localStorage.setItem(TAB_KEY, v); } catch { /* blocked storage */ } };
+    const shownTab: Tab = allowedTabs.includes(tab) ? tab : (allowedTabs[0] || 'plan');
     const [data, setData] = useState<any>(null);
     const [loadFailed, setLoadFailed] = useState(false);
     const [serviceId, setServiceId] = useState<number | null>(null);
@@ -139,10 +150,10 @@ export default function MealsPage({ conferenceId, slug, conference }: { conferen
                         <h2 className="text-3xl font-black text-gray-900 italic tracking-tighter">{tx('meals.title', 'Comidas y entregas')}</h2>
                         <p className="text-xs text-gray-500 mt-1 max-w-xl">{tx('meals.subtitle', 'Define qué comidas recibe cada localidad, ajusta por persona y registra cada entrega con el código de barras del participante.')}</p>
                     </div>
-                    <button type="button" onClick={() => setScanner(true)} disabled={!services.length}
+                    {canDeliver && <button type="button" onClick={() => setScanner(true)} disabled={!services.length}
                         className="px-6 py-4 rounded-2xl bg-gray-900 text-white hover:bg-black font-black text-xs uppercase tracking-widest shadow-lg transition-all active:scale-95 disabled:opacity-50">
                         <i className="fa-solid fa-mobile-screen-button mr-2" aria-hidden="true"></i>{tx('meals.scanner.open', 'Modo escáner (celular)')}
-                    </button>
+                    </button>}
                 </div>
                 <div className="relative grid grid-cols-3 gap-3 mt-6">
                     <Counter label={tx('meals.count.services', 'Servicios')} value={services.length} icon="fa-utensils" />
@@ -151,22 +162,23 @@ export default function MealsPage({ conferenceId, slug, conference }: { conferen
                 </div>
             </div>
 
-            {/* Sub-tabs */}
+            {/* Sub-tabs (only the ones the role may open) */}
             <div className="flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label={tx('meals', 'Alimentación')}>
-                {TABS.map((k) => (
-                    <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
-                        className={`flex items-center gap-2 px-5 py-3 rounded-2xl border-2 font-black text-[11px] uppercase tracking-widest whitespace-nowrap transition-all ${tab === k ? 'border-orange-400 bg-orange-50 text-orange-700' : 'border-gray-100 bg-white text-gray-500 hover:border-gray-300'}`}>
+                {allowedTabs.map((k) => (
+                    <button key={k} type="button" role="tab" aria-selected={shownTab === k} onClick={() => setTab(k)}
+                        className={`flex items-center gap-2 px-5 py-3 rounded-2xl border-2 font-black text-[11px] uppercase tracking-widest whitespace-nowrap transition-all ${shownTab === k ? 'border-orange-400 bg-orange-50 text-orange-700' : 'border-gray-100 bg-white text-gray-500 hover:border-gray-300'}`}>
                         <i className={`fa-solid ${tabMeta[k][1]}`} aria-hidden="true"></i>{tabMeta[k][0]}
                     </button>
                 ))}
             </div>
+            {shownTab !== 'delivery' && <ReadOnlyNotice section="meals" alsoManage={shownTab === 'people' ? ['meals_delivery'] : []} />}
 
-            {tab === 'plan' && <PlanTab conferenceId={conferenceId} conference={conference} data={data} services={services} reload={reload} />}
-            {tab === 'people' && <PeopleTab conferenceId={conferenceId} data={data} services={services} reload={reload} />}
-            {tab === 'delivery' && <DeliveryTab conferenceId={conferenceId} services={services} locations={data.locations || []} serviceId={serviceId} setServiceId={chooseService} reload={reload} paused={scanner} onScanner={() => setScanner(true)} />}
-            {tab === 'report' && <ReportTab services={services} serviceId={serviceId} setServiceId={chooseService} slug={slug} />}
+            {shownTab === 'plan' && canPlan && <PlanTab conferenceId={conferenceId} conference={conference} data={data} services={services} reload={reload} />}
+            {shownTab === 'people' && canPlan && <PeopleTab conferenceId={conferenceId} data={data} services={services} reload={reload} />}
+            {shownTab === 'delivery' && canDeliver && <DeliveryTab conferenceId={conferenceId} services={services} locations={data.locations || []} serviceId={serviceId} setServiceId={chooseService} reload={reload} paused={scanner} onScanner={() => setScanner(true)} />}
+            {shownTab === 'report' && canPlan && <ReportTab services={services} serviceId={serviceId} setServiceId={chooseService} slug={slug} />}
 
-            {scanner && (
+            {scanner && canDeliver && (
                 <MealScanner conferenceId={conferenceId} services={services} serviceId={serviceId} language={language}
                     onServiceChange={chooseService} onChanged={reload} onClose={() => { setScanner(false); reload(); }} />
             )}
@@ -202,6 +214,7 @@ function PlanTab({ conferenceId, conference, data, services, reload }: any) {
     const { language } = useI18n();
     const { addToast } = useToast();
     const { confirm } = useModal();
+    const canEdit = usePerms().can('meals', 'manage');
     const [creating, setCreating] = useState(false);
     const [editing, setEditing] = useState<any>(null);
     const [busyCell, setBusyCell] = useState<string | null>(null);
@@ -284,7 +297,7 @@ function PlanTab({ conferenceId, conference, data, services, reload }: any) {
                         <h3 className="text-lg font-black text-gray-900">{tx('meals.services', 'Servicios de comida')}</h3>
                         <p className="text-xs text-gray-500">{tx('meals.services.hint', 'Cada servicio es una comida de un día. Crea varios de una vez eligiendo las fechas y las comidas.')}</p>
                     </div>
-                    <button type="button" className={btnPrimary} onClick={() => setCreating(true)}><i className="fa-solid fa-plus mr-1.5" aria-hidden="true"></i>{tx('meals.create', 'Crear servicios')}</button>
+                    {canEdit && <button type="button" className={btnPrimary} onClick={() => setCreating(true)}><i className="fa-solid fa-plus mr-1.5" aria-hidden="true"></i>{tx('meals.create', 'Crear servicios')}</button>}
                 </div>
                 {!services.length && (
                     <div className="text-center py-10 border-2 border-dashed border-gray-100 rounded-3xl">
@@ -305,8 +318,8 @@ function PlanTab({ conferenceId, conference, data, services, reload }: any) {
                                             <div className="text-sm font-black text-gray-900 truncate">{mealName(tx, s.meal)}{s.label ? ` — ${s.label}` : ''}</div>
                                             <div className="text-[11px] font-semibold text-gray-500">{a}–{b} · {servedLine(tx, s)}</div>
                                         </div>
-                                        <button type="button" onClick={() => setEditing(s)} className="p-2 text-gray-400 hover:text-blue-600" aria-label={tx('meals.edit', 'Editar servicio')}><i className="fa-solid fa-pen" aria-hidden="true"></i></button>
-                                        <button type="button" onClick={() => remove(s)} className="p-2 text-gray-400 hover:text-rose-600" aria-label={tx('meals.delete', 'Eliminar servicio')}><i className="fa-solid fa-trash" aria-hidden="true"></i></button>
+                                        {canEdit && <button type="button" onClick={() => setEditing(s)} className="p-2 text-gray-400 hover:text-blue-600" aria-label={tx('meals.edit', 'Editar servicio')}><i className="fa-solid fa-pen" aria-hidden="true"></i></button>}
+                                        {canEdit && <button type="button" onClick={() => remove(s)} className="p-2 text-gray-400 hover:text-rose-600" aria-label={tx('meals.delete', 'Eliminar servicio')}><i className="fa-solid fa-trash" aria-hidden="true"></i></button>}
                                     </div>
                                 );
                             })}
@@ -320,7 +333,7 @@ function PlanTab({ conferenceId, conference, data, services, reload }: any) {
                 <div className={`${card} p-5 sm:p-6 space-y-4`}>
                     <div>
                         <h3 className="text-lg font-black text-gray-900">{tx('meals.matrix', 'Qué recibe cada localidad')}</h3>
-                        <p className="text-xs text-gray-500">{tx('meals.matrix.hint', 'Marca las comidas de cada localidad. Las personas sin localidad solo reciben lo que se les añada en «Por persona».')}</p>
+                        <p className="text-xs text-gray-500">{canEdit ? tx('meals.matrix.hint', 'Marca las comidas de cada localidad. Las personas sin localidad solo reciben lo que se les añada en «Por persona».') : tx('meals.matrix.hint.readonly', 'Las comidas que recibe cada localidad. Las personas sin localidad solo reciben lo que se les añada en «Por persona».')}</p>
                     </div>
                     {!locations.length ? (
                         <p className="text-sm font-bold text-gray-500">{tx('meals.matrix.no.locations', 'Esta conferencia no tiene localidades.')}</p>
@@ -341,11 +354,11 @@ function PlanTab({ conferenceId, conference, data, services, reload }: any) {
                                                 <th key={s.id} className="bg-white px-2 py-2 border-b border-l border-gray-100 text-center align-top min-w-[96px]">
                                                     <div className="text-[11px] font-black text-gray-800 whitespace-nowrap"><i className={`fa-solid ${MEAL_ICON[s.meal] || 'fa-utensils'} mr-1 text-orange-500`} aria-hidden="true"></i>{mealName(tx, s.meal)}</div>
                                                     <div className="text-[10px] font-semibold text-gray-400 tabular-nums" title={tx('meals.matrix.cell.counts', 'entregados / con derecho')}>{Math.max(0, (s.entitled || 0) - (s.pending || 0))}/{s.entitled || 0}{s.overrides_delivered > 0 ? ` +${s.overrides_delivered}` : ''}</div>
-                                                    <button type="button" disabled={busyCell != null} onClick={() => setColumn(s.id)}
+                                                    {canEdit && <button type="button" disabled={busyCell != null} onClick={() => setColumn(s.id)}
                                                         className="mt-1 text-[9px] font-black uppercase tracking-widest text-blue-600 hover:underline disabled:opacity-40"
                                                         aria-label={st === 'all' ? tx('meals.matrix.col.none.aria', 'Quitar {service} a todas las localidades', { service: serviceName(tx, s, language) }) : tx('meals.matrix.col.all.aria', 'Dar {service} a todas las localidades', { service: serviceName(tx, s, language) })}>
                                                         {st === 'all' ? tx('meals.matrix.unmark.all', 'Desmarcar todas') : tx('meals.matrix.mark.all', 'Marcar todas')}
-                                                    </button>
+                                                    </button>}
                                                 </th>
                                             );
                                         })}
@@ -358,18 +371,18 @@ function PlanTab({ conferenceId, conference, data, services, reload }: any) {
                                             <tr key={l.id}>
                                                 <th scope="row" className="sticky left-0 z-10 bg-white text-left px-4 py-2 border-b border-r border-gray-100">
                                                     <div className="text-sm font-black text-gray-900 truncate max-w-[200px]">{l.name}</div>
-                                                    <button type="button" disabled={busyCell != null} onClick={() => setRow(l.id)}
+                                                    {canEdit && <button type="button" disabled={busyCell != null} onClick={() => setRow(l.id)}
                                                         className="text-[9px] font-black uppercase tracking-widest text-blue-600 hover:underline disabled:opacity-40">
                                                         {st === 'all' ? tx('meals.matrix.unmark.all', 'Desmarcar todas') : tx('meals.matrix.mark.all', 'Marcar todas')}
-                                                    </button>
+                                                    </button>}
                                                 </th>
                                                 {services.map((s) => {
                                                     const key = planKey(l.id, s.id);
                                                     const on = plan.has(key);
                                                     return (
                                                         <td key={s.id} className={`border-b border-l border-gray-100 text-center ${on ? 'bg-emerald-50/60' : ''}`}>
-                                                            <label className="flex items-center justify-center w-full h-full py-2.5 cursor-pointer">
-                                                                <input type="checkbox" className="w-5 h-5 accent-emerald-600" checked={on} disabled={busyCell != null}
+                                                            <label className={`flex items-center justify-center w-full h-full py-2.5 ${canEdit ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
+                                                                <input type="checkbox" className="w-5 h-5 accent-emerald-600 disabled:cursor-not-allowed" checked={on} disabled={busyCell != null || !canEdit}
                                                                     onChange={() => toggle(l.id, s.id)}
                                                                     aria-label={tx('meals.matrix.cell.aria', '{location}: {service}', { location: l.name, service: serviceName(tx, s, language) })} />
                                                             </label>
@@ -389,8 +402,8 @@ function PlanTab({ conferenceId, conference, data, services, reload }: any) {
                 </div>
             )}
 
-            {creating && <CreateServicesDialog conferenceId={conferenceId} conference={conference} locations={locations} onClose={() => { setCreating(false); reload(); }} onDone={() => { setCreating(false); reload(); }} />}
-            {editing && <EditServiceDialog service={editing} onClose={() => setEditing(null)} onDone={() => { setEditing(null); reload(); }} />}
+            {creating && canEdit && <CreateServicesDialog conferenceId={conferenceId} conference={conference} locations={locations} onClose={() => { setCreating(false); reload(); }} onDone={() => { setCreating(false); reload(); }} />}
+            {editing && canEdit && <EditServiceDialog service={editing} onClose={() => setEditing(null)} onDone={() => { setEditing(null); reload(); }} />}
         </div>
     );
 }
@@ -641,6 +654,9 @@ function PersonMealsDialog({ inscriptionId, onClose, onChanged }: any) {
     const tx = useTx();
     const { language } = useI18n();
     const { addToast } = useToast();
+    const perms = usePerms();
+    const canAdjust = perms.can('meals', 'manage');
+    const canDeliver = perms.can('meals_delivery', 'manage');
     const deliver = useMealDelivery();
     const [d, setD] = useState<any>(null);
     const [busy, setBusy] = useState<string | null>(null);
@@ -684,6 +700,7 @@ function PersonMealsDialog({ inscriptionId, onClose, onChanged }: any) {
             {p.status === 'cancelled' && <div className="rounded-2xl bg-rose-50 border-2 border-rose-200 px-4 py-3 text-sm font-bold text-rose-700">{tx('meals.verdict.cancelled', 'Inscripción cancelada')}</div>}
             {!d.services.length && <p className="text-sm font-bold text-gray-500">{tx('meals.services.none', 'Todavía no hay servicios de comida.')}</p>}
             <p className="text-xs text-gray-500">{tx('meals.person.hint', '«Heredar» sigue el plan de su localidad; «Incluir» y «Excluir» lo cambian solo para esta persona.')}</p>
+            {!canAdjust && <p className="text-xs font-bold text-sky-700"><i className="fa-solid fa-eye mr-1" aria-hidden="true"></i>{tx('perm.meals.person.readonly', 'Tu rol puede ver estos ajustes, pero no cambiarlos.')}</p>}
             {days.map((day) => (
                 <div key={day.date} className="space-y-2">
                     <div className="text-[10px] font-black uppercase tracking-widest text-gray-500">{dayLabel(day.date, language, true)}</div>
@@ -702,11 +719,11 @@ function PersonMealsDialog({ inscriptionId, onClose, onChanged }: any) {
                                 </div>
                                 <div className="inline-flex rounded-xl border-2 border-gray-100 overflow-hidden" role="group" aria-label={tx('meals.person.mode', 'Ajuste para {service}', { service: serviceName(tx, s, language) })}>
                                     {([['inherit', tx('meals.mode.inherit', 'Heredar')], ['include', tx('meals.mode.include', 'Incluir')], ['exclude', tx('meals.mode.exclude', 'Excluir')]] as const).map(([m, label]) => (
-                                        <button key={m} type="button" disabled={busy != null} aria-pressed={mode === m} onClick={() => mode !== m && setMode(s, m)}
-                                            className={`px-3 py-2 text-[10px] font-black uppercase tracking-widest disabled:opacity-60 ${mode === m ? (m === 'include' ? 'bg-blue-600 text-white' : m === 'exclude' ? 'bg-rose-600 text-white' : 'bg-gray-800 text-white') : 'bg-white text-gray-500 hover:bg-gray-50'}`}>{label}</button>
+                                        <button key={m} type="button" disabled={busy != null || !canAdjust} aria-pressed={mode === m} onClick={() => canAdjust && mode !== m && setMode(s, m)}
+                                            className={`px-3 py-2 text-[10px] font-black uppercase tracking-widest disabled:opacity-60 disabled:cursor-not-allowed ${mode === m ? (m === 'include' ? 'bg-blue-600 text-white' : m === 'exclude' ? 'bg-rose-600 text-white' : 'bg-gray-800 text-white') : 'bg-white text-gray-500 hover:bg-gray-50'}`}>{label}</button>
                                     ))}
                                 </div>
-                                {s.delivered_at
+                                {!canDeliver ? null : s.delivered_at
                                     ? (undoAsk === s.id
                                         ? <span className="inline-flex flex-wrap items-center gap-2" role="alertdialog" aria-label={tx('meals.undo.confirm', '¿Deshacer la entrega de {service}?', { service: serviceName(tx, s, language) })}>
                                             <span className="text-xs font-bold text-gray-700">{tx('meals.undo.confirm', '¿Deshacer la entrega de {service}?', { service: serviceName(tx, s, language) })}</span>
@@ -730,6 +747,7 @@ function PersonMealsDialog({ inscriptionId, onClose, onChanged }: any) {
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════
 function DeliveryTab({ conferenceId, services, locations, serviceId, setServiceId, reload, paused, onScanner }: any) {
     const tx = useTx();
+    const canPlanEdit = usePerms().can('meals', 'manage');
     const txn = makeTxn(tx);
     const { language } = useI18n();
     const { addToast } = useToast();
@@ -837,7 +855,7 @@ function DeliveryTab({ conferenceId, services, locations, serviceId, setServiceI
     /** Buttons here must not take the focus from the scan input (the scanner's Enter would press them). */
     const keepFocus = (e: any) => e.preventDefault();
 
-    if (!services.length) return <div className={`${card} p-8 text-center text-sm font-bold text-gray-500`}>{tx('meals.delivery.no.services', 'Crea los servicios en «Plan» para empezar a registrar entregas.')}</div>;
+    if (!services.length) return <div className={`${card} p-8 text-center text-sm font-bold text-gray-500`}>{canPlanEdit ? tx('meals.delivery.no.services', 'Crea los servicios en «Plan» para empezar a registrar entregas.') : tx('meals.delivery.no.services.ask', 'Todavía no hay servicios de comida. Pide a quien gestiona Alimentación que los cree.')}</div>;
 
     return (
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6" onClick={(e) => { const tag = (e.target as HTMLElement).closest('button,input,select,textarea,a,label'); if (!tag) focusInput(); }}>
@@ -935,6 +953,9 @@ function ReportTab({ services, serviceId, setServiceId, slug }: any) {
     const txn = makeTxn(tx);
     const { language } = useI18n();
     const { addToast } = useToast();
+    // The Excel export is a «Reportes» permission, like every other Excel of the plugin.
+    const canExcel = usePerms().can('reports');
+    const canCodes = usePerms().can('inscriptions');
     const [report, setReport] = useState<any>(null);
     const [loading, setLoading] = useState(false);
     const [filter, setFilter] = useState<'all' | 'pending' | 'delivered' | 'override'>('all');
@@ -958,7 +979,8 @@ function ReportTab({ services, serviceId, setServiceId, slug }: any) {
                 noLocation: tx('meals.no.location', 'Sin localidad'), yes: tx('meals.yes', 'Sí'), no: tx('meals.no', 'No'),
             };
             const s = report.service;
-            downloadXlsx(buildXlsx(buildMealReportWorkbook(report, { filter, q, labels })), exportFilename(`alimentacion-${s.service_date}-${s.meal}`, slug));
+            const built = buildMealReportWorkbook(report, { filter, q, labels });
+            downloadXlsx(buildXlsx(canCodes ? built : withoutColumn(built, 'Código')), exportFilename(`alimentacion-${s.service_date}-${s.meal}`, slug));
         } catch (e: any) { addToast(e?.message || 'Error', 'error'); }
     };
 
@@ -967,9 +989,9 @@ function ReportTab({ services, serviceId, setServiceId, slug }: any) {
     return (
         <div className="space-y-5">
             <div className={`${card} p-5 sm:p-6 grid grid-cols-1 md:grid-cols-4 gap-3 items-end`}>
-                <div className="md:col-span-3 space-y-1"><label htmlFor="mr-service" className={labelCls}>{tx('meals.scanner.service', 'Servicio')}</label>
+                <div className={`${canExcel ? 'md:col-span-3' : 'md:col-span-4'} space-y-1`}><label htmlFor="mr-service" className={labelCls}>{tx('meals.scanner.service', 'Servicio')}</label>
                     <ServiceSelect id="mr-service" services={services} serviceId={serviceId} setServiceId={setServiceId} /></div>
-                <button type="button" onClick={excel} disabled={!report || !rows.length} className="px-4 py-3 rounded-xl bg-white border-2 border-gray-100 text-emerald-700 hover:border-emerald-500 font-black text-[10px] uppercase tracking-widest disabled:opacity-50"><i className="fa-solid fa-file-excel mr-1.5" aria-hidden="true"></i>{tx('meals.excel', 'Excel')}</button>
+                {canExcel && <button type="button" onClick={excel} disabled={!report || !rows.length} className="px-4 py-3 rounded-xl bg-white border-2 border-gray-100 text-emerald-700 hover:border-emerald-500 font-black text-[10px] uppercase tracking-widest disabled:opacity-50"><i className="fa-solid fa-file-excel mr-1.5" aria-hidden="true"></i>{tx('meals.excel', 'Excel')}</button>}
             </div>
             {loading && !report && <Spinner label={tx('loading', 'Cargando…')} />}
             {report && (

@@ -7,6 +7,10 @@
  * A bus is a trip (origin → destination, departure) with seats and a price. Selling a seat creates a
  * ticket at the bus price; the ticket is paid with its own transport payments (cash / transfer) and has
  * its own payment status. Nothing here touches the inscription's fee, payments or balance.
+ *
+ * Staff roles (2.15.0): Transporte › ver reads buses, passengers and ticket payments; › gestionar creates
+ * / edits / deletes buses, sells and removes seats and records / deletes ticket payments. The Excel
+ * files are a «Reportes» permission. Administrators see everything.
  */
 import React, { useEffect, useMemo, useState } from "react";
 import { useI18n } from "../../../../../frontend/src/contexts/I18nContext";
@@ -14,7 +18,8 @@ import { useToast } from "../../../../../frontend/src/contexts/ToastContext";
 import { conferenceApi, PAYMENT_METHODS, fmtMoney } from "../lib/conference";
 import type { Bus, TransportTicket, TransportPayment, Inscription, ConferenceField, Location } from "../lib/conference";
 import { buildXlsx, downloadXlsx } from "../lib/xlsx";
-import { buildBusManifest, displayName, exportFilename } from "../lib/exports";
+import { buildBusManifest, displayName, exportFilename, withoutColumn } from "../lib/exports";
+import { usePerms, ReadOnlyNotice } from "./perms";
 
 const money = (n: unknown) => '$' + fmtMoney(Number(n) || 0);
 const fmtWhen = (v?: string | null) => {
@@ -58,6 +63,9 @@ function Modal({ title, subtitle, onClose, children, footer, wide }: any) {
 export default function TransportPage({ conferenceId, slug }: { conferenceId: number; slug?: string }) {
     const { t } = useI18n();
     const { addToast } = useToast();
+    const perms = usePerms();
+    const canManage = perms.can('transport', 'manage');
+    const canExcel = perms.can('reports');
     const [buses, setBuses] = useState<Bus[]>([]);
     const [people, setPeople] = useState<Inscription[]>([]);
     const [fields, setFields] = useState<ConferenceField[]>([]);
@@ -83,11 +91,13 @@ export default function TransportPage({ conferenceId, slug }: { conferenceId: nu
 
     const load = async () => {
         try {
+            // The buses are this page; attendees / fields / locations only name the passengers, so a role
+            // that may not read them still gets its buses (passengers then show as «#id»).
             const [b, p, f, l] = await Promise.all([
                 conferenceApi.getBuses(conferenceId),
-                conferenceApi.getInscriptions(conferenceId),
-                conferenceApi.getFields(conferenceId),
-                conferenceApi.getLocations(conferenceId),
+                conferenceApi.getInscriptions(conferenceId).catch(() => []),
+                conferenceApi.getFields(conferenceId).catch(() => []),
+                conferenceApi.getLocations(conferenceId).catch(() => null),
             ]);
             setBuses(b || []); setPeople(p || []); setFields(f || []); setLocations(l?.locations || []);
         } catch (e: any) {
@@ -190,7 +200,8 @@ export default function TransportPage({ conferenceId, slug }: { conferenceId: nu
     // ── Excel
     const excel = (busId: number | null) => {
         try {
-            const sheets = buildBusManifest({ buses: buses as any, people: people as any, fields: fields as any, onlyBusId: busId });
+            const built = buildBusManifest({ buses: buses as any, people: people as any, fields: fields as any, onlyBusId: busId });
+            const sheets = perms.can('inscriptions') ? built : withoutColumn(built, 'Código');
             const name = busId != null ? 'bus-' + String(buses.find(b => b.id === busId)?.name || busId).toLowerCase() : 'transporte';
             downloadXlsx(buildXlsx(sheets), exportFilename(name, slug));
         } catch (e: any) { addToast(e?.message || 'Error', 'error'); }
@@ -208,6 +219,7 @@ export default function TransportPage({ conferenceId, slug }: { conferenceId: nu
     const pending = totals.revenue - totals.collected;
     return (
         <div className="space-y-8 animate-in fade-in duration-500">
+            <ReadOnlyNotice section="transport" />
             {/* Header */}
             <div className="relative overflow-hidden bg-white rounded-3xl p-8 border border-gray-100 shadow-xl shadow-gray-100/50">
                 <div className="absolute top-0 right-0 -mr-16 -mt-16 w-64 h-64 bg-sky-50/60 rounded-full blur-3xl pointer-events-none"></div>
@@ -235,12 +247,12 @@ export default function TransportPage({ conferenceId, slug }: { conferenceId: nu
                         </div>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                        <button onClick={() => excel(null)} disabled={!buses.length} className="px-6 py-4 rounded-2xl bg-white border-2 border-gray-100 text-emerald-700 hover:border-emerald-500 font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50">
+                        {canExcel && <button onClick={() => excel(null)} disabled={!buses.length} className="px-6 py-4 rounded-2xl bg-white border-2 border-gray-100 text-emerald-700 hover:border-emerald-500 font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50">
                             <i className="fa-solid fa-file-excel mr-1.5"></i>{t('transport.excel') || 'Excel de transporte'}
-                        </button>
-                        <button onClick={openCreate} className="px-8 py-4 rounded-2xl bg-sky-600 text-white hover:bg-sky-700 font-black text-[10px] uppercase tracking-widest shadow-lg shadow-sky-500/30 transition-all active:scale-95">
+                        </button>}
+                        {canManage && <button onClick={openCreate} className="px-8 py-4 rounded-2xl bg-sky-600 text-white hover:bg-sky-700 font-black text-[10px] uppercase tracking-widest shadow-lg shadow-sky-500/30 transition-all active:scale-95">
                             <i className="fa-solid fa-plus mr-1.5"></i>{t('transport.bus.new') || 'Nuevo bus'}
-                        </button>
+                        </button>}
                     </div>
                 </div>
             </div>
@@ -250,7 +262,7 @@ export default function TransportPage({ conferenceId, slug }: { conferenceId: nu
                 <div className="flex flex-col justify-center items-center py-20 bg-gray-50/50 border-2 border-dashed border-gray-100 rounded-3xl text-center px-6">
                     <div className="w-16 h-16 bg-white rounded-2xl flex items-center justify-center text-gray-300 text-2xl shadow-sm mb-4"><i className="fa-solid fa-bus"></i></div>
                     <p className="text-gray-600 font-bold">{t('transport.empty') || 'Aún no hay buses.'}</p>
-                    <p className="text-xs text-gray-400 mt-1">{t('transport.empty.hint') || 'Crea un bus con su trayecto, salida, capacidad y precio para empezar a vender pasajes.'}</p>
+                    {canManage && <p className="text-xs text-gray-400 mt-1">{t('transport.empty.hint') || 'Crea un bus con su trayecto, salida, capacidad y precio para empezar a vender pasajes.'}</p>}
                 </div>
             ) : (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -270,9 +282,9 @@ export default function TransportPage({ conferenceId, slug }: { conferenceId: nu
                                         </div>
                                     </div>
                                     <div className="flex gap-1.5 shrink-0">
-                                        <button onClick={() => excel(b.id)} title={t('transport.bus.excel') || 'Lista de pasajeros (Excel)'} className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-emerald-600 hover:bg-emerald-600 hover:text-white transition-all"><i className="fa-solid fa-file-excel text-xs"></i></button>
-                                        <button onClick={() => openEdit(b)} title={t('edit') || 'Editar'} className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white transition-all"><i className="fa-solid fa-pen text-xs"></i></button>
-                                        <button onClick={() => deleteBus(b)} title={t('delete') || 'Eliminar'} className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition-all"><i className="fa-solid fa-trash-can text-xs"></i></button>
+                                        {canExcel && <button onClick={() => excel(b.id)} title={t('transport.bus.excel') || 'Lista de pasajeros (Excel)'} className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-emerald-600 hover:bg-emerald-600 hover:text-white transition-all"><i className="fa-solid fa-file-excel text-xs"></i></button>}
+                                        {canManage && <button onClick={() => openEdit(b)} title={t('edit') || 'Editar'} className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white transition-all"><i className="fa-solid fa-pen text-xs"></i></button>}
+                                        {canManage && <button onClick={() => deleteBus(b)} title={t('delete') || 'Eliminar'} className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition-all"><i className="fa-solid fa-trash-can text-xs"></i></button>}
                                     </div>
                                 </div>
                                 <div className="mt-5">
@@ -303,7 +315,7 @@ export default function TransportPage({ conferenceId, slug }: { conferenceId: nu
             )}
 
             {/* Bus form */}
-            {busForm && (
+            {busForm && canManage && (
                 <Modal title={busForm.id ? (t('transport.bus.edit') || 'Editar bus') : (t('transport.bus.new') || 'Nuevo bus')} subtitle={t('transport.bus.form.subtitle') || 'Trayecto, salida, capacidad y precio'} onClose={() => setBusForm(null)}
                     footer={<>
                         <button onClick={() => setBusForm(null)} className="px-6 py-3 text-gray-500 font-bold hover:bg-gray-100 rounded-xl">{t('cancel') || 'Cancelar'}</button>
@@ -339,14 +351,14 @@ export default function TransportPage({ conferenceId, slug }: { conferenceId: nu
             {/* Passengers of a bus */}
             {currentBus && (
                 <Modal wide title={currentBus.name} subtitle={`${t('transport.passengers') || 'Pasajeros'} · ${Number(currentBus.sold) || 0}/${currentBus.capacity} · ${money(currentBus.price)}`} onClose={() => setPassengersFor(null)}
-                    footer={adding ? <>
+                    footer={!canManage ? null : adding ? <>
                         <span className="mr-auto text-xs font-bold text-gray-500 self-center">{(t('transport.add.selected') || '{n} seleccionados · {free} puestos libres').replace('{n}', String(pick.size)).replace('{free}', String(free))}</span>
                         <button onClick={() => { setAdding(false); setPick(new Set()); }} className="px-6 py-3 text-gray-500 font-bold hover:bg-gray-100 rounded-xl">{t('cancel') || 'Cancelar'}</button>
                         <button onClick={addPassengers} disabled={busy || !pick.size || pick.size > free} className="px-8 py-3 bg-sky-600 text-white rounded-2xl hover:bg-sky-700 font-black text-[10px] uppercase tracking-widest shadow-lg shadow-sky-500/30 disabled:opacity-50">{t('transport.add.confirm') || 'Vender pasajes'}</button>
                     </> : <>
                         <button onClick={() => setAdding(true)} disabled={free <= 0} className="px-8 py-3 bg-sky-600 text-white rounded-2xl hover:bg-sky-700 font-black text-[10px] uppercase tracking-widest shadow-lg shadow-sky-500/30 disabled:opacity-50"><i className="fa-solid fa-user-plus mr-1.5"></i>{free <= 0 ? (t('transport.full') || 'Bus lleno') : (t('transport.add') || 'Agregar pasajeros')}</button>
                     </>}>
-                    {adding ? (
+                    {adding && canManage ? (
                         <>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                 <input className={inputCls} value={search} onChange={e => setSearch(e.target.value)} placeholder={t('transport.add.search') || 'Buscar por nombre, código o documento…'} aria-label={t('transport.add.search') || 'Buscar'} />
@@ -387,7 +399,7 @@ export default function TransportPage({ conferenceId, slug }: { conferenceId: nu
                                             <span className={`inline-block mt-0.5 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest border ${meta.cls}`}>{t(meta.key) || meta.fallback}</span>
                                         </div>
                                         <button onClick={() => openPayments(tk)} title={t('transport.payments') || 'Pagos del pasaje'} className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-emerald-600 hover:text-white transition-all"><i className="fa-solid fa-money-bill-wave text-xs"></i></button>
-                                        <button onClick={() => removePassenger(tk)} title={t('transport.passenger.remove') || 'Quitar del bus'} className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition-all"><i className="fa-solid fa-user-minus text-xs"></i></button>
+                                        {canManage && <button onClick={() => removePassenger(tk)} title={t('transport.passenger.remove') || 'Quitar del bus'} className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition-all"><i className="fa-solid fa-user-minus text-xs"></i></button>}
                                     </div>
                                 );
                             })}
@@ -412,11 +424,11 @@ export default function TransportPage({ conferenceId, slug }: { conferenceId: nu
                                     <div className="text-sm font-black text-gray-800">{money(p.amount)} <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">{p.method}</span></div>
                                     <div className="text-[10px] text-gray-400 font-bold">{fmtWhen(p.date)}{p.reference ? ` · ${p.reference}` : ''}</div>
                                 </div>
-                                <button onClick={() => deletePayment(p)} title={t('delete') || 'Eliminar'} className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition-all"><i className="fa-solid fa-trash-can text-[10px]"></i></button>
+                                {canManage && <button onClick={() => deletePayment(p)} title={t('delete') || 'Eliminar'} className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition-all"><i className="fa-solid fa-trash-can text-[10px]"></i></button>}
                             </div>
                         ))}
                     </div>
-                    {Number(payTicket.price) - Number(payTicket.amount_paid) > 0.004 && (
+                    {canManage && Number(payTicket.price) - Number(payTicket.amount_paid) > 0.004 && (
                         <div className="space-y-3 rounded-2xl border-2 border-gray-100 p-4">
                             <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('transport.payment.new') || 'Registrar pago'}</div>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

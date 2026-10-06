@@ -3,15 +3,17 @@
  *
  * Runs in the child_process sandbox like every other plugin. It uses ONLY the injected `wordjs`
  * capability bridge (no direct require of express/core/dbAsync) and is granted Android-style
- * permissions (database:read, database:write, express:register_route, admin_menu:register) by the
- * admin. There is NO trusted bypass:
+ * permissions (database:read, database:write, express:register_route, admin_menu:register, users:read) by
+ * the admin. There is NO trusted bypass:
  *   - All tables live under the plugin's own prefix `wjp_conference_manager_` so they pass
  *     assertSqlAllowed's default-deny prefix check. Table names are built from wordjs.db.tablePrefix.
  *   - No PRAGMA / information_schema (denied for plugins). Schema is created idempotently with
  *     createTable and extended with ALTER TABLE … ADD COLUMN on our OWN prefixed tables (permitted;
  *     see addColumnIfMissing).
  *   - Routes are namespaced under /api/v1/plugin/conference-manager/* (no `absolute` paths). The
- *     options object only carries { auth, admin } which the host honors with real middleware.
+ *     options object only carries { auth, admin } which the host honors with real middleware. Admin-panel
+ *     routes are { auth: true } and gate themselves per section through the conference TEAM (2.15.0:
+ *     staff roles, see allow()); team management itself is { auth: true, admin: true }.
  *   - The portal cookie is host-namespaced; we read the namespaced cookie OR the x-portal-token header.
  *
  * Plugin SQL rules (host guard, assertSqlAllowed): no backslashes, no `$`, no `[ ]`, no `;` — so a
@@ -20,7 +22,7 @@
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.14.0',
+    version: '2.15.0',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -51,6 +53,9 @@ exports.init = async function (wordjs) {
         mealPlan: `${P}meal_location_plan`,
         mealOverrides: `${P}meal_overrides`,
         mealDeliveries: `${P}meal_deliveries`,
+        // Team & permissions (2.15.0)
+        staffRoles: `${P}staff_roles`,
+        staffMembers: `${P}staff_members`,
     };
 
     // Schema-follows-form: the registration FORM is the source of truth. Every form field owns a real
@@ -1138,13 +1143,513 @@ exports.init = async function (wordjs) {
         return applyFeeRules(await loadFeeRules(conferenceId), values, feeDefault);
     }
 
-    // === CONFERENCES MANAGEMENT ===
-    http.route('get', '/list', { auth: true, admin: true }, async (req, res) => {
-        const list = await db.all(`SELECT * FROM ${T.conferences} ORDER BY id DESC`);
-        res.json(list);
+    // === TEAM & PERMISSIONS (2.15.0) ===
+    // Several people work in this panel, each on some sections only. A WordJS ADMINISTRATOR adds a WordJS
+    // user to the conference TEAM (staff_members) with a ROLE (staff_roles); the role grants one level per
+    // SECTION, none < view < manage (a section without a level, or with an unknown key or level, is none).
+    // Administrators always have every section at its highest level and alone manage the team; a role has
+    // no conference / location scope (it applies to everything in its sections).
+    //
+    // The host knows only { auth } / { admin } for isolated routes and forwards req.user without
+    // capabilities, so every admin-panel route is registered { auth: true } and GATES ITSELF as the first
+    // statement of its handler — `if (!await allow(req, res, section, level)) return;` (or allowAny /
+    // isStaff). A refusal is 403 { error: 'No tienes acceso a esta sección.' }. The coordinator portal
+    // (/portal/*: a location code) and the public form (/public/*) keep their own authentication.
+    //
+    // ROUTE → PERMISSION (reads = view, writes = manage; «staff» = any active team member or administrator;
+    // «a | b» = any of them; «admin» = administrators only, enforced by the host AND in the handler):
+    //   GET    /list                                   staff (context: the conference list)
+    //   POST   /create                                 settings:manage
+    //   PUT    /:id                                    settings:manage — a body that ONLY sets lodging_deadline
+    //                                                  (the «plazos» of Localidades): locations:manage | settings:manage
+    //   DELETE /:id                                    settings:manage
+    //   POST   /publish                                settings:manage
+    //   GET    /fields                                 staff (context: names every attendee column)
+    //   POST   /fields, DELETE /fields/:id             settings:manage
+    //   GET    /fee-rules                              settings:view
+    //   POST   /fee-rules, DELETE /fee-rules/:id       settings:manage
+    //   POST   /reprice                                settings:manage
+    //   GET    /locations                              staff (context: names, capacity, the conference row);
+    //                                                  the access `code` only with locations:manage (else null)
+    //   POST   /locations, PUT/DELETE /locations/:id   locations:manage (codes = who can log in to the portal)
+    //   GET    /locations/:id/lodging                  locations:view
+    //   POST   /locations/:id/lodging/validate|return|reopen   locations:manage
+    //   GET    /hotels                                 lodging:view | inscriptions:view | dashboard:view | reports:view
+    //   POST   /hotels, PUT/DELETE /hotels/:id         lodging:manage
+    //   POST   /hotels/:id/allot                       lodging:manage
+    //   POST   /rooms, PUT/DELETE /rooms/:id           lodging:manage
+    //   GET    /assignment/rules                       lodging:view
+    //   POST   /assignment/rules, DELETE /assignment/rules/:id, POST /assignment/reset, POST /assignment/run
+    //                                                  lodging:manage
+    //   POST   /inscriptions/:id/assign                lodging:manage
+    //   GET    /inscriptions                           inscriptions:view | payments:view | lodging:view |
+    //                                                  transport:view | accounting:view | dashboard:view | reports:view
+    //                                                  (the roster those pages name people from); `reg_code` only
+    //                                                  with inscriptions:view (else null)
+    //   POST   /inscriptions, PUT/DELETE /inscriptions/:id   inscriptions:manage
+    //   GET    /inscriptions/export                    reports:view | inscriptions:view (the Código column only
+    //                                                  with inscriptions:view)
+    //   GET    /inscriptions/:id/payments              payments:view | inscriptions:view
+    //   POST   /inscriptions/:id/payments              payments:manage
+    //   DELETE /payments/:id                           payments:manage
+    //   POST   /payments/:id/validate|reject           payments:manage
+    //   GET    /reports/summary                        reports:view
+    //   GET    /buses                                  transport:view | reports:view
+    //   POST   /buses, PUT/DELETE /buses/:id           transport:manage
+    //   POST   /buses/:id/passengers, DELETE /buses/:id/passengers/:inscriptionId   transport:manage
+    //   GET    /tickets/:id/payments                   transport:view
+    //   POST   /tickets/:id/payments, DELETE /transport-payments/:id   transport:manage
+    //   GET    /accounting                             accounting:view
+    //   POST   /accounting/entries, PUT/DELETE /accounting/entries/:id   accounting:manage
+    //   GET    /meals                                  meals:view | meals_delivery:manage (the kitchen's services list)
+    //   POST   /meals/services, POST /meals/services/bulk, PUT/DELETE /meals/services/:id   meals:manage
+    //   PUT    /meals/plan, PUT /meals/services/:id/plan, POST /meals/plan/toggle   meals:manage
+    //   GET    /meals/people                           meals:view | meals_delivery:manage (manual delivery search)
+    //   GET    /meals/inscriptions/:id                 meals:view
+    //   PUT    /meals/inscriptions/:id/overrides       meals:manage
+    //   POST   /meals/deliver                          meals_delivery:manage
+    //   DELETE /meals/deliveries/:id                   meals_delivery:manage
+    //   GET    /meals/services/:id/stats               meals:view | meals_delivery:manage
+    //   GET    /meals/services/:id/deliveries          meals:view | meals_delivery:manage (recent deliveries)
+    //   GET    /meals/services/:id/report              meals:view
+    //   (every meals answer carries reg_code only with inscriptions:view, else null)
+    //   GET    /staff/me                               any authenticated user (all `none` when not on the team)
+    //   GET|POST /staff/roles, PUT|DELETE /staff/roles/:id       admin
+    //   GET|POST /staff/members, PUT|DELETE /staff/members/:id   admin
+    //   GET    /staff/user-search                      admin
+    //   /public/*, /portal/*                           unchanged (no WordJS session involved)
+    const STAFF_SECTIONS = [
+        { key: 'dashboard', levels: ['none', 'view'] },
+        { key: 'inscriptions', levels: ['none', 'view', 'manage'] },
+        { key: 'payments', levels: ['none', 'view', 'manage'] },
+        { key: 'locations', levels: ['none', 'view', 'manage'] },
+        { key: 'lodging', levels: ['none', 'view', 'manage'] },
+        { key: 'transport', levels: ['none', 'view', 'manage'] },
+        { key: 'accounting', levels: ['none', 'view', 'manage'] },
+        { key: 'meals', levels: ['none', 'view', 'manage'] },
+        { key: 'meals_delivery', levels: ['none', 'manage'] },
+        { key: 'reports', levels: ['none', 'view'] },
+        { key: 'settings', levels: ['none', 'view', 'manage'] },
+    ];
+    const STAFF_LEVELS = new Map(STAFF_SECTIONS.map(s => [s.key, s.levels]));
+    const NO_ACCESS = 'No tienes acceso a esta sección.';
+    const ADMIN_PERMISSIONS = Object.freeze(Object.fromEntries(STAFF_SECTIONS.map(s => [s.key, s.levels[s.levels.length - 1]])));
+    const NO_PERMISSIONS = Object.freeze(Object.fromEntries(STAFF_SECTIONS.map(s => [s.key, 'none'])));
+    const levelRank = (lv) => (lv === 'manage' ? 2 : lv === 'view' ? 1 : 0);
+
+    // Stored (JSON text) or already-parsed permissions → EVERY section with a valid level: unknown keys are
+    // ignored, a missing or invalid level is none. Never throws (a corrupt row grants nothing).
+    function normalizePermissions(raw) {
+        let src = raw;
+        if (typeof src === 'string') { try { src = JSON.parse(src); } catch { src = null; } }
+        const ok = src && typeof src === 'object' && !Array.isArray(src);
+        const out = {};
+        for (const s of STAFF_SECTIONS) {
+            const v = ok && Object.prototype.hasOwnProperty.call(src, s.key) ? src[s.key] : 'none';
+            out[s.key] = s.levels.includes(v) ? v : 'none';
+        }
+        return out;
+    }
+    // A request body's permissions: a plain object whose every key is a section and every value one of its
+    // levels (400 otherwise). Sections left out are none. `undefined` (POST without it) = all none.
+    function parsePermissionsBody(raw) {
+        if (raw === undefined) return { ...NO_PERMISSIONS };
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw httpError(400, 'Los permisos deben ser un objeto { sección: nivel }.');
+        for (const k of Object.keys(raw)) {
+            const levels = STAFF_LEVELS.get(k);
+            if (!levels) throw httpError(400, `Sección desconocida: «${String(k).slice(0, 40)}».`);
+            if (!levels.includes(raw[k])) throw httpError(400, `Nivel inválido para «${k}»: «${String(raw[k]).slice(0, 20)}» (${levels.join(', ')}).`);
+        }
+        return normalizePermissions(raw);
+    }
+
+    // Who did it, for the audit columns (reviewed_by, recorded_by, delivered_by, lodging_reviewed_by,
+    // added_by): the acting user's login — the host forwards it for administrators and team members alike —
+    // else the user id.
+    const actorOf = (req) => {
+        const u = req.user || null;
+        if (!u) return null;
+        if (u.userLogin) return String(u.userLogin).slice(0, 100);
+        return u.id != null ? String(u.id) : null;
+    };
+
+    // The caller's permissions, cached per user for ≤ STAFF_CACHE_MS and dropped on EVERY team / role write
+    // (invalidateStaffCache), so a revocation takes effect on the very next request of this worker. A read
+    // that started before a write never repopulates the cache with what it read (the generation check).
+    const STAFF_CACHE_MS = 5000;
+    const STAFF_CACHE_MAX = 1000;
+    const staffCache = new Map();   // String(user id) → { at, gen, perms }
+    let staffGen = 0;
+    const invalidateStaffCache = () => { staffGen++; staffCache.clear(); };
+    const isAdminUser = (req) => !!(req && req.user && req.user.role === 'administrator');
+    async function permsOf(req) {
+        const u = req && req.user;
+        if (u && u.role === 'administrator') return { isAdmin: true, isStaff: true, permissions: ADMIN_PERMISSIONS, role: null };
+        const uid = u ? positiveInt(u.id) : null;
+        if (!uid) return { isAdmin: false, isStaff: false, permissions: NO_PERMISSIONS, role: null };
+        const key = String(uid), now = Date.now();
+        const hit = staffCache.get(key);
+        if (hit && hit.gen === staffGen && now - hit.at < STAFF_CACHE_MS) return hit.perms;
+        const gen = staffGen;
+        const row = await db.get(
+            `SELECT m.id, m.active, m.role_id, r.name AS role_name, r.permissions FROM ${T.staffMembers} m JOIN ${T.staffRoles} r ON r.id = m.role_id WHERE m.user_id = ?`, [uid]);
+        const perms = row && Number(row.active) === 1
+            ? { isAdmin: false, isStaff: true, permissions: Object.freeze(normalizePermissions(row.permissions)), role: { id: row.role_id, name: row.role_name } }
+            : { isAdmin: false, isStaff: false, permissions: NO_PERMISSIONS, role: null };
+        if (gen === staffGen) {
+            if (staffCache.size >= STAFF_CACHE_MAX) staffCache.clear();
+            staffCache.set(key, { at: now, gen, perms });
+        }
+        return perms;
+    }
+    const hasLevel = (perms, section, level) => perms.isAdmin || levelRank(perms.permissions[section]) >= levelRank(level);
+    const canSeeRegCodes = (perms) => hasLevel(perms, 'inscriptions', 'view');
+    const canSeeLocationCodes = (perms) => hasLevel(perms, 'locations', 'manage');
+    // reg_code (the barcode payload) travels with inscriptions:view only.
+    const maskRegCode = (obj, perms) => (obj && !canSeeRegCodes(perms) ? { ...obj, reg_code: null } : obj);
+
+    const denyAccess = (res) => { res.status(403).json({ error: NO_ACCESS }); return false; };
+    async function gatePerms(req, res) {
+        try { return await permsOf(req); }
+        catch (e) {
+            console.warn('[conference-manager] permission lookup failed:', e && e.message);
+            res.status(500).json({ error: 'No se pudieron comprobar tus permisos; inténtalo de nuevo.' });
+            return null;
+        }
+    }
+    // THE gate: resolves to the caller's permissions (truthy) when allowed, else answers 403 (500 when the
+    // lookup itself failed) and resolves to false. Never throws.
+    async function allow(req, res, section, level) {
+        if (!STAFF_LEVELS.has(section)) console.warn(`[conference-manager] allow(): unknown section «${section}»`);
+        const p = await gatePerms(req, res);
+        if (!p) return false;
+        return hasLevel(p, section, level) ? p : denyAccess(res);
+    }
+    // Any of [[section, level], …] is enough.
+    async function allowAny(req, res, alternatives) {
+        const p = await gatePerms(req, res);
+        if (!p) return false;
+        for (const [section, level] of alternatives) {
+            if (hasLevel(p, section, level)) return p;
+        }
+        return denyAccess(res);
+    }
+    // Context every team member needs for the panel to work (the conference list, the form fields, the
+    // locations' names): an active membership is enough, whatever the role.
+    async function isStaff(req, res) {
+        const p = await gatePerms(req, res);
+        if (!p) return false;
+        return p.isStaff ? p : denyAccess(res);
+    }
+    // Team management: administrators only (the routes also carry { admin: true }; this is the second lock).
+    const adminOnly = (req, res) => (isAdminUser(req) ? true : denyAccess(res));
+
+    // Team writes are read-then-write: serialised here (single worker process) and backed by UNIQUE indexes.
+    let staffLock = Promise.resolve();
+    const withStaffLock = (fn) => {
+        const run = staffLock.then(fn, fn);
+        staffLock = run.then(() => {}, () => {});
+        return run;
+    };
+
+    async function initStaffSchema() {
+        // First run = the roles table did not exist before this boot. The example roles are seeded then
+        // only: seeding on «no role» would bring them back every boot after an administrator deleted them.
+        let firstRun = false;
+        try { await db.get(`SELECT COUNT(*) AS n FROM ${T.staffRoles}`); } catch (e) { firstRun = true; }
+        await db.createTable(T.staffRoles, [
+            'id INT_PK',
+            'name VARCHAR(80) NOT NULL',
+            'permissions TEXT',                    // JSON { section: level }
+            'created_at DATETIME DEFAULT CURRENT_TIMESTAMP',
+            'updated_at DATETIME DEFAULT CURRENT_TIMESTAMP'
+        ]);
+        await db.createTable(T.staffMembers, [
+            'id INT_PK',
+            'user_id INT NOT NULL',                // the WordJS user (core users.id; no FK across namespaces)
+            'role_id INT NOT NULL',                // a role with members cannot be deleted (checked in code)
+            'active INT DEFAULT 1',
+            'added_by TEXT',
+            'created_at DATETIME DEFAULT CURRENT_TIMESTAMP',
+            `FOREIGN KEY (role_id) REFERENCES ${T.staffRoles}(id)`
+        ]);
+        await createUniqueIndex(`${P}uidx_staff_roles_name`, T.staffRoles, 'name');
+        await createUniqueIndex(`${P}uidx_staff_members_user`, T.staffMembers, 'user_id');
+        await createIndex(`${P}idx_staff_members_role`, T.staffMembers, 'role_id');
+        if (!firstRun) return;
+        const c = await db.get(`SELECT COUNT(*) AS n FROM ${T.staffRoles}`);
+        if (Number(c && c.n) > 0) return;
+        const seeds = [
+            { name: 'Solo lectura', permissions: Object.fromEntries(STAFF_SECTIONS.map(s => [s.key, s.levels.includes('view') ? 'view' : 'none'])) },
+            { name: 'Cocina', permissions: { ...NO_PERMISSIONS, meals_delivery: 'manage' } },
+        ];
+        for (const s of seeds) {
+            try { await db.run(`INSERT INTO ${T.staffRoles} (name, permissions) VALUES (?, ?)`, [s.name, JSON.stringify(s.permissions)]); }
+            catch (e) { console.warn('[conference-manager] staff role seed skipped:', e.message); }
+        }
+    }
+    await initStaffSchema();
+
+    // ── WordJS users (grant users:read) ──
+    const USERS_GRANT_MESSAGE = 'Para buscar usuarios, concede al plugin el permiso «users:read» en Plugins.';
+    const isUsersGrantError = (e) => /without permission|security block|not granted|permission/i.test(String(e && e.message ? e.message : e));
+    const usersBridge = () => (wordjs.users && typeof wordjs.users.findById === 'function' && typeof wordjs.users.search === 'function' ? wordjs.users : null);
+    // The host's SAFE projection → the wire shape { id, login, email, name, role }.
+    const wireUser = (u) => (u && u.id != null ? {
+        id: u.id,
+        login: u.userLogin || u.username || null,
+        email: u.userEmail || null,
+        name: u.displayName || u.userLogin || u.username || null,
+        role: u.role || null,
+    } : null);
+    // Throws 503 (USERS_GRANT_MESSAGE) when the grant is missing.
+    async function findWordjsUser(id) {
+        const api = usersBridge();
+        if (!api) throw httpError(503, USERS_GRANT_MESSAGE);
+        try { return await api.findById(id); }
+        catch (e) { if (isUsersGrantError(e)) throw httpError(503, USERS_GRANT_MESSAGE); throw e; }
+    }
+    async function searchWordjsUsers(term, limit) {
+        const api = usersBridge();
+        if (!api) throw httpError(503, USERS_GRANT_MESSAGE);
+        try { return await api.search(term, limit); }
+        catch (e) { if (isUsersGrantError(e)) throw httpError(503, USERS_GRANT_MESSAGE); throw e; }
+    }
+
+    const STAFF_ADMIN_ROUTE = { auth: true, admin: true };
+    const ROLE_DUPLICATE = 'Ya existe un rol con ese nombre.';
+    const staffSectionsWire = () => STAFF_SECTIONS.map(s => ({ key: s.key, levels: s.levels.slice() }));
+    const roleWire = (r) => ({ id: r.id, name: r.name, permissions: normalizePermissions(r.permissions), members: Number(r.members) || 0, created_at: r.created_at || null, updated_at: r.updated_at || null });
+    const parseRoleName = (v) => {
+        const s = typeof v === 'string' ? v.trim().replace(/\s+/g, ' ') : '';
+        if (!s) throw httpError(400, 'El nombre del rol es obligatorio.');
+        if (s.length > 80) throw httpError(400, 'El nombre del rol es demasiado largo (máximo 80 caracteres).');
+        return s;
+    };
+    // Role names are unique ignoring case AND accents — compared HERE, not with SQL LOWER(), which folds
+    // only ASCII on SQLite («TESORERÍA» ≠ «tesorería» there) while MySQL's default collation also ignores
+    // accents (its UNIQUE index would refuse «Tesoreria» next to «Tesorería» with a 500). The roles table is
+    // small; the UNIQUE index backs the exact-name race.
+    const foldRoleName = (s) => String(s).normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+    const roleNameTaken = async (name, exceptId) => {
+        const want = foldRoleName(name);
+        const rows = await db.all(`SELECT id, name FROM ${T.staffRoles}`);
+        return rows.some(r => Number(r.id) !== Number(exceptId || 0) && foldRoleName(r.name) === want);
+    };
+    const parseFlag = (v) => (v === true || v === 1 || v === '1' || v === 'true' ? 1 : v === false || v === 0 || v === '0' || v === 'false' ? 0 : null);
+
+    // What the caller may do here — the admin UI loads it at mount (200 with every section `none` for a
+    // logged-in user who is not on the team, so the page can explain how to get access).
+    http.route('get', '/staff/me', { auth: true }, async (req, res) => {
+        try {
+            const p = await permsOf(req);
+            const u = req.user || {};
+            res.json({
+                isAdmin: p.isAdmin,
+                isStaff: p.isStaff,
+                permissions: { ...p.permissions },
+                role: p.role ? { id: p.role.id, name: p.role.name } : null,
+                user: { id: u.id == null ? null : u.id, name: String(u.userLogin || u.userEmail || (u.id != null ? `#${u.id}` : '')) },
+            });
+        } catch (e) { sendError(res, e); }
     });
 
-    http.route('post', '/create', { auth: true, admin: true }, async (req, res) => {
+    http.route('get', '/staff/roles', STAFF_ADMIN_ROUTE, async (req, res) => {
+        if (!adminOnly(req, res)) return;
+        try {
+            const rows = await db.all(`SELECT r.*, (SELECT COUNT(*) FROM ${T.staffMembers} m WHERE m.role_id = r.id) AS members FROM ${T.staffRoles} r ORDER BY r.name, r.id`);
+            res.json({ roles: rows.map(roleWire), sections: staffSectionsWire() });
+        } catch (e) { sendError(res, e); }
+    });
+
+    http.route('post', '/staff/roles', STAFF_ADMIN_ROUTE, async (req, res) => {
+        if (!adminOnly(req, res)) return;
+        try {
+            const body = req.body || {};
+            const name = parseRoleName(body.name);
+            const permissions = parsePermissionsBody(body.permissions);
+            const id = await withStaffLock(async () => {
+                if (await roleNameTaken(name, null)) throw httpError(409, ROLE_DUPLICATE);
+                let r;
+                try {
+                    r = await db.run(`INSERT INTO ${T.staffRoles} (name, permissions, created_at, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, [name, JSON.stringify(permissions)]);
+                } catch (e) {
+                    if (await roleNameTaken(name, null)) throw httpError(409, ROLE_DUPLICATE);
+                    throw e;
+                }
+                invalidateStaffCache();
+                return r.lastID;
+            });
+            res.json({ success: true, id });
+        } catch (e) { sendError(res, e); }
+    });
+
+    http.route('put', '/staff/roles/:id', STAFF_ADMIN_ROUTE, async (req, res) => {
+        if (!adminOnly(req, res)) return;
+        try {
+            const id = positiveInt(req.params.id);
+            const body = req.body || {};
+            const name = body.name === undefined ? undefined : parseRoleName(body.name);
+            const permissions = body.permissions === undefined ? undefined : parsePermissionsBody(body.permissions);
+            await withStaffLock(async () => {
+                const role = id ? await db.get(`SELECT id FROM ${T.staffRoles} WHERE id = ?`, [id]) : null;
+                if (!role) throw httpError(404, 'Rol no encontrado.');
+                if (name !== undefined && await roleNameTaken(name, id)) throw httpError(409, ROLE_DUPLICATE);
+                const sets = ['updated_at = CURRENT_TIMESTAMP'], params = [];
+                if (name !== undefined) { sets.push('name = ?'); params.push(name); }
+                if (permissions !== undefined) { sets.push('permissions = ?'); params.push(JSON.stringify(permissions)); }
+                try { await db.run(`UPDATE ${T.staffRoles} SET ${sets.join(', ')} WHERE id = ?`, [...params, id]); }
+                catch (e) {
+                    if (name !== undefined && await roleNameTaken(name, id)) throw httpError(409, ROLE_DUPLICATE);
+                    throw e;
+                }
+                invalidateStaffCache();
+            });
+            res.json({ success: true });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // A role that still has members (active or not) is never deleted: 409 { error, members }.
+    http.route('delete', '/staff/roles/:id', STAFF_ADMIN_ROUTE, async (req, res) => {
+        if (!adminOnly(req, res)) return;
+        try {
+            const id = positiveInt(req.params.id);
+            const outcome = await withStaffLock(async () => {
+                const role = id ? await db.get(`SELECT id FROM ${T.staffRoles} WHERE id = ?`, [id]) : null;
+                if (!role) throw httpError(404, 'Rol no encontrado.');
+                // One conditional statement: "has no member" and "delete it" cannot be split by a writer.
+                const r = await db.run(`DELETE FROM ${T.staffRoles} WHERE id = ? AND NOT EXISTS (SELECT 1 FROM ${T.staffMembers} m WHERE m.role_id = ? )`, [id, id]);
+                if (r && r.changes) { invalidateStaffCache(); return { deleted: true }; }
+                const c = await db.get(`SELECT COUNT(*) AS n FROM ${T.staffMembers} WHERE role_id = ?`, [id]);
+                return { members: Number(c && c.n) || 0 };
+            });
+            if (!outcome.deleted) {
+                const n = outcome.members;
+                return res.status(409).json({ error: `El rol tiene ${n} miembro(s); cámbialos de rol o quítalos del equipo antes de eliminarlo.`, members: n });
+            }
+            res.json({ success: true });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // The team, with each member's WordJS account when the users:read grant allows looking it up
+    // (`user: null` otherwise, or when the account no longer exists; `users_read` says which).
+    http.route('get', '/staff/members', STAFF_ADMIN_ROUTE, async (req, res) => {
+        if (!adminOnly(req, res)) return;
+        try {
+            const rows = await db.all(`SELECT m.*, r.name AS role_name FROM ${T.staffMembers} m LEFT JOIN ${T.staffRoles} r ON r.id = m.role_id ORDER BY m.created_at, m.id`);
+            let usersRead = true;
+            const members = [];
+            for (const m of rows) {
+                let user = null;
+                if (usersRead) {
+                    try { user = wireUser(await findWordjsUser(m.user_id)); }
+                    catch (e) { if (e && e.status === 503) usersRead = false; }
+                }
+                members.push({
+                    id: m.id, user_id: m.user_id, role_id: m.role_id, role_name: m.role_name || null,
+                    active: Number(m.active) === 1, added_by: m.added_by || null, created_at: m.created_at || null, user,
+                });
+            }
+            res.json({ members, users_read: usersRead });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // Add a WordJS user to the team: { user_id, role_id }. 400 unknown role / an administrator (they already
+    // have everything); 404 unknown user; 409 already on the team; 503 without the users:read grant.
+    http.route('post', '/staff/members', STAFF_ADMIN_ROUTE, async (req, res) => {
+        if (!adminOnly(req, res)) return;
+        try {
+            const body = req.body || {};
+            const userId = positiveInt(body.user_id);
+            if (!userId) return res.status(400).json({ error: 'Indica el usuario.' });
+            const roleId = positiveInt(body.role_id);
+            const role = roleId ? await db.get(`SELECT id FROM ${T.staffRoles} WHERE id = ?`, [roleId]) : null;
+            if (!role) return res.status(400).json({ error: 'Rol desconocido.' });
+            const user = await findWordjsUser(userId);
+            if (!user || user.id == null) return res.status(404).json({ error: 'Usuario no encontrado.' });
+            if (user.role === 'administrator') return res.status(400).json({ error: 'Los administradores ya tienen acceso a todo; no hace falta añadirlos al equipo.' });
+            const id = await withStaffLock(async () => {
+                if (!(await db.get(`SELECT id FROM ${T.staffRoles} WHERE id = ?`, [roleId]))) throw httpError(400, 'Rol desconocido.');
+                const dup = 'Esa persona ya forma parte del equipo.';
+                if (await db.get(`SELECT id FROM ${T.staffMembers} WHERE user_id = ?`, [userId])) throw httpError(409, dup);
+                let r;
+                try {
+                    r = await db.run(`INSERT INTO ${T.staffMembers} (user_id, role_id, active, added_by, created_at) VALUES (?, ?, 1, ?, CURRENT_TIMESTAMP)`, [userId, roleId, actorOf(req)]);
+                } catch (e) {
+                    if (await db.get(`SELECT id FROM ${T.staffMembers} WHERE user_id = ?`, [userId])) throw httpError(409, dup);
+                    throw e;
+                }
+                invalidateStaffCache();
+                return r.lastID;
+            });
+            res.json({ success: true, id });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // Change a member's role and/or (de)activate them: { role_id?, active? }. Effective at once.
+    http.route('put', '/staff/members/:id', STAFF_ADMIN_ROUTE, async (req, res) => {
+        if (!adminOnly(req, res)) return;
+        try {
+            const id = positiveInt(req.params.id);
+            const body = req.body || {};
+            let roleId;
+            if (body.role_id !== undefined) {
+                roleId = positiveInt(body.role_id);
+                if (!roleId) return res.status(400).json({ error: 'Rol desconocido.' });
+            }
+            let active;
+            if (body.active !== undefined) {
+                active = parseFlag(body.active);
+                if (active === null) return res.status(400).json({ error: 'active debe ser verdadero o falso.' });
+            }
+            await withStaffLock(async () => {
+                const m = id ? await db.get(`SELECT id FROM ${T.staffMembers} WHERE id = ?`, [id]) : null;
+                if (!m) throw httpError(404, 'Miembro no encontrado.');
+                if (roleId !== undefined && !(await db.get(`SELECT id FROM ${T.staffRoles} WHERE id = ?`, [roleId]))) throw httpError(400, 'Rol desconocido.');
+                const sets = [], params = [];
+                if (roleId !== undefined) { sets.push('role_id = ?'); params.push(roleId); }
+                if (active !== undefined) { sets.push('active = ?'); params.push(active); }
+                if (sets.length) await db.run(`UPDATE ${T.staffMembers} SET ${sets.join(', ')} WHERE id = ?`, [...params, id]);
+                invalidateStaffCache();
+            });
+            res.json({ success: true });
+        } catch (e) { sendError(res, e); }
+    });
+
+    http.route('delete', '/staff/members/:id', STAFF_ADMIN_ROUTE, async (req, res) => {
+        if (!adminOnly(req, res)) return;
+        try {
+            const id = positiveInt(req.params.id);
+            await withStaffLock(async () => {
+                const r = id ? await db.run(`DELETE FROM ${T.staffMembers} WHERE id = ?`, [id]) : null;
+                invalidateStaffCache();
+                if (!r || !r.changes) throw httpError(404, 'Miembro no encontrado.');
+            });
+            res.json({ success: true });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // WordJS users by name / e-mail / login (empty q = the first ones), for «add to the team».
+    http.route('get', '/staff/user-search', STAFF_ADMIN_ROUTE, async (req, res) => {
+        if (!adminOnly(req, res)) return;
+        try {
+            const q = String(req.query.q == null ? '' : req.query.q).trim().slice(0, 100);
+            const list = await searchWordjsUsers(q, 20);
+            res.json({ users: (Array.isArray(list) ? list : []).map(wireUser).filter(Boolean) });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // === CONFERENCES MANAGEMENT ===
+    http.route('get', '/list', { auth: true }, async (req, res) => {
+        if (!await isStaff(req, res)) return;
+        try {
+            const list = await db.all(`SELECT * FROM ${T.conferences} ORDER BY id DESC`);
+            res.json(list);
+        } catch (e) { sendError(res, e); }
+    });
+
+    http.route('post', '/create', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'settings', 'manage')) return;
         const { name, slug, date_start, date_end, fee_default, description } = req.body;
         try {
             const cleanName = String(name || '').trim();
@@ -1178,7 +1683,11 @@ exports.init = async function (wordjs) {
     // Update conference metadata (name/slug/dates/fee/description/status). Only the fields present
     // in the body are changed, so partial updates are safe.
     const CONFERENCE_STATUSES = new Set(['draft', 'active', 'archived']);
-    http.route('put', '/:id', { auth: true, admin: true }, async (req, res) => {
+    http.route('put', '/:id', { auth: true }, async (req, res) => {
+        // Only the lodging deadline (the «plazos» of Localidades) → locations:manage suffices too.
+        const editKeys = ['name', 'slug', 'date_start', 'date_end', 'fee_default', 'description', 'status', 'lodging_deadline'].filter(k => (req.body || {})[k] !== undefined);
+        const deadlineOnly = editKeys.length === 1 && editKeys[0] === 'lodging_deadline';
+        if (!await (deadlineOnly ? allowAny(req, res, [['settings', 'manage'], ['locations', 'manage']]) : allow(req, res, 'settings', 'manage'))) return;
         const { name, slug, date_start, date_end, fee_default, description, status, lodging_deadline } = req.body;
         try {
             const conf = await db.get(`SELECT * FROM ${T.conferences} WHERE id = ?`, [req.params.id]);
@@ -1221,7 +1730,8 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
 
-    http.route('delete', '/:id', { auth: true, admin: true }, async (req, res) => {
+    http.route('delete', '/:id', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'settings', 'manage')) return;
         try {
             // Meals (2.14.0): the FKs cascade; the explicit deletes keep it so with foreign keys off too.
             // Parent first, under the meals lock (see withMealsLock / deleteMealsOfConference).
@@ -1236,7 +1746,8 @@ exports.init = async function (wordjs) {
     // === DATA SEGMENTATION (requires conference_id in query/body) ===
 
     // Hotels for a conference
-    http.route('get', '/hotels', { auth: true, admin: true }, async (req, res) => {
+    http.route('get', '/hotels', { auth: true }, async (req, res) => {
+        if (!await allowAny(req, res, [['lodging', 'view'], ['inscriptions', 'view'], ['dashboard', 'view'], ['reports', 'view']])) return;
         const { conference_id } = req.query;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
 
@@ -1268,12 +1779,14 @@ exports.init = async function (wordjs) {
 
     // Shared filter builder for GET /inscriptions and /inscriptions/export (same query params).
     // `search` matches every DEFINED field column + the location label with LIKE, wildcards escaped.
-    async function inscriptionFilters(q, params) {
+    // `withCodes`: also match the search term against reg_code. Only for callers who may SEE the codes —
+    // otherwise the filter is an oracle that rebuilds a hidden code one character at a time.
+    async function inscriptionFilters(q, params, withCodes) {
         let where = '';
         const search = q.search ? String(q.search).slice(0, 200) : '';
         if (search) {
             const flds = await db.all(`SELECT name FROM ${T.fields} WHERE conference_id = ?`, [q.conference_id]);
-            const cols = [...new Set([...flds.map(f => f.name).filter(isFieldColumn), 'location', 'reg_code'])];
+            const cols = [...new Set([...flds.map(f => f.name).filter(isFieldColumn), 'location', ...(withCodes ? ['reg_code'] : [])])];
             const term = `%${likeEscape(search)}%`;
             where += ` AND (` + cols.map(c => `i.${c} LIKE ?${LIKE_ESCAPE}`).join(' OR ') + `)`;
             cols.forEach(() => params.push(term));
@@ -1293,7 +1806,9 @@ exports.init = async function (wordjs) {
     }
 
     // Inscriptions for a conference
-    http.route('get', '/inscriptions', { auth: true, admin: true }, async (req, res) => {
+    http.route('get', '/inscriptions', { auth: true }, async (req, res) => {
+        const perms = await allowAny(req, res, [['inscriptions', 'view'], ['payments', 'view'], ['lodging', 'view'], ['transport', 'view'], ['accounting', 'view'], ['dashboard', 'view'], ['reports', 'view']]);
+        if (!perms) return;
         const { conference_id } = req.query;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
 
@@ -1307,7 +1822,7 @@ exports.init = async function (wordjs) {
                 WHERE i.conference_id = ?
             `;
             const params = [conference_id];
-            query += await inscriptionFilters(req.query, params);
+            query += await inscriptionFilters(req.query, params, canSeeRegCodes(perms));
             query += ` ORDER BY i.last_name, i.first_name`;
 
             // Optional pagination — only kicks in when the caller passes `limit` (keeps the existing
@@ -1322,14 +1837,17 @@ exports.init = async function (wordjs) {
 
             const list = await db.all(query, params);
 
-            // Parse custom_data (guarded — one malformed legacy row must not 500 the whole roster).
-            const parsedList = list.map(item => ({ ...item, custom_data: parseCd(item.custom_data) }));
+            // Parse custom_data (guarded — one malformed legacy row must not 500 the whole roster). The
+            // registration code (barcode payload) only reaches inscriptions:view.
+            const showCodes = canSeeRegCodes(perms);
+            const parsedList = list.map(item => ({ ...item, custom_data: parseCd(item.custom_data), reg_code: showCodes ? item.reg_code : null }));
 
             res.json(parsedList);
         } catch (e) { sendError(res, e); }
     });
 
-    http.route('post', '/publish', { auth: true, admin: true }, async (req, res) => {
+    http.route('post', '/publish', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'settings', 'manage')) return;
         const { conference_id, published } = req.body;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
@@ -1339,7 +1857,8 @@ exports.init = async function (wordjs) {
     });
 
     // === FIELDS ===
-    http.route('get', '/fields', { auth: true, admin: true }, async (req, res) => {
+    http.route('get', '/fields', { auth: true }, async (req, res) => {
+        if (!await isStaff(req, res)) return;
         const { conference_id } = req.query;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
@@ -1351,7 +1870,8 @@ exports.init = async function (wordjs) {
     // Closed allowlist of field types (the admin builder offers text/number/select/date; the rest are
     // accepted for API callers and render as text inputs on the portal).
     const FIELD_TYPES = new Set(['text', 'number', 'select', 'textarea', 'date', 'email', 'tel', 'notes']);
-    http.route('post', '/fields', { auth: true, admin: true }, async (req, res) => {
+    http.route('post', '/fields', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'settings', 'manage')) return;
         const { id, conference_id, name, label, type, options, is_required, sort_order, width, is_group, is_unique } = req.body;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         const cleanLabel = String(label || '').trim();
@@ -1408,7 +1928,8 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
 
-    http.route('delete', '/fields/:id', { auth: true, admin: true }, async (req, res) => {
+    http.route('delete', '/fields/:id', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'settings', 'manage')) return;
         try {
             const field = await db.get(`SELECT conference_id FROM ${T.fields} WHERE id = ?`, [req.params.id]);
             if (field) {
@@ -1425,7 +1946,8 @@ exports.init = async function (wordjs) {
     // === FEE RULES (dynamic pricing) ===
     const FEE_OPERATORS = new Set(['eq', 'neq', 'contains', 'gt', 'gte', 'lt', 'lte', 'filled', 'empty', 'any']);
 
-    http.route('get', '/fee-rules', { auth: true, admin: true }, async (req, res) => {
+    http.route('get', '/fee-rules', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'settings', 'view')) return;
         const { conference_id } = req.query;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
@@ -1434,7 +1956,8 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
 
-    http.route('post', '/fee-rules', { auth: true, admin: true }, async (req, res) => {
+    http.route('post', '/fee-rules', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'settings', 'manage')) return;
         const { id, conference_id, label, field_name, operator, value, action, amount, priority, enabled } = req.body;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         const op = FEE_OPERATORS.has(operator) ? operator : 'eq';
@@ -1459,7 +1982,8 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
 
-    http.route('delete', '/fee-rules/:id', { auth: true, admin: true }, async (req, res) => {
+    http.route('delete', '/fee-rules/:id', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'settings', 'manage')) return;
         try {
             await db.run(`DELETE FROM ${T.feeRules} WHERE id = ?`, [req.params.id]);
             res.json({ success: true });
@@ -1490,7 +2014,8 @@ exports.init = async function (wordjs) {
     // Bounded: the rules load ONCE, rows page in 500s, writes go through db.batch, and payment_status
     // is refreshed with ONE set-based statement (≈142 RPCs for 20 000 rows instead of 60 000+).
     const REPRICE_MAX_ROWS = 20000, REPRICE_PAGE = 500;
-    http.route('post', '/reprice', { auth: true, admin: true }, async (req, res) => {
+    http.route('post', '/reprice', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'settings', 'manage')) return;
         const { conference_id } = req.body || {};
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
@@ -1519,7 +2044,8 @@ exports.init = async function (wordjs) {
     });
 
     // Create Inscription (admin). total_due is server-controlled (fee rules + base fee).
-    http.route('post', '/inscriptions', { auth: true, admin: true }, async (req, res) => {
+    http.route('post', '/inscriptions', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'inscriptions', 'manage')) return;
         const { conference_id, ...fieldValues } = req.body || {};
         // Guard against a non-scalar conference_id (the old client arity bug shipped the whole form
         // object here) so we never insert a garbage row bound to '[object Object]'.
@@ -1568,7 +2094,10 @@ exports.init = async function (wordjs) {
     });
 
     // === LOCATIONS ===
-    http.route('get', '/locations', { auth: true, admin: true }, async (req, res) => {
+    http.route('get', '/locations', { auth: true }, async (req, res) => {
+        const perms = await isStaff(req, res);
+        if (!perms) return;
+        const showCodes = canSeeLocationCodes(perms);
         const { conference_id } = req.query;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
@@ -1597,6 +2126,11 @@ exports.init = async function (wordjs) {
                 l.lodging_permission_expired = win.permission.expired;
                 // Can the coordinator change the lodging right now? (window open AND still a draft)
                 l.lodging_can_edit = win.open && l.lodging_status === 'draft';
+                // The access code IS the coordinator's portal login: only who may change it sees it.
+                if (!showCodes) l.code = null;
+                // Every team member gets the locations as context (names, capacity, lodging state); the
+                // coordinator's contact and the admin's review notes are the Localidades section's business.
+                if (!hasLevel(perms, 'locations', 'view')) { l.responsible_name = null; l.responsible_phone = null; l.lodging_note = null; l.lodging_reviewed_by = null; }
             }
             if (conf) conf.lodging_deadline_passed = lodgingDeadlineInfo(conf).passed;
             res.json({ locations, conference: conf });
@@ -1604,7 +2138,8 @@ exports.init = async function (wordjs) {
     });
 
     // Location names are unique per conference (case-insensitive) so the display label is unambiguous.
-    http.route('post', '/locations', { auth: true, admin: true }, async (req, res) => {
+    http.route('post', '/locations', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'locations', 'manage')) return;
         const { conference_id, name, responsible_name, responsible_phone, capacity, payment_methods } = req.body;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         const cleanName = String(name || '').trim();
@@ -1635,7 +2170,8 @@ exports.init = async function (wordjs) {
     // `payment_methods` replaces the enabled set (a form of payment not enabled at creation can be enabled here).
     // `lodging_permission` (true/false) lets this location keep arranging lodging after the conference deadline,
     // until `lodging_permission_until` (optional date; '' / null = until revoked). Revoking clears the date.
-    http.route('put', '/locations/:id', { auth: true, admin: true }, async (req, res) => {
+    http.route('put', '/locations/:id', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'locations', 'manage')) return;
         const { name, responsible_name, responsible_phone, rotate_code, capacity, payment_methods, lodging_permission, lodging_permission_until } = req.body;
         try {
             const loc = await db.get(`SELECT * FROM ${T.locations} WHERE id = ?`, [req.params.id]);
@@ -1683,7 +2219,8 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
 
-    http.route('delete', '/locations/:id', { auth: true, admin: true }, async (req, res) => {
+    http.route('delete', '/locations/:id', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'locations', 'manage')) return;
         try {
             const id = positiveInt(req.params.id);
             if (!id) return res.status(404).json({ error: 'Localidad no encontrada.' });
@@ -1712,7 +2249,8 @@ exports.init = async function (wordjs) {
     // ── lodging review (admin validates what the coordinator arranged) ───────────────────────
     // The arrangement of a location: its allotted rooms with L's occupants, L's attendees without a
     // room, those the admin placed elsewhere, the rules in force and the audit of the current state.
-    http.route('get', '/locations/:id/lodging', { auth: true, admin: true }, async (req, res) => {
+    http.route('get', '/locations/:id/lodging', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'locations', 'view')) return;
         try {
             const id = positiveInt(req.params.id);
             const loc = id ? await db.get(`SELECT * FROM ${T.locations} WHERE id = ?`, [id]) : null;
@@ -1722,7 +2260,8 @@ exports.init = async function (wordjs) {
     });
     // State transitions are compare-and-set: ONE conditional UPDATE under the assignment lock; a 409 is
     // derived from `changes === 0` (someone else moved the state first).
-    http.route('post', '/locations/:id/lodging/validate', { auth: true, admin: true }, async (req, res) => {
+    http.route('post', '/locations/:id/lodging/validate', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'locations', 'manage')) return;
         try {
             const id = positiveInt(req.params.id);
             const loc = id ? await db.get(`SELECT id FROM ${T.locations} WHERE id = ?`, [id]) : null;
@@ -1734,7 +2273,8 @@ exports.init = async function (wordjs) {
             res.json({ success: true, lodging_status: 'validated' });
         } catch (e) { sendError(res, e); }
     });
-    http.route('post', '/locations/:id/lodging/return', { auth: true, admin: true }, async (req, res) => {
+    http.route('post', '/locations/:id/lodging/return', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'locations', 'manage')) return;
         try {
             const id = positiveInt(req.params.id);
             const loc = id ? await db.get(`SELECT id FROM ${T.locations} WHERE id = ?`, [id]) : null;
@@ -1750,7 +2290,8 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
     // Reopen a validated arrangement (keeps it and the review stamps; the coordinator may edit again).
-    http.route('post', '/locations/:id/lodging/reopen', { auth: true, admin: true }, async (req, res) => {
+    http.route('post', '/locations/:id/lodging/reopen', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'locations', 'manage')) return;
         try {
             const id = positiveInt(req.params.id);
             const loc = id ? await db.get(`SELECT id FROM ${T.locations} WHERE id = ?`, [id]) : null;
@@ -1763,7 +2304,8 @@ exports.init = async function (wordjs) {
     });
 
     // === HOTELS & ROOMS (full CRUD) ===
-    http.route('post', '/hotels', { auth: true, admin: true }, async (req, res) => {
+    http.route('post', '/hotels', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'lodging', 'manage')) return;
         const { conference_id, name, address, description, capacity } = req.body;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         if (!String(name || '').trim()) return res.status(400).json({ error: 'El nombre del hotel es obligatorio.' });
@@ -1775,7 +2317,8 @@ exports.init = async function (wordjs) {
             res.json({ success: true, id: r.lastID });
         } catch (e) { sendError(res, e); }
     });
-    http.route('put', '/hotels/:id', { auth: true, admin: true }, async (req, res) => {
+    http.route('put', '/hotels/:id', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'lodging', 'manage')) return;
         const { name, address, description, capacity } = req.body;
         try {
             const sets = [], params = [];
@@ -1792,7 +2335,8 @@ exports.init = async function (wordjs) {
             res.json({ success: true });
         } catch (e) { sendError(res, e); }
     });
-    http.route('delete', '/hotels/:id', { auth: true, admin: true }, async (req, res) => {
+    http.route('delete', '/hotels/:id', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'lodging', 'manage')) return;
         try {
             const id = positiveInt(req.params.id);
             if (!id) return res.status(404).json({ error: 'Hotel no encontrado.' });
@@ -1811,7 +2355,8 @@ exports.init = async function (wordjs) {
     // Allot every room of a hotel (or only `room_ids`) to a location — `location_id` null = back to the
     // pool. All-or-nothing: the frozen checks (target + every affected room's current location) and the
     // occupant check run first, then ONE UPDATE.
-    http.route('post', '/hotels/:id/allot', { auth: true, admin: true }, async (req, res) => {
+    http.route('post', '/hotels/:id/allot', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'lodging', 'manage')) return;
         const { location_id, room_ids } = req.body || {};
         try {
             const hotelId = positiveInt(req.params.id);
@@ -1861,7 +2406,8 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
 
-    http.route('post', '/rooms', { auth: true, admin: true }, async (req, res) => {
+    http.route('post', '/rooms', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'lodging', 'manage')) return;
         const { hotel_id, room_number, capacity, gender, is_family, family_name, notes } = req.body;
         if (!hotel_id) return res.status(400).json({ error: 'Missing hotel_id' });
         if (!String(room_number || '').trim()) return res.status(400).json({ error: 'El número de habitación es obligatorio.' });
@@ -1877,7 +2423,8 @@ exports.init = async function (wordjs) {
     // conference. Checks, in order: frozen (the room's current location when location_id/capacity
     // changes; the target location when allotting), then occupants (an allotted room may only hold the
     // target location's attendees).
-    http.route('put', '/rooms/:id', { auth: true, admin: true }, async (req, res) => {
+    http.route('put', '/rooms/:id', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'lodging', 'manage')) return;
         const { room_number, capacity, gender, is_family, family_name, notes, location_id } = req.body;
         try {
             const id = positiveInt(req.params.id);
@@ -1932,7 +2479,8 @@ exports.init = async function (wordjs) {
             res.json({ success: true });
         } catch (e) { sendError(res, e); }
     });
-    http.route('delete', '/rooms/:id', { auth: true, admin: true }, async (req, res) => {
+    http.route('delete', '/rooms/:id', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'lodging', 'manage')) return;
         try {
             const id = positiveInt(req.params.id);
             if (!id) return res.status(404).json({ error: 'Habitación no encontrada.' });
@@ -1992,7 +2540,8 @@ exports.init = async function (wordjs) {
     const ticketRow = (t) => ({ ...t, price: roundMoney(Number(t.price) || 0), amount_paid: roundMoney(Number(t.amount_paid) || 0), payment_status: t.payment_status || 'unpaid' });
 
     // Buses of a conference with their tickets (passengers) — names are joined by the admin page.
-    http.route('get', '/buses', { auth: true, admin: true }, async (req, res) => {
+    http.route('get', '/buses', { auth: true }, async (req, res) => {
+        if (!await allowAny(req, res, [['transport', 'view'], ['reports', 'view']])) return;
         const cid = positiveInt(req.query.conference_id);
         if (!cid) return res.status(400).json({ error: 'Missing conference_id' });
         try {
@@ -2006,7 +2555,8 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
 
-    http.route('post', '/buses', { auth: true, admin: true }, async (req, res) => {
+    http.route('post', '/buses', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'transport', 'manage')) return;
         try {
             const cid = positiveInt(req.body && req.body.conference_id);
             if (!cid) return res.status(400).json({ error: 'Missing conference_id' });
@@ -2021,7 +2571,8 @@ exports.init = async function (wordjs) {
 
     // Edit a bus. A new price applies to tickets sold from now on; `reprice_tickets: true` also moves every
     // ticket already sold to it (their payment status is recomputed).
-    http.route('put', '/buses/:id', { auth: true, admin: true }, async (req, res) => {
+    http.route('put', '/buses/:id', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'transport', 'manage')) return;
         try {
             const id = positiveInt(req.params.id);
             const bus = id ? await db.get(`${busSelect} WHERE b.id = ?`, [id]) : null;
@@ -2046,7 +2597,8 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
 
-    http.route('delete', '/buses/:id', { auth: true, admin: true }, async (req, res) => {
+    http.route('delete', '/buses/:id', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'transport', 'manage')) return;
         try {
             const id = positiveInt(req.params.id);
             const bus = id ? await db.get(`SELECT id FROM ${T.buses} WHERE id = ?`, [id]) : null;
@@ -2062,7 +2614,8 @@ exports.init = async function (wordjs) {
     // Sell tickets: { inscription_ids: [...] }. Same conference only, never a cancelled attendee, never
     // twice on the same bus, never beyond the seats left (all-or-nothing). Serialised with the assignment
     // lock so two admins cannot both sell the last seat.
-    http.route('post', '/buses/:id/passengers', { auth: true, admin: true }, async (req, res) => {
+    http.route('post', '/buses/:id/passengers', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'transport', 'manage')) return;
         try {
             const id = positiveInt(req.params.id);
             const raw = req.body && req.body.inscription_ids;
@@ -2092,7 +2645,8 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
 
-    http.route('delete', '/buses/:id/passengers/:inscriptionId', { auth: true, admin: true }, async (req, res) => {
+    http.route('delete', '/buses/:id/passengers/:inscriptionId', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'transport', 'manage')) return;
         try {
             const id = positiveInt(req.params.id), iid = positiveInt(req.params.inscriptionId);
             const ticket = id && iid ? await db.get(`SELECT id FROM ${T.tickets} WHERE bus_id = ? AND inscription_id = ?`, [id, iid]) : null;
@@ -2106,7 +2660,8 @@ exports.init = async function (wordjs) {
 
     // Transport payments (admin): { amount, method (Efectivo | Transferencia), reference?, date? }.
     // Never more than what the ticket still owes.
-    http.route('get', '/tickets/:id/payments', { auth: true, admin: true }, async (req, res) => {
+    http.route('get', '/tickets/:id/payments', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'transport', 'view')) return;
         try {
             const id = positiveInt(req.params.id);
             if (!id) return res.status(404).json({ error: 'Pasaje no encontrado.' });
@@ -2114,7 +2669,8 @@ exports.init = async function (wordjs) {
             res.json(list.map(x => ({ ...x, amount: roundMoney(Number(x.amount) || 0) })));
         } catch (e) { sendError(res, e); }
     });
-    http.route('post', '/tickets/:id/payments', { auth: true, admin: true }, async (req, res) => {
+    http.route('post', '/tickets/:id/payments', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'transport', 'manage')) return;
         try {
             const id = positiveInt(req.params.id);
             const { amount, method, reference, date } = req.body || {};
@@ -2137,7 +2693,8 @@ exports.init = async function (wordjs) {
             res.json({ success: true, ...result });
         } catch (e) { sendError(res, e); }
     });
-    http.route('delete', '/transport-payments/:id', { auth: true, admin: true }, async (req, res) => {
+    http.route('delete', '/transport-payments/:id', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'transport', 'manage')) return;
         try {
             const id = positiveInt(req.params.id);
             const pay = id ? await db.get(`SELECT id, ticket_id FROM ${T.transportPayments} WHERE id = ?`, [id]) : null;
@@ -2190,7 +2747,8 @@ exports.init = async function (wordjs) {
     // Every movement of a conference: manual entries + validated fee payments + transport payments, newest
     // first, plus the totals. Filtering (dates, kind, category, source) is the client's job — the whole
     // ledger of one conference is small enough to send at once.
-    http.route('get', '/accounting', { auth: true, admin: true }, async (req, res) => {
+    http.route('get', '/accounting', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'accounting', 'view')) return;
         const cid = positiveInt(req.query.conference_id);
         if (!cid) return res.status(400).json({ error: 'Missing conference_id' });
         try {
@@ -2218,7 +2776,8 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
 
-    http.route('post', '/accounting/entries', { auth: true, admin: true }, async (req, res) => {
+    http.route('post', '/accounting/entries', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'accounting', 'manage')) return;
         try {
             const cid = positiveInt(req.body && req.body.conference_id);
             if (!cid) return res.status(400).json({ error: 'Missing conference_id' });
@@ -2231,7 +2790,8 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
 
-    http.route('put', '/accounting/entries/:id', { auth: true, admin: true }, async (req, res) => {
+    http.route('put', '/accounting/entries/:id', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'accounting', 'manage')) return;
         try {
             const id = positiveInt(req.params.id);
             const row = id ? await db.get(`SELECT id FROM ${T.ledger} WHERE id = ?`, [id]) : null;
@@ -2243,7 +2803,8 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
 
-    http.route('delete', '/accounting/entries/:id', { auth: true, admin: true }, async (req, res) => {
+    http.route('delete', '/accounting/entries/:id', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'accounting', 'manage')) return;
         try {
             const id = positiveInt(req.params.id);
             const r = id ? await db.run(`DELETE FROM ${T.ledger} WHERE id = ?`, [id]) : null;
@@ -2260,7 +2821,8 @@ exports.init = async function (wordjs) {
     // An attendee without a location only gets explicit includes. Deliveries are unique per (service,
     // attendee) by index; POST /meals/deliver always answers 200 with a verdict so the kitchen scanner never
     // handles HTTP errors for a normal outcome. Every id is checked against the conference it belongs to.
-    const MEAL_ROUTE = { auth: true, admin: true };
+    // { auth: true } + the in-handler gate of each route (meals:* / meals_delivery:manage, see allow()).
+    const MEAL_ROUTE = { auth: true };
     const MEALS = ['desayuno', 'almuerzo', 'cena'];
     const MEAL_SET = new Set(MEALS);
     const OVERRIDE_MODES = new Set(['include', 'exclude']);
@@ -2367,13 +2929,7 @@ exports.init = async function (wordjs) {
     const personOf = (r) => ({ id: r.id, name: personName(r), location: liveLocation(r), location_id: r.location_id == null ? null : r.location_id, family_group: r.family_group || null, reg_code: r.reg_code || null });
     const deliveryFields = (d) => ({ delivery_id: d.id, delivered_at: d.delivered_at, delivered_by: d.delivered_by || null, method: d.method || null, note: d.note || null });
     const deliveryOf = (serviceId, inscriptionId) => db.get(`SELECT * FROM ${T.mealDeliveries} WHERE service_id = ? AND inscription_id = ?`, [serviceId, inscriptionId]);
-    // Who delivered: the admin's login when the host forwards it, else the user id.
-    const actorOf = (req) => {
-        const u = req.user || null;
-        if (!u) return null;
-        if (u.userLogin) return String(u.userLogin).slice(0, 100);
-        return u.id != null ? String(u.id) : null;
-    };
+    // Who delivered: actorOf (team section) — the acting user's login, administrator or team member.
     // UTC 'YYYY-MM-DD HH:MM:SS' — the same form SQLite's CURRENT_TIMESTAMP stores (the admin UI parses it as
     // UTC), written explicitly so MySQL (whose CURRENT_TIMESTAMP is session-local) stores the same instant.
     const utcStamp = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
@@ -2527,6 +3083,7 @@ exports.init = async function (wordjs) {
     // → cena) with their counters, the conference's locations, the plan matrix, and how many per-person
     // adjustments exist.
     http.route('get', '/meals', MEAL_ROUTE, async (req, res) => {
+        if (!await allowAny(req, res, [['meals', 'view'], ['meals_delivery', 'manage']])) return;
         const cid = positiveInt(req.query.conference_id);
         if (!cid) return res.status(400).json({ error: 'Missing conference_id' });
         try {
@@ -2547,6 +3104,7 @@ exports.init = async function (wordjs) {
     // The conference and the locations are (re-)read INSIDE the meals lock, where their deletion runs too.
     const conferenceExists = async (cid) => !!(await db.get(`SELECT id FROM ${T.conferences} WHERE id = ?`, [cid]));
     http.route('post', '/meals/services', MEAL_ROUTE, async (req, res) => {
+        if (!await allow(req, res, 'meals', 'manage')) return;
         try {
             const body = req.body || {};
             const cid = positiveInt(body.conference_id);
@@ -2579,6 +3137,7 @@ exports.init = async function (wordjs) {
     // complete services: the same request repeated skips them and creates the rest. That failure answers
     // 500 { error, created, skipped, ids } with what was already created.
     http.route('post', '/meals/services/bulk', MEAL_ROUTE, async (req, res) => {
+        if (!await allow(req, res, 'meals', 'manage')) return;
         try {
             const body = req.body || {};
             const cid = positiveInt(body.conference_id);
@@ -2630,6 +3189,7 @@ exports.init = async function (wordjs) {
     // Edit a service's label / delivery window / notes. Its day and meal are its identity: to change them,
     // delete it and create another (400 when the body tries).
     http.route('put', '/meals/services/:id', MEAL_ROUTE, async (req, res) => {
+        if (!await allow(req, res, 'meals', 'manage')) return;
         try {
             const body = req.body || {};
             const svc = await getService(req.params.id);
@@ -2656,6 +3216,7 @@ exports.init = async function (wordjs) {
     // every delivery a scan reported before the service went.
     const MEAL_DELETE_ATTEMPTS = 5;
     http.route('delete', '/meals/services/:id', MEAL_ROUTE, async (req, res) => {
+        if (!await allow(req, res, 'meals', 'manage')) return;
         try {
             const force = ['1', 'true'].includes(String(req.query.force || ''));
             const result = await withMealsLock(async () => {
@@ -2691,6 +3252,7 @@ exports.init = async function (wordjs) {
     // Replace ONE location's set of services (a row of the matrix): { conference_id, location_id,
     // service_ids:[…] } — only services of the location's conference. Parents are read inside the lock.
     http.route('put', '/meals/plan', MEAL_ROUTE, async (req, res) => {
+        if (!await allow(req, res, 'meals', 'manage')) return;
         try {
             const body = req.body || {};
             const lid = positiveInt(body.location_id);
@@ -2715,6 +3277,7 @@ exports.init = async function (wordjs) {
     // Replace ONE service's set of locations (a column of the matrix): { location_ids:[…] } — only
     // locations of the service's conference. Parents are read inside the lock.
     http.route('put', '/meals/services/:id/plan', MEAL_ROUTE, async (req, res) => {
+        if (!await allow(req, res, 'meals', 'manage')) return;
         try {
             const raw = (req.body || {}).location_ids;
             const final = await withMealsLock(async () => {
@@ -2736,6 +3299,7 @@ exports.init = async function (wordjs) {
     // One cell of the matrix: { location_id, service_id, enabled: boolean } (idempotent). Parents are read
     // inside the lock.
     http.route('post', '/meals/plan/toggle', MEAL_ROUTE, async (req, res) => {
+        if (!await allow(req, res, 'meals', 'manage')) return;
         try {
             const body = req.body || {};
             const on = body.enabled === true || body.enabled === 1 || body.enabled === 'true' || body.enabled === '1';
@@ -2766,6 +3330,8 @@ exports.init = async function (wordjs) {
     const foldText = (v) => String(v == null ? '' : v).normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
     const foldCompare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
     http.route('get', '/meals/people', MEAL_ROUTE, async (req, res) => {
+        const perms = await allowAny(req, res, [['meals', 'view'], ['meals_delivery', 'manage']]);
+        if (!perms) return;
         const cid = positiveInt(req.query.conference_id);
         if (!cid) return res.status(400).json({ error: 'Missing conference_id' });
         try {
@@ -2783,7 +3349,9 @@ exports.init = async function (wordjs) {
                 // A word that IS (part of) a code — only code letters, dashes allowed, 4+ of them — also
                 // matches reg_code; a name or a stray symbol never turns into a broad code match.
                 const code = normalizeScanCode(w);
-                return { text: foldText(w), code: code.length >= 4 && code === w.toUpperCase().replace(/-/g, '') ? code : null };
+                // Only for whoever may see codes or scans them (the kitchen types a code into the search).
+                const codeOk = canSeeRegCodes(perms) || hasLevel(perms, 'meals_delivery', 'manage');
+                return { text: foldText(w), code: codeOk && code.length >= 4 && code === w.toUpperCase().replace(/-/g, '') ? code : null };
             });
             const candidates = await db.all(
                 `SELECT i.id, i.first_name, i.last_name, i.location, i.location_id, i.family_group, i.document_number, i.reg_code, i.status, l.name AS location_name`
@@ -2815,7 +3383,7 @@ exports.init = async function (wordjs) {
                     if (mode === 'exclude') excludes++;
                     if (entitlementFrom(r.status, mode, r.location_id != null && plan.set.has(`${r.location_id}:${s.id}`)).entitled) entitled++;
                 }
-                return { ...personOf(r), first_name: r.first_name || '', last_name: r.last_name || '', document_number: r.document_number || null, status: r.status || null, entitled, delivered: delBy.get(String(r.id)) || 0, includes, excludes };
+                return maskRegCode({ ...personOf(r), first_name: r.first_name || '', last_name: r.last_name || '', document_number: r.document_number || null, status: r.status || null, entitled, delivered: delBy.get(String(r.id)) || 0, includes, excludes }, perms);
             });
             res.json({ people, total, limit, offset, services_count: services.length });
         } catch (e) { sendError(res, e); }
@@ -2840,11 +3408,13 @@ exports.init = async function (wordjs) {
         });
     }
     http.route('get', '/meals/inscriptions/:id', MEAL_ROUTE, async (req, res) => {
+        const perms = await allow(req, res, 'meals', 'view');
+        if (!perms) return;
         try {
             const id = positiveInt(req.params.id);
             const ins = id ? await db.get(`${PERSON_SQL} WHERE i.id = ?`, [id]) : null;
             if (!ins) return res.status(404).json({ error: 'Inscripción no encontrada.' });
-            res.json({ person: { ...personOf(ins), status: ins.status || null, conference_id: ins.conference_id }, services: await personMeals(ins) });
+            res.json({ person: maskRegCode({ ...personOf(ins), status: ins.status || null, conference_id: ins.conference_id }, perms), services: await personMeals(ins) });
         } catch (e) { sendError(res, e); }
     });
 
@@ -2852,6 +3422,7 @@ exports.init = async function (wordjs) {
     // 'inherit' } — 'inherit' removes the row (back to what the location plan says). The attendee and the
     // services are read inside the meals lock, where their deletion runs too.
     http.route('put', '/meals/inscriptions/:id/overrides', MEAL_ROUTE, async (req, res) => {
+        if (!await allow(req, res, 'meals', 'manage')) return;
         try {
             const body = req.body || {};
             const id = positiveInt(req.params.id);
@@ -2902,6 +3473,8 @@ exports.init = async function (wordjs) {
         return null;
     };
     http.route('post', '/meals/deliver', MEAL_ROUTE, async (req, res) => {
+        const perms = await allow(req, res, 'meals_delivery', 'manage');
+        if (!perms) return;
         try {
             const body = req.body || {};
             const svc = await getService(body.service_id);
@@ -2915,7 +3488,7 @@ exports.init = async function (wordjs) {
             else { const iid = positiveInt(body.inscription_id); ins = iid ? ((await db.get(`${PERSON_SQL} WHERE i.id = ?`, [iid])) || null) : null; }
             if (!ins) return verdict('unknown');
             if (Number(ins.conference_id) !== Number(svc.conference_id)) return verdict('other_conference');
-            const person = personOf(ins);
+            const person = maskRegCode(personOf(ins), perms);
             const prior = await deliveryOf(svc.id, ins.id);
             if (prior) return verdict('already', { person, ...deliveryFields(prior) });
             if (isCancelled(ins.status)) return verdict('cancelled', { person });
@@ -2957,6 +3530,7 @@ exports.init = async function (wordjs) {
 
     // Undo a delivery.
     http.route('delete', '/meals/deliveries/:id', MEAL_ROUTE, async (req, res) => {
+        if (!await allow(req, res, 'meals_delivery', 'manage')) return;
         try {
             const id = positiveInt(req.params.id);
             const d = id ? await db.get(`SELECT id, service_id, inscription_id FROM ${T.mealDeliveries} WHERE id = ?`, [id]) : null;
@@ -2969,6 +3543,7 @@ exports.init = async function (wordjs) {
 
     // Live counters of one service (the delivery screen polls this): same numbers as GET /meals.
     http.route('get', '/meals/services/:id/stats', MEAL_ROUTE, async (req, res) => {
+        if (!await allowAny(req, res, [['meals', 'view'], ['meals_delivery', 'manage']])) return;
         try {
             const svc = await getService(req.params.id);
             if (!svc) return res.status(404).json({ error: 'Servicio de comida no encontrado.' });
@@ -2979,6 +3554,9 @@ exports.init = async function (wordjs) {
 
     // The latest deliveries of a service, newest first (`limit` ≤ 100, default 20) — the scan history.
     http.route('get', '/meals/services/:id/deliveries', MEAL_ROUTE, async (req, res) => {
+        const perms = await allowAny(req, res, [['meals', 'view'], ['meals_delivery', 'manage']]);
+        if (!perms) return;
+        const showCodes = canSeeRegCodes(perms);
         try {
             const svc = await getService(req.params.id);
             if (!svc) return res.status(404).json({ error: 'Servicio de comida no encontrado.' });
@@ -2988,7 +3566,7 @@ exports.init = async function (wordjs) {
                 + ` FROM ${T.mealDeliveries} d JOIN ${T.inscriptions} i ON d.inscription_id = i.id${LOCATION_JOIN} WHERE d.service_id = ? ORDER BY d.delivered_at DESC, d.id DESC LIMIT ?`, [svc.id, limit]);
             res.json({
                 service_id: svc.id,
-                deliveries: rows.map(r => ({ delivery_id: r.delivery_id, inscription_id: r.inscription_id, name: personName({ ...r, id: r.inscription_id }), location: liveLocation(r), location_id: r.location_id == null ? null : r.location_id, family_group: r.family_group || null, reg_code: r.reg_code || null, delivered_at: r.delivered_at, delivered_by: r.delivered_by || null, method: r.method || null, note: r.note || null })),
+                deliveries: rows.map(r => ({ delivery_id: r.delivery_id, inscription_id: r.inscription_id, name: personName({ ...r, id: r.inscription_id }), location: liveLocation(r), location_id: r.location_id == null ? null : r.location_id, family_group: r.family_group || null, reg_code: showCodes ? (r.reg_code || null) : null, delivered_at: r.delivered_at, delivered_by: r.delivered_by || null, method: r.method || null, note: r.note || null })),
             });
         } catch (e) { sendError(res, e); }
     });
@@ -2997,6 +3575,9 @@ exports.init = async function (wordjs) {
     // concerned by it), the totals and the per-location breakdown (every location of the conference, then
     // attendees without a location as location_id null).
     http.route('get', '/meals/services/:id/report', MEAL_ROUTE, async (req, res) => {
+        const perms = await allow(req, res, 'meals', 'view');
+        if (!perms) return;
+        const showCodes = canSeeRegCodes(perms);
         try {
             const svc = await getService(req.params.id);
             if (!svc) return res.status(404).json({ error: 'Servicio de comida no encontrado.' });
@@ -3016,7 +3597,7 @@ exports.init = async function (wordjs) {
                 if (!ent.entitled && r.delivery_id == null) continue;
                 rows.push({
                     inscription_id: r.id, name: personName(r), location: liveLocation(r), location_id: r.location_id == null ? null : r.location_id,
-                    family_group: r.family_group || null, reg_code: r.reg_code || null, status: r.status || null,
+                    family_group: r.family_group || null, reg_code: showCodes ? (r.reg_code || null) : null, status: r.status || null,
                     entitled: ent.entitled, source: ent.source, delivered: r.delivery_id != null,
                     delivery_id: r.delivery_id == null ? null : r.delivery_id, delivered_at: r.delivered_at || null, method: r.method || null, delivered_by: r.delivered_by || null, note: r.note || null,
                 });
@@ -3049,7 +3630,8 @@ exports.init = async function (wordjs) {
     // or an edit that leaves every fee-relevant value as it was — never touches total_due, even when
     // rules or the base fee changed since registration: those reach existing attendees only through
     // /reprice, for EVERYONE at once, never one attendee at a time through an unrelated edit.
-    http.route('put', '/inscriptions/:id', { auth: true, admin: true }, async (req, res) => {
+    http.route('put', '/inscriptions/:id', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'inscriptions', 'manage')) return;
         const { conference_id, ...fieldValues } = req.body || {};
         try {
             const existing = await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ?`, [req.params.id]);
@@ -3122,8 +3704,18 @@ exports.init = async function (wordjs) {
             res.json({ success: true });
         } catch (e) { sendError(res, e); }
     });
-    http.route('delete', '/inscriptions/:id', { auth: true, admin: true }, async (req, res) => {
+    http.route('delete', '/inscriptions/:id', { auth: true }, async (req, res) => {
+        const perms = await allow(req, res, 'inscriptions', 'manage');
+        if (!perms) return;
         try {
+            // Deleting the attendee deletes its money too (fee payments cascade, transport payments below).
+            // That is a payments / transport decision: a role that may only manage inscriptions must not
+            // erase validated income through this door (DELETE /payments/:id and DELETE /buses/:id refuse it).
+            const fee = await db.get(`SELECT COUNT(*) AS n FROM ${T.payments} WHERE inscription_id = ?`, [req.params.id]);
+            const rides = await db.get(`SELECT COUNT(*) AS n FROM ${T.transportPayments} WHERE ticket_id IN (SELECT id FROM ${T.tickets} WHERE inscription_id = ? )`, [req.params.id]);
+            if ((Number(fee && fee.n) > 0 && !hasLevel(perms, 'payments', 'manage')) || (Number(rides && rides.n) > 0 && !hasLevel(perms, 'transport', 'manage'))) {
+                return res.status(409).json({ error: 'La inscripción tiene pagos registrados: pide a quien gestiona los pagos que los anule, o cancela la inscripción en lugar de eliminarla.' });
+            }
             await db.run(`DELETE FROM ${T.transportPayments} WHERE ticket_id IN (SELECT id FROM ${T.tickets} WHERE inscription_id = ? )`, [req.params.id]);
             await db.run(`DELETE FROM ${T.tickets} WHERE inscription_id = ?`, [req.params.id]);
             // Meals (2.14.0): the attendee first, then its meal rows (the FKs cascade; the explicit deletes
@@ -3142,7 +3734,8 @@ exports.init = async function (wordjs) {
     // the manual path used to bare-UPDATE and could overfill or cross-place). Pass room_id null to free.
     // Lodging (2.5.0): the attendee's location must not be frozen; a cancelled attendee is never placed;
     // an allotted room only takes its own location's attendees (roomAllows).
-    http.route('post', '/inscriptions/:id/assign', { auth: true, admin: true }, async (req, res) => {
+    http.route('post', '/inscriptions/:id/assign', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'lodging', 'manage')) return;
         const { room_id: rawRoomId } = req.body || {};
         try {
             const id = positiveInt(req.params.id);
@@ -3183,9 +3776,11 @@ exports.init = async function (wordjs) {
     // === PAYMENTS: add / void / validate / reject ===
     // State machine: pending → validated | rejected; validated ↔ rejected; only pending/rejected may be
     // deleted (a validated payment is part of the ledger — reject it first). validate/reject stamp
-    // reviewed_at/reviewed_by (the host forwards req.user {id, role, …} to isolated routes).
-    const reviewerOf = (req) => (req.user && req.user.id != null ? String(req.user.id) : null);
-    http.route('post', '/inscriptions/:id/payments', { auth: true, admin: true }, async (req, res) => {
+    // reviewed_at/reviewed_by (the host forwards req.user {id, role, userLogin, …} to isolated routes): the
+    // acting user's login — an administrator's or a team member's (actorOf) — else the user id.
+    const reviewerOf = (req) => actorOf(req);
+    http.route('post', '/inscriptions/:id/payments', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'payments', 'manage')) return;
         const { amount, method, reference, proof } = req.body;
         try {
             if (!Number.isFinite(Number(amount)) || Number(amount) > MAX_MONEY) return res.status(400).json({ error: 'El monto debe ser mayor que cero.' });
@@ -3202,7 +3797,8 @@ exports.init = async function (wordjs) {
             res.json({ success: true });
         } catch (e) { sendError(res, e); }
     });
-    http.route('delete', '/payments/:id', { auth: true, admin: true }, async (req, res) => {
+    http.route('delete', '/payments/:id', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'payments', 'manage')) return;
         try {
             const pay = await db.get(`SELECT inscription_id, status FROM ${T.payments} WHERE id = ?`, [req.params.id]);
             if (!pay) return res.status(404).json({ error: 'Pago no encontrado.' });
@@ -3213,7 +3809,8 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
     // Validate / reject a payment (admin gate). Only a VALIDATED payment counts toward amount_paid.
-    http.route('post', '/payments/:id/validate', { auth: true, admin: true }, async (req, res) => {
+    http.route('post', '/payments/:id/validate', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'payments', 'manage')) return;
         try {
             const pay = await db.get(`SELECT inscription_id, status FROM ${T.payments} WHERE id = ?`, [req.params.id]);
             if (!pay) return res.status(404).json({ error: 'Pago no encontrado.' });
@@ -3223,7 +3820,8 @@ exports.init = async function (wordjs) {
             res.json({ success: true, status: 'validated' });
         } catch (e) { sendError(res, e); }
     });
-    http.route('post', '/payments/:id/reject', { auth: true, admin: true }, async (req, res) => {
+    http.route('post', '/payments/:id/reject', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'payments', 'manage')) return;
         try {
             const pay = await db.get(`SELECT inscription_id, status FROM ${T.payments} WHERE id = ?`, [req.params.id]);
             if (!pay) return res.status(404).json({ error: 'Pago no encontrado.' });
@@ -3234,7 +3832,8 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
 
-    http.route('get', '/inscriptions/:id/payments', { auth: true, admin: true }, async (req, res) => {
+    http.route('get', '/inscriptions/:id/payments', { auth: true }, async (req, res) => {
+        if (!await allowAny(req, res, [['payments', 'view'], ['inscriptions', 'view']])) return;
         try {
             const list = await db.all(`SELECT * FROM ${T.payments} WHERE inscription_id = ? ORDER BY date DESC`, [req.params.id]);
             res.json(list);
@@ -3243,7 +3842,8 @@ exports.init = async function (wordjs) {
 
     // === REPORTS ===
     // Aggregate roster stats for the Reports dashboard (counts, money, per-location breakdown).
-    http.route('get', '/reports/summary', { auth: true, admin: true }, async (req, res) => {
+    http.route('get', '/reports/summary', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'reports', 'view')) return;
         const { conference_id } = req.query;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
@@ -3273,7 +3873,9 @@ exports.init = async function (wordjs) {
     });
 
     // CSV roster export — honors the same filters as GET /inscriptions.
-    http.route('get', '/inscriptions/export', { auth: true, admin: true }, async (req, res) => {
+    http.route('get', '/inscriptions/export', { auth: true }, async (req, res) => {
+        const perms = await allowAny(req, res, [['reports', 'view'], ['inscriptions', 'view']]);
+        if (!perms) return;
         const { conference_id } = req.query;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
@@ -3288,14 +3890,15 @@ exports.init = async function (wordjs) {
                 LEFT JOIN ${T.hotels} h ON r.hotel_id = h.id
                 WHERE i.conference_id = ?`;
             const params = [conference_id];
-            query += await inscriptionFilters(req.query, params);
+            query += await inscriptionFilters(req.query, params, canSeeRegCodes(perms));
             query += ` ORDER BY i.last_name, i.first_name`;
             const rows = await db.all(query, params);
 
             const MONEY_COLS = new Set(['total_due', 'amount_paid']);
+            // The Código column (barcode payload) only for inscriptions:view.
             const cols = [
                 ...safeFlds.map(f => [f.name, f.label || f.name]),
-                ['reg_code', 'Código'], ['status', 'Estado'], ['payment_status', 'Pago'],
+                ...(canSeeRegCodes(perms) ? [['reg_code', 'Código']] : []), ['status', 'Estado'], ['payment_status', 'Pago'],
                 ['total_due', 'Cuota'], ['amount_paid', 'Pagado'],
                 ['hotel_name', 'Hotel'], ['room_number', 'Habitación'],
             ];
@@ -3317,7 +3920,8 @@ exports.init = async function (wordjs) {
     });
 
     // === ASSIGNMENT RULES ===
-    http.route('get', '/assignment/rules', { auth: true, admin: true }, async (req, res) => {
+    http.route('get', '/assignment/rules', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'lodging', 'view')) return;
         const { conference_id } = req.query;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
@@ -3330,7 +3934,8 @@ exports.init = async function (wordjs) {
     const RULE_TYPES = new Set(['keep_together', 'separate_by', 'split_by', 'require_companion']);
     // The admin's CONFERENCE rules (location_id IS NULL). A location's own rules are the coordinator's
     // (portal) and are never reachable through this route: an `id` of a location rule is a 404.
-    http.route('post', '/assignment/rules', { auth: true, admin: true }, async (req, res) => {
+    http.route('post', '/assignment/rules', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'lodging', 'manage')) return;
         const { id, conference_id, name, type, enabled, priority, config, params, hard } = req.body || {};
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
@@ -3359,7 +3964,8 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
 
-    http.route('delete', '/assignment/rules/:id', { auth: true, admin: true }, async (req, res) => {
+    http.route('delete', '/assignment/rules/:id', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'lodging', 'manage')) return;
         try {
             const id = positiveInt(req.params.id);
             const r = id ? await db.run(`DELETE FROM ${T.rules} WHERE id = ? AND location_id IS NULL`, [id]) : null;
@@ -3370,7 +3976,8 @@ exports.init = async function (wordjs) {
 
     // Clears every room of the conference EXCEPT those of frozen locations (their arrangement is
     // under review); those are listed in `skipped_frozen` so the admin knows to reopen them.
-    http.route('post', '/assignment/reset', { auth: true, admin: true }, async (req, res) => {
+    http.route('post', '/assignment/reset', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'lodging', 'manage')) return;
         const { conference_id } = req.body;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
@@ -3386,7 +3993,8 @@ exports.init = async function (wordjs) {
 
     // Conference-wide run: the pool scope plus every delegated location that is not frozen (see
     // runAssignment). Returns totals + by_location + skipped_frozen.
-    http.route('post', '/assignment/run', { auth: true, admin: true }, async (req, res) => {
+    http.route('post', '/assignment/run', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'lodging', 'manage')) return;
         const { conference_id } = req.body;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
@@ -4546,14 +5154,15 @@ exports.init = async function (wordjs) {
     });
 
     // === ADMIN MENU ===
-    // Every route here requires role `administrator`; gate the sidebar entry on a capability only
-    // administrators hold (editors have manage_categories and would see an entry that 403s).
+    // Team & permissions (2.15.0): every logged-in user who may open /admin sees the entry; the page asks
+    // GET /staff/me and shows only the sections the user's role allows (a user not on the team gets a
+    // friendly «no access» screen). The server gates every route itself (allow()).
     adminMenu.add({
         href: '/admin/plugin/conference-manager',
         label: 'Conference',
         icon: 'fa-users',
         order: 50,
-        cap: 'manage_options'
+        cap: 'access_admin_panel'
     });
 
     // Registration codes (2.9.0): one UNIQUE index (NULLs allowed while the backfill runs) and a code

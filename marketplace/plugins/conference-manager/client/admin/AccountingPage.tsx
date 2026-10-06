@@ -8,6 +8,9 @@
  * fee payments and transport payments — appears automatically as read-only income (it is managed where it
  * belongs: the inscription's payments, the ticket's payments), so the balance is complete without
  * entering anything twice.
+ *
+ * Staff roles (2.15.0): Contabilidad › ver reads the ledger; › gestionar creates / edits / deletes the
+ * manual entries. The Excel file is a «Reportes» permission. Administrators see everything.
  */
 import React, { useEffect, useMemo, useState } from "react";
 import { useI18n } from "../../../../../frontend/src/contexts/I18nContext";
@@ -16,6 +19,7 @@ import { conferenceApi, PAYMENT_METHODS, fmtMoney } from "../lib/conference";
 import { buildXlsx, downloadXlsx } from "../lib/xlsx";
 import { displayName, exportFilename } from "../lib/exports";
 import { filterLedger, summarizeLedger, buildLedgerWorkbook } from "../lib/accounting";
+import { usePerms, ReadOnlyNotice } from "./perms";
 
 const money = (n: unknown) => { const v = Number(n) || 0; return (v < 0 ? '-$' : '$') + fmtMoney(Math.abs(v)); };
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
@@ -33,6 +37,9 @@ const labelCls = 'block text-[10px] font-black text-gray-400 uppercase tracking-
 export default function AccountingPage({ conferenceId, slug }: { conferenceId: number; slug?: string }) {
     const { t } = useI18n();
     const { addToast } = useToast();
+    const perms = usePerms();
+    const canManage = perms.can('accounting', 'manage');
+    const canExcel = perms.can('reports');
     const [data, setData] = useState<any>({ entries: [], totals: { income: 0, expense: 0, balance: 0 }, categories: { income: [], expense: [] } });
     const [people, setPeople] = useState<any[]>([]);
     const [fields, setFields] = useState<any[]>([]);
@@ -44,7 +51,9 @@ export default function AccountingPage({ conferenceId, slug }: { conferenceId: n
 
     const load = async () => {
         try {
-            const [d, p, f] = await Promise.all([conferenceApi.getLedger(conferenceId), conferenceApi.getInscriptions(conferenceId), conferenceApi.getFields(conferenceId)]);
+            // The ledger is this page; attendees / fields only name the payers, so a role that may not read
+            // them still gets the ledger (those rows then show «#id»).
+            const [d, p, f] = await Promise.all([conferenceApi.getLedger(conferenceId), conferenceApi.getInscriptions(conferenceId).catch(() => []), conferenceApi.getFields(conferenceId).catch(() => [])]);
             setData(d); setPeople(p || []); setFields(f || []);
         } catch (e: any) { addToast(e?.message || 'Error', 'error'); }
         finally { setLoading(false); }
@@ -98,6 +107,7 @@ export default function AccountingPage({ conferenceId, slug }: { conferenceId: n
     const formCategories = form ? (data.categories?.[form.kind] || []) : [];
     return (
         <div className="space-y-8 animate-in fade-in duration-500">
+            <ReadOnlyNotice section="accounting" />
             {/* Header */}
             <div className="relative overflow-hidden bg-white rounded-3xl p-8 border border-gray-100 shadow-xl shadow-gray-100/50">
                 <div className="absolute top-0 right-0 -mr-16 -mt-16 w-64 h-64 bg-emerald-50/60 rounded-full blur-3xl pointer-events-none"></div>
@@ -111,9 +121,9 @@ export default function AccountingPage({ conferenceId, slug }: { conferenceId: n
                         <p className="text-xs text-gray-500 mt-1 max-w-xl">{t('accounting.subtitle') || 'Los pagos de inscripción validados y los pagos de transporte entran solos como ingresos; aquí registras todo lo demás.'}</p>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                        <button onClick={excel} disabled={!rows.length} className="px-6 py-4 rounded-2xl bg-white border-2 border-gray-100 text-emerald-700 hover:border-emerald-500 font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50"><i className="fa-solid fa-file-excel mr-1.5"></i>{t('accounting.excel') || 'Excel'}</button>
-                        <button onClick={() => openNew('expense')} className="px-6 py-4 rounded-2xl bg-rose-600 text-white hover:bg-rose-700 font-black text-[10px] uppercase tracking-widest shadow-lg shadow-rose-500/30 transition-all active:scale-95"><i className="fa-solid fa-minus mr-1.5"></i>{t('accounting.new.expense') || 'Nuevo egreso'}</button>
-                        <button onClick={() => openNew('income')} className="px-6 py-4 rounded-2xl bg-emerald-600 text-white hover:bg-emerald-700 font-black text-[10px] uppercase tracking-widest shadow-lg shadow-emerald-500/30 transition-all active:scale-95"><i className="fa-solid fa-plus mr-1.5"></i>{t('accounting.new.income') || 'Nuevo ingreso'}</button>
+                        {canExcel && <button onClick={excel} disabled={!rows.length} className="px-6 py-4 rounded-2xl bg-white border-2 border-gray-100 text-emerald-700 hover:border-emerald-500 font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50"><i className="fa-solid fa-file-excel mr-1.5"></i>{t('accounting.excel') || 'Excel'}</button>}
+                        {canManage && <button onClick={() => openNew('expense')} className="px-6 py-4 rounded-2xl bg-rose-600 text-white hover:bg-rose-700 font-black text-[10px] uppercase tracking-widest shadow-lg shadow-rose-500/30 transition-all active:scale-95"><i className="fa-solid fa-minus mr-1.5"></i>{t('accounting.new.expense') || 'Nuevo egreso'}</button>}
+                        {canManage && <button onClick={() => openNew('income')} className="px-6 py-4 rounded-2xl bg-emerald-600 text-white hover:bg-emerald-700 font-black text-[10px] uppercase tracking-widest shadow-lg shadow-emerald-500/30 transition-all active:scale-95"><i className="fa-solid fa-plus mr-1.5"></i>{t('accounting.new.income') || 'Nuevo ingreso'}</button>}
                     </div>
                 </div>
                 <div className="relative grid grid-cols-1 sm:grid-cols-3 gap-4 mt-6">
@@ -175,7 +185,7 @@ export default function AccountingPage({ conferenceId, slug }: { conferenceId: n
                                             <td className="px-5 py-3 text-xs font-medium text-gray-600 whitespace-nowrap">{e.method || '—'}</td>
                                             <td className={`px-5 py-3 text-right font-black whitespace-nowrap ${e.kind === 'income' ? 'text-emerald-600' : 'text-rose-600'}`}>{e.kind === 'income' ? '+' : '−'}{money(e.amount)}</td>
                                             <td className="px-5 py-3 text-right whitespace-nowrap">
-                                                {e.readonly ? (
+                                                {!canManage ? null : e.readonly ? (
                                                     <span title={t('accounting.readonly') || 'Se gestiona desde los pagos de la inscripción o del pasaje'} className="text-gray-300"><i className="fa-solid fa-lock text-xs"></i></span>
                                                 ) : (
                                                     <div className="flex justify-end gap-1.5 opacity-0 group-hover/row:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity">
@@ -218,7 +228,7 @@ export default function AccountingPage({ conferenceId, slug }: { conferenceId: n
             </div>
 
             {/* Entry form */}
-            {form && (
+            {form && canManage && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 animate-in fade-in duration-200">
                     <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-lg border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200 max-h-[92vh] flex flex-col" role="dialog" aria-modal="true">
                         <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-start justify-between gap-4 shrink-0">

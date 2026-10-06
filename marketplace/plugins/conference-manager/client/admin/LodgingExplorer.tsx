@@ -24,6 +24,9 @@
  * Navigation never touches the browser history (the admin runs inside the Next.js app router, which
  * hard-reloads on foreign history states): the place is React state, remembered per conference in
  * sessionStorage, and `focus` (from «Hoteles y habitaciones») opens a given hotel / room once.
+ *
+ * `readOnly` (2.15.0: a staff role with Hospedaje › ver): the same three levels to look around, with
+ * no drag & drop, no drop targets and no move / remove / assign controls.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../../../../../frontend/src/contexts/I18nContext";
@@ -153,7 +156,7 @@ const inputCls = 'w-full border-2 border-gray-100 rounded-xl px-3 py-2.5 bg-whit
 
 export default function LodgingExplorer({
     conferenceId, inscriptions, hotels, locations, fields, onMove, pending, loading, runSummary, boardRef,
-    focus, onFocusConsumed, suspendKeys, loadFailed, onRetry,
+    focus, onFocusConsumed, suspendKeys, loadFailed, onRetry, readOnly = false,
 }: {
     conferenceId: number;
     inscriptions: any[];
@@ -176,6 +179,8 @@ export default function LodgingExplorer({
      */
     loadFailed?: boolean;
     onRetry?: () => void;
+    /** View only: nothing can be dragged, dropped, moved, removed or assigned. */
+    readOnly?: boolean;
 }) {
     const { t } = useI18n();
     const tx = makeTx(t);
@@ -328,6 +333,7 @@ export default function LodgingExplorer({
     const moveTarget = moveTargetId == null ? null : people.find(p => p.id === moveTargetId) || null;
     const assignEntry = assignRoomId == null ? null : roomIndex.get(Number(assignRoomId)) || null;
     const openMove = (p: any, scopeHotelId: number | null = null) => {
+        if (readOnly) return;
         setMoveScopeHotelId(scopeHotelId);
         setMoveTargetId(p.id);
     };
@@ -342,6 +348,7 @@ export default function LodgingExplorer({
     const focusFallback = () => headingRef.current || boardRef?.current || null;
 
     const unassign = async (p: any) => {
+        if (readOnly) return;
         const why = unassignBlock(p, ctx);
         if (why) { addToast(blockText(tx, why), 'error'); return; }
         const opener = document.activeElement as HTMLElement | null;
@@ -386,7 +393,9 @@ export default function LodgingExplorer({
         dragging,
         over,
         draggedPerson,
+        readOnly,
         start: (p: any) => (e: React.DragEvent) => {
+            if (readOnly) { e.preventDefault(); return; }
             e.stopPropagation();
             e.dataTransfer.setData(BOARD_DRAG_TYPE, String(p.id));
             e.dataTransfer.setData('text/plain', nameOf(p));
@@ -395,13 +404,13 @@ export default function LodgingExplorer({
         },
         end: () => { setDragging(null); setOver(null); },
         roomOver: (r: any) => (e: React.DragEvent) => {
-            if (!isOurDrag(e)) return;
+            if (readOnly || !isOurDrag(e)) return;
             e.preventDefault();
             e.dataTransfer.dropEffect = 'move';
             if (over !== `room:${r.id}`) setOver(`room:${r.id}`);
         },
         roomDrop: (r: any) => async (e: React.DragEvent) => {
-            if (!isOurDrag(e)) return;
+            if (readOnly || !isOurDrag(e)) return;
             e.preventDefault();
             setOver(null);
             const id = readDragId(e);
@@ -414,13 +423,13 @@ export default function LodgingExplorer({
             await onMove(id, r.id);
         },
         unassignedOver: (e: React.DragEvent) => {
-            if (!isOurDrag(e)) return;
+            if (readOnly || !isOurDrag(e)) return;
             e.preventDefault();
             e.dataTransfer.dropEffect = 'move';
             if (over !== 'unassigned') setOver('unassigned');
         },
         unassignedDrop: async (e: React.DragEvent) => {
-            if (!isOurDrag(e)) return;
+            if (readOnly || !isOurDrag(e)) return;
             e.preventDefault();
             setOver(null);
             const id = readDragId(e);
@@ -436,13 +445,13 @@ export default function LodgingExplorer({
         // the dragged attendee — narrowed to that hotel for a card — so a move between rooms of
         // DIFFERENT hotels stays one drag plus one click, as on the old all-hotels board.
         pickOver: (key: string) => (e: React.DragEvent) => {
-            if (!isOurDrag(e)) return;
+            if (readOnly || !isOurDrag(e)) return;
             e.preventDefault();
             e.dataTransfer.dropEffect = 'move';
             if (over !== key) setOver(key);
         },
         pickDrop: (scopeHotelId: number | null) => (e: React.DragEvent) => {
-            if (!isOurDrag(e)) return;
+            if (readOnly || !isOurDrag(e)) return;
             e.preventDefault();
             setOver(null);
             const id = readDragId(e);
@@ -513,7 +522,7 @@ export default function LodgingExplorer({
     }, []);
 
     // --- Render -----------------------------------------------------------------------------------
-    const env = { tx, txn, ctx, idx, nameOf, locNameOf, locationIdOf, roomLocName, roomLabel, fields, dnd, locById, filters: nav.filters };
+    const env = { tx, txn, ctx, idx, nameOf, locNameOf, locationIdOf, roomLocName, roomLabel, fields, dnd, locById, filters: nav.filters, readOnly };
     const overall = overallStats(hotelList, people, idx);
     const locationOnly = { ...DEFAULT_ROOM_FILTERS, location: nav.filters.location };
 
@@ -593,7 +602,7 @@ export default function LodgingExplorer({
                 onOpenRoom={(id: number) => openRoom(id, { scroll: false, heading: false })}
                 onMove={(p: any) => openMove(p)}
                 onUnassign={unassign}
-                onAssign={() => setAssignRoomId(room.id)}
+                onAssign={readOnly ? undefined : () => setAssignRoomId(room.id)}
                 headingRef={headingRef}
                 env={env}
             />
@@ -625,6 +634,12 @@ export default function LodgingExplorer({
                         </div>
                     </div>
                     {runChip}
+                    {readOnly && (
+                        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-sky-50 border border-sky-200 text-sky-700 text-[10px] font-black uppercase tracking-widest" data-explorer-readonly="">
+                            <i className="fa-solid fa-eye text-[9px]" aria-hidden="true"></i>
+                            {tx('explorer.readonly', 'Solo lectura')}
+                        </div>
+                    )}
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
                     <label className="sr-only" htmlFor={`cm-explorer-loc-${conferenceId}`}>{tx('explorer.filter.location.label', 'Localidad')}</label>
@@ -1136,15 +1151,15 @@ function RoomCard({ room, onOpen, env }: any) {
                     return (
                         <li
                             key={p.id}
-                            draggable={!block}
-                            onDragStart={block ? undefined : dnd.start(p)}
+                            draggable={!block && !env.readOnly}
+                            onDragStart={block || env.readOnly ? undefined : dnd.start(p)}
                             onDragEnd={dnd.end}
                             title={p.status === 'cancelled'
                                 // A cancelled row listed INSIDE a room still holds that bed (board.cancelled says
                                 // the opposite: it is the refusal for a cancelled attendee WITHOUT a room).
                                 ? tx('explorer.occupant.cancelled', 'Inscripción cancelada: aún ocupa esta cama. Quítala de la habitación para liberarla.')
-                                : block ? blockText(tx, block) : tx('explorer.occupant.drag', 'Arrastra para mover')}
-                            className={`flex items-start gap-2 text-sm leading-snug rounded-lg px-1.5 py-1 -mx-1.5 ${block ? '' : 'cursor-grab active:cursor-grabbing hover:bg-indigo-50'} ${dnd.dragging === p.id ? 'opacity-40' : ''} ${foreign ? 'opacity-50' : ''}`}
+                                : env.readOnly ? nameOf(p) : block ? blockText(tx, block) : tx('explorer.occupant.drag', 'Arrastra para mover')}
+                            className={`flex items-start gap-2 text-sm leading-snug rounded-lg px-1.5 py-1 -mx-1.5 ${block || env.readOnly ? '' : 'cursor-grab active:cursor-grabbing hover:bg-indigo-50'} ${dnd.dragging === p.id ? 'opacity-40' : ''} ${foreign ? 'opacity-50' : ''}`}
                         >
                             <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${genderDot(p.gender)}`} aria-hidden="true"></span>
                             <span className={`font-semibold text-gray-800 break-words min-w-0 ${p.status === 'cancelled' ? 'line-through text-gray-400' : ''}`}>{nameOf(p)}</span>
@@ -1232,7 +1247,7 @@ function RoomLevel({ hotel, room, walk, walkingAll, onOpenRoom, onMove, onUnassi
             ) : s.overbooked ? (
                 <Notice tone="rose" icon="fa-triangle-exclamation">{tx('explorer.room.overbooked.notice', 'Hay más ocupantes que camas ({occ} / {cap}). Mueve o quita a alguien para corregirlo.', { occ: s.occupied, cap: s.capacity })}</Notice>
             ) : s.occupied === 0 && s.capacity > 0 ? (
-                <Notice tone="gray" icon="fa-bed">{tx('explorer.room.empty', 'Nadie duerme aquí todavía. Usa «Asignar participante» en una cama libre o arrastra a alguien desde «Sin asignar».')}</Notice>
+                <Notice tone="gray" icon="fa-bed">{env.readOnly ? tx('explorer.room.empty.readonly', 'Nadie duerme aquí todavía.') : tx('explorer.room.empty', 'Nadie duerme aquí todavía. Usa «Asignar participante» en una cama libre o arrastra a alguien desde «Sin asignar».')}</Notice>
             ) : s.free === 0 ? (
                 <Notice tone="gray" icon="fa-circle-check">{s.capacity === 0
                     ? tx('explorer.room.no.beds', 'Esta habitación no tiene camas (capacidad 0): no admite participantes.')
@@ -1267,7 +1282,7 @@ function RoomLevel({ hotel, room, walk, walkingAll, onOpenRoom, onMove, onUnassi
                         <div key={`slot-${i}`} className="rounded-3xl border-2 border-dashed border-gray-200 bg-gray-50/40 p-5 flex flex-col items-center justify-center text-center gap-3 min-h-[10rem]">
                             <div className="w-12 h-12 rounded-2xl bg-white border border-gray-100 flex items-center justify-center text-gray-300 text-xl"><i className="fa-solid fa-bed"></i></div>
                             <div className="text-sm font-black text-gray-400 uppercase tracking-widest">{tx('explorer.room.free.bed', 'Cama libre')}</div>
-                            <button
+                            {onAssign && <button
                                 type="button"
                                 data-assign-bed=""
                                 disabled={!!locked}
@@ -1275,8 +1290,8 @@ function RoomLevel({ hotel, room, walk, walkingAll, onOpenRoom, onMove, onUnassi
                                 className="inline-flex items-center gap-2 px-4 py-2.5 min-h-[44px] rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 font-black text-[10px] uppercase tracking-widest shadow-lg shadow-indigo-500/20 transition-all disabled:bg-gray-200 disabled:text-gray-400 disabled:shadow-none disabled:cursor-not-allowed focus:outline-none focus-visible:ring-4 focus-visible:ring-indigo-200"
                             >
                                 <i className="fa-solid fa-user-plus text-[9px]"></i> {tx('explorer.assign', 'Asignar participante')}
-                            </button>
-                            {locked && <p className="text-[11px] text-amber-700 font-medium">{blockText(tx, locked)}</p>}
+                            </button>}
+                            {onAssign && locked && <p className="text-[11px] text-amber-700 font-medium">{blockText(tx, locked)}</p>}
                         </div>
                     ))}
                 </div>
@@ -1336,7 +1351,7 @@ function OccupantCard({ person: p, onMove, onUnassign, env }: any) {
                         {pay && <span className={`px-2 py-0.5 rounded-md border text-[10px] font-black uppercase tracking-widest ${pay.cls}`}>{tx(pay.key, pay.fallback)}</span>}
                     </div>
                 </div>
-                {!block && (
+                {!block && !env.readOnly && (
                     <span
                         draggable
                         onDragStart={dnd.start(p)}
@@ -1398,14 +1413,14 @@ function OccupantCard({ person: p, onMove, onUnassign, env }: any) {
                 </div>
             )}
 
-            <footer className="mt-auto flex flex-wrap gap-2 pt-1">
+            {!env.readOnly && <footer className="mt-auto flex flex-wrap gap-2 pt-1">
                 <button type="button" disabled={!!block} onClick={onMove} className={btnGhost}>
                     <i className="fa-solid fa-right-left text-[9px]"></i> {tx('explorer.move', 'Mover a otra habitación')}
                 </button>
                 <button type="button" disabled={!!outBlock} onClick={onUnassign} className={`${btnGhost} hover:border-rose-300 hover:text-rose-600`}>
                     <i className="fa-solid fa-user-minus text-[9px]"></i> {tx('explorer.unassign', 'Quitar de la habitación')}
                 </button>
-            </footer>
+            </footer>}
         </article>
     );
 }
@@ -1414,13 +1429,16 @@ function PersonChip({ person: p, onOptions, env }: any) {
     const { tx, ctx, nameOf, dnd } = env;
     const block = dragBlock(p, ctx);
     const isDragging = dnd.dragging === p.id;
+    const ro = !!env.readOnly;
     return (
         <div
-            draggable={!block}
-            onDragStart={block ? undefined : dnd.start(p)}
+            draggable={!block && !ro}
+            onDragStart={block || ro ? undefined : dnd.start(p)}
             onDragEnd={dnd.end}
-            title={block ? blockText(tx, block) : nameOf(p)}
-            className={`inline-flex items-center gap-1.5 pl-1.5 pr-1 py-1 rounded-full border text-xs font-bold max-w-full transition-all select-none ${block
+            title={block && !ro ? blockText(tx, block) : nameOf(p)}
+            className={`inline-flex items-center gap-1.5 pl-1.5 ${ro ? 'pr-2.5' : 'pr-1'} py-1 rounded-full border text-xs font-bold max-w-full transition-all select-none ${ro
+                ? 'bg-white border-gray-200 text-gray-700 shadow-sm'
+                : block
                 ? 'bg-gray-50 border-gray-100 text-gray-400 opacity-70 cursor-not-allowed'
                 : isDragging
                     ? 'bg-indigo-100 border-indigo-300 text-indigo-700 opacity-50 cursor-grabbing'
@@ -1435,7 +1453,7 @@ function PersonChip({ person: p, onOptions, env }: any) {
             )}
             {block === 'board.frozen' && <i className="fa-solid fa-lock text-[8px] text-amber-500" aria-hidden="true"></i>}
             {block === 'board.moving' && <i className="fa-solid fa-spinner fa-spin text-[8px] text-indigo-400" aria-hidden="true"></i>}
-            <button
+            {!ro && <button
                 type="button"
                 onClick={e => { e.stopPropagation(); onOptions(p); }}
                 title={tx('board.options', 'Opciones de habitación')}
@@ -1443,7 +1461,7 @@ function PersonChip({ person: p, onOptions, env }: any) {
                 className="w-7 h-7 rounded-full flex items-center justify-center text-gray-400 hover:bg-gray-100 hover:text-indigo-600 transition-colors shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300"
             >
                 <i className="fa-solid fa-ellipsis text-[10px]"></i>
-            </button>
+            </button>}
         </div>
     );
 }

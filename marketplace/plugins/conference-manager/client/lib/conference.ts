@@ -381,7 +381,79 @@ export type MealDeliveryRow = {
     family_group: string | null; reg_code: string | null; delivered_at: string; delivered_by: string | null; method: string | null; note: string | null;
 };
 
+// Staff & permissions (2.15.0) — WordJS users the administrator adds to the team with a customizable
+// role (a level per section). The server resolves and enforces every level; the admin UI only mirrors
+// them to stop offering actions that would answer 403.
+export type StaffLevel = 'none' | 'view' | 'manage';
+export type StaffSection =
+    | 'dashboard' | 'inscriptions' | 'payments' | 'locations' | 'lodging' | 'transport'
+    | 'accounting' | 'meals' | 'meals_delivery' | 'reports' | 'settings';
+export type StaffPermissions = Record<StaffSection, StaffLevel>;
+/** Every section with the levels it accepts, in display order (mirrors the server's list). */
+export const STAFF_SECTIONS: { key: StaffSection; levels: StaffLevel[] }[] = [
+    { key: 'dashboard', levels: ['none', 'view'] },
+    { key: 'inscriptions', levels: ['none', 'view', 'manage'] },
+    { key: 'payments', levels: ['none', 'view', 'manage'] },
+    { key: 'locations', levels: ['none', 'view', 'manage'] },
+    { key: 'lodging', levels: ['none', 'view', 'manage'] },
+    { key: 'transport', levels: ['none', 'view', 'manage'] },
+    { key: 'accounting', levels: ['none', 'view', 'manage'] },
+    { key: 'meals', levels: ['none', 'view', 'manage'] },
+    { key: 'meals_delivery', levels: ['none', 'manage'] },
+    { key: 'reports', levels: ['none', 'view'] },
+    { key: 'settings', levels: ['none', 'view', 'manage'] },
+];
+export interface StaffMe {
+    isAdmin: boolean;
+    isStaff: boolean;
+    /** Every section present; an administrator gets the highest level of each. */
+    permissions: StaffPermissions;
+    user: { id: number; name: string };
+}
+export interface StaffRole {
+    id: number;
+    name: string;
+    permissions: Partial<StaffPermissions>;
+    members: number;
+    created_at?: string;
+    updated_at?: string;
+}
+export interface StaffUser { id: number; login: string; email: string; name: string; role: string }
+export interface StaffMember {
+    id: number;
+    user_id: number;
+    role_id: number;
+    role_name: string;
+    active: boolean;
+    added_by?: string | null;
+    created_at?: string;
+    /** null when the WordJS user no longer exists (or the users:read grant is missing). */
+    user: StaffUser | null;
+}
+
 export const conferenceApi = {
+    // Staff & permissions (2.15.0)
+    /** Any signed-in user: 200 with every section 'none' for someone who is not on the team. */
+    getStaffMe: () => apiGet<StaffMe>('/plugin/conference-manager/staff/me'),
+    getStaffRoles: () => apiGet<{ roles: StaffRole[]; sections: { key: StaffSection; levels: StaffLevel[] }[] }>('/plugin/conference-manager/staff/roles'),
+    /** 409 = a role with that name exists; 400 = unknown section / level. */
+    createStaffRole: (data: { name: string; permissions: Partial<StaffPermissions> }) =>
+        apiPost<{ success: boolean; id: number }>('/plugin/conference-manager/staff/roles', data),
+    updateStaffRole: (id: number, data: { name?: string; permissions?: Partial<StaffPermissions> }) =>
+        apiPut<{ success: boolean }>(`/plugin/conference-manager/staff/roles/${id}`, data),
+    /** 409 while the role still has members (the message says how many). */
+    deleteStaffRole: (id: number) => apiDelete<{ success: boolean }>(`/plugin/conference-manager/staff/roles/${id}`),
+    getStaffMembers: () => apiGet<{ members: StaffMember[] }>('/plugin/conference-manager/staff/members'),
+    /** 409 already a member; 400 an administrator / unknown role; 404 unknown user; 503 users:read not granted. */
+    addStaffMember: (data: { user_id: number; role_id: number }) =>
+        apiPost<{ success: boolean; id: number }>('/plugin/conference-manager/staff/members', data),
+    updateStaffMember: (id: number, data: { role_id?: number; active?: boolean }) =>
+        apiPut<{ success: boolean }>(`/plugin/conference-manager/staff/members/${id}`, data),
+    removeStaffMember: (id: number) => apiDelete<{ success: boolean }>(`/plugin/conference-manager/staff/members/${id}`),
+    /** By name, e-mail or login; 503 when the plugin lacks the users:read grant. */
+    searchStaffUsers: (q: string) =>
+        apiGet<{ users: StaffUser[] }>(`/plugin/conference-manager/staff/user-search?q=${encodeURIComponent(q)}`),
+
     // Conferences
     getConferences: () => apiGet<Conference[]>('/plugin/conference-manager/list'),
     createConference: (data: Partial<Conference>) => apiPost('/plugin/conference-manager/create', data),

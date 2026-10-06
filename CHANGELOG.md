@@ -104,6 +104,17 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   recorded as authorized), cancelled or unknown code — and the server guarantees one delivery per person and
   service even when two phones scan at once. Live counters, the latest deliveries with undo, and a per-service
   report (per location, pending / served, Excel export) complete it.
+- **Conference Manager 2.15.0 — a team with per-section permissions.** Several people can now work in the
+  conference manager with their own WordJS accounts, each seeing only what their role allows. Roles are
+  defined in a new *Equipo y permisos* view (administrators only): for each section — summary, registrations,
+  payments, locations, lodging, transport, accounting, meals, meal delivery, reports and settings — a role
+  gives no access, view-only access or full management. Two example roles are created on first use
+  («Solo lectura» and «Cocina», which can only record meal deliveries). Members are WordJS users found by
+  name, e-mail or login (the plugin asks for the users:read permission) and can be given another role,
+  deactivated or removed, with immediate effect. Every route checks the caller's level on the server; the
+  panel shows only the sections and actions the role allows, registration codes travel only with access to
+  registrations, and deleting an attendee who has payments requires the right to manage those payments.
+  WordJS administrators keep full access and do not need to be on the team.
 
 ### Fixed
 

@@ -16,7 +16,7 @@ import AccountingPage from "./AccountingPage";
 import MealsPage from "./MealsPage";
 import { code128Svg, code128Png } from "../lib/barcode";
 import { buildXlsx, downloadXlsx } from "../lib/xlsx";
-import { availableColumns, defaultColumnKeys, filterRoster, buildRosterSheet, buildHotelReport, exportFilename, transportByPerson } from "../lib/exports";
+import { availableColumns, defaultColumnKeys, filterRoster, buildRosterSheet, buildHotelReport, exportFilename, transportByPerson, withoutColumn } from "../lib/exports";
 import { StatCard } from "../../../../../frontend/src/components/ui/StatCard";
 import { ActionCard } from "../../../../../frontend/src/components/ui/ActionCard";
 // Lodging explorer (2.13.0) and the pure helpers it shares with this page (status meta, display
@@ -24,11 +24,45 @@ import { ActionCard } from "../../../../../frontend/src/components/ui/ActionCard
 // imports this file.
 import LodgingExplorer from "./LodgingExplorer";
 import { fieldVal, fillVars, lodgingStatusMeta, personDisplayName, withName, indexOccupants } from "../lib/lodgingView";
+// Staff & permissions (2.15.0): who sees which view and which controls (perms.tsx); «Equipo y permisos».
+import { PermsProvider, usePerms, hasAnySection, ReadOnlyNotice, canReadRoster, canReadHotels } from "./perms";
+import type { Perms } from "./perms";
+import StaffPage from "./StaffPage";
+import { useTx } from "./MealScanner";
 
 // Register plugin translations
 registerTranslations(translations);
 
-type View = 'list' | 'dashboard' | 'inscriptions' | 'lodging' | 'transport' | 'meals' | 'accounting' | 'locations' | 'reports' | 'assignment' | 'fields' | 'pricing';
+type View = 'list' | 'dashboard' | 'inscriptions' | 'lodging' | 'transport' | 'meals' | 'accounting' | 'locations' | 'reports' | 'assignment' | 'fields' | 'pricing' | 'staff';
+
+/** The conference views in tab order (the first one the role may open is the default). */
+const TAB_VIEWS: View[] = ['dashboard', 'inscriptions', 'lodging', 'transport', 'meals', 'locations', 'assignment', 'fields', 'pricing', 'reports', 'accounting', 'staff'];
+
+/**
+ * View → section (2.15.0). «Inscripciones» opens with Inscripciones › ver OR Pagos › ver (the fee
+ * payments live in each attendee's row there); «Asignación» belongs to Hospedaje; «Campos» and «Precios»
+ * to Configuración; «Alimentación» opens with the meals plan (view) OR the kitchen's delivery (operate);
+ * «Equipo y permisos» is for WordJS administrators only. The conference list is open to every staff member.
+ */
+const viewAllowed = (v: View, p: Perms): boolean => {
+    switch (v) {
+        case 'list': return true;
+        case 'dashboard': return p.can('dashboard');
+        case 'inscriptions': return p.can('inscriptions') || p.can('payments');
+        case 'lodging': return p.can('lodging');
+        case 'assignment': return p.can('lodging');
+        case 'transport': return p.can('transport');
+        case 'meals': return p.can('meals') || p.can('meals_delivery', 'manage');
+        case 'locations': return p.can('locations');
+        case 'fields': return p.can('settings');
+        case 'pricing': return p.can('settings');
+        case 'reports': return p.can('reports');
+        case 'accounting': return p.can('accounting');
+        case 'staff': return p.isAdmin;
+        default: return false;
+    }
+};
+const firstAllowedView = (p: Perms): View => TAB_VIEWS.find(v => viewAllowed(v, p)) || 'list';
 
 // LODGING_STATUS_META / lodgingStatusMeta and withName ({name} placeholder; t() has no interpolation)
 // moved to lib/lodgingView.ts in 2.13.0.
@@ -37,20 +71,25 @@ function ConferenceManagerContent() {
     const { currentConference, conferences, setCurrentConference, refreshConferences, loading } = useConference();
     // useI18n from global context
     const { t, language } = useI18n();
+    const tx = useTx();
+    const perms = usePerms();
     const [view, setViewState] = useState<View>('list');
     const [selectedConferenceId, setSelectedConferenceId] = useState<number | null>(null);
+    const firstView = firstAllowedView(perms);
 
-    // Initialize state from local storage
+    // Initialize state from local storage — a saved view the role may not open falls back to the first
+    // one it may (the conference list stays the start page when nothing was saved).
     useEffect(() => {
         const savedView = localStorage.getItem('conference-manager:view') as View;
-        if (savedView && ['list', 'dashboard', 'inscriptions', 'lodging', 'transport', 'meals', 'locations', 'assignment', 'fields', 'pricing', 'reports', 'accounting'].includes(savedView)) {
-            setViewState(savedView);
+        if (savedView && ['list', 'dashboard', 'inscriptions', 'lodging', 'transport', 'meals', 'locations', 'assignment', 'fields', 'pricing', 'reports', 'accounting', 'staff'].includes(savedView)) {
+            setViewState(viewAllowed(savedView, perms) ? savedView : firstView);
         }
     }, []);
 
     const setView = (newView: View) => {
-        setViewState(newView);
-        try { localStorage.setItem('conference-manager:view', newView); } catch { /* blocked storage */ }
+        const next = viewAllowed(newView, perms) ? newView : firstView;
+        setViewState(next);
+        try { localStorage.setItem('conference-manager:view', next); } catch { /* blocked storage */ }
     };
 
     // «Ver ocupación» (Hoteles y habitaciones) → the lodging explorer in «Asignación», opened at that
@@ -62,27 +101,59 @@ function ConferenceManagerContent() {
         setView('assignment');
     };
 
-    // Cuando se selecciona una conferencia, cambiar a dashboard
+    // Cuando se selecciona una conferencia, cambiar a dashboard (o a la primera vista que permita el rol)
     const handleManageConference = (conference: Conference) => {
         setCurrentConference(conference);
         setSelectedConferenceId(conference.id);
-        setView('dashboard');
+        setView(viewAllowed('dashboard', perms) ? 'dashboard' : firstView);
     };
 
-    // Cuando se cambia de vista, asegurar que hay una conferencia seleccionada
+    // Cuando se cambia de vista, asegurar que hay una conferencia seleccionada («Equipo y permisos» no la
+    // necesita: es del plugin entero).
     useEffect(() => {
-        if (!loading && view !== 'list' && !currentConference) {
+        if (!loading && view !== 'list' && view !== 'staff' && !currentConference) {
             setView('list');
         }
     }, [view, currentConference, loading]);
 
-    if (view === 'list') {
-        return <ConferenceList onManage={handleManageConference} />;
+    // A view the role may not open is never drawn, not even for one render.
+    const shown: View = viewAllowed(view, perms) ? view : firstView;
+    const openStaff = perms.isAdmin ? () => setView('staff') : undefined;
+
+    if (shown === 'list') {
+        return <ConferenceList onManage={handleManageConference} onOpenStaff={openStaff} />;
+    }
+
+    // «Equipo y permisos» without a conference selected (no conference yet, or opened from the list).
+    if (shown === 'staff' && !currentConference) {
+        return (
+            <div className="h-full overflow-auto p-6">
+                <button type="button" onClick={() => setView('list')} className="mb-4 text-gray-400 hover:text-gray-600 transition-colors inline-flex items-center gap-2 text-sm font-bold">
+                    <i className="fa-solid fa-arrow-left"></i>{tx('staff.back.list', 'Volver a los congresos')}
+                </button>
+                <StaffPage />
+            </div>
+        );
     }
 
     if (!currentConference) {
-        return <ConferenceList onManage={handleManageConference} />;
+        return <ConferenceList onManage={handleManageConference} onOpenStaff={openStaff} />;
     }
+
+    const tabs = [
+        { name: t('dashboard'), view: 'dashboard' as View, icon: 'fa-chart-pie' },
+        { name: t('inscriptions'), view: 'inscriptions' as View, icon: 'fa-users' },
+        { name: t('lodging'), view: 'lodging' as View, icon: 'fa-bed' },
+        { name: t('transport') || 'Transporte', view: 'transport' as View, icon: 'fa-bus' },
+        { name: t('meals') || 'Alimentación', view: 'meals' as View, icon: 'fa-utensils' },
+        { name: t('locations'), view: 'locations' as View, icon: 'fa-map-marker-alt' },
+        { name: t('assignment'), view: 'assignment' as View, icon: 'fa-wand-magic-sparkles' },
+        { name: t('fields'), view: 'fields' as View, icon: 'fa-list-check' },
+        { name: t('pricing') || 'Precios', view: 'pricing' as View, icon: 'fa-tags' },
+        { name: t('reports'), view: 'reports' as View, icon: 'fa-file-lines' },
+        { name: t('accounting') || 'Contabilidad', view: 'accounting' as View, icon: 'fa-scale-balanced' },
+        { name: tx('staff', 'Equipo y permisos'), view: 'staff' as View, icon: 'fa-user-shield' },
+    ].filter(tab => viewAllowed(tab.view, perms));
 
     return (
         <div className="h-full flex flex-col overflow-hidden">
@@ -111,20 +182,8 @@ function ConferenceManagerContent() {
                 </div>
 
                 <div className="flex border-b border-gray-200 mb-6 overflow-x-auto">
-                    {[
-                        { name: t('dashboard'), view: 'dashboard' as View, icon: 'fa-chart-pie' },
-                        { name: t('inscriptions'), view: 'inscriptions' as View, icon: 'fa-users' },
-                        { name: t('lodging'), view: 'lodging' as View, icon: 'fa-bed' },
-                        { name: t('transport') || 'Transporte', view: 'transport' as View, icon: 'fa-bus' },
-                        { name: t('meals') || 'Alimentación', view: 'meals' as View, icon: 'fa-utensils' },
-                        { name: t('locations'), view: 'locations' as View, icon: 'fa-map-marker-alt' },
-                        { name: t('assignment'), view: 'assignment' as View, icon: 'fa-wand-magic-sparkles' },
-                        { name: t('fields'), view: 'fields' as View, icon: 'fa-list-check' },
-                        { name: t('pricing') || 'Precios', view: 'pricing' as View, icon: 'fa-tags' },
-                        { name: t('reports'), view: 'reports' as View, icon: 'fa-file-lines' },
-                        { name: t('accounting') || 'Contabilidad', view: 'accounting' as View, icon: 'fa-scale-balanced' },
-                    ].map((tab) => {
-                        const isActive = view === tab.view;
+                    {tabs.map((tab) => {
+                        const isActive = shown === tab.view;
                         return (
                             <button
                                 key={tab.view}
@@ -145,28 +204,80 @@ function ConferenceManagerContent() {
 
             <div className="flex-1 px-6 pb-6 overflow-hidden min-h-0">
                 <div className="h-full bg-white rounded-xl shadow-sm border border-gray-200 p-6 overflow-auto flex flex-col">
-                    {view === 'dashboard' && <ConferenceDashboard conferenceId={currentConference.id} onNavigate={setView} />}
-                    {view === 'inscriptions' && <InscriptionsPage conferenceId={currentConference.id} />}
-                    {view === 'lodging' && <LodgingPage conferenceId={currentConference.id} onOpenExplorer={openLodgingExplorer} />}
-                    {view === 'transport' && <TransportPage conferenceId={currentConference.id} slug={currentConference.slug} />}
-                    {view === 'meals' && <MealsPage conferenceId={currentConference.id} slug={currentConference.slug} conference={currentConference} />}
-                    {view === 'accounting' && <AccountingPage conferenceId={currentConference.id} slug={currentConference.slug} />}
-                    {view === 'locations' && <LocationsPage conferenceId={currentConference.id} />}
-                    {view === 'assignment' && <AssignmentPage conferenceId={currentConference.id} focus={lodgingFocus} onFocusConsumed={() => setLodgingFocus(null)} />}
-                    {view === 'fields' && <FieldsPage conferenceId={currentConference.id} />}
-                    {view === 'pricing' && <PricingPage conferenceId={currentConference.id} />}
-                    {view === 'reports' && <ReportsPage conferenceId={currentConference.id} />}
+                    {shown === 'dashboard' && <ConferenceDashboard conferenceId={currentConference.id} onNavigate={setView} />}
+                    {shown === 'inscriptions' && <InscriptionsPage conferenceId={currentConference.id} />}
+                    {shown === 'lodging' && <LodgingPage conferenceId={currentConference.id} onOpenExplorer={openLodgingExplorer} />}
+                    {shown === 'transport' && <TransportPage conferenceId={currentConference.id} slug={currentConference.slug} />}
+                    {shown === 'meals' && <MealsPage conferenceId={currentConference.id} slug={currentConference.slug} conference={currentConference} />}
+                    {shown === 'accounting' && <AccountingPage conferenceId={currentConference.id} slug={currentConference.slug} />}
+                    {shown === 'locations' && <LocationsPage conferenceId={currentConference.id} />}
+                    {shown === 'assignment' && <AssignmentPage conferenceId={currentConference.id} focus={lodgingFocus} onFocusConsumed={() => setLodgingFocus(null)} />}
+                    {shown === 'fields' && <FieldsPage conferenceId={currentConference.id} />}
+                    {shown === 'pricing' && <PricingPage conferenceId={currentConference.id} />}
+                    {shown === 'reports' && <ReportsPage conferenceId={currentConference.id} />}
+                    {shown === 'staff' && <StaffPage />}
                 </div>
             </div>
         </div>
     );
 }
 
+/**
+ * The page root (2.15.0): GET /staff/me first. While it loads, the usual spinner; a signed-in WordJS user
+ * who is neither an administrator nor on the team (or whose role opens nothing) gets a friendly screen
+ * instead of a page of 403s. Everyone else gets the admin, filtered by their role.
+ */
+function PermsGate() {
+    const perms = usePerms();
+    const tx = useTx();
+    if (perms.loading) {
+        return (
+            <div className="text-center py-20">
+                <div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+                <p className="text-gray-500">{tx('loading', 'Cargando...')}</p>
+            </div>
+        );
+    }
+    if (perms.error) {
+        return (
+            <div className="max-w-lg mx-auto text-center py-20 px-6 space-y-4" role="alert">
+                <i className="fa-solid fa-triangle-exclamation text-3xl text-rose-400"></i>
+                <p className="text-sm font-bold text-rose-700">{tx('perm.load.failed', 'No se pudieron cargar tus permisos.')}</p>
+                <p className="text-xs text-gray-500">{perms.error}</p>
+                <button type="button" onClick={perms.reload} className="px-6 py-3 rounded-2xl bg-white border-2 border-gray-100 text-gray-700 hover:border-blue-400 font-black text-[10px] uppercase tracking-widest">{tx('staff.retry', 'Reintentar')}</button>
+            </div>
+        );
+    }
+    if (!perms.isAdmin && (!perms.isStaff || !hasAnySection(perms))) {
+        return (
+            <div className="max-w-xl mx-auto text-center py-20 px-6" data-no-access="">
+                <div className="w-20 h-20 mx-auto mb-6 rounded-3xl bg-gray-50 border border-gray-100 flex items-center justify-center text-gray-300 text-3xl">
+                    <i className="fa-solid fa-user-lock"></i>
+                </div>
+                <h2 className="text-2xl font-black text-gray-900 italic tracking-tighter mb-3">{tx('perm.noaccess.title', 'Sin acceso')}</h2>
+                <p className="text-base font-medium text-gray-600 leading-relaxed">{tx('perm.noaccess', 'No tienes acceso a este módulo. Pide al administrador que te añada al equipo.')}</p>
+            </div>
+        );
+    }
+    return (
+        <ConferenceProvider>
+            <ConferenceManagerContent />
+        </ConferenceProvider>
+    );
+}
+
 // Conference List Component
-function ConferenceList({ onManage }: { onManage: (conf: Conference) => void }) {
-    const { conferences, refreshConferences } = useConference();
+function ConferenceList({ onManage, onOpenStaff }: { onManage: (conf: Conference) => void; onOpenStaff?: () => void }) {
+    const { conferences, refreshConferences, loading: confLoading } = useConference();
     const { t } = useI18n();
+    const tx = useTx();
     const { addToast } = useToast();
+    // Creating / deleting a conference is Configuración › gestionar; the per-card counts are read only
+    // from the sections the role may see (no request is made just to be refused).
+    const perms = usePerms();
+    const canManageSettings = perms.can('settings', 'manage');
+    const canCountPeople = canReadRoster(perms);
+    const canCountHotels = canReadHotels(perms);
     const [loading, setLoading] = useState(true);
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [newConference, setNewConference] = useState({
@@ -191,8 +302,8 @@ function ConferenceList({ onManage }: { onManage: (conf: Conference) => void }) 
             for (const conf of conferences) {
                 try {
                     const [inscriptions, hotels] = await Promise.all([
-                        conferenceApi.getInscriptions(conf.id).catch(() => []),
-                        conferenceApi.getHotels(conf.id).catch(() => [])
+                        canCountPeople ? conferenceApi.getInscriptions(conf.id).catch(() => []) : Promise.resolve([]),
+                        canCountHotels ? conferenceApi.getHotels(conf.id).catch(() => []) : Promise.resolve([])
                     ]);
 
                     stats[conf.id] = {
@@ -271,16 +382,32 @@ function ConferenceList({ onManage }: { onManage: (conf: Conference) => void }) 
 
     return (
         <div className="p-10 space-y-10 animate-in fade-in duration-500">
-            <div className="flex justify-between items-end mb-8">
+            <div className="flex flex-wrap justify-between items-end gap-4 mb-8">
                 <div>
                     <h2 className="text-4xl font-black text-gray-900 italic tracking-tighter mb-2">{t('conference.list')}</h2>
                     <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">{t('conference.manager.description')}</p>
                 </div>
+                {onOpenStaff && (
+                    <button
+                        type="button"
+                        onClick={onOpenStaff}
+                        className="px-6 py-3 bg-white border-2 border-gray-100 hover:border-indigo-500 hover:text-indigo-600 text-gray-700 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2"
+                    >
+                        <i className="fa-solid fa-user-shield"></i>{tx('staff', 'Equipo y permisos')}
+                    </button>
+                )}
             </div>
 
+            {!confLoading && !canManageSettings && conferences.length === 0 && (
+                <div className="text-center py-16 px-6 bg-gray-50/50 border-2 border-dashed border-gray-100 rounded-3xl">
+                    <i className="fa-solid fa-calendar-xmark text-3xl text-gray-300 mb-3"></i>
+                    <p className="text-sm font-bold text-gray-500">{tx('perm.no.conferences', 'Todavía no hay congresos. Un administrador debe crearlos.')}</p>
+                </div>
+            )}
+
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {/* Nueva Conferencia Card - Premium */}
-                <div
+                {/* Nueva Conferencia Card - Premium (Configuración › gestionar) */}
+                {canManageSettings && <div
                     onClick={() => setShowCreateModal(true)}
                     className="group bg-gradient-to-br from-blue-600 to-indigo-700 rounded-[40px] p-8 flex flex-col items-center justify-center text-white hover:shadow-2xl hover:shadow-blue-500/40 hover:-translate-y-2 transition-all duration-500 cursor-pointer min-h-[320px] relative overflow-hidden ring-4 ring-white ring-offset-4 ring-offset-gray-50"
                 >
@@ -295,7 +422,7 @@ function ConferenceList({ onManage }: { onManage: (conf: Conference) => void }) 
                         <span className="font-black text-2xl italic tracking-tight">{t('create.conference')}</span>
                         <span className="mt-2 text-xs font-bold uppercase tracking-widest text-blue-200 group-hover:text-white transition-colors">Comenzar nuevo evento</span>
                     </div>
-                </div>
+                </div>}
 
                 {/* Conference Cards */}
                 {conferences.map(conf => {
@@ -329,13 +456,13 @@ function ConferenceList({ onManage }: { onManage: (conf: Conference) => void }) 
                                         <i className={`fa-solid ${conf.status === 'active' ? 'fa-satellite-dish' : 'fa-box-archive'}`}></i>
                                     </div>
                                     <div className="flex gap-2">
-                                        <button
+                                        {canManageSettings && <button
                                             onClick={(e) => { e.stopPropagation(); handleDeleteConference(conf.id); }}
                                             className="w-10 h-10 flex items-center justify-center rounded-2xl text-gray-300 hover:bg-rose-50 hover:text-rose-600 transition-all duration-300 opacity-0 group-hover:opacity-100 transform translate-x-4 group-hover:translate-x-0"
                                             disabled={isDeleting}
                                         >
                                             {isDeleting ? <i className="fa-solid fa-spinner animate-spin"></i> : <i className="fa-solid fa-trash-can"></i>}
-                                        </button>
+                                        </button>}
                                     </div>
                                 </div>
 
@@ -366,17 +493,17 @@ function ConferenceList({ onManage }: { onManage: (conf: Conference) => void }) 
                             </div>
 
                             <div className="flex items-end justify-between mt-auto relative z-10 pt-6 border-t border-gray-50">
-                                <div className="space-y-1.5">
+                                <div className={`space-y-1.5 ${canCountPeople || canCountHotels ? '' : 'invisible'}`}>
                                     <div className="text-gray-300 text-[9px] font-black uppercase tracking-[0.2em]">{t('stats') || 'ESTADISTICAS'}</div>
                                     <div className="flex items-center gap-4 text-xs font-bold text-gray-600">
-                                        <span className="flex items-center gap-1.5" title={t('inscription.plural')}>
+                                        {canCountPeople && <span className="flex items-center gap-1.5" title={t('inscription.plural')}>
                                             <i className="fa-solid fa-users text-blue-400"></i>
                                             {stats.inscriptions}
-                                        </span>
-                                        <span className="flex items-center gap-1.5" title={t('hotels')}>
+                                        </span>}
+                                        {canCountHotels && <span className="flex items-center gap-1.5" title={t('hotels')}>
                                             <i className="fa-solid fa-bed text-indigo-400"></i>
                                             {stats.hotels}
-                                        </span>
+                                        </span>}
                                     </div>
                                 </div>
 
@@ -511,7 +638,11 @@ function ConferenceList({ onManage }: { onManage: (conf: Conference) => void }) 
 function ConferenceDashboard({ conferenceId, onNavigate }: { conferenceId: number, onNavigate: (view: View) => void }) {
     const { currentConference } = useConference();
     const { t } = useI18n(); // Get t() function
-    const [stats, setStats] = useState({
+    // A card whose source the role may not read shows «—» instead of a misleading 0, and the shortcuts
+    // only lead to views the role may open.
+    const perms = usePerms();
+    const canOpen = (v: View) => viewAllowed(v, perms);
+    const [stats, setStats] = useState<any>({
         inscriptions: 0,
         hotels: 0,
         rooms: 0,
@@ -526,21 +657,23 @@ function ConferenceDashboard({ conferenceId, onNavigate }: { conferenceId: numbe
 
         const loadStats = async () => {
             try {
+                // null = that source could not be read (e.g. a 403 for a role without the section).
                 const [inscriptions, hotels, locData] = await Promise.all([
-                    conferenceApi.getInscriptions(conferenceId).catch(() => []),
-                    conferenceApi.getHotels(conferenceId).catch(() => []),
+                    conferenceApi.getInscriptions(conferenceId).catch(() => null),
+                    conferenceApi.getHotels(conferenceId).catch(() => null),
                     conferenceApi.getLocations(conferenceId).catch(() => null)
                 ]);
+                const na = '—';
 
-                const paid = inscriptions.filter(i => i.payment_status === 'paid').length;
-                const unpaid = inscriptions.filter(i => i.payment_status !== 'paid').length;
-                const totalRooms = hotels.reduce((sum, h) => sum + (h.rooms?.length || 0), 0);
+                const paid = inscriptions ? inscriptions.filter(i => i.payment_status === 'paid').length : na;
+                const unpaid = inscriptions ? inscriptions.filter(i => i.payment_status !== 'paid').length : na;
+                const totalRooms = hotels ? hotels.reduce((sum, h) => sum + (h.rooms?.length || 0), 0) : na;
                 // Locations whose coordinator sent the lodging and is waiting for the admin's validation.
-                const lodgingToValidate = (locData?.locations || []).filter(l => l.lodging_status === 'submitted').length;
+                const lodgingToValidate = locData ? (locData.locations || []).filter(l => l.lodging_status === 'submitted').length : na;
 
                 setStats({
-                    inscriptions: inscriptions.length,
-                    hotels: hotels.length,
+                    inscriptions: inscriptions ? inscriptions.length : na,
+                    hotels: hotels ? hotels.length : na,
                     rooms: totalRooms,
                     paid,
                     unpaid,
@@ -603,7 +736,7 @@ function ConferenceDashboard({ conferenceId, onNavigate }: { conferenceId: numbe
                         </div>
                     </div>
 
-                    <div className="flex items-center gap-3">
+                    {canOpen('fields') && <div className="flex items-center gap-3">
                         <button
                             onClick={() => onNavigate('fields')}
                             className="px-6 py-3 bg-white border-2 border-gray-100 hover:border-blue-500 hover:text-blue-600 transition-all rounded-2xl text-xs font-black uppercase tracking-widest flex items-center gap-2 group"
@@ -611,7 +744,7 @@ function ConferenceDashboard({ conferenceId, onNavigate }: { conferenceId: numbe
                             <i className="fa-solid fa-pen-to-square group-hover:scale-110 transition-transform"></i>
                             Configurar Registro
                         </button>
-                    </div>
+                    </div>}
                 </div>
             </div>
 
@@ -622,11 +755,11 @@ function ConferenceDashboard({ conferenceId, onNavigate }: { conferenceId: numbe
                 <StatCard icon="fa-door-open" label={t('rooms')} value={stats.rooms} color="indigo" />
                 <StatCard icon="fa-circle-check" label={t('paid')} value={stats.paid} color="green" />
                 <StatCard icon="fa-circle-xmark" label={t('unpaid')} value={stats.unpaid} color="red" />
-                <StatCard icon="fa-clipboard-check" label={t('lodging.pending.validation') || 'Hospedajes por validar'} value={stats.lodgingToValidate} color={stats.lodgingToValidate > 0 ? 'orange' : 'gray'} onClick={() => onNavigate('locations')} />
+                <StatCard icon="fa-clipboard-check" label={t('lodging.pending.validation') || 'Hospedajes por validar'} value={stats.lodgingToValidate} color={Number(stats.lodgingToValidate) > 0 ? 'orange' : 'gray'} onClick={canOpen('locations') ? () => onNavigate('locations') : undefined} />
             </div>
 
-            {/* Actions Grid */}
-            <div className="space-y-6 pt-2">
+            {/* Actions Grid — only the shortcuts to views the role may open */}
+            {(canOpen('inscriptions') || canOpen('lodging') || canOpen('reports')) && <div className="space-y-6 pt-2">
                 <div className="flex items-center gap-3">
                     <div className="h-px flex-1 bg-gradient-to-r from-transparent via-gray-200 to-transparent"></div>
                     <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.3em] whitespace-nowrap">{t('quick.actions')}</h3>
@@ -634,29 +767,29 @@ function ConferenceDashboard({ conferenceId, onNavigate }: { conferenceId: numbe
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <ActionCard
+                    {canOpen('inscriptions') && <ActionCard
                         icon="fa-user-plus"
                         title={t('register.participant')}
                         description={t('new.inscription.desc')}
                         onClick={() => onNavigate('inscriptions')}
                         color="blue"
-                    />
-                    <ActionCard
+                    />}
+                    {canOpen('lodging') && <ActionCard
                         icon="fa-bed"
                         title={t('manage.lodging')}
                         description={t('manage.lodging.desc')}
                         onClick={() => onNavigate('lodging')}
                         color="purple"
-                    />
-                    <ActionCard
+                    />}
+                    {canOpen('reports') && <ActionCard
                         icon="fa-file-lines"
                         title={t('view.reports')}
                         description={t('view.reports.desc')}
                         onClick={() => onNavigate('reports')}
                         color="green"
-                    />
+                    />}
                 </div>
-            </div>
+            </div>}
         </div>
     );
 }
@@ -729,14 +862,15 @@ function BarcodeModal({ code, name, onClose }: { code: string; name: string; onC
 // Everything is built in the browser from the admin's own API data (the sandbox can only answer JSON):
 // client/lib/exports.ts shapes the sheets, client/lib/xlsx.ts writes the file, client/lib/barcode.ts
 // rasterises each registration code for the optional barcode column.
-async function downloadHotelReport(conferenceId: number, slug: string | undefined, onlyHotelId: number | null = null) {
+async function downloadHotelReport(conferenceId: number, slug: string | undefined, onlyHotelId: number | null = null, withCodes = true) {
     const [hotels, people, fields, locs] = await Promise.all([
         conferenceApi.getHotels(conferenceId),
         conferenceApi.getInscriptions(conferenceId),
         conferenceApi.getFields(conferenceId),
         conferenceApi.getLocations(conferenceId),
     ]);
-    const sheets = buildHotelReport({ hotels: hotels as any, people: people as any, fields: fields as any, locations: (locs.locations || []) as any, onlyHotelId });
+    const built = buildHotelReport({ hotels: hotels as any, people: people as any, fields: fields as any, locations: (locs.locations || []) as any, onlyHotelId });
+    const sheets = withCodes ? built : withoutColumn(built, 'Código');
     const hotelName = onlyHotelId != null ? (hotels.find((h: any) => Number(h.id) === Number(onlyHotelId))?.name || 'hotel') : '';
     downloadXlsx(buildXlsx(sheets), exportFilename(onlyHotelId != null ? 'hotel-' + String(hotelName).toLowerCase() : 'hoteles', slug));
 }
@@ -744,6 +878,8 @@ async function downloadHotelReport(conferenceId: number, slug: string | undefine
 function ExcelExportModal({ conferenceId, slug, onClose }: { conferenceId: number; slug?: string; onClose: () => void }) {
     const { t } = useI18n();
     const { addToast } = useToast();
+    // The registration codes reach the browser only with Inscripciones › ver: no barcode option without them.
+    const canBarcode = usePerms().can('inscriptions');
     const storeKey = `cm:excel:${conferenceId}`;
     const [fields, setFields] = useState<ConferenceField[]>([]);
     const [people, setPeople] = useState<Inscription[]>([]);
@@ -764,7 +900,7 @@ function ExcelExportModal({ conferenceId, slug, onClose }: { conferenceId: numbe
             .then(([f, p, l, b]) => {
                 if (!alive) return;
                 setFields(f); setPeople(p); setLocs(l.locations || []); setTransport(transportByPerson((b || []) as any));
-                const all = new Set(availableColumns(f as any).map(c => c.key));
+                const all = new Set(availableColumns(f as any).filter(c => canBarcode || c.key !== 'reg_code').map(c => c.key));
                 let saved: any = null;
                 try { saved = JSON.parse(localStorage.getItem(storeKey) || 'null'); } catch { saved = null; }
                 const keys = Array.isArray(saved?.columns) ? saved.columns.filter((k: string) => all.has(k)) : [];
@@ -776,7 +912,7 @@ function ExcelExportModal({ conferenceId, slug, onClose }: { conferenceId: numbe
         return () => { alive = false; };
     }, [conferenceId]);
 
-    const columns = useMemo(() => availableColumns(fields as any), [fields]);
+    const columns = useMemo(() => availableColumns(fields as any).filter(c => canBarcode || c.key !== 'reg_code'), [fields, canBarcode]);
     const label = (k: string) => columns.find(c => c.key === k)?.label || k;
     const rows = useMemo(() => filterRoster(people as any, {
         locationId: locationId ? Number(locationId) : null,
@@ -796,7 +932,7 @@ function ExcelExportModal({ conferenceId, slug, onClose }: { conferenceId: numbe
         try { localStorage.setItem(storeKey, JSON.stringify({ columns: selected, barcode })); } catch { /* private mode */ }
         try {
             let images: Map<number, any> | null = null;
-            if (barcode) {
+            if (barcode && canBarcode) {
                 images = new Map();
                 const withCode = rows.filter((p: any) => p.reg_code);
                 setProgress({ n: 0, total: withCode.length });
@@ -884,13 +1020,13 @@ function ExcelExportModal({ conferenceId, slug, onClose }: { conferenceId: numbe
                                         </div>
                                     ))}
                                 </div>
-                                <label className="mt-4 flex items-start gap-3 px-4 py-3 rounded-2xl border-2 border-gray-100 cursor-pointer">
+                                {canBarcode && <label className="mt-4 flex items-start gap-3 px-4 py-3 rounded-2xl border-2 border-gray-100 cursor-pointer">
                                     <input type="checkbox" checked={barcode} onChange={e => setBarcode(e.target.checked)} className="accent-blue-600 w-4 h-4 mt-0.5" />
                                     <span>
                                         <span className="block text-sm font-bold text-gray-800"><i className="fa-solid fa-barcode mr-1.5"></i>{t('excel.barcode') || 'Incluir código de barras'}</span>
                                         <span className="block text-[11px] text-gray-500 mt-0.5">{t('excel.barcode.help') || 'Agrega una columna con la imagen del código de barras de cada inscripción.'}</span>
                                     </span>
-                                </label>
+                                </label>}
                             </div>
                         </div>
                     </div>
@@ -913,7 +1049,17 @@ function ExcelExportModal({ conferenceId, slug, onClose }: { conferenceId: numbe
 
 function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
     const { t } = useI18n();
+    const tx = useTx();
     const { addToast } = useToast();
+    // Inscripciones › gestionar = new / edit / delete; Pagos › gestionar = register / validate / reject /
+    // void (the list of an attendee's payments opens with Inscripciones › ver); Hospedaje › gestionar =
+    // the room button; Reportes = the Excel export.
+    const perms = usePerms();
+    const canManage = perms.can('inscriptions', 'manage');
+    const canSeeCodes = perms.can('inscriptions');
+    const canPayManage = perms.can('payments', 'manage');
+    const canAssign = perms.can('lodging', 'manage');
+    const canExcel = perms.can('reports');
     // Attendee whose registration barcode is open in the viewer.
     const [barcodeFor, setBarcodeFor] = useState<Inscription | null>(null);
     const [showExcel, setShowExcel] = useState(false);
@@ -1217,6 +1363,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
 
     return (
         <div className="h-full flex flex-col overflow-hidden">
+            <ReadOnlyNotice section="inscriptions" alsoManage={['payments', 'lodging']} className="mb-4 flex-shrink-0" />
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-10 gap-6 flex-shrink-0 px-1">
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 flex-1 w-full">
                     {showExcel && <ExcelExportModal conferenceId={conferenceId} slug={excelConf?.slug} onClose={() => setShowExcel(false)} />}
@@ -1328,21 +1475,21 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                     </div>
                 </div>
 
-                <button
+                {canExcel && <button
                     onClick={() => setShowExcel(true)}
                     title={t('excel.custom') || 'Excel personalizado'}
                     className="flex-shrink-0 bg-white border-2 border-gray-100 text-emerald-700 px-6 py-4 rounded-2xl hover:border-emerald-500 transition-all flex items-center justify-center gap-2 w-full md:w-auto font-black text-[10px] uppercase tracking-widest"
                 >
                     <i className="fa-solid fa-file-excel text-sm"></i>
                     <span>{t('excel.custom') || 'Excel personalizado'}</span>
-                </button>
-                <button
+                </button>}
+                {canManage && <button
                     onClick={openCreate}
                     className="flex-shrink-0 bg-blue-600 text-white px-8 py-4 rounded-2xl hover:bg-blue-700 active:scale-95 transition-all shadow-xl shadow-blue-500/30 flex items-center justify-center gap-3 w-full md:w-auto font-black italic tracking-tighter"
                 >
                     <i className="fa-solid fa-plus text-sm"></i>
                     <span>{t('new.inscription')}</span>
-                </button>
+                </button>}
             </div>
 
             <div className="flex-1 overflow-y-auto overflow-x-auto modern-scrollbar min-h-0">
@@ -1418,7 +1565,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                         {fields.map((field, idx) => (
                                                             <th key={field.id} className={`${idx === 0 ? 'px-8' : 'px-6'} py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap`}>{field.label}</th>
                                                         ))}
-                                                        <th className="px-6 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest text-center whitespace-nowrap">{t('reg.code') || 'Código'}</th>
+                                                        {canSeeCodes && <th className="px-6 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest text-center whitespace-nowrap">{t('reg.code') || 'Código'}</th>}
                                                         <th className="px-6 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest text-center whitespace-nowrap">{t('payment')}</th>
                                                         <th className="px-6 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest text-center whitespace-nowrap">{t('lodging')}</th>
                                                         <th className="px-8 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest text-right whitespace-nowrap">{t('actions')}</th>
@@ -1444,7 +1591,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                                     </td>
                                                                 );
                                                             })}
-                                                            <td className="px-6 py-5 text-center">
+                                                            {canSeeCodes && <td className="px-6 py-5 text-center">
                                                                 {person.reg_code ? (
                                                                     <button
                                                                         onClick={() => setBarcodeFor(person)}
@@ -1455,7 +1602,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                                         <span className="font-mono text-[11px] font-black tracking-wider">{person.reg_code}</span>
                                                                     </button>
                                                                 ) : <span className="text-gray-300 italic text-xs">{t('reg.code.none') || 'Sin código'}</span>}
-                                                            </td>
+                                                            </td>}
                                                             <td className="px-6 py-5">
                                                                 <div className="flex flex-col items-center gap-1">
                                                                     <button
@@ -1492,27 +1639,27 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                             </td>
                                                             <td className="px-8 py-5 text-right">
                                                                 <div className="flex justify-end gap-2 opacity-0 group-hover/row:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity">
-                                                                    <button
+                                                                    {canAssign && <button
                                                                         onClick={() => openAssign(person)}
                                                                         className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-emerald-600 hover:text-white transition-all shadow-sm border border-transparent hover:border-emerald-400"
                                                                         title={t('assign.room') || 'Asignar habitación'}
                                                                     >
                                                                         <i className="fa-solid fa-bed text-xs"></i>
-                                                                    </button>
-                                                                    <button
+                                                                    </button>}
+                                                                    {canManage && <button
                                                                         onClick={() => openEdit(person)}
                                                                         className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white transition-all shadow-sm border border-transparent hover:border-blue-400"
                                                                         title={t('edit')}
                                                                     >
                                                                         <i className="fa-solid fa-pen text-xs"></i>
-                                                                    </button>
-                                                                    <button
+                                                                    </button>}
+                                                                    {canManage && <button
                                                                         onClick={() => handleDelete(person)}
                                                                         className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition-all shadow-sm border border-transparent hover:border-rose-400"
                                                                         title={t('delete')}
                                                                     >
                                                                         <i className="fa-solid fa-trash text-xs"></i>
-                                                                    </button>
+                                                                    </button>}
                                                                 </div>
                                                             </td>
                                                         </tr>
@@ -1690,7 +1837,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                 ) : payment.proof ? (
                                                     <span className="shrink-0 self-center text-[10px] font-bold uppercase bg-gray-200 text-gray-500 px-2 py-1 rounded-full whitespace-nowrap" title="El comprobante guardado no es una imagen">Comprobante no válido</span>
                                                 ) : null}
-                                                {(() => { const can = paymentActions(payment.status); return (
+                                                {canPayManage && (() => { const can = paymentActions(payment.status); return (
                                                 <div className="shrink-0 flex items-center gap-1">
                                                     {can.validate && (
                                                         <button type="button" onClick={() => handleValidatePayment(payment)} title="Validar pago" className="w-8 h-8 flex items-center justify-center rounded-lg text-emerald-600 hover:text-white hover:bg-emerald-600 border border-emerald-100 transition">
@@ -1720,8 +1867,17 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                 </div>
                             )}
 
+                            {!canPayManage && (
+                                <div className="pt-6 mt-4 border-t border-gray-100 flex flex-wrap items-center justify-between gap-3">
+                                    <span className="text-xs font-bold text-gray-500">
+                                        {t('paid')}: <span className="text-emerald-600">${fmtMoney(selectedInscription.amount_paid)}</span> / ${fmtMoney(selectedInscription.total_due)}
+                                    </span>
+                                    <span className="text-[11px] font-bold text-sky-700 bg-sky-50 border border-sky-200 rounded-xl px-3 py-1.5"><i className="fa-solid fa-eye mr-1.5"></i>{tx('perm.payments.readonly', 'Tu rol puede ver los pagos, pero no registrarlos ni validarlos.')}</span>
+                                    <button type="button" onClick={() => setSelectedInscription(null)} className="px-6 py-2.5 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition">{t('close') || 'Cerrar'}</button>
+                                </div>
+                            )}
                             {/* Register a new payment */}
-                            <form onSubmit={handleAddPayment} className="pt-6 mt-4 border-t border-gray-100">
+                            {canPayManage && <form onSubmit={handleAddPayment} className="pt-6 mt-4 border-t border-gray-100">
                                 <div className="flex items-center justify-between mb-3">
                                     <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400">{t('register.payment') || 'Registrar pago'}</h4>
                                     <span className="text-xs font-bold text-gray-500">
@@ -1792,7 +1948,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                         {addingPayment ? (t('saving') || 'Guardando…') : (t('register.payment') || 'Registrar pago')}
                                     </button>
                                 </div>
-                            </form>
+                            </form>}
                         </div>
                     </div>
                 </div>
@@ -1966,7 +2122,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
  */
 function LodgingRoomTile({ room, names, selecting, selected, onActivate, onDelete, t }: {
     room: Room; names: string[]; selecting: boolean; selected: boolean;
-    onActivate?: () => void; onDelete: () => void; t: (k: string) => string;
+    onActivate?: () => void; onDelete?: () => void; t: (k: string) => string;
 }) {
     const cap = room.capacity || 0;
     const occ = room.occupied || 0;
@@ -2054,7 +2210,7 @@ function LodgingRoomTile({ room, names, selecting, selected, onActivate, onDelet
                     </div>
                 </div>
             </Body>
-            <button
+            {onDelete && <button
                 type="button"
                 onClick={onDelete}
                 title={t('delete.room') || 'Eliminar habitación'}
@@ -2062,7 +2218,7 @@ function LodgingRoomTile({ room, names, selecting, selected, onActivate, onDelet
                 className="absolute top-4 right-4 sm:top-5 sm:right-5 z-10 w-6 h-6 rounded-full flex items-center justify-center text-gray-300 hover:text-rose-600 hover:bg-rose-50 transition-colors opacity-0 group-hover/room:opacity-100 group-focus-within/room:opacity-100 focus:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-300 [@media(hover:none)]:opacity-100"
             >
                 <i className="fa-solid fa-trash-can text-[9px]" aria-hidden="true"></i>
-            </button>
+            </button>}
         </div>
     );
 }
@@ -2074,10 +2230,14 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
     const { t } = useI18n(); // Get t() function
     const { addToast } = useToast();
     const { currentConference: lodgingConf } = useConference();
+    // Hospedaje › gestionar = hotels, rooms and their allotment to locations; Reportes = the Excel files.
+    const perms = usePerms();
+    const canManage = perms.can('lodging', 'manage');
+    const canExcel = perms.can('reports');
     const [reportBusy, setReportBusy] = useState<number | 'all' | null>(null);
     const hotelReport = async (hotelId: number | null) => {
         setReportBusy(hotelId ?? 'all');
-        try { await downloadHotelReport(conferenceId, lodgingConf?.slug, hotelId); }
+        try { await downloadHotelReport(conferenceId, lodgingConf?.slug, hotelId, perms.can('inscriptions')); }
         catch (e: any) { addToast(e?.message || 'Error', 'error'); }
         finally { setReportBusy(null); }
     };
@@ -2261,25 +2421,26 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
 
     return (
         <div className="space-y-10 animate-in fade-in duration-500">
+            <ReadOnlyNotice section="lodging" />
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center justify-between bg-gray-50/50 p-8 rounded-[32px] border-2 border-white shadow-sm">
                 <div>
                     <h2 className="text-3xl font-black text-gray-900 italic tracking-tighter">{t('hotels.and.rooms')}</h2>
                     <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1">Gestión de alojamiento y disponibilidad</p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                <button
+                {canExcel && <button
                     onClick={() => hotelReport(null)}
                     disabled={reportBusy !== null}
                     className="bg-white border-2 border-gray-100 text-emerald-700 px-6 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest hover:border-emerald-500 transition-all flex items-center gap-2 disabled:opacity-50"
                 >
                     <i className={`fa-solid ${reportBusy === 'all' ? 'fa-spinner animate-spin' : 'fa-file-excel'} text-[10px]`}></i> {t('excel.hotels') || 'Reporte de hoteles (Excel)'}
-                </button>
-                <button
+                </button>}
+                {canManage && <button
                     onClick={() => setShowHotelModal(true)}
                     className="bg-gray-900 text-white px-8 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-blue-600 transition-all duration-500 shadow-xl hover:shadow-blue-500/30 flex items-center gap-3 transform active:scale-95 translate-y-0 hover:-translate-y-1"
                 >
                     <i className="fa-solid fa-plus text-[8px]"></i> {t('add.hotel')}
-                </button>
+                </button>}
                 </div>
             </div>
 
@@ -2322,32 +2483,32 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                                     <i className="fa-solid fa-door-open text-[10px]"></i> {t('explorer.hotel.view') || 'Ver ocupación'}
                                 </button>
                             )}
-                            <button
+                            {canManage && <button
                                 onClick={() => setShowRoomModal(hotel.id)}
                                 className="bg-white border-2 border-gray-100 px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-gray-500 hover:border-blue-500 hover:text-white hover:bg-blue-600 transition-all flex items-center gap-2 shadow-sm"
                             >
                                 <i className="fa-solid fa-plus text-[8px]"></i> {t('add.room')}
-                            </button>
-                            <button
+                            </button>}
+                            {canExcel && <button
                                 onClick={() => hotelReport(hotel.id)}
                                 disabled={reportBusy !== null}
                                 title={t('excel.hotel.one') || 'Excel de este hotel'}
                                 className="w-11 h-11 flex items-center justify-center rounded-xl bg-white border-2 border-gray-100 text-emerald-600 hover:border-emerald-400 hover:bg-emerald-600 hover:text-white transition-all disabled:opacity-50"
                             >
                                 <i className={`fa-solid ${reportBusy === hotel.id ? 'fa-spinner animate-spin' : 'fa-file-excel'} text-xs`}></i>
-                            </button>
-                            <button
+                            </button>}
+                            {canManage && <button
                                 onClick={() => handleDeleteHotel(hotel)}
                                 title={t('delete.hotel') || 'Eliminar hotel'}
                                 className="w-11 h-11 flex items-center justify-center rounded-xl bg-white border-2 border-gray-100 text-gray-400 hover:border-rose-400 hover:bg-rose-600 hover:text-white transition-all shadow-sm"
                             >
                                 <i className="fa-solid fa-trash-can text-xs"></i>
-                            </button>
+                            </button>}
                         </div>
                     </div>
 
                     <div className="p-4 sm:p-8 bg-gray-50/30">
-                        {(hotel.rooms && hotel.rooms.length > 0) && (
+                        {canManage && (hotel.rooms && hotel.rooms.length > 0) && (
                             <div className="mb-6 p-4 bg-white rounded-2xl border border-gray-100 shadow-sm flex flex-col lg:flex-row lg:items-center gap-3">
                                 <div className="flex items-center gap-3 min-w-0">
                                     <div className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-500 flex items-center justify-center text-sm shrink-0">
@@ -2403,7 +2564,7 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                             <div className="flex flex-col items-center justify-center py-16 text-gray-300 border-2 border-dashed border-gray-200 rounded-3xl bg-white/50">
                                 <i className="fa-solid fa-door-closed text-4xl mb-4 opacity-30"></i>
                                 <p className="text-xs font-black uppercase tracking-widest opacity-60">{t('no.rooms')}</p>
-                                <p className="text-[10px] uppercase tracking-widest opacity-40 mt-1">Añade habitaciones para comenzar</p>
+                                {canManage && <p className="text-[10px] uppercase tracking-widest opacity-40 mt-1">Añade habitaciones para comenzar</p>}
                             </div>
                         ) : (
                             <>
@@ -2425,7 +2586,7 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                                             selecting={selecting}
                                             selected={selecting && selectedRooms.has(room.id)}
                                             onActivate={activate}
-                                            onDelete={() => handleDeleteRoom(room)}
+                                            onDelete={canManage ? () => handleDeleteRoom(room) : undefined}
                                             t={t}
                                         />
                                     );
@@ -2671,6 +2832,8 @@ const FEE_OPERATORS = [
 function PricingPage({ conferenceId }: { conferenceId: number }) {
     const { addToast } = useToast();
     const { confirm } = useModal();
+    // Configuración › gestionar = base fee, rules and the re-pricing; «ver» only reads them.
+    const canManage = usePerms().can('settings', 'manage');
     const [fields, setFields] = useState<any[]>([]);
     const [rules, setRules] = useState<any[]>([]);
     const [baseFee, setBaseFee] = useState<string>('0');
@@ -2736,19 +2899,20 @@ function PricingPage({ conferenceId }: { conferenceId: number }) {
 
     return (
         <div className="h-full flex flex-col overflow-hidden">
+            <ReadOnlyNotice section="settings" className="mb-4 flex-shrink-0" />
             <div className="flex flex-wrap items-center justify-between gap-4 mb-6 flex-shrink-0">
                 <div>
                     <h2 className="text-2xl font-black text-gray-900 italic tracking-tighter">Precios</h2>
                     <p className="text-sm text-gray-400 font-medium">Cuota base + reglas según los campos del formulario</p>
                 </div>
-                <div className="flex items-center gap-2">
+                {canManage && <div className="flex items-center gap-2">
                     <button onClick={repriceAll} disabled={repricing} className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-5 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center gap-2 disabled:opacity-50" title="Aplica las reglas actuales a los inscritos existentes">
                         <i className={`fa-solid ${repricing ? 'fa-spinner animate-spin' : 'fa-arrows-rotate'}`}></i> Recalcular todos
                     </button>
                     <button onClick={openNew} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center gap-2 shadow-lg">
                         <i className="fa-solid fa-plus"></i> Nueva regla
                     </button>
-                </div>
+                </div>}
             </div>
 
             <div className="flex-1 overflow-y-auto modern-scrollbar min-h-0 space-y-6">
@@ -2758,10 +2922,10 @@ function PricingPage({ conferenceId }: { conferenceId: number }) {
                     <div className="flex items-center gap-3">
                         <div className="relative flex-1 max-w-xs">
                             <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold">$</span>
-                            <input type="number" min="0" value={baseFee} onChange={e => setBaseFee(e.target.value)}
-                                className="w-full border-2 border-gray-100 rounded-xl pl-8 pr-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none font-bold text-gray-900" />
+                            <input type="number" min="0" value={baseFee} onChange={e => setBaseFee(e.target.value)} disabled={!canManage}
+                                className="w-full border-2 border-gray-100 rounded-xl pl-8 pr-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none font-bold text-gray-900 disabled:opacity-70 disabled:cursor-not-allowed" />
                         </div>
-                        <button onClick={saveBase} disabled={savingBase} className="px-6 py-3 bg-gray-900 hover:bg-black text-white rounded-xl font-black text-xs uppercase tracking-widest transition disabled:opacity-50">{savingBase ? 'Guardando…' : 'Guardar'}</button>
+                        {canManage && <button onClick={saveBase} disabled={savingBase} className="px-6 py-3 bg-gray-900 hover:bg-black text-white rounded-xl font-black text-xs uppercase tracking-widest transition disabled:opacity-50">{savingBase ? 'Guardando…' : 'Guardar'}</button>}
                     </div>
                     <p className="text-[11px] text-gray-400 mt-2">Se aplica a todos; luego las reglas la fijan o la ajustan según los campos.</p>
                 </div>
@@ -2796,11 +2960,11 @@ function PricingPage({ conferenceId }: { conferenceId: number }) {
                                         </div>
                                     </div>
                                     <div className="flex items-center gap-2 shrink-0">
-                                        <button onClick={() => toggleRule(r)} title={r.enabled ? 'Desactivar' : 'Activar'} className={`w-11 h-6 rounded-full relative transition ${r.enabled ? 'bg-emerald-500' : 'bg-gray-200'}`}>
+                                        <button onClick={() => toggleRule(r)} disabled={!canManage} title={r.enabled ? 'Desactivar' : 'Activar'} className={`w-11 h-6 rounded-full relative transition disabled:cursor-not-allowed disabled:opacity-60 ${r.enabled ? 'bg-emerald-500' : 'bg-gray-200'}`}>
                                             <span className={`absolute top-1 w-4 h-4 bg-white rounded-full transition ${r.enabled ? 'left-6' : 'left-1'}`}></span>
                                         </button>
-                                        <button onClick={() => openEdit(r)} title="Editar" className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white transition"><i className="fa-solid fa-pen text-xs"></i></button>
-                                        <button onClick={() => delRule(r)} title="Eliminar" className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition"><i className="fa-solid fa-trash text-xs"></i></button>
+                                        {canManage && <button onClick={() => openEdit(r)} title="Editar" className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white transition"><i className="fa-solid fa-pen text-xs"></i></button>}
+                                        {canManage && <button onClick={() => delRule(r)} title="Eliminar" className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition"><i className="fa-solid fa-trash text-xs"></i></button>}
                                     </div>
                                 </div>
                             ))}
@@ -2896,9 +3060,10 @@ function ReportsPage({ conferenceId }: { conferenceId: number }) {
     const [showExcel, setShowExcel] = useState(false);
     const [hotelsBusy, setHotelsBusy] = useState(false);
     const { currentConference: reportConf } = useConference();
+    const codesOk = usePerms().can('inscriptions');
     const hotelsExcel = async () => {
         setHotelsBusy(true);
-        try { await downloadHotelReport(conferenceId, reportConf?.slug); }
+        try { await downloadHotelReport(conferenceId, reportConf?.slug, null, codesOk); }
         catch (e: any) { addToast(e?.message || 'Error', 'error'); }
         finally { setHotelsBusy(false); }
     };
@@ -3045,6 +3210,8 @@ function ReportsPage({ conferenceId }: { conferenceId: number }) {
 function FieldsPage({ conferenceId }: { conferenceId: number }) {
     const { t } = useI18n();
     const { addToast } = useToast();
+    // Configuración › gestionar = add / edit / delete / reorder fields and publish the form.
+    const canManage = usePerms().can('settings', 'manage');
     const [fields, setFields] = useState<ConferenceField[]>([]);
     const [conference, setConference] = useState<Conference | null>(null);
     const [loading, setLoading] = useState(true);
@@ -3136,13 +3303,13 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
     const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
 
     const handleDragStart = (idx: number) => {
-        if (isPublished) return;
+        if (isPublished || !canManage) return;
         setDraggedIndex(idx);
     };
 
     const handleDragOver = (e: React.DragEvent, idx: number) => {
         e.preventDefault();
-        if (isPublished || draggedIndex === null || draggedIndex === idx) return;
+        if (isPublished || !canManage || draggedIndex === null || draggedIndex === idx) return;
 
         const newFields = [...fields];
         const draggedItem = newFields[draggedIndex];
@@ -3153,7 +3320,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
     };
 
     const handleDragEnd = async () => {
-        if (isPublished) return;
+        if (isPublished || !canManage) return;
         setDraggedIndex(null);
         try {
             await Promise.all(fields.map((f, i) =>
@@ -3190,6 +3357,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
 
     return (
         <div className="space-y-10 animate-in fade-in duration-500">
+            <ReadOnlyNotice section="settings" />
             {/* Premium Publisher Card */}
             <div className={`group relative overflow-hidden rounded-[40px] p-10 border-2 transition-all duration-500 shadow-2xl ${isPublished
                 ? 'bg-emerald-50/50 border-emerald-100 shadow-emerald-100/30'
@@ -3228,7 +3396,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                         </p>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-4">
+                    {canManage && <div className="flex flex-wrap items-center gap-4">
                         <button
                             onClick={handlePublish}
                             className={`px-8 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest transition-all duration-500 flex items-center gap-3 shadow-xl transform active:scale-95 ${isPublished
@@ -3247,7 +3415,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                 <i className="fa-solid fa-plus text-[8px]"></i> {t('add.field')}
                             </button>
                         )}
-                    </div>
+                    </div>}
                 </div>
             </div>
 
@@ -3274,11 +3442,11 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                         ) : fields.map((field, idx) => (
                             <div
                                 key={field.id}
-                                draggable={!isPublished}
+                                draggable={!isPublished && canManage}
                                 onDragStart={() => handleDragStart(idx)}
                                 onDragOver={(e) => handleDragOver(e, idx)}
                                 onDragEnd={handleDragEnd}
-                                className={`bg-white border-2 rounded-2xl p-4 flex items-center justify-between group transition-all duration-300 shadow-sm ${draggedIndex === idx ? 'opacity-50 border-blue-500 scale-95 shadow-inner' : 'border-gray-50 hover:border-blue-500 hover:shadow-xl hover:-translate-y-1'} ${!isPublished ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                                className={`bg-white border-2 rounded-2xl p-4 flex items-center justify-between group transition-all duration-300 shadow-sm ${draggedIndex === idx ? 'opacity-50 border-blue-500 scale-95 shadow-inner' : 'border-gray-50 hover:border-blue-500 hover:shadow-xl hover:-translate-y-1'} ${!isPublished && canManage ? 'cursor-grab active:cursor-grabbing' : ''}`}
                             >
                                 <div className="flex items-center gap-4">
                                     <div className="w-10 h-10 rounded-xl bg-gray-50 text-gray-300 group-hover:bg-blue-50 group-hover:text-blue-500 flex items-center justify-center transition-colors">
@@ -3302,12 +3470,12 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                         </div>
                                     </div>
                                 </div>
-                                <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-all duration-300 translate-x-2 group-hover:translate-x-0">
+                                {canManage && <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-all duration-300 translate-x-2 group-hover:translate-x-0">
                                     <button onClick={() => { setFormData(field); setShowModal(true); }} className="w-9 h-9 flex items-center justify-center bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white rounded-xl transition-all shadow-sm" title="Editar"><i className="fa-solid fa-pen text-xs"></i></button>
                                     {!isPublished && !['first_name', 'last_name', 'email', 'phone', 'gender', 'location', 'family_group'].includes(field.name) && (
                                         <button onClick={() => handleDelete(field.id)} className="w-9 h-9 flex items-center justify-center bg-rose-50 text-rose-600 hover:bg-rose-600 hover:text-white rounded-xl transition-all shadow-sm" title="Eliminar"><i className="fa-solid fa-trash text-xs"></i></button>
                                     )}
-                                </div>
+                                </div>}
                             </div>
                         ))}
                     </div>
@@ -3658,6 +3826,9 @@ function PredicateEditor({ fields, value, onChange, label }: any) {
 function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId: number; focus?: { hotelId: number; roomId?: number | null } | null; onFocusConsumed?: () => void }) {
     const { t } = useI18n();
     const { addToast } = useToast();
+    // Hospedaje › gestionar = run / reset the engine, edit its rules, and move people in the explorer
+    // (drag & drop and pickers); «ver» explores who sleeps where without changing anything.
+    const canManage = usePerms().can('lodging', 'manage');
     const [rules, setRules] = useState<AssignmentRule[]>([]);
     const [fields, setFields] = useState<ConferenceField[]>([]);
     const [stats, setStats] = useState({ total: 0, assigned: 0, unassigned: 0 });
@@ -3875,6 +4046,7 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
 
     return (
         <div className="space-y-10 animate-in fade-in duration-500">
+            <ReadOnlyNotice section="lodging" />
             {/* Premium Header & Summary */}
             <div className="relative overflow-hidden bg-white rounded-3xl p-8 border border-gray-100 shadow-xl shadow-gray-100/50">
                 <div className="absolute top-0 right-0 -mr-16 -mt-16 w-64 h-64 bg-indigo-50/50 rounded-full blur-3xl"></div>
@@ -3909,7 +4081,7 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
                         </div>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-4">
+                    {canManage && <div className="flex flex-wrap items-center gap-4">
                         <button
                             onClick={handleReset}
                             className="px-6 py-4 text-rose-600 font-black text-[10px] uppercase tracking-widest hover:bg-rose-50 rounded-2xl transition-all border-2 border-transparent hover:border-rose-100 flex items-center gap-2 group"
@@ -3928,7 +4100,7 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
                             {running ? <i className="fa-solid fa-spinner fa-spin"></i> : <i className="fa-solid fa-play text-[8px]"></i>}
                             {t('run.auto.assignment')}
                         </button>
-                    </div>
+                    </div>}
                 </div>
             </div>
 
@@ -3998,6 +4170,7 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
                 suspendKeys={showRuleModal}
                 loadFailed={loadFailed}
                 onRetry={() => loadData()}
+                readOnly={!canManage}
             />
 
             <div className="bg-white rounded-3xl border border-gray-100 overflow-hidden shadow-xl shadow-gray-100/30">
@@ -4006,13 +4179,13 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
                         <h3 className="text-sm font-black text-gray-900 uppercase tracking-widest leading-none">{t('assignment.rules')}</h3>
                         <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-2">{t('assignment.rules.desc') || 'Criterios para la distribución de habitaciones'}</p>
                     </div>
-                    <button
+                    {canManage && <button
                         onClick={openNewRule}
                         className="px-5 py-2.5 bg-white border border-gray-200 rounded-xl text-[10px] font-black uppercase tracking-widest text-indigo-600 hover:bg-indigo-50 hover:border-indigo-200 transition-all flex items-center gap-2"
                     >
                         <i className="fa-solid fa-plus"></i>
                         {t('add.rule')}
-                    </button>
+                    </button>}
                 </div>
                 <div className="divide-y divide-gray-50">
                     {loading ? (
@@ -4060,16 +4233,17 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
                             <div className="flex items-center gap-4">
                                 <button
                                     onClick={() => handleToggleRule(rule)}
-                                    className={`w-12 h-6 rounded-full transition-all relative ${rule.enabled ? 'bg-emerald-500 shadow-lg shadow-emerald-100' : 'bg-gray-200'}`}
+                                    disabled={!canManage}
+                                    className={`w-12 h-6 rounded-full transition-all relative disabled:cursor-not-allowed disabled:opacity-60 ${rule.enabled ? 'bg-emerald-500 shadow-lg shadow-emerald-100' : 'bg-gray-200'}`}
                                 >
                                     <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all shadow-sm ${rule.enabled ? 'left-7' : 'left-1'}`}></div>
                                 </button>
-                                <button onClick={() => openEditRule(rule)} title={t('edit') || 'Editar'} className="w-10 h-10 rounded-xl bg-white border border-gray-100 text-gray-400 hover:text-indigo-600 hover:border-indigo-100 hover:bg-indigo-50 transition-all flex items-center justify-center">
+                                {canManage && <button onClick={() => openEditRule(rule)} title={t('edit') || 'Editar'} className="w-10 h-10 rounded-xl bg-white border border-gray-100 text-gray-400 hover:text-indigo-600 hover:border-indigo-100 hover:bg-indigo-50 transition-all flex items-center justify-center">
                                     <i className="fa-solid fa-pen text-sm"></i>
-                                </button>
-                                <button onClick={() => handleDeleteRule(rule)} title={t('delete')} className="w-10 h-10 rounded-xl bg-white border border-gray-100 text-gray-400 hover:text-rose-600 hover:border-rose-100 hover:bg-rose-50 transition-all flex items-center justify-center group/del">
+                                </button>}
+                                {canManage && <button onClick={() => handleDeleteRule(rule)} title={t('delete')} className="w-10 h-10 rounded-xl bg-white border border-gray-100 text-gray-400 hover:text-rose-600 hover:border-rose-100 hover:bg-rose-50 transition-all flex items-center justify-center group/del">
                                     <i className="fa-solid fa-trash-can text-sm group-hover/del:scale-110 transition-transform"></i>
-                                </button>
+                                </button>}
                             </div>
                         </div>
                     ))}
@@ -4172,9 +4346,9 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
 // Main Export
 export default function ConferenceManagerAdmin() {
     return (
-        <ConferenceProvider>
-            <ConferenceManagerContent />
-        </ConferenceProvider>
+        <PermsProvider>
+            <PermsGate />
+        </PermsProvider>
     );
 }
 
@@ -4182,7 +4356,14 @@ export default function ConferenceManagerAdmin() {
 // Locations Page Component
 function LocationsPage({ conferenceId }: { conferenceId: number }) {
     const { t } = useI18n();
+    const tx = useTx();
     const { addToast } = useToast();
+    // Localidades › gestionar = create / delete, coordinators' codes (rotate), seats, forms of payment,
+    // the lodging deadline and its exceptions, and the lodging review (validate / return / reopen).
+    // «ver» reads all of it (the review included) and can still copy a code or the portal link.
+    const locPerms = usePerms();
+    const canManage = locPerms.can('locations', 'manage');
+    const canDeadline = canManage || locPerms.can('settings', 'manage');
     const { conferences } = useConference();
     const currentConference = conferences.find(c => c.id === conferenceId);
 
@@ -4473,6 +4654,7 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
 
     return (
         <div className="space-y-10 animate-in fade-in duration-500">
+            <ReadOnlyNotice section="locations" alsoManage={['settings']} />
             {/* Premium Public Link Card */}
             <div className={`group relative overflow-hidden rounded-[40px] p-10 border-2 transition-all duration-500 shadow-2xl ${isPublished
                 ? 'bg-emerald-50/50 border-emerald-100 shadow-emerald-100/30'
@@ -4563,18 +4745,19 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                 type="date"
                                 value={deadlineInput}
                                 onChange={e => setDeadlineInput(e.target.value)}
-                                className="border-2 border-gray-100 rounded-xl px-4 py-3 bg-white focus:border-blue-500 outline-none text-sm font-bold text-gray-900"
+                                disabled={!canDeadline}
+                                className="border-2 border-gray-100 rounded-xl px-4 py-3 bg-white focus:border-blue-500 outline-none text-sm font-bold text-gray-900 disabled:opacity-70 disabled:cursor-not-allowed"
                                 aria-label={t('lodging.deadline') || 'Plazo de acomodación de hospedajes'}
                             />
-                            <button
+                            {canDeadline && <button
                                 type="button"
                                 onClick={() => saveDeadline(deadlineInput || null)}
                                 disabled={savingDeadline || !dirty}
                                 className="px-6 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-black text-[10px] uppercase tracking-widest shadow-lg shadow-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
                             >
                                 {t('save') || 'Guardar'}
-                            </button>
-                            {current && (
+                            </button>}
+                            {canDeadline && current && (
                                 <button
                                     type="button"
                                     onClick={() => saveDeadline(null)}
@@ -4594,12 +4777,12 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                     <h2 className="text-3xl font-black text-gray-900 italic tracking-tighter">{t('locations')}</h2>
                     <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1">Sedes regionales y grupos locales</p>
                 </div>
-                <button
+                {canManage && <button
                     onClick={() => setShowModal(true)}
                     className="bg-gray-900 text-white px-8 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-blue-600 transition-all duration-500 shadow-xl hover:shadow-blue-500/30 flex items-center gap-3 transform active:scale-95 translate-y-0 hover:-translate-y-1"
                 >
                     <i className="fa-solid fa-plus text-[8px]"></i> {t('new.location')}
-                </button>
+                </button>}
             </div>
 
             {loading ? (
@@ -4636,12 +4819,12 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                             </div>
                                         </div>
                                     </div>
-                                    <button
+                                    {canManage && <button
                                         onClick={() => handleDelete(loc.id)}
                                         className="w-10 h-10 flex items-center justify-center rounded-xl bg-gray-50 text-gray-300 hover:bg-rose-50 hover:text-rose-600 transition-all duration-300 opacity-0 group-hover:opacity-100 transform translate-x-4 group-hover:translate-x-0"
                                     >
                                         <i className="fa-solid fa-trash-can text-sm"></i>
-                                    </button>
+                                    </button>}
                                 </div>
 
                                 <div className="space-y-6 relative z-10">
@@ -4651,22 +4834,24 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                                 <div className="p-2 bg-white rounded-lg shadow-sm">
                                                     <i className="fa-solid fa-fingerprint text-xs text-blue-500"></i>
                                                 </div>
-                                                <span className="font-mono text-sm font-black text-gray-600 tracking-tighter uppercase">{loc.code}</span>
+                                                {loc.code
+                                                    ? <span className="font-mono text-sm font-black text-gray-600 tracking-tighter uppercase">{loc.code}</span>
+                                                    : <span className="text-[11px] font-bold text-gray-400 italic">{tx('perm.location.code.hidden', 'Código oculto: solo lo ve quien gestiona Localidades.')}</span>}
                                             </div>
                                             <div className="flex items-center gap-2">
-                                                <button
+                                                {loc.code && <button
                                                     onClick={() => handleCopyCode(loc.code, loc.id)}
                                                     className={`text-[10px] font-black uppercase tracking-widest px-4 py-2 rounded-xl transition-all duration-300 shadow-sm ${copiedId === loc.id ? 'bg-emerald-500 text-white' : 'bg-white text-blue-600 hover:bg-blue-600 hover:text-white'}`}
                                                 >
                                                     {copiedId === loc.id ? t('copied') || '¡Copiado!' : t('copy') || 'Copiar'}
-                                                </button>
-                                                <button
+                                                </button>}
+                                                {canManage && <button
                                                     onClick={() => handleRotateCode(loc)}
                                                     title={t('rotate.code') || 'Rotar código'}
                                                     className="w-9 h-9 flex items-center justify-center rounded-xl bg-white text-gray-400 hover:bg-amber-500 hover:text-white transition-all shadow-sm"
                                                 >
                                                     <i className="fa-solid fa-rotate text-xs"></i>
-                                                </button>
+                                                </button>}
                                             </div>
                                         </div>
                                     </div>
@@ -4706,7 +4891,7 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                                                 </div>
                                                             )}
                                                         </div>
-                                                        {!editing && (
+                                                        {!editing && canManage && (
                                                             <button
                                                                 onClick={() => setCapacityEdit({ id: loc.id, value: cap === null ? String(Math.max(1, inscribed)) : String(cap) })}
                                                                 title={t('edit.capacity') || 'Editar cupo'}
@@ -4739,8 +4924,8 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                                                     key={m}
                                                                     type="button"
                                                                     onClick={() => handleToggleMethod(loc, m)}
-                                                                    disabled={savingMethods === loc.id}
-                                                                    title={on ? (t('payment.method.disable') || 'Deshabilitar') : (t('payment.method.enable') || 'Habilitar')}
+                                                                    disabled={savingMethods === loc.id || !canManage}
+                                                                    title={!canManage ? tx('perm.readonly.short', 'Solo lectura') : on ? (t('payment.method.disable') || 'Deshabilitar') : (t('payment.method.enable') || 'Habilitar')}
                                                                     className={`text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-lg border transition-all disabled:opacity-50 ${on ? 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100' : 'bg-gray-50 border-gray-200 text-gray-400 line-through hover:bg-gray-100'}`}
                                                                 >
                                                                     <i className={`fa-solid ${on ? 'fa-check' : 'fa-ban'} mr-1`}></i>{m}
@@ -4823,7 +5008,7 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                                             <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">{t('lodging.permission') || 'Permiso fuera de plazo'}</div>
                                                             <span className={`inline-flex items-center mt-1 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest ${toneCls[tone]}`}>{label}</span>
                                                         </div>
-                                                        {!editing && (
+                                                        {!editing && canManage && (
                                                             <div className="flex flex-wrap items-center justify-end gap-1.5 shrink-0">
                                                                 {(!granted || expired) && (
                                                                     <button type="button" onClick={() => setPermEdit({ id: loc.id, until: '' })} disabled={savingPerm === loc.id}
@@ -4956,7 +5141,10 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
 
                                         {/* Actions by status */}
                                         <div className={`rounded-2xl border p-5 ${status === 'submitted' ? 'bg-amber-50/40 border-amber-200' : status === 'validated' ? 'bg-emerald-50/40 border-emerald-200' : 'bg-gray-50 border-gray-100'}`}>
-                                            {status === 'submitted' && (
+                                            {status === 'submitted' && !canManage && (
+                                                <p className="text-sm text-amber-800 font-medium"><i className="fa-solid fa-hourglass-half mr-2"></i>{tx('perm.lodging.review.readonly', 'Enviado por el encargado y pendiente de validación. Tu rol solo puede consultarlo.')}</p>
+                                            )}
+                                            {status === 'submitted' && canManage && (
                                                 <div className="space-y-4">
                                                     <div className="flex flex-wrap items-center gap-3">
                                                         <button
@@ -5003,13 +5191,13 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                             {status === 'validated' && (
                                                 <div className="flex flex-wrap items-center gap-3">
                                                     <p className="text-sm text-emerald-800 font-medium flex-1"><i className="fa-solid fa-circle-check mr-2"></i>{t('lodging.status.validated') || 'Validado'}</p>
-                                                    <button
+                                                    {canManage && <button
                                                         onClick={handleReopen}
                                                         disabled={reviewBusy}
                                                         className="px-6 py-3 rounded-xl border-2 border-emerald-300 bg-white text-emerald-700 font-black text-[10px] uppercase tracking-widest hover:bg-emerald-50 transition-all disabled:opacity-50 flex items-center gap-2"
                                                     >
                                                         <i className="fa-solid fa-lock-open"></i> {t('lodging.reopen') || 'Reabrir'}
-                                                    </button>
+                                                    </button>}
                                                 </div>
                                             )}
                                             {status === 'draft' && (
