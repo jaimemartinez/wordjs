@@ -87,10 +87,13 @@ async function main() {
 
     // 1) Generate this node's private key + CSR with openssl (no node deps needed pre-install). The CN we
     //    request is cosmetic — the gateway FORCES CN=<role> from the token, so it cannot be spoofed here.
+    //    `-sha256` is explicit because sha256WithRSAEncryption is the only CSR signature algorithm the
+    //    gateway accepts (gateway/src/cluster-ca.js); a host openssl.cnf with another default_md must
+    //    not turn into a refused enrolment.
     console.log(`🔑 Generating ${role} keypair + CSR (openssl)...`);
     const keyPath = path.join(certsDir, `${role}.key`);
     const csrPath = path.join(os.tmpdir(), `${role}-${Date.now()}.csr`);
-    execFileSync('openssl', ['req', '-newkey', 'rsa:2048', '-nodes', '-keyout', keyPath, '-out', csrPath, '-subj', `/CN=${role}`], { stdio: 'ignore' });
+    execFileSync('openssl', ['req', '-newkey', 'rsa:2048', '-nodes', '-sha256', '-keyout', keyPath, '-out', csrPath, '-subj', `/CN=${role}`], { stdio: 'ignore' });
     try { fs.chmodSync(keyPath, 0o600); } catch { /* Windows */ }
     const csrPem = fs.readFileSync(csrPath, 'utf8');
     fs.unlinkSync(csrPath);

@@ -1,0 +1,13 @@
+{
+  "$comment": "Read by scripts/ci-audit.mjs. One entry = ONE npm advisory id on ONE package, for an advisory with no fixed release anywhere. Each entry expires at most 60 days after it was added; when it expires the audit blocks again. Remove the entry as soon as a fixed release exists.",
+  "exceptions": [
+    {
+      "package": "node-forge",
+      "advisory": 1240912,
+      "url": "https://github.com/advisories/GHSA-86w9-cpqp-85rv",
+      "added": "2026-10-06",
+      "expires": "2026-11-05",
+      "reason": "No fixed release: every node-forge version (latest 1.4.0) is affected, and acme-client 5.4.0 (latest) depends on it. The flaw is in RSA PKCS#1 v1.5 signature VERIFICATION. WordJS's only call to it was the enrollment CSR self-signature check in gateway/src/cluster-ca.js, which now verifies with Node's native crypto (OpenSSL) instead. The remaining uses only generate keys, build and sign certificates and CSRs, and parse PEM (gateway cluster CA, setup, backend certManager and system-health, acme-client's forge helpers), none of which verify a signature with node-forge."
+    }
+  ]
+}
