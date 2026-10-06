@@ -92,6 +92,18 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   women-only or men-only room the picker lists that gender first and flags the others. Everything the
   previous board did still works inside the explorer (dragging people from the unassigned panel onto a hotel
   or room, the location filter, pool rooms), and the lodging tile in the attendee view jumps to the room.
+- **Conference Manager 2.14.0 — meals per location and per person, delivered with the attendee's barcode.** A
+  new *Alimentación* tab defines meal services (breakfast, lunch or dinner on a given day, created in bulk
+  from a date range) and a location × service matrix that says which locations get which meals — all of
+  them or only some. Each attendee can be adjusted per service (inherit from the location, include, exclude).
+  The *Entrega* screen records deliveries from the registration-code barcode: a USB or Bluetooth scanner
+  types into a large always-focused field, and a full-screen *scanner mode* turns a phone into the reader
+  (camera with torch and camera switch, Code 128 decoding via the browser's BarcodeDetector or a built-in
+  decoder on iPhone and Firefox, screen kept awake, beep and vibration). Every scan gets a clear verdict —
+  delivered, already received (with the time and who recorded it), not entitled (with *Deliver anyway*,
+  recorded as authorized), cancelled or unknown code — and the server guarantees one delivery per person and
+  service even when two phones scan at once. Live counters, the latest deliveries with undo, and a per-service
+  report (per location, pending / served, Excel export) complete it.
 
 ### Fixed
 

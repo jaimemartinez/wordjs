@@ -13,6 +13,7 @@ import { conferenceApi, PAYMENT_METHODS, Conference, Inscription, Hotel, Room, L
 import { useModal } from "@/contexts/ModalContext";
 import TransportPage from "./TransportPage";
 import AccountingPage from "./AccountingPage";
+import MealsPage from "./MealsPage";
 import { code128Svg, code128Png } from "../lib/barcode";
 import { buildXlsx, downloadXlsx } from "../lib/xlsx";
 import { availableColumns, defaultColumnKeys, filterRoster, buildRosterSheet, buildHotelReport, exportFilename, transportByPerson } from "../lib/exports";
@@ -27,7 +28,7 @@ import { fieldVal, fillVars, lodgingStatusMeta, personDisplayName, withName, ind
 // Register plugin translations
 registerTranslations(translations);
 
-type View = 'list' | 'dashboard' | 'inscriptions' | 'lodging' | 'transport' | 'accounting' | 'locations' | 'reports' | 'assignment' | 'fields' | 'pricing';
+type View = 'list' | 'dashboard' | 'inscriptions' | 'lodging' | 'transport' | 'meals' | 'accounting' | 'locations' | 'reports' | 'assignment' | 'fields' | 'pricing';
 
 // LODGING_STATUS_META / lodgingStatusMeta and withName ({name} placeholder; t() has no interpolation)
 // moved to lib/lodgingView.ts in 2.13.0.
@@ -42,7 +43,7 @@ function ConferenceManagerContent() {
     // Initialize state from local storage
     useEffect(() => {
         const savedView = localStorage.getItem('conference-manager:view') as View;
-        if (savedView && ['list', 'dashboard', 'inscriptions', 'lodging', 'transport', 'locations', 'assignment', 'fields', 'pricing', 'reports', 'accounting'].includes(savedView)) {
+        if (savedView && ['list', 'dashboard', 'inscriptions', 'lodging', 'transport', 'meals', 'locations', 'assignment', 'fields', 'pricing', 'reports', 'accounting'].includes(savedView)) {
             setViewState(savedView);
         }
     }, []);
@@ -115,6 +116,7 @@ function ConferenceManagerContent() {
                         { name: t('inscriptions'), view: 'inscriptions' as View, icon: 'fa-users' },
                         { name: t('lodging'), view: 'lodging' as View, icon: 'fa-bed' },
                         { name: t('transport') || 'Transporte', view: 'transport' as View, icon: 'fa-bus' },
+                        { name: t('meals') || 'Alimentación', view: 'meals' as View, icon: 'fa-utensils' },
                         { name: t('locations'), view: 'locations' as View, icon: 'fa-map-marker-alt' },
                         { name: t('assignment'), view: 'assignment' as View, icon: 'fa-wand-magic-sparkles' },
                         { name: t('fields'), view: 'fields' as View, icon: 'fa-list-check' },
@@ -147,6 +149,7 @@ function ConferenceManagerContent() {
                     {view === 'inscriptions' && <InscriptionsPage conferenceId={currentConference.id} />}
                     {view === 'lodging' && <LodgingPage conferenceId={currentConference.id} onOpenExplorer={openLodgingExplorer} />}
                     {view === 'transport' && <TransportPage conferenceId={currentConference.id} slug={currentConference.slug} />}
+                    {view === 'meals' && <MealsPage conferenceId={currentConference.id} slug={currentConference.slug} conference={currentConference} />}
                     {view === 'accounting' && <AccountingPage conferenceId={currentConference.id} slug={currentConference.slug} />}
                     {view === 'locations' && <LocationsPage conferenceId={currentConference.id} />}
                     {view === 'assignment' && <AssignmentPage conferenceId={currentConference.id} focus={lodgingFocus} onFocusConsumed={() => setLodgingFocus(null)} />}

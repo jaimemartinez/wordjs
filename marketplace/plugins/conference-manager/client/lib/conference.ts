@@ -1,5 +1,6 @@
 // @ts-nocheck — backend plugin client source; bundled by the plugin loader, not type-checked by the frontend.
 import { apiGet, apiPost, apiPut, apiDelete } from "../../../../../frontend/src/lib/api";
+import type { MealService } from "./meals";
 
 export interface Conference {
     id: number;
@@ -346,6 +347,40 @@ export interface TransportPayment {
 }
 export type BusInput = { name: string; origin?: string; destination?: string; departure?: string; capacity: number | string; price: number | string; notes?: string };
 
+// Meals (2.14.0) — shapes of the /meals routes (see lib/meals.ts for the helpers).
+export type MealServiceInput = { service_date: string; meal: string; label?: string | null; start_time?: string | null; end_time?: string | null; notes?: string | null };
+export type MealsOverview = {
+    services: MealService[];
+    locations: { id: number; name: string }[];
+    plan: { location_id: number; service_id: number }[];
+    overrides_count: number;
+};
+export type MealPerson = {
+    id: number; name: string; first_name?: string; last_name?: string; location: string | null; location_id: number | null;
+    family_group: string | null; reg_code: string | null; document_number: string | null; status: string;
+    entitled: number; delivered: number; includes: number; excludes: number;
+};
+export type MealPersonService = {
+    id: number; service_date: string; meal: string; label: string | null; start_time: string | null; end_time: string | null;
+    entitled: boolean | number; source: 'location' | 'include' | 'exclude' | 'none'; override: 'include' | 'exclude' | null; planned: boolean | number;
+    delivered_at: string | null; delivery_id: number | null; method: string | null; delivered_by: string | null;
+};
+export type MealPersonDetail = {
+    person: { id: number; name: string; location: string | null; location_id: number | null; family_group: string | null; reg_code: string | null; status: string; conference_id: number };
+    services: MealPersonService[];
+};
+export type MealVerdictPerson = { id: number; name: string; location: string | null; location_id: number | null; family_group: string | null; reg_code: string | null };
+export type MealVerdict = {
+    result: 'delivered' | 'already' | 'not_entitled' | 'cancelled' | 'unknown' | 'other_conference';
+    service_id: number;
+    person?: MealVerdictPerson;
+    delivery_id?: number; delivered_at?: string; delivered_by?: string | null; method?: string | null; note?: string | null; source?: string;
+};
+export type MealDeliveryRow = {
+    delivery_id: number; inscription_id: number; name: string; location: string | null; location_id: number | null;
+    family_group: string | null; reg_code: string | null; delivered_at: string; delivered_by: string | null; method: string | null; note: string | null;
+};
+
 export const conferenceApi = {
     // Conferences
     getConferences: () => apiGet<Conference[]>('/plugin/conference-manager/list'),
@@ -450,6 +485,45 @@ export const conferenceApi = {
     createLedgerEntry: (conferenceId: number, data: { kind: 'income' | 'expense'; date: string; description: string; amount: number; category?: string; method?: string | null; reference?: string }) => apiPost<{ success: boolean; id: number }>('/plugin/conference-manager/accounting/entries', { ...data, conference_id: conferenceId }),
     updateLedgerEntry: (id: number, data: Record<string, unknown>) => apiPut(`/plugin/conference-manager/accounting/entries/${id}`, data),
     deleteLedgerEntry: (id: number) => apiDelete(`/plugin/conference-manager/accounting/entries/${id}`),
+
+    // Meals (2.14.0) — services (one meal on one day), the location plan, per-person overrides and
+    // deliveries. Entitlement and every counter are computed by the server.
+    getMeals: (conferenceId: number) => apiGet<MealsOverview>(`/plugin/conference-manager/meals?conference_id=${conferenceId}`),
+    createMealService: (conferenceId: number, data: MealServiceInput & { location_ids?: number[] | null }) =>
+        apiPost<{ success: boolean; id: number; planned: number }>('/plugin/conference-manager/meals/services', { ...data, conference_id: conferenceId }),
+    /** Creates the missing date × meal combinations (≤ 60 dates); existing ones are skipped, their plan untouched. */
+    bulkCreateMealServices: (conferenceId: number, data: { dates: string[]; meals: string[]; location_ids?: number[] | null }) =>
+        apiPost<{ success: boolean; created: number; skipped: number; ids: number[] }>('/plugin/conference-manager/meals/services/bulk', { ...data, conference_id: conferenceId }),
+    updateMealService: (id: number, data: Partial<Pick<MealServiceInput, 'label' | 'start_time' | 'end_time' | 'notes'>>) =>
+        apiPut<{ success: boolean }>(`/plugin/conference-manager/meals/services/${id}`, data),
+    /** Without `force` a service with deliveries answers 409 (requiresConfirm). */
+    deleteMealService: (id: number, force = false) =>
+        apiDelete<{ success: boolean; deleted_deliveries: number }>(`/plugin/conference-manager/meals/services/${id}${force ? '?force=1' : ''}`),
+    setLocationMealPlan: (conferenceId: number, locationId: number, serviceIds: number[]) =>
+        apiPut<{ success: boolean; location_id: number; service_ids: number[] }>('/plugin/conference-manager/meals/plan', { conference_id: conferenceId, location_id: locationId, service_ids: serviceIds }),
+    setServiceMealPlan: (serviceId: number, locationIds: number[]) =>
+        apiPut<{ success: boolean; service_id: number; location_ids: number[] }>(`/plugin/conference-manager/meals/services/${serviceId}/plan`, { location_ids: locationIds }),
+    toggleMealPlan: (locationId: number, serviceId: number, enabled: boolean) =>
+        apiPost<{ success: boolean }>('/plugin/conference-manager/meals/plan/toggle', { location_id: locationId, service_id: serviceId, enabled }),
+    /** `location_id`: a number, or 'none' for attendees without a location. The server ignores case and accents in `q`. */
+    getMealPeople: (conferenceId: number, params: { q?: string; location_id?: number | 'none' | ''; limit?: number; offset?: number } = {}) => {
+        const q = new URLSearchParams({ conference_id: String(conferenceId) });
+        if (params.q) q.set('q', params.q);
+        if (params.location_id !== undefined && params.location_id !== '') q.set('location_id', String(params.location_id));
+        if (params.limit) q.set('limit', String(params.limit));
+        if (params.offset) q.set('offset', String(params.offset));
+        return apiGet<{ people: MealPerson[]; total: number; limit: number; offset: number; services_count: number }>(`/plugin/conference-manager/meals/people?${q.toString()}`);
+    },
+    getMealPerson: (inscriptionId: number) => apiGet<MealPersonDetail>(`/plugin/conference-manager/meals/inscriptions/${inscriptionId}`),
+    setMealOverride: (inscriptionId: number, data: { service_id?: number; service_ids?: number[]; mode: 'include' | 'exclude' | 'inherit' }) =>
+        apiPut<{ success: boolean }>(`/plugin/conference-manager/meals/inscriptions/${inscriptionId}/overrides`, data),
+    /** Always 200 with a verdict for normal outcomes; 404 = the service no longer exists. Send the RAW scanned text as `code`. */
+    deliverMeal: (data: { service_id: number; code?: string; inscription_id?: number; force?: boolean; note?: string }) =>
+        apiPost<MealVerdict>('/plugin/conference-manager/meals/deliver', data),
+    undoMealDelivery: (deliveryId: number) => apiDelete<{ success: boolean }>(`/plugin/conference-manager/meals/deliveries/${deliveryId}`),
+    getMealServiceStats: (serviceId: number) => apiGet<{ service_id: number; entitled: number; delivered: number; pending: number; overrides_delivered: number; by_location: any[] }>(`/plugin/conference-manager/meals/services/${serviceId}/stats`),
+    getMealServiceDeliveries: (serviceId: number, limit = 20) => apiGet<{ service_id: number; deliveries: MealDeliveryRow[] }>(`/plugin/conference-manager/meals/services/${serviceId}/deliveries?limit=${limit}`),
+    getMealServiceReport: (serviceId: number) => apiGet<any>(`/plugin/conference-manager/meals/services/${serviceId}/report`),
 
     // Reports
     getReportSummary: (conferenceId: number) => apiGet<ReportSummary>(`/plugin/conference-manager/reports/summary?conference_id=${conferenceId}`),

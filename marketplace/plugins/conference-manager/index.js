@@ -20,7 +20,7 @@
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.13.0',
+    version: '2.14.0',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -47,6 +47,10 @@ exports.init = async function (wordjs) {
         tickets: `${P}transport_tickets`,
         transportPayments: `${P}transport_payments`,
         ledger: `${P}ledger_entries`,
+        mealServices: `${P}meal_services`,
+        mealPlan: `${P}meal_location_plan`,
+        mealOverrides: `${P}meal_overrides`,
+        mealDeliveries: `${P}meal_deliveries`,
     };
 
     // Schema-follows-form: the registration FORM is the source of truth. Every form field owns a real
@@ -109,6 +113,12 @@ exports.init = async function (wordjs) {
         } catch (e) {
             // Ignore if index already exists / unsupported.
         }
+    };
+    // A UNIQUE index is load-bearing (it is what makes a write race-free without transactions), so a
+    // failure is logged instead of swallowed.
+    const createUniqueIndex = async (name, table, cols) => {
+        try { await db.run(`CREATE UNIQUE INDEX IF NOT EXISTS ${name} ON ${table} (${cols})`); }
+        catch (e) { console.warn(`[conference-manager] unique index ${name} skipped:`, e.message); }
     };
 
     /**
@@ -336,6 +346,58 @@ exports.init = async function (wordjs) {
             'created_at DATETIME DEFAULT CURRENT_TIMESTAMP',
             `FOREIGN KEY (conference_id) REFERENCES ${T.conferences}(id) ON DELETE CASCADE`
         ]);
+
+        // 12. Meals (2.14.0). A SERVICE is one meal on one day of a conference (unique per conference). The
+        // LOCATION PLAN says which services each location gets; a per-attendee OVERRIDE adds ('include') or
+        // removes ('exclude') one service against that plan; a DELIVERY records that an attendee received a
+        // service — at most one per (service, attendee), guaranteed by a UNIQUE index (no transactions on
+        // the bridge, so the index — not a read-then-write — is what stops a double scan). Indexed text
+        // columns are VARCHAR: MySQL cannot index TEXT.
+        await db.createTable(T.mealServices, [
+            'id INT_PK',
+            'conference_id INT NOT NULL',
+            'service_date VARCHAR(10) NOT NULL',   // YYYY-MM-DD
+            'meal VARCHAR(16) NOT NULL',           // desayuno | almuerzo | cena
+            'label TEXT',
+            'start_time VARCHAR(5)',               // HH:MM, NULL = the meal's default window (client side)
+            'end_time VARCHAR(5)',
+            'notes TEXT',
+            'created_at DATETIME DEFAULT CURRENT_TIMESTAMP',
+            `FOREIGN KEY (conference_id) REFERENCES ${T.conferences}(id) ON DELETE CASCADE`
+        ]);
+        await db.createTable(T.mealPlan, [
+            'id INT_PK',
+            'location_id INT NOT NULL',
+            'service_id INT NOT NULL',
+            `FOREIGN KEY (location_id) REFERENCES ${T.locations}(id) ON DELETE CASCADE`,
+            `FOREIGN KEY (service_id) REFERENCES ${T.mealServices}(id) ON DELETE CASCADE`
+        ]);
+        await db.createTable(T.mealOverrides, [
+            'id INT_PK',
+            'inscription_id INT NOT NULL',
+            'service_id INT NOT NULL',
+            'mode VARCHAR(8) NOT NULL',            // include | exclude (no row = inherit from the location)
+            `FOREIGN KEY (inscription_id) REFERENCES ${T.inscriptions}(id) ON DELETE CASCADE`,
+            `FOREIGN KEY (service_id) REFERENCES ${T.mealServices}(id) ON DELETE CASCADE`
+        ]);
+        await db.createTable(T.mealDeliveries, [
+            'id INT_PK',
+            'service_id INT NOT NULL',
+            'inscription_id INT NOT NULL',
+            'delivered_at DATETIME DEFAULT CURRENT_TIMESTAMP',
+            'delivered_by TEXT',
+            'method VARCHAR(12)',                  // scan | manual | override
+            'note TEXT',
+            `FOREIGN KEY (service_id) REFERENCES ${T.mealServices}(id) ON DELETE CASCADE`,
+            `FOREIGN KEY (inscription_id) REFERENCES ${T.inscriptions}(id) ON DELETE CASCADE`
+        ]);
+        await createUniqueIndex(`${P}uidx_meal_services_day`, T.mealServices, 'conference_id, service_date, meal');
+        await createUniqueIndex(`${P}uidx_meal_plan_loc_svc`, T.mealPlan, 'location_id, service_id');
+        await createIndex(`${P}idx_meal_plan_service`, T.mealPlan, 'service_id');
+        await createUniqueIndex(`${P}uidx_meal_overrides_ins_svc`, T.mealOverrides, 'inscription_id, service_id');
+        await createIndex(`${P}idx_meal_overrides_service`, T.mealOverrides, 'service_id');
+        await createUniqueIndex(`${P}uidx_meal_deliveries_svc_ins`, T.mealDeliveries, 'service_id, inscription_id');
+        await createIndex(`${P}idx_meal_deliveries_ins`, T.mealDeliveries, 'inscription_id');
 
         await createIndex(`${P}idx_inscriptions_conference`, T.inscriptions, 'conference_id');
         await createIndex(`${P}idx_inscriptions_room`, T.inscriptions, 'room_id');
@@ -757,6 +819,20 @@ exports.init = async function (wordjs) {
     } catch (e) {
         console.warn('[conference-manager] data hygiene skipped:', e.message);
     }
+    // (b2) Meals (2.14.0): the FKs cascade, but a driver/session with foreign keys off would leave rows
+    //      pointing at a deleted conference / location / attendee / service. Each statement reads ANOTHER
+    //      table in its subquery (MySQL error 1093 forbids reading the target table), children first.
+    try {
+        await db.run(`DELETE FROM ${T.mealServices} WHERE conference_id NOT IN (SELECT id FROM ${T.conferences} )`);
+        await db.run(`DELETE FROM ${T.mealDeliveries} WHERE service_id NOT IN (SELECT id FROM ${T.mealServices} )`);
+        await db.run(`DELETE FROM ${T.mealDeliveries} WHERE inscription_id NOT IN (SELECT id FROM ${T.inscriptions} )`);
+        await db.run(`DELETE FROM ${T.mealOverrides} WHERE service_id NOT IN (SELECT id FROM ${T.mealServices} )`);
+        await db.run(`DELETE FROM ${T.mealOverrides} WHERE inscription_id NOT IN (SELECT id FROM ${T.inscriptions} )`);
+        await db.run(`DELETE FROM ${T.mealPlan} WHERE service_id NOT IN (SELECT id FROM ${T.mealServices} )`);
+        await db.run(`DELETE FROM ${T.mealPlan} WHERE location_id NOT IN (SELECT id FROM ${T.locations} )`);
+    } catch (e) {
+        console.warn('[conference-manager] meals hygiene skipped:', e.message);
+    }
     // (c) Registration codes (2.9.0): unique index + a code for every attendee that has none — run at
     //     the end of init (see below), once the code generator exists.
 
@@ -859,6 +935,17 @@ exports.init = async function (wordjs) {
     const withAssignmentLock = (fn) => {
         const run = assignmentLock.then(fn, fn);
         assignmentLock = run.then(() => {}, () => {});
+        return run;
+    };
+    // Meals (2.14.0): plan / override writes are read-then-write sets, and so is the deletion of what they
+    // hang from (a conference, location, attendee or service). Both run under this lock and re-read their
+    // parents INSIDE it, so a plan or override row can never be written for a parent deleted meanwhile
+    // (no transactions on the bridge). Deliveries are NOT serialised: their UNIQUE index decides, and the
+    // deliver route re-checks its parents after inserting (see POST /meals/deliver).
+    let mealsLock = Promise.resolve();
+    const withMealsLock = (fn) => {
+        const run = mealsLock.then(fn, fn);
+        mealsLock = run.then(() => {}, () => {});
         return run;
     };
 
@@ -1136,7 +1223,12 @@ exports.init = async function (wordjs) {
 
     http.route('delete', '/:id', { auth: true, admin: true }, async (req, res) => {
         try {
-            await db.run(`DELETE FROM ${T.conferences} WHERE id = ?`, [req.params.id]);
+            // Meals (2.14.0): the FKs cascade; the explicit deletes keep it so with foreign keys off too.
+            // Parent first, under the meals lock (see withMealsLock / deleteMealsOfConference).
+            await withMealsLock(async () => {
+                await db.run(`DELETE FROM ${T.conferences} WHERE id = ?`, [req.params.id]);
+                await deleteMealsOfConference(req.params.id);
+            });
             res.json({ success: true });
         } catch (e) { sendError(res, e); }
     });
@@ -1600,10 +1692,19 @@ exports.init = async function (wordjs) {
             await db.run(`UPDATE ${T.inscriptions} SET room_id = NULL WHERE location_id = ? AND room_id IN (SELECT id FROM ${T.rooms} WHERE location_id = ?)`, [id, id]);
             await db.run(`UPDATE ${T.rooms} SET location_id = NULL WHERE location_id = ?`, [id]);
             await db.run(`DELETE FROM ${T.rules} WHERE location_id = ?`, [id]);
-            // No FK can be added by ALTER in SQLite: detach the attendees explicitly. The label is kept
-            // for history (reports/CSV still show where they registered).
-            await db.run(`UPDATE ${T.inscriptions} SET location_id = NULL WHERE location_id = ?`, [id]);
-            await db.run(`DELETE FROM ${T.locations} WHERE id = ?`, [id]);
+            // Under the meals lock: a plan write re-reads the location inside that lock, so it can never
+            // add a plan row for this location once it is gone.
+            await withMealsLock(async () => {
+                // No FK can be added by ALTER in SQLite: detach the attendees explicitly. The label is kept
+                // for history (reports/CSV still show where they registered; the meals views show the
+                // live location of location_id instead).
+                await db.run(`UPDATE ${T.inscriptions} SET location_id = NULL WHERE location_id = ?`, [id]);
+                await db.run(`DELETE FROM ${T.locations} WHERE id = ?`, [id]);
+                // Meals (2.14.0): the location's plan goes with it (parent first; the FK cascades too); its
+                // attendees keep only their explicit per-person includes (and every delivery already made —
+                // that is history).
+                await db.run(`DELETE FROM ${T.mealPlan} WHERE location_id = ?`, [id]);
+            });
             res.json({ success: true });
         } catch (e) { sendError(res, e); }
     });
@@ -2151,6 +2252,796 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
 
+    // === MEALS (2.14.0) ===
+    // A service is one meal (desayuno | almuerzo | cena) on one day. Entitlement of attendee I to service S
+    // is computed HERE, never on the client:
+    //   I is not cancelled AND (override(I,S) = include OR (override(I,S) != exclude AND S is in the plan
+    //   of I's location)).
+    // An attendee without a location only gets explicit includes. Deliveries are unique per (service,
+    // attendee) by index; POST /meals/deliver always answers 200 with a verdict so the kitchen scanner never
+    // handles HTTP errors for a normal outcome. Every id is checked against the conference it belongs to.
+    const MEAL_ROUTE = { auth: true, admin: true };
+    const MEALS = ['desayuno', 'almuerzo', 'cena'];
+    const MEAL_SET = new Set(MEALS);
+    const OVERRIDE_MODES = new Set(['include', 'exclude']);
+    const MEAL_MAX_BULK_DATES = 60;
+    const MEAL_MAX_IDS = 1000;
+    const MEAL_PEOPLE_MAX = 100;
+    const mealRank = (m) => { const i = MEALS.indexOf(m); return i === -1 ? MEALS.length : i; };
+    const sortServices = (list) => list.sort((a, b) => String(a.service_date).localeCompare(String(b.service_date)) || mealRank(a.meal) - mealRank(b.meal) || Number(a.id) - Number(b.id));
+    // A real calendar day written YYYY-MM-DD (2026-02-30 is refused), or null.
+    const parseDay = (v) => {
+        if (typeof v !== 'string') return null;
+        const s = v.trim();
+        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+        if (!m) return null;
+        const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+        return d.getUTCFullYear() === Number(m[1]) && d.getUTCMonth() === Number(m[2]) - 1 && d.getUTCDate() === Number(m[3]) ? s : null;
+    };
+    // HH:MM (H:MM and HH:MM:SS from a time input are accepted and normalized). undefined = absent, '' → null.
+    const parseTime = (v, label) => {
+        if (v === undefined) return undefined;
+        if (v === null || String(v).trim() === '') return null;
+        const m = /^([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?$/.exec(String(v).trim());
+        if (!m) throw httpError(400, `Hora inválida (${label}); usa HH:MM.`);
+        return `${m[1].padStart(2, '0')}:${m[2]}`;
+    };
+    const parseMeal = (v) => {
+        const m = typeof v === 'string' ? v.trim().toLowerCase() : '';
+        if (!MEAL_SET.has(m)) throw httpError(400, 'Comida inválida (desayuno, almuerzo o cena).');
+        return m;
+    };
+    const mealText = (v, max) => (v === undefined ? undefined : (v === null || String(v).trim() === '' ? null : String(v).trim().slice(0, max)));
+    // Body → the editable columns of a service (date/meal only when creating).
+    function parseServiceBody(body, partial) {
+        const out = {};
+        if (!partial) {
+            const day = parseDay(body.service_date);
+            if (!day) throw httpError(400, 'Fecha del servicio inválida (usa AAAA-MM-DD).');
+            out.service_date = day;
+            out.meal = parseMeal(body.meal);
+        }
+        const label = mealText(body.label, 120); if (label !== undefined) out.label = label;
+        const notes = mealText(body.notes, 1000); if (notes !== undefined) out.notes = notes;
+        const start = parseTime(body.start_time, 'inicio'); if (start !== undefined) out.start_time = start;
+        const end = parseTime(body.end_time, 'fin'); if (end !== undefined) out.end_time = end;
+        return out;
+    }
+    const assertWindow = (start, end) => {
+        if (start && end && end <= start) throw httpError(400, 'La hora de fin del servicio debe ser posterior a la de inicio.');
+    };
+    // A list of positive integer ids from a body value (deduplicated). Throws 400.
+    const parseIdList = (raw, what) => {
+        if (!Array.isArray(raw)) throw httpError(400, `${what} debe ser una lista.`);
+        if (raw.length > MEAL_MAX_IDS) throw httpError(400, `Máximo ${MEAL_MAX_IDS} elementos en ${what}.`);
+        const ids = [...new Set(raw.map(positiveInt))];
+        if (ids.some(n => !n)) throw httpError(400, `Identificadores inválidos en ${what}.`);
+        return ids;
+    };
+    const placeholders = (list) => list.map(() => '?').join(', ');
+    const serviceRow = (s) => ({ id: s.id, conference_id: s.conference_id, service_date: s.service_date, meal: s.meal, label: s.label || null, start_time: s.start_time || null, end_time: s.end_time || null, notes: s.notes || null });
+    async function loadServices(cid) {
+        return sortServices(await db.all(`SELECT * FROM ${T.mealServices} WHERE conference_id = ?`, [cid]));
+    }
+    const getService = async (id) => { const sid = positiveInt(id); return sid ? db.get(`SELECT * FROM ${T.mealServices} WHERE id = ?`, [sid]) : null; };
+    // The conference's location plan as rows + a "locationId:serviceId" set.
+    async function loadPlan(cid) {
+        const rows = await db.all(
+            `SELECT p.location_id, p.service_id FROM ${T.mealPlan} p JOIN ${T.mealServices} s ON p.service_id = s.id JOIN ${T.locations} l ON p.location_id = l.id`
+            + ` WHERE s.conference_id = ? AND l.conference_id = ? ORDER BY p.location_id, p.service_id`, [cid, cid]);
+        const set = new Set(rows.map(r => `${r.location_id}:${r.service_id}`));
+        return { rows: rows.map(r => ({ location_id: r.location_id, service_id: r.service_id })), set };
+    }
+    // Ids of these locations, all in conference `cid` (undefined/null = every location of it). Throws 400.
+    async function resolvePlanLocations(cid, raw) {
+        if (raw === undefined || raw === null) return (await db.all(`SELECT id FROM ${T.locations} WHERE conference_id = ? ORDER BY id`, [cid])).map(r => r.id);
+        const ids = parseIdList(raw, 'location_ids');
+        if (!ids.length) return ids;
+        const rows = await db.all(`SELECT id FROM ${T.locations} WHERE conference_id = ? AND id IN (${placeholders(ids)})`, [cid, ...ids]);
+        if (rows.length !== ids.length) throw httpError(400, 'Alguna localidad no pertenece a esta conferencia.');
+        return ids;
+    }
+    // Ids of these services, all in conference `cid`. Throws 400.
+    async function resolveServiceIds(cid, raw, what, foreignMessage) {
+        const ids = parseIdList(raw, what);
+        if (!ids.length) return ids;
+        const rows = await db.all(`SELECT id FROM ${T.mealServices} WHERE conference_id = ? AND id IN (${placeholders(ids)})`, [cid, ...ids]);
+        if (rows.length !== ids.length) throw httpError(400, foreignMessage || 'Algún servicio de comida no pertenece a esta conferencia.');
+        return ids;
+    }
+    const isCancelled = (status) => status === 'cancelled';
+    // THE entitlement rule (see the section note). `mode` = the override row's mode or null; `planned` =
+    // the service is in the plan of the attendee's location.
+    function entitlementFrom(status, mode, planned) {
+        const source = mode === 'include' ? 'include' : mode === 'exclude' ? 'exclude' : planned ? 'location' : 'none';
+        return { entitled: !isCancelled(status) && (source === 'include' || source === 'location'), source };
+    }
+    const personName = (r) => `${r.first_name || ''} ${r.last_name || ''}`.trim() || `#${r.id}`;
+    // The meals views show the LIVE location of location_id (what the plan and every per-location counter
+    // use), never the stored text label alone: DELETE /locations/:id nulls location_id but keeps the label
+    // for history, and showing it would put an attendee under a location that no longer feeds them.
+    // Every attendee query of this section selects `l.name AS location_name` through this join.
+    const LOCATION_JOIN = ` LEFT JOIN ${T.locations} l ON l.id = i.location_id`;
+    const PERSON_SQL = `SELECT i.id, i.conference_id, i.first_name, i.last_name, i.location, i.location_id, i.family_group, i.status, i.reg_code, l.name AS location_name FROM ${T.inscriptions} i${LOCATION_JOIN}`;
+    const liveLocation = (r) => (r.location_id == null ? null : (r.location_name || r.location || null));
+    const personOf = (r) => ({ id: r.id, name: personName(r), location: liveLocation(r), location_id: r.location_id == null ? null : r.location_id, family_group: r.family_group || null, reg_code: r.reg_code || null });
+    const deliveryFields = (d) => ({ delivery_id: d.id, delivered_at: d.delivered_at, delivered_by: d.delivered_by || null, method: d.method || null, note: d.note || null });
+    const deliveryOf = (serviceId, inscriptionId) => db.get(`SELECT * FROM ${T.mealDeliveries} WHERE service_id = ? AND inscription_id = ?`, [serviceId, inscriptionId]);
+    // Who delivered: the admin's login when the host forwards it, else the user id.
+    const actorOf = (req) => {
+        const u = req.user || null;
+        if (!u) return null;
+        if (u.userLogin) return String(u.userLogin).slice(0, 100);
+        return u.id != null ? String(u.id) : null;
+    };
+    // UTC 'YYYY-MM-DD HH:MM:SS' — the same form SQLite's CURRENT_TIMESTAMP stores (the admin UI parses it as
+    // UTC), written explicitly so MySQL (whose CURRENT_TIMESTAMP is session-local) stores the same instant.
+    const utcStamp = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
+
+    // Scanner input → registration code: trim, uppercase, drop every character outside the code alphabet
+    // (scanners add prefixes / suffixes / CR-LF; people type dashes and lowercase). The client mirrors this.
+    const NOT_IN_CODE_ALPHABET = new RegExp(`[^${REG_CODE_ALPHABET}]`, 'g');
+    const normalizeScanCode = (raw) => String(raw == null ? '' : raw).trim().toUpperCase().replace(NOT_IN_CODE_ALPHABET, '');
+    // The attendee a scan names (any conference — the caller decides), or null. Longer than a code after
+    // normalization (a scanner prefix made of alphabet letters, e.g. the "C" an AIM "]C0" id leaves): the
+    // unique 10-character window that is a real code wins; none or several = unknown.
+    async function findByScanCode(raw) {
+        const text = String(raw == null ? '' : raw);
+        if (text.length > 256) return null;
+        const code = normalizeScanCode(text);
+        if (code.length < REG_CODE_LEN || code.length > 64) return null;
+        if (code.length === REG_CODE_LEN) return (await db.get(`${PERSON_SQL} WHERE i.reg_code = ?`, [code])) || null;
+        const windows = [];
+        for (let k = 0; k + REG_CODE_LEN <= code.length; k++) { const w = code.slice(k, k + REG_CODE_LEN); if (!windows.includes(w)) windows.push(w); }
+        const rows = await db.all(`${PERSON_SQL} WHERE i.reg_code IN (${placeholders(windows)})`, windows);
+        return rows.length === 1 ? rows[0] : null;
+    }
+    // Entitlement of one attendee row to one service id.
+    async function entitlementOf(ins, serviceId) {
+        const ov = await db.get(`SELECT mode FROM ${T.mealOverrides} WHERE inscription_id = ? AND service_id = ?`, [ins.id, serviceId]);
+        const planned = ins.location_id != null
+            && !!(await db.get(`SELECT id FROM ${T.mealPlan} WHERE location_id = ? AND service_id = ?`, [ins.location_id, serviceId]));
+        return entitlementFrom(ins.status, ov ? ov.mode : null, planned);
+    }
+
+    // Plan / override writes run under withMealsLock (defined with the assignment lock; single child
+    // process, so an in-memory chain is the whole view).
+    // Insert plan rows (pairs not already planned). Caller holds the meals lock.
+    async function insertPlanRows(pairs) {
+        if (!pairs.length) return;
+        await runBatched(pairs.map(([locationId, serviceId]) => [`INSERT INTO ${T.mealPlan} (location_id, service_id) VALUES (?, ?)`, [locationId, serviceId]]));
+    }
+    // DELETE … WHERE <col> = ? AND <other> IN (…), chunked so no statement binds too many parameters.
+    async function deleteIn(table, col, value, otherCol, ids) {
+        for (let k = 0; k < ids.length; k += 500) {
+            const chunk = ids.slice(k, k + 500);
+            await db.run(`DELETE FROM ${table} WHERE ${col} = ? AND ${otherCol} IN (${placeholders(chunk)})`, [value, ...chunk]);
+        }
+    }
+    // DELETE … WHERE <col> IN (…), chunked.
+    async function deleteWhereIn(table, col, ids) {
+        for (let k = 0; k < ids.length; k += 500) {
+            const chunk = ids.slice(k, k + 500);
+            await db.run(`DELETE FROM ${table} WHERE ${col} IN (${placeholders(chunk)})`, chunk);
+        }
+    }
+    // Every meal row of a conference (DELETE /:id, under the meals lock; the FKs would cascade anyway).
+    // PARENT FIRST: with no transactions, a delivery a scan inserts while this runs either lands before the
+    // services are gone (and the sweep below removes it) or after (and the scan's own re-check removes it)
+    // — deleting the children first would leave a window where a new child outlives its parent.
+    async function deleteMealsOfConference(conferenceId) {
+        const ids = (await db.all(`SELECT id FROM ${T.mealServices} WHERE conference_id = ?`, [conferenceId])).map(r => Number(r.id));
+        await db.run(`DELETE FROM ${T.mealServices} WHERE conference_id = ?`, [conferenceId]);
+        await deleteWhereIn(T.mealDeliveries, 'service_id', ids);
+        await deleteWhereIn(T.mealOverrides, 'service_id', ids);
+        await deleteWhereIn(T.mealPlan, 'service_id', ids);
+    }
+    // Insert one service and plan it for `locIds` (caller holds the meals lock). Returns the new id, or
+    // null when the unique (conference, day, meal) index refused it because it exists. No transactions: if
+    // its plan cannot be written the service is removed again, so it never stays without its plan — a
+    // retry skips existing services untouched, so it would never repair one.
+    async function createServiceWithPlan(cid, v, locIds) {
+        const keys = Object.keys(v);
+        let r;
+        try {
+            r = await db.run(`INSERT INTO ${T.mealServices} (conference_id, ${keys.join(', ')}) VALUES (?, ${placeholders(keys)})`, [cid, ...keys.map(k => v[k])]);
+        } catch (e) {
+            if (await db.get(`SELECT id FROM ${T.mealServices} WHERE conference_id = ? AND service_date = ? AND meal = ?`, [cid, v.service_date, v.meal])) return null;
+            throw e;
+        }
+        try {
+            await insertPlanRows(locIds.map(lid => [lid, r.lastID]));
+        } catch (e) {
+            try {
+                await db.run(`DELETE FROM ${T.mealServices} WHERE id = ?`, [r.lastID]);
+                await db.run(`DELETE FROM ${T.mealPlan} WHERE service_id = ?`, [r.lastID]);
+            } catch (e2) { /* the original error is the one to report; boot hygiene sweeps orphan plan rows */ }
+            throw e;
+        }
+        return r.lastID;
+    }
+
+    // Per-service counters of a conference (all services, or the one `onlyServiceId`):
+    //   entitled            attendees entitled right now
+    //   delivered           deliveries recorded (whoever received them)
+    //   pending             entitled attendees not served yet
+    //   overrides_delivered deliveries to someone NOT entitled now («entregar de todas formas», or the
+    //                       right was removed after serving) — so delivered = (entitled − pending) + this
+    //   by_location         the same per location (every location of the conference, then the attendees
+    //                       without a location as location_id null when they have any count)
+    async function mealStats(cid, plan, locations, onlyServiceId) {
+        const svcFilter = onlyServiceId ? ' AND s.id = ?' : '';
+        const svcParams = onlyServiceId ? [onlyServiceId] : [];
+        const services = await db.all(`SELECT s.id FROM ${T.mealServices} s WHERE s.conference_id = ?${svcFilter}`, [cid, ...svcParams]);
+        const key = (v) => (v == null ? 'null' : String(v));
+        const active = new Map();
+        for (const r of await db.all(`SELECT location_id, COUNT(*) AS n FROM ${T.inscriptions} WHERE conference_id = ? AND ${occupiedSql()} GROUP BY location_id`, [cid])) active.set(key(r.location_id), Number(r.n) || 0);
+        const ovCount = new Map(); // "serviceId|locKey|mode" → n (non-cancelled attendees only)
+        const ovRows = await db.all(
+            `SELECT o.service_id, i.location_id, o.mode, COUNT(*) AS n FROM ${T.mealOverrides} o JOIN ${T.inscriptions} i ON o.inscription_id = i.id JOIN ${T.mealServices} s ON o.service_id = s.id`
+            + ` WHERE s.conference_id = ? AND i.conference_id = ? AND ${occupiedSql('i.status')}${svcFilter} GROUP BY o.service_id, i.location_id, o.mode`, [cid, cid, ...svcParams]);
+        for (const r of ovRows) ovCount.set(`${r.service_id}|${key(r.location_id)}|${r.mode}`, Number(r.n) || 0);
+        const deliveries = await db.all(
+            `SELECT d.service_id, i.location_id, i.status, o.mode FROM ${T.mealDeliveries} d JOIN ${T.mealServices} s ON d.service_id = s.id JOIN ${T.inscriptions} i ON d.inscription_id = i.id`
+            + ` LEFT JOIN ${T.mealOverrides} o ON o.inscription_id = d.inscription_id AND o.service_id = d.service_id WHERE s.conference_id = ?${svcFilter}`, [cid, ...svcParams]);
+        const locKeys = new Set([...locations.map(l => key(l.id)), ...active.keys(), ...ovRows.map(r => key(r.location_id)), ...deliveries.map(d => key(d.location_id))]);
+        const deliveriesBy = new Map();
+        for (const d of deliveries) { const k = Number(d.service_id); if (!deliveriesBy.has(k)) deliveriesBy.set(k, []); deliveriesBy.get(k).push(d); }
+        const known = new Set(locations.map(l => key(l.id)));
+        const out = new Map();
+        for (const s of services) {
+            const per = new Map();
+            for (const lk of locKeys) per.set(lk, { entitled: 0, delivered: 0, delivered_entitled: 0 });
+            for (const lk of locKeys) {
+                const planned = lk !== 'null' && plan.set.has(`${lk}:${s.id}`);
+                const c = per.get(lk);
+                c.entitled = planned
+                    ? (active.get(lk) || 0) - (ovCount.get(`${s.id}|${lk}|exclude`) || 0)
+                    : (ovCount.get(`${s.id}|${lk}|include`) || 0);
+            }
+            let overrides = 0;
+            for (const d of deliveriesBy.get(Number(s.id)) || []) {
+                const lk = key(d.location_id);
+                const c = per.get(lk);
+                c.delivered++;
+                const planned = lk !== 'null' && plan.set.has(`${lk}:${s.id}`);
+                if (entitlementFrom(d.status, d.mode, planned).entitled) c.delivered_entitled++;
+                else overrides++;
+            }
+            const byLocation = [];
+            const push = (lk) => {
+                const c = per.get(lk);
+                byLocation.push({ location_id: lk === 'null' ? null : Number(lk), entitled: c.entitled, delivered: c.delivered, pending: c.entitled - c.delivered_entitled });
+            };
+            for (const l of locations) push(key(l.id));
+            for (const lk of locKeys) { const c = per.get(lk); if (!known.has(lk) && (c.entitled || c.delivered)) push(lk); }
+            const tot = { entitled: 0, delivered: 0, pending: 0 };
+            for (const b of byLocation) { tot.entitled += b.entitled; tot.delivered += b.delivered; tot.pending += b.pending; }
+            out.set(s.id, { ...tot, overrides_delivered: overrides, by_location: byLocation });
+        }
+        return out;
+    }
+    const conferenceLocations = (cid) => db.all(`SELECT id, name FROM ${T.locations} WHERE conference_id = ? ORDER BY name, id`, [cid]);
+
+    // Everything the «Alimentación» page needs at once: services (sorted by day, then desayuno → almuerzo
+    // → cena) with their counters, the conference's locations, the plan matrix, and how many per-person
+    // adjustments exist.
+    http.route('get', '/meals', MEAL_ROUTE, async (req, res) => {
+        const cid = positiveInt(req.query.conference_id);
+        if (!cid) return res.status(400).json({ error: 'Missing conference_id' });
+        try {
+            const [services, locations, plan] = [await loadServices(cid), await conferenceLocations(cid), await loadPlan(cid)];
+            const stats = await mealStats(cid, plan, locations, null);
+            const ov = await db.get(`SELECT COUNT(*) AS n FROM ${T.mealOverrides} o JOIN ${T.mealServices} s ON o.service_id = s.id WHERE s.conference_id = ?`, [cid]);
+            res.json({
+                services: services.map(s => ({ ...serviceRow(s), ...(stats.get(s.id) || { entitled: 0, delivered: 0, pending: 0, overrides_delivered: 0, by_location: [] }) })),
+                locations,
+                plan: plan.rows,
+                overrides_count: Number(ov && ov.n) || 0,
+            });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // Create one service: { conference_id, service_date, meal, label?, start_time?, end_time?, notes?,
+    // location_ids? } — location_ids are planned right away (omitted = every location of the conference).
+    // The conference and the locations are (re-)read INSIDE the meals lock, where their deletion runs too.
+    const conferenceExists = async (cid) => !!(await db.get(`SELECT id FROM ${T.conferences} WHERE id = ?`, [cid]));
+    http.route('post', '/meals/services', MEAL_ROUTE, async (req, res) => {
+        try {
+            const body = req.body || {};
+            const cid = positiveInt(body.conference_id);
+            if (!cid) return res.status(400).json({ error: 'Missing conference_id' });
+            if (!(await conferenceExists(cid))) return res.status(404).json({ error: 'Conferencia no encontrada.' });
+            const v = parseServiceBody(body, false);
+            assertWindow(v.start_time, v.end_time);
+            const result = await withMealsLock(async () => {
+                if (!(await conferenceExists(cid))) throw httpError(404, 'Conferencia no encontrada.');
+                const locIds = await resolvePlanLocations(cid, body.location_ids);
+                const dupSql = `SELECT id FROM ${T.mealServices} WHERE conference_id = ? AND service_date = ? AND meal = ?`;
+                const dupErr = (row) => Object.assign(httpError(409, `Ya existe el servicio de ${v.meal} del ${v.service_date}.`), { id: row ? row.id : null });
+                const dup = await db.get(dupSql, [cid, v.service_date, v.meal]);
+                if (dup) throw dupErr(dup);
+                const id = await createServiceWithPlan(cid, v, locIds);
+                if (id == null) throw dupErr(await db.get(dupSql, [cid, v.service_date, v.meal]));
+                return { id, planned: locIds.length };
+            });
+            res.json({ success: true, ...result });
+        } catch (e) {
+            if (e && e.status === 409 && e.id) return res.status(409).json({ error: e.message, id: e.id });
+            sendError(res, e);
+        }
+    });
+
+    // Create many: { conference_id, dates:[YYYY-MM-DD…] (≤ 60), meals:[…] (≤ 3), location_ids? } — every
+    // missing (date, meal) is created and planned for location_ids (omitted = all); existing ones are
+    // skipped untouched (their plan is not modified). Validation is all-or-nothing, before any write. Each
+    // service is created together with its plan (createServiceWithPlan), so a failure part-way leaves only
+    // complete services: the same request repeated skips them and creates the rest. That failure answers
+    // 500 { error, created, skipped, ids } with what was already created.
+    http.route('post', '/meals/services/bulk', MEAL_ROUTE, async (req, res) => {
+        try {
+            const body = req.body || {};
+            const cid = positiveInt(body.conference_id);
+            if (!cid) return res.status(400).json({ error: 'Missing conference_id' });
+            if (!(await conferenceExists(cid))) return res.status(404).json({ error: 'Conferencia no encontrada.' });
+            if (!Array.isArray(body.dates) || !body.dates.length) return res.status(400).json({ error: 'Indica al menos una fecha.' });
+            if (body.dates.length > MEAL_MAX_BULK_DATES * 4) return res.status(400).json({ error: `Máximo ${MEAL_MAX_BULK_DATES} fechas por operación.` });
+            const dates = [];
+            for (const raw of body.dates) {
+                const d = parseDay(raw);
+                if (!d) return res.status(400).json({ error: `Fecha inválida: «${String(raw).slice(0, 40)}» (usa AAAA-MM-DD).` });
+                if (!dates.includes(d)) dates.push(d);
+            }
+            if (dates.length > MEAL_MAX_BULK_DATES) return res.status(400).json({ error: `Máximo ${MEAL_MAX_BULK_DATES} fechas por operación.` });
+            if (!Array.isArray(body.meals) || !body.meals.length) return res.status(400).json({ error: 'Indica al menos una comida.' });
+            if (body.meals.length > 12) return res.status(400).json({ error: 'Comida inválida (desayuno, almuerzo o cena).' });
+            const chosen = new Set(body.meals.map(parseMeal));
+            const meals = MEALS.filter(m => chosen.has(m));
+            dates.sort();
+            const result = await withMealsLock(async () => {
+                if (!(await conferenceExists(cid))) throw httpError(404, 'Conferencia no encontrada.');
+                const locIds = await resolvePlanLocations(cid, body.location_ids);
+                const existing = new Set((await db.all(`SELECT service_date, meal FROM ${T.mealServices} WHERE conference_id = ?`, [cid])).map(r => `${r.service_date}|${r.meal}`));
+                const ids = [];
+                let skipped = 0;
+                try {
+                    for (const d of dates) {
+                        for (const m of meals) {
+                            if (existing.has(`${d}|${m}`)) { skipped++; continue; }
+                            // null: created meanwhile outside this process's lock (the unique index refused it).
+                            const id = await createServiceWithPlan(cid, { service_date: d, meal: m }, locIds);
+                            if (id == null) skipped++; else ids.push(id);
+                        }
+                    }
+                } catch (e) {
+                    if (!ids.length) throw e;
+                    throw Object.assign(httpError(500, `Se crearon ${ids.length} servicio(s) antes de un error; repite la operación para crear el resto (los ya creados se omiten). Detalle: ${e && e.message ? e.message : e}`),
+                        { partial: { created: ids.length, skipped, ids } });
+                }
+                return { created: ids.length, skipped, ids };
+            });
+            res.json({ success: true, ...result });
+        } catch (e) {
+            if (e && e.partial) return res.status(500).json({ error: e.message, ...e.partial });
+            sendError(res, e);
+        }
+    });
+
+    // Edit a service's label / delivery window / notes. Its day and meal are its identity: to change them,
+    // delete it and create another (400 when the body tries).
+    http.route('put', '/meals/services/:id', MEAL_ROUTE, async (req, res) => {
+        try {
+            const body = req.body || {};
+            const svc = await getService(req.params.id);
+            if (!svc) return res.status(404).json({ error: 'Servicio de comida no encontrado.' });
+            const changesDay = body.service_date !== undefined && String(body.service_date).trim() !== svc.service_date;
+            const changesMeal = body.meal !== undefined && String(body.meal).trim().toLowerCase() !== svc.meal;
+            if (changesDay || changesMeal) return res.status(400).json({ error: 'La fecha y la comida de un servicio no se pueden cambiar; elimínalo y créalo de nuevo.' });
+            const v = parseServiceBody(body, true);
+            assertWindow(v.start_time !== undefined ? v.start_time : svc.start_time, v.end_time !== undefined ? v.end_time : svc.end_time);
+            const keys = Object.keys(v);
+            if (keys.length) await db.run(`UPDATE ${T.mealServices} SET ${keys.map(k => `${k} = ?`).join(', ')} WHERE id = ?`, [...keys.map(k => v[k]), svc.id]);
+            res.json({ success: true });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // Delete a service with its plan, overrides and deliveries. With deliveries already recorded it answers
+    // 409 { requiresConfirm: true, deliveries } unless ?force=1.
+    // Deliveries are not serialised by the meals lock (scans never wait), so "has no delivery" and "delete
+    // it" are ONE statement: a separate count followed by the delete would destroy a scan landing in
+    // between without the confirmation. The service row goes FIRST and its children after it: from then
+    // on a scan's INSERT fails on the foreign key, or (foreign keys off) the scan finds the service gone
+    // when it re-checks and removes its own row — either way it answers 404, never «Entregado». With force,
+    // deliveries are deleted (and counted) until the conditional delete passes, so deleted_deliveries counts
+    // every delivery a scan reported before the service went.
+    const MEAL_DELETE_ATTEMPTS = 5;
+    http.route('delete', '/meals/services/:id', MEAL_ROUTE, async (req, res) => {
+        try {
+            const force = ['1', 'true'].includes(String(req.query.force || ''));
+            const result = await withMealsLock(async () => {
+                const svc = await getService(req.params.id);
+                if (!svc) throw httpError(404, 'Servicio de comida no encontrado.');
+                const deleteIfUnserved = `DELETE FROM ${T.mealServices} WHERE id = ? AND NOT EXISTS (SELECT 1 FROM ${T.mealDeliveries} d WHERE d.service_id = ? )`;
+                let deleted = 0;
+                for (let attempt = 1; ; attempt++) {
+                    if (force) {
+                        const d = await db.run(`DELETE FROM ${T.mealDeliveries} WHERE service_id = ?`, [svc.id]);
+                        deleted += Number(d && d.changes) || 0;
+                    }
+                    const r = await db.run(deleteIfUnserved, [svc.id, svc.id]);
+                    if (r && r.changes) break;
+                    if (!(await getService(svc.id))) throw httpError(404, 'Servicio de comida no encontrado.');
+                    if (!force) {
+                        const n = Number(((await db.get(`SELECT COUNT(*) AS n FROM ${T.mealDeliveries} WHERE service_id = ?`, [svc.id])) || {}).n) || 0;
+                        if (n > 0) return { blocked: n };
+                        // 0: the delivery that blocked it was undone meanwhile — try again.
+                    }
+                    if (attempt >= MEAL_DELETE_ATTEMPTS) throw httpError(409, 'Se están registrando entregas en este servicio ahora mismo; inténtalo de nuevo.');
+                }
+                await db.run(`DELETE FROM ${T.mealOverrides} WHERE service_id = ?`, [svc.id]);
+                await db.run(`DELETE FROM ${T.mealPlan} WHERE service_id = ?`, [svc.id]);
+                await db.run(`DELETE FROM ${T.mealDeliveries} WHERE service_id = ?`, [svc.id]);
+                return { deleted_deliveries: deleted };
+            });
+            if (result.blocked) return res.status(409).json({ error: `El servicio ya tiene ${result.blocked} entrega(s) registrada(s); confirma para eliminarlo con ellas.`, requiresConfirm: true, deliveries: result.blocked });
+            res.json({ success: true, ...result });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // Replace ONE location's set of services (a row of the matrix): { conference_id, location_id,
+    // service_ids:[…] } — only services of the location's conference. Parents are read inside the lock.
+    http.route('put', '/meals/plan', MEAL_ROUTE, async (req, res) => {
+        try {
+            const body = req.body || {};
+            const lid = positiveInt(body.location_id);
+            const final = await withMealsLock(async () => {
+                const loc = lid ? await db.get(`SELECT id, conference_id FROM ${T.locations} WHERE id = ?`, [lid]) : null;
+                if (!loc) throw httpError(404, 'Localidad no encontrada.');
+                if (body.conference_id !== undefined && body.conference_id !== null && positiveInt(body.conference_id) !== Number(loc.conference_id)) {
+                    throw httpError(400, 'La localidad no pertenece a esta conferencia.');
+                }
+                const ids = await resolveServiceIds(loc.conference_id, body.service_ids, 'service_ids');
+                const current = (await db.all(`SELECT service_id FROM ${T.mealPlan} WHERE location_id = ?`, [loc.id])).map(r => Number(r.service_id));
+                const want = new Set(ids);
+                await deleteIn(T.mealPlan, 'location_id', loc.id, 'service_id', current.filter(s => !want.has(s)));
+                const have = new Set(current);
+                await insertPlanRows(ids.filter(s => !have.has(s)).map(s => [loc.id, s]));
+                return { location_id: loc.id, service_ids: [...want].sort((a, b) => a - b) };
+            });
+            res.json({ success: true, ...final });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // Replace ONE service's set of locations (a column of the matrix): { location_ids:[…] } — only
+    // locations of the service's conference. Parents are read inside the lock.
+    http.route('put', '/meals/services/:id/plan', MEAL_ROUTE, async (req, res) => {
+        try {
+            const raw = (req.body || {}).location_ids;
+            const final = await withMealsLock(async () => {
+                const svc = await getService(req.params.id);
+                if (!svc) throw httpError(404, 'Servicio de comida no encontrado.');
+                if (raw === undefined || raw === null) throw httpError(400, 'location_ids debe ser una lista.');
+                const ids = await resolvePlanLocations(svc.conference_id, raw);
+                const current = (await db.all(`SELECT location_id FROM ${T.mealPlan} WHERE service_id = ?`, [svc.id])).map(r => Number(r.location_id));
+                const want = new Set(ids);
+                await deleteIn(T.mealPlan, 'service_id', svc.id, 'location_id', current.filter(l => !want.has(l)));
+                const have = new Set(current);
+                await insertPlanRows(ids.filter(l => !have.has(l)).map(l => [l, svc.id]));
+                return { service_id: svc.id, location_ids: [...want].sort((a, b) => a - b) };
+            });
+            res.json({ success: true, ...final });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // One cell of the matrix: { location_id, service_id, enabled: boolean } (idempotent). Parents are read
+    // inside the lock.
+    http.route('post', '/meals/plan/toggle', MEAL_ROUTE, async (req, res) => {
+        try {
+            const body = req.body || {};
+            const on = body.enabled === true || body.enabled === 1 || body.enabled === 'true' || body.enabled === '1';
+            const off = body.enabled === false || body.enabled === 0 || body.enabled === 'false' || body.enabled === '0';
+            if (!on && !off) return res.status(400).json({ error: 'enabled debe ser verdadero o falso.' });
+            const enabled = on;
+            const lid = positiveInt(body.location_id);
+            const done = await withMealsLock(async () => {
+                const loc = lid ? await db.get(`SELECT id, conference_id FROM ${T.locations} WHERE id = ?`, [lid]) : null;
+                if (!loc) throw httpError(404, 'Localidad no encontrada.');
+                const svc = await getService(body.service_id);
+                if (!svc) throw httpError(404, 'Servicio de comida no encontrado.');
+                if (Number(svc.conference_id) !== Number(loc.conference_id)) throw httpError(400, 'La localidad y el servicio son de conferencias distintas.');
+                if (!enabled) await db.run(`DELETE FROM ${T.mealPlan} WHERE location_id = ? AND service_id = ?`, [loc.id, svc.id]);
+                else if (!(await db.get(`SELECT id FROM ${T.mealPlan} WHERE location_id = ? AND service_id = ?`, [loc.id, svc.id]))) await insertPlanRows([[loc.id, svc.id]]);
+                return { location_id: loc.id, service_id: svc.id };
+            });
+            res.json({ success: true, ...done, enabled });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // «Por persona»: non-cancelled attendees of the conference matching `q` (every word must match the
+    // name, document or registration code), optionally of one location (`location_id`, or 'none' for those
+    // without one), paged (`limit` ≤ 100, `offset`), each with its entitlement summary.
+    // The words are matched HERE, not with SQL LIKE: SQLite's LOWER()/LIKE fold only ASCII letters and no
+    // engine ignores accents, so «ángela», «angela» and «ÁNGELA» must all find «Ángela» (and «nunez»
+    // «Núñez»). A conference's non-cancelled attendees are a bounded set, read once with the columns needed.
+    const foldText = (v) => String(v == null ? '' : v).normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+    const foldCompare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+    http.route('get', '/meals/people', MEAL_ROUTE, async (req, res) => {
+        const cid = positiveInt(req.query.conference_id);
+        if (!cid) return res.status(400).json({ error: 'Missing conference_id' });
+        try {
+            const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), MEAL_PEOPLE_MAX);
+            const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+            let where = ` WHERE i.conference_id = ? AND ${occupiedSql('i.status')}`;
+            const params = [cid];
+            const rawLoc = req.query.location_id;
+            if (rawLoc !== undefined && rawLoc !== '') {
+                if (rawLoc === 'none') where += ' AND i.location_id IS NULL';
+                else { const lid = positiveInt(rawLoc); if (lid) { where += ' AND i.location_id = ?'; params.push(lid); } else where += ' AND 1 = 0'; }
+            }
+            const words = String(req.query.q || '').trim().slice(0, 100).split(/\s+/).filter(Boolean).slice(0, 5);
+            const matchers = words.map(w => {
+                // A word that IS (part of) a code — only code letters, dashes allowed, 4+ of them — also
+                // matches reg_code; a name or a stray symbol never turns into a broad code match.
+                const code = normalizeScanCode(w);
+                return { text: foldText(w), code: code.length >= 4 && code === w.toUpperCase().replace(/-/g, '') ? code : null };
+            });
+            const candidates = await db.all(
+                `SELECT i.id, i.first_name, i.last_name, i.location, i.location_id, i.family_group, i.document_number, i.reg_code, i.status, l.name AS location_name`
+                + ` FROM ${T.inscriptions} i${LOCATION_JOIN}${where}`, params);
+            const hits = [];
+            for (const r of candidates) {
+                const first = foldText(r.first_name), last = foldText(r.last_name), doc = foldText(r.document_number);
+                const reg = String(r.reg_code || '').toUpperCase();
+                if (matchers.every(m => first.includes(m.text) || last.includes(m.text) || doc.includes(m.text) || (m.code !== null && reg.includes(m.code)))) hits.push({ r, first, last });
+            }
+            hits.sort((a, b) => foldCompare(a.last, b.last) || foldCompare(a.first, b.first) || Number(a.r.id) - Number(b.r.id));
+            const total = hits.length;
+            const rows = hits.slice(offset, offset + limit).map(h => h.r);
+            const services = await db.all(`SELECT id FROM ${T.mealServices} WHERE conference_id = ?`, [cid]);
+            const plan = await loadPlan(cid);
+            const ids = rows.map(r => r.id);
+            const ovBy = new Map(), delBy = new Map();
+            if (ids.length) {
+                for (const o of await db.all(`SELECT inscription_id, service_id, mode FROM ${T.mealOverrides} WHERE inscription_id IN (${placeholders(ids)})`, ids)) ovBy.set(`${o.inscription_id}:${o.service_id}`, o.mode);
+                for (const d of await db.all(
+                    `SELECT d.inscription_id, COUNT(*) AS n FROM ${T.mealDeliveries} d JOIN ${T.mealServices} s ON d.service_id = s.id`
+                    + ` WHERE s.conference_id = ? AND d.inscription_id IN (${placeholders(ids)}) GROUP BY d.inscription_id`, [cid, ...ids])) delBy.set(String(d.inscription_id), Number(d.n) || 0);
+            }
+            const people = rows.map(r => {
+                let entitled = 0, includes = 0, excludes = 0;
+                for (const s of services) {
+                    const mode = ovBy.get(`${r.id}:${s.id}`) || null;
+                    if (mode === 'include') includes++;
+                    if (mode === 'exclude') excludes++;
+                    if (entitlementFrom(r.status, mode, r.location_id != null && plan.set.has(`${r.location_id}:${s.id}`)).entitled) entitled++;
+                }
+                return { ...personOf(r), first_name: r.first_name || '', last_name: r.last_name || '', document_number: r.document_number || null, status: r.status || null, entitled, delivered: delBy.get(String(r.id)) || 0, includes, excludes };
+            });
+            res.json({ people, total, limit, offset, services_count: services.length });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // One attendee's meals: every service of their conference with entitlement, its source, the override
+    // (null = inherit) and the delivery if any.
+    async function personMeals(ins) {
+        const services = await loadServices(ins.conference_id);
+        const ov = new Map((await db.all(`SELECT service_id, mode FROM ${T.mealOverrides} WHERE inscription_id = ?`, [ins.id])).map(o => [Number(o.service_id), o.mode]));
+        const planned = new Set(ins.location_id == null ? [] : (await db.all(`SELECT service_id FROM ${T.mealPlan} WHERE location_id = ?`, [ins.location_id])).map(p => Number(p.service_id)));
+        const del = new Map((await db.all(`SELECT * FROM ${T.mealDeliveries} WHERE inscription_id = ?`, [ins.id])).map(d => [Number(d.service_id), d]));
+        return services.map(s => {
+            const mode = ov.get(Number(s.id)) || null;
+            const ent = entitlementFrom(ins.status, mode, planned.has(Number(s.id)));
+            const d = del.get(Number(s.id));
+            return {
+                id: s.id, service_date: s.service_date, meal: s.meal, label: s.label || null, start_time: s.start_time || null, end_time: s.end_time || null,
+                entitled: ent.entitled, source: ent.source, override: mode, planned: planned.has(Number(s.id)),
+                delivered_at: d ? d.delivered_at : null, delivery_id: d ? d.id : null, method: d ? d.method || null : null, delivered_by: d ? d.delivered_by || null : null,
+            };
+        });
+    }
+    http.route('get', '/meals/inscriptions/:id', MEAL_ROUTE, async (req, res) => {
+        try {
+            const id = positiveInt(req.params.id);
+            const ins = id ? await db.get(`${PERSON_SQL} WHERE i.id = ?`, [id]) : null;
+            if (!ins) return res.status(404).json({ error: 'Inscripción no encontrada.' });
+            res.json({ person: { ...personOf(ins), status: ins.status || null, conference_id: ins.conference_id }, services: await personMeals(ins) });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // Set the per-person adjustment: { service_id (or service_ids:[…]), mode: 'include' | 'exclude' |
+    // 'inherit' } — 'inherit' removes the row (back to what the location plan says). The attendee and the
+    // services are read inside the meals lock, where their deletion runs too.
+    http.route('put', '/meals/inscriptions/:id/overrides', MEAL_ROUTE, async (req, res) => {
+        try {
+            const body = req.body || {};
+            const id = positiveInt(req.params.id);
+            const { ins, ids, mode } = await withMealsLock(async () => {
+                const ins = id ? await db.get(`${PERSON_SQL} WHERE i.id = ?`, [id]) : null;
+                if (!ins) throw httpError(404, 'Inscripción no encontrada.');
+                const mode = typeof body.mode === 'string' ? body.mode.trim() : '';
+                if (!OVERRIDE_MODES.has(mode) && mode !== 'inherit') throw httpError(400, 'Modo inválido (include, exclude o inherit).');
+                let raw;
+                if (body.service_ids !== undefined) raw = body.service_ids;
+                else if (body.service_id !== undefined && body.service_id !== null) raw = [body.service_id];
+                else throw httpError(400, 'Indica el servicio de comida.');
+                const ids = await resolveServiceIds(ins.conference_id, raw, 'service_ids', 'El servicio de comida no pertenece a la conferencia de esta inscripción.');
+                if (!ids.length) throw httpError(400, 'Indica el servicio de comida.');
+                if (mode === 'inherit') await deleteIn(T.mealOverrides, 'inscription_id', ins.id, 'service_id', ids);
+                else {
+                    for (const sid of ids) {
+                        const up = await db.run(`UPDATE ${T.mealOverrides} SET mode = ? WHERE inscription_id = ? AND service_id = ?`, [mode, ins.id, sid]);
+                        if (up && up.changes) continue;
+                        try { await db.run(`INSERT INTO ${T.mealOverrides} (inscription_id, service_id, mode) VALUES (?, ?, ?)`, [ins.id, sid, mode]); }
+                        catch (e) { await db.run(`UPDATE ${T.mealOverrides} SET mode = ? WHERE inscription_id = ? AND service_id = ?`, [mode, ins.id, sid]); }
+                    }
+                }
+                return { ins, ids, mode };
+            });
+            const touched = new Set(ids);
+            const services = (await personMeals(ins)).filter(s => touched.has(Number(s.id)))
+                .map(s => ({ id: s.id, entitled: s.entitled, source: s.source, override: s.override }));
+            res.json({ success: true, mode, services });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // The kitchen scan: { service_id, code? | inscription_id?, force?, note? } → ALWAYS 200 with
+    //   { result: 'delivered' | 'already' | 'not_entitled' | 'cancelled' | 'unknown' | 'other_conference',
+    //     service_id, person?, delivered_at?, delivery_id?, delivered_by?, method?, note?, source? }
+    // (404 only for an unknown service, 400 when neither code nor inscription_id is sent). `code` wins over
+    // inscription_id when both come. force:true turns ONLY 'not_entitled' into a delivery (method
+    // 'override'). Two simultaneous scans of one person: the UNIQUE (service, attendee) index lets exactly
+    // one INSERT through; the other catches the constraint error, re-reads, and answers 'already'.
+    // Scans are not serialised with deletions (no transactions either), so after its INSERT — or when the
+    // INSERT fails and no winning row exists (a foreign key refused it) — the route re-reads the service
+    // and the attendee: if either was deleted meanwhile, its own row is removed and it answers 404 (service)
+    // or 'unknown' (attendee), never «Entregado» for a delivery that does not survive. The deletions go
+    // parent first, so a row inserted before the parent went is swept by them.
+    const deliveryParentGone = async (serviceId, inscriptionId) => {
+        if (!(await db.get(`SELECT id FROM ${T.mealServices} WHERE id = ?`, [serviceId]))) return 'service';
+        if (!(await db.get(`SELECT id FROM ${T.inscriptions} WHERE id = ?`, [inscriptionId]))) return 'person';
+        return null;
+    };
+    http.route('post', '/meals/deliver', MEAL_ROUTE, async (req, res) => {
+        try {
+            const body = req.body || {};
+            const svc = await getService(body.service_id);
+            if (!svc) return res.status(404).json({ error: 'Servicio de comida no encontrado.' });
+            const hasCode = body.code !== undefined && body.code !== null;
+            const hasId = body.inscription_id !== undefined && body.inscription_id !== null && body.inscription_id !== '';
+            if (!hasCode && !hasId) return res.status(400).json({ error: 'Indica el código o la inscripción.' });
+            const verdict = (result, extra) => res.json({ result, service_id: svc.id, ...(extra || {}) });
+            let ins = null;
+            if (hasCode) ins = typeof body.code === 'string' || typeof body.code === 'number' ? await findByScanCode(body.code) : null;
+            else { const iid = positiveInt(body.inscription_id); ins = iid ? ((await db.get(`${PERSON_SQL} WHERE i.id = ?`, [iid])) || null) : null; }
+            if (!ins) return verdict('unknown');
+            if (Number(ins.conference_id) !== Number(svc.conference_id)) return verdict('other_conference');
+            const person = personOf(ins);
+            const prior = await deliveryOf(svc.id, ins.id);
+            if (prior) return verdict('already', { person, ...deliveryFields(prior) });
+            if (isCancelled(ins.status)) return verdict('cancelled', { person });
+            const ent = await entitlementOf(ins, svc.id);
+            let method = hasCode ? 'scan' : 'manual';
+            if (!ent.entitled) {
+                if (body.force !== true) {
+                    // A service deleted while this scan ran takes its plan rows with it (after the service
+                    // row): if it is still there now, the plan read above was intact.
+                    if (!(await getService(svc.id))) return res.status(404).json({ error: 'Servicio de comida no encontrado.' });
+                    return verdict('not_entitled', { person, source: ent.source });
+                }
+                method = 'override';
+            }
+            const note = shortText(typeof body.note === 'string' ? body.note.trim() : null, 500);
+            const stamp = utcStamp(), actor = actorOf(req);
+            const parentGone = (gone) => (gone === 'service' ? res.status(404).json({ error: 'Servicio de comida no encontrado.' }) : verdict('unknown'));
+            let r;
+            try {
+                r = await db.run(`INSERT INTO ${T.mealDeliveries} (service_id, inscription_id, delivered_at, delivered_by, method, note) VALUES (?, ?, ?, ?, ?, ?)`,
+                    [svc.id, ins.id, stamp, actor, method, note]);
+            } catch (e) {
+                const won = await deliveryOf(svc.id, ins.id);
+                if (won) return verdict('already', { person, ...deliveryFields(won) });
+                const gone = await deliveryParentGone(svc.id, ins.id);
+                if (gone) return parentGone(gone);
+                throw e;
+            }
+            const gone = await deliveryParentGone(svc.id, ins.id);
+            if (gone) {
+                // Its parent is gone: the (service, attendee) pair can hold no valid delivery any more.
+                await db.run(`DELETE FROM ${T.mealDeliveries} WHERE service_id = ? AND inscription_id = ?`, [svc.id, ins.id]);
+                return parentGone(gone);
+            }
+            const row = (await deliveryOf(svc.id, ins.id)) || { id: r && r.lastID, delivered_at: stamp, delivered_by: actor, method, note };
+            return verdict('delivered', { person, ...deliveryFields(row) });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // Undo a delivery.
+    http.route('delete', '/meals/deliveries/:id', MEAL_ROUTE, async (req, res) => {
+        try {
+            const id = positiveInt(req.params.id);
+            const d = id ? await db.get(`SELECT id, service_id, inscription_id FROM ${T.mealDeliveries} WHERE id = ?`, [id]) : null;
+            if (!d) return res.status(404).json({ error: 'Entrega no encontrada.' });
+            const r = await db.run(`DELETE FROM ${T.mealDeliveries} WHERE id = ?`, [d.id]);
+            if (!r || !r.changes) return res.status(404).json({ error: 'Entrega no encontrada.' });
+            res.json({ success: true, delivery_id: d.id, service_id: d.service_id, inscription_id: d.inscription_id });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // Live counters of one service (the delivery screen polls this): same numbers as GET /meals.
+    http.route('get', '/meals/services/:id/stats', MEAL_ROUTE, async (req, res) => {
+        try {
+            const svc = await getService(req.params.id);
+            if (!svc) return res.status(404).json({ error: 'Servicio de comida no encontrado.' });
+            const stats = await mealStats(svc.conference_id, await loadPlan(svc.conference_id), await conferenceLocations(svc.conference_id), svc.id);
+            res.json({ service_id: svc.id, ...stats.get(svc.id) });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // The latest deliveries of a service, newest first (`limit` ≤ 100, default 20) — the scan history.
+    http.route('get', '/meals/services/:id/deliveries', MEAL_ROUTE, async (req, res) => {
+        try {
+            const svc = await getService(req.params.id);
+            if (!svc) return res.status(404).json({ error: 'Servicio de comida no encontrado.' });
+            const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+            const rows = await db.all(
+                `SELECT d.id AS delivery_id, d.inscription_id, d.delivered_at, d.delivered_by, d.method, d.note, i.first_name, i.last_name, i.location, i.location_id, i.family_group, i.reg_code, l.name AS location_name`
+                + ` FROM ${T.mealDeliveries} d JOIN ${T.inscriptions} i ON d.inscription_id = i.id${LOCATION_JOIN} WHERE d.service_id = ? ORDER BY d.delivered_at DESC, d.id DESC LIMIT ?`, [svc.id, limit]);
+            res.json({
+                service_id: svc.id,
+                deliveries: rows.map(r => ({ delivery_id: r.delivery_id, inscription_id: r.inscription_id, name: personName({ ...r, id: r.inscription_id }), location: liveLocation(r), location_id: r.location_id == null ? null : r.location_id, family_group: r.family_group || null, reg_code: r.reg_code || null, delivered_at: r.delivered_at, delivered_by: r.delivered_by || null, method: r.method || null, note: r.note || null })),
+            });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // Report of one service: one row per attendee who is entitled OR was served (anyone else is not
+    // concerned by it), the totals and the per-location breakdown (every location of the conference, then
+    // attendees without a location as location_id null).
+    http.route('get', '/meals/services/:id/report', MEAL_ROUTE, async (req, res) => {
+        try {
+            const svc = await getService(req.params.id);
+            if (!svc) return res.status(404).json({ error: 'Servicio de comida no encontrado.' });
+            const planned = new Set((await db.all(
+                `SELECT p.location_id FROM ${T.mealPlan} p JOIN ${T.locations} l ON p.location_id = l.id WHERE p.service_id = ? AND l.conference_id = ?`, [svc.id, svc.conference_id])).map(p => Number(p.location_id)));
+            const list = await db.all(
+                `SELECT i.id, i.first_name, i.last_name, i.location, i.location_id, i.family_group, i.reg_code, i.status, o.mode,`
+                + ` d.id AS delivery_id, d.delivered_at, d.method, d.delivered_by, d.note, l.name AS location_name`
+                + ` FROM ${T.inscriptions} i${LOCATION_JOIN}`
+                + ` LEFT JOIN ${T.mealOverrides} o ON o.inscription_id = i.id AND o.service_id = ?`
+                + ` LEFT JOIN ${T.mealDeliveries} d ON d.inscription_id = i.id AND d.service_id = ?`
+                + ` WHERE i.conference_id = ? AND (d.id IS NOT NULL OR o.mode = 'include' OR i.location_id IN (SELECT p.location_id FROM ${T.mealPlan} p WHERE p.service_id = ? ))`,
+                [svc.id, svc.id, svc.conference_id, svc.id]);
+            const rows = [];
+            for (const r of list) {
+                const ent = entitlementFrom(r.status, r.mode || null, r.location_id != null && planned.has(Number(r.location_id)));
+                if (!ent.entitled && r.delivery_id == null) continue;
+                rows.push({
+                    inscription_id: r.id, name: personName(r), location: liveLocation(r), location_id: r.location_id == null ? null : r.location_id,
+                    family_group: r.family_group || null, reg_code: r.reg_code || null, status: r.status || null,
+                    entitled: ent.entitled, source: ent.source, delivered: r.delivery_id != null,
+                    delivery_id: r.delivery_id == null ? null : r.delivery_id, delivered_at: r.delivered_at || null, method: r.method || null, delivered_by: r.delivered_by || null, note: r.note || null,
+                });
+            }
+            // By location (its live name; people without a location — location_id null, the same bucket as
+            // by_location — last), then by name.
+            rows.sort((a, b) => (a.location_id == null) - (b.location_id == null) || String(a.location || '').localeCompare(String(b.location || ''))
+                || (a.location_id == null ? 0 : Number(a.location_id) - Number(b.location_id)) || a.name.localeCompare(b.name) || a.inscription_id - b.inscription_id);
+            const totals = { entitled: 0, delivered: 0, pending: 0, overrides_delivered: 0 };
+            const locations = await conferenceLocations(svc.conference_id);
+            const byLoc = new Map(locations.map(l => [String(l.id), { location_id: l.id, location: l.name, entitled: 0, delivered: 0, pending: 0 }]));
+            for (const r of rows) {
+                const k = r.location_id == null ? 'null' : String(r.location_id);
+                // Attendees without a location share one bucket (r.location is already null for them).
+                if (!byLoc.has(k)) byLoc.set(k, { location_id: r.location_id, location: r.location, entitled: 0, delivered: 0, pending: 0 });
+                const b = byLoc.get(k);
+                if (r.entitled) { totals.entitled++; b.entitled++; }
+                if (r.delivered) { totals.delivered++; b.delivered++; }
+                if (r.entitled && !r.delivered) { totals.pending++; b.pending++; }
+                if (r.delivered && !r.entitled) totals.overrides_delivered++;
+            }
+            res.json({ service: serviceRow(svc), rows, totals, by_location: [...byLoc.values()] });
+        } catch (e) { sendError(res, e); }
+    });
+
     // === INSCRIPTIONS: edit / delete / manual room assignment ===
     // total_due is DERIVED — a client value is ignored. It is frozen at registration; an edit re-prices
     // it ONLY when the edit changes what the CURRENT rules yield (a fee-relevant field changed: the
@@ -2235,7 +3126,14 @@ exports.init = async function (wordjs) {
         try {
             await db.run(`DELETE FROM ${T.transportPayments} WHERE ticket_id IN (SELECT id FROM ${T.tickets} WHERE inscription_id = ? )`, [req.params.id]);
             await db.run(`DELETE FROM ${T.tickets} WHERE inscription_id = ?`, [req.params.id]);
-            await db.run(`DELETE FROM ${T.inscriptions} WHERE id = ?`, [req.params.id]);
+            // Meals (2.14.0): the attendee first, then its meal rows (the FKs cascade; the explicit deletes
+            // keep it so with foreign keys off). Under the meals lock an override write cannot slip in for
+            // a deleted attendee, and a scan racing this re-checks the attendee after its INSERT.
+            await withMealsLock(async () => {
+                await db.run(`DELETE FROM ${T.inscriptions} WHERE id = ?`, [req.params.id]);
+                await db.run(`DELETE FROM ${T.mealDeliveries} WHERE inscription_id = ?`, [req.params.id]);
+                await db.run(`DELETE FROM ${T.mealOverrides} WHERE inscription_id = ?`, [req.params.id]);
+            });
             res.json({ success: true });
         } catch (e) { sendError(res, e); }
     });
