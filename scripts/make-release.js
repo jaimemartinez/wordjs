@@ -22,7 +22,14 @@ const ROOT_DIR = path.resolve(__dirname, '..');
 const RELEASE_DIR = path.join(ROOT_DIR, 'release');
 const TEMP_DIST = path.join(RELEASE_DIR, 'wordjs-package');
 
-// Files and folders to exclude from the release
+// Files and folders to exclude from the release.
+//
+// PRIVATE, UNTRACKED PLUGINS AND THEMES ARE NOT LISTED HERE, ON PURPOSE. This file is public, so every
+// name written into it is published: listing a private extension to keep it out of the ZIP discloses it
+// in the repository instead. They stay out structurally — git does not track them, and shouldIgnore drops
+// whatever git does not track — and, where git cannot answer, through the gitignored `.release-exclude`
+// file (see loadLocalExcludes). backend/src/tests/release-excludes.test.ts fails if this file names an
+// individual plugin or theme directory.
 const IGNORE_PATTERNS = [
     'node_modules',
     '.git',
@@ -64,11 +71,10 @@ const IGNORE_PATTERNS = [
     'dump-routes.js',
     'build-production.ps1',
     'marketplace', // Marketplace plugins are DISTRIBUTED separately (release assets), never bundled in the core package
-    // SECURITY: private CLIENT plugins. They are gitignored (CI releases built from git never see
-    // them) but they DO exist in local working trees — without these entries a locally-run
-    // `npm run bundle-release` would ship client code+secrets inside the public ZIP.
-    'backend/plugins/toscano',
-    'backend/plugins/toscano-platform',
+    // The local exclusion list (see loadLocalExcludes). Its whole job is to name what must stay private,
+    // so it must never ship — and it must stay out without relying on git, which is exactly the case it
+    // exists for.
+    '.release-exclude',
 ];
 
 // SECURITY: never ship local databases, private keys or TLS material in a release. The sensitive
@@ -272,10 +278,59 @@ function loadTrackedFiles() {
         console.log(`   🔒 git knows ${trackedFiles.size} files — anything else is local and will NOT ship`);
     } catch (e) {
         trackedFiles = false;
-        console.log(`   ⚠️  git unavailable (${e.message}) — falling back to the name-based exclusion list ONLY.`);
-        console.log('      Review the archive before publishing: untracked local files may be included.');
+        console.log(`   ⚠️  git unavailable (${e.message}) — falling back to the name-based exclusion list and ${LOCAL_EXCLUDE_FILE} ONLY.`);
+        console.log(`      Untracked local files may be included: list private paths in ${LOCAL_EXCLUDE_FILE} and review the archive before publishing.`);
     }
     return trackedFiles;
+}
+
+/**
+ * LOCAL EXCLUSIONS — what must stay out of a release but cannot be named in this file.
+ *
+ * Private, untracked plugins and themes already stay out through the structural rule above: git does
+ * not track them, so nothing here needs to know they exist. That rule needs git, though, and a release
+ * packaged where git cannot answer (git missing or refusing the repository, a tree copied without
+ * `.git/`) is left with the name list alone. For that case, and for anything else local, the packager
+ * reads `.release-exclude` at the repository root: gitignored, never shipped (it is in IGNORE_PATTERNS),
+ * honoured with or without git. One entry per line, `#` starts a comment, and an entry follows the same
+ * rules as IGNORE_PATTERNS — with a `/` it is a path matched at segment boundaries, without one it is a
+ * file or directory name matched at any depth. No globs.
+ */
+const LOCAL_EXCLUDE_FILE = '.release-exclude';
+let localExcludes = null;     // string[] once read
+
+function loadLocalExcludes() {
+    if (localExcludes !== null) return localExcludes;
+    let text = '';
+    try {
+        text = fs.readFileSync(path.join(ROOT_DIR, LOCAL_EXCLUDE_FILE), 'utf8');
+    } catch (e) {
+        // Absent is the normal case. Present but unreadable aborts the release rather than shipping
+        // whatever it was meant to keep out.
+        if (e.code !== 'ENOENT') throw new Error(`${LOCAL_EXCLUDE_FILE} exists but cannot be read: ${e.message}`);
+    }
+    localExcludes = text.split(/\r?\n/)
+        .map((line) => line.replace(/#.*/, '').trim().replace(/\\/g, '/').replace(/^\.?\/+/, '').replace(/\/+$/, ''))
+        .filter(Boolean);
+    // The count only: the entries are private by definition, and build logs are not.
+    if (localExcludes.length) console.log(`   🔒 ${LOCAL_EXCLUDE_FILE}: ${localExcludes.length} local exclusion(s)`);
+    return localExcludes;
+}
+
+/**
+ * Does an exclusion entry cover this path? Entries are matched at PATH-SEGMENT boundaries, NOT as raw
+ * substrings. A bare directory name like `marketplace` or `logs` used with a naive `.includes()` also
+ * strips legitimate source whose path merely CONTAINS it — e.g. `backend/dist/routes/marketplace.js`
+ * (the compiled marketplace ROUTE), which silently vanished from the v1.6.0 bundle and crashed the
+ * backend on boot (`Cannot find module './marketplace'`). Segment matching keeps the top-level
+ * `marketplace/` catalog excluded while preserving `routes/marketplace.js`.
+ */
+function matchesEntry(relativePath, segments, entry) {
+    if (entry.includes('/')) {                                 // path fragment (e.g. backend/cli, .next/cache)
+        return relativePath === entry || relativePath.startsWith(entry + '/') ||
+            relativePath.includes('/' + entry + '/') || relativePath.endsWith('/' + entry);
+    }
+    return segments.includes(entry);                           // bare dir/file NAME → full-segment match
 }
 
 /** Is this path a build artifact we deliberately ship even though git ignores it? */
@@ -300,24 +355,17 @@ function shouldIgnore(filePath) {
     // Don't include the release folder itself
     if (relativePath.startsWith('release')) return true;
 
-    // Match ignore patterns at PATH-SEGMENT boundaries, NOT as raw substrings. A bare directory name
-    // like `marketplace` or `logs` used with a naive `.includes()` also strips legitimate source whose
-    // path merely CONTAINS it — e.g. `backend/dist/routes/marketplace.js` (the compiled marketplace
-    // ROUTE), which silently vanished from the v1.6.0 bundle and crashed the backend on boot
-    // (`Cannot find module './marketplace'`). Segment matching keeps the top-level `marketplace/`
-    // catalog excluded while preserving `routes/marketplace.js`.
+    // Match ignore patterns at PATH-SEGMENT boundaries (see matchesEntry).
     const segments = relativePath.split('/');
     const shippedCli = isShippedCli(relativePath);
     for (const pattern of IGNORE_PATTERNS) {
         if (pattern.startsWith('*')) continue;                 // extension globs are handled above
         if (pattern === 'backend/cli' && shippedCli) continue;  // product CLI carve-out (see CLI_SHIPPED)
-        if (pattern.includes('/')) {                           // path fragment (e.g. backend/cli, .next/cache)
-            if (relativePath === pattern || relativePath.startsWith(pattern + '/') ||
-                relativePath.includes('/' + pattern + '/') || relativePath.endsWith('/' + pattern)) return true;
-        } else if (segments.includes(pattern)) {               // bare dir/file NAME → full-segment match
-            return true;
-        }
+        if (matchesEntry(relativePath, segments, pattern)) return true;
     }
+
+    // What this public file must not name: the developer's own `.release-exclude` (see loadLocalExcludes).
+    if (loadLocalExcludes().some((entry) => matchesEntry(relativePath, segments, entry))) return true;
 
     // SECURITY: drop databases / private keys / TLS material — the secret DIRS are anchored to their
     // known top-level locations (SECRET_DIR_RE) so we never strip legitimate source (e.g.
@@ -387,5 +435,5 @@ async function createZip(sourceDir, outPath) {
 if (require.main === module) {
     run();
 } else {
-    module.exports = { shouldIgnore, IGNORE_PATTERNS, ROOT_DIR };
+    module.exports = { shouldIgnore, copyFiles, IGNORE_PATTERNS, ROOT_DIR };
 }

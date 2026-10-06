@@ -73,6 +73,9 @@ tsconfig.tsbuildinfo
 # WordJS Releases
 /release/
 /release-bundles/
+# Local release exclusions: private paths that must never ship, and so must never be named in the repo
+# (read by scripts/make-release.js, never bundled)
+/.release-exclude
 
 # System Files
 .DS_Store
