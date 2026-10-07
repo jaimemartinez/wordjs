@@ -174,6 +174,35 @@ let fileConfig: FileConfig = {};
 
 const crypto = require('crypto');
 
+// JWT secrets printed in this repository (defaultConfig above, the example config the deployment guide used
+// to ship, docker-compose's dev default). Anyone who has read them can sign a session.
+const PUBLISHED_JWT_SECRETS = new Set([
+    'wordjs-default-secret-change-me',
+    'auto-generated-secure-secret',
+    'wordjs-shared-dev-secret-change-me',
+]);
+// 64 hex characters = 32 random bytes, the shortest secret any WordJS generator has ever written.
+const MIN_PREINSTALL_JWT_SECRET_LENGTH = 64;
+
+/**
+ * Must boot replace this config's jwtSecret before anything signs with it?
+ *
+ * Always when it is missing, not a string (jsonwebtoken refuses it as key material, so the site could never
+ * issue a session) or the core placeholder. On a NOT-YET-INSTALLED config, also when it is short or any
+ * published placeholder: POST /setup/install persists the secret this process boots with, so whatever passes
+ * here becomes the site's permanent signing key. It has to be decided now, not at install, because
+ * core/collab-rooms derives a key from the live secret when it loads. An INSTALLED site keeps any other
+ * value: rotating it would sign every user out and split a multi-node tier that shares it.
+ */
+function jwtSecretNeedsReplacing(cfg: FileConfig): boolean {
+    const secret: unknown = cfg.jwtSecret;
+    if (typeof secret !== 'string' || !secret || secret === 'wordjs-default-secret-change-me') return true;
+    // Same predicate as core/configManager.isInstalledConfig. Not imported: that module resolves its file
+    // against the CWD when it loads, and config/app loads before anything else.
+    const installed = !!(cfg.installedAt || cfg.dbDriver);
+    return !installed && (secret.length < MIN_PREINSTALL_JWT_SECRET_LENGTH || PUBLISHED_JWT_SECRETS.has(secret));
+}
+
 // In the HOST: load wordjs-config.json and auto-generate/persist secrets. SKIP entirely inside an
 // isolated plugin worker (global.__WORDJS_ISOLATED__) — that file is outside the worker's sandbox
 // and the worker never needs these host secrets (it reaches config via the bridge). This avoids
@@ -194,8 +223,8 @@ if (!(globalThis as any).__WORDJS_ISOLATED__) {
     // 1.5 Secure Auto-Generation — generate secure keys ONLY if config exists but is insecure.
     let configChanged = false;
     if (fs.existsSync(configPath)) {
-        if (!fileConfig.jwtSecret || fileConfig.jwtSecret === 'wordjs-default-secret-change-me') {
-            fileConfig.jwtSecret = crypto.randomBytes(32).toString('hex');
+        if (jwtSecretNeedsReplacing(fileConfig)) {
+            fileConfig.jwtSecret = crypto.randomBytes(64).toString('hex');
             configChanged = true;
             console.log('🔐 Generated secure JWT secret for existing config.');
         }
@@ -236,10 +265,13 @@ function envInt(name: string, fallback: number, min: number, max: number): numbe
     return value;
 }
 
-// SECURITY: ephemeral fallback secret for when none is configured (see jwt.secret below).
-const EPHEMERAL_JWT_SECRET: string = crypto.randomBytes(32).toString('hex');
+// SECURITY: ephemeral fallback secret for when none is configured (see jwt.secret below). It is also
+// the value POST /setup/install persists — the installer adopts the secret this process already signs
+// with instead of minting another — so it carries the 64 bytes the installer used to generate, as does
+// the boot-time replacement above.
+const EPHEMERAL_JWT_SECRET: string = crypto.randomBytes(64).toString('hex');
 if (!fileConfig.jwtSecret) {
-    console.warn('⚠️  No JWT secret configured — using an ephemeral random secret (tokens reset on restart). Complete setup to persist one.');
+    console.warn('⚠️  No JWT secret configured — using an ephemeral random secret (tokens reset on restart). Completing setup persists it.');
 }
 
 const config: AppConfig = {
@@ -341,7 +373,8 @@ const config: AppConfig = {
         // anyone forge admin tokens. When no secret is configured (e.g. pre-install,
         // missing wordjs-config.json) use a per-process random secret so issued tokens
         // are unforgeable. Such tokens simply don't survive a restart, which is the
-        // correct behavior for a not-yet-configured instance.
+        // correct behavior for a not-yet-configured instance — until the installer
+        // persists this very value (routes/setup.ts), after which they do.
         secret: fileConfig.jwtSecret || EPHEMERAL_JWT_SECRET,
         expiresIn: '2h'
     },

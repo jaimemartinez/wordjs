@@ -509,8 +509,17 @@ router.post('/install', async (req: Request, res: Response) => {
     const path = require('path');
 
     // SECURITY: Auto-generate cryptographically secure secrets
-    const jwtSecret = crypto.randomBytes(64).toString('hex');
     const gatewaySecret = crypto.randomBytes(32).toString('hex');
+    // The JWT secret is NOT minted here: the one to persist is the one this process is ALREADY signing
+    // with — the per-boot random secret of an unconfigured box, or whatever enrollment / boot-time
+    // auto-generation put in the config before boot (config/app.ts). Minting a fresh one wrote secret B
+    // to disk while the live process kept signing with A, so every session issued between the install and
+    // the first restart — this handler's own auto-login included — was answered 401 rest_token_invalid
+    // once the restart loaded B. Persisting A leaves no moment at which the two differ, and never
+    // changes the live secret, so nothing derived from it at module load (collab-rooms' replica key)
+    // goes stale either. Persisting it also makes it permanent, which is why config/app.ts replaces a
+    // short, non-string or published pre-install value at boot, before anything signs with it.
+    const jwtSecret = config.jwt.secret;
 
     // Was this node provisioned by CLUSTER ENROLLMENT (scripts/node-join.js, separate mode)? If so the
     // gateway is the cluster CA: it already issued this node a CN=backend identity, handed it the shared
@@ -575,7 +584,8 @@ router.post('/install', async (req: Request, res: Response) => {
         gatewayHost: isEnrolledNode ? enrolledConfig.gatewayHost : host.split(':')[0],
         // Rotating this on an enrolled node would desynchronise it from the gateway's shared secret.
         gatewaySecret: isEnrolledNode ? enrolledConfig.gatewaySecret : gatewaySecret,
-        jwtSecret: jwtSecret, // Store in config for reference
+        // The live signing secret (see above) — what the next boot will sign and verify with.
+        jwtSecret,
         // Database selection (chosen in the installer). SQLite drivers use their own file; Postgres
         // stores a connection object. The driver layer reads these from the live config.
         dbDriver,

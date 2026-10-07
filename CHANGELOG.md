@@ -34,6 +34,24 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **Sessions issued right after the install survive the first restart.** A fresh instance signs with a
+  per-boot random JWT secret until it is configured, and `POST /setup/install` generated a *different* one
+  and wrote it to `wordjs-config.json` while the running process kept signing with the first — so the
+  wizard's own auto-login and every login made before the first backend restart were answered `401
+  rest_token_invalid` once the restart loaded the persisted secret. The same happened on an enrolled
+  separate-mode node, where the installer also rotated away the secret `node-join` had written. The
+  installer now persists the secret the process is already signing with, so the live and persisted values
+  never differ and the live secret never changes mid-process (keys derived from it at load, such as the
+  collaborative editor's replica identity, stay valid). **A `jwtSecret` written into a config before the
+  install (by hand, `node-join`, `npm run setup`) is therefore now kept, where the installer used to
+  replace it.** So that a weak value cannot become the permanent key, a not-yet-installed config's
+  `jwtSecret` is replaced at boot, before anything signs with it, when it is shorter than 64 characters,
+  not a string, or a placeholder printed in this repository (such as the `auto-generated-secure-secret` of
+  the deployment guide's old example config, which the guide no longer shows). An installed site's
+  secret is never rotated. Every JWT secret the backend generates (the per-boot one and the boot-time
+  replacement) is now 64 random bytes, as the installer's was. Covered in monolith, split and enrolled-node
+  modes by a backend test that installs, restarts and re-authenticates, including a session forged with a
+  pre-seeded placeholder, and by the split-mode leg of `scripts/smoke-deploy.sh`.
 - **Conference Manager 2.2.0 — the plugin can be activated again, and 23 defects from a functional audit are
   closed.** Activation had failed since the 2026-08-15 hardening (a `DEFAULT '{}'` column definition was
   refused by the column-definition allowlist — fixed in core, see above). In the plugin: the portal's bulk
