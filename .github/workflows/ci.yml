@@ -374,7 +374,15 @@ jobs:
     # coverage runs in parallel instead of extending this one — was rejected on purpose: the ratchet has
     # to gate the SAME suite this job certifies, and a second job would install and boot everything again
     # to measure the identical thing.
-    timeout-minutes: 32
+    #
+    # RAISED 32 -> 45 on 2026-10-07, measured: the suite now runs twice in this job on ~245 test files,
+    # and a run that adds no tests (#397, dependency bumps only) took 31m24s, 36s under the wall; #396 took
+    # 25m39s. The site-address change adds 13 backend suites, several of them driving real sockets, and its
+    # run was still passing tests (1259 so far, alphabetically at `sudo-classes`) when 32 minutes cut it off.
+    # 45 is that measured cost plus the cold-cache margin this budget was always sized with, and it still
+    # turns a real hang red well inside the hour. If it is approached again, the fix is to run the unit
+    # suite once (the coverage step's run can certify it), not another raise.
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:16
