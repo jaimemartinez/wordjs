@@ -313,7 +313,8 @@ async function importSite(data: any, options: Record<string, any> = {}) {
                     // NOT write user_pass from the import at all.
                     const crypto = require('crypto');
                     const newUser = await User.create({
-                        username: user.username,
+                        // A login from an older WordJS may predate the username rule (models/User.ts).
+                        username: User.importableUsername(user.username),
                         email: user.email,
                         password: crypto.randomBytes(24).toString('hex'),
                         displayName: user.displayName,
