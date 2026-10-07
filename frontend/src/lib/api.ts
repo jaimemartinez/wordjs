@@ -351,6 +351,9 @@ export interface Plugin {
         scope: string;
         access: string;
         reason: string;
+        // Projected by GET /plugins (not in the manifest): browser:script for a plugin that ships browser
+        // code but predates the permission, so the admin can still see and revoke the upgrade-time grant.
+        undeclared?: boolean;
     }[];
     requestedPermissions?: string[];  // "scope:access" tokens the manifest requests (the togglable set)
     grantedPermissions?: string[];    // tokens the admin has granted (subset of requested + optional "network")

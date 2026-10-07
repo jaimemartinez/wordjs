@@ -24,7 +24,7 @@
 
 exports.metadata = {
     name: 'Auctions',
-    version: '1.0.0',
+    version: '1.0.1',
     description: 'Auction listings with public bidding, minimum increments, anti-snipe extension and winner reporting.',
     author: 'WordJS',
 };

@@ -15,7 +15,7 @@
 
 exports.metadata = {
     name: 'Job Board',
-    version: '1.0.0',
+    version: '1.0.1',
     description: 'Job listings + public applications with anti-spam + applications inbox',
     author: 'WordJS',
 };
