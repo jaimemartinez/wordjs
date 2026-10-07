@@ -29,10 +29,11 @@ it does so **only when `WORDJS_PRESEED_CONFIG=1`**, and never over an existing c
 
 > **Why that is opt-in.** `core/configManager.isInstalled()` keys off `installedAt || dbDriver`, so any
 > config written before first boot marks the instance **installed** — and `POST /api/v1/setup/install`
-> then answers `400 Already installed` for the life of that volume. The container serves pages, but no
-> administrator can ever be created (the CMS bootstrap deliberately seeds none — see the enrollment leg
-> of `scripts/smoke-deploy.sh`), so nobody can log in. Pre-seeding unconditionally, as this entrypoint
-> used to, therefore shipped an image that could not be installed. The default now writes nothing: the
+> then answers `400 Already installed` for the life of that volume. Nobody chooses the administrator:
+> on its first boot over an **empty** database the backend creates a bootstrap administrator `admin`
+> with a random password, written (mode 0600) to `backend/data/initial-admin-password` and printed only
+> to a terminal. Pre-seeding unconditionally, as this entrypoint used to, therefore shipped an image that
+> skipped the wizard and could not be installed the normal way. The default now writes nothing: the
 > container boots into **setup mode**, mints an install token and serves `/install`. Pre-seed only when
 > you mean to skip the wizard — an external database, or a replica joining an already-installed site.
 
@@ -47,11 +48,20 @@ throws), which is exactly right on a first boot. The same holds for `npm run sit
 container (`docker compose exec wordjs npm run site -- list`). A **regular** file at that path — baked in or bind-mounted — is left alone and wins.
 
 > **Password gotcha (real, load-bearing):** `backend/src/config/app.ts` regenerates and persists a
-> random `dbPassword` when the flat key is missing **or literally `"password"`**, and a random
-> `jwtSecret` when it is missing or the placeholder. On multi-node that hands each replica a *different*
-> secret and breaks both the shared-Postgres login and cross-node token validation. The entrypoint
-> therefore always writes concrete values — supply `WORDJS_DB_PASSWORD` and `WORDJS_JWT_SECRET`
-> (identical on every replica, and **not** `"password"`) via the environment.
+> random `dbPassword` when the flat key is missing **or literally `"password"`**. On multi-node that
+> hands each replica a *different* value and breaks the shared-Postgres login. The entrypoint therefore
+> always writes concrete values — supply `WORDJS_DB_PASSWORD` (identical on every replica, and **not**
+> `"password"`) via the environment.
+
+> **`WORDJS_JWT_SECRET` is required when pre-seeding.** It is the key every session is signed with, and
+> the config the entrypoint writes is an *installed* one. It used to default to a placeholder printed in
+> this repository, which let anyone who had read it sign a session for the bootstrap administrator
+> (user id 1). There is no default any more: with `WORDJS_PRESEED_CONFIG=1` the entrypoint exits with an
+> error unless `WORDJS_JWT_SECRET` is set, at least 64 characters long, and made of `A-Z a-z 0-9 . _ ~ +
+> / = -`. Generate it with `openssl rand -hex 64` and give **every replica the same value**. The backend
+> also refuses to start on an installed config whose `jwtSecret` is one of those published placeholders
+> (rather than rotate it, which would desync the replicas); a volume pre-seeded by an older image needs
+> its `jwtSecret` replaced by hand, or the volume recreated with the variable set.
 
 ### Environment variables the entrypoint reads
 
@@ -62,7 +72,7 @@ container (`docker compose exec wordjs npm run site -- list`). A **regular** fil
 | `WORDJS_DB_HOST` / `WORDJS_DB_PORT` | `localhost` / `5432` | shared Postgres address |
 | `WORDJS_DB_USER` / `WORDJS_DB_NAME` | `postgres` / `wordjs` | Postgres role + database |
 | `WORDJS_DB_PASSWORD` | `wordjs` | **must not be `password`** (see gotcha) |
-| `WORDJS_JWT_SECRET` | dev placeholder | **share across replicas** |
+| `WORDJS_JWT_SECRET` | *(none — required)* | session signing key, ≥ 64 characters (`openssl rand -hex 64`); **share across replicas** |
 | `WORDJS_REDIS_ENABLED` | `false` | `true` turns on cross-node coherence |
 | `WORDJS_REDIS_HOST` / `WORDJS_REDIS_PORT` | `127.0.0.1` / `6379` | shared Redis |
 | `WORDJS_SITE_URL` | `http://localhost:3000` | public origin, written as `siteUrl` (the main address) in the generated config. In **setup mode** (the default) it is only a **suggestion**: the install wizard prefills its *Site address* field with the address you are browsing and offers this value (when it is not a loopback address) as the server's suggested address; it also labels the entrypoint's "finish setup at …" log line. It never overrides an installed main address — see [`documentation/site-address.md`](../documentation/site-address.md) |
@@ -71,7 +81,12 @@ container (`docker compose exec wordjs npm run site -- list`). A **regular** fil
 
 ## Stack (`docker-compose.yml`)
 
-`docker compose up --build` brings up **Postgres 16 + Redis 7 + two app replicas** (`app`, `app2`) that
+```sh
+export WORDJS_JWT_SECRET="$(openssl rand -hex 64)"   # or WORDJS_JWT_SECRET=... in a .env file here
+docker compose up --build
+```
+
+brings up **Postgres 16 + Redis 7 + two app replicas** (`app`, `app2`) that
 share the same Postgres, the same Redis, and the same `jwtSecret` — two nodes of the horizontally-scaled
 backend tier from [`documentation/multi-node.md`](../documentation/multi-node.md). Browse `app` on
 `http://localhost:3000` and `app2` on `http://localhost:3001`.
@@ -98,11 +113,15 @@ backend tier from [`documentation/multi-node.md`](../documentation/multi-node.md
   `multi-node.md`; until then, plugin-activation fan-out across nodes is not representative here.
 - **TLS is terminated as plain HTTP** inside the containers (`WORDJS_HTTP=1`). Put a reverse proxy
   (Nginx/Caddy/Cloudflare) or the built-in gateway HTTPS in front for a real deployment.
-- **You cannot log in.** Both replicas set `WORDJS_PRESEED_CONFIG=1` — they must, because the database is
-  external and because `app2` has to join the site rather than install one — so both come up already
-  "installed" and the wizard never runs. No administrator is created (the bootstrap deliberately seeds
-  none). This stack demonstrates coherence and public browsing; it is not a site you can administer. For
-  that, use [`deploy/compose`](../deploy/compose): one container, SQLite, wizard-driven.
+- **The wizard never runs.** Both replicas set `WORDJS_PRESEED_CONFIG=1` — they must, because the
+  database is external and because `app2` has to join the site rather than install one — so both come up
+  already "installed". The administrator is therefore not one you chose: the replica that seeds the empty
+  database creates `admin` (email `admin@example.com`) with a random password and writes it to its own
+  data volume — `docker compose exec app cat /app/backend/data/initial-admin-password` (try `app2` if
+  that replica won the boot lease). You **can** log in with it; sign in, change the password and the
+  address, and delete the file. The site is only as safe as `WORDJS_JWT_SECRET`, which is why the stack
+  refuses to render without one. For a wizard-driven install, use [`deploy/compose`](../deploy/compose):
+  one container, SQLite.
 
 ## CI coverage
 

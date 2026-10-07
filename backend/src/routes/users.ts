@@ -475,7 +475,8 @@ router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
  *       400:
  *         description: >-
  *           rest_missing_param (username/email/password absent), rest_invalid_param (malformed primary
- *           email), rest_invalid_personal_email, or rest_user_exists.
+ *           email, or a username outside letters/digits/. _ - or longer than 60 characters),
+ *           rest_invalid_personal_email, or rest_user_exists.
  *         content:
  *           application/json:
  *             schema:
@@ -506,6 +507,12 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
             message: 'Username, email, and password are required.',
             data: { status: 400 }
         });
+    }
+
+    // The username rule (models/User.ts) — User.create enforces it too; checked here for a clean 400.
+    const usernameProblem = User.usernameError(username);
+    if (usernameProblem) {
+        return res.status(400).json({ code: 'rest_invalid_param', message: usernameProblem, data: { status: 400 } });
     }
 
     // The PRIMARY email must be a real address. User.create enforces the same rule (it is the model-level
