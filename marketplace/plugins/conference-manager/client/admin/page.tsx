@@ -1,7 +1,7 @@
 // @ts-nocheck
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { ConferenceProvider, useConference } from "../contexts/ConferenceContext";
 // Import from GLOBAL context/lib
 import { useI18n } from "../../../../../frontend/src/contexts/I18nContext";
@@ -9,57 +9,149 @@ import { registerTranslations } from "../../../../../frontend/src/lib/i18n";
 import { useToast } from "../../../../../frontend/src/contexts/ToastContext";
 // Import local translations data
 import { translations } from "../lib/i18n";
-import { conferenceApi, Conference, Inscription, Hotel, Room, Location, ConferenceField, Payment, buildInscriptionPayload, seedLocationId, isImageProof, fmtMoney, paymentActions } from "../lib/conference";
+import { conferenceApi, PAYMENT_METHODS, Conference, Inscription, Hotel, Room, Location, ConferenceField, Payment, LodgingReview, buildInscriptionPayload, seedLocationId, isImageProof, fmtMoney, paymentActions, isLodgingFrozen } from "../lib/conference";
 import { useModal } from "@/contexts/ModalContext";
+import TransportPage from "./TransportPage";
+import AccountingPage from "./AccountingPage";
+import MealsPage from "./MealsPage";
+import { code128Svg, code128Png } from "../lib/barcode";
+import { buildXlsx, downloadXlsx } from "../lib/xlsx";
+import { availableColumns, defaultColumnKeys, filterRoster, buildRosterSheet, buildHotelReport, exportFilename, transportByPerson, withoutColumn } from "../lib/exports";
 import { StatCard } from "../../../../../frontend/src/components/ui/StatCard";
 import { ActionCard } from "../../../../../frontend/src/components/ui/ActionCard";
+// Lodging explorer (2.13.0) and the pure helpers it shares with this page (status meta, display
+// names, field values, {placeholder} filling) — they live in lib/lodgingView.ts so the explorer never
+// imports this file.
+import LodgingExplorer from "./LodgingExplorer";
+import { fieldVal, fillVars, lodgingStatusMeta, personDisplayName, withName, indexOccupants } from "../lib/lodgingView";
+// Staff & permissions (2.15.0): who sees which view and which controls (perms.tsx); «Equipo y permisos».
+import { PermsProvider, usePerms, hasAnySection, ReadOnlyNotice, canReadRoster, canReadHotels } from "./perms";
+import type { Perms } from "./perms";
+import StaffPage from "./StaffPage";
+import { useTx } from "./MealScanner";
 
 // Register plugin translations
 registerTranslations(translations);
 
-type View = 'list' | 'dashboard' | 'inscriptions' | 'lodging' | 'locations' | 'reports' | 'assignment' | 'fields' | 'pricing';
+type View = 'list' | 'dashboard' | 'inscriptions' | 'lodging' | 'transport' | 'meals' | 'accounting' | 'locations' | 'reports' | 'assignment' | 'fields' | 'pricing' | 'staff';
+
+/** The conference views in tab order (the first one the role may open is the default). */
+const TAB_VIEWS: View[] = ['dashboard', 'inscriptions', 'lodging', 'transport', 'meals', 'locations', 'assignment', 'fields', 'pricing', 'reports', 'accounting', 'staff'];
+
+/**
+ * View → section (2.15.0). «Inscripciones» opens with Inscripciones › ver OR Pagos › ver (the fee
+ * payments live in each attendee's row there); «Asignación» belongs to Hospedaje; «Campos» and «Precios»
+ * to Configuración; «Alimentación» opens with the meals plan (view) OR the kitchen's delivery (operate);
+ * «Equipo y permisos» is for WordJS administrators only. The conference list is open to every staff member.
+ */
+const viewAllowed = (v: View, p: Perms): boolean => {
+    switch (v) {
+        case 'list': return true;
+        case 'dashboard': return p.can('dashboard');
+        case 'inscriptions': return p.can('inscriptions') || p.can('payments');
+        case 'lodging': return p.can('lodging');
+        case 'assignment': return p.can('lodging');
+        case 'transport': return p.can('transport');
+        case 'meals': return p.can('meals') || p.can('meals_delivery', 'manage');
+        case 'locations': return p.can('locations');
+        case 'fields': return p.can('settings');
+        case 'pricing': return p.can('settings');
+        case 'reports': return p.can('reports');
+        case 'accounting': return p.can('accounting');
+        case 'staff': return p.isAdmin;
+        default: return false;
+    }
+};
+const firstAllowedView = (p: Perms): View => TAB_VIEWS.find(v => viewAllowed(v, p)) || 'list';
+
+// LODGING_STATUS_META / lodgingStatusMeta and withName ({name} placeholder; t() has no interpolation)
+// moved to lib/lodgingView.ts in 2.13.0.
 
 function ConferenceManagerContent() {
-    const { currentConference, conferences, setCurrentConference, refreshConferences, loading } = useConference();
+    const { currentConference, setCurrentConference, loading } = useConference();
     // useI18n from global context
-    const { t, language } = useI18n();
+    const { t } = useI18n();
+    const tx = useTx();
+    const perms = usePerms();
     const [view, setViewState] = useState<View>('list');
-    const [selectedConferenceId, setSelectedConferenceId] = useState<number | null>(null);
+    const firstView = firstAllowedView(perms);
 
-    // Initialize state from local storage
+    // Initialize state from local storage — a saved view the role may not open falls back to the first
+    // one it may (the conference list stays the start page when nothing was saved).
     useEffect(() => {
         const savedView = localStorage.getItem('conference-manager:view') as View;
-        if (savedView && ['list', 'dashboard', 'inscriptions', 'lodging', 'locations', 'assignment', 'fields', 'pricing', 'reports'].includes(savedView)) {
-            setViewState(savedView);
+        if (savedView && ['list', 'dashboard', 'inscriptions', 'lodging', 'transport', 'meals', 'locations', 'assignment', 'fields', 'pricing', 'reports', 'accounting', 'staff'].includes(savedView)) {
+            setViewState(viewAllowed(savedView, perms) ? savedView : firstView);
         }
     }, []);
 
     const setView = (newView: View) => {
-        setViewState(newView);
-        localStorage.setItem('conference-manager:view', newView);
+        const next = viewAllowed(newView, perms) ? newView : firstView;
+        setViewState(next);
+        try { localStorage.setItem('conference-manager:view', next); } catch { /* blocked storage */ }
     };
 
-    // Cuando se selecciona una conferencia, cambiar a dashboard
+    // «Ver ocupación» (Hoteles y habitaciones) → the lodging explorer in «Asignación», opened at that
+    // hotel / room. The explorer consumes the focus once and clears it (onFocusConsumed); it never goes
+    // through the browser history (the admin lives inside the Next.js app router).
+    const [lodgingFocus, setLodgingFocus] = useState<{ hotelId: number; roomId?: number | null } | null>(null);
+    const openLodgingExplorer = (focus: { hotelId: number; roomId?: number | null }) => {
+        setLodgingFocus({ hotelId: Number(focus.hotelId), roomId: focus.roomId != null ? Number(focus.roomId) : null });
+        setView('assignment');
+    };
+
+    // Cuando se selecciona una conferencia, cambiar a dashboard (o a la primera vista que permita el rol)
     const handleManageConference = (conference: Conference) => {
         setCurrentConference(conference);
-        setSelectedConferenceId(conference.id);
-        setView('dashboard');
+        setView(viewAllowed('dashboard', perms) ? 'dashboard' : firstView);
     };
 
-    // Cuando se cambia de vista, asegurar que hay una conferencia seleccionada
+    // Cuando se cambia de vista, asegurar que hay una conferencia seleccionada («Equipo y permisos» no la
+    // necesita: es del plugin entero).
     useEffect(() => {
-        if (!loading && view !== 'list' && !currentConference) {
+        if (!loading && view !== 'list' && view !== 'staff' && !currentConference) {
             setView('list');
         }
     }, [view, currentConference, loading]);
 
-    if (view === 'list') {
-        return <ConferenceList onManage={handleManageConference} />;
+    // A view the role may not open is never drawn, not even for one render.
+    const shown: View = viewAllowed(view, perms) ? view : firstView;
+    const openStaff = perms.isAdmin ? () => setView('staff') : undefined;
+
+    if (shown === 'list') {
+        return <ConferenceList onManage={handleManageConference} onOpenStaff={openStaff} />;
+    }
+
+    // «Equipo y permisos» without a conference selected (no conference yet, or opened from the list).
+    if (shown === 'staff' && !currentConference) {
+        return (
+            <div className="h-full overflow-auto p-6">
+                <button type="button" onClick={() => setView('list')} className="mb-4 text-gray-400 hover:text-gray-600 transition-colors inline-flex items-center gap-2 text-sm font-bold">
+                    <i className="fa-solid fa-arrow-left"></i>{tx('staff.back.list', 'Volver a los congresos')}
+                </button>
+                <StaffPage />
+            </div>
+        );
     }
 
     if (!currentConference) {
-        return <ConferenceList onManage={handleManageConference} />;
+        return <ConferenceList onManage={handleManageConference} onOpenStaff={openStaff} />;
     }
+
+    const tabs = [
+        { name: t('dashboard'), view: 'dashboard' as View, icon: 'fa-chart-pie' },
+        { name: t('inscriptions'), view: 'inscriptions' as View, icon: 'fa-users' },
+        { name: t('lodging'), view: 'lodging' as View, icon: 'fa-bed' },
+        { name: t('transport') || 'Transporte', view: 'transport' as View, icon: 'fa-bus' },
+        { name: t('meals') || 'Alimentación', view: 'meals' as View, icon: 'fa-utensils' },
+        { name: t('locations'), view: 'locations' as View, icon: 'fa-map-marker-alt' },
+        { name: t('assignment'), view: 'assignment' as View, icon: 'fa-wand-magic-sparkles' },
+        { name: t('fields'), view: 'fields' as View, icon: 'fa-list-check' },
+        { name: t('pricing') || 'Precios', view: 'pricing' as View, icon: 'fa-tags' },
+        { name: t('reports'), view: 'reports' as View, icon: 'fa-file-lines' },
+        { name: t('accounting') || 'Contabilidad', view: 'accounting' as View, icon: 'fa-scale-balanced' },
+        { name: tx('staff', 'Equipo y permisos'), view: 'staff' as View, icon: 'fa-user-shield' },
+    ].filter(tab => viewAllowed(tab.view, perms));
 
     return (
         <div className="h-full flex flex-col overflow-hidden">
@@ -88,17 +180,8 @@ function ConferenceManagerContent() {
                 </div>
 
                 <div className="flex border-b border-gray-200 mb-6 overflow-x-auto">
-                    {[
-                        { name: t('dashboard'), view: 'dashboard' as View, icon: 'fa-chart-pie' },
-                        { name: t('inscriptions'), view: 'inscriptions' as View, icon: 'fa-users' },
-                        { name: t('lodging'), view: 'lodging' as View, icon: 'fa-bed' },
-                        { name: t('locations'), view: 'locations' as View, icon: 'fa-map-marker-alt' },
-                        { name: t('assignment'), view: 'assignment' as View, icon: 'fa-wand-magic-sparkles' },
-                        { name: t('fields'), view: 'fields' as View, icon: 'fa-list-check' },
-                        { name: t('pricing') || 'Precios', view: 'pricing' as View, icon: 'fa-tags' },
-                        { name: t('reports'), view: 'reports' as View, icon: 'fa-file-lines' },
-                    ].map((tab) => {
-                        const isActive = view === tab.view;
+                    {tabs.map((tab) => {
+                        const isActive = shown === tab.view;
                         return (
                             <button
                                 key={tab.view}
@@ -119,25 +202,80 @@ function ConferenceManagerContent() {
 
             <div className="flex-1 px-6 pb-6 overflow-hidden min-h-0">
                 <div className="h-full bg-white rounded-xl shadow-sm border border-gray-200 p-6 overflow-auto flex flex-col">
-                    {view === 'dashboard' && <ConferenceDashboard conferenceId={currentConference.id} onNavigate={setView} />}
-                    {view === 'inscriptions' && <InscriptionsPage conferenceId={currentConference.id} />}
-                    {view === 'lodging' && <LodgingPage conferenceId={currentConference.id} />}
-                    {view === 'locations' && <LocationsPage conferenceId={currentConference.id} />}
-                    {view === 'assignment' && <AssignmentPage conferenceId={currentConference.id} />}
-                    {view === 'fields' && <FieldsPage conferenceId={currentConference.id} />}
-                    {view === 'pricing' && <PricingPage conferenceId={currentConference.id} />}
-                    {view === 'reports' && <ReportsPage conferenceId={currentConference.id} />}
+                    {shown === 'dashboard' && <ConferenceDashboard conferenceId={currentConference.id} onNavigate={setView} />}
+                    {shown === 'inscriptions' && <InscriptionsPage conferenceId={currentConference.id} />}
+                    {shown === 'lodging' && <LodgingPage conferenceId={currentConference.id} onOpenExplorer={openLodgingExplorer} />}
+                    {shown === 'transport' && <TransportPage conferenceId={currentConference.id} slug={currentConference.slug} />}
+                    {shown === 'meals' && <MealsPage conferenceId={currentConference.id} slug={currentConference.slug} conference={currentConference} />}
+                    {shown === 'accounting' && <AccountingPage conferenceId={currentConference.id} slug={currentConference.slug} />}
+                    {shown === 'locations' && <LocationsPage conferenceId={currentConference.id} />}
+                    {shown === 'assignment' && <AssignmentPage conferenceId={currentConference.id} focus={lodgingFocus} onFocusConsumed={() => setLodgingFocus(null)} />}
+                    {shown === 'fields' && <FieldsPage conferenceId={currentConference.id} />}
+                    {shown === 'pricing' && <PricingPage conferenceId={currentConference.id} />}
+                    {shown === 'reports' && <ReportsPage conferenceId={currentConference.id} />}
+                    {shown === 'staff' && <StaffPage />}
                 </div>
             </div>
         </div>
     );
 }
 
+/**
+ * The page root (2.15.0): GET /staff/me first. While it loads, the usual spinner; a signed-in WordJS user
+ * who is neither an administrator nor on the team (or whose role opens nothing) gets a friendly screen
+ * instead of a page of 403s. Everyone else gets the admin, filtered by their role.
+ */
+function PermsGate() {
+    const perms = usePerms();
+    const tx = useTx();
+    if (perms.loading) {
+        return (
+            <div className="text-center py-20">
+                <div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+                <p className="text-gray-500">{tx('loading', 'Cargando...')}</p>
+            </div>
+        );
+    }
+    if (perms.error) {
+        return (
+            <div className="max-w-lg mx-auto text-center py-20 px-6 space-y-4" role="alert">
+                <i className="fa-solid fa-triangle-exclamation text-3xl text-rose-400"></i>
+                <p className="text-sm font-bold text-rose-700">{tx('perm.load.failed', 'No se pudieron cargar tus permisos.')}</p>
+                <p className="text-xs text-gray-500">{perms.error}</p>
+                <button type="button" onClick={perms.reload} className="px-6 py-3 rounded-2xl bg-white border-2 border-gray-100 text-gray-700 hover:border-blue-400 font-black text-[10px] uppercase tracking-widest">{tx('staff.retry', 'Reintentar')}</button>
+            </div>
+        );
+    }
+    if (!perms.isAdmin && (!perms.isStaff || !hasAnySection(perms))) {
+        return (
+            <div className="max-w-xl mx-auto text-center py-20 px-6" data-no-access="">
+                <div className="w-20 h-20 mx-auto mb-6 rounded-3xl bg-gray-50 border border-gray-100 flex items-center justify-center text-gray-300 text-3xl">
+                    <i className="fa-solid fa-user-lock"></i>
+                </div>
+                <h2 className="text-2xl font-black text-gray-900 italic tracking-tighter mb-3">{tx('perm.noaccess.title', 'Sin acceso')}</h2>
+                <p className="text-base font-medium text-gray-600 leading-relaxed">{tx('perm.noaccess', 'No tienes acceso a este módulo. Pide al administrador que te añada al equipo.')}</p>
+            </div>
+        );
+    }
+    return (
+        <ConferenceProvider>
+            <ConferenceManagerContent />
+        </ConferenceProvider>
+    );
+}
+
 // Conference List Component
-function ConferenceList({ onManage }: { onManage: (conf: Conference) => void }) {
-    const { conferences, refreshConferences } = useConference();
+function ConferenceList({ onManage, onOpenStaff }: { onManage: (conf: Conference) => void; onOpenStaff?: () => void }) {
+    const { conferences, refreshConferences, loading: confLoading } = useConference();
     const { t } = useI18n();
+    const tx = useTx();
     const { addToast } = useToast();
+    // Creating / deleting a conference is Configuración › gestionar; the per-card counts are read only
+    // from the sections the role may see (no request is made just to be refused).
+    const perms = usePerms();
+    const canManageSettings = perms.can('settings', 'manage');
+    const canCountPeople = canReadRoster(perms);
+    const canCountHotels = canReadHotels(perms);
     const [loading, setLoading] = useState(true);
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [newConference, setNewConference] = useState({
@@ -162,8 +300,8 @@ function ConferenceList({ onManage }: { onManage: (conf: Conference) => void }) 
             for (const conf of conferences) {
                 try {
                     const [inscriptions, hotels] = await Promise.all([
-                        conferenceApi.getInscriptions(conf.id).catch(() => []),
-                        conferenceApi.getHotels(conf.id).catch(() => [])
+                        canCountPeople ? conferenceApi.getInscriptions(conf.id).catch(() => []) : Promise.resolve([]),
+                        canCountHotels ? conferenceApi.getHotels(conf.id).catch(() => []) : Promise.resolve([])
                     ]);
 
                     stats[conf.id] = {
@@ -242,16 +380,32 @@ function ConferenceList({ onManage }: { onManage: (conf: Conference) => void }) 
 
     return (
         <div className="p-10 space-y-10 animate-in fade-in duration-500">
-            <div className="flex justify-between items-end mb-8">
+            <div className="flex flex-wrap justify-between items-end gap-4 mb-8">
                 <div>
                     <h2 className="text-4xl font-black text-gray-900 italic tracking-tighter mb-2">{t('conference.list')}</h2>
                     <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">{t('conference.manager.description')}</p>
                 </div>
+                {onOpenStaff && (
+                    <button
+                        type="button"
+                        onClick={onOpenStaff}
+                        className="px-6 py-3 bg-white border-2 border-gray-100 hover:border-indigo-500 hover:text-indigo-600 text-gray-700 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2"
+                    >
+                        <i className="fa-solid fa-user-shield"></i>{tx('staff', 'Equipo y permisos')}
+                    </button>
+                )}
             </div>
 
+            {!confLoading && !canManageSettings && conferences.length === 0 && (
+                <div className="text-center py-16 px-6 bg-gray-50/50 border-2 border-dashed border-gray-100 rounded-3xl">
+                    <i className="fa-solid fa-calendar-xmark text-3xl text-gray-300 mb-3"></i>
+                    <p className="text-sm font-bold text-gray-500">{tx('perm.no.conferences', 'Todavía no hay congresos. Un administrador debe crearlos.')}</p>
+                </div>
+            )}
+
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {/* Nueva Conferencia Card - Premium */}
-                <div
+                {/* Nueva Conferencia Card - Premium (Configuración › gestionar) */}
+                {canManageSettings && <div
                     onClick={() => setShowCreateModal(true)}
                     className="group bg-gradient-to-br from-blue-600 to-indigo-700 rounded-[40px] p-8 flex flex-col items-center justify-center text-white hover:shadow-2xl hover:shadow-blue-500/40 hover:-translate-y-2 transition-all duration-500 cursor-pointer min-h-[320px] relative overflow-hidden ring-4 ring-white ring-offset-4 ring-offset-gray-50"
                 >
@@ -266,7 +420,7 @@ function ConferenceList({ onManage }: { onManage: (conf: Conference) => void }) 
                         <span className="font-black text-2xl italic tracking-tight">{t('create.conference')}</span>
                         <span className="mt-2 text-xs font-bold uppercase tracking-widest text-blue-200 group-hover:text-white transition-colors">Comenzar nuevo evento</span>
                     </div>
-                </div>
+                </div>}
 
                 {/* Conference Cards */}
                 {conferences.map(conf => {
@@ -300,13 +454,13 @@ function ConferenceList({ onManage }: { onManage: (conf: Conference) => void }) 
                                         <i className={`fa-solid ${conf.status === 'active' ? 'fa-satellite-dish' : 'fa-box-archive'}`}></i>
                                     </div>
                                     <div className="flex gap-2">
-                                        <button
+                                        {canManageSettings && <button
                                             onClick={(e) => { e.stopPropagation(); handleDeleteConference(conf.id); }}
                                             className="w-10 h-10 flex items-center justify-center rounded-2xl text-gray-300 hover:bg-rose-50 hover:text-rose-600 transition-all duration-300 opacity-0 group-hover:opacity-100 transform translate-x-4 group-hover:translate-x-0"
                                             disabled={isDeleting}
                                         >
                                             {isDeleting ? <i className="fa-solid fa-spinner animate-spin"></i> : <i className="fa-solid fa-trash-can"></i>}
-                                        </button>
+                                        </button>}
                                     </div>
                                 </div>
 
@@ -337,17 +491,17 @@ function ConferenceList({ onManage }: { onManage: (conf: Conference) => void }) 
                             </div>
 
                             <div className="flex items-end justify-between mt-auto relative z-10 pt-6 border-t border-gray-50">
-                                <div className="space-y-1.5">
+                                <div className={`space-y-1.5 ${canCountPeople || canCountHotels ? '' : 'invisible'}`}>
                                     <div className="text-gray-300 text-[9px] font-black uppercase tracking-[0.2em]">{t('stats') || 'ESTADISTICAS'}</div>
                                     <div className="flex items-center gap-4 text-xs font-bold text-gray-600">
-                                        <span className="flex items-center gap-1.5" title={t('inscription.plural')}>
+                                        {canCountPeople && <span className="flex items-center gap-1.5" title={t('inscription.plural')}>
                                             <i className="fa-solid fa-users text-blue-400"></i>
                                             {stats.inscriptions}
-                                        </span>
-                                        <span className="flex items-center gap-1.5" title={t('hotels')}>
+                                        </span>}
+                                        {canCountHotels && <span className="flex items-center gap-1.5" title={t('hotels')}>
                                             <i className="fa-solid fa-bed text-indigo-400"></i>
                                             {stats.hotels}
-                                        </span>
+                                        </span>}
                                     </div>
                                 </div>
 
@@ -482,12 +636,17 @@ function ConferenceList({ onManage }: { onManage: (conf: Conference) => void }) 
 function ConferenceDashboard({ conferenceId, onNavigate }: { conferenceId: number, onNavigate: (view: View) => void }) {
     const { currentConference } = useConference();
     const { t } = useI18n(); // Get t() function
-    const [stats, setStats] = useState({
+    // A card whose source the role may not read shows «—» instead of a misleading 0, and the shortcuts
+    // only lead to views the role may open.
+    const perms = usePerms();
+    const canOpen = (v: View) => viewAllowed(v, perms);
+    const [stats, setStats] = useState<any>({
         inscriptions: 0,
         hotels: 0,
         rooms: 0,
         paid: 0,
-        unpaid: 0
+        unpaid: 0,
+        lodgingToValidate: 0
     });
     const [loading, setLoading] = useState(true);
 
@@ -496,21 +655,27 @@ function ConferenceDashboard({ conferenceId, onNavigate }: { conferenceId: numbe
 
         const loadStats = async () => {
             try {
-                const [inscriptions, hotels] = await Promise.all([
-                    conferenceApi.getInscriptions(conferenceId).catch(() => []),
-                    conferenceApi.getHotels(conferenceId).catch(() => [])
+                // null = that source could not be read (e.g. a 403 for a role without the section).
+                const [inscriptions, hotels, locData] = await Promise.all([
+                    conferenceApi.getInscriptions(conferenceId).catch(() => null),
+                    conferenceApi.getHotels(conferenceId).catch(() => null),
+                    conferenceApi.getLocations(conferenceId).catch(() => null)
                 ]);
+                const na = '—';
 
-                const paid = inscriptions.filter(i => i.payment_status === 'paid').length;
-                const unpaid = inscriptions.filter(i => i.payment_status !== 'paid').length;
-                const totalRooms = hotels.reduce((sum, h) => sum + (h.rooms?.length || 0), 0);
+                const paid = inscriptions ? inscriptions.filter(i => i.payment_status === 'paid').length : na;
+                const unpaid = inscriptions ? inscriptions.filter(i => i.payment_status !== 'paid').length : na;
+                const totalRooms = hotels ? hotels.reduce((sum, h) => sum + (h.rooms?.length || 0), 0) : na;
+                // Locations whose coordinator sent the lodging and is waiting for the admin's validation.
+                const lodgingToValidate = locData ? (locData.locations || []).filter(l => l.lodging_status === 'submitted').length : na;
 
                 setStats({
-                    inscriptions: inscriptions.length,
-                    hotels: hotels.length,
+                    inscriptions: inscriptions ? inscriptions.length : na,
+                    hotels: hotels ? hotels.length : na,
                     rooms: totalRooms,
                     paid,
-                    unpaid
+                    unpaid,
+                    lodgingToValidate
                 });
             } catch (error) {
                 console.error('Failed to load stats:', error);
@@ -569,7 +734,7 @@ function ConferenceDashboard({ conferenceId, onNavigate }: { conferenceId: numbe
                         </div>
                     </div>
 
-                    <div className="flex items-center gap-3">
+                    {canOpen('fields') && <div className="flex items-center gap-3">
                         <button
                             onClick={() => onNavigate('fields')}
                             className="px-6 py-3 bg-white border-2 border-gray-100 hover:border-blue-500 hover:text-blue-600 transition-all rounded-2xl text-xs font-black uppercase tracking-widest flex items-center gap-2 group"
@@ -577,21 +742,22 @@ function ConferenceDashboard({ conferenceId, onNavigate }: { conferenceId: numbe
                             <i className="fa-solid fa-pen-to-square group-hover:scale-110 transition-transform"></i>
                             Configurar Registro
                         </button>
-                    </div>
+                    </div>}
                 </div>
             </div>
 
             {/* Stats Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-6">
                 <StatCard icon="fa-users" label={t('inscriptions')} value={stats.inscriptions} color="blue" />
                 <StatCard icon="fa-bed" label={t('hotels')} value={stats.hotels} color="purple" />
                 <StatCard icon="fa-door-open" label={t('rooms')} value={stats.rooms} color="indigo" />
                 <StatCard icon="fa-circle-check" label={t('paid')} value={stats.paid} color="green" />
                 <StatCard icon="fa-circle-xmark" label={t('unpaid')} value={stats.unpaid} color="red" />
+                <StatCard icon="fa-clipboard-check" label={t('lodging.pending.validation') || 'Hospedajes por validar'} value={stats.lodgingToValidate} color={Number(stats.lodgingToValidate) > 0 ? 'orange' : 'gray'} onClick={canOpen('locations') ? () => onNavigate('locations') : undefined} />
             </div>
 
-            {/* Actions Grid */}
-            <div className="space-y-6 pt-2">
+            {/* Actions Grid — only the shortcuts to views the role may open */}
+            {(canOpen('inscriptions') || canOpen('lodging') || canOpen('reports')) && <div className="space-y-6 pt-2">
                 <div className="flex items-center gap-3">
                     <div className="h-px flex-1 bg-gradient-to-r from-transparent via-gray-200 to-transparent"></div>
                     <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.3em] whitespace-nowrap">{t('quick.actions')}</h3>
@@ -599,29 +765,29 @@ function ConferenceDashboard({ conferenceId, onNavigate }: { conferenceId: numbe
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <ActionCard
+                    {canOpen('inscriptions') && <ActionCard
                         icon="fa-user-plus"
                         title={t('register.participant')}
                         description={t('new.inscription.desc')}
                         onClick={() => onNavigate('inscriptions')}
                         color="blue"
-                    />
-                    <ActionCard
+                    />}
+                    {canOpen('lodging') && <ActionCard
                         icon="fa-bed"
                         title={t('manage.lodging')}
                         description={t('manage.lodging.desc')}
                         onClick={() => onNavigate('lodging')}
                         color="purple"
-                    />
-                    <ActionCard
+                    />}
+                    {canOpen('reports') && <ActionCard
                         icon="fa-file-lines"
                         title={t('view.reports')}
                         description={t('view.reports.desc')}
                         onClick={() => onNavigate('reports')}
                         color="green"
-                    />
+                    />}
                 </div>
-            </div>
+            </div>}
         </div>
     );
 }
@@ -633,29 +799,269 @@ function ConferenceDashboard({ conferenceId, onNavigate }: { conferenceId: numbe
 
 // Inscriptions Component
 // The registration form is the source of truth: attendee data lives in real columns named after each
-// field (with a custom_data fallback for legacy rows). These read a field's value + build a display name.
-const fieldVal = (person: any, field: any) => {
-    const v = person?.[field.name];
-    if (v !== undefined && v !== null && v !== '') return v;
-    const cd = person?.custom_data?.[field.name];
-    return (cd !== undefined && cd !== null && cd !== '') ? cd : '';
-};
-const personDisplayName = (person: any, fields: any[]) => {
-    const fl = fields || [];
-    // Prefer the fields tagged with the name roles; fall back to the first 1-2 form fields.
-    const named = ['first_name', 'last_name']
-        .map(role => fl.find((f: any) => f.role === role))
-        .filter(Boolean)
-        .map((f: any) => fieldVal(person, f))
-        .filter(v => v !== '' && v != null);
-    const parts = named.length ? named : fl.map((f: any) => fieldVal(person, f)).filter(v => v !== '' && v != null).slice(0, 2);
-    const name = parts.join(' ').trim();
-    return name || `#${person?.id ?? ''}`;
-};
+// field (with a custom_data fallback for legacy rows). fieldVal / personDisplayName read a field's value
+// and build a display name — both live in lib/lodgingView.ts (shared with the lodging explorer).
+// Registration-code viewer (admin-only): the Code 128 barcode of an attendee's reg_code, with print,
+// SVG download and copy. The SVG is generated locally from a code of a fixed alphabet (escaped anyway).
+function BarcodeModal({ code, name, onClose }: { code: string; name: string; onClose: () => void }) {
+    const { t } = useI18n();
+    const { addToast } = useToast();
+    const svg = useMemo(() => { try { return code128Svg(code, { module: 3, height: 90, fontSize: 18 }); } catch { return ''; } }, [code]);
+    const print = () => {
+        const w = window.open('', '_blank', 'width=520,height=360');
+        if (!w) { addToast(t('reg.code.print') || 'Imprimir', 'error'); return; }
+        w.document.open();
+        w.document.write(`<!doctype html><html><head><title>${code}</title><style>body{margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:sans-serif}h1{font-size:16px;margin:0 0 12px}</style></head><body><h1></h1>${svg}</body></html>`);
+        w.document.close();
+        const h1 = w.document.querySelector('h1');
+        if (h1) h1.textContent = name; // text node, never markup
+        w.focus();
+        setTimeout(() => w.print(), 250);
+    };
+    const download = () => {
+        const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+        const a = document.createElement('a');
+        a.href = url; a.download = `codigo-${code}.svg`;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    };
+    const copy = async () => {
+        try { await navigator.clipboard.writeText(code); addToast(t('reg.code.copied') || 'Código copiado', 'success'); }
+        catch { addToast(code, 'info'); }
+    };
+    return (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={onClose}>
+            <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-lg border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+                <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                        <h3 className="font-black text-2xl text-gray-900 italic tracking-tighter">{t('reg.code.title') || 'Código de inscripción'}</h3>
+                        <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1 truncate">{name}</p>
+                    </div>
+                    <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors p-2 hover:bg-gray-100 rounded-2xl" aria-label="Cerrar">
+                        <i className="fa-solid fa-xmark text-xl"></i>
+                    </button>
+                </div>
+                <div className="p-8 flex flex-col items-center gap-5">
+                    <div className="w-full overflow-x-auto flex justify-center bg-white rounded-2xl border border-gray-100 p-4" dangerouslySetInnerHTML={{ __html: svg }} />
+                    <div className="font-mono text-2xl font-black tracking-[0.3em] text-gray-900">{code}</div>
+                    <p className="text-[11px] text-gray-500"><i className="fa-solid fa-lock mr-1"></i>{t('reg.code.admin.only') || 'Solo visible para el administrador.'}</p>
+                    <div className="flex flex-wrap justify-center gap-2">
+                        <button onClick={print} className="px-5 py-3 rounded-2xl bg-blue-600 text-white hover:bg-blue-700 font-black text-[10px] uppercase tracking-widest shadow-lg shadow-blue-500/30 transition-all"><i className="fa-solid fa-print mr-1.5"></i>{t('reg.code.print') || 'Imprimir'}</button>
+                        <button onClick={download} className="px-5 py-3 rounded-2xl bg-white border-2 border-gray-100 text-gray-700 hover:border-blue-500 hover:text-blue-600 font-black text-[10px] uppercase tracking-widest transition-all"><i className="fa-solid fa-download mr-1.5"></i>{t('reg.code.download') || 'Descargar SVG'}</button>
+                        <button onClick={copy} className="px-5 py-3 rounded-2xl bg-white border-2 border-gray-100 text-gray-700 hover:border-blue-500 hover:text-blue-600 font-black text-[10px] uppercase tracking-widest transition-all"><i className="fa-solid fa-copy mr-1.5"></i>{t('reg.code.copy') || 'Copiar código'}</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// ── Excel exports (2.10.0) ───────────────────────────────────────────────────────────────────────────
+// Everything is built in the browser from the admin's own API data (the sandbox can only answer JSON):
+// client/lib/exports.ts shapes the sheets, client/lib/xlsx.ts writes the file, client/lib/barcode.ts
+// rasterises each registration code for the optional barcode column.
+async function downloadHotelReport(conferenceId: number, slug: string | undefined, onlyHotelId: number | null = null, withCodes = true) {
+    const [hotels, people, fields, locs] = await Promise.all([
+        conferenceApi.getHotels(conferenceId),
+        conferenceApi.getInscriptions(conferenceId),
+        conferenceApi.getFields(conferenceId),
+        conferenceApi.getLocations(conferenceId),
+    ]);
+    const built = buildHotelReport({ hotels: hotels as any, people: people as any, fields: fields as any, locations: (locs.locations || []) as any, onlyHotelId });
+    const sheets = withCodes ? built : withoutColumn(built, 'Código');
+    const hotelName = onlyHotelId != null ? (hotels.find((h: any) => Number(h.id) === Number(onlyHotelId))?.name || 'hotel') : '';
+    downloadXlsx(buildXlsx(sheets), exportFilename(onlyHotelId != null ? 'hotel-' + String(hotelName).toLowerCase() : 'hoteles', slug));
+}
+
+function ExcelExportModal({ conferenceId, slug, onClose }: { conferenceId: number; slug?: string; onClose: () => void }) {
+    const { t } = useI18n();
+    const { addToast } = useToast();
+    // The registration codes reach the browser only with Inscripciones › ver: no barcode option without them.
+    const canBarcode = usePerms().can('inscriptions');
+    const storeKey = `cm:excel:${conferenceId}`;
+    const [fields, setFields] = useState<ConferenceField[]>([]);
+    const [people, setPeople] = useState<Inscription[]>([]);
+    const [locs, setLocs] = useState<Location[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [selected, setSelected] = useState<string[]>([]);
+    const [barcode, setBarcode] = useState(false);
+    const [locationId, setLocationId] = useState('');
+    const [paymentStatus, setPaymentStatus] = useState('');
+    const [excludeCancelled, setExcludeCancelled] = useState(true);
+    const [progress, setProgress] = useState<{ n: number; total: number } | null>(null);
+    // Transport per attendee (bus names, ticket prices, transport payments) for the transport columns.
+    const [transport, setTransport] = useState<Map<number, any>>(new Map());
+
+    useEffect(() => {
+        let alive = true;
+        Promise.all([conferenceApi.getFields(conferenceId), conferenceApi.getInscriptions(conferenceId), conferenceApi.getLocations(conferenceId), conferenceApi.getBuses(conferenceId).catch(() => [])])
+            .then(([f, p, l, b]) => {
+                if (!alive) return;
+                setFields(f); setPeople(p); setLocs(l.locations || []); setTransport(transportByPerson((b || []) as any));
+                const all = new Set(availableColumns(f as any).filter(c => canBarcode || c.key !== 'reg_code').map(c => c.key));
+                let saved: any = null;
+                try { saved = JSON.parse(localStorage.getItem(storeKey) || 'null'); } catch { saved = null; }
+                const keys = Array.isArray(saved?.columns) ? saved.columns.filter((k: string) => all.has(k)) : [];
+                setSelected(keys.length ? keys : defaultColumnKeys(f as any).filter(k => all.has(k)));
+                if (saved && typeof saved.barcode === 'boolean') setBarcode(saved.barcode);
+            })
+            .catch((e: any) => addToast(e?.message || 'Error', 'error'))
+            .finally(() => { if (alive) setLoading(false); });
+        return () => { alive = false; };
+    }, [conferenceId]);
+
+    const columns = useMemo(() => availableColumns(fields as any).filter(c => canBarcode || c.key !== 'reg_code'), [fields, canBarcode]);
+    const label = (k: string) => columns.find(c => c.key === k)?.label || k;
+    const rows = useMemo(() => filterRoster(people as any, {
+        locationId: locationId ? Number(locationId) : null,
+        paymentStatus: paymentStatus || null,
+        excludeCancelled,
+    }), [people, locationId, paymentStatus, excludeCancelled]);
+
+    const toggle = (k: string) => setSelected(s => s.includes(k) ? s.filter(x => x !== k) : [...s, k]);
+    const move = (i: number, d: number) => setSelected(s => {
+        const j = i + d;
+        if (j < 0 || j >= s.length) return s;
+        const n = [...s]; [n[i], n[j]] = [n[j], n[i]]; return n;
+    });
+
+    const generate = async () => {
+        if (!selected.length) { addToast(t('excel.columns.none') || 'Elige al menos una columna.', 'warning'); return; }
+        try { localStorage.setItem(storeKey, JSON.stringify({ columns: selected, barcode })); } catch { /* private mode */ }
+        try {
+            let images: Map<number, any> | null = null;
+            if (barcode && canBarcode) {
+                images = new Map();
+                const withCode = rows.filter((p: any) => p.reg_code);
+                setProgress({ n: 0, total: withCode.length });
+                for (let i = 0; i < withCode.length; i++) {
+                    const p: any = withCode[i];
+                    images.set(Number(p.id), await code128Png(String(p.reg_code), { module: 2, height: 44, fontSize: 12 }));
+                    if (i % 25 === 0) setProgress({ n: i + 1, total: withCode.length });
+                }
+            }
+            const sheet = buildRosterSheet({ people: rows as any, fields: fields as any, columnKeys: selected, barcodes: images, transport });
+            downloadXlsx(buildXlsx([sheet]), exportFilename('inscripciones', slug));
+            addToast(t('excel.done') || 'Excel generado', 'success');
+        } catch (e: any) {
+            addToast(e?.message || 'Error', 'error');
+        } finally {
+            setProgress(null);
+        }
+    };
+
+    const busy = !!progress;
+    const input = 'w-full border-2 border-gray-100 rounded-xl px-3 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-sm font-medium text-gray-900';
+    return (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 animate-in fade-in duration-200">
+            <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-4xl border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200 max-h-[92vh] flex flex-col" role="dialog" aria-modal="true">
+                <div className="bg-gray-50/50 px-8 sm:px-10 py-6 border-b border-gray-100 flex items-start justify-between gap-4 shrink-0">
+                    <div>
+                        <h3 className="font-black text-2xl text-gray-900 italic tracking-tighter"><i className="fa-solid fa-file-excel text-emerald-600 mr-2"></i>{t('excel.custom') || 'Excel personalizado'}</h3>
+                        <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1">{t('excel.custom.subtitle') || 'Elige las columnas, su orden y los filtros'}</p>
+                    </div>
+                    <button onClick={onClose} disabled={busy} className="text-gray-400 hover:text-gray-600 transition-colors p-2 hover:bg-gray-100 rounded-2xl disabled:opacity-40" aria-label="Cerrar">
+                        <i className="fa-solid fa-xmark text-xl"></i>
+                    </button>
+                </div>
+                {loading ? (
+                    <div className="text-center py-20"><div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div></div>
+                ) : (
+                    <div className="p-6 sm:p-10 space-y-6 overflow-y-auto">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                            <div className="space-y-1.5">
+                                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{t('excel.filter.location') || 'Localidad'}</label>
+                                <select value={locationId} onChange={e => setLocationId(e.target.value)} className={input}>
+                                    <option value="">{t('excel.filter.all') || 'Todas'}</option>
+                                    {locs.map(l => <option key={l.id} value={String(l.id)}>{l.name}</option>)}
+                                </select>
+                            </div>
+                            <div className="space-y-1.5">
+                                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{t('excel.filter.payment') || 'Estado de pago'}</label>
+                                <select value={paymentStatus} onChange={e => setPaymentStatus(e.target.value)} className={input}>
+                                    <option value="">{t('excel.filter.all') || 'Todas'}</option>
+                                    <option value="paid">{t('paid') || 'Pagado'}</option>
+                                    <option value="partial">{t('partial') || 'Parcial'}</option>
+                                    <option value="unpaid">{t('unpaid') || 'Pendiente'}</option>
+                                </select>
+                            </div>
+                            <label className="flex items-center gap-3 sm:mt-6 px-4 py-2.5 rounded-xl border-2 border-gray-100 cursor-pointer">
+                                <input type="checkbox" checked={excludeCancelled} onChange={e => setExcludeCancelled(e.target.checked)} className="accent-blue-600 w-4 h-4" />
+                                <span className="text-sm font-bold text-gray-700">{t('excel.filter.cancelled') || 'Excluir cancelados'}</span>
+                            </label>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1 mb-2">{t('excel.columns.available') || 'Columnas disponibles'}</div>
+                                <div className="rounded-2xl border border-gray-100 divide-y divide-gray-50 max-h-80 overflow-y-auto">
+                                    {columns.map(c => (
+                                        <label key={c.key} className="flex items-center gap-3 px-4 py-2.5 hover:bg-blue-50/40 cursor-pointer">
+                                            <input type="checkbox" checked={selected.includes(c.key)} onChange={() => toggle(c.key)} className="accent-blue-600 w-4 h-4" />
+                                            <span className="text-sm font-medium text-gray-800">{c.label}</span>
+                                            {c.key.startsWith('field:') && <span className="ml-auto text-[9px] font-black uppercase tracking-widest text-gray-300">form</span>}
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
+                            <div>
+                                <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1 mb-2">{t('excel.columns.selected') || 'Columnas del Excel (en orden)'}</div>
+                                <div className="rounded-2xl border border-gray-100 divide-y divide-gray-50 max-h-80 overflow-y-auto">
+                                    {selected.length === 0 && <div className="px-4 py-6 text-center text-xs text-gray-400 italic">{t('excel.columns.none') || 'Elige al menos una columna.'}</div>}
+                                    {selected.map((k, i) => (
+                                        <div key={k} className="flex items-center gap-2 px-4 py-2">
+                                            <span className="w-6 text-[10px] font-black text-gray-300">{i + 1}</span>
+                                            <span className="flex-1 min-w-0 truncate text-sm font-bold text-gray-800">{label(k)}</span>
+                                            <button type="button" onClick={() => move(i, -1)} disabled={i === 0} title={t('excel.move.up') || 'Subir'} className="w-8 h-8 rounded-lg bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white disabled:opacity-30"><i className="fa-solid fa-arrow-up text-[10px]"></i></button>
+                                            <button type="button" onClick={() => move(i, 1)} disabled={i === selected.length - 1} title={t('excel.move.down') || 'Bajar'} className="w-8 h-8 rounded-lg bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white disabled:opacity-30"><i className="fa-solid fa-arrow-down text-[10px]"></i></button>
+                                            <button type="button" onClick={() => toggle(k)} title={t('excel.remove') || 'Quitar'} className="w-8 h-8 rounded-lg bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white"><i className="fa-solid fa-xmark text-[10px]"></i></button>
+                                        </div>
+                                    ))}
+                                </div>
+                                {canBarcode && <label className="mt-4 flex items-start gap-3 px-4 py-3 rounded-2xl border-2 border-gray-100 cursor-pointer">
+                                    <input type="checkbox" checked={barcode} onChange={e => setBarcode(e.target.checked)} className="accent-blue-600 w-4 h-4 mt-0.5" />
+                                    <span>
+                                        <span className="block text-sm font-bold text-gray-800"><i className="fa-solid fa-barcode mr-1.5"></i>{t('excel.barcode') || 'Incluir código de barras'}</span>
+                                        <span className="block text-[11px] text-gray-500 mt-0.5">{t('excel.barcode.help') || 'Agrega una columna con la imagen del código de barras de cada inscripción.'}</span>
+                                    </span>
+                                </label>}
+                            </div>
+                        </div>
+                    </div>
+                )}
+                <div className="px-6 sm:px-10 py-5 border-t border-gray-50 bg-gray-50/30 flex flex-wrap items-center justify-between gap-3 shrink-0">
+                    <span className="text-xs font-bold text-gray-500">{(t('excel.rows') || '{n} inscripciones se exportarán').replace('{n}', String(rows.length))}</span>
+                    <div className="flex gap-3">
+                        <button onClick={onClose} disabled={busy} className="px-6 py-3 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition-all disabled:opacity-40">{t('cancel') || 'Cancelar'}</button>
+                        <button onClick={generate} disabled={busy || loading || !selected.length} className="px-8 py-3 bg-emerald-600 text-white rounded-2xl hover:bg-emerald-700 font-black text-[10px] uppercase tracking-widest shadow-lg shadow-emerald-500/30 transition-all disabled:opacity-50">
+                            {progress
+                                ? <><i className="fa-solid fa-spinner fa-spin mr-1.5"></i>{(t('excel.generating') || 'Generando… {n}/{total}').replace('{n}', String(progress.n)).replace('{total}', String(progress.total))}</>
+                                : <><i className="fa-solid fa-file-excel mr-1.5"></i>{t('excel.generate') || 'Generar Excel'}</>}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
 
 function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
     const { t } = useI18n();
+    const tx = useTx();
     const { addToast } = useToast();
+    // Inscripciones › gestionar = new / edit / delete; Pagos › gestionar = register / validate / reject /
+    // void (the list of an attendee's payments opens with Inscripciones › ver); Hospedaje › gestionar =
+    // the room button; Reportes = the Excel export.
+    const perms = usePerms();
+    const canManage = perms.can('inscriptions', 'manage');
+    const canSeeCodes = perms.can('inscriptions');
+    const canPayManage = perms.can('payments', 'manage');
+    const canAssign = perms.can('lodging', 'manage');
+    const canExcel = perms.can('reports');
+    // Attendee whose registration barcode is open in the viewer.
+    const [barcodeFor, setBarcodeFor] = useState<Inscription | null>(null);
+    const [showExcel, setShowExcel] = useState(false);
+    const { currentConference: excelConf } = useConference();
     const [inscriptions, setInscriptions] = useState<Inscription[]>([]);
     const [fields, setFields] = useState<ConferenceField[]>([]);
     const [confLocations, setConfLocations] = useState<Location[]>([]);
@@ -955,8 +1361,13 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
 
     return (
         <div className="h-full flex flex-col overflow-hidden">
+            <ReadOnlyNotice section="inscriptions" alsoManage={['payments', 'lodging']} className="mb-4 flex-shrink-0" />
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-10 gap-6 flex-shrink-0 px-1">
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 flex-1 w-full">
+                    {showExcel && <ExcelExportModal conferenceId={conferenceId} slug={excelConf?.slug} onClose={() => setShowExcel(false)} />}
+                    {barcodeFor && barcodeFor.reg_code && (
+                        <BarcodeModal code={barcodeFor.reg_code} name={personDisplayName(barcodeFor, fields)} onClose={() => setBarcodeFor(null)} />
+                    )}
                     {/* Premium Search */}
                     <div className="relative flex-1 max-w-md">
                         <i className="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm"></i>
@@ -1062,13 +1473,21 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                     </div>
                 </div>
 
-                <button
+                {canExcel && <button
+                    onClick={() => setShowExcel(true)}
+                    title={t('excel.custom') || 'Excel personalizado'}
+                    className="flex-shrink-0 bg-white border-2 border-gray-100 text-emerald-700 px-6 py-4 rounded-2xl hover:border-emerald-500 transition-all flex items-center justify-center gap-2 w-full md:w-auto font-black text-[10px] uppercase tracking-widest"
+                >
+                    <i className="fa-solid fa-file-excel text-sm"></i>
+                    <span>{t('excel.custom') || 'Excel personalizado'}</span>
+                </button>}
+                {canManage && <button
                     onClick={openCreate}
                     className="flex-shrink-0 bg-blue-600 text-white px-8 py-4 rounded-2xl hover:bg-blue-700 active:scale-95 transition-all shadow-xl shadow-blue-500/30 flex items-center justify-center gap-3 w-full md:w-auto font-black italic tracking-tighter"
                 >
                     <i className="fa-solid fa-plus text-sm"></i>
                     <span>{t('new.inscription')}</span>
-                </button>
+                </button>}
             </div>
 
             <div className="flex-1 overflow-y-auto overflow-x-auto modern-scrollbar min-h-0">
@@ -1144,6 +1563,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                         {fields.map((field, idx) => (
                                                             <th key={field.id} className={`${idx === 0 ? 'px-8' : 'px-6'} py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap`}>{field.label}</th>
                                                         ))}
+                                                        {canSeeCodes && <th className="px-6 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest text-center whitespace-nowrap">{t('reg.code') || 'Código'}</th>}
                                                         <th className="px-6 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest text-center whitespace-nowrap">{t('payment')}</th>
                                                         <th className="px-6 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest text-center whitespace-nowrap">{t('lodging')}</th>
                                                         <th className="px-8 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest text-right whitespace-nowrap">{t('actions')}</th>
@@ -1169,6 +1589,18 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                                     </td>
                                                                 );
                                                             })}
+                                                            {canSeeCodes && <td className="px-6 py-5 text-center">
+                                                                {person.reg_code ? (
+                                                                    <button
+                                                                        onClick={() => setBarcodeFor(person)}
+                                                                        title={t('reg.code.title') || 'Código de inscripción'}
+                                                                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-gray-50 hover:bg-blue-600 hover:text-white text-gray-700 transition-all border border-gray-100"
+                                                                    >
+                                                                        <i className="fa-solid fa-barcode text-xs"></i>
+                                                                        <span className="font-mono text-[11px] font-black tracking-wider">{person.reg_code}</span>
+                                                                    </button>
+                                                                ) : <span className="text-gray-300 italic text-xs">{t('reg.code.none') || 'Sin código'}</span>}
+                                                            </td>}
                                                             <td className="px-6 py-5">
                                                                 <div className="flex flex-col items-center gap-1">
                                                                     <button
@@ -1205,27 +1637,27 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                             </td>
                                                             <td className="px-8 py-5 text-right">
                                                                 <div className="flex justify-end gap-2 opacity-0 group-hover/row:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity">
-                                                                    <button
+                                                                    {canAssign && <button
                                                                         onClick={() => openAssign(person)}
                                                                         className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-emerald-600 hover:text-white transition-all shadow-sm border border-transparent hover:border-emerald-400"
                                                                         title={t('assign.room') || 'Asignar habitación'}
                                                                     >
                                                                         <i className="fa-solid fa-bed text-xs"></i>
-                                                                    </button>
-                                                                    <button
+                                                                    </button>}
+                                                                    {canManage && <button
                                                                         onClick={() => openEdit(person)}
                                                                         className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white transition-all shadow-sm border border-transparent hover:border-blue-400"
                                                                         title={t('edit')}
                                                                     >
                                                                         <i className="fa-solid fa-pen text-xs"></i>
-                                                                    </button>
-                                                                    <button
+                                                                    </button>}
+                                                                    {canManage && <button
                                                                         onClick={() => handleDelete(person)}
                                                                         className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition-all shadow-sm border border-transparent hover:border-rose-400"
                                                                         title={t('delete')}
                                                                     >
                                                                         <i className="fa-solid fa-trash text-xs"></i>
-                                                                    </button>
+                                                                    </button>}
                                                                 </div>
                                                             </td>
                                                         </tr>
@@ -1403,7 +1835,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                 ) : payment.proof ? (
                                                     <span className="shrink-0 self-center text-[10px] font-bold uppercase bg-gray-200 text-gray-500 px-2 py-1 rounded-full whitespace-nowrap" title="El comprobante guardado no es una imagen">Comprobante no válido</span>
                                                 ) : null}
-                                                {(() => { const can = paymentActions(payment.status); return (
+                                                {canPayManage && (() => { const can = paymentActions(payment.status); return (
                                                 <div className="shrink-0 flex items-center gap-1">
                                                     {can.validate && (
                                                         <button type="button" onClick={() => handleValidatePayment(payment)} title="Validar pago" className="w-8 h-8 flex items-center justify-center rounded-lg text-emerald-600 hover:text-white hover:bg-emerald-600 border border-emerald-100 transition">
@@ -1433,8 +1865,17 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                 </div>
                             )}
 
+                            {!canPayManage && (
+                                <div className="pt-6 mt-4 border-t border-gray-100 flex flex-wrap items-center justify-between gap-3">
+                                    <span className="text-xs font-bold text-gray-500">
+                                        {t('paid')}: <span className="text-emerald-600">${fmtMoney(selectedInscription.amount_paid)}</span> / ${fmtMoney(selectedInscription.total_due)}
+                                    </span>
+                                    <span className="text-[11px] font-bold text-sky-700 bg-sky-50 border border-sky-200 rounded-xl px-3 py-1.5"><i className="fa-solid fa-eye mr-1.5"></i>{tx('perm.payments.readonly', 'Tu rol puede ver los pagos, pero no registrarlos ni validarlos.')}</span>
+                                    <button type="button" onClick={() => setSelectedInscription(null)} className="px-6 py-2.5 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition">{t('close') || 'Cerrar'}</button>
+                                </div>
+                            )}
                             {/* Register a new payment */}
-                            <form onSubmit={handleAddPayment} className="pt-6 mt-4 border-t border-gray-100">
+                            {canPayManage && <form onSubmit={handleAddPayment} className="pt-6 mt-4 border-t border-gray-100">
                                 <div className="flex items-center justify-between mb-3">
                                     <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400">{t('register.payment') || 'Registrar pago'}</h4>
                                     <span className="text-xs font-bold text-gray-500">
@@ -1457,9 +1898,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                         value={paymentForm.method}
                                         onChange={e => setPaymentForm({ ...paymentForm, method: e.target.value })}
                                     >
-                                        <option>Efectivo</option>
-                                        <option>Transferencia</option>
-                                        <option>Consignación</option>
+                                        {PAYMENT_METHODS.map(m => <option key={m}>{m}</option>)}
                                     </select>
                                     <input
                                         type="text"
@@ -1507,7 +1946,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                         {addingPayment ? (t('saving') || 'Guardando…') : (t('register.payment') || 'Registrar pago')}
                                     </button>
                                 </div>
-                            </form>
+                            </form>}
                         </div>
                     </div>
                 </div>
@@ -1575,7 +2014,32 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                 <i className="fa-solid fa-xmark text-lg"></i>
                             </button>
                         </div>
+                        {(() => {
+                            // The attendee's location (by id, or by name for legacy rows) decides which allotted
+                            // rooms are open to them, and whether the whole arrangement is frozen.
+                            const targetLocId = seedLocationId(assignTarget, confLocations);
+                            const targetLoc = targetLocId == null ? null : confLocations.find(l => Number(l.id) === Number(targetLocId)) || null;
+                            const frozen = !!targetLoc && isLodgingFrozen(targetLoc.lodging_status);
+                            return (
                         <div className="p-8 max-h-[65vh] overflow-y-auto modern-scrollbar">
+                            {frozen ? (
+                                <div className="p-6 rounded-2xl bg-amber-50 border border-amber-200 flex items-start gap-4">
+                                    <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center shrink-0">
+                                        <i className="fa-solid fa-lock"></i>
+                                    </div>
+                                    <div>
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest ${lodgingStatusMeta(targetLoc!.lodging_status).cls}`}>
+                                                {t(lodgingStatusMeta(targetLoc!.lodging_status).key) || lodgingStatusMeta(targetLoc!.lodging_status).fallback}
+                                            </span>
+                                        </div>
+                                        <p className="text-sm text-amber-800 font-medium leading-relaxed">
+                                            {withName(t('lodging.frozen.notice') || 'El hospedaje de la localidad «{name}» está en validación o validado. Reábrelo desde Localidades antes de cambiar la habitación de este participante.', targetLoc!.name)}
+                                        </p>
+                                    </div>
+                                </div>
+                            ) : (
+                            <>
                             {assignTarget.room_id && (
                                 <button
                                     onClick={() => doAssign(null)}
@@ -1600,18 +2064,28 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                 {(hotel.rooms || []).map(room => {
                                                     const full = (room.occupied || 0) >= room.capacity && assignTarget.room_id !== room.id;
                                                     const current = assignTarget.room_id === room.id;
+                                                    // A room allotted to another location is closed to this attendee (roomAllows).
+                                                    const foreign = room.location_id != null && Number(room.location_id) !== Number(targetLocId);
+                                                    const blocked = full || foreign;
+                                                    const roomLoc = room.location_id != null ? (room.location_name || `#${room.location_id}`) : null;
                                                     return (
                                                         <button
                                                             key={room.id}
-                                                            disabled={full}
+                                                            disabled={blocked}
+                                                            title={foreign ? roomLoc || undefined : undefined}
                                                             onClick={() => doAssign(room.id)}
                                                             className={`px-3 py-2.5 rounded-xl border-2 text-left transition-all ${current
                                                                 ? 'border-blue-500 bg-blue-50'
-                                                                : full
+                                                                : blocked
                                                                     ? 'border-gray-100 bg-gray-50 opacity-50 cursor-not-allowed'
                                                                     : 'border-gray-100 hover:border-emerald-400 hover:bg-emerald-50'}`}
                                                         >
                                                             <div className="font-black text-sm text-gray-900">{room.room_number}</div>
+                                                            {roomLoc && (
+                                                                <div className={`text-[9px] font-black uppercase tracking-widest truncate ${foreign ? 'text-rose-500' : 'text-indigo-500'}`}>
+                                                                    <i className="fa-solid fa-map-pin mr-1"></i>{roomLoc}
+                                                                </div>
+                                                            )}
                                                             <div className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">
                                                                 {(room.occupied || 0)}/{room.capacity}
                                                             </div>
@@ -1626,7 +2100,11 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                     ))}
                                 </div>
                             )}
+                            </>
+                            )}
                         </div>
+                            );
+                        })()}
                     </div>
                 </div>
             )}
@@ -1634,10 +2112,133 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
     );
 }
 
+/**
+ * One room tile of «Hoteles y habitaciones». The tile is a plain container: its one action (open the
+ * explorer at this room, or toggle it in selection mode) is a real <button>, and the delete button is
+ * its SIBLING — never an interactive control nested in a role=button, whose children screen readers
+ * flatten (axe nested-interactive). `names` = the occupants' display names, sorted.
+ */
+function LodgingRoomTile({ room, names, selecting, selected, onActivate, onDelete, t }: {
+    room: Room; names: string[]; selecting: boolean; selected: boolean;
+    onActivate?: () => void; onDelete?: () => void; t: (k: string) => string;
+}) {
+    const cap = room.capacity || 0;
+    const occ = room.occupied || 0;
+    const isFull = cap > 0 && occ >= cap;
+    const occupancyPercent = cap > 0 ? Math.min(100, (occ / cap) * 100) : 0;
+    const badge = room.location_id != null ? (room.location_name || `#${room.location_id}`) : null;
+    const shownNames = names.slice(0, 3);
+    const openLabel = fillVars(t('explorer.tile.open') || 'Ver ocupación de la habitación {n}', { n: room.room_number });
+    const actionLabel = selecting
+        ? fillVars(t('explorer.tile.select') || 'Seleccionar la habitación {n}', { n: room.room_number })
+        : `${openLabel} (${occ}/${room.capacity ?? 0})${names.length ? `: ${names.join(', ')}` : ''}`;
+    const Body: any = onActivate ? 'button' : 'div';
+    const bodyProps = onActivate
+        ? { type: 'button', onClick: onActivate, 'aria-label': actionLabel, 'aria-pressed': selecting ? selected : undefined, title: selecting ? undefined : openLabel }
+        : {};
+    return (
+        <div
+            data-room-tile={room.id}
+            className={`
+            group/room rounded-3xl border-2 transition-all duration-300 relative overflow-hidden
+            ${selected
+                ? 'bg-indigo-50 border-indigo-500 shadow-lg'
+                : isFull
+                    ? 'bg-white border-rose-100 shadow-sm opacity-80'
+                    : 'bg-white border-white shadow-sm hover:border-blue-400 hover:shadow-xl hover:-translate-y-1'}
+        `}>
+            {/* Decor first: the body below is positioned and paints over it. */}
+            {isFull && <div className="absolute inset-0 bg-rose-50/10 pointer-events-none"></div>}
+            <Body
+                {...bodyProps}
+                className={`relative w-full h-full text-left p-4 sm:p-5 flex flex-col justify-between gap-3 min-h-[9rem] rounded-3xl ${onActivate ? 'cursor-pointer focus:outline-none focus-visible:ring-4 focus-visible:ring-inset focus-visible:ring-blue-200' : ''}`}
+            >
+                {/* pr-7 keeps the room number / badges clear of the delete button above it. */}
+                <div className="flex justify-between items-start gap-2 pr-7 w-full">
+                    <div className="min-w-0">
+                        <span className="font-black text-xl text-gray-900 italic tracking-tighter">{room.room_number}</span>
+                        {badge && (
+                            <div className="mt-0.5 max-w-full truncate px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-600 text-[8px] font-black uppercase tracking-widest" title={badge}>
+                                <i className="fa-solid fa-map-pin mr-1" aria-hidden="true"></i>{badge}
+                            </div>
+                        )}
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                        {selecting && (
+                            <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[8px] border-2 ${selected ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-gray-200 text-transparent'}`} aria-hidden="true">
+                                <i className="fa-solid fa-check"></i>
+                            </div>
+                        )}
+                        {room.notes && (
+                            <div className="w-5 h-5 rounded-full bg-blue-50 flex items-center justify-center text-blue-400 group-hover/room:bg-blue-100 transition-colors" title={room.notes}>
+                                <i className="fa-solid fa-info text-[8px]" aria-hidden="true"></i>
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                {/* Who sleeps here: the first 3 names (wrapping, never cut to «Mar…»), then «+N». */}
+                <ul className="space-y-0.5 min-w-0 w-full">
+                    {shownNames.map((n, i) => (
+                        <li key={i} className="text-sm leading-snug font-semibold text-gray-700 break-words line-clamp-2" title={n}>{n}</li>
+                    ))}
+                    {names.length > shownNames.length && (
+                        <li className="text-[10px] font-bold text-gray-400">{fillVars(t('explorer.tile.more') || '+{n} más', { n: names.length - shownNames.length })}</li>
+                    )}
+                    {occ === 0 && (
+                        <li className="text-[10px] font-bold text-gray-300 italic">{t('explorer.tile.empty') || 'Sin ocupantes'}</li>
+                    )}
+                </ul>
+
+                <div className="space-y-3 w-full">
+                    <div className="flex justify-between items-end">
+                        <span className={`text-[10px] font-black uppercase tracking-widest ${isFull ? 'text-rose-500' : 'text-gray-400'}`}>
+                            {isFull ? (t('explorer.tile.full') || 'Completa') : (t('explorer.tile.free') || 'Libre')}
+                        </span>
+                        <span className="text-xs font-bold text-gray-900">
+                            {room.occupied || 0}<span className="text-gray-300">/</span>{room.capacity}
+                        </span>
+                    </div>
+
+                    <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden" aria-hidden="true">
+                        <div
+                            className={`h-full rounded-full transition-all duration-500 ${isFull ? 'bg-rose-500' : 'bg-blue-500'}`}
+                            style={{ width: `${occupancyPercent}%` }}
+                        ></div>
+                    </div>
+                </div>
+            </Body>
+            {onDelete && <button
+                type="button"
+                onClick={onDelete}
+                title={t('delete.room') || 'Eliminar habitación'}
+                aria-label={`${t('delete.room') || 'Eliminar habitación'} ${room.room_number}`}
+                className="absolute top-4 right-4 sm:top-5 sm:right-5 z-10 w-6 h-6 rounded-full flex items-center justify-center text-gray-300 hover:text-rose-600 hover:bg-rose-50 transition-colors opacity-0 group-hover/room:opacity-100 group-focus-within/room:opacity-100 focus:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-300 [@media(hover:none)]:opacity-100"
+            >
+                <i className="fa-solid fa-trash-can text-[9px]" aria-hidden="true"></i>
+            </button>}
+        </div>
+    );
+}
+
 // Lodging Component
-function LodgingPage({ conferenceId }: { conferenceId: number }) {
+// `onOpenExplorer`: a room tile (outside selection mode) or a hotel's «Ver ocupación» opens the lodging
+// explorer in «Asignación» at that hotel / room (see ConferenceManagerContent.openLodgingExplorer).
+function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; onOpenExplorer?: (focus: { hotelId: number; roomId?: number | null }) => void }) {
     const { t } = useI18n(); // Get t() function
     const { addToast } = useToast();
+    const { currentConference: lodgingConf } = useConference();
+    // Hospedaje › gestionar = hotels, rooms and their allotment to locations; Reportes = the Excel files.
+    const perms = usePerms();
+    const canManage = perms.can('lodging', 'manage');
+    const canExcel = perms.can('reports');
+    const [reportBusy, setReportBusy] = useState<number | 'all' | null>(null);
+    const hotelReport = async (hotelId: number | null) => {
+        setReportBusy(hotelId ?? 'all');
+        try { await downloadHotelReport(conferenceId, lodgingConf?.slug, hotelId, perms.can('inscriptions')); }
+        catch (e: any) { addToast(e?.message || 'Error', 'error'); }
+        finally { setReportBusy(null); }
+    };
     const { confirm } = useModal();
     const [hotels, setHotels] = useState<Hotel[]>([]);
     const [loading, setLoading] = useState(true);
@@ -1647,6 +2248,32 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
     const [roomForm, setRoomForm] = useState<Partial<Room>>({ room_number: '', capacity: 2, notes: '' });
     const [isBulk, setIsBulk] = useState(false);
     const [bulkConfig, setBulkConfig] = useState({ start: 1, end: 10, prefix: '' });
+    // Allotment of rooms to locations: the locations of the conference, the location picked per hotel
+    // ('' = pool), the hotel whose tiles are in selection mode and the selected room ids.
+    const [locations, setLocations] = useState<Location[]>([]);
+    const [allotTarget, setAllotTarget] = useState<Record<number, string>>({});
+    const [selectHotel, setSelectHotel] = useState<number | null>(null);
+    const [selectedRooms, setSelectedRooms] = useState<Set<number>>(new Set());
+    const [allotting, setAllotting] = useState<number | null>(null);
+    // Who sleeps in each room, for the names on the tiles. A failed load only hides the names: the
+    // counts keep coming from GET /hotels (room.occupied). Only the latest of overlapping loads lands.
+    const [people, setPeople] = useState<Inscription[]>([]);
+    const [formFields, setFormFields] = useState<ConferenceField[]>([]);
+    const peopleSeq = useRef(0);
+    const occupantsByRoom = useMemo(() => indexOccupants(people), [people]);
+
+    const fetchPeople = async () => {
+        if (!conferenceId) return;
+        const seq = ++peopleSeq.current;
+        try {
+            const [ins, flds] = await Promise.all([conferenceApi.getInscriptions(conferenceId), conferenceApi.getFields(conferenceId)]);
+            if (seq !== peopleSeq.current) return;
+            setPeople(ins || []);
+            setFormFields(flds || []);
+        } catch (e) {
+            console.error(e);
+        }
+    };
 
     const fetchHotels = async () => {
         if (!conferenceId) return;
@@ -1661,9 +2288,62 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
         }
     };
 
+    const fetchLocations = async () => {
+        if (!conferenceId) return;
+        try {
+            const data = await conferenceApi.getLocations(conferenceId);
+            setLocations(data?.locations || []);
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
     useEffect(() => {
         fetchHotels();
+        fetchLocations();
+        fetchPeople();
     }, [conferenceId]);
+
+    // Allot the whole hotel, or only the selected tiles, to the location picked in that hotel's select.
+    // The server refuses it (409) when an occupant belongs to another location or a location is frozen;
+    // those messages surface as toasts untouched.
+    const applyAllot = async (hotel: Hotel, roomIds?: number[]) => {
+        const raw = allotTarget[hotel.id] || '';
+        const locationId = raw === '' ? null : Number(raw);
+        if (roomIds && roomIds.length === 0) { addToast(t('allot.none.selected') || 'Selecciona al menos una habitación.', 'warning'); return; }
+        // The select defaults to the pool: a stray click on "Aplicar" would silently take every allotted
+        // room of the hotel away from its coordinators — confirm when the click actually un-allots one.
+        if (locationId === null) {
+            const affected = (hotel.rooms || []).filter(r => r.location_id != null && (!roomIds || roomIds.includes(r.id)));
+            if (affected.length > 0 && !await confirm(t('allot.confirm.pool') || 'Se devolverán al pool las habitaciones de este hotel ya asignadas a una localidad; sus encargados dejarán de verlas. ¿Continuar?', t('allot.apply.hotel') || 'Aplicar', true)) return;
+        }
+        setAllotting(hotel.id);
+        try {
+            await conferenceApi.allotHotel(hotel.id, roomIds ? { location_id: locationId, room_ids: roomIds } : { location_id: locationId });
+            addToast(t('allot.done') || 'Habitaciones actualizadas', 'success');
+            if (selectHotel === hotel.id) { setSelectHotel(null); setSelectedRooms(new Set()); }
+            fetchHotels();
+            fetchLocations();
+        } catch (error: any) {
+            addToast(error?.message || 'Error', 'error');
+        } finally {
+            setAllotting(null);
+        }
+    };
+
+    const toggleSelectMode = (hotel: Hotel) => {
+        if (selectHotel === hotel.id) { setSelectHotel(null); setSelectedRooms(new Set()); return; }
+        setSelectHotel(hotel.id);
+        setSelectedRooms(new Set());
+    };
+
+    const toggleRoomSelected = (roomId: number) => {
+        setSelectedRooms(prev => {
+            const next = new Set(prev);
+            if (next.has(roomId)) next.delete(roomId); else next.add(roomId);
+            return next;
+        });
+    };
 
     const handleHotelSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -1685,6 +2365,7 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
             await conferenceApi.deleteHotel(hotel.id);
             addToast(t('hotel.deleted') || 'Hotel eliminado', 'success');
             fetchHotels();
+            fetchPeople();
         } catch (error: any) {
             addToast(error?.message || 'Error', 'error');
         }
@@ -1696,6 +2377,7 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
             await conferenceApi.deleteRoom(room.id);
             addToast(t('room.deleted') || 'Habitación eliminada', 'success');
             fetchHotels();
+            fetchPeople();
         } catch (error: any) {
             addToast(error?.message || 'Error', 'error');
         }
@@ -1737,17 +2419,27 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
 
     return (
         <div className="space-y-10 animate-in fade-in duration-500">
+            <ReadOnlyNotice section="lodging" />
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center justify-between bg-gray-50/50 p-8 rounded-[32px] border-2 border-white shadow-sm">
                 <div>
                     <h2 className="text-3xl font-black text-gray-900 italic tracking-tighter">{t('hotels.and.rooms')}</h2>
                     <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1">Gestión de alojamiento y disponibilidad</p>
                 </div>
-                <button
+                <div className="flex flex-wrap items-center gap-2">
+                {canExcel && <button
+                    onClick={() => hotelReport(null)}
+                    disabled={reportBusy !== null}
+                    className="bg-white border-2 border-gray-100 text-emerald-700 px-6 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest hover:border-emerald-500 transition-all flex items-center gap-2 disabled:opacity-50"
+                >
+                    <i className={`fa-solid ${reportBusy === 'all' ? 'fa-spinner animate-spin' : 'fa-file-excel'} text-[10px]`}></i> {t('excel.hotels') || 'Reporte de hoteles (Excel)'}
+                </button>}
+                {canManage && <button
                     onClick={() => setShowHotelModal(true)}
                     className="bg-gray-900 text-white px-8 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-blue-600 transition-all duration-500 shadow-xl hover:shadow-blue-500/30 flex items-center gap-3 transform active:scale-95 translate-y-0 hover:-translate-y-1"
                 >
                     <i className="fa-solid fa-plus text-[8px]"></i> {t('add.hotel')}
-                </button>
+                </button>}
+                </div>
             </div>
 
             {loading ? (
@@ -1780,87 +2472,125 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
                                 </div>
                             </div>
                         </div>
-                        <div className="flex items-center gap-3">
-                            <button
+                        <div className="flex flex-wrap items-center gap-3">
+                            {onOpenExplorer && (
+                                <button
+                                    onClick={() => onOpenExplorer({ hotelId: hotel.id })}
+                                    className="bg-gray-900 text-white px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-600 transition-all flex items-center gap-2 shadow-sm focus:outline-none focus-visible:ring-4 focus-visible:ring-indigo-200"
+                                >
+                                    <i className="fa-solid fa-door-open text-[10px]"></i> {t('explorer.hotel.view') || 'Ver ocupación'}
+                                </button>
+                            )}
+                            {canManage && <button
                                 onClick={() => setShowRoomModal(hotel.id)}
                                 className="bg-white border-2 border-gray-100 px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-gray-500 hover:border-blue-500 hover:text-white hover:bg-blue-600 transition-all flex items-center gap-2 shadow-sm"
                             >
                                 <i className="fa-solid fa-plus text-[8px]"></i> {t('add.room')}
-                            </button>
-                            <button
+                            </button>}
+                            {canExcel && <button
+                                onClick={() => hotelReport(hotel.id)}
+                                disabled={reportBusy !== null}
+                                title={t('excel.hotel.one') || 'Excel de este hotel'}
+                                className="w-11 h-11 flex items-center justify-center rounded-xl bg-white border-2 border-gray-100 text-emerald-600 hover:border-emerald-400 hover:bg-emerald-600 hover:text-white transition-all disabled:opacity-50"
+                            >
+                                <i className={`fa-solid ${reportBusy === hotel.id ? 'fa-spinner animate-spin' : 'fa-file-excel'} text-xs`}></i>
+                            </button>}
+                            {canManage && <button
                                 onClick={() => handleDeleteHotel(hotel)}
                                 title={t('delete.hotel') || 'Eliminar hotel'}
                                 className="w-11 h-11 flex items-center justify-center rounded-xl bg-white border-2 border-gray-100 text-gray-400 hover:border-rose-400 hover:bg-rose-600 hover:text-white transition-all shadow-sm"
                             >
                                 <i className="fa-solid fa-trash-can text-xs"></i>
-                            </button>
+                            </button>}
                         </div>
                     </div>
 
-                    <div className="p-8 bg-gray-50/30">
+                    <div className="p-4 sm:p-8 bg-gray-50/30">
+                        {canManage && (hotel.rooms && hotel.rooms.length > 0) && (
+                            <div className="mb-6 p-4 bg-white rounded-2xl border border-gray-100 shadow-sm flex flex-col lg:flex-row lg:items-center gap-3">
+                                <div className="flex items-center gap-3 min-w-0">
+                                    <div className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-500 flex items-center justify-center text-sm shrink-0">
+                                        <i className="fa-solid fa-map-location-dot"></i>
+                                    </div>
+                                    <div className="min-w-0">
+                                        <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">{t('allot.title') || 'Asignar habitaciones a localidad'}</div>
+                                        {locations.length === 0 && <div className="text-[10px] text-gray-400">{t('allot.no.locations') || 'Crea una localidad para poder asignarle habitaciones.'}</div>}
+                                    </div>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2 lg:ml-auto">
+                                    <select
+                                        value={allotTarget[hotel.id] || ''}
+                                        onChange={e => setAllotTarget({ ...allotTarget, [hotel.id]: e.target.value })}
+                                        className="border-2 border-gray-100 rounded-xl px-3 py-2 bg-gray-50/30 focus:bg-white focus:border-indigo-500 transition-all outline-none text-gray-900 font-medium text-xs"
+                                    >
+                                        <option value="">{t('allot.pool') || 'Sin asignar (pool)'}</option>
+                                        {locations.map(l => <option key={l.id} value={String(l.id)}>{l.name}</option>)}
+                                    </select>
+                                    <button
+                                        type="button"
+                                        disabled={allotting === hotel.id}
+                                        onClick={() => applyAllot(hotel)}
+                                        className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest bg-gray-900 text-white hover:bg-indigo-600 transition-all disabled:opacity-50 flex items-center gap-2"
+                                    >
+                                        <i className="fa-solid fa-hotel text-[8px]"></i> {t('allot.apply.hotel') || 'Aplicar a todo el hotel'}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => toggleSelectMode(hotel)}
+                                        className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border-2 transition-all flex items-center gap-2 ${selectHotel === hotel.id ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-gray-100 bg-white text-gray-500 hover:border-indigo-300'}`}
+                                    >
+                                        <i className={`fa-solid ${selectHotel === hotel.id ? 'fa-xmark' : 'fa-object-group'} text-[8px]`}></i>
+                                        {selectHotel === hotel.id ? (t('allot.select.cancel') || 'Cancelar selección') : (t('allot.select.mode') || 'Seleccionar habitaciones')}
+                                    </button>
+                                    {selectHotel === hotel.id && (
+                                        <button
+                                            type="button"
+                                            disabled={allotting === hotel.id || selectedRooms.size === 0}
+                                            onClick={() => applyAllot(hotel, Array.from(selectedRooms))}
+                                            className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest bg-indigo-600 text-white hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center gap-2"
+                                        >
+                                            <i className="fa-solid fa-check text-[8px]"></i> {t('allot.apply.selection') || 'Aplicar a la selección'} ({selectedRooms.size})
+                                        </button>
+                                    )}
+                                </div>
+                                {selectHotel === hotel.id && (
+                                    <p className="w-full lg:w-auto lg:basis-full text-[10px] text-indigo-500 font-medium">{t('allot.hint') || 'Pulsa las habitaciones que quieras y aplica la localidad elegida a la selección.'}</p>
+                                )}
+                            </div>
+                        )}
                         {(!hotel.rooms || hotel.rooms.length === 0) ? (
                             <div className="flex flex-col items-center justify-center py-16 text-gray-300 border-2 border-dashed border-gray-200 rounded-3xl bg-white/50">
                                 <i className="fa-solid fa-door-closed text-4xl mb-4 opacity-30"></i>
                                 <p className="text-xs font-black uppercase tracking-widest opacity-60">{t('no.rooms')}</p>
-                                <p className="text-[10px] uppercase tracking-widest opacity-40 mt-1">Añade habitaciones para comenzar</p>
+                                {canManage && <p className="text-[10px] uppercase tracking-widest opacity-40 mt-1">Añade habitaciones para comenzar</p>}
                             </div>
                         ) : (
-                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+                            <>
+                            {onOpenExplorer && selectHotel !== hotel.id && (
+                                <p className="mb-3 text-[11px] text-gray-400 font-medium"><i className="fa-solid fa-hand-pointer mr-1.5"></i>{t('explorer.tile.hint') || 'Pulsa una habitación para ver quién duerme ahí y gestionar sus camas.'}</p>
+                            )}
+                            <div className="grid grid-cols-1 min-[440px]:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3 sm:gap-4">
                                 {hotel.rooms.map(room => {
-                                    const cap = room.capacity || 0;
-                                    const occ = room.occupied || 0;
-                                    const isFull = cap > 0 && occ >= cap;
-                                    const occupancyPercent = cap > 0 ? Math.min(100, (occ / cap) * 100) : 0;
-
+                                    const selecting = selectHotel === hotel.id;
+                                    // Outside selection mode a tile opens the explorer at this room; in it, it toggles the selection.
+                                    const activate = selecting
+                                        ? () => toggleRoomSelected(room.id)
+                                        : onOpenExplorer ? () => onOpenExplorer({ hotelId: hotel.id, roomId: room.id }) : undefined;
                                     return (
-                                        <div key={room.id} className={`
-                                            group/room p-5 rounded-3xl border-2 transition-all duration-300 relative overflow-hidden flex flex-col justify-between h-32
-                                            ${isFull
-                                                ? 'bg-white border-rose-100 shadow-sm opacity-80'
-                                                : 'bg-white border-white shadow-sm hover:border-blue-400 hover:shadow-xl hover:-translate-y-1'}
-                                        `}>
-                                            <div className="flex justify-between items-start z-10">
-                                                <span className="font-black text-xl text-gray-900 italic tracking-tighter">{room.room_number}</span>
-                                                <div className="flex items-center gap-1.5">
-                                                    {room.notes && (
-                                                        <div className="w-5 h-5 rounded-full bg-blue-50 flex items-center justify-center text-blue-400 group-hover/room:bg-blue-100 transition-colors" title={room.notes}>
-                                                            <i className="fa-solid fa-info text-[8px]"></i>
-                                                        </div>
-                                                    )}
-                                                    <button
-                                                        onClick={() => handleDeleteRoom(room)}
-                                                        title={t('delete.room') || 'Eliminar habitación'}
-                                                        className="w-5 h-5 rounded-full flex items-center justify-center text-gray-300 hover:text-rose-600 hover:bg-rose-50 transition-colors opacity-0 group-hover/room:opacity-100 [@media(hover:none)]:opacity-100"
-                                                    >
-                                                        <i className="fa-solid fa-trash-can text-[8px]"></i>
-                                                    </button>
-                                                </div>
-                                            </div>
-
-                                            <div className="space-y-3 z-10">
-                                                <div className="flex justify-between items-end">
-                                                    <span className={`text-[10px] font-black uppercase tracking-widest ${isFull ? 'text-rose-500' : 'text-gray-400'}`}>
-                                                        {isFull ? 'Completa' : 'Libre'}
-                                                    </span>
-                                                    <span className="text-xs font-bold text-gray-900">
-                                                        {room.occupied || 0}<span className="text-gray-300">/</span>{room.capacity}
-                                                    </span>
-                                                </div>
-
-                                                <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
-                                                    <div
-                                                        className={`h-full rounded-full transition-all duration-500 ${isFull ? 'bg-rose-500' : 'bg-blue-500'}`}
-                                                        style={{ width: `${occupancyPercent}%` }}
-                                                    ></div>
-                                                </div>
-                                            </div>
-
-                                            {/* Decor */}
-                                            {isFull && <div className="absolute inset-0 bg-rose-50/10 pointer-events-none"></div>}
-                                        </div>
+                                        <LodgingRoomTile
+                                            key={room.id}
+                                            room={room}
+                                            names={(occupantsByRoom.get(Number(room.id)) || []).map(p => personDisplayName(p, formFields)).sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }))}
+                                            selecting={selecting}
+                                            selected={selecting && selectedRooms.has(room.id)}
+                                            onActivate={activate}
+                                            onDelete={canManage ? () => handleDeleteRoom(room) : undefined}
+                                            t={t}
+                                        />
                                     );
                                 })}
                             </div>
+                            </>
                         )}
                     </div>
                 </div>
@@ -2100,6 +2830,8 @@ const FEE_OPERATORS = [
 function PricingPage({ conferenceId }: { conferenceId: number }) {
     const { addToast } = useToast();
     const { confirm } = useModal();
+    // Configuración › gestionar = base fee, rules and the re-pricing; «ver» only reads them.
+    const canManage = usePerms().can('settings', 'manage');
     const [fields, setFields] = useState<any[]>([]);
     const [rules, setRules] = useState<any[]>([]);
     const [baseFee, setBaseFee] = useState<string>('0');
@@ -2165,19 +2897,20 @@ function PricingPage({ conferenceId }: { conferenceId: number }) {
 
     return (
         <div className="h-full flex flex-col overflow-hidden">
+            <ReadOnlyNotice section="settings" className="mb-4 flex-shrink-0" />
             <div className="flex flex-wrap items-center justify-between gap-4 mb-6 flex-shrink-0">
                 <div>
                     <h2 className="text-2xl font-black text-gray-900 italic tracking-tighter">Precios</h2>
                     <p className="text-sm text-gray-400 font-medium">Cuota base + reglas según los campos del formulario</p>
                 </div>
-                <div className="flex items-center gap-2">
+                {canManage && <div className="flex items-center gap-2">
                     <button onClick={repriceAll} disabled={repricing} className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-5 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center gap-2 disabled:opacity-50" title="Aplica las reglas actuales a los inscritos existentes">
                         <i className={`fa-solid ${repricing ? 'fa-spinner animate-spin' : 'fa-arrows-rotate'}`}></i> Recalcular todos
                     </button>
                     <button onClick={openNew} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center gap-2 shadow-lg">
                         <i className="fa-solid fa-plus"></i> Nueva regla
                     </button>
-                </div>
+                </div>}
             </div>
 
             <div className="flex-1 overflow-y-auto modern-scrollbar min-h-0 space-y-6">
@@ -2187,10 +2920,10 @@ function PricingPage({ conferenceId }: { conferenceId: number }) {
                     <div className="flex items-center gap-3">
                         <div className="relative flex-1 max-w-xs">
                             <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold">$</span>
-                            <input type="number" min="0" value={baseFee} onChange={e => setBaseFee(e.target.value)}
-                                className="w-full border-2 border-gray-100 rounded-xl pl-8 pr-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none font-bold text-gray-900" />
+                            <input type="number" min="0" value={baseFee} onChange={e => setBaseFee(e.target.value)} disabled={!canManage}
+                                className="w-full border-2 border-gray-100 rounded-xl pl-8 pr-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none font-bold text-gray-900 disabled:opacity-70 disabled:cursor-not-allowed" />
                         </div>
-                        <button onClick={saveBase} disabled={savingBase} className="px-6 py-3 bg-gray-900 hover:bg-black text-white rounded-xl font-black text-xs uppercase tracking-widest transition disabled:opacity-50">{savingBase ? 'Guardando…' : 'Guardar'}</button>
+                        {canManage && <button onClick={saveBase} disabled={savingBase} className="px-6 py-3 bg-gray-900 hover:bg-black text-white rounded-xl font-black text-xs uppercase tracking-widest transition disabled:opacity-50">{savingBase ? 'Guardando…' : 'Guardar'}</button>}
                     </div>
                     <p className="text-[11px] text-gray-400 mt-2">Se aplica a todos; luego las reglas la fijan o la ajustan según los campos.</p>
                 </div>
@@ -2225,11 +2958,11 @@ function PricingPage({ conferenceId }: { conferenceId: number }) {
                                         </div>
                                     </div>
                                     <div className="flex items-center gap-2 shrink-0">
-                                        <button onClick={() => toggleRule(r)} title={r.enabled ? 'Desactivar' : 'Activar'} className={`w-11 h-6 rounded-full relative transition ${r.enabled ? 'bg-emerald-500' : 'bg-gray-200'}`}>
+                                        <button onClick={() => toggleRule(r)} disabled={!canManage} title={r.enabled ? 'Desactivar' : 'Activar'} className={`w-11 h-6 rounded-full relative transition disabled:cursor-not-allowed disabled:opacity-60 ${r.enabled ? 'bg-emerald-500' : 'bg-gray-200'}`}>
                                             <span className={`absolute top-1 w-4 h-4 bg-white rounded-full transition ${r.enabled ? 'left-6' : 'left-1'}`}></span>
                                         </button>
-                                        <button onClick={() => openEdit(r)} title="Editar" className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white transition"><i className="fa-solid fa-pen text-xs"></i></button>
-                                        <button onClick={() => delRule(r)} title="Eliminar" className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition"><i className="fa-solid fa-trash text-xs"></i></button>
+                                        {canManage && <button onClick={() => openEdit(r)} title="Editar" className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white transition"><i className="fa-solid fa-pen text-xs"></i></button>}
+                                        {canManage && <button onClick={() => delRule(r)} title="Eliminar" className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition"><i className="fa-solid fa-trash text-xs"></i></button>}
                                     </div>
                                 </div>
                             ))}
@@ -2322,6 +3055,16 @@ function ReportsPage({ conferenceId }: { conferenceId: number }) {
     const money = (n: number) => '$' + fmtMoney(n);
 
     const [exporting, setExporting] = useState(false);
+    const [showExcel, setShowExcel] = useState(false);
+    const [hotelsBusy, setHotelsBusy] = useState(false);
+    const { currentConference: reportConf } = useConference();
+    const codesOk = usePerms().can('inscriptions');
+    const hotelsExcel = async () => {
+        setHotelsBusy(true);
+        try { await downloadHotelReport(conferenceId, reportConf?.slug, null, codesOk); }
+        catch (e: any) { addToast(e?.message || 'Error', 'error'); }
+        finally { setHotelsBusy(false); }
+    };
     const downloadCsv = async () => {
         setExporting(true);
         try {
@@ -2370,6 +3113,21 @@ function ReportsPage({ conferenceId }: { conferenceId: number }) {
                     <h2 className="text-2xl font-black text-gray-900 italic tracking-tighter">{t('reports.title') || 'Reportes'}</h2>
                     <p className="text-sm text-gray-400 font-medium">{t('reports.subtitle') || 'Resumen de inscripciones y pagos'}</p>
                 </div>
+                <div className="flex flex-wrap items-center gap-2">
+                {showExcel && <ExcelExportModal conferenceId={conferenceId} slug={reportConf?.slug} onClose={() => setShowExcel(false)} />}
+                <button
+                    onClick={() => setShowExcel(true)}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center gap-2 shadow-lg shadow-emerald-500/30"
+                >
+                    <i className="fa-solid fa-file-excel"></i> {t('excel.custom') || 'Excel personalizado'}
+                </button>
+                <button
+                    onClick={hotelsExcel}
+                    disabled={hotelsBusy}
+                    className="bg-white border-2 border-gray-100 text-gray-700 hover:border-emerald-500 hover:text-emerald-700 px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center gap-2 disabled:opacity-50"
+                >
+                    <i className={`fa-solid ${hotelsBusy ? 'fa-spinner animate-spin' : 'fa-hotel'}`}></i> {t('excel.hotels') || 'Reporte de hoteles (Excel)'}
+                </button>
                 <button
                     onClick={downloadCsv}
                     disabled={exporting}
@@ -2377,6 +3135,7 @@ function ReportsPage({ conferenceId }: { conferenceId: number }) {
                 >
                     <i className={`fa-solid ${exporting ? 'fa-spinner animate-spin' : 'fa-file-csv'}`}></i> {t('export.csv') || 'Exportar CSV'}
                 </button>
+                </div>
             </div>
 
             <div className="flex-1 overflow-y-auto modern-scrollbar min-h-0 space-y-8">
@@ -2449,6 +3208,8 @@ function ReportsPage({ conferenceId }: { conferenceId: number }) {
 function FieldsPage({ conferenceId }: { conferenceId: number }) {
     const { t } = useI18n();
     const { addToast } = useToast();
+    // Configuración › gestionar = add / edit / delete / reorder fields and publish the form.
+    const canManage = usePerms().can('settings', 'manage');
     const [fields, setFields] = useState<ConferenceField[]>([]);
     const [conference, setConference] = useState<Conference | null>(null);
     const [loading, setLoading] = useState(true);
@@ -2515,38 +3276,18 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
         }
     };
 
-    const handleMove = async (field: ConferenceField, direction: 'up' | 'down') => {
-        const index = fields.findIndex(f => f.id === field.id);
-        if (direction === 'up' && index === 0) return;
-        if (direction === 'down' && index === fields.length - 1) return;
-
-        const newFields = [...fields];
-        const swapIndex = direction === 'up' ? index - 1 : index + 1;
-        [newFields[index], newFields[swapIndex]] = [newFields[swapIndex], newFields[index]];
-
-        // Update sort orders and save all
-        try {
-            await Promise.all(newFields.map((f, i) =>
-                conferenceApi.saveField({ ...f, sort_order: i, conference_id: conferenceId })
-            ));
-            loadData();
-        } catch (e) {
-            addToast('Error reordering fields', 'error');
-        }
-    };
-
     const isPublished = !!conference?.is_form_published;
 
     const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
 
     const handleDragStart = (idx: number) => {
-        if (isPublished) return;
+        if (isPublished || !canManage) return;
         setDraggedIndex(idx);
     };
 
     const handleDragOver = (e: React.DragEvent, idx: number) => {
         e.preventDefault();
-        if (isPublished || draggedIndex === null || draggedIndex === idx) return;
+        if (isPublished || !canManage || draggedIndex === null || draggedIndex === idx) return;
 
         const newFields = [...fields];
         const draggedItem = newFields[draggedIndex];
@@ -2557,7 +3298,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
     };
 
     const handleDragEnd = async () => {
-        if (isPublished) return;
+        if (isPublished || !canManage) return;
         setDraggedIndex(null);
         try {
             await Promise.all(fields.map((f, i) =>
@@ -2594,6 +3335,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
 
     return (
         <div className="space-y-10 animate-in fade-in duration-500">
+            <ReadOnlyNotice section="settings" />
             {/* Premium Publisher Card */}
             <div className={`group relative overflow-hidden rounded-[40px] p-10 border-2 transition-all duration-500 shadow-2xl ${isPublished
                 ? 'bg-emerald-50/50 border-emerald-100 shadow-emerald-100/30'
@@ -2632,7 +3374,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                         </p>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-4">
+                    {canManage && <div className="flex flex-wrap items-center gap-4">
                         <button
                             onClick={handlePublish}
                             className={`px-8 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest transition-all duration-500 flex items-center gap-3 shadow-xl transform active:scale-95 ${isPublished
@@ -2651,7 +3393,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                 <i className="fa-solid fa-plus text-[8px]"></i> {t('add.field')}
                             </button>
                         )}
-                    </div>
+                    </div>}
                 </div>
             </div>
 
@@ -2678,11 +3420,11 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                         ) : fields.map((field, idx) => (
                             <div
                                 key={field.id}
-                                draggable={!isPublished}
+                                draggable={!isPublished && canManage}
                                 onDragStart={() => handleDragStart(idx)}
                                 onDragOver={(e) => handleDragOver(e, idx)}
                                 onDragEnd={handleDragEnd}
-                                className={`bg-white border-2 rounded-2xl p-4 flex items-center justify-between group transition-all duration-300 shadow-sm ${draggedIndex === idx ? 'opacity-50 border-blue-500 scale-95 shadow-inner' : 'border-gray-50 hover:border-blue-500 hover:shadow-xl hover:-translate-y-1'} ${!isPublished ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                                className={`bg-white border-2 rounded-2xl p-4 flex items-center justify-between group transition-all duration-300 shadow-sm ${draggedIndex === idx ? 'opacity-50 border-blue-500 scale-95 shadow-inner' : 'border-gray-50 hover:border-blue-500 hover:shadow-xl hover:-translate-y-1'} ${!isPublished && canManage ? 'cursor-grab active:cursor-grabbing' : ''}`}
                             >
                                 <div className="flex items-center gap-4">
                                     <div className="w-10 h-10 rounded-xl bg-gray-50 text-gray-300 group-hover:bg-blue-50 group-hover:text-blue-500 flex items-center justify-center transition-colors">
@@ -2706,12 +3448,12 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                         </div>
                                     </div>
                                 </div>
-                                <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-all duration-300 translate-x-2 group-hover:translate-x-0">
+                                {canManage && <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-all duration-300 translate-x-2 group-hover:translate-x-0">
                                     <button onClick={() => { setFormData(field); setShowModal(true); }} className="w-9 h-9 flex items-center justify-center bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white rounded-xl transition-all shadow-sm" title="Editar"><i className="fa-solid fa-pen text-xs"></i></button>
                                     {!isPublished && !['first_name', 'last_name', 'email', 'phone', 'gender', 'location', 'family_group'].includes(field.name) && (
                                         <button onClick={() => handleDelete(field.id)} className="w-9 h-9 flex items-center justify-center bg-rose-50 text-rose-600 hover:bg-rose-600 hover:text-white rounded-xl transition-all shadow-sm" title="Eliminar"><i className="fa-solid fa-trash text-xs"></i></button>
                                     )}
-                                </div>
+                                </div>}
                             </div>
                         ))}
                     </div>
@@ -3005,7 +3747,6 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
     );
 }
 
-const INSCRIPTION_FIELDS: string[] = [];
 
 // Assignment Component
 // The four composable assignment-rule primitives (must match the backend engine's rule types).
@@ -3051,9 +3792,20 @@ function PredicateEditor({ fields, value, onChange, label }: any) {
     );
 }
 
-function AssignmentPage({ conferenceId }: { conferenceId: number }) {
+// ---------------------------------------------------------------------------------------------
+// Accommodation (AssignmentPage): who sleeps where. Since 2.13.0 it is the lodging explorer
+// (./LodgingExplorer.tsx) — «Hoteles › Hotel › Habitación» with the same drag & drop contract,
+// room picker and frozen / cancelled protections the 2.5.0 board had.
+// ---------------------------------------------------------------------------------------------
+
+// `focus` / `onFocusConsumed`: «Ver ocupación» in «Hoteles y habitaciones» opens the explorer at a
+// hotel (and room) once — see ConferenceManagerContent.openLodgingExplorer.
+function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId: number; focus?: { hotelId: number; roomId?: number | null } | null; onFocusConsumed?: () => void }) {
     const { t } = useI18n();
     const { addToast } = useToast();
+    // Hospedaje › gestionar = run / reset the engine, edit its rules, and move people in the explorer
+    // (drag & drop and pickers); «ver» explores who sleeps where without changing anything.
+    const canManage = usePerms().can('lodging', 'manage');
     const [rules, setRules] = useState<AssignmentRule[]>([]);
     const [fields, setFields] = useState<ConferenceField[]>([]);
     const [stats, setStats] = useState({ total: 0, assigned: 0, unassigned: 0 });
@@ -3061,6 +3813,19 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
     const [loading, setLoading] = useState(true);
     const [showRuleModal, setShowRuleModal] = useState(false);
     const [runReport, setRunReport] = useState<any>(null);
+    // The lodging explorer's data: every attendee, every hotel with its rooms, every location.
+    const [inscriptions, setInscriptions] = useState<Inscription[]>([]);
+    const [hotels, setHotels] = useState<Hotel[]>([]);
+    const [locations, setLocations] = useState<Location[]>([]);
+    // Attendees with a move in flight: the explorer refuses a second move of the same attendee until it settles.
+    const [pending, setPending] = useState<Set<number>>(() => new Set());
+    // The latest load failed: the explorer then keeps its remembered place (it would otherwise fit it to
+    // the empty lists and forget it) and offers a retry instead of «No hay hoteles configurados».
+    const [loadFailed, setLoadFailed] = useState(false);
+    const boardRef = useRef<HTMLDivElement>(null);
+    const reportRef = useRef<HTMLDivElement>(null);
+    // Reload ordering: two overlapping reloads may resolve out of order; only the latest one is applied.
+    const loadSeq = useRef(0);
     const [ruleForm, setRuleForm] = useState<Partial<AssignmentRule>>({
         name: '', type: 'keep_together', enabled: 1, priority: 50, config: '', hard: 0, params: {}
     });
@@ -3072,14 +3837,19 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
         setRuleForm({ ...rule, params }); setShowRuleModal(true);
     };
 
-    const loadData = async () => {
-        setLoading(true);
+    // silent = refresh the data without the loading spinner (after a run, a reset or a board move).
+    const loadData = async (silent = false) => {
+        if (!silent) setLoading(true);
+        const seq = ++loadSeq.current;
         try {
-            const [rulesData, inscriptions, fieldsData] = await Promise.all([
+            const [rulesData, inscriptionsData, fieldsData, hotelsData, locData] = await Promise.all([
                 conferenceApi.getAssignmentRules(conferenceId),
                 conferenceApi.getInscriptions(conferenceId),
-                conferenceApi.getFields(conferenceId)
+                conferenceApi.getFields(conferenceId),
+                conferenceApi.getHotels(conferenceId),
+                conferenceApi.getLocations(conferenceId).catch(() => null),
             ]);
+            if (seq !== loadSeq.current) return; // a newer load already landed (or is about to)
 
             setFields(fieldsData);
 
@@ -3087,16 +3857,62 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
             // on "0 rules" would resurrect them every time the admin deletes them all and reloads.
             setRules(rulesData);
 
-            const assigned = inscriptions.filter(i => i.room_id).length;
-            setStats({
-                total: inscriptions.length,
-                assigned,
-                unassigned: inscriptions.length - assigned
-            });
+            setInscriptions(inscriptionsData || []);
+            setHotels(hotelsData || []);
+            setLocations(locData?.locations || []);
+            setLoadFailed(false);
+            // Cancelled attendees are neither placed by the engine nor listed by the board — the header
+            // counts (and the run button's gate) leave them out too.
+            const live = (inscriptionsData || []).filter(i => i.status !== 'cancelled');
+            const assigned = live.filter(i => i.room_id).length;
+            setStats({ total: live.length, assigned, unassigned: live.length - assigned });
         } catch (e) {
             console.error(e);
+            if (seq === loadSeq.current) setLoadFailed(true);
         } finally {
-            setLoading(false);
+            if (!silent && seq === loadSeq.current) setLoading(false);
+        }
+    };
+    const reload = () => loadData(true);
+
+    // One board move: optimistic update, POST /inscriptions/:id/assign, then a silent reload. A server
+    // refusal (full / other location / frozen: 400 or 409) reverts THAT attendee only (a whole-list
+    // snapshot would undo a newer move that succeeded meanwhile), surfaces its message and re-syncs.
+    // Resolves true when the move stuck (the modal closes on true).
+    const moveAttendee = async (inscriptionId: number, roomId: number | null): Promise<boolean> => {
+        if (pending.has(inscriptionId)) return false;
+        const before = inscriptions.find(p => p.id === inscriptionId);
+        if (!before) return false;
+        setPending(set => new Set(set).add(inscriptionId));
+        let target: { room: Room; hotel: Hotel } | null = null;
+        if (roomId != null) {
+            for (const h of hotels) {
+                const r = (h.rooms || []).find(x => Number(x.id) === Number(roomId));
+                if (r) { target = { room: r, hotel: h }; break; }
+            }
+        }
+        setInscriptions(list => list.map(p => p.id === inscriptionId
+            ? { ...p, room_id: roomId, room_number: target ? target.room.room_number : undefined, hotel_name: target ? target.hotel.name : undefined }
+            : p));
+        try {
+            await conferenceApi.assignRoom(inscriptionId, roomId);
+            if (roomId != null) {
+                const label = target ? `${target.hotel.name} · ${target.room.room_number}` : `#${roomId}`;
+                addToast(fillVars(t('board.moved') || 'Movido a {room}', { room: label }), 'success');
+            } else {
+                addToast(t('board.removed') || 'Quitado de la habitación', 'success');
+            }
+            await reload();
+            return true;
+        } catch (e: any) {
+            setInscriptions(list => list.map(p => p.id === inscriptionId
+                ? { ...p, room_id: before.room_id, room_number: before.room_number, hotel_name: before.hotel_name }
+                : p));
+            addToast(e?.message || 'Error', 'error');
+            await reload();
+            return false;
+        } finally {
+            setPending(set => { const next = new Set(set); next.delete(inscriptionId); return next; });
         }
     };
 
@@ -3148,7 +3964,15 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
             const nv = (result.violations || []).length;
             if (nv > 0) addToast(`Asignados: ${result.assignedCount}. ${nv} punto(s) no se pudieron cumplir del todo — revisa el reporte.`, 'error');
             else addToast(`${t('assignment.completed')}: ${result.assignedCount} ${t('participant.plural')}`, 'success');
-            loadData();
+            await reload();
+            // The board is the answer to "who went where": bring it into view once the new data is in.
+            // With violations the toast says "revisa el reporte", so the report (rendered above the
+            // board) is what must be on screen, not scrolled out above the board's top edge.
+            const el = nv > 0 ? (reportRef.current || boardRef.current) : boardRef.current;
+            if (el) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                if (el === boardRef.current) el.focus({ preventScroll: true });
+            }
         } catch (e: any) {
             addToast(e.message || 'Error running assignment', 'error');
         } finally {
@@ -3156,16 +3980,29 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
         }
     };
 
+    // "«Norte» no se tocó: hospedaje en validación/validado — reábrelo desde Localidades"
+    const skippedFrozenLine = (name: string) =>
+        withName(t('assignment.skipped.frozen') || '«{name}» no se tocó: hospedaje en validación/validado — reábrelo desde Localidades', name);
+
     const handleReset = async () => {
         if (!await confirm(t('confirm.reset.assignments') || 'Reset all assignments?', t('reset.assignments') || "Reset Assignments", true)) return;
         try {
-            await conferenceApi.resetAssignments(conferenceId);
-            addToast(t('assignment.reset.done'), 'success');
-            loadData();
+            const result: any = await conferenceApi.resetAssignments(conferenceId);
+            const skipped: any[] = (result && result.skipped_frozen) || [];
+            if (skipped.length > 0) addToast(`${t('assignment.reset.done')}. ${skipped.map(s => skippedFrozenLine(s.name)).join(' ')}`, 'warning');
+            else addToast(t('assignment.reset.done'), 'success');
+            setRunReport(null);
+            reload();
         } catch (e) {
             addToast('Error resetting assignments', 'error');
         }
     };
+
+    // One object per run (the board re-opens every hotel when it changes, so it must not change per render).
+    const runSummary = useMemo(
+        () => (runReport ? { assigned: Number(runReport.assignedCount) || 0, remaining: Number(runReport.remaining) || 0 } : null),
+        [runReport]
+    );
 
     // Convenience accessors for the current rule's type-specific params blob.
     const rParams: any = ruleForm.params || {};
@@ -3186,6 +4023,7 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
 
     return (
         <div className="space-y-10 animate-in fade-in duration-500">
+            <ReadOnlyNotice section="lodging" />
             {/* Premium Header & Summary */}
             <div className="relative overflow-hidden bg-white rounded-3xl p-8 border border-gray-100 shadow-xl shadow-gray-100/50">
                 <div className="absolute top-0 right-0 -mr-16 -mt-16 w-64 h-64 bg-indigo-50/50 rounded-full blur-3xl"></div>
@@ -3220,7 +4058,7 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
                         </div>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-4">
+                    {canManage && <div className="flex flex-wrap items-center gap-4">
                         <button
                             onClick={handleReset}
                             className="px-6 py-4 text-rose-600 font-black text-[10px] uppercase tracking-widest hover:bg-rose-50 rounded-2xl transition-all border-2 border-transparent hover:border-rose-100 flex items-center gap-2 group"
@@ -3239,9 +4077,78 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
                             {running ? <i className="fa-solid fa-spinner fa-spin"></i> : <i className="fa-solid fa-play text-[8px]"></i>}
                             {t('run.auto.assignment')}
                         </button>
-                    </div>
+                    </div>}
                 </div>
             </div>
+
+            {runReport && (
+                <div ref={reportRef} className={`rounded-3xl border p-6 shadow-xl ${(runReport.violations || []).length ? 'bg-amber-50/40 border-amber-200' : 'bg-emerald-50/40 border-emerald-200'}`}>
+                    <div className="flex items-center gap-3 mb-3">
+                        <i className={`fa-solid ${(runReport.violations || []).length ? 'fa-triangle-exclamation text-amber-500' : 'fa-circle-check text-emerald-500'} text-lg`}></i>
+                        <h3 className="text-sm font-black text-gray-900 uppercase tracking-widest">Resultado de la asignación</h3>
+                        <button onClick={() => setRunReport(null)} className="ml-auto text-gray-300 hover:text-gray-500"><i className="fa-solid fa-xmark"></i></button>
+                    </div>
+                    <p className="text-xs text-gray-600 mb-3">Asignados <b>{runReport.assignedCount}</b>{runReport.remaining ? <> · <span className="text-amber-700 font-bold">{runReport.remaining} sin cupo</span></> : null}.</p>
+                    {/* One line per delegated location the run covered, then the frozen ones it skipped. */}
+                    {(runReport.by_location || []).length > 0 && (
+                        <div className="mb-3">
+                            <div className="text-[9px] font-black uppercase tracking-widest text-gray-400 mb-1">{t('assignment.by.location') || 'Por localidad'}</div>
+                            <ul className="space-y-1">
+                                {runReport.by_location.map((l: any) => (
+                                    <li key={l.location_id} className="text-xs text-gray-700 flex items-center gap-2">
+                                        <i className="fa-solid fa-map-pin text-[9px] text-indigo-400"></i>
+                                        <b>{l.name}</b>: {l.assignedCount} {t('assignment.assigned.short') || 'asignados'}
+                                        {l.remaining ? <span className="text-amber-700 font-bold"> · {l.remaining} {t('assignment.remaining.short') || 'sin cupo'}</span> : null}
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
+                    {(runReport.skipped_frozen || []).length > 0 && (
+                        <ul className="mb-3 space-y-1">
+                            {runReport.skipped_frozen.map((l: any) => (
+                                <li key={l.location_id} className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 flex items-center gap-2">
+                                    <i className="fa-solid fa-lock text-[9px]"></i>
+                                    <span>{skippedFrozenLine(l.name)}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                    {(runReport.violations || []).length === 0 ? (
+                        <p className="text-xs text-emerald-700 font-medium">Todas las reglas se cumplieron. ✓</p>
+                    ) : (
+                        <ul className="space-y-1.5">
+                            {runReport.violations.map((v: any, i: number) => (
+                                <li key={i} className="flex items-start gap-2 text-xs text-gray-700">
+                                    <span className={`mt-0.5 px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-widest whitespace-nowrap ${v.hard ? 'bg-rose-100 text-rose-600' : 'bg-gray-200 text-gray-500'}`}>{v.hard ? 'Obligatoria' : 'Preferente'}</span>
+                                    <span><b>{v.rule}</b> — {v.detail}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </div>
+            )}
+
+            {/* Who sleeps where — «Hoteles › Hotel › Habitación», editable by drag & drop and pickers. */}
+            <LodgingExplorer
+                key={conferenceId}
+                conferenceId={conferenceId}
+                inscriptions={inscriptions}
+                hotels={hotels}
+                locations={locations}
+                fields={fields}
+                onMove={moveAttendee}
+                pending={pending}
+                loading={loading}
+                runSummary={runSummary}
+                boardRef={boardRef}
+                focus={focus}
+                onFocusConsumed={onFocusConsumed}
+                suspendKeys={showRuleModal}
+                loadFailed={loadFailed}
+                onRetry={() => loadData()}
+                readOnly={!canManage}
+            />
 
             <div className="bg-white rounded-3xl border border-gray-100 overflow-hidden shadow-xl shadow-gray-100/30">
                 <div className="bg-gray-50/50 border-b border-gray-100 px-8 py-6 flex justify-between items-center">
@@ -3249,13 +4156,13 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
                         <h3 className="text-sm font-black text-gray-900 uppercase tracking-widest leading-none">{t('assignment.rules')}</h3>
                         <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-2">{t('assignment.rules.desc') || 'Criterios para la distribución de habitaciones'}</p>
                     </div>
-                    <button
+                    {canManage && <button
                         onClick={openNewRule}
                         className="px-5 py-2.5 bg-white border border-gray-200 rounded-xl text-[10px] font-black uppercase tracking-widest text-indigo-600 hover:bg-indigo-50 hover:border-indigo-200 transition-all flex items-center gap-2"
                     >
                         <i className="fa-solid fa-plus"></i>
                         {t('add.rule')}
-                    </button>
+                    </button>}
                 </div>
                 <div className="divide-y divide-gray-50">
                     {loading ? (
@@ -3303,48 +4210,26 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
                             <div className="flex items-center gap-4">
                                 <button
                                     onClick={() => handleToggleRule(rule)}
-                                    className={`w-12 h-6 rounded-full transition-all relative ${rule.enabled ? 'bg-emerald-500 shadow-lg shadow-emerald-100' : 'bg-gray-200'}`}
+                                    disabled={!canManage}
+                                    className={`w-12 h-6 rounded-full transition-all relative disabled:cursor-not-allowed disabled:opacity-60 ${rule.enabled ? 'bg-emerald-500 shadow-lg shadow-emerald-100' : 'bg-gray-200'}`}
                                 >
                                     <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all shadow-sm ${rule.enabled ? 'left-7' : 'left-1'}`}></div>
                                 </button>
-                                <button onClick={() => openEditRule(rule)} title={t('edit') || 'Editar'} className="w-10 h-10 rounded-xl bg-white border border-gray-100 text-gray-400 hover:text-indigo-600 hover:border-indigo-100 hover:bg-indigo-50 transition-all flex items-center justify-center">
+                                {canManage && <button onClick={() => openEditRule(rule)} title={t('edit') || 'Editar'} className="w-10 h-10 rounded-xl bg-white border border-gray-100 text-gray-400 hover:text-indigo-600 hover:border-indigo-100 hover:bg-indigo-50 transition-all flex items-center justify-center">
                                     <i className="fa-solid fa-pen text-sm"></i>
-                                </button>
-                                <button onClick={() => handleDeleteRule(rule)} title={t('delete')} className="w-10 h-10 rounded-xl bg-white border border-gray-100 text-gray-400 hover:text-rose-600 hover:border-rose-100 hover:bg-rose-50 transition-all flex items-center justify-center group/del">
+                                </button>}
+                                {canManage && <button onClick={() => handleDeleteRule(rule)} title={t('delete')} className="w-10 h-10 rounded-xl bg-white border border-gray-100 text-gray-400 hover:text-rose-600 hover:border-rose-100 hover:bg-rose-50 transition-all flex items-center justify-center group/del">
                                     <i className="fa-solid fa-trash-can text-sm group-hover/del:scale-110 transition-transform"></i>
-                                </button>
+                                </button>}
                             </div>
                         </div>
                     ))}
                 </div>
             </div>
 
-            {runReport && (
-                <div className={`rounded-3xl border p-6 shadow-xl ${(runReport.violations || []).length ? 'bg-amber-50/40 border-amber-200' : 'bg-emerald-50/40 border-emerald-200'}`}>
-                    <div className="flex items-center gap-3 mb-3">
-                        <i className={`fa-solid ${(runReport.violations || []).length ? 'fa-triangle-exclamation text-amber-500' : 'fa-circle-check text-emerald-500'} text-lg`}></i>
-                        <h3 className="text-sm font-black text-gray-900 uppercase tracking-widest">Resultado de la asignación</h3>
-                        <button onClick={() => setRunReport(null)} className="ml-auto text-gray-300 hover:text-gray-500"><i className="fa-solid fa-xmark"></i></button>
-                    </div>
-                    <p className="text-xs text-gray-600 mb-3">Asignados <b>{runReport.assignedCount}</b>{runReport.remaining ? <> · <span className="text-amber-700 font-bold">{runReport.remaining} sin cupo</span></> : null}.</p>
-                    {(runReport.violations || []).length === 0 ? (
-                        <p className="text-xs text-emerald-700 font-medium">Todas las reglas se cumplieron. ✓</p>
-                    ) : (
-                        <ul className="space-y-1.5">
-                            {runReport.violations.map((v: any, i: number) => (
-                                <li key={i} className="flex items-start gap-2 text-xs text-gray-700">
-                                    <span className={`mt-0.5 px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-widest whitespace-nowrap ${v.hard ? 'bg-rose-100 text-rose-600' : 'bg-gray-200 text-gray-500'}`}>{v.hard ? 'Obligatoria' : 'Preferente'}</span>
-                                    <span><b>{v.rule}</b> — {v.detail}</span>
-                                </li>
-                            ))}
-                        </ul>
-                    )}
-                </div>
-            )}
-
             {showRuleModal && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
-                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg border border-gray-100 max-h-[92vh] overflow-y-auto animate-in zoom-in-95 duration-200">
+                    <div role="dialog" aria-modal="true" className="bg-white rounded-3xl shadow-2xl w-full max-w-lg border border-gray-100 max-h-[92vh] overflow-y-auto animate-in zoom-in-95 duration-200">
                         <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-center justify-between sticky top-0 z-10">
                             <div>
                                 <h3 className="font-black text-xl text-gray-900 italic tracking-tighter">{ruleForm.id ? 'Editar regla' : t('add.rule')}</h3>
@@ -3438,9 +4323,9 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
 // Main Export
 export default function ConferenceManagerAdmin() {
     return (
-        <ConferenceProvider>
-            <ConferenceManagerContent />
-        </ConferenceProvider>
+        <PermsProvider>
+            <PermsGate />
+        </PermsProvider>
     );
 }
 
@@ -3448,7 +4333,14 @@ export default function ConferenceManagerAdmin() {
 // Locations Page Component
 function LocationsPage({ conferenceId }: { conferenceId: number }) {
     const { t } = useI18n();
+    const tx = useTx();
     const { addToast } = useToast();
+    // Localidades › gestionar = create / delete, coordinators' codes (rotate), seats, forms of payment,
+    // the lodging deadline and its exceptions, and the lodging review (validate / return / reopen).
+    // «ver» reads all of it (the review included) and can still copy a code or the portal link.
+    const locPerms = usePerms();
+    const canManage = locPerms.can('locations', 'manage');
+    const canDeadline = canManage || locPerms.can('settings', 'manage');
     const { conferences } = useConference();
     const currentConference = conferences.find(c => c.id === conferenceId);
 
@@ -3456,7 +4348,25 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
     const [conference, setConference] = useState<Conference | null>(null);
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
-    const [newLocation, setNewLocation] = useState({ name: '', responsible_name: '', responsible_phone: '' });
+    const [newLocation, setNewLocation] = useState({ name: '', responsible_name: '', responsible_phone: '', capacity: '', payment_methods: [...PAYMENT_METHODS] as string[] });
+    const [savingMethods, setSavingMethods] = useState<number | null>(null);
+    // Lodging deadline (per conference): the date input mirrors conference.lodging_deadline until saved.
+    const [deadlineInput, setDeadlineInput] = useState('');
+    const [savingDeadline, setSavingDeadline] = useState(false);
+    // Per-location permission after the deadline: the card whose editor is open + its date, and the one saving.
+    const [permEdit, setPermEdit] = useState<{ id: number; until: string } | null>(null);
+    const [savingPerm, setSavingPerm] = useState<number | null>(null);
+    // Inline capacity editor on a card: which location and the value being typed.
+    const [capacityEdit, setCapacityEdit] = useState<{ id: number; value: string } | null>(null);
+    const [savingCapacity, setSavingCapacity] = useState(false);
+    // "Revisar hospedaje" modal: the location being reviewed, the GET /locations/:id/lodging payload,
+    // the observations typed for a return, and the action in flight.
+    const [reviewLoc, setReviewLoc] = useState<Location | null>(null);
+    const [review, setReview] = useState<LodgingReview | null>(null);
+    const [reviewLoading, setReviewLoading] = useState(false);
+    const [returnNote, setReturnNote] = useState('');
+    const [showReturnForm, setShowReturnForm] = useState(false);
+    const [reviewBusy, setReviewBusy] = useState(false);
 
     const loadLocations = async () => {
         setLoading(true);
@@ -3464,6 +4374,7 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
             const data = await conferenceApi.getLocations(conferenceId);
             setLocations(data.locations);
             setConference(data.conference);
+            setDeadlineInput(String(data.conference?.lodging_deadline || '').slice(0, 10));
         } catch (error) {
             console.error(error);
         } finally {
@@ -3475,14 +4386,21 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
         loadLocations();
     }, [conferenceId]);
 
-    const { confirm } = useModal();
+    // In-page confirm that renders ABOVE this page's own z-[100] modals (the review modal awaits it for
+    // Validar / Reabrir) — the shared useModal dialog is z-50 and would sit BEHIND the review modal, so
+    // its buttons could never be clicked and the promise would never resolve. Same
+    // (message, label, danger) signature as useModal's confirm; the promise resolves to the choice.
+    const [confirmState, setConfirmState] = useState<{ message: string; label: string; danger: boolean; resolve: (v: boolean) => void } | null>(null);
+    const confirm = (message: string, label = 'Confirmar', danger = false) =>
+        new Promise<boolean>(resolve => setConfirmState({ message, label, danger, resolve }));
 
+    const canCreate = !!newLocation.name.trim() && /^\d+$/.test(newLocation.capacity.trim()) && Number(newLocation.capacity) > 0;
     const handleCreate = async () => {
-        if (!newLocation.name) return;
+        if (!canCreate) return;
         try {
-            await conferenceApi.createLocation(conferenceId, newLocation);
+            await conferenceApi.createLocation(conferenceId, { ...newLocation, capacity: Number(newLocation.capacity) });
             setShowModal(false);
-            setNewLocation({ name: '', responsible_name: '', responsible_phone: '' });
+            setNewLocation({ name: '', responsible_name: '', responsible_phone: '', capacity: '', payment_methods: [...PAYMENT_METHODS] });
             loadLocations();
             addToast(t('location.created'), 'success');
         } catch (error: any) {
@@ -3532,6 +4450,39 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
 
     const isPublished = !!conference?.is_form_published;
 
+    // 'YYYY-MM-DD' → 'DD/MM/YYYY' (a datetime keeps its clock); anything else verbatim.
+    const fmtDeadline = (v: unknown): string => {
+        const m = String(v ?? '').trim().match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/);
+        return m ? `${m[3]}/${m[2]}/${m[1]}${m[4] ? ` ${m[4]}:${m[5]}` : ''}` : String(v ?? '');
+    };
+    const saveDeadline = async (value: string | null) => {
+        setSavingDeadline(true);
+        try {
+            await conferenceApi.updateConference(conferenceId, { lodging_deadline: value } as any);
+            addToast(value ? (t('lodging.deadline.saved') || 'Plazo guardado') : (t('lodging.deadline.cleared') || 'Plazo eliminado'), 'success');
+            loadLocations();
+        } catch (error: any) {
+            addToast(error?.message || 'Error', 'error');
+        } finally {
+            setSavingDeadline(false);
+        }
+    };
+
+    // Grant (with an optional end date; '' = until revoked) or revoke a location's permission.
+    const savePermission = async (loc: Location, granted: boolean, until: string) => {
+        setSavingPerm(loc.id);
+        try {
+            await conferenceApi.updateLocation(loc.id, granted ? { lodging_permission: true, lodging_permission_until: until || null } : { lodging_permission: false });
+            addToast(granted ? (t('lodging.permission.granted') || 'Permiso concedido') : (t('lodging.permission.revoked') || 'Permiso retirado'), 'success');
+            setPermEdit(null);
+            loadLocations();
+        } catch (error: any) {
+            addToast(error?.message || 'Error', 'error');
+        } finally {
+            setSavingPerm(null);
+        }
+    };
+
     const [copiedId, setCopiedId] = useState<number | null>(null);
 
     const handleCopyCode = async (code: string, id: number) => {
@@ -3540,6 +4491,40 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
             setTimeout(() => setCopiedId(null), 2000);
         } else {
             addToast(`${t('code') || 'Código'}: ${code}`, 'info');
+        }
+    };
+
+    // Enable or disable one form of payment for a location (the server stores the whole enabled set).
+    const handleToggleMethod = async (loc: Location, method: string) => {
+        const current = Array.isArray(loc.payment_methods) ? loc.payment_methods : [...PAYMENT_METHODS];
+        const next = current.includes(method) ? current.filter(m => m !== method) : [...current, method];
+        setSavingMethods(loc.id);
+        try {
+            await conferenceApi.updateLocation(loc.id, { payment_methods: next });
+            addToast(t('payment.methods.updated') || 'Formas de pago actualizadas', 'success');
+            loadLocations();
+        } catch (error: any) {
+            addToast(error?.message || 'Error', 'error');
+        } finally {
+            setSavingMethods(null);
+        }
+    };
+
+    // Raise or lower the cap; the server refuses a value below the seats already taken (409 with the count).
+    const handleSaveCapacity = async (loc: Location) => {
+        if (!capacityEdit || capacityEdit.id !== loc.id) return;
+        const v = capacityEdit.value.trim();
+        if (!/^\d+$/.test(v) || Number(v) < 1) { addToast(t('location.capacity.help'), 'warning'); return; }
+        setSavingCapacity(true);
+        try {
+            await conferenceApi.updateLocation(loc.id, { capacity: Number(v) });
+            addToast(t('capacity.updated') || 'Cupo actualizado', 'success');
+            setCapacityEdit(null);
+            loadLocations();
+        } catch (error: any) {
+            addToast(error?.message || 'Error', 'error');
+        } finally {
+            setSavingCapacity(false);
         }
     };
 
@@ -3554,8 +4539,99 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
         }
     };
 
+    // --- Lodging review (the admin only validates the coordinator's arrangement) ---------------
+    const loadReview = async (id: number) => {
+        setReviewLoading(true);
+        try {
+            setReview(await conferenceApi.getLocationLodging(id));
+        } catch (error: any) {
+            addToast(error?.message || t('lodging.error.loading') || 'Error al cargar el hospedaje', 'error');
+        } finally {
+            setReviewLoading(false);
+        }
+    };
+
+    const openReview = (loc: Location) => {
+        setReviewLoc(loc);
+        setReview(null);
+        setReturnNote('');
+        setShowReturnForm(false);
+        loadReview(loc.id);
+    };
+
+    const closeReview = () => {
+        setReviewLoc(null);
+        setReview(null);
+        setShowReturnForm(false);
+    };
+
+    // Each transition is a compare-and-set on the server (409 when the status moved meanwhile); after
+    // any of them the modal reloads its payload and the cards refresh their status/counters.
+    const handleValidate = async () => {
+        if (!reviewLoc) return;
+        if (!await confirm(t('lodging.confirm.validate') || '¿Validar el hospedaje de esta localidad? El encargado no podrá modificarlo hasta que lo reabras.', t('lodging.validate') || 'Validar', false)) return;
+        setReviewBusy(true);
+        try {
+            await conferenceApi.validateLodging(reviewLoc.id);
+            addToast(t('lodging.validated.done') || 'Hospedaje validado', 'success');
+            await loadReview(reviewLoc.id);
+            loadLocations();
+        } catch (error: any) {
+            addToast(error?.message || 'Error', 'error');
+        } finally {
+            setReviewBusy(false);
+        }
+    };
+
+    const handleReturn = async () => {
+        if (!reviewLoc) return;
+        const note = returnNote.trim();
+        if (!note) { addToast(t('lodging.return.note.required') || 'Indica las observaciones para el encargado.', 'warning'); return; }
+        setReviewBusy(true);
+        try {
+            await conferenceApi.returnLodging(reviewLoc.id, note);
+            addToast(t('lodging.returned.done') || 'Hospedaje devuelto al encargado', 'success');
+            setShowReturnForm(false);
+            setReturnNote('');
+            await loadReview(reviewLoc.id);
+            loadLocations();
+        } catch (error: any) {
+            addToast(error?.message || 'Error', 'error');
+        } finally {
+            setReviewBusy(false);
+        }
+    };
+
+    const handleReopen = async () => {
+        if (!reviewLoc) return;
+        if (!await confirm(t('lodging.confirm.reopen') || '¿Reabrir el hospedaje? El encargado podrá volver a modificarlo.', t('lodging.reopen') || 'Reabrir', false)) return;
+        setReviewBusy(true);
+        try {
+            await conferenceApi.reopenLodging(reviewLoc.id);
+            addToast(t('lodging.reopened.done') || 'Hospedaje reabierto', 'success');
+            await loadReview(reviewLoc.id);
+            loadLocations();
+        } catch (error: any) {
+            addToast(error?.message || 'Error', 'error');
+        } finally {
+            setReviewBusy(false);
+        }
+    };
+
+    // The server stamps CURRENT_TIMESTAMP: SQLite returns `YYYY-MM-DD HH:MM:SS` in UTC with no zone
+    // marker (Chrome would read it as local time, Safari as an invalid date) — parse that form as UTC.
+    const fmtDate = (v?: string | null) => {
+        if (!v) return '';
+        const s = String(v).trim();
+        const sql = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?)$/.exec(s);
+        const d = new Date(sql ? `${sql[1]}T${sql[2]}Z` : s);
+        return isNaN(d.getTime()) ? s : d.toLocaleString();
+    };
+    const occupantName = (p: any) => `${p.first_name || ''} ${p.last_name || ''}`.trim() || `#${p.id}`;
+
     return (
         <div className="space-y-10 animate-in fade-in duration-500">
+            <ReadOnlyNotice section="locations" alsoManage={['settings']} />
             {/* Premium Public Link Card */}
             <div className={`group relative overflow-hidden rounded-[40px] p-10 border-2 transition-all duration-500 shadow-2xl ${isPublished
                 ? 'bg-emerald-50/50 border-emerald-100 shadow-emerald-100/30'
@@ -3595,6 +4671,10 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                 ? 'El portal está listo para recibir inscripciones. Comparte este enlace exclusivo con tus coordinadores y responsables de cada zona para iniciar el proceso.'
                                 : 'Tu portal aún está en modo borrador. El enlace no funcionará correctamente hasta que publiques el formulario desde la pestaña de campos.'}
                         </p>
+                        <p className={`text-xs font-medium leading-relaxed max-w-xl mt-3 ${isPublished ? 'text-emerald-800/60' : 'text-gray-400'}`}>
+                            <i className="fa-solid fa-bed mr-1.5"></i>
+                            {t('portal.publish.hint') || 'Los encargados necesitan el formulario publicado para entrar al portal (inscripciones y hospedaje).'}
+                        </p>
                     </div>
                     <button
                         onClick={handleCopyLink}
@@ -3608,17 +4688,78 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                 </div>
             </div>
 
+            {/* Lodging deadline: until when the coordinators may arrange from the portal */}
+            {(() => {
+                const current = conference?.lodging_deadline || null;
+                const passed = !!conference?.lodging_deadline_passed;
+                const dirty = deadlineInput !== String(current || '').slice(0, 10);
+                return (
+                    <div className={`flex flex-col gap-5 lg:flex-row lg:items-center justify-between p-8 rounded-[32px] border-2 shadow-sm ${passed ? 'bg-rose-50/60 border-rose-100' : current ? 'bg-blue-50/40 border-blue-100' : 'bg-gray-50/50 border-white'}`} data-testid="lodging-deadline">
+                        <div className="flex items-start gap-4 flex-1">
+                            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-lg shadow-inner shrink-0 ${passed ? 'bg-rose-100 text-rose-600' : 'bg-blue-100 text-blue-600'}`}>
+                                <i className={`fa-solid ${passed ? 'fa-lock' : 'fa-calendar-check'}`}></i>
+                            </div>
+                            <div>
+                                <h3 className="text-xl font-black text-gray-900 italic tracking-tighter">{t('lodging.deadline') || 'Plazo de acomodación de hospedajes'}</h3>
+                                <p className={`text-xs font-bold mt-1 ${passed ? 'text-rose-700' : current ? 'text-blue-700' : 'text-gray-500'}`}>
+                                    {!current
+                                        ? (t('lodging.deadline.none') || 'Sin plazo: los encargados pueden acomodar en cualquier momento.')
+                                        : passed
+                                            ? (t('lodging.deadline.passed') || 'Plazo vencido el {date}: solo el administrador puede modificar los hospedajes.').replace('{date}', fmtDeadline(current))
+                                            : (t('lodging.deadline.until') || 'Los encargados pueden acomodar hasta el {date} (inclusive).').replace('{date}', fmtDeadline(current))}
+                                </p>
+                                <p className="text-[11px] text-gray-400 mt-1 leading-relaxed max-w-xl">{t('lodging.deadline.help')}</p>
+                                {current && locations.some(l => l.lodging_permission_active) && (
+                                    <p className="text-[11px] font-bold text-emerald-700 mt-1">
+                                        <i className="fa-solid fa-unlock mr-1"></i>
+                                        {(t('lodging.deadline.permissions') || '{n} localidad(es) con permiso fuera de plazo').replace('{n}', String(locations.filter(l => l.lodging_permission_active).length))}
+                                    </p>
+                                )}
+                            </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <input
+                                type="date"
+                                value={deadlineInput}
+                                onChange={e => setDeadlineInput(e.target.value)}
+                                disabled={!canDeadline}
+                                className="border-2 border-gray-100 rounded-xl px-4 py-3 bg-white focus:border-blue-500 outline-none text-sm font-bold text-gray-900 disabled:opacity-70 disabled:cursor-not-allowed"
+                                aria-label={t('lodging.deadline') || 'Plazo de acomodación de hospedajes'}
+                            />
+                            {canDeadline && <button
+                                type="button"
+                                onClick={() => saveDeadline(deadlineInput || null)}
+                                disabled={savingDeadline || !dirty}
+                                className="px-6 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-black text-[10px] uppercase tracking-widest shadow-lg shadow-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                            >
+                                {t('save') || 'Guardar'}
+                            </button>}
+                            {canDeadline && current && (
+                                <button
+                                    type="button"
+                                    onClick={() => saveDeadline(null)}
+                                    disabled={savingDeadline}
+                                    className="px-4 py-3 text-gray-500 hover:text-rose-600 hover:bg-rose-50 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50"
+                                >
+                                    {t('lodging.deadline.clear') || 'Quitar plazo'}
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                );
+            })()}
+
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center justify-between bg-gray-50/50 p-8 rounded-[32px] border-2 border-white shadow-sm">
                 <div>
                     <h2 className="text-3xl font-black text-gray-900 italic tracking-tighter">{t('locations')}</h2>
                     <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1">Sedes regionales y grupos locales</p>
                 </div>
-                <button
+                {canManage && <button
                     onClick={() => setShowModal(true)}
                     className="bg-gray-900 text-white px-8 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-blue-600 transition-all duration-500 shadow-xl hover:shadow-blue-500/30 flex items-center gap-3 transform active:scale-95 translate-y-0 hover:-translate-y-1"
                 >
                     <i className="fa-solid fa-plus text-[8px]"></i> {t('new.location')}
-                </button>
+                </button>}
             </div>
 
             {loading ? (
@@ -3655,12 +4796,12 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                             </div>
                                         </div>
                                     </div>
-                                    <button
+                                    {canManage && <button
                                         onClick={() => handleDelete(loc.id)}
                                         className="w-10 h-10 flex items-center justify-center rounded-xl bg-gray-50 text-gray-300 hover:bg-rose-50 hover:text-rose-600 transition-all duration-300 opacity-0 group-hover:opacity-100 transform translate-x-4 group-hover:translate-x-0"
                                     >
                                         <i className="fa-solid fa-trash-can text-sm"></i>
-                                    </button>
+                                    </button>}
                                 </div>
 
                                 <div className="space-y-6 relative z-10">
@@ -3670,27 +4811,231 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                                 <div className="p-2 bg-white rounded-lg shadow-sm">
                                                     <i className="fa-solid fa-fingerprint text-xs text-blue-500"></i>
                                                 </div>
-                                                <span className="font-mono text-sm font-black text-gray-600 tracking-tighter uppercase">{loc.code}</span>
+                                                {loc.code
+                                                    ? <span className="font-mono text-sm font-black text-gray-600 tracking-tighter uppercase">{loc.code}</span>
+                                                    : <span className="text-[11px] font-bold text-gray-400 italic">{tx('perm.location.code.hidden', 'Código oculto: solo lo ve quien gestiona Localidades.')}</span>}
                                             </div>
                                             <div className="flex items-center gap-2">
-                                                <button
+                                                {loc.code && <button
                                                     onClick={() => handleCopyCode(loc.code, loc.id)}
                                                     className={`text-[10px] font-black uppercase tracking-widest px-4 py-2 rounded-xl transition-all duration-300 shadow-sm ${copiedId === loc.id ? 'bg-emerald-500 text-white' : 'bg-white text-blue-600 hover:bg-blue-600 hover:text-white'}`}
                                                 >
                                                     {copiedId === loc.id ? t('copied') || '¡Copiado!' : t('copy') || 'Copiar'}
-                                                </button>
-                                                <button
+                                                </button>}
+                                                {canManage && <button
                                                     onClick={() => handleRotateCode(loc)}
                                                     title={t('rotate.code') || 'Rotar código'}
                                                     className="w-9 h-9 flex items-center justify-center rounded-xl bg-white text-gray-400 hover:bg-amber-500 hover:text-white transition-all shadow-sm"
                                                 >
                                                     <i className="fa-solid fa-rotate text-xs"></i>
-                                                </button>
+                                                </button>}
                                             </div>
                                         </div>
                                     </div>
 
                                     <div className="grid grid-cols-1 gap-3 px-1">
+                                        {(() => {
+                                            const inscribed = Number(loc.inscribed) || 0;
+                                            const cap = loc.capacity == null ? null : Number(loc.capacity);
+                                            const full = cap !== null && inscribed >= cap;
+                                            const pct = cap ? Math.min(100, Math.round((inscribed / cap) * 100)) : 0;
+                                            const editing = capacityEdit?.id === loc.id;
+                                            return (
+                                                <div className={`p-3 bg-white rounded-xl border shadow-sm transition-colors ${full ? 'border-rose-200' : 'border-gray-50 group-hover:border-blue-100'}`}>
+                                                    <div className="flex items-center gap-4">
+                                                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm ${full ? 'bg-rose-50 text-rose-500' : 'bg-emerald-50 text-emerald-500'}`}>
+                                                            <i className="fa-solid fa-users"></i>
+                                                        </div>
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">{t('location.inscribed') || 'Inscritos'} / {t('location.capacity') || 'Cupo máximo'}</div>
+                                                            {editing ? (
+                                                                <div className="flex items-center gap-2 mt-1">
+                                                                    <input
+                                                                        type="number" min={Math.max(1, inscribed)} step={1}
+                                                                        value={capacityEdit!.value}
+                                                                        onChange={e => setCapacityEdit({ id: loc.id, value: e.target.value })}
+                                                                        onKeyDown={e => { if (e.key === 'Enter') handleSaveCapacity(loc); if (e.key === 'Escape') setCapacityEdit(null); }}
+                                                                        className="w-24 border-2 border-blue-200 rounded-lg px-2 py-1 text-sm font-black text-gray-900 outline-none focus:border-blue-500"
+                                                                        autoFocus
+                                                                    />
+                                                                    <button onClick={() => handleSaveCapacity(loc)} disabled={savingCapacity} className="text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">{t('save') || 'Guardar'}</button>
+                                                                    <button onClick={() => setCapacityEdit(null)} className="text-[10px] font-black uppercase tracking-widest px-2 py-1.5 rounded-lg text-gray-400 hover:bg-gray-100">{t('cancel') || 'Cancelar'}</button>
+                                                                </div>
+                                                            ) : (
+                                                                <div className="flex items-center gap-2">
+                                                                    <span className={`text-xs font-black ${full ? 'text-rose-600' : 'text-gray-700'}`}>{inscribed} / {cap === null ? (t('location.unlimited') || 'Sin límite') : cap}</span>
+                                                                    {full && <span className="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md bg-rose-50 text-rose-600">{t('location.full') || 'Cupo lleno'}</span>}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                        {!editing && canManage && (
+                                                            <button
+                                                                onClick={() => setCapacityEdit({ id: loc.id, value: cap === null ? String(Math.max(1, inscribed)) : String(cap) })}
+                                                                title={t('edit.capacity') || 'Editar cupo'}
+                                                                className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white transition-all shadow-sm"
+                                                            >
+                                                                <i className="fa-solid fa-pen text-xs"></i>
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                    {cap !== null && (
+                                                        <div className="mt-2 h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
+                                                            <div className={`h-full rounded-full transition-all ${full ? 'bg-rose-500' : pct >= 80 ? 'bg-amber-400' : 'bg-emerald-500'}`} style={{ width: `${pct}%` }}></div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })()}
+                                        <div className="p-3 bg-white rounded-xl border border-gray-50 shadow-sm group-hover:border-blue-100 transition-colors">
+                                            <div className="flex items-center gap-4">
+                                                <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-500 flex items-center justify-center text-sm">
+                                                    <i className="fa-solid fa-money-bill-wave"></i>
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">{t('payment.methods') || 'Formas de pago'}</div>
+                                                    <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                                                        {PAYMENT_METHODS.map(m => {
+                                                            const on = Array.isArray(loc.payment_methods) ? loc.payment_methods.includes(m) : true;
+                                                            return (
+                                                                <button
+                                                                    key={m}
+                                                                    type="button"
+                                                                    onClick={() => handleToggleMethod(loc, m)}
+                                                                    disabled={savingMethods === loc.id || !canManage}
+                                                                    title={!canManage ? tx('perm.readonly.short', 'Solo lectura') : on ? (t('payment.method.disable') || 'Deshabilitar') : (t('payment.method.enable') || 'Habilitar')}
+                                                                    className={`text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-lg border transition-all disabled:opacity-50 ${on ? 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100' : 'bg-gray-50 border-gray-200 text-gray-400 line-through hover:bg-gray-100'}`}
+                                                                >
+                                                                    <i className={`fa-solid ${on ? 'fa-check' : 'fa-ban'} mr-1`}></i>{m}
+                                                                </button>
+                                                            );
+                                                        })}
+                                                        {Array.isArray(loc.payment_methods) && loc.payment_methods.length === 0 && (
+                                                            <span className="text-[10px] font-bold text-rose-500 uppercase tracking-widest">{t('payment.methods.none') || 'Ninguna habilitada'}</span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        {(() => {
+                                            const meta = lodgingStatusMeta(loc.lodging_status);
+                                            const unlodged = Number(loc.unlodged) || 0;
+                                            return (
+                                                <div className={`p-3 bg-white rounded-xl border shadow-sm transition-colors ${loc.lodging_status === 'submitted' ? 'border-amber-200' : 'border-gray-50 group-hover:border-blue-100'}`}>
+                                                    <div className="flex items-center gap-4">
+                                                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm ${loc.lodging_status === 'submitted' ? 'bg-amber-50 text-amber-500' : loc.lodging_status === 'validated' ? 'bg-emerald-50 text-emerald-500' : 'bg-purple-50 text-purple-400'}`}>
+                                                            <i className="fa-solid fa-bed"></i>
+                                                        </div>
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="flex items-center gap-2 flex-wrap">
+                                                                <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">{t('lodging.block') || 'Hospedaje'}</div>
+                                                                <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest ${meta.cls}`}>
+                                                                    <i className={`fa-solid ${meta.icon} mr-1`}></i>{t(meta.key) || meta.fallback}
+                                                                </span>
+                                                            </div>
+                                                            <div className="text-[11px] font-bold text-gray-600 mt-1 flex flex-wrap gap-x-1.5">
+                                                                <span>{Number(loc.rooms_allotted) || 0} {t('lodging.rooms.short') || 'hab.'}</span>
+                                                                <span className="text-gray-300">·</span>
+                                                                <span>{Number(loc.beds_allotted) || 0} {t('lodging.beds.short') || 'camas'}</span>
+                                                                <span className="text-gray-300">·</span>
+                                                                <span>{Number(loc.lodged) || 0} {t('lodging.lodged.short') || 'alojados'}</span>
+                                                                <span className="text-gray-300">·</span>
+                                                                <span className={unlodged > 0 ? 'text-amber-600' : ''}>{unlodged} {t('lodging.unlodged.short') || 'sin habitación'}</span>
+                                                            </div>
+                                                        </div>
+                                                        <button
+                                                            onClick={() => openReview(loc)}
+                                                            title={t('lodging.review') || 'Revisar hospedaje'}
+                                                            className={`shrink-0 text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-xl transition-all shadow-sm ${loc.lodging_status === 'submitted' ? 'bg-amber-500 text-white hover:bg-amber-600' : 'bg-white text-purple-600 hover:bg-purple-600 hover:text-white'}`}
+                                                        >
+                                                            <i className="fa-solid fa-clipboard-check mr-1"></i>{t('lodging.review') || 'Revisar hospedaje'}
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })()}
+                                        {conference?.lodging_deadline && (() => {
+                                            // Permission to keep arranging after the conference's lodging deadline (2.8.0).
+                                            const granted = !!loc.lodging_permission;
+                                            const active = !!loc.lodging_permission_active;
+                                            const expired = !!loc.lodging_permission_expired;
+                                            const until = loc.lodging_permission_until || null;
+                                            const passed = !!conference?.lodging_deadline_passed;
+                                            const editing = permEdit?.id === loc.id;
+                                            const label = !granted
+                                                ? (passed ? (t('lodging.permission.closed') || 'Cerrado por plazo') : (t('lodging.permission.none') || 'Sin permiso'))
+                                                : expired
+                                                    ? (t('lodging.permission.expired') || 'Permiso vencido el {date}').replace('{date}', fmtDeadline(until))
+                                                    : until
+                                                        ? (t('lodging.permission.until') || 'Con permiso hasta el {date}').replace('{date}', fmtDeadline(until))
+                                                        : (t('lodging.permission.open') || 'Con permiso hasta que lo retires');
+                                            const tone = active ? 'emerald' : (granted && expired) ? 'amber' : passed ? 'rose' : 'gray';
+                                            const toneCls: Record<string, string> = {
+                                                emerald: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
+                                                amber: 'bg-amber-50 text-amber-700 border border-amber-200',
+                                                rose: 'bg-rose-50 text-rose-700 border border-rose-200',
+                                                gray: 'bg-gray-100 text-gray-500',
+                                            };
+                                            return (
+                                                <div className={`p-3 bg-white rounded-xl border shadow-sm transition-colors ${active ? 'border-emerald-100' : 'border-gray-50 group-hover:border-blue-100'}`} data-testid={`lodging-permission-${loc.id}`}>
+                                                    <div className="flex items-center gap-4">
+                                                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm ${active ? 'bg-emerald-50 text-emerald-500' : passed ? 'bg-rose-50 text-rose-400' : 'bg-gray-50 text-gray-400'}`}>
+                                                            <i className={`fa-solid ${active ? 'fa-unlock' : 'fa-lock'}`}></i>
+                                                        </div>
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">{t('lodging.permission') || 'Permiso fuera de plazo'}</div>
+                                                            <span className={`inline-flex items-center mt-1 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest ${toneCls[tone]}`}>{label}</span>
+                                                        </div>
+                                                        {!editing && canManage && (
+                                                            <div className="flex flex-wrap items-center justify-end gap-1.5 shrink-0">
+                                                                {(!granted || expired) && (
+                                                                    <button type="button" onClick={() => setPermEdit({ id: loc.id, until: '' })} disabled={savingPerm === loc.id}
+                                                                        className="text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 transition-all shadow-sm disabled:opacity-50">
+                                                                        <i className="fa-solid fa-unlock mr-1"></i>{t('lodging.permission.grant') || 'Dar permiso'}
+                                                                    </button>
+                                                                )}
+                                                                {granted && !expired && (
+                                                                    <button type="button" onClick={() => setPermEdit({ id: loc.id, until: until ? String(until).slice(0, 10) : '' })} disabled={savingPerm === loc.id}
+                                                                        className="text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-xl bg-gray-50 text-gray-600 hover:bg-blue-600 hover:text-white transition-all shadow-sm disabled:opacity-50">
+                                                                        {t('lodging.permission.change') || 'Cambiar fecha'}
+                                                                    </button>
+                                                                )}
+                                                                {granted && (
+                                                                    <button type="button" onClick={() => savePermission(loc, false, '')} disabled={savingPerm === loc.id}
+                                                                        className="text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-xl bg-gray-50 text-gray-500 hover:bg-rose-600 hover:text-white transition-all shadow-sm disabled:opacity-50">
+                                                                        {t('lodging.permission.revoke') || 'Retirar permiso'}
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                    {editing && (
+                                                        <div className="mt-3 flex flex-wrap items-end gap-2">
+                                                            <div className="space-y-1">
+                                                                <label htmlFor={`perm-until-${loc.id}`} className="block text-[9px] font-bold text-gray-400 uppercase tracking-widest ml-1">{t('lodging.permission.until.label') || 'Hasta (opcional)'}</label>
+                                                                <input id={`perm-until-${loc.id}`} type="date" value={permEdit!.until}
+                                                                    onChange={e => setPermEdit({ id: loc.id, until: e.target.value })}
+                                                                    className="border-2 border-gray-100 rounded-xl px-3 py-2 bg-white focus:border-blue-500 outline-none text-xs font-bold text-gray-900" />
+                                                            </div>
+                                                            <button type="button" onClick={() => savePermission(loc, true, permEdit!.until)} disabled={savingPerm === loc.id}
+                                                                className="text-[10px] font-black uppercase tracking-widest px-4 py-2.5 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 transition-all shadow-sm disabled:opacity-50">
+                                                                {t('save') || 'Guardar'}
+                                                            </button>
+                                                            <button type="button" onClick={() => setPermEdit(null)}
+                                                                className="text-[10px] font-black uppercase tracking-widest px-3 py-2.5 rounded-xl text-gray-400 hover:bg-gray-100">
+                                                                {t('cancel') || 'Cancelar'}
+                                                            </button>
+                                                            <p className="basis-full text-[11px] text-gray-500 ml-1">{t('lodging.permission.until.help') || 'Vacío = hasta que lo retires. La fecha incluye el día completo.'}</p>
+                                                        </div>
+                                                    )}
+                                                    {active && loc.lodging_status === 'validated' && (
+                                                        <p className="mt-2 text-[11px] font-bold text-amber-700"><i className="fa-solid fa-circle-info mr-1"></i>{t('lodging.permission.validated.hint') || 'El hospedaje está validado: reábrelo para que el encargado pueda modificarlo.'}</p>
+                                                    )}
+                                                    {active && loc.lodging_status === 'submitted' && (
+                                                        <p className="mt-2 text-[11px] font-bold text-gray-500"><i className="fa-solid fa-circle-info mr-1"></i>{t('lodging.permission.submitted.hint') || 'El encargado puede retirar su envío para volver a acomodar.'}</p>
+                                                    )}
+                                                </div>
+                                            );
+                                        })()}
                                         <div className="flex items-center gap-4 p-3 bg-white rounded-xl border border-gray-50 shadow-sm group-hover:border-blue-100 transition-colors">
                                             <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-400 flex items-center justify-center text-sm">
                                                 <i className="fa-solid fa-user-tie"></i>
@@ -3717,6 +5062,255 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                 </div>
             )}
 
+            {/* Lodging review modal — fed by GET /locations/:id/lodging; the admin validates / returns / reopens. */}
+            {reviewLoc && (() => {
+                const status = review?.location?.lodging_status || reviewLoc.lodging_status || 'draft';
+                const meta = lodgingStatusMeta(status);
+                const counts = review?.counts || { placed: 0, unassigned: 0, hard_violations: 0, soft_violations: 0, placed_elsewhere: 0 };
+                const violations = review?.violations || [];
+                const note = review ? review.location?.lodging_note : reviewLoc.lodging_note;
+                const submittedAt = review ? review.location?.lodging_submitted_at : reviewLoc.lodging_submitted_at;
+                const reviewedAt = review ? review.location?.lodging_reviewed_at : reviewLoc.lodging_reviewed_at;
+                const hardLabel = t('rule.hard') || 'Obligatoria';
+                const softLabel = t('rule.soft') || 'Preferente';
+                return (
+                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-200">
+                        <div className="bg-white rounded-[32px] shadow-2xl w-full max-w-4xl border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200 max-h-[92vh] flex flex-col">
+                            <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-center justify-between gap-4">
+                                <div className="min-w-0">
+                                    <div className="flex items-center gap-3 flex-wrap">
+                                        <h3 className="font-bold text-xl text-gray-900 italic truncate">{t('lodging.review.title') || 'Revisión de hospedaje'} — {reviewLoc.name}</h3>
+                                        <span className={`px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${meta.cls}`}>
+                                            <i className={`fa-solid ${meta.icon} mr-1`}></i>{t(meta.key) || meta.fallback}
+                                        </span>
+                                    </div>
+                                    <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1 flex flex-wrap gap-x-3">
+                                        {submittedAt && <span>{t('lodging.submitted.at') || 'Enviado'}: {fmtDate(submittedAt)}</span>}
+                                        {reviewedAt && <span>{t('lodging.reviewed.at') || 'Revisado'}: {fmtDate(reviewedAt)}</span>}
+                                    </p>
+                                </div>
+                                <button onClick={closeReview} className="text-gray-400 hover:text-gray-600 transition-colors p-2 hover:bg-gray-100 rounded-lg shrink-0">
+                                    <i className="fa-solid fa-xmark text-lg"></i>
+                                </button>
+                            </div>
+
+                            <div className="p-8 space-y-8 overflow-y-auto modern-scrollbar flex-1">
+                                {reviewLoading && !review ? (
+                                    <div className="text-center py-16"><div className="inline-block w-8 h-8 border-4 border-purple-500 border-t-transparent rounded-full animate-spin"></div></div>
+                                ) : !review ? (
+                                    <div className="text-center py-16 text-gray-400 text-sm">{t('lodging.error.loading') || 'Error al cargar el hospedaje'}</div>
+                                ) : (
+                                    <>
+                                        {/* The four counts */}
+                                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                                            {[
+                                                { label: t('lodging.counts.placed') || 'Alojados', value: counts.placed, cls: 'bg-emerald-50 text-emerald-700', icon: 'fa-bed' },
+                                                { label: t('lodging.counts.unassigned') || 'Sin habitación', value: counts.unassigned, cls: counts.unassigned > 0 ? 'bg-amber-50 text-amber-700' : 'bg-gray-50 text-gray-500', icon: 'fa-user-slash' },
+                                                { label: t('lodging.counts.hard') || 'Faltas obligatorias', value: counts.hard_violations, cls: counts.hard_violations > 0 ? 'bg-rose-50 text-rose-700' : 'bg-gray-50 text-gray-500', icon: 'fa-triangle-exclamation' },
+                                                { label: t('lodging.counts.soft') || 'Faltas preferentes', value: counts.soft_violations, cls: counts.soft_violations > 0 ? 'bg-amber-50 text-amber-700' : 'bg-gray-50 text-gray-500', icon: 'fa-circle-exclamation' },
+                                            ].map((c, i) => (
+                                                <div key={i} className={`rounded-2xl p-4 ${c.cls}`}>
+                                                    <div className="text-[9px] font-black uppercase tracking-widest opacity-70"><i className={`fa-solid ${c.icon} mr-1`}></i>{c.label}</div>
+                                                    <div className="text-2xl font-black italic tracking-tighter mt-1">{c.value}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+
+                                        {/* Actions by status */}
+                                        <div className={`rounded-2xl border p-5 ${status === 'submitted' ? 'bg-amber-50/40 border-amber-200' : status === 'validated' ? 'bg-emerald-50/40 border-emerald-200' : 'bg-gray-50 border-gray-100'}`}>
+                                            {status === 'submitted' && !canManage && (
+                                                <p className="text-sm text-amber-800 font-medium"><i className="fa-solid fa-hourglass-half mr-2"></i>{tx('perm.lodging.review.readonly', 'Enviado por el encargado y pendiente de validación. Tu rol solo puede consultarlo.')}</p>
+                                            )}
+                                            {status === 'submitted' && canManage && (
+                                                <div className="space-y-4">
+                                                    <div className="flex flex-wrap items-center gap-3">
+                                                        <button
+                                                            onClick={handleValidate}
+                                                            disabled={reviewBusy}
+                                                            className="px-6 py-3 rounded-xl bg-emerald-600 text-white font-black text-[10px] uppercase tracking-widest hover:bg-emerald-700 transition-all disabled:opacity-50 flex items-center gap-2 shadow-lg shadow-emerald-500/20"
+                                                        >
+                                                            <i className="fa-solid fa-circle-check"></i> {t('lodging.validate') || 'Validar'}
+                                                        </button>
+                                                        <button
+                                                            onClick={() => setShowReturnForm(v => !v)}
+                                                            disabled={reviewBusy}
+                                                            className={`px-6 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50 flex items-center gap-2 border-2 ${showReturnForm ? 'border-amber-500 bg-amber-100 text-amber-800' : 'border-amber-300 bg-white text-amber-700 hover:bg-amber-50'}`}
+                                                        >
+                                                            <i className="fa-solid fa-rotate-left"></i> {t('lodging.return') || 'Devolver'}
+                                                        </button>
+                                                    </div>
+                                                    {showReturnForm && (
+                                                        <div className="space-y-2">
+                                                            <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1">{t('lodging.return.note') || 'Observaciones para el encargado'} *</label>
+                                                            <textarea
+                                                                value={returnNote}
+                                                                onChange={e => setReturnNote(e.target.value)}
+                                                                rows={3}
+                                                                maxLength={2000}
+                                                                required
+                                                                placeholder={t('lodging.return.note.placeholder') || 'Explica qué debe corregir el encargado…'}
+                                                                className="w-full border-2 border-amber-200 rounded-xl px-4 py-3 bg-white focus:border-amber-500 transition-all outline-none text-gray-900 font-medium text-sm"
+                                                                autoFocus
+                                                            />
+                                                            <div className="flex justify-end">
+                                                                <button
+                                                                    onClick={handleReturn}
+                                                                    disabled={reviewBusy || !returnNote.trim()}
+                                                                    className="px-6 py-2.5 rounded-xl bg-amber-500 text-white font-black text-[10px] uppercase tracking-widest hover:bg-amber-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                                                                >
+                                                                    <i className="fa-solid fa-paper-plane"></i> {t('lodging.return') || 'Devolver'}
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                            {status === 'validated' && (
+                                                <div className="flex flex-wrap items-center gap-3">
+                                                    <p className="text-sm text-emerald-800 font-medium flex-1"><i className="fa-solid fa-circle-check mr-2"></i>{t('lodging.status.validated') || 'Validado'}</p>
+                                                    {canManage && <button
+                                                        onClick={handleReopen}
+                                                        disabled={reviewBusy}
+                                                        className="px-6 py-3 rounded-xl border-2 border-emerald-300 bg-white text-emerald-700 font-black text-[10px] uppercase tracking-widest hover:bg-emerald-50 transition-all disabled:opacity-50 flex items-center gap-2"
+                                                    >
+                                                        <i className="fa-solid fa-lock-open"></i> {t('lodging.reopen') || 'Reabrir'}
+                                                    </button>}
+                                                </div>
+                                            )}
+                                            {status === 'draft' && (
+                                                <div className="space-y-3">
+                                                    <p className="text-sm text-gray-500 font-medium"><i className="fa-solid fa-hourglass-half mr-2"></i>{t('lodging.not.submitted') || 'El encargado aún no ha enviado el hospedaje'}</p>
+                                                    {note && (
+                                                        <div className="p-4 rounded-xl bg-amber-50 border border-amber-200">
+                                                            <div className="text-[9px] font-black uppercase tracking-widest text-amber-600 mb-1">{t('lodging.note.label') || 'Observaciones enviadas al encargado'}</div>
+                                                            <p className="text-sm text-amber-900 whitespace-pre-wrap">{note}</p>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {/* Violations: hard in red, soft in amber */}
+                                        <div>
+                                            <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">{t('lodging.violations') || 'Reglas incumplidas'}</h4>
+                                            {violations.length === 0 ? (
+                                                <p className="text-xs text-emerald-700 font-medium"><i className="fa-solid fa-check mr-1"></i>{t('lodging.violations.none') || 'Todas las reglas se cumplen.'}</p>
+                                            ) : (
+                                                <ul className="space-y-1.5">
+                                                    {violations.map((v: any, i: number) => (
+                                                        <li key={i} className={`flex items-start gap-2 text-xs p-2.5 rounded-xl border ${v.hard ? 'bg-rose-50 border-rose-200 text-rose-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
+                                                            <span className={`mt-0.5 px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-widest whitespace-nowrap ${v.hard ? 'bg-rose-100 text-rose-600' : 'bg-amber-100 text-amber-700'}`}>{v.hard ? hardLabel : softLabel}</span>
+                                                            <span><b>{v.rule}</b> — {v.detail}</span>
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            )}
+                                        </div>
+
+                                        {/* Rooms with occupants */}
+                                        <div>
+                                            <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">{t('lodging.rooms.title') || 'Habitaciones y ocupantes'} ({review.rooms.length})</h4>
+                                            {review.rooms.length === 0 ? (
+                                                <p className="text-xs text-gray-400 italic">{t('lodging.rooms.none') || 'Esta localidad no tiene habitaciones asignadas.'}</p>
+                                            ) : (
+                                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                                    {review.rooms.map(room => {
+                                                        const over = (room.occupied || 0) > (room.capacity || 0);
+                                                        return (
+                                                            <div key={room.id} className={`p-4 rounded-2xl border ${over ? 'border-rose-200 bg-rose-50/30' : 'border-gray-100 bg-gray-50/40'}`}>
+                                                                <div className="flex items-center justify-between gap-2 mb-2">
+                                                                    <div className="min-w-0">
+                                                                        <div className="font-black text-sm text-gray-900 italic tracking-tighter truncate">{room.room_number}</div>
+                                                                        <div className="text-[9px] text-gray-400 font-bold uppercase tracking-widest truncate">{room.hotel_name}</div>
+                                                                    </div>
+                                                                    <span className={`text-xs font-black whitespace-nowrap ${over ? 'text-rose-600' : 'text-gray-700'}`}>{room.occupied || 0}<span className="text-gray-300">/</span>{room.capacity}</span>
+                                                                </div>
+                                                                {(room.occupants || []).length === 0 ? (
+                                                                    <p className="text-[10px] text-gray-300 italic">{t('lodging.room.empty') || 'Vacía'}</p>
+                                                                ) : (
+                                                                    <ul className="space-y-1">
+                                                                        {room.occupants.map((p: any) => (
+                                                                            <li key={p.id} className="text-xs text-gray-700 flex items-center gap-2">
+                                                                                <i className={`fa-solid ${p.gender === 'F' ? 'fa-venus text-pink-400' : p.gender === 'M' ? 'fa-mars text-blue-400' : 'fa-user text-gray-300'} text-[9px]`}></i>
+                                                                                <span className="truncate">{occupantName(p)}</span>
+                                                                                {p.family_group && <span className="text-[8px] font-black uppercase tracking-widest text-indigo-500 bg-indigo-50 px-1.5 rounded">{p.family_group}</span>}
+                                                                            </li>
+                                                                        ))}
+                                                                    </ul>
+                                                                )}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {/* Unassigned */}
+                                        <div>
+                                            <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">{t('lodging.unassigned.title') || 'Participantes sin habitación'} ({review.unassigned.length})</h4>
+                                            {review.unassigned.length === 0 ? (
+                                                <p className="text-xs text-emerald-700 font-medium"><i className="fa-solid fa-check mr-1"></i>{t('lodging.unassigned.none') || 'Todos los participantes tienen habitación.'}</p>
+                                            ) : (
+                                                <div className="flex flex-wrap gap-2">
+                                                    {review.unassigned.map((p: any) => (
+                                                        <span key={p.id} className="px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-200 text-xs font-bold text-amber-800">{occupantName(p)}</span>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {/* Placed by the admin into pool rooms (read-only for the coordinator) */}
+                                        {(review.placed_elsewhere || []).length > 0 && (
+                                            <div>
+                                                <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">{t('lodging.elsewhere.title') || 'Alojados por el administrador en habitaciones del pool'} ({review.placed_elsewhere.length})</h4>
+                                                <ul className="space-y-1">
+                                                    {review.placed_elsewhere.map(p => (
+                                                        <li key={p.id} className="text-xs text-gray-700 flex items-center gap-2">
+                                                            <i className="fa-solid fa-bed text-[9px] text-purple-400"></i>
+                                                            <span>{occupantName(p)}</span>
+                                                            <span className="text-gray-400">— {p.hotel_name} · {p.room_number}</span>
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            </div>
+                                        )}
+
+                                        {/* The location's own rules, read-only */}
+                                        <div>
+                                            <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">{t('lodging.rules.title') || 'Reglas propias del encargado'} ({(review.rules?.location || []).length})</h4>
+                                            <p className="text-[10px] text-gray-400 mb-3">{t('lodging.rules.conference.hint') || 'Se aplican además las reglas de la conferencia'} ({(review.rules?.conference || []).length}).</p>
+                                            {(review.rules?.location || []).length === 0 ? (
+                                                <p className="text-xs text-gray-400 italic">{t('lodging.rules.none') || 'El encargado no ha definido reglas propias.'}</p>
+                                            ) : (
+                                                <div className="divide-y divide-gray-100 rounded-2xl border border-gray-100 overflow-hidden">
+                                                    {review.rules.location.map((rule: any) => (
+                                                        <div key={rule.id} className={`p-3 flex items-center gap-3 ${rule.enabled ? 'bg-white' : 'bg-gray-50 opacity-60'}`}>
+                                                            <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-500 flex items-center justify-center text-xs shrink-0">
+                                                                <i className={`fa-solid ${ruleTypeMeta(rule.type).icon}`}></i>
+                                                            </div>
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="flex items-center gap-2 flex-wrap">
+                                                                    <span className="font-black text-sm text-gray-900 truncate">{rule.name}</span>
+                                                                    <span className="px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest bg-indigo-50 text-indigo-600">{ruleTypeMeta(rule.type).label}</span>
+                                                                    <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest ${rule.hard ? 'bg-rose-50 text-rose-600' : 'bg-gray-100 text-gray-400'}`}>{rule.hard ? hardLabel : softLabel}</span>
+                                                                </div>
+                                                                <div className="text-[9px] text-gray-400 font-bold uppercase tracking-widest mt-0.5">
+                                                                    {t('priority')}: {rule.priority}{rule.config ? ` · ${rule.config}` : ''}
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
+
             {/* Create Location Modal */}
             {showModal && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
@@ -3739,6 +5333,41 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                     placeholder="Ej. Zona Norte"
                                     autoFocus
                                 />
+                            </div>
+
+                            <div className="space-y-1.5">
+                                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">{t('location.capacity')} *</label>
+                                <input
+                                    type="number"
+                                    min={1}
+                                    step={1}
+                                    value={newLocation.capacity}
+                                    onChange={e => setNewLocation({ ...newLocation, capacity: e.target.value })}
+                                    className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium"
+                                    placeholder={t('location.capacity.placeholder')}
+                                />
+                                <p className="text-[11px] text-gray-400 ml-1 leading-relaxed">{t('location.capacity.help')}</p>
+                            </div>
+
+                            <div className="space-y-1.5">
+                                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">{t('payment.methods')}</label>
+                                <div className="flex flex-wrap gap-3">
+                                    {PAYMENT_METHODS.map(m => {
+                                        const on = newLocation.payment_methods.includes(m);
+                                        return (
+                                            <label key={m} className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 cursor-pointer transition-all ${on ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-gray-100 bg-gray-50/30 text-gray-500'}`}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={on}
+                                                    onChange={() => setNewLocation({ ...newLocation, payment_methods: on ? newLocation.payment_methods.filter(x => x !== m) : [...newLocation.payment_methods, m] })}
+                                                    className="accent-emerald-600"
+                                                />
+                                                <span className="text-sm font-bold">{m}</span>
+                                            </label>
+                                        );
+                                    })}
+                                </div>
+                                <p className="text-[11px] text-gray-400 ml-1 leading-relaxed">{t('payment.methods.help')}</p>
                             </div>
 
                             <div className="space-y-1.5">
@@ -3779,12 +5408,39 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                 </button>
                                 <button
                                     onClick={handleCreate}
-                                    disabled={!newLocation.name}
+                                    disabled={!canCreate}
                                     className="px-8 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-bold shadow-lg shadow-blue-500/30 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                     {t('create')}
                                 </button>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* In-page confirm dialog — z-[120], above the review modal (z-100). */}
+            {confirmState && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[120] flex items-center justify-center p-4 animate-in fade-in duration-150">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-150">
+                        <div className="p-6">
+                            <p className="text-gray-800 font-medium leading-relaxed">{confirmState.message}</p>
+                        </div>
+                        <div className="px-6 py-4 bg-gray-50/50 border-t border-gray-100 flex justify-end gap-3">
+                            <button
+                                type="button"
+                                onClick={() => { confirmState.resolve(false); setConfirmState(null); }}
+                                className="px-5 py-2 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition"
+                            >
+                                {t('cancel') || 'Cancelar'}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => { confirmState.resolve(true); setConfirmState(null); }}
+                                className={`px-5 py-2 text-white font-bold rounded-xl shadow-lg transition ${confirmState.danger ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-500/30' : 'bg-blue-600 hover:bg-blue-700 shadow-blue-500/30'}`}
+                            >
+                                {confirmState.label}
+                            </button>
                         </div>
                     </div>
                 </div>

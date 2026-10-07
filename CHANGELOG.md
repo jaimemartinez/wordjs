@@ -135,6 +135,117 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   `file-type` in the backend (GHSA-5v7r-6r5c-r473, moderate; the fixed line requires Node 22, and the upload
   path already bounds detection by size and time).
 
+### Added
+
+- **Conference Manager 2.3.0 — every location has a maximum number of registrants.** The cap is required when
+  a location is created and can be raised or lowered afterwards, never below the people already registered
+  (the request is refused with the current count). A full location refuses new registrations from the
+  coordinator portal and from the admin, including moving an attendee into it or reinstating a cancelled one;
+  cancelling or deleting an attendee frees the seat. The admin cards show taken / maximum with an inline
+  editor; the portal shows the count and closes its form when the location is full. Locations created before
+  this version have no limit until one is set.
+- **Conference Manager 2.4.0 — forms of payment per location.** The plugin now accepts exactly two forms of
+  payment, cash (`Efectivo`) and bank transfer (`Transferencia`). When a location is created the admin picks which of
+  them it receives (both by default) and can enable or disable either one later from the location card. The
+  coordinator portal only offers the enabled ones and the server refuses a payment recorded with a form the
+  location does not receive; the admin's own entries must name one of the two. Locations created before this
+  version receive both.
+- **Conference Manager 2.5.0 — lodging per location: the coordinator arranges, the admin validates.** The admin
+  allots hotel rooms to a location (a whole hotel or a selection of its rooms); the coordinator portal gains a
+  *Hospedajes* tab where the coordinator places their own attendees into those rooms by hand or with the automatic
+  assignment, driven by the admin's rules plus the location's own rules, and then submits the arrangement. The admin
+  reviews it (rooms, unplaced attendees, every broken rule — split families, mixed rooms, missing companions,
+  over-capacity) and validates it, returns it with observations or reopens it. A submitted or validated
+  arrangement is protected: its rooms cannot be deleted, shrunk or re-allotted and its attendees cannot be moved
+  until the admin reopens it. The admin keeps everything it had: the conference-wide automatic assignment still
+  covers every location (each with its rooms and rules) and the manual assignment still reaches any free room the
+  attendee may occupy. Rule predicates are now validated against the form's fields on both the admin and the portal
+  route, and the state changes are single conditional updates.
+- **Conference Manager 2.6.0 — a deadline for the coordinators' lodging arrangements.** The admin sets a date on
+  the conference (Localidades page); until that day, inclusive, coordinators arrange, submit or withdraw their
+  lodging from the portal. Afterwards every portal lodging change is refused with the date in the message, the
+  portal shows the arrangement read-only with a notice, and only the administrator changes it — the admin's own
+  tools are not affected. No deadline means no limit; the date can be moved or removed at any time.
+- **Conference Manager 2.7.0 — first-match rules, an editable lodging board, drag & drop.** Assignment rules now
+  work first-match: they are consulted in priority order and the first one that applies wins a conflict, so a
+  family kept together by a higher-priority rule may share a room across genders without the gender rule being
+  reported, and a family divided by a higher-priority gender rule is reported as information, not as a broken
+  rule — in the assignment report, the admin review and the coordinator portal alike. The admin's Assignment
+  page gains an always-visible *Acomodación* board (every hotel, room and occupant, the unplaced attendees
+  grouped by location, a search and a location filter) where attendees are moved by drag & drop or through a
+  room picker, honouring every server rule (capacity, allotment, frozen arrangements, cancelled attendees). The
+  coordinator portal gains the same drag & drop in its Hospedajes tab, and its whole interface now shares the
+  admin's design language.
+- **Conference Manager 2.8.0 — per-location permission after the lodging deadline.** Once the conference's
+  lodging deadline has passed, the admin can let one location keep arranging (and submit or withdraw its
+  arrangement) from the location card: until a chosen date, inclusive, or until the permission is revoked.
+  Every other location stays closed; a submitted or validated arrangement still has to be withdrawn or
+  reopened first. The portal explains whether the location is working under such a permission, and an
+  expired permission is named in the refusal. The admin's own tools are never limited by the deadline.
+- **Conference Manager 2.9.0 — a unique registration code and barcode per attendee.** Every attendee gets a
+  random 10-character code (no ambiguous characters, drawn from the host CSPRNG) when registered from the portal
+  or the admin, and existing attendees receive one at the next start. The code is shown only in the admin
+  panel: a column in the roster opens its Code 128 barcode, which can be printed, downloaded as SVG or copied;
+  the roster search finds an attendee by code and the CSV export includes it. No portal response carries it,
+  no request can set or change it, and a unique index guarantees it is never repeated.
+- **Conference Manager 2.10.0 — Excel exports.** A custom Excel export (Inscriptions and Reports pages) lets the
+  admin pick and order the columns — every form field plus code, location, status, payment status, fee, paid,
+  balance, hotel, room, registration date and admin notes — filter by location, payment status and cancelled
+  attendees, and add a column with each attendee's registration barcode as an image; the choice is remembered
+  per conference. A hotel assignment report (Reports and Hotels pages, or one hotel from its card) produces a
+  summary sheet and one sheet per hotel listing every room, its allotment and occupants. The files are real
+  .xlsx workbooks built in the browser without new dependencies; text that looks like a formula stays text.
+- **Conference Manager 2.11.0 — transport, sold apart from the participation fee.** A new *Transporte* tab lists
+  buses (name, origin → destination, departure, seats, price per seat) with seats sold, amount sold, collected
+  and outstanding. The admin sells seats to attendees (never beyond the seats left, never to a cancelled
+  attendee, never twice on the same bus); each ticket keeps the price it was sold at and is paid with its own
+  payments (cash or transfer, with reference and date), so it has its own paid / partial / pending status and
+  never touches the attendee's fee, payments or balance. A new price applies to future sales, or to the
+  tickets already sold when asked (refused if it would fall below what a ticket already paid); a ticket or a
+  bus with payments cannot be removed until those payments are. A transport workbook (summary + passenger
+  list per bus, or one bus) and four transport columns in the custom Excel complete it.
+- **Conference Manager 2.12.0 — accounting.** A new *Contabilidad* tab records the income and expenses of a
+  conference (type, date, category, description, amount, form of payment, reference). The money the plugin
+  already receives — validated registration payments and transport payments — appears automatically as
+  read-only income, so the balance is complete without entering anything twice. Totals (income, expenses,
+  balance) and a per-category breakdown follow the date, type, category, source and text filters; the
+  filtered ledger exports to Excel (summary and entries).
+- **Conference Manager 2.13.0 — a lodging explorer you can walk into.** Hotel assignment, in the admin and in
+  the coordinator portal, now opens on the hotels (beds taken and free, rooms full or with space), enters a
+  hotel to see every room with its occupants' full names and free beds, and enters a room to see each occupant
+  in full: location, family group, document, email, phone, payment status, registration code and the
+  conference's own fields. *Volver*, breadcrumbs and Esc step back one level; *Anterior / Siguiente* walk the
+  rooms; the last hotel and room are remembered per browser tab (the search text and the gender filter are
+  not: they never reach browser storage). From a room you assign people to a free bed
+  (searchable, optionally moving someone from another room), move or unassign an occupant, with the same
+  rules the server enforces (allotted locations, frozen or validated arrangements, capacity). In a
+  women-only or men-only room the picker lists that gender first and flags the others. Everything the
+  previous board did still works inside the explorer (dragging people from the unassigned panel onto a hotel
+  or room, the location filter, pool rooms), and the lodging tile in the attendee view jumps to the room.
+- **Conference Manager 2.14.0 — meals per location and per person, delivered with the attendee's barcode.** A
+  new *Alimentación* tab defines meal services (breakfast, lunch or dinner on a given day, created in bulk
+  from a date range) and a location × service matrix that says which locations get which meals — all of
+  them or only some. Each attendee can be adjusted per service (inherit from the location, include, exclude).
+  The *Entrega* screen records deliveries from the registration-code barcode: a USB or Bluetooth scanner
+  types into a large always-focused field, and a full-screen *scanner mode* turns a phone into the reader
+  (camera with torch and camera switch, Code 128 decoding via the browser's BarcodeDetector or a built-in
+  decoder on iPhone and Firefox, screen kept awake, beep and vibration). Every scan gets a clear verdict —
+  delivered, already received (with the time and who recorded it), not entitled (with *Deliver anyway*,
+  recorded as authorized), cancelled or unknown code — and the server guarantees one delivery per person and
+  service even when two phones scan at once. Live counters, the latest deliveries with undo, and a per-service
+  report (per location, pending / served, Excel export) complete it.
+- **Conference Manager 2.15.0 — a team with per-section permissions.** Several people can now work in the
+  conference manager with their own WordJS accounts, each seeing only what their role allows. Roles are
+  defined in a new *Equipo y permisos* view (administrators only): for each section — summary, registrations,
+  payments, locations, lodging, transport, accounting, meals, meal delivery, reports and settings — a role
+  gives no access, view-only access or full management. Two example roles are created on first use
+  («Solo lectura» and «Cocina», which can only record meal deliveries). Members are WordJS users found by
+  name, e-mail or login (the plugin asks for the users:read permission) and can be given another role,
+  deactivated or removed, with immediate effect. Every route checks the caller's level on the server; the
+  panel shows only the sections and actions the role allows, registration codes travel only with access to
+  registrations, and deleting an attendee who has payments requires the right to manage those payments.
+  WordJS administrators keep full access and do not need to be on the team.
+
 ### Fixed
 
 - **Sessions issued right after the install survive the first restart.** A fresh instance signs with a
