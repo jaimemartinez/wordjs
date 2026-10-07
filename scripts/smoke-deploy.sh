@@ -230,8 +230,18 @@ assert_serving() { # assert_serving <label> <logfile>
 
 assert_serving "fresh install" "$LOGS/split.log"
 
-# Probed once the cluster has settled (above), so a transient 502 cannot be mistaken for a rejection.
-session_me() { curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -H "Origin: $GW" -b "$SESSION_JAR" "$GW/api/v1/auth/me" 2>/dev/null; }
+# What this asserts is the session's verdict (200, or 401 for a token the backend no longer accepts).
+# Right after a restart the gateway's FIRST proxied /api request can still meet the backend's previous
+# protocol and come back 502 (ECONNRESET) until the gateway switches to HTTPS on that very error; that is
+# the gateway warming up, not a rejection. So retry only on 502 / no connection, for up to ~20 s.
+session_me() {
+    local code i
+    for ((i = 1; i <= 20; i++)); do
+        code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -H "Origin: $GW" -b "$SESSION_JAR" "$GW/api/v1/auth/me" 2>/dev/null)"
+        case "$code" in 502|000|'') sleep 1 ;; *) break ;; esac
+    done
+    echo "$code"
+}
 me="$(session_me)"
 [ "$me" = 200 ] \
     || fail "the installer's auto-login session is not accepted (GET /auth/me answered $me) — the wizard cannot land in /admin" "$LOGS/split.log"
