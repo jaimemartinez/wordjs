@@ -12,10 +12,12 @@
 #
 # WHY OPT-IN (this is the whole point): `core/configManager.isInstalled()` keys off `installedAt ||
 # dbDriver`, so ANY config written here marks the instance INSTALLED — and `POST /api/v1/setup/install`
-# early-returns `400 Already installed`. An unconditionally pre-seeded container therefore boots as a
-# site that can never be installed: no administrator is ever created (the CMS bootstrap deliberately
-# seeds none — see scripts/smoke-deploy.sh's enrollment leg) and nobody can log in. So the DEFAULT is to
-# write nothing and let the instance boot into SETUP MODE, mint an install token, and serve /install.
+# early-returns `400 Already installed`. An unconditionally pre-seeded container therefore skips the
+# wizard: nobody chooses the administrator. The backend's first boot over an EMPTY database creates a
+# bootstrap administrator `admin` with a random password, written 0600 to backend/data/
+# initial-admin-password (it is printed only to a TTY) — a usable but unchosen account, not a wizard
+# install. So the DEFAULT is to write nothing and let the instance boot into SETUP MODE, mint an install
+# token, and serve /install.
 set -e
 
 BACKEND_DIR="/app/backend"
@@ -76,18 +78,38 @@ if [ "${WORDJS_PRESEED_CONFIG:-0}" = "1" ] && [ ! -e "$PERSISTED_CONFIG" ] && [ 
     echo "[entrypoint] WORDJS_PRESEED_CONFIG=1 and no config found — generating one from environment."
 
     # GOTCHA (see documentation/multi-node.md): backend/src/config/app.ts REGENERATES and persists a
-    # random dbPassword whenever the flat key is missing OR literally 'password', and a random jwtSecret
-    # whenever it is missing OR the placeholder. On multi-node that would give each replica a DIFFERENT
-    # secret and break both the shared-Postgres login and cross-node token validation. So we always write
-    # concrete, non-'password' values here — supply WORDJS_DB_PASSWORD / WORDJS_JWT_SECRET (identical on
-    # every replica) via the environment.
+    # random dbPassword whenever the flat key is missing OR literally 'password'. On multi-node that would
+    # give each replica a DIFFERENT value and break the shared-Postgres login. So we always write concrete,
+    # non-'password' values here — supply WORDJS_DB_PASSWORD (identical on every replica) via the environment.
+    #
+    # SECURITY: WORDJS_JWT_SECRET is REQUIRED, with no fallback. This branch writes an INSTALLED config, and
+    # the jwtSecret in it is the key every session is signed with. It used to default to a placeholder
+    # printed in this repository, which let anyone sign a session for the bootstrap administrator (user
+    # id 1). The backend now refuses to start on such a config; failing here says why, before it is
+    # written. Generate one with `openssl rand -hex 64` and give EVERY replica the same value.
+    JWT_SECRET="${WORDJS_JWT_SECRET:-}"
+    if [ -z "$JWT_SECRET" ]; then
+        echo "[entrypoint] FATAL: WORDJS_PRESEED_CONFIG=1 requires WORDJS_JWT_SECRET (the key every session is signed with)." >&2
+        echo "[entrypoint] Generate one with:  openssl rand -hex 64   and set the SAME value on every replica of this site." >&2
+        exit 1
+    fi
+    if [ "${#JWT_SECRET}" -lt 64 ]; then
+        echo "[entrypoint] FATAL: WORDJS_JWT_SECRET is ${#JWT_SECRET} characters; at least 64 are required (openssl rand -hex 64 gives 128)." >&2
+        exit 1
+    fi
+    case "$JWT_SECRET" in
+        # It is written into JSON below: keep it to characters that need no escaping there.
+        *[!A-Za-z0-9._~+/=-]*)
+            echo "[entrypoint] FATAL: WORDJS_JWT_SECRET may only contain A-Z a-z 0-9 . _ ~ + / = - (use openssl rand -hex 64)." >&2
+            exit 1
+            ;;
+    esac
     DB_DRIVER="${WORDJS_DB_DRIVER:-sqlite-native}"
     DB_HOST="${WORDJS_DB_HOST:-localhost}"
     DB_PORT="${WORDJS_DB_PORT:-5432}"
     DB_USER="${WORDJS_DB_USER:-postgres}"
     DB_NAME="${WORDJS_DB_NAME:-wordjs}"
     DB_PASSWORD="${WORDJS_DB_PASSWORD:-wordjs}"
-    JWT_SECRET="${WORDJS_JWT_SECRET:-wordjs-shared-dev-secret-change-me}"
     SITE_URL="${WORDJS_SITE_URL:-http://localhost:3000}"
     BACKEND_PORT="${WORDJS_BACKEND_PORT:-4000}"
     PUBLIC_PORT="${PORT:-3000}"
@@ -123,7 +145,8 @@ if [ "${WORDJS_PRESEED_CONFIG:-0}" = "1" ] && [ ! -e "$PERSISTED_CONFIG" ] && [ 
 }
 EOF
     echo "[entrypoint] Wrote ${PERSISTED_CONFIG} (driver=${DB_DRIVER}, db=${DB_HOST}:${DB_PORT}/${DB_NAME}, redis.enabled=${REDIS_ENABLED})."
-    echo "[entrypoint] This instance reports INSTALLED — the setup wizard is skipped and no administrator is seeded."
+    echo "[entrypoint] This instance reports INSTALLED — the setup wizard is skipped. On an empty database the backend"
+    echo "[entrypoint] creates a bootstrap administrator 'admin' and writes its random password to ${DATA_DIR}/initial-admin-password (mode 0600)."
 elif [ -e "$PERSISTED_CONFIG" ] || [ -f "$CONFIG" ]; then
     echo "[entrypoint] Existing wordjs-config.json found — leaving it untouched."
 else

@@ -8,6 +8,33 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Security
 
+- **An installed site no longer starts with a JWT secret published in this repository.** With
+  `WORDJS_PRESEED_CONFIG=1` and no `WORDJS_JWT_SECRET`, `docker/entrypoint.sh` wrote an *installed* config
+  signed with `wordjs-shared-dev-secret-change-me` (the root `docker-compose.yml` set that very value), and
+  boot kept it because the site was installed — anyone could sign a session for the bootstrap
+  administrator (user id 1). The backend now refuses to start on an installed config whose `jwtSecret` is
+  any published placeholder, with instructions to set a real one (it does not rotate it silently, which
+  would split replicas). The entrypoint requires `WORDJS_JWT_SECRET` (≥ 64 characters, no default) when
+  pre-seeding, and the root compose file refuses to render without it (`openssl rand -hex 64`).
+  **Upgrade note:** a volume pre-seeded without the variable needs its `jwtSecret` replaced, the same value
+  on every replica. The docs no longer claim the root stack cannot be logged into: its bootstrap `admin`
+  password is written to `backend/data/initial-admin-password`.
+- **A username can no longer take over another account's email.** Sign-in and password recovery tried an
+  identifier as a username before an email, and any string was a valid username, so registering the
+  username `boss@gmail.com` broke that account's email sign-in and sent its reset link to the attacker;
+  `Boss` and ` boss` also registered beside `boss`. New logins are limited to letters, digits, `.`, `_`, `-`
+  (≤ 60 characters), must not collide case-insensitively with any login or email (nor a new email with a
+  login), and an identifier containing `@` is now resolved as an email first. Existing accounts are not
+  re-validated; importers convert an invalid source login.
+- **Transactional emails escape what they interpolate.** The verification and password-reset mails put the
+  login and site name into their HTML unescaped, and the Auctions plugin's outbid mail did the same with
+  the bidder name and auction title, so markup (a phishing link) could arrive in a message the site sent.
+  They now use `escHtml`.
+- **`POST /auth/register` no longer reveals whether an email has an account.** It answered "Email already
+  exists" / "Username already exists" verbatim. With email verification required, a taken email now gets
+  the same 201 as a new one (the owner is notified instead; the body no longer carries `user`); otherwise
+  both duplicates get one generic `400 rest_user_exists`. A username's availability, and an email's when
+  verification is off, remain observable — see `documentation/security.md`.
 - **Plugin `dependencies` accept only plain npm registry version ranges.** The host installs a plugin's
   manifest `dependencies` with `npm install` in its own root at activation, and npm runs the `prepare`
   script of a `git+…`/`github:` or `file:` directory dependency even with `--ignore-scripts` — so a
