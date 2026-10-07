@@ -6,6 +6,34 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Security
+
+- **Shortcode parsing no longer freezes the server on hostile post content.** The matcher was a regex whose
+  attribute run had no bound, so every `[tag` without a closing `]` scanned to the end of the document
+  before the next one did the same: `"[gallery ".repeat(n)` cost O(n²), about 5 s for 360 KB and 87 s for
+  1.4 MB, on every serialization of the post (content and excerpt), from a draft any contributor can
+  save. `doShortcode`, `doShortcodeAsync` and `stripShortcodes` now share a single-pass scanner that
+  matches exactly the same shortcodes (1.4 MB now takes about 40 ms). Output is rebuilt in one join
+  instead of one string copy per shortcode, and at most 2000 shortcodes are processed per document; any
+  beyond that are left as written.
+- **The anonymous sidebar render endpoint escapes what it outputs.** `GET /api/v1/widgets/sidebars/:id/render`
+  is public and returns `text/html` from the API origin, but the Categories and Recent Posts widgets
+  and the widget title wrote category names, post titles and slugs into the HTML unescaped. An editor
+  could name a category `<img src=x onerror=…>` and get script running for anyone who opened the
+  URL, administrators included. All of these values are now escaped, and the response carries
+  `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox` and `X-Content-Type-Options: nosniff`.
+  Category and tag names are also stripped of HTML tags when created or updated; a name made only of
+  markup is rejected with 400. Plugins can no longer filter the rendered sidebar: `dynamic_sidebar` joins
+  `wordjs_head`/`wordjs_footer` on the list of raw-HTML hooks denied to every plugin.
+- **Widgets added since instance ids became UUIDs render again.** The renderer split
+  `<widgetId>-<instanceId>` keys on the last `-`, which cut a UUID in half, so those widgets were
+  skipped without error and the sidebar came back empty. Keys are now matched against the registered
+  widget ids, so old-style keys, UUID keys and widget ids containing `-` all resolve. The admin widgets
+  page labels them the same way.
+- **Installed font names and URLs can no longer break out of the server-rendered `<style>`.** The
+  `@font-face` builder removed quotes from the family name only. It now removes quotes, backslashes,
+  `<`, `>` and control characters from both the family name and the URL.
+
 ### Added
 
 - **`npm run pack:plugin -- <slug> [--dir <folder>]` packages a plugin into an installable ZIP.** It

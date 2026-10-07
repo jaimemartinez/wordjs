@@ -23,6 +23,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { widgetsApi, Widget, Sidebar } from "@/lib/api";
+import { widgetIdFromInstanceKey } from "@/lib/widgetInstanceKey";
 import { useModal } from "@/contexts/ModalContext";
 import { PageHeader } from "@/components/ui";
 import { useI18n } from "@/contexts/I18nContext";
@@ -128,7 +129,7 @@ function SidebarItem({
     );
 }
 
-function SidebarContainer({ sidebar, onRemove }: { sidebar: Sidebar, onRemove: (sid: string, key: string) => void }) {
+function SidebarContainer({ sidebar, widgetIds, onRemove }: { sidebar: Sidebar, widgetIds: string[], onRemove: (sid: string, key: string) => void }) {
     const { t } = useI18n();
     const { setNodeRef } = useDroppable({
         id: sidebar.id,
@@ -153,7 +154,9 @@ function SidebarContainer({ sidebar, onRemove }: { sidebar: Sidebar, onRemove: (
                         </div>
                     )}
                     {sidebar.widgets.map(key => {
-                        const [wId] = key.split('-');
+                        // Keys are "<widgetId>-<uuid>" and widget ids may contain '-': resolve against the
+                        // registered ids, as the backend's renderer does.
+                        const wId = widgetIdFromInstanceKey(key, widgetIds);
                         return (
                             <SidebarItem
                                 key={key}
@@ -317,6 +320,7 @@ export default function WidgetsPage() {
                             <SidebarContainer
                                 key={sidebar.id}
                                 sidebar={sidebar}
+                                widgetIds={widgets.map(w => w.id)}
                                 onRemove={(sid, key) => handleRemove(sid, key)}
                             />
                         ))}
