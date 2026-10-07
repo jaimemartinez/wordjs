@@ -26,7 +26,11 @@ const fs = require('fs');
 const path = require('path');
 
 const BACKEND_DIR = path.resolve(__dirname, '..');
-const PLUGINS_DIR = path.join(BACKEND_DIR, 'plugins');
+// Plugin commands honor WORDJS_PLUGINS_DIR, the variable scripts/build-plugin.js reads — so `pack --build`
+// builds and packs the SAME folder (tests point it at a throwaway dir).
+const PLUGINS_DIR = process.env.WORDJS_PLUGINS_DIR
+    ? path.resolve(process.env.WORDJS_PLUGINS_DIR)
+    : path.join(BACKEND_DIR, 'plugins');
 // Theme commands honor WORDJS_THEMES_DIR (tests/CI point it at a throwaway dir).
 const THEMES_DIR = process.env.WORDJS_THEMES_DIR
     ? path.resolve(process.env.WORDJS_THEMES_DIR)
@@ -515,6 +519,17 @@ function pack(slug, args) {
     const EXCLUDE = /(^|[\\/])(node_modules|data|\.git|os-tmp)([\\/]|$)/;
     const zip = new AdmZip();
     zip.addLocalFolder(pluginDir, slug, (p) => !EXCLUDE.test(p));
+    // A build (--build, or an earlier one) leaves the COMPILED stylesheet in dist/admin.css: the plugin's
+    // own admin.css plus the Tailwind classes its UI uses. It ships as client/admin/admin.css, the file the
+    // admin shell loads — the same substitution as the catalog and pack:plugin (scripts/plugin-stylesheet.js).
+    const builtCss = path.join(pluginDir, 'dist', 'admin.css');
+    if (fs.existsSync(builtCss)) {
+        const { BUILT_STYLESHEET, PACKAGED_STYLESHEET } = require(path.join(BACKEND_DIR, 'scripts', 'plugin-stylesheet.js'));
+        for (const rel of [BUILT_STYLESHEET, PACKAGED_STYLESHEET]) {
+            if (zip.getEntry(`${slug}/${rel}`)) zip.deleteFile(`${slug}/${rel}`);
+        }
+        zip.addFile(`${slug}/${PACKAGED_STYLESHEET}`, fs.readFileSync(builtCss));
+    }
     zip.writeZip(outFile);
 
     const sizeKB = (fs.statSync(outFile).size / 1024).toFixed(1);

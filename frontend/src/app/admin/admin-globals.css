@@ -19,6 +19,16 @@ html {
   scroll-behavior: smooth;
 }
 
+/* The admin is an app shell: the document itself never scrolls (DashboardLayoutClient's shell is
+ * exactly the visible viewport and every screen scrolls its own container). Without this, iOS
+ * rubber-banded the WHOLE document on every drag that reached the end of a scroller — header and all —
+ * and Android turned it into pull-to-refresh. Vertical only: `overscroll-behavior-x: none` on the root
+ * would also switch off the desktop browsers' two-finger swipe back/forward. */
+html,
+body {
+  overscroll-behavior-y: none;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);

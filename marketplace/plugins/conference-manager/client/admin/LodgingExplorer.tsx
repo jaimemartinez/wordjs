@@ -33,6 +33,7 @@ import { useI18n } from "../../../../../frontend/src/contexts/I18nContext";
 import { useToast } from "../../../../../frontend/src/contexts/ToastContext";
 import { useModal } from "@/contexts/ModalContext";
 import { fmtMoney } from "../lib/conference";
+import { Overlay } from "./Overlay";
 import {
     BOARD_CHIP_CAP, BOARD_DRAG_TYPE, DEFAULT_ROOM_FILTERS, POOL_FILTER,
     assignCandidates, candidateExclusions, dropBlock, dragBlock, fieldVal, fillVars, filterRooms, filtersActive,
@@ -1577,8 +1578,8 @@ function ModalShell({ title, subtitle, onClose, children, closeLabel, restoreFoc
     const restoreRef = useRef(restoreFocus);
     useEffect(() => { closeRef.current = onClose; restoreRef.current = restoreFocus; });
     // Selecting text in the search box and releasing over the backdrop sends the click to the backdrop
-    // (the nearest common ancestor): only a press that also STARTED on the backdrop closes the dialog.
-    const downOnBackdrop = useRef(false);
+    // (the nearest common ancestor): only a press that also STARTED on the backdrop closes the dialog —
+    // Overlay's `onBackdrop` has exactly that rule.
     // What had focus inside the dialog when the effect was last cleaned up: React StrictMode (dev) runs
     // mount → cleanup → mount, and the cleanup's focus restore must not cost the search box its autoFocus.
     const lastInner = useRef<HTMLElement | null>(null);
@@ -1619,15 +1620,7 @@ function ModalShell({ title, subtitle, onClose, children, closeLabel, restoreFoc
         };
     }, []);
     return (
-        <div
-            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200"
-            onMouseDown={e => { downOnBackdrop.current = e.target === e.currentTarget; }}
-            onClick={e => {
-                const close = downOnBackdrop.current && e.target === e.currentTarget;
-                downOnBackdrop.current = false;
-                if (close) onClose();
-            }}
-        >
+        <Overlay layer={1} onBackdrop={onClose}>
             <div ref={dialogRef} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl border border-gray-100 overflow-hidden flex flex-col max-h-[92vh] outline-none animate-in zoom-in-95 duration-200">
                 <div className="bg-gray-50/50 px-5 sm:px-8 py-5 border-b border-gray-100 flex items-start justify-between gap-4">
                     <div className="min-w-0">
@@ -1640,7 +1633,7 @@ function ModalShell({ title, subtitle, onClose, children, closeLabel, restoreFoc
                 </div>
                 <div className="p-5 sm:p-8 overflow-y-auto modern-scrollbar min-h-0">{children}</div>
             </div>
-        </div>
+        </Overlay>
     );
 }
 

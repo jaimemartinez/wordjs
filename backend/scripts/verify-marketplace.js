@@ -25,6 +25,10 @@
  *      inside the zip. build-plugin.js silently skips an entry whose file is missing
  *      (`if (fs.existsSync(fullPath))`), so the build stays green while shipping a plugin whose admin
  *      page or Puck block can never load — the exact regression that shipped twice already.
+ *   3b. ...and the stylesheet carrying the Tailwind classes that UI uses (client/admin/admin.css for an
+ *      admin page, dist/<name>.bundle.css for a block or hooks bundle), compiled by build-plugin.js.
+ *      A runtime-installed plugin gets no classes from the host build, so without it every screen
+ *      installs fine and renders unstyled on a live site.
  *   4. No runtime state inside a zip: a plugin's top-level data/ holds live secrets (mail-server's AES
  *      root key data/.mailenc, user attachments). A packer regression here leaks them to every install.
  *   5. Installer-shape compatibility with routes/marketplace.ts: the filename must satisfy the same
@@ -58,6 +62,9 @@ const { resolveBlockEntry } = require('./plugin-block-contract');
 // The review ledger reader shared with build-marketplace.js. Same reason as above: "what does the
 // review badge mean" must have exactly one definition, or the gate ends up certifying its own copy.
 const { readLedger, reviewFor, permissionsSha256, packageContentSha256, isFirstPartyAuthor, REVIEW_STATUSES } = require('./marketplace-review');
+// Where the compiled stylesheet ships and the marker that proves the compile step ran — the builder's
+// own constants, for the same reason.
+const { PACKAGED_STYLESHEET, UTILITIES_MARKER } = require('./plugin-stylesheet');
 
 const ROOT = process.env.WORDJS_MARKETPLACE_ROOT
     ? path.resolve(process.env.WORDJS_MARKETPLACE_ROOT)
@@ -349,6 +356,23 @@ function verifyEntry(entry, kind, srcRoot, seenFiles) {
                 fail(`${label}: ${entry.file} is missing ${bundle} — its admin page / block can never load once installed`);
             }
         }
+
+        // (3b) ...and so must the CLASSES its UI uses. A runtime-installed plugin gets no Tailwind from the
+        // host build, so every screen ships with exactly the stylesheet the package carries: the admin page
+        // with client/admin/admin.css (which the admin shell links), a block / hooks bundle with
+        // dist/<name>.bundle.css (which pluginBundleLoader links). Each must hold the compiled utilities
+        // block — without it the package installs fine and renders transparent overlays and collapsed
+        // layouts on a live site (the conference-manager meal scanner, shipped exactly so).
+        const pkgZip = new AdmZip(buf);
+        const sheets = expected.map((name) => (name === 'admin' ? PACKAGED_STYLESHEET : `dist/${name}.bundle.css`));
+        for (const rel of sheets) {
+            const sheet = pkgZip.getEntry(`${entry.id}/${rel}`);
+            if (!sheet) {
+                fail(`${label}: ${entry.file} is missing ${entry.id}/${rel} — the plugin's UI would ship without the Tailwind classes it uses`);
+            } else if (!sheet.getData().toString('utf8').includes(UTILITIES_MARKER)) {
+                fail(`${label}: ${entry.id}/${rel} inside ${entry.file} carries no compiled utilities ("${UTILITIES_MARKER}") — build-plugin.js did not compile the plugin's Tailwind classes`);
+            }
+        }
     }
 }
 
@@ -453,7 +477,7 @@ function main() {
         console.error('');
         process.exit(1);
     }
-    console.log(`✅ marketplace catalog verified — every published zip matches its catalog entry (sha256, size, inner manifest, compiled bundles) and every review badge matches the ledger.`);
+    console.log(`✅ marketplace catalog verified — every published zip matches its catalog entry (sha256, size, inner manifest, compiled bundles and stylesheets) and every review badge matches the ledger.`);
 }
 
 main();

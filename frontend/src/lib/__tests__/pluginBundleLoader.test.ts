@@ -610,6 +610,63 @@ describe("hooks registration is deduped per plugin, across SEQUENTIAL and CONCUR
 });
 
 /**
+ * THE HOOKED UI'S CLASSES. A hooks extension renders inside ANOTHER admin screen (mail-server's toggle in
+ * the user form), where the plugin's admin.css is never linked — and a runtime-installed plugin gets no
+ * Tailwind from the host build. build-plugin.js compiles the classes into dist/hooks.bundle.css; the
+ * loader must link it once the bundle registers, or the extension renders unstyled on a live site.
+ */
+describe("hooks registration links the hooks bundle's stylesheet", () => {
+    /** The slice of `document` the loader touches, recording what it appends to <head>. */
+    function stubDocument(): Array<{ rel: string; href: string; attrs: Record<string, string> }> {
+        const links: Array<{ rel: string; href: string; attrs: Record<string, string> }> = [];
+        vi.stubGlobal('document', {
+            head: { appendChild: (el: (typeof links)[number]) => { links.push(el); return el; } },
+            createElement: () => {
+                const attrs: Record<string, string> = {};
+                return { rel: '', href: '', attrs, setAttribute: (k: string, v: string) => { attrs[k] = v; } };
+            },
+            querySelector: (sel: string) => {
+                const m = /^link\[data-plugin-hooks-css="([^"]+)"\]$/.exec(sel);
+                return (m && links.find((l) => l.attrs['data-plugin-hooks-css'] === m[1])) || null;
+            },
+        });
+        return links;
+    }
+
+    it("links /bundle/css?type=hooks ONCE per plugin, after the bundle evaluates", async () => {
+        installImportableBundleShim();
+        const links = stubDocument();
+        const code = hooksBundle('styled');
+        fetchMock.mockImplementation(async (url: string) =>
+            url === ACTIVE_URL ? jsonResponse(['mail-server']) : textResponse(code));
+        const { loadRuntimePluginHooks, invalidateActivePluginIds } = await freshLoader();
+
+        await loadRuntimePluginHooks();
+        invalidateActivePluginIds();
+        await loadRuntimePluginHooks();
+
+        expect(registrations('styled')).toBe(1);
+        expect(links).toHaveLength(1);
+        expect(links[0].rel).toBe('stylesheet');
+        expect(links[0].href).toBe('/api/v1/plugins/mail-server/bundle/css?type=hooks');
+    });
+
+    it("links nothing for a plugin that ships no hooks bundle (404)", async () => {
+        const links = stubDocument();
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === ACTIVE_URL) return jsonResponse(['faq']);
+            if (url === REGISTRY_URL) return registryResponse([registryEntry('faq', null)]);
+            return jsonResponse({}, 404);
+        });
+        const { loadRuntimePluginHooks } = await freshLoader();
+
+        await loadRuntimePluginHooks();
+
+        expect(links).toHaveLength(0);
+    });
+});
+
+/**
  * ACTIVATING A PLUGIN MID-SESSION — the memo must be invalidated, because nothing else will.
  *
  * The active-plugin list was memoized for the whole session on the claim that it "only changes when an

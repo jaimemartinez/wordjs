@@ -18,6 +18,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useToast } from "../../../../../frontend/src/contexts/ToastContext";
 import { conferenceApi, STAFF_SECTIONS } from "../lib/conference";
+import { canAutoFocus } from "../lib/overlay";
+import { Overlay } from "./Overlay";
 import type { StaffLevel, StaffMember, StaffRole, StaffSection, StaffUser } from "../lib/conference";
 import { useTx, makeTxn } from "./MealScanner";
 import { normalizePermissions, levelRank } from "./perms";
@@ -297,7 +299,7 @@ function RoleEditor({ role, sections, existing, onClose, onSaved }: any) {
     };
     const title = role?.id ? tx('staff.role.edit', 'Editar rol') : tx('staff.role.new', 'Nuevo rol');
     return (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={onClose}>
+        <Overlay layer={2} onBackdrop={onClose}>
             <div className="bg-white rounded-[32px] shadow-2xl w-full max-w-3xl border border-gray-100 overflow-hidden max-h-[92vh] flex flex-col" role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()} data-role-editor="">
                 <div className="bg-gray-50/50 px-6 sm:px-8 py-5 border-b border-gray-100 flex items-start justify-between gap-4 shrink-0">
                     <div className="min-w-0">
@@ -309,7 +311,7 @@ function RoleEditor({ role, sections, existing, onClose, onSaved }: any) {
                 <div className="p-6 sm:p-8 space-y-5 overflow-y-auto">
                     <div className="space-y-1.5">
                         <label htmlFor="staff-role-name" className={labelCls}>{tx('staff.role.name', 'Nombre del rol')} *</label>
-                        <input id="staff-role-name" ref={nameRef} className={inputCls} value={name} maxLength={80} autoFocus
+                        <input id="staff-role-name" ref={nameRef} className={inputCls} value={name} maxLength={80} autoFocus={canAutoFocus()}
                             onChange={(e) => { setName(e.target.value); setError(''); }} placeholder={tx('staff.role.name.placeholder', 'Ej.: Cocina, Tesorería, Recepción')} />
                         {duplicate && <p className="text-xs font-bold text-rose-600">{tx('staff.role.name.duplicate', 'Ya existe un rol con ese nombre.')}</p>}
                     </div>
@@ -367,7 +369,7 @@ function RoleEditor({ role, sections, existing, onClose, onSaved }: any) {
                     <button type="button" onClick={save} disabled={busy || !trimmed || duplicate} className={btnPrimary} data-save-role="">{busy ? tx('saving', 'Guardando…') : tx('save', 'Guardar')}</button>
                 </div>
             </div>
-        </div>
+        </Overlay>
     );
 }
 

@@ -8,10 +8,12 @@
  * "compress the folder by hand". This does what that step needs, the same way the catalog does it:
  *
  *   1. checks the manifest the installer will check (valid JSON, id == folder, a name, "isolated": true);
- *   2. compiles the frontend entries with build-plugin.js (skipped for a backend-only plugin);
+ *   2. compiles the frontend entries with build-plugin.js (skipped for a backend-only plugin), including
+ *      the Tailwind classes its UI uses (plugin-stylesheet.js);
  *   3. copies the plugin into a staging folder with the catalog's rules (core/plugin-package-files.ts,
  *      shared with the admin Download route) — never the top-level runtime
- *      data/ (keys, attachments), never OS junk, .git or symlinks, never the working node_modules/;
+ *      data/ (keys, attachments), never OS junk, .git or symlinks, never the working node_modules/ — and
+ *      puts the compiled stylesheet at client/admin/admin.css, where the admin shell loads it;
  *   4. settles the npm dependencies on its own (see resolveDependencies below), so the ZIP either lets
  *      the host install them at activation or carries exactly the production ones;
  *   5. runs the installer's own permission + code scan (validatePluginPermissions) on the STAGED copy —
@@ -39,6 +41,7 @@ const { spawnSync } = require('child_process');
 const AdmZip = require('adm-zip');
 const acorn = require('acorn');
 const walkAst = require('acorn-walk');
+const { stagePackagedStylesheet, PACKAGED_STYLESHEET } = require('./plugin-stylesheet');
 
 // The limits the install path enforces (routes/plugins.ts multer fileSize; core/zip-guard.ts DEFAULTS).
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
@@ -274,6 +277,9 @@ function pack(opts) {
         const stageDir = path.join(stageRoot, slug);
         fs.mkdirSync(stageDir);
         stageFiles(pluginDir, stageDir);
+        // Same substitution the catalog makes (build-marketplace.js): the BUILT stylesheet is the
+        // package's client/admin/admin.css. Done on the stage, before the installer checks below.
+        if (stagePackagedStylesheet(stageDir)) console.log(`🎨 ${PACKAGED_STYLESHEET} carries the compiled Tailwind classes.`);
 
         const packed = JSON.parse(JSON.stringify(manifest));
         resolveDependencies(stageDir, packed, installer);

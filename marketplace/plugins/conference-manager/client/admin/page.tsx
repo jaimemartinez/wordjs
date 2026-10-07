@@ -19,6 +19,8 @@ import { buildXlsx, downloadXlsx } from "../lib/xlsx";
 import { availableColumns, defaultColumnKeys, filterRoster, buildRosterSheet, buildHotelReport, exportFilename, transportByPerson, withoutColumn } from "../lib/exports";
 import { StatCard } from "../../../../../frontend/src/components/ui/StatCard";
 import { ActionCard } from "../../../../../frontend/src/components/ui/ActionCard";
+import { Overlay } from "./Overlay";
+import { canAutoFocus } from "../lib/overlay";
 // Lodging explorer (2.13.0) and the pure helpers it shares with this page (status meta, display
 // names, field values, {placeholder} filling) — they live in lib/lodgingView.ts so the explorer never
 // imports this file.
@@ -409,7 +411,6 @@ function ConferenceList({ onManage, onOpenStaff }: { onManage: (conf: Conference
                     onClick={() => setShowCreateModal(true)}
                     className="group bg-gradient-to-br from-blue-600 to-indigo-700 rounded-[40px] p-8 flex flex-col items-center justify-center text-white hover:shadow-2xl hover:shadow-blue-500/40 hover:-translate-y-2 transition-all duration-500 cursor-pointer min-h-[320px] relative overflow-hidden ring-4 ring-white ring-offset-4 ring-offset-gray-50"
                 >
-                    <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20"></div>
                     <div className="absolute top-0 right-0 w-64 h-64 bg-white opacity-5 rounded-full blur-[80px] group-hover:blur-[60px] transition-all duration-700"></div>
                     <div className="absolute bottom-0 left-0 w-48 h-48 bg-purple-500 opacity-20 rounded-full blur-[60px]"></div>
 
@@ -519,9 +520,9 @@ function ConferenceList({ onManage, onOpenStaff }: { onManage: (conf: Conference
 
             {/* Create Conference Modal */}
             {showCreateModal && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
-                    <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-lg border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200">
-                        <div className="bg-gray-50/50 px-10 py-8 border-b border-gray-100 flex items-center justify-between">
+                <Overlay layer={1}>
+                    <div className="bg-white rounded-t-[32px] sm:rounded-[40px] shadow-2xl w-full max-w-lg border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200">
+                        <div className="bg-gray-50/50 px-6 py-5 sm:px-10 sm:py-8 border-b border-gray-100 flex items-center justify-between">
                             <div>
                                 <h3 className="font-black text-2xl text-gray-900 italic tracking-tighter">{t('create.conference')}</h3>
                                 <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1">Configura tu nuevo evento</p>
@@ -533,7 +534,7 @@ function ConferenceList({ onManage, onOpenStaff }: { onManage: (conf: Conference
                                 <i className="fa-solid fa-xmark text-xl"></i>
                             </button>
                         </div>
-                        <form onSubmit={handleCreateConference} className="p-10 space-y-6">
+                        <form onSubmit={handleCreateConference} className="p-6 sm:p-10 space-y-4 sm:space-y-6">
                             <div className="space-y-2">
                                 <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">
                                     {t('conference.name')} *
@@ -552,7 +553,7 @@ function ConferenceList({ onManage, onOpenStaff }: { onManage: (conf: Conference
                                         });
                                     }}
                                     placeholder="e.g. Conferencia Anual 2024"
-                                    autoFocus
+                                    autoFocus={canAutoFocus()}
                                 />
                             </div>
                             <div className="space-y-2">
@@ -561,7 +562,7 @@ function ConferenceList({ onManage, onOpenStaff }: { onManage: (conf: Conference
                                     <input
                                         required
                                         type="text"
-                                        className="w-full border-2 border-gray-100 rounded-2xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-mono text-sm pl-4"
+                                        className="w-full border-2 border-gray-100 rounded-2xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-mono text-base sm:text-sm pl-4"
                                         value={newConference.slug}
                                         onChange={(e) => setNewConference({ ...newConference, slug: e.target.value })}
                                         placeholder="conferencia-anual-2024"
@@ -576,7 +577,7 @@ function ConferenceList({ onManage, onOpenStaff }: { onManage: (conf: Conference
                                     <div className="relative">
                                         <input
                                             type="datetime-local"
-                                            className="w-full border-2 border-gray-100 rounded-2xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-bold text-sm"
+                                            className="w-full border-2 border-gray-100 rounded-2xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-bold text-base sm:text-sm min-w-0 appearance-none"
                                             value={newConference.date_start}
                                             onChange={(e) => setNewConference({ ...newConference, date_start: e.target.value })}
                                         />
@@ -587,7 +588,7 @@ function ConferenceList({ onManage, onOpenStaff }: { onManage: (conf: Conference
                                     <div className="relative">
                                         <input
                                             type="datetime-local"
-                                            className="w-full border-2 border-gray-100 rounded-2xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-bold text-sm"
+                                            className="w-full border-2 border-gray-100 rounded-2xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-bold text-base sm:text-sm min-w-0 appearance-none"
                                             value={newConference.date_end}
                                             onChange={(e) => setNewConference({ ...newConference, date_end: e.target.value })}
                                         />
@@ -626,7 +627,7 @@ function ConferenceList({ onManage, onOpenStaff }: { onManage: (conf: Conference
                             </div>
                         </form>
                     </div>
-                </div>
+                </Overlay>
             )}
         </div>
     );
@@ -830,7 +831,7 @@ function BarcodeModal({ code, name, onClose }: { code: string; name: string; onC
         catch { addToast(code, 'info'); }
     };
     return (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={onClose}>
+        <Overlay layer={2} onBackdrop={onClose}>
             <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-lg border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
                 <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-start justify-between gap-4">
                     <div className="min-w-0">
@@ -852,7 +853,7 @@ function BarcodeModal({ code, name, onClose }: { code: string; name: string; onC
                     </div>
                 </div>
             </div>
-        </div>
+        </Overlay>
     );
 }
 
@@ -953,7 +954,7 @@ function ExcelExportModal({ conferenceId, slug, onClose }: { conferenceId: numbe
     const busy = !!progress;
     const input = 'w-full border-2 border-gray-100 rounded-xl px-3 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-sm font-medium text-gray-900';
     return (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 animate-in fade-in duration-200">
+        <Overlay layer={2}>
             <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-4xl border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200 max-h-[92vh] flex flex-col" role="dialog" aria-modal="true">
                 <div className="bg-gray-50/50 px-8 sm:px-10 py-6 border-b border-gray-100 flex items-start justify-between gap-4 shrink-0">
                     <div>
@@ -1041,7 +1042,7 @@ function ExcelExportModal({ conferenceId, slug, onClose }: { conferenceId: numbe
                     </div>
                 </div>
             </div>
-        </div>
+        </Overlay>
     );
 }
 
@@ -1674,7 +1675,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
             </div>
 
             {showAddModal && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-200">
+                <Overlay layer={1}>
                     <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200">
                         <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-center justify-between">
                             <h3 className="font-bold text-xl text-gray-900 italic">{editId ? (t('edit.inscription') || 'Editar Inscripción') : t('new.inscription')}</h3>
@@ -1769,12 +1770,12 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                             </div>
                         </form>
                     </div>
-                </div>
+                </Overlay>
             )}
 
             {/* Payments Modal */}
             {selectedInscription && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-200">
+                <Overlay layer={1}>
                     <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200">
                         <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-center justify-between">
                             <div>
@@ -1949,12 +1950,12 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                             </form>}
                         </div>
                     </div>
-                </div>
+                </Overlay>
             )}
 
             {/* In-app confirm dialog — z-[120], above the payments modal (z-100) + lightbox (z-110). */}
             {confirmState && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[120] flex items-center justify-center p-4 animate-in fade-in duration-150">
+                <Overlay layer={3}>
                     <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-150">
                         <div className="p-6">
                             <p className="text-gray-800 font-medium leading-relaxed">{confirmState.message}</p>
@@ -1976,15 +1977,12 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                             </button>
                         </div>
                     </div>
-                </div>
+                </Overlay>
             )}
 
             {/* Comprobante lightbox — a data: URL is blocked from opening in a new tab, so view it in-app. */}
             {isImageProof(proofViewer) && (
-                <div
-                    className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[110] flex items-center justify-center p-6 animate-in fade-in duration-200"
-                    onClick={() => setProofViewer(null)}
-                >
+                <Overlay layer={2} sheet={false} backdrop="rgba(0,0,0,0.8)" onBackdrop={() => setProofViewer(null)}>
                     <button
                         type="button"
                         onClick={() => setProofViewer(null)}
@@ -1998,12 +1996,12 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                         className="max-w-full max-h-[90vh] rounded-xl shadow-2xl object-contain bg-white"
                         onClick={e => e.stopPropagation()}
                     />
-                </div>
+                </Overlay>
             )}
 
             {/* Manual room-assignment modal */}
             {assignTarget && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-200">
+                <Overlay layer={1}>
                     <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200">
                         <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-center justify-between">
                             <div>
@@ -2106,7 +2104,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                             );
                         })()}
                     </div>
-                </div>
+                </Overlay>
             )}
         </div>
     );
@@ -2597,7 +2595,7 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
             ))}
 
             {showHotelModal && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
+                <Overlay layer={1}>
                     <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-md border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200">
                         <div className="bg-gray-50/50 px-10 py-8 border-b border-gray-100 flex items-center justify-between">
                             <div>
@@ -2617,7 +2615,7 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                                     className="w-full border-2 border-gray-100 rounded-2xl px-5 py-4 bg-gray-50/50 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-bold placeholder:text-gray-200"
                                     value={hotelForm.name}
                                     onChange={e => setHotelForm({ ...hotelForm, name: e.target.value })}
-                                    autoFocus
+                                    autoFocus={canAutoFocus()}
                                 />
                             </div>
                             <div className="space-y-2">
@@ -2659,11 +2657,11 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                             </div>
                         </form>
                     </div>
-                </div>
+                </Overlay>
             )}
 
             {showRoomModal && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
+                <Overlay layer={1}>
                     <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-md border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200">
                         <div className="bg-gray-50/50 px-10 py-8 border-b border-gray-100 flex items-center justify-between">
                             <div>
@@ -2760,7 +2758,7 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                                                 className="w-full border-2 border-gray-100 rounded-2xl pl-12 pr-5 py-4 bg-gray-50/50 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-bold placeholder:text-gray-200"
                                                 value={roomForm.room_number}
                                                 onChange={e => setRoomForm({ ...roomForm, room_number: e.target.value })}
-                                                autoFocus
+                                                autoFocus={canAutoFocus()}
                                             />
                                         </div>
                                     </div>
@@ -2806,7 +2804,7 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                             </div>
                         </form>
                     </div>
-                </div>
+                </Overlay>
             )}
         </div>
     );
@@ -2973,7 +2971,7 @@ function PricingPage({ conferenceId }: { conferenceId: number }) {
 
             {/* Rule modal */}
             {showModal && form && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-200">
+                <Overlay layer={1}>
                     <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200">
                         <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-center justify-between">
                             <h3 className="font-bold text-xl text-gray-900 italic">{form.id ? 'Editar regla' : 'Nueva regla de precio'}</h3>
@@ -3029,7 +3027,7 @@ function PricingPage({ conferenceId }: { conferenceId: number }) {
                             </div>
                         </form>
                     </div>
-                </div>
+                </Overlay>
             )}
         </div>
     );
@@ -3527,7 +3525,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
 
             {
                 showModal && (
-                    <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm z-[100] flex items-start justify-center p-4 overflow-y-auto animate-in fade-in duration-200">
+                    <Overlay layer={1} backdrop="rgba(17,24,39,0.6)">
                         <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg border border-gray-100 animate-in zoom-in-95 duration-200 relative my-auto overflow-visible">
                             <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-center justify-between">
                                 <div>
@@ -3740,7 +3738,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                 </div>
                             </form>
                         </div>
-                    </div>
+                    </Overlay>
                 )
             }
         </div >
@@ -4228,7 +4226,7 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
             </div>
 
             {showRuleModal && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
+                <Overlay layer={1}>
                     <div role="dialog" aria-modal="true" className="bg-white rounded-3xl shadow-2xl w-full max-w-lg border border-gray-100 max-h-[92vh] overflow-y-auto animate-in zoom-in-95 duration-200">
                         <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-center justify-between sticky top-0 z-10">
                             <div>
@@ -4314,7 +4312,7 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
                             </div>
                         </form>
                     </div>
-                </div>
+                </Overlay>
             )}
         </div>
     );
@@ -5074,7 +5072,7 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                 const hardLabel = t('rule.hard') || 'Obligatoria';
                 const softLabel = t('rule.soft') || 'Preferente';
                 return (
-                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-200">
+                    <Overlay layer={1}>
                         <div className="bg-white rounded-[32px] shadow-2xl w-full max-w-4xl border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200 max-h-[92vh] flex flex-col">
                             <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-center justify-between gap-4">
                                 <div className="min-w-0">
@@ -5307,13 +5305,13 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                 )}
                             </div>
                         </div>
-                    </div>
+                    </Overlay>
                 );
             })()}
 
             {/* Create Location Modal */}
             {showModal && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
+                <Overlay layer={1}>
                     <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200">
                         <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-center justify-between">
                             <h3 className="font-bold text-xl text-gray-900 italic">{t('new.location')}</h3>
@@ -5331,7 +5329,7 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                     onChange={e => setNewLocation({ ...newLocation, name: e.target.value })}
                                     className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium"
                                     placeholder="Ej. Zona Norte"
-                                    autoFocus
+                                    autoFocus={canAutoFocus()}
                                 />
                             </div>
 
@@ -5416,12 +5414,12 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                             </div>
                         </div>
                     </div>
-                </div>
+                </Overlay>
             )}
 
             {/* In-page confirm dialog — z-[120], above the review modal (z-100). */}
             {confirmState && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[120] flex items-center justify-center p-4 animate-in fade-in duration-150">
+                <Overlay layer={3}>
                     <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-150">
                         <div className="p-6">
                             <p className="text-gray-800 font-medium leading-relaxed">{confirmState.message}</p>
@@ -5443,7 +5441,7 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                             </button>
                         </div>
                     </div>
-                </div>
+                </Overlay>
             )}
         </div>
     );

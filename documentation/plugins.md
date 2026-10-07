@@ -265,6 +265,21 @@ frontend entry:
 > A declared entry whose file is missing is a **build error**, not a skip — the build fails loudly
 > instead of shipping a plugin whose UI is silently absent at runtime.
 
+It also compiles the **Tailwind classes your UI uses** (`backend/scripts/plugin-stylesheet.js`, with the
+Tailwind v4 the repository already has). A plugin loaded at runtime gets no classes from the host's
+build — in development `next dev` scans `backend/plugins`, so everything looks right there, but on a
+production site a class only your plugin uses would simply not exist. The compiled classes use the host's
+cascade layers and theme, no preflight, and are **not** scoped to `.plugin-admin-<slug>` (a modal or
+scanner you portal to `<body>` lives outside that wrapper):
+- `admin.css`: your own `client/admin/admin.css` (if you have one), verbatim, followed by the classes
+  found in `client/**` and in everything the admin bundle imports. The packers (`npm run
+  pack:plugin`, `wordjs pack`, the marketplace build) ship it **as** `client/admin/admin.css`, the file the
+  admin shell links; your source file is never written.
+- `component.bundle.css` / `hooks.bundle.css`: the classes of the block / hooks bundle only (a block's
+  CSS reaches public pages), after any CSS esbuild extracted from your imports. The loader links them.
+
+The output is deterministic — rebuilding unchanged sources gives the same bytes.
+
 ### 🛑 Critical: The React Singleton
 WordJS is highly sophisticated about how it handles React. 
 - **The Core Problem:** If your plugin bundles its own copy of React, Hooks will fail (Singleton violation).

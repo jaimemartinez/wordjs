@@ -1,5 +1,5 @@
 /**
- * Code 128 reader for camera frames — no dependency, pure functions (also loaded by Node tests).
+ * Barcode reader for camera frames — no dependency, pure functions (also loaded by Node tests).
  *
  * Phones without `BarcodeDetector` (iPhone Safari, Firefox) still need to read the registration-code
  * barcodes printed by `./barcode`. This module decodes them from grayscale/RGBA pixels:
@@ -13,8 +13,18 @@
  *   at an angle) and only returns a value that at least two scanlines decoded identically.
  * - `createScanConsensus()` lets the UI additionally require consecutive frames to agree.
  *
+ * 2.15.1: the scanner shows WHATEVER it reads — a product box held under the camera must say «Código
+ * leído: …» instead of nothing. `decodeBarcodeRow()` / `decodeBarcodeImage()` read, on the same
+ * binarised scanlines, Code 128 plus the retail symbologies EAN-13, EAN-8, UPC-A (an EAN-13 whose first
+ * digit is 0), UPC-E and Code 39, and return the text WITH its symbology. EAN/UPC digits are matched
+ * like the Code 128 symbols (edge-to-similar-edge distances, ink spread measured on the guard bars to
+ * tell 1/7 and 2/8 apart) and verified by guard patterns, quiet zones and the check digit; Code 39 by its
+ * three-wide-of-nine patterns, the `*` start/stop and the quiet zones. `decodeVideoRegion()` decodes the
+ * part of a video frame under the aiming frame at full resolution (`aimCrop()` maps it).
+ *
  * The symbol table is derived from the encoder's own `PATTERNS`/`STOP`, so both sides never drift.
- * No DOM is touched at module level; `scanVideoFrame()` is the only browser-only helper.
+ * No DOM is touched at module level; `scanVideoFrame()` and `decodeVideoRegion()` take the browser
+ * objects they draw with as arguments.
  */
 
 import { PATTERNS, STOP } from './barcode';
@@ -72,7 +82,29 @@ export type ScanImage = {
     channels?: 1 | 4;
 };
 
-type Resolved = { regCodeOnly: boolean; quietZone: number; minContrast: number; window: number; maxD: number; minRuns: number };
+/** Symbologies the built-in reader decodes (BarcodeDetector's names). */
+export type BarcodeFormat = 'code_128' | 'ean_13' | 'ean_8' | 'upc_a' | 'upc_e' | 'code_39';
+/** Every symbology `decodeBarcodeRow()` / `decodeBarcodeImage()` read by default. */
+export const BUILTIN_FORMATS: readonly BarcodeFormat[] = ['code_128', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_39'];
+/** A decoded barcode: its text and its symbology. */
+export type BarcodeRead = { text: string; format: BarcodeFormat };
+
+export type BarcodeScanOptions = Omit<Code128ScanOptions, 'regCodeOnly'> & {
+    /** Only accept reads that are registration codes (default FALSE here: show whatever is read). */
+    regCodeOnly?: boolean;
+    /** Symbologies to read (default `BUILTIN_FORMATS`). */
+    formats?: readonly BarcodeFormat[];
+};
+export type BarcodeImageOptions = Omit<Code128ImageOptions, 'regCodeOnly'> & BarcodeScanOptions;
+
+type Resolved = {
+    regCodeOnly: boolean; quietZone: number; minContrast: number; window: number; maxD: number;
+    /** Fewest runs a line needs for ANY enabled symbology (early exit before decoding). */
+    minRuns: number;
+    /** Fewest runs from a Code 128 start candidate to the line end. */
+    c128Runs: number;
+    c128: boolean; ean13: boolean; upcA: boolean; ean8: boolean; upcE: boolean; c39: boolean;
+};
 
 // ---------------------------------------------------------------------------------------------
 // Symbol table (derived from the encoder)
@@ -201,10 +233,10 @@ function decodeFrom(r: Float64Array, count: number, i: number, start: number, p:
 }
 
 /** Look for a start symbol (with its quiet zone) anywhere in the runs and decode from there. */
-function decodeRuns(r: Float64Array, count: number, firstDark: boolean, o: Resolved): string | null {
+function decodeCode128Runs(r: Float64Array, count: number, firstDark: boolean, o: Resolved): string | null {
     // Dark runs sit at even indices when the line starts dark, odd otherwise; a start needs a light
     // run (its quiet zone) before it, so the first candidate is index 1 or 2.
-    for (let i = firstDark ? 2 : 1; i + o.minRuns <= count; i += 2) {
+    for (let i = firstDark ? 2 : 1; i + o.c128Runs <= count; i += 2) {
         const p = r[i] + r[i + 1] + r[i + 2] + r[i + 3] + r[i + 4] + r[i + 5];
         const m = p / 11;
         // Every start symbol begins bar 2, space 1, bar 1: cheap pre-check before the full match.
@@ -218,6 +250,300 @@ function decodeRuns(r: Float64Array, count: number, firstDark: boolean, o: Resol
         if (start < START_A || start > START_C) continue;
         const text = decodeFrom(r, count, i, start, p, o);
         if (text !== null) return text;
+    }
+    return null;
+}
+
+// ---------------------------------------------------------------------------------------------
+// EAN-13 / UPC-A, EAN-8 and UPC-E
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Widths of the odd-parity ("L") digits 0-9, space first, 7 modules each. The even-parity ("G") digit is
+ * the same widths reversed; the right-hand ("R") digit the same widths starting with a bar.
+ */
+const EAN_L = ['3211', '2221', '2122', '1411', '1132', '1231', '1114', '1312', '1213', '3112'];
+/** A digit as the reader sees it: its two edge-to-similar-edge distances and its dark modules. */
+type DigitPattern = { digit: number; even: boolean; e1: number; e2: number; dark: number };
+const LEFT_DIGITS: DigitPattern[] = [];
+const RIGHT_DIGITS: DigitPattern[] = [];
+EAN_L.forEach((s, digit) => {
+    const w = Array.from(s, Number);
+    const g = [...w].reverse();
+    LEFT_DIGITS.push({ digit, even: false, e1: w[0] + w[1], e2: w[1] + w[2], dark: w[1] + w[3] });
+    LEFT_DIGITS.push({ digit, even: true, e1: g[0] + g[1], e2: g[1] + g[2], dark: g[1] + g[3] });
+    RIGHT_DIGITS.push({ digit, even: false, e1: w[0] + w[1], e2: w[1] + w[2], dark: w[0] + w[2] });
+});
+/** EAN-13: the parity (L = odd, G = even) of the six left digits encodes the first digit. */
+const EAN13_FIRST = ['LLLLLL', 'LLGLGG', 'LLGGLG', 'LLGGGL', 'LGLLGG', 'LGGLLG', 'LGGGLL', 'LGLGLG', 'LGLGGL', 'LGGLGL'];
+/** UPC-E, number system 0: the parity of the six digits encodes the check digit (system 1: inverted). */
+const UPCE_NS0 = ['GGGLLL', 'GGLGLL', 'GGLLGL', 'GGLLLG', 'GLGGLL', 'GLLGGL', 'GLLLGG', 'GLGLGL', 'GLGLLG', 'GLLGLG'];
+/** Light modules required before and after an EAN/UPC symbol (the specification asks for 7-11). */
+const EAN_QUIET = 4;
+/** Largest squared distance (modules²) between a digit's measured and nominal edge distances. */
+const DIGIT_MAX_D = 0.7;
+/** Runs of each symbol, guards included (quiet zones not). */
+const EAN13_RUNS = 3 + 24 + 5 + 24 + 3;
+const EAN8_RUNS = 3 + 16 + 5 + 16 + 3;
+const UPCE_RUNS = 3 + 24 + 6;
+
+/**
+ * Ink spread in modules (bars measured wider than nominal by it, spaces narrower), from a guard of
+ * one-module elements starting at `pos` (`n` runs, `firstBar` when it starts with a bar).
+ */
+function guardSpread(r: Float64Array, pos: number, n: number, firstBar: boolean, m: number): number {
+    let bars = 0, nb = 0, spaces = 0, ns = 0;
+    for (let k = 0; k < n; k++) {
+        if ((k % 2 === 0) === firstBar) { bars += r[pos + k]; nb++; } else { spaces += r[pos + k]; ns++; }
+    }
+    if (!nb || !ns) return 0;
+    const s = (bars / nb - spaces / ns) / (2 * m);
+    return s < -0.6 ? -0.6 : s > 0.6 ? 0.6 : s;
+}
+
+/** A guard of `n` one-module elements at `pos`: every element and every bar+space pair near nominal. */
+function guardOk(r: Float64Array, pos: number, n: number, m: number): boolean {
+    for (let k = 0; k < n; k++) {
+        const x = r[pos + k] / m;
+        if (x < 0.3 || x > 1.9) return false;
+        if (k > 0) {
+            const pair = (r[pos + k - 1] + r[pos + k]) / m;
+            if (pair < 1.35 || pair > 2.65) return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * The digit whose four runs start at `pos`, or null. `table` is LEFT_DIGITS (runs start with a space)
+ * or RIGHT_DIGITS (start with a bar). The two edge-to-similar-edge distances pick the pattern; the pairs
+ * that share them (1/7, 2/8) are told apart by their dark modules, corrected by the measured ink spread.
+ */
+function matchDigit(r: Float64Array, pos: number, table: DigitPattern[], m: number, spread: number): DigitPattern | null {
+    const a = r[pos], b = r[pos + 1], c = r[pos + 2], d = r[pos + 3];
+    const p = a + b + c + d;
+    // A digit is 7 modules; allow the perspective of a code held at an angle.
+    if (!(p > 0) || p < 5.2 * m || p > 8.8 * m) return null;
+    const k = 7 / p;
+    const t1 = (a + b) * k, t2 = (b + c) * k;
+    let best: DigitPattern | null = null;
+    let bestD = DIGIT_MAX_D;
+    for (const pt of table) {
+        const e = t1 - pt.e1, f = t2 - pt.e2;
+        const dist = e * e + f * f;
+        if (dist < bestD) { bestD = dist; best = pt; }
+    }
+    if (!best) return null;
+    const dark = (table === RIGHT_DIGITS ? a + c : b + d) * k - 2 * spread;
+    let pick = best;
+    for (const pt of table) {
+        if (pt !== best && pt.e1 === best.e1 && pt.e2 === best.e2 && pt.even === best.even
+            && Math.abs(dark - pt.dark) < Math.abs(dark - pick.dark)) pick = pt;
+    }
+    return pick;
+}
+
+/** GS1 check digit: weights 3 and 1 alternating from the digit next to the check digit. */
+function checkDigitOk(d: number[]): boolean {
+    const n = d.length;
+    let sum = 0;
+    for (let i = 0; i < n - 1; i++) sum += d[i] * ((n - 2 - i) % 2 === 0 ? 3 : 1);
+    return (10 - (sum % 10)) % 10 === d[n - 1];
+}
+
+/** The light run `at` is a quiet zone: wide enough, or (cut by the image border) at least 2.5 modules. */
+function quietAt(r: Float64Array, count: number, at: number, m: number, modules: number): boolean {
+    if (at < 0 || at >= count) return false;
+    const q = r[at];
+    return q >= modules * m || ((at === 0 || at === count - 1) && q >= 2.5 * m);
+}
+
+/** Module width of the `runs` runs at `i` spanning `modules` modules. */
+function moduleOf(r: Float64Array, i: number, runs: number, modules: number): number {
+    let w = 0;
+    for (let k = 0; k < runs; k++) w += r[i + k];
+    return w / modules;
+}
+
+/** Read `n` digits from `pos` (4 runs each) into `out`/`parity`; false when one does not match. */
+function readDigits(r: Float64Array, pos: number, n: number, table: DigitPattern[], m: number, spread: number, out: number[], parity: string[]): boolean {
+    for (let j = 0; j < n; j++) {
+        const pt = matchDigit(r, pos + 4 * j, table, m, spread);
+        if (!pt) return false;
+        out.push(pt.digit);
+        parity.push(pt.even ? 'G' : 'L');
+    }
+    return true;
+}
+
+/** EAN-13 (or UPC-A, its first digit 0) whose start guard is the dark run `i`. */
+function readEan13(r: Float64Array, count: number, i: number, o: Resolved): BarcodeRead | null {
+    if (i + EAN13_RUNS >= count) return null;
+    const m = moduleOf(r, i, EAN13_RUNS, 95);
+    if (!quietAt(r, count, i - 1, m, EAN_QUIET) || !quietAt(r, count, i + EAN13_RUNS, m, EAN_QUIET)) return null;
+    if (!guardOk(r, i, 3, m) || !guardOk(r, i + 27, 5, m) || !guardOk(r, i + 56, 3, m)) return null;
+    const digits: number[] = [];
+    const parity: string[] = [];
+    if (!readDigits(r, i + 3, 6, LEFT_DIGITS, m, guardSpread(r, i, 3, true, m), digits, parity)) return null;
+    if (!readDigits(r, i + 32, 6, RIGHT_DIGITS, m, guardSpread(r, i + 27, 5, false, m), digits, parity)) return null;
+    const first = EAN13_FIRST.indexOf(parity.slice(0, 6).join(''));
+    if (first < 0) return null;
+    const all = [first, ...digits];
+    if (!checkDigitOk(all)) return null;
+    if (first === 0) return o.upcA ? { text: all.slice(1).join(''), format: 'upc_a' } : null;
+    return o.ean13 ? { text: all.join(''), format: 'ean_13' } : null;
+}
+
+/** EAN-8 whose start guard is the dark run `i`. */
+function readEan8(r: Float64Array, count: number, i: number): BarcodeRead | null {
+    if (i + EAN8_RUNS >= count) return null;
+    const m = moduleOf(r, i, EAN8_RUNS, 67);
+    if (!quietAt(r, count, i - 1, m, EAN_QUIET) || !quietAt(r, count, i + EAN8_RUNS, m, EAN_QUIET)) return null;
+    if (!guardOk(r, i, 3, m) || !guardOk(r, i + 19, 5, m) || !guardOk(r, i + 40, 3, m)) return null;
+    const digits: number[] = [];
+    const parity: string[] = [];
+    if (!readDigits(r, i + 3, 4, LEFT_DIGITS, m, guardSpread(r, i, 3, true, m), digits, parity)) return null;
+    if (parity.includes('G')) return null; // EAN-8 has no even-parity digits
+    if (!readDigits(r, i + 24, 4, RIGHT_DIGITS, m, guardSpread(r, i + 19, 5, false, m), digits, parity)) return null;
+    if (!checkDigitOk(digits)) return null;
+    return { text: digits.join(''), format: 'ean_8' };
+}
+
+/** UPC-E digits (number system, six digits, check) as the UPC-A they abbreviate (11 digits + check). */
+function upcEToUpcA(ns: number, d: number[], check: number): number[] {
+    const last = d[5];
+    const body = last <= 2 ? [d[0], d[1], last, 0, 0, 0, 0, d[2], d[3], d[4]]
+        : last === 3 ? [d[0], d[1], d[2], 0, 0, 0, 0, 0, d[3], d[4]]
+            : last === 4 ? [d[0], d[1], d[2], d[3], 0, 0, 0, 0, 0, d[4]]
+                : [d[0], d[1], d[2], d[3], d[4], 0, 0, 0, 0, last];
+    return [ns, ...body, check];
+}
+
+/** UPC-E whose start guard is the dark run `i` (the 8-digit text BarcodeDetector reports). */
+function readUpcE(r: Float64Array, count: number, i: number): BarcodeRead | null {
+    if (i + UPCE_RUNS >= count) return null;
+    const m = moduleOf(r, i, UPCE_RUNS, 51);
+    if (!quietAt(r, count, i - 1, m, EAN_QUIET) || !quietAt(r, count, i + UPCE_RUNS, m, EAN_QUIET)) return null;
+    if (!guardOk(r, i, 3, m) || !guardOk(r, i + 27, 6, m)) return null;
+    const digits: number[] = [];
+    const parity: string[] = [];
+    if (!readDigits(r, i + 3, 6, LEFT_DIGITS, m, guardSpread(r, i, 3, true, m), digits, parity)) return null;
+    const pat = parity.join('');
+    let ns = 0;
+    let check = UPCE_NS0.indexOf(pat);
+    if (check < 0) {
+        ns = 1;
+        check = UPCE_NS0.indexOf(pat.replace(/[GL]/g, (c) => (c === 'G' ? 'L' : 'G')));
+        if (check < 0) return null;
+    }
+    if (!checkDigitOk(upcEToUpcA(ns, digits, check))) return null;
+    return { text: `${ns}${digits.join('')}${check}`, format: 'upc_e' };
+}
+
+/** Any enabled EAN/UPC symbol starting at a dark run preceded by a quiet zone. */
+function decodeUpcEanRuns(r: Float64Array, count: number, firstDark: boolean, o: Resolved): BarcodeRead | null {
+    for (let i = firstDark ? 2 : 1; i + UPCE_RUNS < count; i += 2) {
+        // Cheap pre-check: a start guard is bar-space-bar of one module each.
+        const g = (r[i] + r[i + 1] + r[i + 2]) / 3;
+        if (r[i] < 0.35 * g || r[i] > 1.65 * g || r[i + 1] < 0.35 * g || r[i + 1] > 1.65 * g || r[i + 2] < 0.35 * g || r[i + 2] > 1.65 * g) continue;
+        if (r[i - 1] < 2.5 * g) continue;
+        const found = ((o.ean13 || o.upcA) ? readEan13(r, count, i, o) : null)
+            ?? (o.ean8 ? readEan8(r, count, i) : null)
+            ?? (o.upcE ? readUpcE(r, count, i) : null);
+        if (found) return found;
+    }
+    return null;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Code 39
+// ---------------------------------------------------------------------------------------------
+
+/** Code 39 characters and their nine-element patterns (bar first; bit set = wide element). */
+const C39_ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ-. $/+%';
+const C39_CODES = [
+    0x034, 0x121, 0x061, 0x160, 0x031, 0x130, 0x070, 0x025, 0x124, 0x064,
+    0x109, 0x049, 0x148, 0x019, 0x118, 0x058, 0x00d, 0x10c, 0x04c, 0x01c,
+    0x103, 0x043, 0x142, 0x013, 0x112, 0x052, 0x007, 0x106, 0x046, 0x016,
+    0x181, 0x0c1, 0x1c0, 0x091, 0x190, 0x0d0, 0x085, 0x184, 0x0c4, 0x0a8,
+    0x0a2, 0x08a, 0x02a,
+];
+const C39_STAR = 0x094;
+const C39_CHAR = new Map<number, string>(C39_CODES.map((c, i) => [c, C39_ALPHABET[i]]));
+C39_CHAR.set(C39_STAR, '*');
+/** Start + stop with their gap: the shortest line a Code 39 symbol can be read on. */
+const C39_MIN_RUNS = 9 + 1 + 9;
+
+/**
+ * The Code 39 character whose nine runs start at `pos`: exactly three are wide, clearly wider than the
+ * six narrow ones. Returns the character, the runs' total width and the narrow element's width.
+ */
+function c39At(r: Float64Array, pos: number): { ch: string; width: number; narrow: number } | null {
+    const w: number[] = [];
+    let total = 0;
+    for (let k = 0; k < 9; k++) { w.push(r[pos + k]); total += r[pos + k]; }
+    const sorted = [...w].sort((a, b) => b - a);
+    const wideMin = sorted[2], narrowMax = sorted[3];
+    if (!(narrowMax > 0) || wideMin < narrowMax * 1.3) return null;
+    const cut = (wideMin + narrowMax) / 2;
+    let code = 0;
+    let narrow = 0;
+    for (let k = 0; k < 9; k++) {
+        const wide = w[k] > cut;
+        code = (code << 1) | (wide ? 1 : 0);
+        if (!wide) narrow += w[k];
+    }
+    const ch = C39_CHAR.get(code);
+    return ch === undefined ? null : { ch, width: total, narrow: narrow / 6 };
+}
+
+/** The Code 39 symbol (`*` … `*`) whose start character begins at the dark run `i`. */
+function readCode39At(r: Float64Array, count: number, i: number): string | null {
+    const start = c39At(r, i);
+    if (!start || start.ch !== '*') return null;
+    const x = start.narrow;
+    if (!quietAt(r, count, i - 1, x, 5)) return null;
+    let text = '';
+    let pos = i + 9;
+    for (;;) {
+        if (pos + 10 > count) return null;
+        const gap = r[pos];
+        if (gap > 3.5 * x) return null; // a wide light run: the symbol ended without its stop
+        const c = c39At(r, pos + 1);
+        if (!c) return null;
+        if (c.width > start.width * 1.35 || c.width * 1.35 < start.width) return null;
+        if (c.ch === '*') {
+            if (!text.length || !quietAt(r, count, pos + 10, x, 5)) return null;
+            return text;
+        }
+        text += c.ch;
+        if (text.length > 48) return null;
+        pos += 10;
+    }
+}
+
+function decodeCode39Runs(r: Float64Array, count: number, firstDark: boolean): string | null {
+    for (let i = firstDark ? 2 : 1; i + C39_MIN_RUNS < count; i += 2) {
+        const text = readCode39At(r, count, i);
+        if (text !== null) return text;
+    }
+    return null;
+}
+
+/** Every enabled symbology on one run-length encoded line (read in the given direction only). */
+function decodeAllRuns(r: Float64Array, count: number, firstDark: boolean, o: Resolved): BarcodeRead | null {
+    if (o.c128) {
+        const text = decodeCode128Runs(r, count, firstDark, o);
+        if (text !== null) return { text, format: 'code_128' };
+    }
+    if (!o.regCodeOnly && (o.ean13 || o.upcA || o.ean8 || o.upcE)) {
+        // EAN/UPC carry 8, 12 or 13 digits: never a registration code, so skipped under regCodeOnly.
+        const found = decodeUpcEanRuns(r, count, firstDark, o);
+        if (found) return found;
+    }
+    if (o.c39) {
+        const text = decodeCode39Runs(r, count, firstDark);
+        if (text !== null && (!o.regCodeOnly || isRegCode(text))) return { text, format: 'code_39' };
     }
     return null;
 }
@@ -348,16 +674,37 @@ function edgesToRuns(edges: Float64Array, ne: number, n: number, runs: Float64Ar
     return ne + 1;
 }
 
-function resolveOptions(opts: Code128ScanOptions): Resolved {
-    const regCodeOnly = opts.regCodeOnly ?? true;
-    return {
+/**
+ * `defaultRegCodeOnly`: the Code 128 entry points keep their historical default (true); the
+ * multi-symbology ones default to false — their caller wants to see whatever is read.
+ */
+function resolveOptions(opts: BarcodeScanOptions, defaultRegCodeOnly: boolean, defaultFormats: readonly BarcodeFormat[]): Resolved {
+    const regCodeOnly = opts.regCodeOnly ?? defaultRegCodeOnly;
+    const f = new Set(opts.formats ?? defaultFormats);
+    const o: Resolved = {
         regCodeOnly,
         quietZone: opts.quietZone ?? 2,
         minContrast: opts.minContrast ?? 16,
         window: opts.window ?? 0,
         maxD: opts.maxError ?? 1.1,
-        minRuns: regCodeOnly ? REG_RUNS : MIN_RUNS,
+        minRuns: 0,
+        c128Runs: regCodeOnly ? REG_RUNS : MIN_RUNS,
+        c128: f.has('code_128'),
+        ean13: f.has('ean_13'),
+        upcA: f.has('upc_a'),
+        ean8: f.has('ean_8'),
+        upcE: f.has('upc_e'),
+        c39: f.has('code_39'),
     };
+    // A symbol plus the light runs on both sides of it.
+    const needs: number[] = [];
+    if (o.c128) needs.push(o.c128Runs);
+    if (!regCodeOnly && (o.ean13 || o.upcA)) needs.push(EAN13_RUNS + 2);
+    if (!regCodeOnly && o.ean8) needs.push(EAN8_RUNS + 2);
+    if (!regCodeOnly && o.upcE) needs.push(UPCE_RUNS + 2);
+    if (o.c39) needs.push(C39_MIN_RUNS + 2);
+    o.minRuns = needs.length ? Math.min(...needs) : Number.MAX_SAFE_INTEGER;
+    return o;
 }
 
 /**
@@ -374,7 +721,7 @@ const PASSES: ReadonlyArray<Pass> = [
 ];
 
 /** Decode a scanline held in the shared work buffer `wk.line` (length `n`). */
-function decodeLine(n: number, o: Resolved, wk: Work, passes: ReadonlyArray<Pass> = PASSES): string | null {
+function decodeLine(n: number, o: Resolved, wk: Work, passes: ReadonlyArray<Pass> = PASSES): BarcodeRead | null {
     if (n < 30) return null;
     // Envelope window: wide (default ±n/20 px) so runs of 1-module elements, whose contrast blur
     // flattens, are still compared with the full black and white of wider neighbours.
@@ -404,13 +751,13 @@ function decodeLine(n: number, o: Resolved, wk: Work, passes: ReadonlyArray<Pass
         // plain pass merges most 1-module elements, and the sharpened passes recover them.)
         if (ne + 1 < o.minRuns) continue;
         const count = edgesToRuns(wk.edges, ne, n, wk.runs);
-        const fwd = decodeRuns(wk.runs, count, flag.firstDark, o);
+        const fwd = decodeAllRuns(wk.runs, count, flag.firstDark, o);
         if (fwd !== null) return fwd;
         // Read the same line right-to-left (upside-down code).
         const rev = wk.rev;
         for (let k = 0; k < count; k++) rev[k] = wk.runs[count - 1 - k];
         const lastDark = ((count - 1) % 2 === 0) === flag.firstDark;
-        const back = decodeRuns(rev, count, lastDark, o);
+        const back = decodeAllRuns(rev, count, lastDark, o);
         if (back !== null) return back;
     }
     return null;
@@ -422,10 +769,28 @@ function decodeLine(n: number, o: Resolved, wk: Work, passes: ReadonlyArray<Pass
  * zones verified) is found — or, with `regCodeOnly` (default), when the text is not a registration code.
  */
 export function decodeCode128Row(lum: ArrayLike<number>, opts: Code128ScanOptions = {}): string | null {
+    return decodeBarcodeRow(lum, { ...opts, regCodeOnly: opts.regCodeOnly ?? true, formats: ['code_128'] })?.text ?? null;
+}
+
+/**
+ * Decode one scanline in any of `opts.formats` (default: every built-in symbology), both directions.
+ * Returns the text and its symbology, or null. `regCodeOnly` defaults to FALSE here.
+ */
+export function decodeBarcodeRow(lum: ArrayLike<number>, opts: BarcodeScanOptions = {}): BarcodeRead | null {
     const n = lum.length;
     const wk = getWork(n);
     for (let i = 0; i < n; i++) wk.line[i] = lum[i];
-    return decodeLine(n, resolveOptions(opts), wk);
+    return decodeLine(n, resolveOptions(opts, false, BUILTIN_FORMATS), wk);
+}
+
+/** Human name of a symbology («EAN-13»), for BarcodeDetector's names too («qr_code» → «QR»). */
+export function formatLabel(format: string): string {
+    const known: Record<string, string> = {
+        code_128: 'Code 128', code_39: 'Code 39', code_93: 'Code 93', codabar: 'Codabar', ean_13: 'EAN-13', ean_8: 'EAN-8',
+        upc_a: 'UPC-A', upc_e: 'UPC-E', itf: 'ITF', qr_code: 'QR', data_matrix: 'Data Matrix', pdf417: 'PDF417', aztec: 'Aztec',
+    };
+    const f = String(format || '').trim();
+    return known[f] || f.replace(/_/g, ' ').toUpperCase();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -502,17 +867,28 @@ function centreOut(n: number): number[] {
  * (default 2) lines decoded it identically, otherwise null.
  */
 export function decodeCode128Image(img: ScanImage, opts: Code128ImageOptions = {}): string | null {
+    return decodeBarcodeImage(img, { ...opts, regCodeOnly: opts.regCodeOnly ?? true, formats: ['code_128'] })?.text ?? null;
+}
+
+/**
+ * `decodeCode128Image()` for every symbology in `opts.formats` (default: all built-in ones): the
+ * same scan order and the same `minAgree` lines agreeing on text AND symbology. `regCodeOnly` defaults
+ * to FALSE: the phone scanner shows whatever it reads and decides afterwards what to post.
+ */
+export function decodeBarcodeImage(img: ScanImage, opts: BarcodeImageOptions = {}): BarcodeRead | null {
     const { width: w, height: h } = img;
     if (!(w > 0 && h > 0) || !img.data) return null;
     const ch = img.channels ?? (img.data.length >= w * h * 4 ? 4 : 1);
-    const o = resolveOptions(opts);
+    const o = resolveOptions(opts, false, BUILTIN_FORMATS);
     const lines = Math.max(1, Math.min(64, Math.round(opts.lines ?? 15)));
     const margin = Math.max(0, Math.min(0.45, opts.margin ?? 0.1));
     const need = Math.max(1, Math.round(opts.minAgree ?? 2));
     const thickness = Math.max(1, Math.round(opts.thickness ?? 3));
     const columns = opts.columns !== false;
     const wk = getWork(Math.max(w, h));
+    // Votes per symbology AND text: the same digits read as two symbologies are two different reads.
     const votes = new Map<string, number>();
+    const reads = new Map<string, BarcodeRead>();
 
     const pass = (vertical: boolean, slope: number, count: number): string | null => {
         const extent = vertical ? w : h;
@@ -523,11 +899,13 @@ export function decodeCode128Image(img: ScanImage, opts: Code128ImageOptions = {
             if (at < 0 || at >= extent || scanned.has(at)) return null;
             scanned.add(at);
             const n = sampleLine(img, ch, vertical, at, slope, thickness, wk.line);
-            const r = decodeLine(n, o, wk);
-            if (r === null) return null;
-            const c = (votes.get(r) ?? 0) + 1;
-            votes.set(r, c);
-            return c >= need ? r : '';
+            const hit = decodeLine(n, o, wk);
+            if (hit === null) return null;
+            const key = `${hit.format}\n${hit.text}`;
+            reads.set(key, hit);
+            const c = (votes.get(key) ?? 0) + 1;
+            votes.set(key, c);
+            return c >= need ? key : '';
         };
         const near = Math.max(2, Math.round(step / 4));
         for (const k of centreOut(count)) {
@@ -546,12 +924,12 @@ export function decodeCode128Image(img: ScanImage, opts: Code128ImageOptions = {
     };
 
     const found = pass(false, 0, lines) ?? (columns ? pass(true, 0, lines) : null);
-    if (found) return found;
+    if (found) return reads.get(found) ?? null;
     for (const deg of opts.slants ?? [12, -12, 24, -24]) {
         if (!deg || Math.abs(deg) >= 45) continue;
         const slope = Math.tan((deg * Math.PI) / 180);
         const r = pass(false, slope, lines) ?? (columns ? pass(true, slope, lines) : null);
-        if (r) return r;
+        if (r) return reads.get(r) ?? null;
     }
     return null;
 }
@@ -619,4 +997,64 @@ export function scanVideoFrame(
     ctx.drawImage(video, 0, 0, w, h);
     const frame = ctx.getImageData(0, 0, w, h);
     return decodeCode128Image({ data: frame.data, width: w, height: h, channels: 4 }, opts);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The aiming band, at full resolution
+// ---------------------------------------------------------------------------------------------
+
+export type Rect = { x: number; y: number; width: number; height: number };
+
+/**
+ * The part of a camera frame shown under the on-screen aiming frame, in VIDEO pixels. The video is
+ * drawn with `object-fit: cover` into a `view` box (CSS px); `frame` is the aiming frame's box relative
+ * to that view. The band is widened by `padX` / `padY` (fractions of the frame's width / height: nobody
+ * aims exactly) and clamped to the video. Null when the geometry is unusable (nothing laid out yet):
+ * the caller then decodes the whole frame.
+ */
+export function aimCrop(videoW: number, videoH: number, view: { width: number; height: number }, frame: Rect, padX = 0.1, padY = 0.6): Rect | null {
+    if (!(videoW > 0 && videoH > 0 && view.width > 0 && view.height > 0 && frame.width > 0 && frame.height > 0)) return null;
+    const s = Math.max(view.width / videoW, view.height / videoH); // cover: the video fills the view
+    const offX = (view.width - videoW * s) / 2;
+    const offY = (view.height - videoH * s) / 2;
+    const x0 = Math.max(0, Math.floor((frame.x - frame.width * padX - offX) / s));
+    const x1 = Math.min(videoW, Math.ceil((frame.x + frame.width * (1 + padX) - offX) / s));
+    const y0 = Math.max(0, Math.floor((frame.y - frame.height * padY - offY) / s));
+    const y1 = Math.min(videoH, Math.ceil((frame.y + frame.height * (1 + padY) - offY) / s));
+    if (x1 - x0 < 16 || y1 - y0 < 8) return null;
+    return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+}
+
+/** What `decodeVideoRegion()` draws from and onto (an HTMLVideoElement and an HTMLCanvasElement). */
+export type VideoLike = { videoWidth: number; videoHeight: number };
+export type CanvasLike = {
+    width: number;
+    height: number;
+    getContext(type: '2d', opts?: { willReadFrequently?: boolean }): {
+        drawImage(src: unknown, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number, dw: number, dh: number): void;
+        getImageData(x: number, y: number, w: number, h: number): { data: ArrayLike<number> };
+    } | null;
+};
+
+/**
+ * Draw `region` of the current video frame (default: the whole frame) onto `canvas` and decode it.
+ * The region keeps its full camera resolution up to `maxSide` px (default 1600) on its longer side:
+ * downscaling the WHOLE frame first (what 2.15.0 did) thins a product barcode's 1-module bars below a
+ * pixel. `regCodeOnly` defaults to false. Returns null when the video has no frame yet or nothing is read.
+ */
+export function decodeVideoRegion(video: VideoLike, canvas: CanvasLike, region: Rect | null, opts: BarcodeImageOptions & { maxSide?: number } = {}): BarcodeRead | null {
+    const vw = video?.videoWidth, vh = video?.videoHeight;
+    if (!vw || !vh || !canvas) return null;
+    const src = region ?? { x: 0, y: 0, width: vw, height: vh };
+    const maxSide = opts.maxSide ?? (region ? 1600 : 1280);
+    const scale = Math.min(1, maxSide / Math.max(src.width, src.height));
+    const w = Math.max(1, Math.round(src.width * scale));
+    const h = Math.max(1, Math.round(src.height * scale));
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.drawImage(video, src.x, src.y, src.width, src.height, 0, 0, w, h);
+    const frame = ctx.getImageData(0, 0, w, h);
+    return decodeBarcodeImage({ data: frame.data, width: w, height: h, channels: 4 }, opts);
 }

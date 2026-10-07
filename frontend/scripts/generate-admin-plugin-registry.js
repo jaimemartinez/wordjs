@@ -261,8 +261,11 @@ export default function PluginAdminPage() {
         return createRemotePluginComponent(slug, "admin", () => <PluginNotFound slug={slug} />);
     }, [slug]);
 
+    // overscroll-y-contain: this wrapper is the page's scroller. Reaching its end used to chain the drag to
+    // the document, which iOS rubber-banded — admin header included. Vertical only, so a horizontal
+    // swipe still reaches the browser's back/forward gesture.
     return (
-        <div className={\`plugin-admin-wrapper plugin-admin-\${slug} h-full overflow-y-auto custom-scrollbar\`}>
+        <div className={\`plugin-admin-wrapper plugin-admin-\${slug} h-full overflow-y-auto overscroll-y-contain custom-scrollbar\`}>
             {themeStyle && <style dangerouslySetInnerHTML={{ __html: themeStyle }} />}
             {hasCss && <link rel="stylesheet" href={cssUrl} />}
             <Suspense fallback={<LoadingFallback />}>

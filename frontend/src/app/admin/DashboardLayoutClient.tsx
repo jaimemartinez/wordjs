@@ -164,7 +164,7 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
 
     if (isLoading) {
         return (
-            <div className="flex h-screen items-center justify-center bg-gray-100">
+            <div className="flex h-dvh items-center justify-center bg-gray-100">
                 <div className="animate-spin rounded-full h-12 w-12 border-4 border-blue-500 border-t-transparent"></div>
             </div>
         );
@@ -227,8 +227,14 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
         }).filter((banner) => !(banner.kind === "link-base" && linkBaseDismissed))
         : [];
 
+    // THE SHELL IS EXACTLY THE VISIBLE VIEWPORT. `h-screen` is 100vh, which iOS resolves to the LARGE
+    // viewport (toolbars hidden) while html/body are 100% of the small one: the document came out taller
+    // than the screen by the toolbar's height, so a drag scrolled and rubber-banded the whole document —
+    // header included — instead of the page's own scroller. `h-dvh` follows the toolbar. The horizontal
+    // safe-area padding keeps the shell out of the notch in landscape now that the admin viewport is
+    // `viewport-fit=cover` (app/admin/layout.tsx); env() is 0 everywhere else, so desktop is unchanged.
     return (
-        <div className="flex h-screen bg-gray-100 overflow-hidden relative">
+        <div data-wjs-admin-shell="" className="flex h-dvh bg-gray-100 overflow-hidden relative pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
             <Sidebar
                 isOpen={sidebarOpen}
                 onClose={() => setSidebarOpen(false)}
@@ -240,7 +246,7 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
                 onClick={() => setIsCollapsed(!isCollapsed)}
                 className={`
                     hidden md:flex absolute top-10 z-[5003] w-8 h-8 bg-white border border-gray-200 rounded-full items-center justify-center text-gray-500 hover:text-blue-500 hover:border-blue-200 shadow-lg transition-all duration-500 [transition-timing-function:cubic-bezier(0.4,0,0.2,1)]
-                    ${isCollapsed ? 'left-[96px]' : 'left-[304px]'}
+                    ${isCollapsed ? 'left-[calc(96px+env(safe-area-inset-left))]' : 'left-[calc(304px+env(safe-area-inset-left))]'}
                 `}
                 title={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
             >
@@ -248,8 +254,11 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
             </button>
 
             <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
-                {/* Mobile Header */}
-                <header className="md:hidden bg-white border-b p-4 flex items-center justify-between sticky top-0 z-[5000] flex-shrink-0">
+                {/* Mobile Header. `relative`, not `sticky`: the nearest scroller is this overflow-hidden
+                    column, so sticky never stuck — it only made the header look pinned while the whole
+                    document moved under the finger. Same stacking (positioned, z-5000). The top padding
+                    clears the status bar when the admin runs full-screen (viewport-fit=cover). */}
+                <header className="md:hidden bg-white border-b p-4 pt-[max(1rem,env(safe-area-inset-top))] flex items-center justify-between relative z-[5000] flex-shrink-0">
                     <div className="flex items-center gap-3">
                         <button
                             onClick={() => setSidebarOpen(true)}

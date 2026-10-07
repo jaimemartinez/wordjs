@@ -85,6 +85,23 @@ test('pack:plugin writes <slug>-<version>.zip with a single slug root and no loc
     assert.deepStrictEqual(manifest, MANIFEST, 'manifest untouched when there is nothing to declare');
 });
 
+test('a plugin with an admin page ships the Tailwind classes its UI uses at client/admin/admin.css', () => {
+    // Uploaded through Admin → Plugins, the plugin is loaded at runtime from its own bundle: the host build
+    // never compiled its classes. The packed stylesheet, which the admin shell links, has to carry them.
+    const manifest = { ...MANIFEST, frontend: { adminPage: { entry: './client/admin/page.tsx', slug: 'styled' } } };
+    const f = fixture('styled', manifest, OK_INDEX);
+    const dir = path.join(f.plugins, 'styled');
+    fs.mkdirSync(path.join(dir, 'client', 'admin'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'client', 'admin', 'page.tsx'),
+        'export default function A() { return <div className="bg-black/80 aspect-[2.6/1]" />; }\n');
+    const { names } = packOk('styled', f);
+    assert.ok(names.includes('styled/client/admin/admin.css'), names.join('\n'));
+    assert.ok(!names.includes('styled/dist/admin.css'), 'the build\'s intermediate copy is not shipped twice');
+    const css = new AdmZip(path.join(f.out, 'styled-1.2.3.zip')).readAsText('styled/client/admin/admin.css');
+    assert.ok(css.includes('.bg-black\\/80') && css.includes('.aspect-\\[2\\.6\\/1\\]'), 'the compiled classes are in the packed stylesheet');
+    assert.ok(!fs.existsSync(path.join(dir, 'client', 'admin', 'admin.css')), 'the plugin folder itself is never written');
+});
+
 test('shared dependencies: package.json deps go into the manifest for the server to install, node_modules stays out', () => {
     const f = fixture('shared', { ...MANIFEST, dependencies: { 'already-declared': '^2.0.0' } },
         "const a = require('left-pad'); const b = require('@acme/util/sub'); module.exports = { init() {} };\n",
