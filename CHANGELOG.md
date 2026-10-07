@@ -26,6 +26,17 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **Mail Server 2.2.3 — direct-MX delivery to a host with an invalid certificate takes the logged
+  downgrade again.** The plugin verifies the MX host's STARTTLS certificate and, when that verification
+  fails, retries that one host with verification off and logs `[MailServer][TLS]`. The check matched the
+  error's `code` against the certificate-failure codes, but nodemailer rewrites `code` to `ESOCKET` for every
+  socket error, so it never matched: mail to an MX with a self-signed, expired or mismatched certificate
+  failed instead. The failure is now recognised from what nodemailer leaves intact — the verify reason Node
+  puts in the message, anchored and only on the socket-error shape. The policy is unchanged: the same five
+  failures (self-signed leaf or chain root, an issuer neither sent nor trusted, expired, hostname mismatch)
+  and nothing else — a reset, a TLS protocol error, a refused connection or an SMTP reply quoting the same
+  text is never downgraded, and the downgraded retry still upgrades to STARTTLS when the host offers it. A
+  new suite drives each case through the real nodemailer against a local TLS server.
 - **Conference Manager 2.2.0 — the plugin can be activated again, and 23 defects from a functional audit are
   closed.** Activation had failed since the 2026-08-15 hardening (a `DEFAULT '{}'` column definition was
   refused by the column-definition allowlist — fixed in core, see above). In the plugin: the portal's bulk
