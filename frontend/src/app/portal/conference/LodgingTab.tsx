@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useToast } from "@/contexts/ToastContext";
 import {
     attendeeName,
@@ -139,8 +139,10 @@ export default function Hospedajes({ authHeaders, onLocationRefresh, storageScop
     const closeEditor = useCallback(() => setEditor(null), []);
     const mounted = useRef(true);
     // `authHeaders` is a closure over the page's token; keep the latest without re-running the load effect.
+    // Updated in a layout effect, not during render: it runs before every passive effect, so the load
+    // effect below always reads the current headers.
     const headersRef = useRef(authHeaders);
-    headersRef.current = authHeaders;
+    useLayoutEffect(() => { headersRef.current = authHeaders; }, [authHeaders]);
 
     // Whether a payload has ever been received — a failed refetch keeps the last good payload on
     // screen (with a toast); a failed FIRST load shows the error card instead of the empty state.

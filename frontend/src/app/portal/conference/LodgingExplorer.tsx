@@ -1115,6 +1115,14 @@ export default function LodgingExplorer({
     const [focusTick, setFocusTick] = useState(0);
     /** dragenter/dragleave depth per drop target (dragleave fires for every child crossed; WebKit gives no relatedTarget). */
     const dragDepth = useRef(new Map<string, number>());
+    /** Adds `delta` to a drop target's depth and returns the new depth (0 removes the entry). */
+    const bumpDragDepth = useCallback((key: string, delta: number): number => {
+        const depth = (dragDepth.current.get(key) ?? 0) + delta;
+        if (depth > 0) dragDepth.current.set(key, depth);
+        else dragDepth.current.delete(key);
+        return depth;
+    }, []);
+    const clearDragDepth = useCallback(() => dragDepth.current.clear(), []);
     const rootRef = useRef<HTMLDivElement>(null);
     const headingRef = useRef<HTMLHeadingElement>(null);
     const panelRef = useRef<HTMLElement>(null);
@@ -1290,7 +1298,7 @@ export default function LodgingExplorer({
             e.dataTransfer.effectAllowed = 'move';
             setDragging({ id: attendeeId, fromRoomId });
         },
-        onDragEnd: () => { dragDepth.current.clear(); setDragging(null); setDropHover(null); },
+        onDragEnd: () => { clearDragDepth(); setDragging(null); setDropHover(null); },
     });
 
     const dropTargetProps = (toRoomId: number | null): DropProps => (!editable ? {} : {
@@ -1298,8 +1306,7 @@ export default function LodgingExplorer({
             // Foreign drags (text or a file from outside the tab) are never counted: no dragend would reset them.
             if (!dragging || !canDrag) return;
             e.preventDefault();
-            const key = dropKey(toRoomId);
-            dragDepth.current.set(key, (dragDepth.current.get(key) ?? 0) + 1);
+            bumpDragDepth(dropKey(toRoomId), 1);
         },
         onDragOver: (e) => {
             if (!dragging || !canDrag) return;
@@ -1312,16 +1319,14 @@ export default function LodgingExplorer({
         },
         onDragLeave: () => {
             const key = dropKey(toRoomId);
-            const depth = (dragDepth.current.get(key) ?? 0) - 1;
-            if (depth > 0) { dragDepth.current.set(key, depth); return; }
-            dragDepth.current.delete(key);
+            if (bumpDragDepth(key, -1) > 0) return;
             setDropHover((h) => (h && h.key === key ? null : h));
         },
         onDrop: (e) => {
             e.preventDefault();
             e.stopPropagation();
             const from = dragging;
-            dragDepth.current.clear();
+            clearDragDepth();
             setDragging(null);
             setDropHover(null);
             if (!from || !canDrag) return;
