@@ -6,31 +6,6 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
-### Added
-
-- **`npm run pack:plugin -- <slug> [--dir <folder>]` packages a plugin into an installable ZIP.** It
-  checks the manifest, builds the frontend bundles, runs the installer's permission check and AST scan
-  on exactly what is packed, and writes `release/plugins/<slug>-<version>.zip` without `data/`, the
-  working `node_modules/` or OS junk, refusing anything the upload would reject. npm dependencies are
-  handled without flags: the plugin's `package.json` dependencies are declared in the packed manifest
-  for the server to install, or — for `"bundled": true` and for packages the server will not install
-  itself, such as native builds — a fresh production-only `node_modules/` ships in the ZIP; a required
-  package declared nowhere stops the pack.
-- **Dev-mode "Build & download ZIP" in `/admin/plugins`.** With `NODE_ENV=development`, each plugin card
-  offers a button that runs the same packer on the installed plugin (`POST /api/v1/plugins/:slug/pack`,
-  admin-only) and saves `<slug>-<version>.zip`, or shows the packer's refusal reason. Outside development
-  the route answers 404 and `GET /plugins` reports `packable: false`, so the button is hidden. `--dir` (and `WORDJS_PLUGINS_DIR` for `build-plugin.js`)
-  lets a private plugin live outside `backend/plugins/`. Documented in `documentation/plugins.md` §4–5.
-
-### Changed
-
-- **`create-wordjs` is published to npm with trusted publishing, not a stored token.** npm restricted the
-  long-lived tokens that bypass two-factor authentication, and the release workflow's `NPM_TOKEN` stopped
-  being accepted (the 2.3.0 publish failed with E404). The `npm-publish` job in `release.yml` now
-  exchanges its GitHub OIDC token for a one-time publish credential (`id-token: write`, npm ≥ 11.5.1), so
-  no npm credential is stored in the repository and each version carries provenance. It needs a trusted
-  publisher configured once on npmjs.com for `jaimemartinez/wordjs`, workflow `release.yml`.
-
 ### Security
 
 - **Plugin `dependencies` accept only plain npm registry version ranges.** The host installs a plugin's
@@ -68,6 +43,46 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   whole plugin folder, including its top-level `data/` (mail-server's `data/.mailenc` encryption key and
   attachments), `node_modules/` and `.git`. It now uses the same file rule as the plugin packer: no
   top-level `data/`, no `node_modules/` or `.git`, no OS junk and no symbolic links.
+
+### Added
+
+- **`npm run pack:plugin -- <slug> [--dir <folder>]` packages a plugin into an installable ZIP.** It
+  checks the manifest, builds the frontend bundles, runs the installer's permission check and AST scan
+  on exactly what is packed, and writes `release/plugins/<slug>-<version>.zip` without `data/`, the
+  working `node_modules/` or OS junk, refusing anything the upload would reject. npm dependencies are
+  handled without flags: the plugin's `package.json` dependencies are declared in the packed manifest
+  for the server to install, or — for `"bundled": true` and for packages the server will not install
+  itself, such as native builds — a fresh production-only `node_modules/` ships in the ZIP; a required
+  package declared nowhere stops the pack.
+- **Dev-mode "Build & download ZIP" in `/admin/plugins`.** With `NODE_ENV=development`, each plugin card
+  offers a button that runs the same packer on the installed plugin (`POST /api/v1/plugins/:slug/pack`,
+  admin-only) and saves `<slug>-<version>.zip`, or shows the packer's refusal reason. Outside development
+  the route answers 404 and `GET /plugins` reports `packable: false`, so the button is hidden. `--dir` (and `WORDJS_PLUGINS_DIR` for `build-plugin.js`)
+  lets a private plugin live outside `backend/plugins/`. Documented in `documentation/plugins.md` §4–5.
+
+### Changed
+
+- **`create-wordjs` is published to npm with trusted publishing, not a stored token.** npm restricted the
+  long-lived tokens that bypass two-factor authentication, and the release workflow's `NPM_TOKEN` stopped
+  being accepted (the 2.3.0 publish failed with E404). The `npm-publish` job in `release.yml` now
+  exchanges its GitHub OIDC token for a one-time publish credential (`id-token: write`, npm ≥ 11.5.1), so
+  no npm credential is stored in the repository and each version carries provenance. It needs a trusted
+  publisher configured once on npmjs.com for `jaimemartinez/wordjs`, workflow `release.yml`.
+
+### Fixed
+
+- **The F6 performance budget no longer fails the Linux CI on unchanged code.** Its ratio ceilings were
+  measured on one Windows host and judged on the Linux runners too, where the reference workload
+  (autocommit inserts) is cheaper and the mostly-CPU operations read up to ~2.5x their Windows ratios —
+  `contentRender` failed the Backend job at 0.183x and 0.187x against a 0.18x ceiling.
+  `performanceBudget` in `backend/f0-baseline.json` (schema 2) now keeps the host-independent fields once
+  and one calibration per platform under `calibrations.<platform>`: `linux` minted from 104 rounds the CI
+  perf job had recorded, at 1.5x the worst round, and the existing `win32` one. A platform with no
+  calibration has its ratio comparison skipped with the reason instead of borrowing another platform's;
+  `verify:f0` requires a `linux` calibration. `perf-calibrate.mjs` mints one platform's calibration,
+  can reduce already-recorded CI artifacts with `--from`, and reports a re-mint looser than the committed
+  ceiling as an error. The CI `Performance budgets` job now enforces the `linux` calibration on every
+  push and pull request (it is still not a required check).
 
 ## [2.3.0] - 2026-10-07
 
