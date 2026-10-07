@@ -248,9 +248,9 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   an hour after an update a browser ran the new bundle with the old classes. The host stylesheet also scans
   the first-party catalog sources (`@source "../../../marketplace/plugins/**/*.{ts,tsx}"`, about +5 KB
   gzipped), which puts the catalog's own variants in the host's order on a newer core and keeps an older
-  package styled there. The other catalog plugins keep their version numbers: their packages now carry the
-  compiled classes too, but an installed copy only receives them with its next version (on this core the
-  host stylesheet already has them). `wordjs pack` honours `WORDJS_PLUGINS_DIR`, like `build-plugin.js`.
+  package styled there. Every catalog package now carries its compiled classes, and installed copies
+  receive them with the patch version this release offers each catalog plugin (the `browser:script`
+  bump above). `wordjs pack` honours `WORDJS_PLUGINS_DIR`, like `build-plugin.js`.
 - **The admin no longer slides and bounces as a whole on iOS.** The shell and the sidebar were `h-screen`
   (100vh, the LARGE viewport on iOS), so the document was taller than the screen and a drag moved the
   whole page, header included. They are `h-dvh` now; the admin document does not overscroll vertically

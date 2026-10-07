@@ -88,7 +88,11 @@ test('pack:plugin writes <slug>-<version>.zip with a single slug root and no loc
 test('a plugin with an admin page ships the Tailwind classes its UI uses at client/admin/admin.css', () => {
     // Uploaded through Admin → Plugins, the plugin is loaded at runtime from its own bundle: the host build
     // never compiled its classes. The packed stylesheet, which the admin shell links, has to carry them.
-    const manifest = { ...MANIFEST, frontend: { adminPage: { entry: './client/admin/page.tsx', slug: 'styled' } } };
+    const manifest = {
+        ...MANIFEST,
+        permissions: [{ scope: 'browser', access: 'script', reason: 'Renders the admin page.' }],
+        frontend: { adminPage: { entry: './client/admin/page.tsx', slug: 'styled' } },
+    };
     const f = fixture('styled', manifest, OK_INDEX);
     const dir = path.join(f.plugins, 'styled');
     fs.mkdirSync(path.join(dir, 'client', 'admin'), { recursive: true });
