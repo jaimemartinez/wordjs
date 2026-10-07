@@ -15,6 +15,7 @@ import { cache } from 'react';
 import type { Metadata } from 'next';
 import type { Post } from './api';
 import { THEME_CONTRACT } from '@/generated/visual-contract.generated';
+import { HERMETIC_BACKEND_BASE, isHermeticBuild } from '../../hermetic-build.js';
 
 const THEME_ASSET_NAME = new RegExp(THEME_CONTRACT.assetNamePattern);
 
@@ -100,8 +101,12 @@ function sanitizeBackendBase(candidate: string): string | null {
  *  - monolith: the in-process backend's plain-HTTP loopback listener (self-signed TLS never blocks SSR)
  *  - split:    the backend's own HTTP port (default 4000), read from wordjs-config.json
  *  - override: INTERNAL_API_URL (full `.../api/v1`) wins when set
+ *  - release build: WORDJS_HERMETIC_BUILD=1 overrides ALL of the above with a base fetch() refuses,
+ *    so a release packaged on a machine with a running dev backend cannot prerender its content
+ *    (see hermetic-build.js for why the fetch still happens instead of being skipped)
  */
 function backendBaseCandidates(): string[] {
+    if (isHermeticBuild()) return [HERMETIC_BACKEND_BASE];
     if (process.env.WORDJS_MODE === 'mono') {
         return [`${process.env.WORDJS_MONO_ORIGIN || 'http://127.0.0.1:4000'}/api/v1`, MONO_BACKEND_BASE];
     }
@@ -208,6 +213,8 @@ export function backendUrl(base: string, endpoint: string): string | null {
 // Exported alongside resolveServerBase for the same reason — see its comment.
 let _pubHost: { value: { host: string; proto: string } | null; at: number } | null = null;
 export function configuredPublicHost(): { host: string; proto: string } | null {
+    // A release build has no site: the packaging machine's siteUrl is not the deployment's.
+    if (isHermeticBuild()) return null;
     if (_pubHost && Date.now() - _pubHost.at < 10_000) return _pubHost.value;
     let value: { host: string; proto: string } | null = null;
     try {

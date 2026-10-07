@@ -1,5 +1,6 @@
 import { applyCsrfHeader, csrfHeaders } from './csrf';
 import { createContentClient } from './generated/content-client.generated';
+import { HERMETIC_BACKEND_BASE, isHermeticBuild } from '../../hermetic-build.js';
 export type {
     ContentCreateInput,
     ContentRecord,
@@ -16,6 +17,8 @@ const getBaseUrl = () => {
         return '/api/v1';
     }
     // Server-side (SSR):
+    // Release build: no backend at all, the same answer lib/server-api.ts gives (see hermetic-build.js).
+    if (isHermeticBuild()) return HERMETIC_BACKEND_BASE;
     // Monolith mode: hit the in-process backend over its loopback HTTP listener (plain HTTP, so the
     // public HTTPS self-signed cert never blocks server-side fetches).
     if (process.env.WORDJS_MODE === 'mono') {

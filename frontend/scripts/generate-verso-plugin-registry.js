@@ -20,6 +20,7 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const { releasePluginSelection } = require('./hermetic-plugins');
 const { resolveBlockEntry, resolveBlockExports, toPascalCase } = require('../../backend/scripts/plugin-block-contract');
 
 // WORDJS_PLUGINS_DIR / WORDJS_VERSO_REGISTRY_OUT let the compatibility test drive THIS script — the
@@ -31,10 +32,17 @@ const PLUGINS_DIR = path.resolve(process.env.WORDJS_PLUGINS_DIR || path.resolve(
 const OUTPUT_FILE = path.resolve(process.env.WORDJS_VERSO_REGISTRY_OUT || path.resolve(__dirname, '../src/lib/versoPluginRegistry.ts'));
 const API_URL = 'http://localhost:3000/api/v1/plugins/active';
 
+// RELEASE BUILD (WORDJS_HERMETIC_BUILD=1): the plugins compiled in are the ones git tracks — never
+// what this machine's running backend reports as active, nor its untracked plugin folders. See
+// hermetic-plugins.js. null outside a release build.
+const RELEASE = releasePluginSelection(PLUGINS_DIR);
+
 /**
  * Fetch active plugins from backend API
  */
 function fetchActivePlugins() {
+    // Release build: no active-list filter — every tracked plugin, exactly as a clean CI build has.
+    if (RELEASE) return Promise.resolve(null);
     // Authoritative path: the backend (regenerateRegistry) passes the active list via env when it
     // spawns this script — no network, no race with uninstall's dir deletion, and independent of
     // whether the dev server listens on http or https (http.get fails against an https listener,
@@ -82,7 +90,8 @@ function discoverBlockPlugins() {
 
     const folders = fs.readdirSync(PLUGINS_DIR, { withFileTypes: true })
         .filter(d => d.isDirectory())
-        .map(d => d.name);
+        .map(d => d.name)
+        .filter(name => !RELEASE || RELEASE.includes(name));
 
     for (const folder of folders) {
         const manifestPath = path.join(PLUGINS_DIR, folder, 'manifest.json');

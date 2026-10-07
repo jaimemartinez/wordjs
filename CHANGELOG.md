@@ -34,6 +34,57 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **Sessions issued right after the install survive the first restart.** A fresh instance signs with a
+  per-boot random JWT secret until it is configured, and `POST /setup/install` generated a *different* one
+  and wrote it to `wordjs-config.json` while the running process kept signing with the first — so the
+  wizard's own auto-login and every login made before the first backend restart were answered `401
+  rest_token_invalid` once the restart loaded the persisted secret. The same happened on an enrolled
+  separate-mode node, where the installer also rotated away the secret `node-join` had written. The
+  installer now persists the secret the process is already signing with, so the live and persisted values
+  never differ and the live secret never changes mid-process (keys derived from it at load, such as the
+  collaborative editor's replica identity, stay valid). **A `jwtSecret` written into a config before the
+  install (by hand, `node-join`, `npm run setup`) is therefore now kept, where the installer used to
+  replace it.** So that a weak value cannot become the permanent key, a not-yet-installed config's
+  `jwtSecret` is replaced at boot, before anything signs with it, when it is shorter than 64 characters,
+  not a string, or a placeholder printed in this repository (such as the `auto-generated-secure-secret` of
+  the deployment guide's old example config, which the guide no longer shows). An installed site's
+  secret is never rotated. Every JWT secret the backend generates (the per-boot one and the boot-time
+  replacement) is now 64 random bytes, as the installer's was. Covered in monolith, split and enrolled-node
+  modes by a backend test that installs, restarts and re-authenticates, including a session forged with a
+  pre-seeded placeholder, and by the split-mode leg of `scripts/smoke-deploy.sh`.
+- **Mail Server 2.2.3 — direct-MX delivery to a host with an invalid certificate takes the logged
+  downgrade again.** The plugin verifies the MX host's STARTTLS certificate and, when that verification
+  fails, retries that one host with verification off and logs `[MailServer][TLS]`. The check matched the
+  error's `code` against the certificate-failure codes, but nodemailer rewrites `code` to `ESOCKET` for every
+  socket error, so it never matched: mail to an MX with a self-signed, expired or mismatched certificate
+  failed instead. The failure is now recognised from what nodemailer leaves intact — the verify reason Node
+  puts in the message, anchored and only on the socket-error shape. The policy is unchanged: the same five
+  failures (self-signed leaf or chain root, an issuer neither sent nor trusted, expired, hostname mismatch)
+  and nothing else — a reset, a TLS protocol error, a refused connection or an SMTP reply quoting the same
+  text is never downgraded, and the downgraded retry still upgrades to STARTTLS when the host offers it. A
+  new suite drives each case through the real nodemailer against a local TLS server.
+- **A release bundle packaged on a developer machine no longer ships that machine's site.** `npm run
+  bundle-release` runs `next build`, which prerenders pages, and its server-side reads went to whatever
+  backend the machine offered — `wordjs-config.json`, or `http://localhost:4000` without one. CI builds
+  from a clean checkout with nothing listening, so published releases were unaffected; a local build with
+  a dev backend running prerendered private content from that running dev backend into the bundle (its
+  site title on every prerendered page, its posts as prerendered paths) and baked that machine's gateway
+  into the `/api` rewrite. `.next/cache/fetch-cache` also carried an earlier build's backend answers into
+  the next build. The packager now deletes `frontend/.next/cache` and builds with
+  `WORDJS_HERMETIC_BUILD=1` (`frontend/hermetic-build.js`): server-side reads go to a base `fetch()`
+  refuses outright (port 1 is on the Fetch standard's bad-port list) — still issued, so every page keeps
+  the same ISR window a CI build gives it — and the rewrite is the compiled-in default whatever the
+  config or `WORDJS_BACKEND_URL`/`WORDJS_MODE` say. The same flag closes the prebuild plugin registries:
+  they used to ask the running backend which plugins are active and otherwise list every folder under
+  `backend/plugins`, untracked private ones included, so `next build` compiled that machine's local
+  plugins into the shipped `.next`; now they list only the plugins git tracks and ask nothing
+  (`frontend/scripts/hermetic-plugins.js`). The shell's `NEXT_PUBLIC_*` variables are dropped from the
+  build, and a `frontend/.env*` file that sets one stops it, since Next inlines those values. A post-build
+  check (`scripts/release-hermetic-check.js`) then fails the bundle on any trace of a live backend — a
+  fetch-cache entry, a path prerendered from `generateStaticParams`, a prerendered title other than the
+  default `WordJS`, a non-default API rewrite — or on a plugin module git does not track in the generated
+  registries; a check that cannot look (a missing registry, a page whose HTML is not where it reads it)
+  fails instead of passing.
 - **Conference Manager 2.2.0 — the plugin can be activated again, and 23 defects from a functional audit are
   closed.** Activation had failed since the 2026-08-15 hardening (a `DEFAULT '{}'` column definition was
   refused by the column-definition allowlist — fixed in core, see above). In the plugin: the portal's bulk

@@ -149,7 +149,7 @@ what Next's own rewrite proxy sends (upstream `Host` = the target, caller's host
 `x-forwarded-host`) so the backend's CSRF/Origin and host guards see exactly what they saw before.
 Streaming is passed straight through, which is what keeps the collaboration SSE channel live.
 
-Set it at **build** time as well if you build from source and want the baked rewrite to agree.
+Set it at **build** time as well if you build from source (`next build`) and want the baked rewrite to agree. `npm run bundle-release` is the exception: it builds with `WORDJS_HERMETIC_BUILD=1`, which ignores `WORDJS_BACKEND_URL`, `gatewayPort` and `WORDJS_MODE` and always bakes the compiled-in default, so a release never carries the packaging machine's setup. Pin release replicas at runtime, as above.
 
 Two knock-on settings when a frontend is reached directly rather than through the gateway:
 
