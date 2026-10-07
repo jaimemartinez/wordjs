@@ -38,7 +38,10 @@ function workflowSource(): string {
         fs.existsSync(WORKFLOW),
         '.github/workflows/dependency-audit.yml is missing — the daily advisory sweep is gone, and its absence produces no failing run to notice.',
     );
-    return fs.readFileSync(WORKFLOW, 'utf8');
+    // Line endings are normalised: a Windows checkout with core.autocrlf=true materialises the workflow
+    // with CRLF, and every `\n`-anchored assertion below then failed locally while CI (LF) passed — a
+    // check that is red on one platform for a reason unrelated to what it checks gets ignored on all.
+    return fs.readFileSync(WORKFLOW, 'utf8').replace(/\r\n/g, '\n');
 }
 
 /**
