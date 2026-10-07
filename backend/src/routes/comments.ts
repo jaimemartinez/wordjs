@@ -9,6 +9,13 @@ const express = require('express');
 const router = express.Router();
 const Comment = require('../models/Comment');
 const Post = require('../models/Post');
+// THE PARENT ENTRY DECIDES WHO MAY SEE OR ADD A COMMENT. A comment is part of the page it sits on, so
+// a caller who cannot read that page (a draft, a private or trashed entry, a password-protected one,
+// an entry of a non-public type) must not read its comments either, nor post new ones onto it. The
+// read rules are the ones routes/posts.ts applies — one definition in core/post-capabilities.
+const {
+    canReadPostContent, isInternalPostType, nonPublicPostTypes,
+} = require('../core/post-capabilities');
 const { getOption } = require('../core/options');
 const { authenticate, optionalAuth } = require('../middleware/auth');
 const { can } = require('../middleware/permissions');
@@ -470,7 +477,9 @@ async function isDuplicateComment(draft: any, storedContent: string) {
  *       200:
  *         description: >-
  *           List of comments. Author email and IP are included only for a caller holding
- *           moderate_comments; everyone else gets the public projection.
+ *           moderate_comments; everyone else gets the public projection, only for comments on entries
+ *           they may read (published and unprotected, or the single ?post= entry they may read in
+ *           full), and a search that does not match on the commenter's email.
  *         headers:
  *           X-WP-Total:
  *             schema:
@@ -537,11 +546,30 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
         id: 'comment_id'
     });
 
+    // THE PARENT ENTRY GATE (see the import above). A moderator sees every comment, as before. Anyone
+    // else sees only comments whose entry is PUBLIC (published, unprotected, of a publicly readable,
+    // non-internal type) — the filter the comments RSS feed has always applied — unless they asked
+    // for one entry they may read in full (e.g. an author looking at their own private entry), in
+    // which case that entry's approved comments are theirs to see. A `?post=` naming an entry they
+    // may NOT read falls through to the public filter and therefore answers an empty list, exactly
+    // like a nonexistent id.
+    const postFilter = post ? parseInt(String(post), 10) : undefined;
+    let publicOnlyExcludingTypes: string[] | undefined;
+    if (!canModerate) {
+        const target = postFilter ? await Post.findById(postFilter) : null;
+        const readable = !!(target && !isInternalPostType(target.type || target.postType || 'post')
+            && canReadPostContent(req.user, target));
+        if (!readable) publicOnlyExcludingTypes = nonPublicPostTypes();
+    }
+
     const comments = await Comment.findAll({
-        postId: post ? parseInt(String(post), 10) : undefined,
+        postId: postFilter,
         status: commentStatus === 'any' ? undefined : commentStatus,
         parent: parent !== undefined ? parseInt(String(parent), 10) : undefined,
         search,
+        // The commenter's email is moderator-only PII; matching on it is reading it (see Comment._buildWhere).
+        searchAuthorEmail: canModerate,
+        publicOnlyExcludingTypes,
         limit,
         offset,
         orderBy: orderByMap[String(orderby)] || 'comment_date',
@@ -550,10 +578,12 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
     });
 
     const total = await Comment.count({
-        postId: post ? parseInt(String(post), 10) : undefined,
+        postId: postFilter,
         status: commentStatus === 'any' ? undefined : commentStatus,
         parent: parent !== undefined ? parseInt(String(parent), 10) : undefined,
-        search
+        search,
+        searchAuthorEmail: canModerate,
+        publicOnlyExcludingTypes
     });
     const totalPages = Math.ceil(total / limit);
 
@@ -582,9 +612,10 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
  *         description: Comment details
  *       404:
  *         description: >-
- *           rest_comment_invalid_id — no such comment, a malformed route id, OR a comment that is not
- *           approved and the caller does not hold moderate_comments. The three are deliberately
- *           indistinguishable, so this is never an existence oracle over pending or spam comments.
+ *           rest_comment_invalid_id — no such comment, a malformed route id, OR (for a caller without
+ *           moderate_comments) a comment that is not approved or whose entry the caller may not read.
+ *           The cases are deliberately indistinguishable, so this is never an existence oracle over
+ *           pending or spam comments, or over unpublished entries.
  *         content:
  *           application/json:
  *             schema:
@@ -603,18 +634,26 @@ router.get('/:id', optionalAuth, asyncHandler(async (req: Request, res: Response
         });
     }
 
-    // Check if user can view non-approved comments
-    if (comment.commentApproved !== '1') {
-        if (!req.user || !req.user.can('moderate_comments')) {
-            return res.status(404).json({
-                code: 'rest_comment_invalid_id',
-                message: 'Invalid comment ID.',
-                data: { status: 404 }
-            });
+    const canModerate = !!(req.user && req.user.can('moderate_comments'));
+    const notFound = () => res.status(404).json({
+        code: 'rest_comment_invalid_id',
+        message: 'Invalid comment ID.',
+        data: { status: 404 }
+    });
+
+    if (!canModerate) {
+        // Check if user can view non-approved comments
+        if (comment.commentApproved !== '1') return notFound();
+        // The parent entry gate — the same 404 as a missing comment, so walking ids does not reveal
+        // that a draft, private or protected entry has comments (or exists).
+        const parentPost = await Post.findById(comment.commentPostId);
+        if (!parentPost || isInternalPostType(parentPost.type || parentPost.postType || 'post')
+            || !canReadPostContent(req.user, parentPost)) {
+            return notFound();
         }
     }
 
-    res.json(comment.toJSON(!!(req.user && req.user.can('moderate_comments'))));
+    res.json(comment.toJSON(canModerate));
 }));
 
 /**
@@ -686,7 +725,7 @@ router.get('/:id', optionalAuth, asyncHandler(async (req: Request, res: Response
  *             schema:
  *               $ref: '#/components/schemas/RestError'
  *       404:
- *         description: "rest_post_invalid_id — no such post."
+ *         description: "rest_post_invalid_id — no such post, or one the caller may not read or comment on (a draft, a trashed or password-protected entry, an internal or non-public type). The cases are indistinguishable on purpose."
  *         content:
  *           application/json:
  *             schema:
@@ -745,9 +784,16 @@ router.post('/', optionalAuth, commentLimiter, asyncHandler(async (req: Request,
         });
     }
 
-    // Check post exists
+    // The entry must exist AND be one the caller may read in full, not of an internal type, in a state
+    // that takes comments ('publish', or 'private' for those who may read it). It used to be "exists",
+    // so anyone could attach comments to a draft, a trashed entry or a menu item, and the 404/403
+    // split told them which ids existed. Every refusal here is the SAME 404.
     const post = await Post.findById(parseInt(postId, 10));
-    if (!post) {
+    const commentable = !!(post
+        && !isInternalPostType(post.type || post.postType || 'post')
+        && (post.postStatus === 'publish' || post.postStatus === 'private')
+        && canReadPostContent(req.user, post));
+    if (!commentable) {
         return res.status(404).json({
             code: 'rest_post_invalid_id',
             message: 'Invalid post ID.',

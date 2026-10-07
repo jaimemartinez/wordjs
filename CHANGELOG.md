@@ -6,6 +6,29 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Security
+
+- **Scheduled and private posts now need the published-post capability.** The edit and delete gates
+  applied `edit_published_*` / `delete_published_*` only to `publish`, so a contributor could rewrite
+  their own scheduled post after an editor approved it (the unreviewed copy then went live on its own)
+  and could mark their own draft `private`. `future` and `private` now carry the same bar on every write
+  surface, moving a post into `private` needs the publish capability (`403 rest_cannot_publish`), and
+  `POST`/`PUT /posts` accept only `draft`, `pending`, `publish`, `future` and `private` as `status`.
+- **Comments follow the readability of their post.** `GET /comments` and `GET /comments/:id` served
+  the approved comments of drafts, private, trashed and password-protected posts to anyone, and
+  `POST /comments` accepted comments on any existing post, answering differently for missing and
+  unreadable ids. Callers without `moderate_comments` now only see and add comments on posts they may
+  read, and every refusal is the same `404`. Comment search no longer matches the commenter's email for
+  non-moderators.
+- **Internal post meta is no longer public.** `GET /posts*` and `GET /posts/:id/meta` returned every
+  meta key, including `_wjs_review_comments` (the editorial review thread). Callers who cannot edit the
+  post now get unprefixed keys plus `_puck_data`, `_wjs_template` and `_thumbnail_id`.
+- **Password-protected posts are no longer served in full.** Posts imported from WordPress keep
+  `post_password`, but nothing checked it. For callers who cannot edit the post, responses now carry
+  `protected: true` with empty `content`, `excerpt` and `meta._puck_data`, searches do not match them,
+  feeds show a placeholder summary and the sitemap omits them. The public theme shows "This content is
+  password protected."; unlocking a post with its password is not implemented yet.
+
 ### Added
 
 - **`npm run pack:plugin -- <slug> [--dir <folder>]` packages a plugin into an installable ZIP.** It

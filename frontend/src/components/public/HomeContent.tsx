@@ -70,7 +70,9 @@ export default function HomeContent({ post, settings }: { post: Post; settings?:
     return (
         <div className="prose prose-lg max-w-none px-4">
             <h1 className="text-4xl font-bold mb-4 text-center">{post.title}</h1>
-            {renderContent(post.content)}
+            {post.protected && !post.content
+                ? <p className="text-center">This content is password protected.</p>
+                : renderContent(post.content)}
         </div>
     );
 }

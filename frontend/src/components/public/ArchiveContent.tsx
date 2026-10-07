@@ -177,7 +177,7 @@ export default function ArchiveContent({
                                 </Link>
 
                                 <p className="wjs-post-card-excerpt text-[var(--wjs-color-text-muted,#4b5563)] mb-6 line-clamp-3 leading-relaxed">
-                                    {post.excerpt || (post.content || "").substring(0, 200).replace(/<[^>]*>?/gm, "") + "..."}
+                                    {post.protected && !post.content ? "This content is password protected." : post.excerpt || (post.content || "").substring(0, 200).replace(/<[^>]*>?/gm, "") + "..."}
                                 </p>
 
                                 <Link

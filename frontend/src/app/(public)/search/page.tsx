@@ -129,7 +129,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                             </Link>
 
                             <p className="wjs-search-result-excerpt text-[var(--wjs-color-text-muted,#6b7280)] line-clamp-2 mb-4">
-                                {post.excerpt || post.content?.substring(0, 200).replace(/<[^>]*>?/gm, "") + "..."}
+                                {post.protected && !post.content ? "This content is password protected." : post.excerpt || post.content?.substring(0, 200).replace(/<[^>]*>?/gm, "") + "..."}
                             </p>
 
                             <Link

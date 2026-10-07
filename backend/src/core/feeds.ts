@@ -141,8 +141,17 @@ function isoDay(value: any): string | null {
     return isNaN(t.getTime()) ? null : t.toISOString().split('T')[0];
 }
 
+/**
+ * What a feed says INSTEAD of the summary of a password-protected entry — WordPress's own wording.
+ * Feeds are public and cached, and the summary is the excerpt or the content itself, so a protected
+ * entry used to publish its opening paragraphs to every reader.
+ */
+const PROTECTED_FEED_SUMMARY = 'There is no excerpt because this is a protected post.';
+
 /** Tag-stripped, whitespace-collapsed, truncated — the summary rule `generateRssFeed` applies. */
 function plainSummary(post: any): string {
+    const { isPasswordProtected } = require('./post-capabilities');
+    if (isPasswordProtected(post)) return PROTECTED_FEED_SUMMARY;
     const authored = post.postExcerpt || post.excerpt;
     if (authored) return String(authored);
     return String(post.postContent || post.content || '')
@@ -431,6 +440,7 @@ module.exports = {
     DEFAULT_FEED_ITEMS,
     MAX_FEED_ITEMS,
     EXCERPT_CHARS,
+    PROTECTED_FEED_SUMMARY,
     feedItems,
     generateAtomFeed,
     generateJsonFeed,

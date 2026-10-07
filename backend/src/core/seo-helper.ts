@@ -266,7 +266,11 @@ function generateRssFeed(posts: any[], options: { siteUrl?: string; title?: stri
         if (status !== 'publish' || type !== 'post' || !slug) continue;
         const url = `${siteUrl}/${slug}`; // must match the page's rel=canonical (see generateSitemap)
         const title = escapeHtml(post.postTitle || post.title || slug);
-        const rawExcerpt = post.postExcerpt || post.excerpt ||
+        // A password-protected entry publishes a placeholder, never its excerpt or body — the same
+        // rule core/feeds.plainSummary applies to Atom/JSON Feed, so the formats cannot disagree.
+        const rawExcerpt = require('./post-capabilities').isPasswordProtected(post)
+            ? require('./feeds').PROTECTED_FEED_SUMMARY
+            : post.postExcerpt || post.excerpt ||
             String(post.postContent || post.content || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 280);
         // THE ITEM URL IS ESCAPED, and it is not decoration: `<link>` and `<guid>` are XML TEXT NODES,
         // so a slug (or a siteUrl) carrying `&` used to emit a bare ampersand — which is not
