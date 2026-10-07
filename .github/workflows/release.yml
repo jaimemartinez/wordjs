@@ -4,11 +4,21 @@ name: Release
 #  - Push a tag like `v1.0.0`  -> builds the bundle AND publishes a GitHub Release with the ZIP asset.
 #  - Run manually (workflow_dispatch) -> builds the bundle and uploads it as a workflow artifact only
 #    (no Release), so you can test the packaging without cutting a release.
+#  - Run manually with `publish_tag` (e.g. v2.3.0) -> ONLY publishes create-wordjs for that EXISTING tag
+#    to npm (no verify, no build, no Release): the recovery path when a tag's GitHub Release went out
+#    but its npm publish did not. Re-running that tag's own run cannot help, because a re-run uses the
+#    workflow file the tag points at.
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      publish_tag:
+        description: 'Only publish create-wordjs to npm for this existing release tag (e.g. v2.3.0). Leave empty to build the bundle.'
+        required: false
+        default: ''
+        type: string
 
 # Least privilege. `contents: write` used to sit HERE, which handed every job in the workflow — the
 # verify gate and the npm publish included — a token that can push commits and create releases. Only
@@ -34,6 +44,7 @@ jobs:
   # is deterministic and self-contained — if it cannot pass, nothing is built and nothing is published.
   verify:
     name: Verify before publishing (audit + typecheck + tests)
+    if: inputs.publish_tag == ''
     runs-on: ubuntu-latest
     # GitHub's default job timeout is SIX HOURS: a hung step would look like a slow one
     # forever. See the long note in ci.yml.
@@ -173,6 +184,7 @@ jobs:
   build-release:
     name: Build & publish compiled bundle
     needs: verify # nothing is built, and nothing is published, unless the gate above is green
+    if: inputs.publish_tag == ''
     runs-on: ubuntu-latest
     # GitHub's default job timeout is SIX HOURS: a hung step would look like a slow one
     # forever. See the long note in ci.yml.
@@ -343,7 +355,13 @@ jobs:
   npm-publish:
     name: Publish create-wordjs to npm
     needs: build-release
-    if: startsWith(github.ref, 'refs/tags/')
+    # A tag push publishes after its bundle is released; a manual run with `publish_tag` publishes that
+    # existing tag on its own (verify and build are skipped, so `!cancelled()` lets this job run).
+    if: >-
+      !cancelled() && (
+        (startsWith(github.ref, 'refs/tags/') && needs.build-release.result == 'success') ||
+        inputs.publish_tag != ''
+      )
     runs-on: ubuntu-latest
     # GitHub's default job timeout is SIX HOURS: a hung step would look like a slow one
     # forever. See the long note in ci.yml.
@@ -361,6 +379,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.publish_tag || github.ref }}
 
       # No `registry-url`: that writes an .npmrc whose `_authToken` placeholder would compete with the
       # OIDC exchange. npm's default registry is the public one.
@@ -377,7 +397,16 @@ jobs:
       # tag publishes a fresh version and `npx create-wordjs` matches the ZIP it downloads.
       - name: Sync package version to the tag
         working-directory: packages/create-wordjs
-        run: npm pkg set version="${GITHUB_REF_NAME#v}"
+        env:
+          PUBLISH_TAG: ${{ inputs.publish_tag }}
+        run: |
+          TAG="${PUBLISH_TAG:-$GITHUB_REF_NAME}"
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::'$TAG' is not a release tag (expected vX.Y.Z)."
+            exit 1
+          fi
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+          npm pkg set version="${TAG#v}"
 
       # On a TAG, the install channel is part of the release: a failure here fails the release, because
       # a green run means "vX.Y.Z is released", and it is not if `npx create-wordjs@latest` still fetches
@@ -386,6 +415,6 @@ jobs:
         working-directory: packages/create-wordjs
         run: |
           if ! npm publish --access public; then
-            echo "::error::create-wordjs was NOT published for ${GITHUB_REF_NAME}. The GitHub Release exists but 'npx create-wordjs@latest' still installs the PREVIOUS version. Check the trusted publisher on npmjs.com (create-wordjs → Settings → Trusted publishing: GitHub Actions, jaimemartinez/wordjs, workflow release.yml), then re-run this job."
+            echo "::error::create-wordjs was NOT published for ${RELEASE_TAG}. The GitHub Release exists but 'npx create-wordjs@latest' still installs the PREVIOUS version. Check the trusted publisher on npmjs.com (create-wordjs → Settings → Trusted publishing: GitHub Actions, jaimemartinez/wordjs, workflow release.yml), then re-run this job."
             exit 1
           fi
