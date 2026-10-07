@@ -28,20 +28,26 @@
  * gate is not inert lives here: every check below has a negative control that proves the evaluator turns
  * RED, so "the budget passed" cannot mean "the budget was never evaluated".
  *
- * CALIBRATION. The recorded observations come from eight consecutive runs of THIS harness with THESE
- * sample counts on an idle Windows 11 host, Node 22, sqlite-native. Run-to-run spread of the ratio was at
- * most 1.73x (contentRender, the smallest and therefore noisiest operation). `observedRatioToReference`
- * records the WORST of the eight and every ceiling sits at 2.0x it, so the gate trips somewhere between a
- * 2.0x regression (measured on a bad run) and a 2.8x one (measured on a good run). That is the class it
- * exists to catch — an N+1 query, a lost index, a second sanitisation pass, a synchronous flush. It does
- * not catch 20%, and pretending otherwise on a shared runner buys false failures rather than information.
+ * CALIBRATION — ONE PER PLATFORM. A ratio survives moving between runs on one host; it does not survive
+ * moving between hosts, because the denominator is ten AUTOCOMMIT inserts (it moves with what a
+ * durability flush costs on the host filesystem) while two of the numerators are mostly CPU. The first
+ * budget was minted on one Windows laptop and judged on the Linux runners too, and it flapped exactly
+ * there: the Linux reference is ~0.22 ms against Windows' ~0.37 ms, so contentRender — ~0.03 ms a call,
+ * the noisiest operation — read 0.183x on main and 0.187x on a pull request against a 0.18x ceiling, on
+ * code that had not changed, and reached 0.216x across 104 rounds the CI perf job had recorded.
  *
- * The factor is 2.0 rather than 1.5 for a reason that is written down in the budget itself
- * (measuredOn.provisionalMargin): the calibration host is Windows, the denominator is ten AUTOCOMMIT
- * inserts while the numerators are transactions, and per-statement durability costs more on this
- * filesystem than on a Linux runner's. That inflates the denominator here and would make a
- * Windows-tight ceiling flap in CI. The looseness is recorded, not hidden, and the fix is to record a
- * CI-host observation and tighten — not to widen further the next time something goes red.
+ * So the observations and ratio ceilings live in `performanceBudget.calibrations.<process.platform>`,
+ * each with its own `measuredOn` (how many rounds, which factor). `observedRatioToReference` is the WORST
+ * round of that calibration and the ceiling sits at `ceilingFactor` times it, so on a platform the gate
+ * trips somewhere between a ceilingFactor regression (measured on a bad run) and ceilingFactor times the
+ * recorded run-to-run spread (measured on a good run). That is the class it exists to catch — an N+1
+ * query, a lost index, a second sanitisation pass, a synchronous flush. It does not catch 20%, and
+ * pretending otherwise on a shared runner buys false failures rather than information.
+ *
+ * A platform with NO calibration does not borrow another platform's ceilings — that was the defect. Its
+ * ratio comparison is reported as SKIPPED with the reason, while everything that is not host-relative
+ * (the absolute catastrophe ceilings, the denominator bounds, the operation sets) is still enforced.
+ * verify-f0-baseline.ts requires a linux calibration, because every CI job that runs this file runs there.
  *
  * The choice of denominator was measured, not assumed: three candidates (one INSERT+SELECT round trip,
  * fifty SELECT 1 round trips, ten batched INSERTs) were timed side by side in the same runs, and the
@@ -60,6 +66,16 @@ const BACKEND_ROOT = path.resolve(__dirname, '..', '..');
 const REPO_ROOT = path.resolve(BACKEND_ROOT, '..');
 const baseline = JSON.parse(fs.readFileSync(path.join(BACKEND_ROOT, 'f0-baseline.json'), 'utf8'));
 const budget = baseline.performanceBudget;
+
+/** The calibration a platform is judged by — exact key, never another platform's as a fallback. */
+function calibrationFor(spec: any, platform: string): any {
+    const calibrations = spec && spec.calibrations;
+    if (!calibrations || typeof calibrations !== 'object') return null;
+    if (!Object.prototype.hasOwnProperty.call(calibrations, platform)) return null;
+    return calibrations[platform] || null;
+}
+const PLATFORM = process.platform;
+const calibration = calibrationFor(budget, PLATFORM);
 
 const config = require('../config/app');
 const STAMP = `${process.pid}-${Date.now()}`;
@@ -153,8 +169,14 @@ type Run = { reference: { trimmedMeanMilliseconds: number }; operations: Record<
  *
  * It walks the MEASURED set and the BUDGET set in both directions. A measurement with no ceiling is a
  * failure ("unbudgeted"); a ceiling with no measurement is a failure ("unmeasured"). Neither is a skip.
+ *
+ * `platformCalibration` is the ratio half. Passed as null it means "this platform is uncalibrated": the
+ * ratios are then not compared at all (the caller reports that as a SKIP with its reason), while the
+ * absolute ceilings, the denominator bounds and both set directions are still evaluated. Passed as an
+ * object, an operation it has no ratio for is a failure — a calibration that forgot an operation must
+ * not read as "inside the budget".
  */
-function evaluateRun(run: Run, spec: any): string[] {
+function evaluateRun(run: Run, spec: any, platformCalibration: any, platform: string = PLATFORM): string[] {
     const failures: string[] = [];
     const reference = run.reference.trimmedMeanMilliseconds;
 
@@ -179,8 +201,15 @@ function evaluateRun(run: Run, spec: any): string[] {
             failures.push(`${id}: measured but has no committed budget — add it to performanceBudget.operations in backend/f0-baseline.json`);
             continue;
         }
-        if (measured.ratioToReference > Number(ceiling.maximumRatioToReference)) {
-            failures.push(`${id}: ratio ${measured.ratioToReference.toFixed(3)}x reference > ${ceiling.maximumRatioToReference}x budget (recorded observation ${ceiling.observedRatioToReference}x)`);
+        if (platformCalibration) {
+            const calibrated = platformCalibration.operations ? platformCalibration.operations[id] : undefined;
+            if (!calibrated) {
+                failures.push(`${id}: budgeted, but the ${platform} calibration has no ratio ceiling for it`);
+            } else if (!(measured.ratioToReference <= Number(calibrated.maximumRatioToReference))) {
+                // `!(x <= ceiling)` rather than `x > ceiling`: a NaN ratio or a non-numeric ceiling is a
+                // failure, not a comparison that quietly comes out false.
+                failures.push(`${id}: ratio ${measured.ratioToReference.toFixed(3)}x reference > ${calibrated.maximumRatioToReference}x ${platform} budget (recorded ${platform} observation ${calibrated.observedRatioToReference}x)`);
+            }
         }
         if (measured.p95Milliseconds > Number(ceiling.maximumMillisecondsP95)) {
             failures.push(`${id}: p95 ${measured.p95Milliseconds.toFixed(3)}ms > ${ceiling.maximumMillisecondsP95}ms absolute ceiling`);
@@ -190,6 +219,33 @@ function evaluateRun(run: Run, spec: any): string[] {
         if (!run.operations[id]) failures.push(`${id}: has a committed budget but was not measured — the harness stopped exercising it`);
     }
     return failures;
+}
+
+/** Why the ratio comparison does not run on this platform, or false when it does. */
+const UNCALIBRATED_SKIP: string | false = calibration
+    ? false
+    : `no ${PLATFORM} calibration in performanceBudget.calibrations (has ${JSON.stringify(Object.keys((budget && budget.calibrations) || {}))}) — ratios measured here have no ceiling of their own, and borrowing another platform's is the defect this replaced. Mint one with: node backend/scripts/perf-calibrate.mjs --calibrate`;
+
+/**
+ * THE REGRESSION. Two Backend-job runs on ubuntu-latest, both on code whose content path had not
+ * changed, went red against the Windows-minted ceilings: main at CI run 37563029800 (contentQuery
+ * 1.768x > 1.72x, contentRender 0.183x > 0.18x) and pull request #402 at CI run 37649391605
+ * (contentRender 0.187x > 0.18x). These are their `measured:` lines, verbatim. Judged by the
+ * platform they were measured on they are ordinary runs; judged by the other one they are not.
+ */
+const RED_ON_NOISE_LINUX: Run[] = [
+    { reference: { trimmedMeanMilliseconds: 0.242 }, operations: { contentCreate: { trimmedMeanMilliseconds: 1.5328, p95Milliseconds: 2.2121, ratioToReference: 6.333 }, contentUpdate: { trimmedMeanMilliseconds: 1.3422, p95Milliseconds: 1.9655, ratioToReference: 5.546 }, contentQuery: { trimmedMeanMilliseconds: 0.4279, p95Milliseconds: 0.5486, ratioToReference: 1.768 }, contentRender: { trimmedMeanMilliseconds: 0.0443, p95Milliseconds: 0.0747, ratioToReference: 0.183 } } },
+    { reference: { trimmedMeanMilliseconds: 0.2236 }, operations: { contentCreate: { trimmedMeanMilliseconds: 1.4397, p95Milliseconds: 2.0544, ratioToReference: 6.438 }, contentUpdate: { trimmedMeanMilliseconds: 1.2036, p95Milliseconds: 1.3478, ratioToReference: 5.382 }, contentQuery: { trimmedMeanMilliseconds: 0.2959, p95Milliseconds: 0.5318, ratioToReference: 1.323 }, contentRender: { trimmedMeanMilliseconds: 0.0419, p95Milliseconds: 0.0746, ratioToReference: 0.187 } } },
+];
+
+/** One recorded red-on-noise Linux run with every ratio scaled — a synthetic round of the producer's shape. */
+function RED_ON_NOISE_LINUX_FIXTURE(scale: number): Run {
+    const scaled: Run = JSON.parse(JSON.stringify(RED_ON_NOISE_LINUX[1]));
+    for (const measured of Object.values(scaled.operations)) {
+        measured.ratioToReference = Number((measured.ratioToReference * scale).toFixed(3));
+        measured.trimmedMeanMilliseconds = Number((measured.trimmedMeanMilliseconds * scale).toFixed(4));
+    }
+    return scaled;
 }
 
 let run: Run;
@@ -282,23 +338,35 @@ describe('F6 performance budget — the four plan operations, measured as a rati
         }
     });
 
-    test('no ceiling is vacuous, and none is pinned to the observation it was calibrated from', () => {
+    test('no ceiling is vacuous, and none is pinned to the observation it was calibrated from — on every platform', () => {
         // The two ways to make a budget useless: set it so high nothing can fail, or set it at the
         // measured value so the first noisy run turns it red and someone deletes the gate. Both are
         // mechanised here, so loosening a ceiling requires re-recording the observation next to it —
-        // which is a visible act in review rather than a one-character edit.
+        // which is a visible act in review rather than a one-character edit. Every calibration obeys
+        // it, not only the one this host happens to be judged by.
         const [floor, cap] = budget.methodology.ceilingMarginRange;
+        const platforms = Object.keys(budget.calibrations || {});
+        assert.ok(platforms.length > 0, 'performanceBudget.calibrations is empty — no platform has a ratio ceiling at all');
         for (const [id, spec] of Object.entries<any>(budget.operations)) {
-            // Number.isFinite on the RAW value, never on Number(value): `Number(null)` is 0 and passes a
-            // coercing finiteness check, which is how an uncalibrated ceiling can read as a valid one.
-            const observed = spec.observedRatioToReference;
-            const ceiling = spec.maximumRatioToReference;
-            assert.ok(Number.isFinite(observed) && observed > 0, `${id}: no recorded observation to justify the ceiling`);
-            assert.ok(Number.isFinite(ceiling) && ceiling > 0, `${id}: ratio ceiling is not a finite positive number`);
-            assert.ok(ceiling >= observed * floor, `${id}: ceiling ${ceiling}x is under ${floor}x the recorded ${observed}x observation and will flap on a loaded host`);
-            assert.ok(ceiling <= observed * cap, `${id}: ceiling ${ceiling}x is over ${cap}x the recorded ${observed}x observation — that is a budget nothing can fail`);
             assert.ok(Number.isFinite(spec.maximumMillisecondsP95) && spec.maximumMillisecondsP95 > 0, `${id}: absolute catastrophe ceiling missing`);
-            assert.ok(Number.isFinite(spec.observedMillisecondsP95) && spec.observedMillisecondsP95 > 0, `${id}: no recorded absolute observation`);
+        }
+        for (const platform of platforms) {
+            const calibrated = budget.calibrations[platform].operations || {};
+            assert.deepStrictEqual(Object.keys(calibrated).sort(), Object.keys(budget.operations).sort(),
+                `${platform}: the calibrated operations are not the budgeted ones — an operation it omits has no ratio ceiling on ${platform}`);
+            for (const [id, spec] of Object.entries<any>(calibrated)) {
+                // Number.isFinite on the RAW value, never on Number(value): `Number(null)` is 0 and passes a
+                // coercing finiteness check, which is how an uncalibrated ceiling can read as a valid one.
+                const observed = spec.observedRatioToReference;
+                const ceiling = spec.maximumRatioToReference;
+                assert.ok(Number.isFinite(observed) && observed > 0, `${platform}/${id}: no recorded observation to justify the ceiling`);
+                assert.ok(Number.isFinite(ceiling) && ceiling > 0, `${platform}/${id}: ratio ceiling is not a finite positive number`);
+                assert.ok(ceiling >= observed * floor, `${platform}/${id}: ceiling ${ceiling}x is under ${floor}x the recorded ${observed}x observation and will flap on a loaded host`);
+                assert.ok(ceiling <= observed * cap, `${platform}/${id}: ceiling ${ceiling}x is over ${cap}x the recorded ${observed}x observation — that is a budget nothing can fail`);
+                assert.ok(Number.isFinite(spec.observedMillisecondsP95) && spec.observedMillisecondsP95 > 0, `${platform}/${id}: no recorded absolute observation`);
+                assert.ok(spec.observedMillisecondsP95 < budget.operations[id].maximumMillisecondsP95,
+                    `${platform}/${id}: the absolute ceiling ${budget.operations[id].maximumMillisecondsP95}ms is not above the ${spec.observedMillisecondsP95}ms already measured there`);
+            }
         }
     });
 
@@ -308,25 +376,77 @@ describe('F6 performance budget — the four plan operations, measured as a rati
     // UNinstrumented Test step, same commit and same runner, passed. The ratio then measures the
     // instrumentation, not the code. The budget is enforced by the uninstrumented run; under coverage only
     // this comparison is skipped — the structural checks and the negative controls around it still run.
+    //
+    // On a platform with no calibration the comparison is skipped too, and says why; the test below this
+    // one keeps the absolute ceilings and the denominator bounds enforced there.
     test('measured ratios stay inside the committed budget', {
-        skip: process.env.NODE_V8_COVERAGE ? 'NODE_V8_COVERAGE is set: ratios measure the coverage instrumentation; enforced by the uninstrumented run' : false,
+        skip: process.env.NODE_V8_COVERAGE ? 'NODE_V8_COVERAGE is set: ratios measure the coverage instrumentation; enforced by the uninstrumented run' : UNCALIBRATED_SKIP,
     }, () => {
         if (measurementError) throw measurementError;
-        const failures = evaluateRun(run, budget);
-        assert.deepStrictEqual(failures, [], `F6 performance budget exceeded:\n${failures.join('\n')}\nmeasured: ${JSON.stringify(run)}`);
+        const failures = evaluateRun(run, budget, calibration);
+        assert.deepStrictEqual(failures, [], `F6 performance budget exceeded on ${PLATFORM}:\n${failures.join('\n')}\nmeasured: ${JSON.stringify(run)}`);
+    });
+
+    test('the absolute catastrophe ceilings and the denominator bounds hold, calibrated platform or not', {
+        skip: process.env.NODE_V8_COVERAGE ? 'NODE_V8_COVERAGE is set: timings measure the coverage instrumentation; enforced by the uninstrumented run' : false,
+    }, () => {
+        if (measurementError) throw measurementError;
+        const failures = evaluateRun(run, budget, null);
+        assert.deepStrictEqual(failures, [], `F6 absolute budget exceeded on ${PLATFORM}:\n${failures.join('\n')}\nmeasured: ${JSON.stringify(run)}`);
+    });
+
+    test('the Linux runs that went red on noise are inside the linux calibration — and were outside the win32 one', () => {
+        const linux = calibrationFor(budget, 'linux');
+        const win32 = calibrationFor(budget, 'win32');
+        assert.ok(linux, 'no linux calibration: every CI job that runs this harness runs on Linux, so its ratios would be judged by nothing');
+        for (const measured of RED_ON_NOISE_LINUX) {
+            assert.deepStrictEqual(evaluateRun(measured, budget, linux, 'linux'), [],
+                `a Linux run that was red only because it was judged by Windows numbers is still red against the linux calibration: ${JSON.stringify(measured)}`);
+            // The control: the same run against the calibration it used to be judged by still fails, so
+            // the green above is the platform lookup doing its job and not a ceiling that accepts anything.
+            if (win32) {
+                assert.ok(evaluateRun(measured, budget, win32, 'win32').some((f) => f.includes('ratio')),
+                    'the win32 calibration accepts the Linux runs that failed CI — the fixture no longer demonstrates the cross-platform defect');
+            }
+        }
+    });
+
+    test('a platform with no calibration borrows nobody else\'s ceilings', () => {
+        assert.strictEqual(calibrationFor(budget, 'aix'), null, 'an uncalibrated platform resolved to some other platform\'s ceilings');
+        assert.strictEqual(calibrationFor({ ...budget, calibrations: undefined }, 'linux'), null);
+        assert.strictEqual(calibrationFor({ ...budget, calibrations: { constructor: {} } }, 'toString'), null, 'a prototype key resolved as a calibration');
+        // Uncalibrated means "no ratio verdict", never "every ratio passes": an absurd ratio produces no
+        // ratio failure (the ratio test is skipped and says so), while an absolute breach still fails.
+        const absurd: Run = JSON.parse(JSON.stringify(RED_ON_NOISE_LINUX[0]));
+        absurd.operations.contentRender.ratioToReference = 1e6;
+        assert.ok(!evaluateRun(absurd, budget, null, 'aix').some((f) => f.includes('ratio')));
+        absurd.operations.contentRender.p95Milliseconds = Number(budget.operations.contentRender.maximumMillisecondsP95) * 2;
+        assert.ok(evaluateRun(absurd, budget, null, 'aix').some((f) => f.startsWith('contentRender: p95')),
+            'an uncalibrated platform also stopped enforcing the absolute catastrophe ceiling');
     });
 
     // ── negative controls: the evaluator must turn RED, or "passed" means nothing ────────────────────
-    test('an injected slowdown is reported, so a green run is evidence and not silence', () => {
+    test('an injected slowdown is reported on every calibrated platform, so a green run is evidence and not silence', () => {
         if (measurementError) throw measurementError;
-        for (const id of Object.keys(budget.operations)) {
-            const ceiling = Number(budget.operations[id].maximumRatioToReference);
-            const slowed: Run = {
-                reference: run.reference,
-                operations: { ...run.operations, [id]: { ...run.operations[id], ratioToReference: ceiling * 1.01 + 0.001 } },
-            };
-            const failures = evaluateRun(slowed, budget);
-            assert.ok(failures.some((f) => f.startsWith(`${id}: ratio`)), `${id}: a ratio past its ceiling was not reported`);
+        for (const [platform, platformCalibration] of Object.entries<any>(budget.calibrations)) {
+            for (const id of Object.keys(budget.operations)) {
+                const ceiling = Number(platformCalibration.operations[id].maximumRatioToReference);
+                const slowed: Run = {
+                    reference: run.reference,
+                    operations: { ...run.operations, [id]: { ...run.operations[id], ratioToReference: ceiling * 1.01 + 0.001 } },
+                };
+                const failures = evaluateRun(slowed, budget, platformCalibration, platform);
+                assert.ok(failures.some((f) => f.startsWith(`${id}: ratio`)), `${platform}/${id}: a ratio past its ceiling was not reported`);
+            }
+            // A calibration that forgot an operation must not read as "inside the budget".
+            const partial = { ...platformCalibration, operations: { ...platformCalibration.operations } };
+            delete partial.operations.contentQuery;
+            assert.ok(evaluateRun(run, budget, partial, platform).some((f) => f.startsWith('contentQuery: budgeted, but the')),
+                `${platform}: a calibration with no ratio for an operation passed it`);
+            // A NaN ratio is not "under the ceiling".
+            const nan: Run = { reference: run.reference, operations: { ...run.operations, contentRender: { ...run.operations.contentRender, ratioToReference: Number.NaN } } };
+            assert.ok(evaluateRun(nan, budget, platformCalibration, platform).some((f) => f.startsWith('contentRender: ratio')),
+                `${platform}: a NaN ratio passed the comparison`);
         }
     });
 
@@ -336,7 +456,7 @@ describe('F6 performance budget — the four plan operations, measured as a rati
             reference: run.reference,
             operations: { ...run.operations, contentDelete: { trimmedMeanMilliseconds: 1, p95Milliseconds: 1, ratioToReference: 1 } },
         };
-        const failures = evaluateRun(withExtra, budget);
+        const failures = evaluateRun(withExtra, budget, calibration);
         assert.ok(failures.some((f) => f.startsWith('contentDelete: measured but has no committed budget')),
             'a newly measured operation with no ceiling passed — that is the exact hole in f0-content-bench.ts, which iterates the budget table instead of the measurements');
     });
@@ -345,7 +465,7 @@ describe('F6 performance budget — the four plan operations, measured as a rati
         if (measurementError) throw measurementError;
         const operations = { ...run.operations };
         delete operations.contentRender;
-        const failures = evaluateRun({ reference: run.reference, operations }, budget);
+        const failures = evaluateRun({ reference: run.reference, operations }, budget, calibration);
         assert.ok(failures.some((f) => f.startsWith('contentRender: has a committed budget but was not measured')),
             'deleting a measurement passed the gate');
     });
@@ -354,9 +474,9 @@ describe('F6 performance budget — the four plan operations, measured as a rati
         if (measurementError) throw measurementError;
         const floor = Number(budget.reference.minimumMillisecondsTrimmedMean);
         const cap = Number(budget.reference.maximumMillisecondsTrimmedMean);
-        const collapsed = evaluateRun({ reference: { trimmedMeanMilliseconds: floor / 10 }, operations: run.operations }, budget);
+        const collapsed = evaluateRun({ reference: { trimmedMeanMilliseconds: floor / 10 }, operations: run.operations }, budget, calibration);
         assert.ok(collapsed.some((f) => f.includes('below the')), 'a reference that stopped doing work was accepted');
-        const inflated = evaluateRun({ reference: { trimmedMeanMilliseconds: cap * 10 }, operations: run.operations }, budget);
+        const inflated = evaluateRun({ reference: { trimmedMeanMilliseconds: cap * 10 }, operations: run.operations }, budget, calibration);
         assert.ok(inflated.some((f) => f.includes('exceeds the')), 'a reference slow enough to mask every regression was accepted');
     });
 
@@ -381,6 +501,80 @@ describe('F6 performance budget — the four plan operations, measured as a rati
             assert.ok(Number(spec.maximumMillisecondsP95) <= inherited,
                 `${id}: F6 ceiling ${spec.maximumMillisecondsP95}ms is looser than the F0 ceiling ${inherited}ms it inherits`);
         }
+    });
+});
+
+describe('F6 performance budget — per-platform calibration in backend/scripts/perf-calibrate.mjs', () => {
+    let calibrate: any;
+    let scratch = '';
+    const linuxRound = (scale: number) => JSON.parse(JSON.stringify(RED_ON_NOISE_LINUX_FIXTURE(scale)));
+    // The shape perf-calibrate.mjs writes in measure mode, which is what CI uploads on every run.
+    const artifact = (platform: string, rounds: any[], methodology: any = budget.methodology) => ({
+        schemaVersion: 1,
+        generatedBy: 'backend/scripts/perf-calibrate.mjs',
+        mode: 'measure',
+        host: { platform, arch: 'x64', node: 'v22.23.3', cpus: 4, ci: true },
+        comparedAgainst: { file: 'backend/f0-baseline.json#performanceBudget', methodology },
+        rounds,
+    });
+
+    before(async () => {
+        const dynamicImport = new Function('specifier', 'return import(specifier);') as (specifier: string) => Promise<any>;
+        calibrate = await dynamicImport(pathToFileURL(path.join(BACKEND_ROOT, 'scripts', 'perf-calibrate.mjs')).href);
+        scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-f6-calibrate-'));
+    });
+    after(() => { try { fs.rmSync(scratch, { recursive: true, force: true }); } catch { /* best effort */ } });
+
+    test('recorded rounds from another platform, another methodology or another operation set are refused by name', () => {
+        const write = (name: string, value: any) => {
+            fs.mkdirSync(path.join(scratch, name), { recursive: true });
+            fs.writeFileSync(path.join(scratch, name, 'perf-calibration.json'), JSON.stringify(value));
+        };
+        write('a', artifact('linux', [linuxRound(1)]));
+        write('b', artifact('linux', [linuxRound(1.1), linuxRound(0.9)]));
+        write('c', artifact('win32', [linuxRound(1)]));
+        write('d', artifact('linux', [linuxRound(1)], { ...budget.methodology, operationSamples: 30 }));
+        const extra = linuxRound(1);
+        extra.operations.contentDelete = { trimmedMeanMilliseconds: 1, p95Milliseconds: 1, ratioToReference: 1 };
+        write('e', artifact('linux', [extra]));
+        write('f', { generatedBy: 'something else', rounds: [linuxRound(1)], host: { platform: 'linux' } });
+
+        const recorded = calibrate.collectRecordedRounds([scratch], budget, 'linux');
+        assert.strictEqual(recorded.runs.length, 3, 'only the three comparable linux rounds (a + two in b) may be kept');
+        const refused = recorded.refused.join('\n');
+        assert.match(refused, /measured on win32, not linux/);
+        assert.match(refused, /different methodology \(operationSamples 30 vs 60\)/);
+        assert.match(refused, /contentDelete/);
+        assert.match(refused, /not a perf-calibrate\.mjs artifact/);
+    });
+
+    test('a minted calibration records the worst round, sits at 1.5x it, and replaces only its own platform', () => {
+        const runs = [linuxRound(1), linuxRound(1.25), linuxRound(0.8)];
+        const { calibration, performanceBudget, warnings } = calibrate.mintCalibration(runs, budget, { platform: 'linux', source: 'recorded' });
+        for (const id of Object.keys(budget.operations)) {
+            const worst = Math.max(...runs.map((r: any) => r.operations[id].ratioToReference));
+            assert.strictEqual(calibration.operations[id].observedRatioToReference, Number(worst.toFixed(3)), `${id}: not the worst round`);
+            assert.strictEqual(calibration.operations[id].maximumRatioToReference, Number((Number(worst.toFixed(3)) * 1.5).toFixed(3)), `${id}: not 1.5x the worst round`);
+        }
+        assert.strictEqual(calibration.measuredOn.platform, 'linux');
+        assert.strictEqual(calibration.measuredOn.ceilingFactor, 1.5);
+        assert.strictEqual(calibration.measuredOn.runs, 3);
+        // Every other platform's calibration and every shared field survive untouched.
+        for (const platform of Object.keys(budget.calibrations).filter((p) => p !== 'linux')) {
+            assert.deepStrictEqual(performanceBudget.calibrations[platform], budget.calibrations[platform], `${platform}: a linux mint disturbed another platform`);
+        }
+        assert.deepStrictEqual(performanceBudget.operations, budget.operations);
+        assert.deepStrictEqual(performanceBudget.reference, budget.reference);
+        // A 1.25x-slower round set mints ceilings looser than the committed linux ones, and that is a
+        // finding the script reports — never a quiet number change.
+        assert.ok(warnings.some((w: string) => /LOOSER than the committed/.test(w)), `a looser re-mint was not reported: ${warnings.join(' | ')}`);
+    });
+
+    test('--enforce on an uncalibrated platform is a failure, not a pass', () => {
+        const { failures } = calibrate.evaluate(linuxRound(1), budget, 'aix');
+        assert.ok(failures.some((f: string) => /aix: no calibration/.test(f)), `an uncalibrated platform passed --enforce: ${failures.join(' | ')}`);
+        assert.deepStrictEqual(calibrate.evaluate(linuxRound(1), budget, 'linux').failures, [], 'the recorded red-on-noise Linux run fails the linux calibration in perf-calibrate.mjs');
+        assert.strictEqual(calibrate.calibrationFor(budget, 'aix'), null);
     });
 });
 

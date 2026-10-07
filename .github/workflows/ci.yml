@@ -10,11 +10,10 @@ on:
     branches: [main]
     tags: ['v*']
   pull_request:
-  # Manual dispatch exists for the performance budgets in backend/f0-baseline.json, which were calibrated
-  # on a single Windows laptop and whose Linux numbers no log has ever printed. A plain dispatch runs the
-  # `perf-budgets` job below in ENFORCING mode (push and pull_request only measure — see that job for why);
-  # `calibrate: true` runs it in calibration mode instead, eight rounds on this runner, and uploads a
-  # paste-ready `performanceBudget` block measured on Linux.
+  # Manual dispatch exists for the F6 performance budget in backend/f0-baseline.json, which carries one
+  # calibration per platform. A plain dispatch runs the whole workflow, `perf-budgets` included, enforcing
+  # the committed linux calibration as push and pull_request do; `calibrate: true` runs `perf-budgets` in
+  # calibration mode instead, eight rounds on this runner, and uploads a paste-ready linux calibration.
   workflow_dispatch:
     inputs:
       calibrate:
@@ -1240,49 +1239,30 @@ jobs:
         run: docker rm -fv wordjs-ci 2>/dev/null || true
 
   perf-budgets:
-    # THE BUDGET NOBODY HAS EVER SEEN THE NUMBERS OF.
+    # THE F6 BUDGET, MEASURED IN ISOLATION ON THE PLATFORM IT IS CALIBRATED FOR.
     #
-    # backend/f0-baseline.json#performanceBudget carries `measuredOn.platform: win32`. Every ratio in it
-    # was observed across eight runs on one Windows laptop, and the file is candid about the cost: the
-    # denominator is ten AUTOCOMMIT inserts while the numerators are transactions, per-statement
-    # durability costs more on that filesystem than on ext4, so the Windows denominator is inflated and a
-    # Windows-tight ceiling would flap here. The recorded margin is therefore 2.0x = 1.5x for measurement
-    # noise TIMES an allowance for never having been measured anywhere else, and `provisionalMargin` says
-    # in as many words what to do about it: "once the harness has run on the CI host, record that
-    # observation and tighten the ceilings back toward 1.5x".
+    # backend/f0-baseline.json#performanceBudget carries one calibration per platform under
+    # `calibrations.<process.platform>`. It used to carry exactly one, minted on a Windows laptop, and the
+    # Linux runners were judged by it: the denominator is ten AUTOCOMMIT inserts, which are cheaper on this
+    # runner's filesystem (~0.22 ms against ~0.37 ms), so the mostly-CPU operations read up to ~2.5x their
+    # Windows ratios here and the Backend job went red on unchanged code (contentRender 0.183x and 0.187x
+    # against a 0.18x ceiling). The linux calibration that replaced it was minted from 104 one-round
+    # artifacts THIS job had uploaded in measure mode — `perf-calibrate.mjs --calibrate --from` reduces them
+    # — at 1.5x the worst round.
     #
-    # WHAT IS ACTUALLY MISSING — stated precisely, because the first draft of this comment got it wrong.
-    # The harness is NOT unrun on Linux: backend/src/tests/f6-performance-budget.test.ts is matched by the
-    # Backend job's own `src/tests/*.test.ts` glob, carries no CI or platform skip, and has therefore been
-    # measuring AND enforcing the committed win32 ceilings on this very runner on every push — and passing,
-    # or Backend would be red today. What has never existed is the OBSERVATION: the suite asserts and says
-    # nothing, so no log anywhere prints what Linux actually measures next to the ceiling it is judged by,
-    # and there is no multi-round mode from which a Linux budget could be minted. That gap is what this job
-    # closes, and it is the whole of what it adds.
+    # SO IT ENFORCES. With the ceilings measured on this platform there is nothing red by design left, so
+    # push and pull_request run `--enforce` against the linux calibration. It is still NOT a required check:
+    # the Backend job's `npm test` and the F6 phase suites run the same harness against the same
+    # calibration inside required checks. What this job adds is the isolated measurement (no other suite
+    # in the process), a table that prints each observation next to its ceiling, and the artifact that the
+    # next calibration is minted from.
     #
-    # SO IT MEASURES, IT DOES NOT RE-ENFORCE. On push/pull_request the script runs in measure mode: it
-    # prints each observation beside its ceiling and uploads the raw numbers, and it does not fail the run.
-    # Two reasons, both decisive. (1) `--enforce` re-derives, on a second whole runner and a second cold
-    # `npm ci`, exactly the four assertions the Backend job already made this commit — a duplicate gate is
-    # not a second opinion. (2) The ceilings are still the Windows ones, so an enforcing run here is red BY
-    # DESIGN until a Linux calibration lands — and a job that is red by design on main is how a team learns
-    # to stop reading the check list, which would cost far more than this job buys. `--enforce` is available
-    # on `workflow_dispatch` (below) for anyone who wants the verdict on demand; put it back on push in the
-    # same commit that lands the Linux `performanceBudget` block, and only then make the job required.
-    #
-    # `workflow_dispatch` with `calibrate: true` runs EIGHT rounds and mints a paste-ready
-    # `performanceBudget` block with `measuredOn.platform: linux` and ceilings at 1.5x the worst round —
-    # the noise factor alone, because a calibration on the enforcing platform no longer owes the
-    # single-platform allowance. The flow is: dispatch -> download the perf-calibration.json artifact ->
-    # paste its `.performanceBudget` into backend/f0-baseline.json -> open a PR. It is deliberately not
-    # written by CI: a budget change is a review decision, and the F6 suite plus verify-f0-baseline.ts
-    # both re-check the pasted block.
-    #
-    # ADDITIVE, AND NOT A REQUIRED CHECK YET. It changes NOTHING about how F6 enforces the budget today
-    # (f6-performance-budget.test.ts still runs inside the Backend job's Test step, against the committed
-    # ceilings, unchanged — that is the enforcement, and it is untouched). The job name below is stable so
-    # it can be made required once the calibration it produces has landed.
-    name: Performance budgets (Linux measurement; calibrate/enforce on dispatch)
+    # `workflow_dispatch` with `calibrate: true` runs EIGHT rounds and mints a paste-ready linux
+    # calibration at 1.5x the worst round. The flow is: mint (dispatch, or --from over the recorded
+    # artifacts) -> paste the `.calibration` over calibrations.linux in backend/f0-baseline.json -> open a
+    # PR. It is deliberately not written by CI: a budget change is a review decision, and the F6 suite plus
+    # verify-f0-baseline.ts both re-check the pasted block.
+    name: Performance budgets (Linux, enforced; calibrate on dispatch)
     runs-on: ubuntu-latest
     # MEASURED, not guessed: the harness is ten warmups, 150 reference samples and 60 samples of each of
     # the four plan operations against a temp SQLite file, and one round takes ~2.5 SECONDS end to end on
@@ -1301,39 +1281,28 @@ jobs:
       - name: Install backend dependencies
         working-directory: backend
         run: npm ci || npm install
-      - name: Measure the F6 budget on this runner (calibrate/enforce on dispatch only)
-        # ONE script drives all three modes, and it does not re-implement the measurement: it spawns
+      - name: Measure and enforce the F6 budget on this runner (calibrate on dispatch)
+        # ONE script drives every mode, and it does not re-implement the measurement: it spawns
         # backend/src/tests/f6-performance-budget.test.ts — the very harness F6 certifies with, wired to
         # performanceBudget.methodology (10 warmups, 60 operation samples, 150 reference samples, 10%
         # trimmed mean) — and reduces its rounds. A second copy of "the same methodology" here would be
         # a calibration minted from a harness nobody enforces with, which is the fixture-vs-producer trap
         # this repository has already paid for once.
         #
-        # THE MODE IS CHOSEN BY THE EVENT, not by a variable that could be empty for two different
+        # THE MODE IS CHOSEN BY THE INPUT, not by a variable that could be empty for two different
         # reasons. `inputs.calibrate` is empty on push/pull_request (the `inputs` context is only
-        # populated for workflow_dispatch/workflow_call), so `github.event_name` is the honest switch:
+        # populated for workflow_dispatch/workflow_call), so only an explicit `true` calibrates:
         #
-        #   push / pull_request  -> neither flag: measure, print the table, write the artifact, exit 0.
-        #                           The verdict is NOT re-asserted here — the Backend job's Test step
-        #                           already enforced this budget on this runner, this commit.
-        #   workflow_dispatch    -> `--enforce`: the same four assertions, on demand, when someone wants
-        #                           the verdict spelled out in one log.
-        #   dispatch + calibrate -> `--calibrate --rounds 8`: mint a paste-ready Linux budget.
-        #
-        # Put `--enforce` back on the push path in the same commit that lands the Linux calibration; a
-        # ceiling measured on another platform is not one to fail a push on.
+        #   push / pull_request / plain dispatch -> `--enforce`: one round against calibrations.linux.
+        #   dispatch + calibrate                  -> `--calibrate --rounds 8`: mint a linux calibration.
         env:
           CALIBRATE: ${{ inputs.calibrate }}
-          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -u
           if [ "${CALIBRATE:-false}" = "true" ]; then
             node backend/scripts/perf-calibrate.mjs --calibrate --rounds 8 --out perf-calibration.json
-          elif [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
-            node backend/scripts/perf-calibrate.mjs --enforce --out perf-calibration.json
           else
-            echo "measure-only: the F6 budget is enforced by the Backend job's Test step, not re-asserted here."
-            node backend/scripts/perf-calibrate.mjs --out perf-calibration.json
+            node backend/scripts/perf-calibrate.mjs --enforce --out perf-calibration.json
           fi
       - name: Upload the raw Linux measurements
         # `always()`: a run that went OVER a ceiling is precisely the run whose numbers someone needs.
