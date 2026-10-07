@@ -6,6 +6,35 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Security
+
+- **The plugin sandbox works when WordJS runs as a non-root user that holds a capability.** A service
+  started with `AmbientCapabilities=CAP_NET_BIND_SERVICE` (to listen on 443 without root) ended with the
+  sandbox `degraded` and every plugin refused: the Landlock/seccomp shim treated any capability as root
+  and called `setgroups`, `PR_SET_SECUREBITS` and `PR_CAPBSET_DROP`, which need `CAP_SETGID`/`CAP_SETPCAP`
+  (`SHIM-FAIL: setgroups(clear): Operation not permitted`). Each privilege-drop step now runs only when the
+  process holds the capability it needs: the ambient set is cleared and the permitted, effective and
+  inheritable sets are emptied in every case, groups, securebits and the bounding set when they can be,
+  and a setuid-root wrapper's real/saved uids are collapsed. The result is verified (inheritable,
+  permitted, effective and ambient empty; the bounding set only when it was dropped — `no_new_privs`
+  means a plugin can gain nothing across `exec`). The same change fixes root services with a reduced
+  bounding set (`CapabilityBoundingSet=` in the unit). The shim's read grants no longer include
+  `/etc/ssl/private`.
+- **The cause is reported, not just the symptom.** When the node process itself holds capabilities or a
+  root uid, the boot log and `GET /api/v1/health/details` (`sandbox.hostPrivilege`) say where they come
+  from (root, an ambient capability, file capabilities on the node binary, a setuid-root wrapper) and how
+  to remove them. Activating, reloading or updating a plugin the sandbox refuses to launch now answers
+  `409 sandbox_unavailable` with the mechanism, its state, the failure line and the operator action
+  (paths redacted) instead of a generic 500, and the admin plugins screen shows it; a plugin refused at
+  boot is listed as `refused`.
+- **`create-wordjs` no longer recommends `setcap cap_net_bind_service=+ep` on node** (it hands that
+  capability to every node script on the machine and is lost on each node upgrade). For ports below 1024
+  it recommends `net.ipv4.ip_unprivileged_port_start` in `/etc/sysctl.d/` or a reverse proxy. The new
+  `--systemd` option (with `--port` and `--service-user`) writes a systemd unit for a dedicated user with
+  no capabilities, `NoNewPrivileges=yes` and `NODE_ENV=production` into a private temporary directory and
+  prints the root-owned install steps. mail-server 2.2.5 explains a port-25 bind failure accurately
+  (permission vs. the sandbox) instead of suggesting `setcap`.
+
 ### Added
 
 - **`npm run pack:plugin -- <slug> [--dir <folder>]` packages a plugin into an installable ZIP.** It
