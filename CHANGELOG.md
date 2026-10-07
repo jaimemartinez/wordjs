@@ -31,6 +31,21 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   no npm credential is stored in the repository and each version carries provenance. It needs a trusted
   publisher configured once on npmjs.com for `jaimemartinez/wordjs`, workflow `release.yml`.
 
+### Fixed
+
+- **The F6 performance budget no longer fails the Linux CI on unchanged code.** Its ratio ceilings were
+  measured on one Windows host and judged on the Linux runners too, where the reference workload
+  (autocommit inserts) is cheaper and the mostly-CPU operations read up to ~2.5x their Windows ratios —
+  `contentRender` failed the Backend job at 0.183x and 0.187x against a 0.18x ceiling.
+  `performanceBudget` in `backend/f0-baseline.json` (schema 2) now keeps the host-independent fields once
+  and one calibration per platform under `calibrations.<platform>`: `linux` minted from 104 rounds the CI
+  perf job had recorded, at 1.5x the worst round, and the existing `win32` one. A platform with no
+  calibration has its ratio comparison skipped with the reason instead of borrowing another platform's;
+  `verify:f0` requires a `linux` calibration. `perf-calibrate.mjs` mints one platform's calibration,
+  can reduce already-recorded CI artifacts with `--from`, and reports a re-mint looser than the committed
+  ceiling as an error. The CI `Performance budgets` job now enforces the `linux` calibration on every
+  push and pull request (it is still not a required check).
+
 ## [2.3.0] - 2026-10-07
 
 ### Security
