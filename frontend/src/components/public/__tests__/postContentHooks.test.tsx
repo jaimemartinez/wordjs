@@ -144,3 +144,22 @@ describe('PostContent — the post frame is emitted on both body paths', () => {
         expect(emits(render({ ...basePost, type: 'product' } as unknown as Post), 'wjs-post-body')).toBe(true);
     });
 });
+
+describe('PostContent — password-protected entries', () => {
+    // The API withholds content/excerpt/_puck_data of a protected entry from callers who cannot edit
+    // it and sets `protected: true`; the page must say so instead of rendering an empty body.
+    const locked = { ...basePost, content: '', protected: true, meta: {} } as unknown as Post;
+
+    it('renders the notice (and the title) in place of the withheld body', () => {
+        const html = render(locked);
+        expect(html).toContain('This content is password protected.');
+        expect(html).toContain('A post with two bodies');
+        expect(emits(html, 'wjs-post-body')).toBe(true);
+    });
+
+    it('renders the body normally when the API did send it (an editor viewing the entry)', () => {
+        const html = render({ ...basePost, protected: true } as unknown as Post);
+        expect(html).toContain('classic body');
+        expect(html).not.toContain('This content is password protected.');
+    });
+});

@@ -56,7 +56,9 @@ Usage:
   npx create-wordjs@latest join <role> [dir] [opts]   Join this machine to a gateway as backend|frontend
 
 Options:
-  --zip <path-or-url>   Use a local release ZIP (or a direct ZIP URL) instead of asking GitHub.
+  --zip <path-or-url>   Use a local release ZIP (or a direct https:// ZIP URL) instead of asking GitHub.
+  --sha256 <hex>        Require the ZIP to have this SHA-256 (pin a checksum for --zip; also checked
+                        on top of the release's own .sha256 asset).
   --version <tag>       Install/upgrade to a specific release tag (e.g. v2.1.0) instead of the latest.
   --http                Serve plain HTTP instead of self-signed HTTPS (sets WORDJS_HTTP=1). (create)
   --no-start            Scaffold + install dependencies only; don't start the server.
@@ -66,7 +68,8 @@ Options:
   --host <ip/dns>       (gateway) The address other machines dial to reach this gateway.
   --gateway <ip/dns>    (join) The gateway's address.
   --token <join-token>  (join) A single-use token minted on the gateway (cluster token <role>).
-  --ca-hash <sha256>    (join) Pin the cluster CA fingerprint the gateway prints (MITM guard).
+  --ca-hash <sha256>    (join) REQUIRED. The cluster CA fingerprint the gateway prints; the gateway's
+                        TLS certificate must chain to it before the token is sent (MITM guard).
   --advertise <ip/dns>  (join) This node's routable address the gateway will proxy to.
   --enroll-port <port>  (join) Gateway token-enrollment port (default 3101).
   --systemd             (create, upgrade; Linux) Also write a systemd unit, wordjs.service, to a
@@ -118,6 +121,7 @@ function parseArgs(argv) {
         mode: 'create', dir: null, zip: null, version: null, http: false, start: true, yes: false, force: false, install: true,
         role: null, gateway: null, token: null, caHash: null, advertise: null, enrollPort: null, host: null,
         systemd: false, port: null, serviceUser: null,
+        sha256: null,
     };
     // A leading subcommand selects the mode (default is the monolith create flow).
     if (['upgrade', 'gateway', 'join'].includes(argv[0])) { opts.mode = argv[0]; argv = argv.slice(1); }
@@ -126,6 +130,13 @@ function parseArgs(argv) {
         const a = argv[i];
         if (a === '-h' || a === '--help') { console.log(HELP); process.exit(0); }
         else if (a === '--zip') { opts.zip = argv[++i] || fail('--zip needs a value (path or URL to a wordjs-*.zip).'); }
+        else if (a === '--sha256') {
+            const v = argv[++i];
+            if (!v) fail('--sha256 needs a value (the 64-character hex SHA-256 of the ZIP).');
+            const hex = normalizeSha256(v);
+            if (!hex) fail(`--sha256 must be a 64-character hex SHA-256, got "${v}".`);
+            opts.sha256 = hex;
+        }
         else if (a === '--version') { opts.version = argv[++i] || fail('--version needs a value (a release tag, e.g. v2.1.0).'); }
         else if (a === '--http') opts.http = true;
         else if (a === '--no-start') opts.start = false;
@@ -183,7 +194,13 @@ function request(url, headers, redirectsLeft = 5) {
         const req = https.get(url, { headers: { 'user-agent': 'create-wordjs', ...headers } }, (res) => {
             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirectsLeft > 0) {
                 res.resume(); // GitHub release assets redirect to objects.githubusercontent.com
-                resolve(request(new URL(res.headers.location, url).toString(), headers, redirectsLeft - 1));
+                const next = new URL(res.headers.location, url);
+                // Never let a redirect downgrade the transfer to plain HTTP (or any other scheme).
+                if (next.protocol !== 'https:') {
+                    reject(new Error(`Refusing to follow a redirect from ${url} to a non-https URL (${next.protocol}//${next.host}).`));
+                    return;
+                }
+                resolve(request(next.toString(), headers, redirectsLeft - 1));
                 return;
             }
             resolve(res);
@@ -200,6 +217,62 @@ function readBody(res) {
         res.on('end', () => resolve(data));
         res.on('error', reject);
     });
+}
+
+// --- integrity: SHA-256 of the release ZIP --------------------------------------------------------
+//
+// The bundle we download becomes the site's code, so it is verified before a single entry is
+// extracted. release.yml publishes `wordjs-<tag>.zip.sha256` (sha256sum format: `<hex>  <name>`) next
+// to every tag-named bundle; the GitHub flow downloads it and refuses a ZIP whose digest differs.
+// Releases published before that asset existed have no checksum to check against — those install
+// with a loud warning rather than not at all. `--sha256 <hex>` pins a digest the user obtained out of
+// band, for `--zip` sources (and on top of the release checksum when both are present).
+
+/** Lower-case 64-char hex, or null. Accepts the `AA:BB:…` colon form some tools print. */
+function normalizeSha256(value) {
+    const hex = String(value == null ? '' : value).trim().replace(/:/g, '').toLowerCase();
+    return /^[0-9a-f]{64}$/.test(hex) ? hex : null;
+}
+
+/**
+ * Read the digest for `expectedName` out of a sha256sum-style checksum file. A line naming a
+ * DIFFERENT file is ignored (a checksum file for another asset must not vouch for this one); a bare
+ * digest with no name is accepted. Returns null when no usable line is found — the caller fails closed.
+ */
+function parseChecksumFile(text, expectedName) {
+    for (const raw of String(text || '').split(/\r?\n/)) {
+        // Split instead of one regex with `\s+…(.+)`: linear on any input (CodeQL js/polynomial-redos).
+        const line = raw.trim();
+        const sep = line.search(/\s/);
+        const digest = sep === -1 ? line : line.slice(0, sep);
+        if (!/^[0-9a-fA-F]{64}$/.test(digest)) continue;
+        const name = sep === -1 ? '' : line.slice(sep).trim().replace(/^\*/, '');
+        if (name && expectedName && path.basename(name).toLowerCase() !== String(expectedName).toLowerCase()) continue;
+        return digest.toLowerCase();
+    }
+    return null;
+}
+
+function sha256File(file) {
+    return new Promise((resolve, reject) => {
+        const hash = crypto.createHash('sha256');
+        fs.createReadStream(file)
+            .on('error', reject)
+            .on('data', (c) => hash.update(c))
+            .on('end', () => resolve(hash.digest('hex')));
+    });
+}
+
+/**
+ * What a `--zip` value points at: an https:// URL, a local file, or something refused. Plain http://
+ * (and any other URL scheme) is refused — a bundle fetched over an unauthenticated channel can be
+ * swapped in transit, and it becomes the site's code. Windows paths (`C:\…`) are files, not URLs.
+ */
+function classifyZipSource(zip) {
+    const value = String(zip || '');
+    if (/^https:\/\//i.test(value)) return { kind: 'url', url: value };
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return { kind: 'refused', scheme: value.slice(0, value.indexOf(':')).toLowerCase() };
+    return { kind: 'file', path: value };
 }
 
 async function githubJson(url) {
@@ -252,6 +325,12 @@ function pickBundleAsset(assets, tagName) {
     return loose.length === 1 ? loose[0] : null;
 }
 
+/** The `<bundle>.sha256` asset for the bundle we picked — matched by EXACT name, never by shape. */
+function pickChecksumAsset(assets, bundleName) {
+    const wanted = `${bundleName}.sha256`.toLowerCase();
+    return (Array.isArray(assets) ? assets : []).find((a) => String(a && a.name || '').toLowerCase() === wanted) || null;
+}
+
 /** Every asset matching the loose `wordjs-*.zip` shape — used to explain an ambiguous refusal. */
 function looseBundleCandidates(assets) {
     const list = Array.isArray(assets) ? assets : [];
@@ -278,7 +357,25 @@ async function resolveReleaseAsset(tag) {
         }
         fail(`Release ${release.tag_name} has no wordjs-*.zip asset.`, 'Pass --zip <path-or-url> instead.');
     }
-    return { name: asset.name, url: asset.browser_download_url, tag: release.tag_name };
+    const sum = pickChecksumAsset(release.assets, asset.name);
+    return {
+        name: asset.name, url: asset.browser_download_url, tag: release.tag_name,
+        checksumName: sum ? sum.name : null, checksumUrl: sum ? sum.browser_download_url : null,
+    };
+}
+
+/** Download a small text asset (the checksum file). Anything but a 200 is fatal: fail closed. */
+async function downloadText(url, maxBytes = 64 * 1024) {
+    let res;
+    try { res = await request(url, { accept: 'application/octet-stream' }); }
+    catch (e) { fail(`Could not download ${url} (${e.message}).`, 'Check your network and try again.'); }
+    if (res.statusCode !== 200) {
+        res.resume();
+        fail(`Download failed (HTTP ${res.statusCode}) for ${url}.`, 'The release lists a checksum file that could not be fetched; refusing to install unverified.');
+    }
+    const body = await readBody(res);
+    if (body.length > maxBytes) fail(`${url} is implausibly large for a checksum file.`);
+    return body;
 }
 
 async function download(url, dest, label) {
@@ -315,9 +412,47 @@ async function download(url, dest, label) {
 
 // --- extraction + scaffolding ------------------------------------------------------------------
 
+// S_IFMT / S_IFLNK out of the high 16 bits of a ZIP entry's external attributes (Unix creators).
+const S_IFMT = 0o170000;
+const S_IFLNK = 0o120000;
+
+/**
+ * Where `entryName` would land under `root` — or a thrown error when it must not be written at all.
+ * adm-zip's own extractAllTo already strips `../` and leading `/` (it rewrites rather than refuses),
+ * but a release bundle that contains such an entry is not a release bundle: refuse the whole archive
+ * explicitly instead of trusting a silent rewrite in a dependency (same rule as the backend's
+ * installPluginFromZip). Refused: absolute paths (POSIX or Windows drive/UNC), any `..` segment, and
+ * anything whose resolved path is not inside root.
+ */
+function containedEntryPath(root, entryName) {
+    const rel = String(entryName).replace(/\\/g, '/');
+    if (!rel || rel.includes('\0')) throw new Error(`Refusing ZIP entry with an invalid name: ${JSON.stringify(entryName)}`);
+    if (rel.startsWith('/') || /^[a-zA-Z]:/.test(rel) || path.isAbsolute(rel) || path.win32.isAbsolute(rel)) {
+        throw new Error(`Refusing ZIP entry with an absolute path: ${entryName}`);
+    }
+    if (rel.split('/').includes('..')) throw new Error(`Refusing ZIP entry that climbs out of the target (Zip Slip): ${entryName}`);
+    const dest = path.resolve(root, rel);
+    if (dest !== root && !dest.startsWith(root + path.sep)) {
+        throw new Error(`Refusing ZIP entry that resolves outside the target (Zip Slip): ${entryName}`);
+    }
+    return dest;
+}
+
+/** A symlink entry (Unix mode stored in the external attributes). The bundle never contains one. */
+function isSymlinkEntry(entry) {
+    const attr = Number(entry && entry.header && entry.header.attr) >>> 0;
+    return ((attr >>> 16) & S_IFMT) === S_IFLNK;
+}
+
 function extractZip(zipPath, targetDir) {
     const AdmZip = require('adm-zip'); // lazy so --help works even before deps are installed
     const zip = new AdmZip(zipPath);
+    // Vet EVERY entry before writing ANY: a refused archive leaves nothing half-extracted behind.
+    const root = path.resolve(targetDir);
+    for (const entry of zip.getEntries()) {
+        containedEntryPath(root, entry.entryName);
+        if (isSymlinkEntry(entry)) throw new Error(`Refusing ZIP entry that is a symbolic link: ${entry.entryName}`);
+    }
     zip.extractAllTo(targetDir, true);
     // Official bundles put files at the ZIP root; tolerate a single wrapper folder too.
     if (!fs.existsSync(path.join(targetDir, 'package.json'))) {
@@ -332,6 +467,76 @@ function extractZip(zipPath, targetDir) {
             }
         }
     }
+}
+
+/**
+ * Obtain the release ZIP — a local file, an https:// URL, or the GitHub release (latest or --version)
+ * — and verify its SHA-256 BEFORE anything is extracted. Shared by create, upgrade, gateway and join so
+ * every path that installs code applies the same rule. Returns { zipPath, tag, cleanup }.
+ */
+async function obtainBundleZip(opts) {
+    let tmpDir = null;
+    const cleanup = () => { if (tmpDir) { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best-effort */ } } };
+    let zipPath;
+    let tag = opts.version || null;
+    const checks = [];   // [{ expected, source }] — every one must match
+    if (opts.sha256) checks.push({ expected: opts.sha256, source: '--sha256' });
+
+    if (opts.zip) {
+        const src = classifyZipSource(opts.zip);
+        if (src.kind === 'refused') {
+            fail(`Refusing --zip ${opts.zip}: only https:// URLs and local file paths are accepted (got ${src.scheme}://).`,
+                'A bundle fetched over plain http:// can be replaced in transit. Serve it over https, or download it yourself and pass the local path (with --sha256 <hex>).');
+        }
+        if (src.kind === 'file') {
+            zipPath = path.resolve(process.cwd(), src.path);
+            if (!fs.existsSync(zipPath)) fail(`ZIP not found: ${zipPath}`);
+            console.log(`  Using local bundle: ${zipPath}`);
+        } else {
+            tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'create-wordjs-'));
+            zipPath = path.join(tmpDir, 'wordjs.zip');
+            await download(src.url, zipPath, 'wordjs.zip');
+            if (!opts.sha256) {
+                console.warn('  ⚠️  No --sha256 given for this --zip URL — its integrity is NOT verified.');
+                console.warn('     Pass --sha256 <hex> (from the release\'s .sha256 asset) to pin it.');
+            }
+        }
+    } else {
+        console.log(opts.version ? `  Looking up release ${opts.version} of ${REPO}…` : `  Looking up the latest release of ${REPO}…`);
+        const asset = await resolveReleaseAsset(opts.version);
+        tag = asset.tag;
+        console.log(`  Found ${asset.tag} → ${asset.name}`);
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'create-wordjs-'));
+        zipPath = path.join(tmpDir, asset.name);
+        await download(asset.url, zipPath, asset.name);
+        if (asset.checksumUrl) {
+            const expected = parseChecksumFile(await downloadText(asset.checksumUrl), asset.name);
+            if (!expected) {
+                cleanup();
+                fail(`${asset.checksumName} does not contain a SHA-256 for ${asset.name}.`, 'Refusing to install a bundle that cannot be verified.');
+            }
+            checks.push({ expected, source: asset.checksumName });
+        } else {
+            // Releases published before the checksum asset existed. Installing them still works (so
+            // `--version <old-tag>` rollbacks keep working), but say plainly that nothing was verified.
+            console.warn(`  ⚠️  Release ${asset.tag} publishes no ${asset.name}.sha256 — the download's integrity`);
+            console.warn('     could NOT be verified (releases before the checksum asset was introduced).');
+            console.warn('     Pin one with --sha256 <hex> if you have it from a trusted source.');
+        }
+    }
+
+    if (checks.length) {
+        const actual = await sha256File(zipPath);
+        for (const { expected, source } of checks) {
+            if (actual !== expected) {
+                cleanup();
+                fail(`SHA-256 mismatch for the release ZIP (checked against ${source}).`,
+                    `expected ${expected}\n  got      ${actual}\n  Refusing to install — the download is corrupt or has been tampered with.`);
+            }
+        }
+        console.log(`  ✓ SHA-256 verified (${checks.map((c) => c.source).join(' + ')})`);
+    }
+    return { zipPath, tag, cleanup };
 }
 
 function runNpmScript(script, cwd, extraEnv) {
@@ -791,30 +996,16 @@ function copyMerge(src, dest, rel = '') {
 // Download (or use a local/URL) release ZIP and extract it into a fresh temp dir. Returns the
 // extracted app root + a cleanup fn. Reuses the same resolution the create flow uses.
 async function obtainReleaseToTemp(opts) {
-    let tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wordjs-upgrade-'));
-    const cleanup = () => { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best-effort */ } };
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wordjs-upgrade-'));
+    let zipCleanup = () => {};
+    const cleanup = () => { zipCleanup(); try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best-effort */ } };
     try {
-        let zipPath;
-        let tag = opts.version || null;
-        if (opts.zip && !/^https?:\/\//i.test(opts.zip)) {
-            zipPath = path.resolve(process.cwd(), opts.zip);
-            if (!fs.existsSync(zipPath)) fail(`ZIP not found: ${zipPath}`);
-        } else {
-            let url = opts.zip;
-            let name = 'wordjs.zip';
-            if (!url) {
-                console.log(opts.version ? `  Looking up release ${opts.version} of ${REPO}…` : `  Looking up the latest release of ${REPO}…`);
-                const asset = await resolveReleaseAsset(opts.version);
-                url = asset.url; name = asset.name; tag = asset.tag;
-                console.log(`  Found ${asset.tag} → ${asset.name}`);
-            }
-            zipPath = path.join(tmpDir, name);
-            await download(url, zipPath, name);
-        }
+        const obtained = await obtainBundleZip(opts);
+        zipCleanup = obtained.cleanup;
         const extractDir = path.join(tmpDir, 'extracted');
         fs.mkdirSync(extractDir, { recursive: true });
-        extractZip(zipPath, extractDir);
-        return { extractDir, tag, cleanup };
+        extractZip(obtained.zipPath, extractDir);
+        return { extractDir, tag: obtained.tag, cleanup };
     } catch (e) {
         cleanup();
         throw e;
@@ -942,27 +1133,11 @@ async function scaffoldBundle(opts, targetDir) {
         fs.mkdirSync(targetDir, { recursive: true });
     }
 
-    let tmpDir = null, zipPath = null;
-    if (opts.zip && !/^https?:\/\//i.test(opts.zip)) {
-        zipPath = path.resolve(process.cwd(), opts.zip);
-        if (!fs.existsSync(zipPath)) fail(`ZIP not found: ${zipPath}`);
-        console.log(`  Using local bundle: ${zipPath}`);
-    } else {
-        let url = opts.zip, name = 'wordjs.zip';
-        if (!url) {
-            console.log(opts.version ? `  Looking up release ${opts.version} of ${REPO}…` : `  Looking up the latest release of ${REPO}…`);
-            const asset = await resolveReleaseAsset(opts.version);
-            url = asset.url; name = asset.name;
-            console.log(`  Found ${asset.tag} → ${asset.name}`);
-        }
-        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'create-wordjs-'));
-        zipPath = path.join(tmpDir, name);
-        await download(url, zipPath, name);
-    }
+    const { zipPath, cleanup } = await obtainBundleZip(opts);
 
     console.log(`  Extracting into ${targetDir}…`);
     try { extractZip(zipPath, targetDir); }
-    finally { if (tmpDir) { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best-effort */ } } }
+    finally { cleanup(); }
 
     let pkg = {};
     try { pkg = JSON.parse(fs.readFileSync(path.join(targetDir, 'package.json'), 'utf8')); } catch { /* handled below */ }
@@ -990,7 +1165,10 @@ async function gateway(opts) {
     runNode('scripts/cluster.js', ['init', '--host', host], targetDir);
 
     // Read the CA fingerprint and mint a token per role (capturing the raw token for the join command).
-    const fp = (runNodeCapture('scripts/cluster.js', ['info'], targetDir).match(/CA fingerprint:\s*([0-9a-f]{64})/) || [])[1] || '<fingerprint>';
+    // The join commands below are only safe with the real fingerprint in them (join requires --ca-hash),
+    // so a missing one is fatal here rather than a '<fingerprint>' placeholder pasted onto the nodes.
+    const fp = (runNodeCapture('scripts/cluster.js', ['info'], targetDir).match(/CA fingerprint:\s*([0-9a-f]{64})/) || [])[1];
+    if (!fp) fail('Could not read the cluster CA fingerprint from "node scripts/cluster.js info".', `Run it yourself in ${opts.dir} and pass the value to join as --ca-hash.`);
     const mint = (role) => (runNodeCapture('scripts/cluster.js', ['token', role, '--ttl', '120'], targetDir)
         .match(new RegExp(`wjc\\.${role}\\.[A-Za-z0-9_-]+`)) || [])[0] || '<token>';
     const beTok = mint('backend'), feTok = mint('frontend');
@@ -1030,7 +1208,13 @@ async function join(opts) {
     }
     if (!opts.gateway) fail('--gateway <gateway-ip/dns> is required for join.');
     if (!opts.token) fail('--token <join-token> is required for join.', `Mint one on the gateway: node scripts/cluster.js token ${opts.role}`);
-    if (!opts.caHash) console.warn('  ⚠️  No --ca-hash given — skipping the MITM fingerprint check (fine on a trusted network).');
+    // The CA pin is what stops an on-path attacker from receiving the token, the cluster secret and a
+    // CA-signed cert during enrollment, so it is required. Checked HERE, before the download + install.
+    if (!opts.caHash) {
+        fail('--ca-hash <sha256> is required for join.',
+            'Use the fingerprint the gateway printed (node scripts/cluster.js info on the gateway). Enrolling without it\n  would be trust-on-first-use, which is not supported.');
+    }
+    if (!normalizeSha256(opts.caHash)) fail(`--ca-hash must be the 64-character hex CA fingerprint, got "${opts.caHash}".`);
 
     const targetDir = path.resolve(process.cwd(), opts.dir);
     console.log(`\n🚀 create-wordjs · join ${opts.role} (separate mode)\n`);
@@ -1039,7 +1223,7 @@ async function join(opts) {
     const advertise = opts.advertise || firstLanIp();
     const args = ['--role', opts.role, '--gateway', opts.gateway, '--enroll-port', String(opts.enrollPort || 3101),
         '--token', opts.token, '--advertise', advertise];
-    if (opts.caHash) args.push('--ca-hash', opts.caHash);
+    args.push('--ca-hash', opts.caHash);
     if (opts.start) args.push('--start');
 
     console.log(`\n🎟️  Enrolling ${opts.role} with gateway ${opts.gateway} (advertise ${advertise})…\n`);
@@ -1095,34 +1279,16 @@ async function main() {
 
     console.log('\n🚀 create-wordjs\n');
 
-    // 1) Obtain the release ZIP (local path, direct URL, or GitHub latest/tagged release).
-    let tmpDir = null;
-    let zipPath = null;
-    if (opts.zip && !/^https?:\/\//i.test(opts.zip)) {
-        zipPath = path.resolve(process.cwd(), opts.zip);
-        if (!fs.existsSync(zipPath)) fail(`ZIP not found: ${zipPath}`);
-        console.log(`  Using local bundle: ${zipPath}`);
-    } else {
-        let url = opts.zip;
-        let name = 'wordjs.zip';
-        if (!url) {
-            console.log(opts.version ? `  Looking up release ${opts.version} of ${REPO}…` : `  Looking up the latest release of ${REPO}…`);
-            const asset = await resolveReleaseAsset(opts.version);
-            url = asset.url;
-            name = asset.name;
-            console.log(`  Found ${asset.tag} → ${asset.name}`);
-        }
-        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'create-wordjs-'));
-        zipPath = path.join(tmpDir, name);
-        await download(url, zipPath, name);
-    }
+    // 1) Obtain the release ZIP (local path, https URL, or GitHub latest/tagged release) and verify
+    //    its SHA-256 before anything is extracted.
+    const { zipPath, cleanup } = await obtainBundleZip(opts);
 
     // 2) Extract + sanity-check that this really is a WordJS release bundle.
     console.log(`  Extracting into ${targetDir}…`);
     try {
         extractZip(zipPath, targetDir);
     } finally {
-        if (tmpDir) { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best-effort */ } }
+        cleanup();
     }
     const pkgPath = path.join(targetDir, 'package.json');
     let pkg = {};
@@ -1220,6 +1386,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-    pickBundleAsset, extractZip, parseArgs, buildSystemdFiles, systemdInstallSteps, writeSystemdFiles,
+    pickBundleAsset, pickChecksumAsset, extractZip, normalizeSha256, parseChecksumFile, classifyZipSource, sha256File,
+    parseArgs, buildSystemdFiles, systemdInstallSteps, writeSystemdFiles,
     sysctlDropIn, serviceUserProblem, systemdPreflight, createSystemdStagingDir, LOW_PORT_ADVICE, HELP,
 };

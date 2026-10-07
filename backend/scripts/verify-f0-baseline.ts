@@ -285,17 +285,107 @@ function harnessOperationIds(file: string): string[] | null {
  *     exactly that case in the F0 file. Here the operation set and the harness that measures it are
  *     compared both ways, so adding an operation to either side without the other fails.
  *
+ *   - One host's ratios judging another host. A ratio to a same-run reference is stable across runs on
+ *     one host, not across hosts (the denominator is autocommit writes, two numerators are mostly CPU),
+ *     so a Windows-minted budget flapped on the Linux runners that enforce it. Observations and ratio
+ *     ceilings therefore live in `calibrations.<platform>`, never in the shared block, and the platform
+ *     CI enforces on must have one — otherwise its ratio comparison would be skipped as uncalibrated.
+ *
  * This function never measures anything: timing belongs in backend/src/tests/f6-performance-budget.test.ts,
  * which runs in `npm test`. What it guarantees is that the budget is complete, internally consistent,
  * still descended from F0's ceilings, and still wired to a gate that executes it.
  */
+
+/**
+ * Platforms that MUST carry a calibration: every CI job that runs f6-performance-budget.test.ts (the
+ * Backend job's `npm test` and the F6 phase suites) runs on ubuntu. Without a linux calibration the
+ * suite reports the ratio comparison as skipped on the very runners that are supposed to enforce it.
+ */
+const REQUIRED_CALIBRATIONS = ['linux'];
+
+/**
+ * Every rule a single-platform budget used to obey, now obeyed by EACH calibration on its own: the ratio
+ * ceiling inside the margin window around its own observation, the observation recorded (Number.isFinite
+ * on the raw value — Number(null) is 0 and passes a coercing check, which is how an uncalibrated ceiling
+ * reads as a valid one), the reference observation strictly inside the shared bounds, the absolute
+ * ceiling above what this host already measured, and the operation set equal to the shared one in both
+ * directions — a calibration that omits an operation would leave it ratio-free on that platform.
+ */
+function verifyCalibrations(budget: any, operationIds: string[], margin: number[], positive: (value: any) => boolean): string[] {
+    const problems: string[] = [];
+    const calibrations = budget.calibrations;
+    if (!calibrations || typeof calibrations !== 'object' || Array.isArray(calibrations) || !Object.keys(calibrations).length) {
+        return ['performanceBudget.calibrations: missing or empty — every ratio ceiling is a property of the platform it was measured on, so with no calibration nothing is enforced anywhere'];
+    }
+    for (const platform of REQUIRED_CALIBRATIONS) {
+        if (!Object.prototype.hasOwnProperty.call(calibrations, platform)) {
+            problems.push(`performanceBudget.calibrations.${platform}: missing — CI runs the harness on ${platform}, and an uncalibrated platform has its ratio comparison skipped. Mint one with backend/scripts/perf-calibrate.mjs --calibrate`);
+        }
+    }
+    const reference = budget.reference || {};
+    const operations = budget.operations || {};
+    for (const [platform, calibration] of Object.entries<any>(calibrations)) {
+        const at = `performanceBudget.calibrations.${platform}`;
+        if (!calibration || typeof calibration !== 'object') {
+            problems.push(`${at}: expected an object`);
+            continue;
+        }
+        const measuredOn = calibration.measuredOn || {};
+        if (measuredOn.platform !== platform) {
+            problems.push(`${at}.measuredOn.platform: ${stable(measuredOn.platform)} — a calibration filed under ${platform} must have been measured on ${platform}`);
+        }
+        if (!positive(measuredOn.runs) || !Number.isInteger(measuredOn.runs)) problems.push(`${at}.measuredOn.runs: expected a positive integer, got ${stable(measuredOn.runs)}`);
+        if (!positive(measuredOn.ceilingFactor)) {
+            problems.push(`${at}.measuredOn.ceilingFactor: expected a positive number, got ${stable(measuredOn.ceilingFactor)}`);
+        } else if (margin.length === 2 && (measuredOn.ceilingFactor < margin[0] || measuredOn.ceilingFactor > margin[1])) {
+            problems.push(`${at}.measuredOn.ceilingFactor: ${measuredOn.ceilingFactor}x is outside the ${stable(margin)} window`);
+        }
+
+        const observedReference = calibration.reference && calibration.reference.observedMillisecondsTrimmedMean;
+        if (!positive(observedReference)) {
+            problems.push(`${at}.reference.observedMillisecondsTrimmedMean: expected a positive number, got ${stable(observedReference)}`);
+        } else if (positive(reference.minimumMillisecondsTrimmedMean) && positive(reference.maximumMillisecondsTrimmedMean)
+            && !(reference.minimumMillisecondsTrimmedMean < observedReference && observedReference < reference.maximumMillisecondsTrimmedMean)) {
+            problems.push(`${at}.reference: the recorded observation must sit strictly inside the shared bounds, otherwise the denominator gate is red or vacuous from the first run on ${platform}`);
+        }
+
+        const calibrated = (calibration.operations && typeof calibration.operations === 'object') ? calibration.operations : {};
+        for (const id of operationIds.filter((id) => !Object.prototype.hasOwnProperty.call(calibrated, id))) {
+            problems.push(`${at}.operations.${id}: missing — a budgeted operation with no ratio ceiling on ${platform} is unenforced there`);
+        }
+        for (const [id, spec] of Object.entries<any>(calibrated)) {
+            if (!operationIds.includes(id)) {
+                problems.push(`${at}.operations.${id}: calibrated but not in performanceBudget.operations — a ceiling for an operation nothing budgets is dead text`);
+                continue;
+            }
+            if (!spec || typeof spec !== 'object') {
+                problems.push(`${at}.operations.${id}: expected an object`);
+                continue;
+            }
+            if (!positive(spec.observedRatioToReference)) problems.push(`${at}.operations.${id}.observedRatioToReference: no recorded measurement justifies the ceiling`);
+            if (!positive(spec.maximumRatioToReference)) problems.push(`${at}.operations.${id}.maximumRatioToReference: expected a positive number, got ${stable(spec.maximumRatioToReference)}`);
+            if (positive(spec.observedRatioToReference) && positive(spec.maximumRatioToReference) && margin.length === 2) {
+                const factor = spec.maximumRatioToReference / spec.observedRatioToReference;
+                if (factor < margin[0]) problems.push(`${at}.operations.${id}: ceiling is ${factor.toFixed(2)}x the recorded observation, under the ${margin[0]}x floor — it will flap on a loaded host and be disabled`);
+                if (factor > margin[1]) problems.push(`${at}.operations.${id}: ceiling is ${factor.toFixed(2)}x the recorded observation, over the ${margin[1]}x cap — a threshold nothing can fail is the same defect as no threshold`);
+            }
+            if (!positive(spec.observedMillisecondsP95)) problems.push(`${at}.operations.${id}.observedMillisecondsP95: no recorded absolute measurement`);
+            const ceiling = operations[id] && operations[id].maximumMillisecondsP95;
+            if (positive(ceiling) && positive(spec.observedMillisecondsP95) && ceiling <= spec.observedMillisecondsP95) {
+                problems.push(`${at}.operations.${id}: the shared absolute ceiling ${ceiling}ms is at or below the ${spec.observedMillisecondsP95}ms already measured on ${platform}, so it is red on arrival there`);
+            }
+        }
+    }
+    return problems;
+}
+
 function verifyPerformanceBudget(baseline: any): string[] {
     const problems: string[] = [];
     const budget = baseline && baseline.performanceBudget;
     if (!budget) {
         return ['performanceBudget: missing — F6 cannot certify "within the budget defined in F0" when no budget exists'];
     }
-    if (budget.schemaVersion !== 1) problems.push(`performanceBudget.schemaVersion: expected 1, got ${stable(budget.schemaVersion)}`);
+    if (budget.schemaVersion !== 2) problems.push(`performanceBudget.schemaVersion: expected 2 (one calibration per platform), got ${stable(budget.schemaVersion)}`);
 
     const positive = (value: any) => typeof value === 'number' && Number.isFinite(value) && value > 0;
     const method = budget.methodology || {};
@@ -313,13 +403,13 @@ function verifyPerformanceBudget(baseline: any): string[] {
     if (!planOperations.length) problems.push('performanceBudget.methodology.planOperations: the F6 plan names creation, update, query and render — the list may not be empty');
 
     const reference = budget.reference || {};
-    for (const key of ['observedMillisecondsTrimmedMean', 'minimumMillisecondsTrimmedMean', 'maximumMillisecondsTrimmedMean']) {
+    for (const key of ['minimumMillisecondsTrimmedMean', 'maximumMillisecondsTrimmedMean']) {
         if (!positive(reference[key])) problems.push(`performanceBudget.reference.${key}: expected a positive number, got ${stable(reference[key])}`);
     }
-    if (positive(reference.minimumMillisecondsTrimmedMean) && positive(reference.maximumMillisecondsTrimmedMean) && positive(reference.observedMillisecondsTrimmedMean)) {
-        if (!(reference.minimumMillisecondsTrimmedMean < reference.observedMillisecondsTrimmedMean && reference.observedMillisecondsTrimmedMean < reference.maximumMillisecondsTrimmedMean)) {
-            problems.push('performanceBudget.reference: the recorded observation must sit strictly inside its own bounds, otherwise the denominator gate is red or vacuous from the first run');
-        }
+    // A per-host number in the SHARED block would be judged against every platform — the exact defect
+    // the calibrations replaced — so the observation may only live inside a calibration.
+    if (Object.prototype.hasOwnProperty.call(reference, 'observedMillisecondsTrimmedMean')) {
+        problems.push('performanceBudget.reference.observedMillisecondsTrimmedMean: an observation is a property of one host — it belongs in calibrations.<platform>.reference');
     }
 
     const budgets = fs.existsSync(BUDGETS_PATH) ? JSON.parse(fs.readFileSync(BUDGETS_PATH, 'utf8')) : { contentMilliseconds: {} };
@@ -337,20 +427,12 @@ function verifyPerformanceBudget(baseline: any): string[] {
         if (typeof spec.callSite !== 'string' || !spec.callSite.trim()) {
             problems.push(`performanceBudget.operations.${id}.callSite: a budget that does not name the call it measures cannot be checked against the harness`);
         }
-        // Number.isFinite on the RAW value: Number(null) is 0 and would pass a coercing check, which is
-        // how an uncalibrated ceiling reads as a valid one.
-        if (!positive(spec.observedRatioToReference)) problems.push(`performanceBudget.operations.${id}.observedRatioToReference: no recorded measurement justifies the ceiling`);
-        if (!positive(spec.maximumRatioToReference)) problems.push(`performanceBudget.operations.${id}.maximumRatioToReference: expected a positive number, got ${stable(spec.maximumRatioToReference)}`);
-        if (positive(spec.observedRatioToReference) && positive(spec.maximumRatioToReference) && margin.length === 2) {
-            const factor = spec.maximumRatioToReference / spec.observedRatioToReference;
-            if (factor < margin[0]) problems.push(`performanceBudget.operations.${id}: ceiling is ${factor.toFixed(2)}x the recorded observation, under the ${margin[0]}x floor — it will flap on a loaded host and be disabled`);
-            if (factor > margin[1]) problems.push(`performanceBudget.operations.${id}: ceiling is ${factor.toFixed(2)}x the recorded observation, over the ${margin[1]}x cap — a threshold nothing can fail is the same defect as no threshold`);
+        for (const key of ['observedRatioToReference', 'maximumRatioToReference', 'observedMillisecondsP95']) {
+            if (Object.prototype.hasOwnProperty.call(spec, key)) {
+                problems.push(`performanceBudget.operations.${id}.${key}: an observation or ratio ceiling is a property of one host — it belongs in calibrations.<platform>.operations.${id}`);
+            }
         }
         if (!positive(spec.maximumMillisecondsP95)) problems.push(`performanceBudget.operations.${id}.maximumMillisecondsP95: the secondary catastrophe ceiling is missing`);
-        if (!positive(spec.observedMillisecondsP95)) problems.push(`performanceBudget.operations.${id}.observedMillisecondsP95: no recorded absolute measurement`);
-        if (positive(spec.maximumMillisecondsP95) && positive(spec.observedMillisecondsP95) && spec.maximumMillisecondsP95 <= spec.observedMillisecondsP95) {
-            problems.push(`performanceBudget.operations.${id}: the absolute ceiling is at or below the value already measured, so it is red on arrival`);
-        }
         // THE KEY MUST BE DECLARED, not merely valid when present.
         //
         // All three gates that enforce "F6 may not loosen a committed F0 ceiling" used to skip an
@@ -380,6 +462,8 @@ function verifyPerformanceBudget(baseline: any): string[] {
     if (missingPlan.length) problems.push(`performanceBudget.operations: the F6 plan operations ${stable(missingPlan)} have no budgeted operation`);
     const duplicated = covered.filter((name, index) => covered.indexOf(name) !== index);
     if (duplicated.length) problems.push(`performanceBudget.operations: ${stable([...new Set(duplicated)])} is covered by more than one operation, so "the plan operation is budgeted" no longer identifies which measurement enforces it`);
+
+    problems.push(...verifyCalibrations(budget, operationIds, margin, positive));
 
     const http = budget.httpSteadyState || {};
     if (!http.reference || typeof http.reference.path !== 'string' || !http.reference.path.trim()) {

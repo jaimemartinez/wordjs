@@ -193,10 +193,22 @@ class Comment {
     }
 
     /**
-     * Get all comments
-     * Equivalent to get_comments()
+     * The WHERE clause shared by findAll() and count(), so the rows and the X-WP-Total that
+     * accompanies them can never answer different questions.
+     *
+     * Two options exist for the PUBLIC surface (routes/comments.ts), and both are opt-in so an
+     * internal caller keeps the unrestricted query:
+     *
+     *  · `searchAuthorEmail` — `search` also matches comment_author_email. Only a moderator may ask:
+     *    the email is private PII that the public projection never returns, and matching on it handed
+     *    anonymous callers a LIKE oracle ("does any commenter's address start with bob.hidden@vic?",
+     *    one character at a time).
+     *  · `publicOnlyExcludingTypes` — restrict to comments whose PARENT entry is public: published, not
+     *    password protected, and not of one of these (internal or non-public) types. The same filter
+     *    the comments RSS feed applies (routes/seo.ts); without it the list served the approved
+     *    comments of drafts, private entries, trash and protected entries to anyone.
      */
-    static async findAll(options: any = {}) {
+    static _buildWhere(options: any = {}) {
         const {
             postId,
             status,
@@ -204,13 +216,10 @@ class Comment {
             userId,
             type = 'comment',
             search,
-            limit = 20,
-            offset = 0,
-            orderBy = 'comment_date',
-            order = 'DESC'
+            searchAuthorEmail = false,
+            publicOnlyExcludingTypes,
         } = options;
 
-        let sql = 'SELECT * FROM comments';
         const conditions: string[] = [];
         const params: any[] = [];
 
@@ -240,10 +249,47 @@ class Comment {
         }
 
         if (search) {
-            conditions.push('(comment_author LIKE ? OR comment_content LIKE ? OR comment_author_email LIKE ?)');
             const searchTerm = `%${search}%`;
-            params.push(searchTerm, searchTerm, searchTerm);
+            if (searchAuthorEmail) {
+                conditions.push('(comment_author LIKE ? OR comment_content LIKE ? OR comment_author_email LIKE ?)');
+                params.push(searchTerm, searchTerm, searchTerm);
+            } else {
+                conditions.push('(comment_author LIKE ? OR comment_content LIKE ?)');
+                params.push(searchTerm, searchTerm);
+            }
         }
+
+        if (Array.isArray(publicOnlyExcludingTypes)) {
+            // A correlated EXISTS rather than a JOIN keeps `SELECT *` / `COUNT(*)` over `comments`
+            // alone, so no column of `posts` can shadow a comment column in the result rows.
+            const excluded = publicOnlyExcludingTypes.length
+                ? ` AND p.post_type NOT IN (${publicOnlyExcludingTypes.map(() => '?').join(',')})`
+                : '';
+            conditions.push(
+                'EXISTS (SELECT 1 FROM posts p WHERE p.id = comments.comment_post_id ' +
+                "AND p.post_status = 'publish' AND (p.post_password IS NULL OR p.post_password = '')" +
+                `${excluded})`
+            );
+            params.push(...publicOnlyExcludingTypes);
+        }
+
+        return { conditions, params };
+    }
+
+    /**
+     * Get all comments
+     * Equivalent to get_comments()
+     */
+    static async findAll(options: any = {}) {
+        const {
+            limit = 20,
+            offset = 0,
+            orderBy = 'comment_date',
+            order = 'DESC'
+        } = options;
+
+        let sql = 'SELECT * FROM comments';
+        const { conditions, params } = Comment._buildWhere(options);
 
         if (conditions.length > 0) {
             sql += ' WHERE ' + conditions.join(' AND ');
@@ -265,37 +311,9 @@ class Comment {
      * Count comments
      */
     static async count(options: any = {}) {
-        const { postId, status, parent, type = 'comment', search } = options;
-
+        // count() never filtered by user; keep that contract while sharing the rest of the clause.
         let sql = 'SELECT COUNT(*) as count FROM comments';
-        const conditions: string[] = [];
-        const params: any[] = [];
-
-        if (postId) {
-            conditions.push('comment_post_id = ?');
-            params.push(postId);
-        }
-
-        if (status !== undefined) {
-            conditions.push('comment_approved = ?');
-            params.push(status);
-        }
-
-        if (parent !== undefined) {
-            conditions.push('comment_parent = ?');
-            params.push(parent);
-        }
-
-        if (type) {
-            conditions.push('comment_type = ?');
-            params.push(type);
-        }
-
-        if (search) {
-            conditions.push('(comment_author LIKE ? OR comment_content LIKE ? OR comment_author_email LIKE ?)');
-            const searchTerm = `%${search}%`;
-            params.push(searchTerm, searchTerm, searchTerm);
-        }
+        const { conditions, params } = Comment._buildWhere({ ...options, userId: undefined });
 
         if (conditions.length > 0) {
             sql += ' WHERE ' + conditions.join(' AND ');

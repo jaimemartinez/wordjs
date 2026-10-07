@@ -47,6 +47,9 @@ function formatFromUrl(url: string): string {
     }
 }
 
+// Characters removed from interpolated values: quotes, backslash, angle brackets and C0 controls.
+const UNSAFE_IN_CSS_STRING = /['"\\<>\u0000-\u001f\u007f]/g;
+
 /**
  * Build a block of @font-face rules for every installed font. Returns '' when there are none.
  * The `family`/`variant`/`url` come straight from GET /fonts (the same source the editor's font pickers
@@ -57,9 +60,13 @@ export function buildFontFaceCss(fonts: WjsFont[] | null | undefined): string {
     if (!Array.isArray(fonts) || fonts.length === 0) return '';
     const rules: string[] = [];
     for (const font of fonts) {
-        // Strip quotes/backslashes so a crafted family name can't break out of the '...' literal.
-        const family = String(font?.family || '').replace(/['"\\]/g, '').trim();
-        const url = String(font?.url || '').trim();
+        // Both values land inside '...' literals of a <style> that the SSR layout writes RAW
+        // (dangerouslySetInnerHTML), so strip every character that could end the CSS string (quotes,
+        // backslash escapes, newlines/control chars) or the <style> element itself ('<' / '>' — a
+        // family named `</style><script>…` would otherwise close the element and inject markup into
+        // every public page's <head>). None of these is meaningful in a font family name or a URL.
+        const family = String(font?.family || '').replace(UNSAFE_IN_CSS_STRING, '').trim();
+        const url = String(font?.url || '').replace(UNSAFE_IN_CSS_STRING, '').trim();
         if (!family || !url) continue;
         const weight = weightFromVariant(font.variant || '');
         const style = /italic/i.test(font.variant || '') ? 'italic' : 'normal';

@@ -11,7 +11,7 @@
       "paths": 186,
       "operations": 236,
       "coverage": 0.9712,
-      "semanticSha256": "d385229f2a233b7a734b065dd74d70da801d5e600586f18a815fa966763545d6"
+      "semanticSha256": "fe8e9585d9ca63010f77d583095261788084a89ad488d401775eac88d41c24be"
     },
     "typingDebt": {
       "requestAny": {
@@ -43,9 +43,9 @@
       "semanticSha256": "dd4150cbbf70aa15c90992d91c4954c7d0502e27ca6901eef6c717dcc4f33c8e"
     },
     "verificationSurface": {
-      "backendTestFiles": 252,
-      "frontendTestFiles": 195,
-      "sandboxWorkflowSemanticSha256": "92f02c0dcc36ed33a1bb856965140739906fda1f4422852f5b50ea518711e4a0",
+      "backendTestFiles": 253,
+      "frontendTestFiles": 197,
+      "sandboxWorkflowSemanticSha256": "85975c9f4aa92ae741121a3666cbd9b256305a436a27be7848307a7f371fceeb",
       "performanceBudgetsSha256": "5a608e783d98267030d14c9ce70edb7cc9f5354cbf006c31353648425d7a7556"
     }
   },
@@ -53,19 +53,9 @@
     "coverageFloor": 0.9706
   },
   "performanceBudget": {
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "why": "F0 committed absolute millisecond ceilings; F6 has to certify 'no regression beyond the F0 budget' on hosts F0 never ran on. A millisecond is a property of the machine, so the enforced budget here is a RATIO against a reference workload measured in the same process, on the same driver, in the same run. Absolute ceilings survive as a secondary catastrophe check and may never be looser than the F0 file they descend from.",
-    "measuredOn": {
-      "platform": "win32",
-      "arch": "x64",
-      "node": "22.x",
-      "driver": "sqlite-native",
-      "date": "2026-08-24",
-      "runs": 8,
-      "worstObservedRunToRunRatioSpread": 1.73,
-      "sensitivityNote": "Ceilings are 2.0x the worst of the eight calibration runs, so the gate trips somewhere between a 2.0x regression (measured on a bad run) and a 2.8x one (measured on a good run). That is the honest sensitivity: it catches the N+1 query, the lost index, the second sanitisation pass and the synchronous flush, and it does not catch a 20% slowdown. Chasing 20% on a shared runner buys false failures, not information.",
-      "provisionalMargin": "The 2.0x factor is 1.5x for measurement noise TIMES a deliberate allowance for calibrating on one platform only. The denominator is ten autocommit inserts while the numerators are transactions, so the ratio is sensitive to how expensive a per-statement durability flush is on the host filesystem; Windows pays more for that than ext4, which inflates the denominator here and would make a Windows-tight ceiling flap on a Linux runner. This looseness is recorded rather than hidden: once the harness has run on the CI host, record that observation and tighten the ceilings back toward 1.5x."
-    },
+    "calibrationsWhy": "A ratio is stable across runs on ONE host and not across hosts. The denominator is ten AUTOCOMMIT inserts, so it moves with what a per-statement durability flush costs on the host filesystem, while the numerators do not all move with it: creation and update are transactions, query and render are mostly CPU. Measured: the Linux runners record a reference of ~0.22 ms against the Windows calibration host's ~0.37 ms, so on Linux the write ratios come out at ~0.55x their Windows values and the CPU ratios at up to ~2.5x — contentRender reached 0.216x over 104 recorded CI rounds against a Windows-derived 0.18x ceiling, which is why the Backend job failed on unchanged code (0.183x on main, 0.187x on a pull request). One budget judged on both platforms is too loose on one and flaps on the other. So the shared fields (methodology, the reference bounds, call sites, absolute catastrophe ceilings, F0 descent) live once, and each platform the harness is enforced on carries its own observations and ratio ceilings under calibrations.<process.platform>. A platform with no calibration is reported as uncalibrated — its ratio comparison is skipped and says so — instead of borrowing another host's numbers; linux is required, because every CI job that runs the harness runs on Linux.",
     "methodology": {
       "warmupIterations": 10,
       "operationSamples": 60,
@@ -74,13 +64,12 @@
       "statistic": "trimmedMean",
       "planOperations": ["creation", "query", "render", "update"],
       "ceilingMarginRange": [1.2, 3.0],
-      "note": "observedRatioToReference records the WORST of the calibration runs and every ceiling sits at 2.0x it (see measuredOn.provisionalMargin for why not 1.5x). ceilingMarginRange is the window a ceiling must stay inside relative to its own recorded observation: below 1.2x it flaps on a loaded host and gets disabled within a week, above 3.0x nothing can fail it, which is the same defect as having no threshold. Loosening a ceiling therefore forces re-recording the observation beside it — a visible act in review rather than a one-character edit."
+      "note": "observedRatioToReference records the WORST of a calibration's rounds, and every ceiling sits at that calibration's measuredOn.ceilingFactor times it. ceilingMarginRange is the window a ceiling must stay inside relative to its own recorded observation: below 1.2x it flaps on a loaded host and gets disabled within a week, above 3.0x nothing can fail it, which is the same defect as having no threshold. Loosening a ceiling therefore forces re-recording the observation beside it — a visible act in review rather than a one-character edit."
     },
     "reference": {
       "id": "referenceWriteBatch",
       "workload": "ten single-row INSERTs through the active driver",
       "why": "Content operations are driver-bound, so a reference that is itself ten durable writes moves with the host and with the driver. Three candidate denominators were measured side by side in the same six runs — a single INSERT+SELECT round trip, fifty SELECT 1 round trips, and this ten-insert batch — and the batch produced the tightest run-to-run ratios (worst spread 1.24x against 1.35x and 1.33x). It is also large enough (~0.37ms) that timer jitter is not a meaningful share of the denominator, which a 6us SELECT 1 could not claim.",
-      "observedMillisecondsTrimmedMean": 0.37,
       "minimumMillisecondsTrimmedMean": 0.02,
       "maximumMillisecondsTrimmedMean": 8.0,
       "boundsNote": "The denominator is load-bearing in both directions. A reference that collapses (writes that stopped being durable) deflates nothing but inflates every ratio into a red run with a confusing message; a reference that inflates deflates every ratio and the gate would pass a real regression. Both bounds are deliberately wide — they exist to catch a change in the driver write path, not to judge the host."
@@ -89,39 +78,108 @@
       "contentCreate": {
         "planOperation": "creation",
         "callSite": "Post.create",
-        "observedRatioToReference": 11.114,
-        "maximumRatioToReference": 22.2,
-        "observedMillisecondsP95": 6.95,
         "maximumMillisecondsP95": 20,
         "f0BudgetKey": "postCreateP95"
       },
       "contentUpdate": {
         "planOperation": "update",
         "callSite": "Post.update",
-        "observedRatioToReference": 10.391,
-        "maximumRatioToReference": 20.8,
-        "observedMillisecondsP95": 7.336,
         "maximumMillisecondsP95": 30,
         "f0BudgetKey": "postUpdateP95"
       },
       "contentQuery": {
         "planOperation": "query",
         "callSite": "Post.findAllWithRelations",
-        "observedRatioToReference": 0.861,
-        "maximumRatioToReference": 1.72,
-        "observedMillisecondsP95": 0.608,
         "maximumMillisecondsP95": 15,
         "f0BudgetKey": "postListP95"
       },
       "contentRender": {
         "planOperation": "render",
         "callSite": "Post#toJSON",
-        "observedRatioToReference": 0.088,
-        "maximumRatioToReference": 0.18,
-        "observedMillisecondsP95": 0.066,
         "maximumMillisecondsP95": 1.5,
         "f0BudgetKey": null,
         "note": "The rendering operation the F6 plan names had no ceiling anywhere: f0-performance-budgets.json budgets create, update, meta, revision and list, and nothing renders. f0BudgetKey is null because there is no F0 entry to inherit from, not because the ceiling is optional."
+      }
+    },
+    "calibrations": {
+      "linux": {
+        "measuredOn": {
+          "platform": "linux",
+          "arch": "x64",
+          "node": "22.x",
+          "driver": "sqlite-native",
+          "date": "2026-10-07",
+          "runs": 104,
+          "source": "104 one-round perf-calibration.json artifacts recorded by CI in measure mode, reduced with perf-calibrate.mjs --calibrate --from",
+          "ceilingFactor": 1.5,
+          "worstObservedRunToRunRatioSpread": 2.769,
+          "sensitivityNote": "Ceilings are 1.5x the worst of the 104 calibration rounds, and the worst run-to-run ratio spread across those rounds was 2.769x. The gate therefore trips somewhere between a 1.5x regression (measured on a bad run) and a 4.154x one (measured on a good run). That is the honest sensitivity: it catches the N+1 query, the lost index, the second sanitisation pass and the synchronous flush. It does not catch a 20% slowdown, and chasing 20% on a shared runner buys false failures rather than information."
+        },
+        "reference": {
+          "observedMillisecondsTrimmedMean": 0.356
+        },
+        "operations": {
+          "contentCreate": {
+            "observedRatioToReference": 8.334,
+            "maximumRatioToReference": 12.501,
+            "observedMillisecondsP95": 2.7442
+          },
+          "contentUpdate": {
+            "observedRatioToReference": 7.108,
+            "maximumRatioToReference": 10.662,
+            "observedMillisecondsP95": 3.3197
+          },
+          "contentQuery": {
+            "observedRatioToReference": 1.605,
+            "maximumRatioToReference": 2.407,
+            "observedMillisecondsP95": 0.5355
+          },
+          "contentRender": {
+            "observedRatioToReference": 0.216,
+            "maximumRatioToReference": 0.324,
+            "observedMillisecondsP95": 0.1126
+          }
+        }
+      },
+      "win32": {
+        "measuredOn": {
+          "platform": "win32",
+          "arch": "x64",
+          "node": "22.x",
+          "driver": "sqlite-native",
+          "date": "2026-08-24",
+          "runs": 8,
+          "source": "eight rounds of this harness on an idle Windows 11 host",
+          "ceilingFactor": 2.0,
+          "worstObservedRunToRunRatioSpread": 1.73,
+          "sensitivityNote": "Ceilings are 2.0x the worst of the eight calibration runs, so the gate trips somewhere between a 2.0x regression (measured on a bad run) and a 2.8x one (measured on a good run). That is the honest sensitivity: it catches the N+1 query, the lost index, the second sanitisation pass and the synchronous flush, and it does not catch a 20% slowdown. Chasing 20% on a shared runner buys false failures, not information.",
+          "marginNote": "These ceilings are 2.0x rather than the 1.5x noise factor because they were minted when this was the ONLY calibration and had to survive being judged on a Linux runner too. That allowance no longer has a job — linux carries its own calibration — so the next step is to re-mint on an idle Windows host with `node backend/scripts/perf-calibrate.mjs --calibrate` and take its 1.5x result. Until that is done the 2.0x stays: tightening a ceiling by hand, without the observation beside it moving, is the edit this file forbids."
+        },
+        "reference": {
+          "observedMillisecondsTrimmedMean": 0.37
+        },
+        "operations": {
+          "contentCreate": {
+            "observedRatioToReference": 11.114,
+            "maximumRatioToReference": 22.2,
+            "observedMillisecondsP95": 6.95
+          },
+          "contentUpdate": {
+            "observedRatioToReference": 10.391,
+            "maximumRatioToReference": 20.8,
+            "observedMillisecondsP95": 7.336
+          },
+          "contentQuery": {
+            "observedRatioToReference": 0.861,
+            "maximumRatioToReference": 1.72,
+            "observedMillisecondsP95": 0.608
+          },
+          "contentRender": {
+            "observedRatioToReference": 0.088,
+            "maximumRatioToReference": 0.18,
+            "observedMillisecondsP95": 0.066
+          }
+        }
       }
     },
     "httpSteadyState": {

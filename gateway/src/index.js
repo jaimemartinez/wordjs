@@ -892,7 +892,12 @@ if (cluster.isPrimary) {
 
         const enrollPort = config.gatewayEnrollPort || ((config.gatewayInternalPort || 3100) + 1);
         const bind = config.gatewayInternalBind || '127.0.0.1';
-        const srv = https.createServer({ key: fs.readFileSync(SRV_KEY), cert: fs.readFileSync(SRV_CRT) }, enrollApp);
+        // Present the CHAIN (identity cert + cluster CA), not just the leaf: a joining node has no trust
+        // anchor yet, so it reads the CA out of this handshake, accepts it only if its SHA-256 equals the
+        // --ca-hash the operator pinned, and then makes the tokened call verified against it
+        // (scripts/node-join.js). The CA certificate is public; its key never leaves CERTS_DIR.
+        const srvChain = `${fs.readFileSync(SRV_CRT, 'utf8').trim()}\n${caCertPem.trim()}\n`;
+        const srv = https.createServer({ key: fs.readFileSync(SRV_KEY), cert: srvChain }, enrollApp);
         srv.on('error', (e) => logger.error(`[Gateway] [Enroll] listener error on ${bind}:${enrollPort}: ${e.message}`));
         srv.listen(enrollPort, bind, () => logger.info(`[Gateway] [Enroll] 🎟️  token-enrollment server on ${bind}:${enrollPort}`));
     }

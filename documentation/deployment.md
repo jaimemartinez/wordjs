@@ -43,7 +43,7 @@ npx create-wordjs@latest join backend  --gateway <ip> --token <t> --ca-hash <fp>
 npx create-wordjs@latest join frontend --gateway <ip> --token <t> --ca-hash <fp> --advertise <frontend-ip>
 ```
 
-Each command downloads the pre-compiled release, enrolls the machine and starts its service. Under the hood (and the manual path from a source checkout — `scripts/cluster.js init` / `token`, `scripts/node-join.js`): the gateway mints the CA (key kept `0600` on the gateway) and per-role single-use tokens; each node makes one `POST /enroll` call with a CSR, receives a signed `CN=<role>` cert + the cluster CA + bootstrap config, then starts and registers over mTLS.
+Each command downloads the pre-compiled release (verifying its SHA-256 against the release's `.sha256` asset), enrolls the machine and starts its service. `--ca-hash` is **required** by `join`: the gateway must present exactly that cluster CA before the token is sent (there is no trust-on-first-use opt-out). Under the hood (and the manual path from a source checkout — `scripts/cluster.js init` / `token`, `scripts/node-join.js`): the gateway mints the CA (key kept `0600` on the gateway) and per-role single-use tokens; each node makes one `POST /enroll` call with a CSR, receives a signed `CN=<role>` cert + the cluster CA + bootstrap config, then starts and registers over mTLS.
 
 One backend + one frontend per gateway needs **no** shared database or filesystem — SQLite stays on the single backend and the frontend reaches uploads through the gateway. Scaling a role to **N** replicas is a further step (Postgres + Redis + shared FS). Full step-by-step (npx quickstart + manual procedure): **[separate-mode.md](separate-mode.md)**; horizontal scaling: **[multi-node.md](multi-node.md)**.
 
@@ -93,7 +93,7 @@ Before anything can be published the workflow **deploys the artifact it just bui
 
 After the core bundle, the workflow runs `npm run build:marketplace` (`backend/scripts/build-marketplace.js`), which packs every plugin under `marketplace/plugins/` into per-plugin zips plus a `marketplace-index.json` catalog (sha256 per entry) in `marketplace/dist/`, then `npm run verify:marketplace` (`verify-marketplace.js --rebuild`), which re-hashes the zips on disk against the catalog entries advertising them and refuses to publish a drifted catalog.
 
-The workflow then publishes a **GitHub Release** with the versioned `wordjs-<tag>.zip` (copied from `wordjs-compiled-release.zip` on tag pushes) attached **plus the marketplace assets** (`marketplace/dist/*`), with auto-generated release notes. A manual **`workflow_dispatch`** run builds the same bundles but uploads them only as **workflow artifacts** (`wordjs-compiled-release` — the un-versioned `wordjs-compiled-release.zip` — and `wordjs-marketplace`) — no Release is created — which is handy for testing the packaging.
+The workflow then publishes a **GitHub Release** with the versioned `wordjs-<tag>.zip` (copied from `wordjs-compiled-release.zip` on tag pushes) and its checksum `wordjs-<tag>.zip.sha256` (`sha256sum` format — `<hex>  wordjs-<tag>.zip`, the file `create-wordjs` verifies the bundle against) attached **plus the marketplace assets** (`marketplace/dist/*`), with auto-generated release notes. A manual **`workflow_dispatch`** run builds the same bundles but uploads them only as **workflow artifacts** (`wordjs-compiled-release` — the un-versioned `wordjs-compiled-release.zip` — and `wordjs-marketplace`) — no Release is created — which is handy for testing the packaging.
 
 ### What the bundle contains
 
@@ -110,9 +110,9 @@ The workflow then publishes a **GitHub Release** with the versioned `wordjs-<tag
 > ```bash
 > npx create-wordjs@latest my-site
 > ```
-> It then installs the runtime dependencies for you (`npm run release:install` — no build step), seeds self-signed HTTPS (pass `--http` for plain HTTP) and starts the server (`npm run start:mono`) with a one-time install token, printing a ready-to-click `https://localhost:3000/install#token=…` URL. Pass `--no-start` to scaffold + install only; start it later with `cd my-site && npm run start:mono` (or `npm start` for the 3-service split). On a Linux server, `--systemd` (e.g. `npx create-wordjs@latest /srv/wordjs --systemd --port 443`) writes a systemd unit that runs the site as a dedicated non-root account with no capabilities instead of starting it — see **[Running as a service](#-running-as-a-service-systemd-non-root)**. The manual download below is the equivalent, step-by-step alternative.
+> It verifies the ZIP's SHA-256 against the release's `wordjs-<tag>.zip.sha256` asset before extracting it (an older release without that asset installs with a warning that it was not verified; `--zip` URLs must be `https://`, and `--sha256 <hex>` pins a checksum for a `--zip` source — see [cli.md § 2](cli.md#2-one-command-site-bootstrap-npx-create-wordjs)). It then installs the runtime dependencies for you (`npm run release:install` — no build step), seeds self-signed HTTPS (pass `--http` for plain HTTP) and starts the server (`npm run start:mono`) with a one-time install token, printing a ready-to-click `https://localhost:3000/install#token=…` URL. Pass `--no-start` to scaffold + install only; start it later with `cd my-site && npm run start:mono` (or `npm start` for the 3-service split). On a Linux server, `--systemd` (e.g. `npx create-wordjs@latest /srv/wordjs --systemd --port 443`) writes a systemd unit that runs the site as a dedicated non-root account with no capabilities instead of starting it — see **[Running as a service](#-running-as-a-service-systemd-non-root)**. The manual download below is the equivalent, step-by-step alternative.
 
-1. Download `wordjs-<tag>.zip` from the GitHub Release and unzip it.
+1. Download `wordjs-<tag>.zip` **and** `wordjs-<tag>.zip.sha256` from the GitHub Release, verify the download with `sha256sum -c wordjs-<tag>.zip.sha256` (releases published before the checksum asset was introduced do not have one), and unzip it.
 2. Install **runtime deps only** (no build/compile step — prebuilt native binaries are downloaded):
    ```bash
    npm run release:install
@@ -386,12 +386,16 @@ session.
 > **A fresh container boots UNINSTALLED, and that is deliberate.** `core/configManager.isInstalled()`
 > keys off `installedAt || dbDriver`, so *any* config written before first boot marks the instance
 > installed — and `POST /api/v1/setup/install` then answers `400 Already installed` forever, leaving a
-> site with no administrator (the CMS bootstrap seeds none by design). So the entrypoint writes nothing
+> site whose administrator nobody chose (on an empty database the backend creates a bootstrap `admin`
+> with a random password in `backend/data/initial-admin-password`). So the entrypoint writes nothing
 > by default: the container enters **setup mode**, mints an install token and serves `/install`.
 > Set **`WORDJS_PRESEED_CONFIG=1`** to opt into the opposite — a container that comes up already
 > installed, wired from the environment variables in [`docker/README.md`](../docker/README.md), with the
 > wizard skipped. That is for an external database or for a replica joining a site another node already
-> installed; it creates no administrator.
+> installed. It **requires `WORDJS_JWT_SECRET`** (≥ 64 characters, the same on every replica; generate
+> it with `openssl rand -hex 64`): there is no default, because the written config is an installed one and
+> a published default would let anyone sign an administrator session. The backend likewise refuses to
+> start on an installed config whose `jwtSecret` is a placeholder printed in this repository.
 
 ### One-click: Docker Compose
 
@@ -441,8 +445,10 @@ Then `GET /api/v1/setup/status` reports `"installed":true` and `/readyz` turns 2
 
 > The compose file at the **repository root** is a different thing: Postgres + Redis + **two** app
 > replicas demonstrating cross-node coherence. Because a second replica can only join a site that is
-> already installed, it sets `WORDJS_PRESEED_CONFIG=1` and therefore has **no administrator** — it is
-> browsable, not loggable-into. See [`docker/README.md`](../docker/README.md).
+> already installed, it sets `WORDJS_PRESEED_CONFIG=1` and skips the wizard: the administrator is the
+> bootstrap `admin`, whose random password is written into the seeding replica's data volume
+> (`/app/backend/data/initial-admin-password`). It refuses to render without `WORDJS_JWT_SECRET`. See
+> [`docker/README.md`](../docker/README.md).
 
 ### Kubernetes
 
@@ -672,7 +678,7 @@ CI runs on every pull request and on pushes to `main` and `v*` tags via `.github
 - **Verso E2E:** the visual editor's own browser gate — Playwright (chromium, headless) driving a real ephemeral monolith over plain HTTP (`dev:mono` with `WORDJS_HTTP=1`, started by Playwright's `webServer`). A `setup` project logs in via the API and shares its storage state with the specs; `perf.spec.ts` also asserts editor latency budgets (input p95, `transact` p95, TTI), read from `backend/f0-performance-budgets.json#versoEditorMilliseconds` — the one place those numbers are written. `VERSO_PERF_*_MS` can TIGHTEN them per runner; a value looser than the committed budget is refused when the spec is collected, so raising a ceiling is a reviewed edit to that file. Traces are uploaded as an artifact on failure.
 - **Frontend:** audit gate → plugin-registry regeneration (`generate-plugin-registry.js`, `generate-admin-plugin-registry.js`, `generate-verso-plugin-registry.js`) → **anti-drift gates** (`backend/public/theme-tokens.json` and `frontend/src/lib/assetVersion.generated.ts` are regenerated and diffed; both are committed, and each gate first asserts the file is tracked so `git diff --exit-code` cannot pass vacuously) → type check → lint (`npm run lint`) → **unit tests** (`npm run test`, vitest — e.g. the XSS sanitizer) → production build (`npm run build`) → coverage ratchet (`npm run test:coverage`).
 - **Compiled bundle smoke-boot:** builds the real release bundle (`npm run bundle-release`), extracts it, runs `npm run release:install` on the extract and drives it through **`scripts/smoke-deploy.sh`** in all three deploy shapes (mono, split, enrollment) — the only job that runs the packaged, compiled artifact rather than the TypeScript source. It is the same step `release.yml` runs before publishing.
-- **Performance budgets:** measures the F6 performance budget on the Linux runner and prints each observation beside its ceiling without failing the run; a manual `workflow_dispatch` runs it enforcing, or with `calibrate: true` in calibration mode.
+- **Performance budgets:** measures the F6 performance budget on the Linux runner, prints each observation beside its ceiling and enforces the committed `linux` calibration (not a required check); a manual `workflow_dispatch` with `calibrate: true` mints a fresh calibration instead.
 
 Beyond `ci.yml`, a separate **`.github/workflows/codeql.yml`** runs **CodeQL SAST** (`security-and-quality` queries, JavaScript/TypeScript) on push/PR to `main` and weekly, reporting to the repo's **Security** tab without blocking merges. A second per-push/PR workflow, **`.github/workflows/sandbox-parity.yml`**, certifies the compiled sandbox on a four-way OS matrix (`ubuntu-latest`, `ubuntu-22.04`, `macos-14`, `windows-latest`) by running `backend/scripts/verify-sandbox-parity.mjs` against the real kernel of each runner. A scheduled workflow, **`.github/workflows/dependency-audit.yml`**, runs the same `scripts/ci-audit.mjs` gate across **all six** workspaces (root, `backend`, `frontend`, `gateway`, `setup`, `packages/create-wordjs`) every day at 04:41 UTC — and on demand via `workflow_dispatch` — opening or commenting on a `Dependency audit failed (<date>)` issue that names the failing workspaces and links the run; `ci.yml` itself audits only `backend`, `gateway`, `frontend` and `packages/create-wordjs`, so the root and `setup` workspaces are covered by that sweep alone. The release pipeline (`release.yml`) also emits a **CycloneDX SBOM** (`release/wordjs-sbom.cdx.json`) attached as a release asset, and third-party Actions are **pinned to immutable commit SHAs** for supply-chain integrity.
 

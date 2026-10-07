@@ -34,34 +34,101 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   no capabilities, `NoNewPrivileges=yes` and `NODE_ENV=production` into a private temporary directory and
   prints the root-owned install steps. mail-server 2.2.5 explains a port-25 bind failure accurately
   (permission vs. the sandbox) instead of suggesting `setcap`.
-
-### Added
-
-- **`npm run pack:plugin -- <slug> [--dir <folder>]` packages a plugin into an installable ZIP.** It
-  checks the manifest, builds the frontend bundles, runs the installer's permission check and AST scan
-  on exactly what is packed, and writes `release/plugins/<slug>-<version>.zip` without `data/`, the
-  working `node_modules/` or OS junk, refusing anything the upload would reject. npm dependencies are
-  handled without flags: the plugin's `package.json` dependencies are declared in the packed manifest
-  for the server to install, or — for `"bundled": true` and for packages the server will not install
-  itself, such as native builds — a fresh production-only `node_modules/` ships in the ZIP; a required
-  package declared nowhere stops the pack.
-- **Dev-mode "Build & download ZIP" in `/admin/plugins`.** With `NODE_ENV=development`, each plugin card
-  offers a button that runs the same packer on the installed plugin (`POST /api/v1/plugins/:slug/pack`,
-  admin-only) and saves `<slug>-<version>.zip`, or shows the packer's refusal reason. Outside development
-  the route answers 404 and `GET /plugins` reports `packable: false`, so the button is hidden. `--dir` (and `WORDJS_PLUGINS_DIR` for `build-plugin.js`)
-  lets a private plugin live outside `backend/plugins/`. Documented in `documentation/plugins.md` §4–5.
-
-### Changed
-
-- **`create-wordjs` is published to npm with trusted publishing, not a stored token.** npm restricted the
-  long-lived tokens that bypass two-factor authentication, and the release workflow's `NPM_TOKEN` stopped
-  being accepted (the 2.3.0 publish failed with E404). The `npm-publish` job in `release.yml` now
-  exchanges its GitHub OIDC token for a one-time publish credential (`id-token: write`, npm ≥ 11.5.1), so
-  no npm credential is stored in the repository and each version carries provenance. It needs a trusted
-  publisher configured once on npmjs.com for `jaimemartinez/wordjs`, workflow `release.yml`.
-
-### Security
-
+- **`create-wordjs` verifies the release ZIP before extracting it.** The release workflow now publishes
+  `wordjs-<tag>.zip.sha256` (`sha256sum` format) next to every tag-named bundle, and `create-wordjs` —
+  create, `upgrade`, `gateway` and `join` — downloads it and refuses a ZIP whose SHA-256 differs.
+  Releases published before the checksum asset existed still install, with a warning that the download
+  was not verified. A new `--sha256 <hex>` option pins a checksum for `--zip` sources (and is checked on
+  top of the release checksum when both apply). `--zip` URLs must now be `https://`: plain `http://` and
+  other schemes are refused, and a redirect to a non-https URL is never followed. Local file paths are
+  unchanged.
+- **`create-wordjs` vets every ZIP entry before extracting any.** An archive containing an absolute path
+  (POSIX, drive letter or UNC), a `..` segment, an entry that resolves outside the target directory, or a
+  symbolic-link entry is refused as a whole, instead of relying on adm-zip silently rewriting such names.
+- **Separate-mode enrollment no longer trusts on first use.** `scripts/node-join.js` and
+  `create-wordjs join` now require `--ca-hash`, and the pin is enforced **before** the join token is sent:
+  the gateway's enroll listener presents the cluster CA in its TLS chain, the node accepts it only if its
+  SHA-256 matches, and the tokened request is made with full TLS verification against that CA and a
+  `CN=gateway-internal` server-identity check. Previously the request ran with TLS verification off and
+  the fingerprint, when given at all, was compared only after the gateway's response (token, cluster
+  secret and signed cert) had already been received — so an on-path attacker relaying the call was not
+  stopped even with `--ca-hash`. There is no opt-out: enrolling without a pinned CA is no longer
+  possible. **Upgrade the gateway before joining new
+  nodes:** a gateway from an earlier release sends no CA in its chain, so a pinned join against it fails
+  closed. `create-wordjs gateway` now fails instead of printing join commands with a placeholder
+  fingerprint.
+- **Scheduled and private posts now need the published-post capability.** The edit and delete gates
+  applied `edit_published_*` / `delete_published_*` only to `publish`, so a contributor could rewrite
+  their own scheduled post after an editor approved it (the unreviewed copy then went live on its own)
+  and could mark their own draft `private`. `future` and `private` now carry the same bar on every write
+  surface, moving a post into `private` needs the publish capability (`403 rest_cannot_publish`), and
+  `POST`/`PUT /posts` accept only `draft`, `pending`, `publish`, `future` and `private` as `status`.
+- **Comments follow the readability of their post.** `GET /comments` and `GET /comments/:id` served
+  the approved comments of drafts, private, trashed and password-protected posts to anyone, and
+  `POST /comments` accepted comments on any existing post, answering differently for missing and
+  unreadable ids. Callers without `moderate_comments` now only see and add comments on posts they may
+  read, and every refusal is the same `404`. Comment search no longer matches the commenter's email for
+  non-moderators.
+- **Internal post meta is no longer public.** `GET /posts*` and `GET /posts/:id/meta` returned every
+  meta key, including `_wjs_review_comments` (the editorial review thread). Callers who cannot edit the
+  post now get unprefixed keys plus `_puck_data`, `_wjs_template` and `_thumbnail_id`.
+- **Password-protected posts are no longer served in full.** Posts imported from WordPress keep
+  `post_password`, but nothing checked it. For callers who cannot edit the post, responses now carry
+  `protected: true` with empty `content`, `excerpt` and `meta._puck_data`, searches do not match them,
+  feeds show a placeholder summary and the sitemap omits them. The public theme shows "This content is
+  password protected."; unlocking a post with its password is not implemented yet.
+- **Shortcode parsing no longer freezes the server on hostile post content.** The matcher was a regex whose
+  attribute run had no bound, so every `[tag` without a closing `]` scanned to the end of the document
+  before the next one did the same: `"[gallery ".repeat(n)` cost O(n²), about 5 s for 360 KB and 87 s for
+  1.4 MB, on every serialization of the post (content and excerpt), from a draft any contributor can
+  save. `doShortcode`, `doShortcodeAsync` and `stripShortcodes` now share a single-pass scanner that
+  matches exactly the same shortcodes (1.4 MB now takes about 40 ms). Output is rebuilt in one join
+  instead of one string copy per shortcode, and at most 2000 shortcodes are processed per document; any
+  beyond that are left as written.
+- **The anonymous sidebar render endpoint escapes what it outputs.** `GET /api/v1/widgets/sidebars/:id/render`
+  is public and returns `text/html` from the API origin, but the Categories and Recent Posts widgets
+  and the widget title wrote category names, post titles and slugs into the HTML unescaped. An editor
+  could name a category `<img src=x onerror=…>` and get script running for anyone who opened the
+  URL, administrators included. All of these values are now escaped, and the response carries
+  `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox` and `X-Content-Type-Options: nosniff`.
+  Category and tag names are also stripped of HTML tags when created or updated; a name made only of
+  markup is rejected with 400. Plugins can no longer filter the rendered sidebar: `dynamic_sidebar` joins
+  `wordjs_head`/`wordjs_footer` on the list of raw-HTML hooks denied to every plugin.
+- **Widgets added since instance ids became UUIDs render again.** The renderer split
+  `<widgetId>-<instanceId>` keys on the last `-`, which cut a UUID in half, so those widgets were
+  skipped without error and the sidebar came back empty. Keys are now matched against the registered
+  widget ids, so old-style keys, UUID keys and widget ids containing `-` all resolve. The admin widgets
+  page labels them the same way.
+- **Installed font names and URLs can no longer break out of the server-rendered `<style>`.** The
+  `@font-face` builder removed quotes from the family name only. It now removes quotes, backslashes,
+  `<`, `>` and control characters from both the family name and the URL.
+- **An installed site no longer starts with a JWT secret published in this repository.** With
+  `WORDJS_PRESEED_CONFIG=1` and no `WORDJS_JWT_SECRET`, `docker/entrypoint.sh` wrote an *installed* config
+  signed with `wordjs-shared-dev-secret-change-me` (the root `docker-compose.yml` set that very value), and
+  boot kept it because the site was installed — anyone could sign a session for the bootstrap
+  administrator (user id 1). The backend now refuses to start on an installed config whose `jwtSecret` is
+  any published placeholder, with instructions to set a real one (it does not rotate it silently, which
+  would split replicas). The entrypoint requires `WORDJS_JWT_SECRET` (≥ 64 characters, no default) when
+  pre-seeding, and the root compose file refuses to render without it (`openssl rand -hex 64`).
+  **Upgrade note:** a volume pre-seeded without the variable needs its `jwtSecret` replaced, the same value
+  on every replica. The docs no longer claim the root stack cannot be logged into: its bootstrap `admin`
+  password is written to `backend/data/initial-admin-password`.
+- **A username can no longer take over another account's email.** Sign-in and password recovery tried an
+  identifier as a username before an email, and any string was a valid username, so registering the
+  username `boss@gmail.com` broke that account's email sign-in and sent its reset link to the attacker;
+  `Boss` and ` boss` also registered beside `boss`. New logins are limited to letters, digits, `.`, `_`, `-`
+  (≤ 60 characters), must not collide case-insensitively with any login or email (nor a new email with a
+  login), and an identifier containing `@` is now resolved as an email first. Existing accounts are not
+  re-validated; importers convert an invalid source login.
+- **Transactional emails escape what they interpolate.** The verification and password-reset mails put the
+  login and site name into their HTML unescaped, and the Auctions plugin's outbid mail did the same with
+  the bidder name and auction title, so markup (a phishing link) could arrive in a message the site sent.
+  They now use `escHtml`.
+- **`POST /auth/register` no longer reveals whether an email has an account.** It answered "Email already
+  exists" / "Username already exists" verbatim. With email verification required, a taken email now gets
+  the same 201 as a new one (the owner is notified instead; the body no longer carries `user`); otherwise
+  both duplicates get one generic `400 rest_user_exists`. A username's availability, and an email's when
+  verification is off, remain observable — see `documentation/security.md`.
 - **Plugin `dependencies` accept only plain npm registry version ranges.** The host installs a plugin's
   manifest `dependencies` with `npm install` in its own root at activation, and npm runs the `prepare`
   script of a `git+…`/`github:` or `file:` directory dependency even with `--ignore-scripts` — so a
@@ -97,6 +164,46 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   whole plugin folder, including its top-level `data/` (mail-server's `data/.mailenc` encryption key and
   attachments), `node_modules/` and `.git`. It now uses the same file rule as the plugin packer: no
   top-level `data/`, no `node_modules/` or `.git`, no OS junk and no symbolic links.
+
+### Added
+
+- **`npm run pack:plugin -- <slug> [--dir <folder>]` packages a plugin into an installable ZIP.** It
+  checks the manifest, builds the frontend bundles, runs the installer's permission check and AST scan
+  on exactly what is packed, and writes `release/plugins/<slug>-<version>.zip` without `data/`, the
+  working `node_modules/` or OS junk, refusing anything the upload would reject. npm dependencies are
+  handled without flags: the plugin's `package.json` dependencies are declared in the packed manifest
+  for the server to install, or — for `"bundled": true` and for packages the server will not install
+  itself, such as native builds — a fresh production-only `node_modules/` ships in the ZIP; a required
+  package declared nowhere stops the pack.
+- **Dev-mode "Build & download ZIP" in `/admin/plugins`.** With `NODE_ENV=development`, each plugin card
+  offers a button that runs the same packer on the installed plugin (`POST /api/v1/plugins/:slug/pack`,
+  admin-only) and saves `<slug>-<version>.zip`, or shows the packer's refusal reason. Outside development
+  the route answers 404 and `GET /plugins` reports `packable: false`, so the button is hidden. `--dir` (and `WORDJS_PLUGINS_DIR` for `build-plugin.js`)
+  lets a private plugin live outside `backend/plugins/`. Documented in `documentation/plugins.md` §4–5.
+
+### Changed
+
+- **`create-wordjs` is published to npm with trusted publishing, not a stored token.** npm restricted the
+  long-lived tokens that bypass two-factor authentication, and the release workflow's `NPM_TOKEN` stopped
+  being accepted (the 2.3.0 publish failed with E404). The `npm-publish` job in `release.yml` now
+  exchanges its GitHub OIDC token for a one-time publish credential (`id-token: write`, npm ≥ 11.5.1), so
+  no npm credential is stored in the repository and each version carries provenance. It needs a trusted
+  publisher configured once on npmjs.com for `jaimemartinez/wordjs`, workflow `release.yml`.
+
+### Fixed
+
+- **The F6 performance budget no longer fails the Linux CI on unchanged code.** Its ratio ceilings were
+  measured on one Windows host and judged on the Linux runners too, where the reference workload
+  (autocommit inserts) is cheaper and the mostly-CPU operations read up to ~2.5x their Windows ratios —
+  `contentRender` failed the Backend job at 0.183x and 0.187x against a 0.18x ceiling.
+  `performanceBudget` in `backend/f0-baseline.json` (schema 2) now keeps the host-independent fields once
+  and one calibration per platform under `calibrations.<platform>`: `linux` minted from 104 rounds the CI
+  perf job had recorded, at 1.5x the worst round, and the existing `win32` one. A platform with no
+  calibration has its ratio comparison skipped with the reason instead of borrowing another platform's;
+  `verify:f0` requires a `linux` calibration. `perf-calibrate.mjs` mints one platform's calibration,
+  can reduce already-recorded CI artifacts with `--from`, and reports a re-mint looser than the committed
+  ceiling as an error. The CI `Performance budgets` job now enforces the `linux` calibration on every
+  push and pull request (it is still not a required check).
 
 ## [2.3.0] - 2026-10-07
 

@@ -182,6 +182,9 @@ function commonPrefix(schemas: Schema[]): string[] {
         '    authorId?: number;',
         '    commentStatus: string;',
         '    meta?: Record<string, unknown>;',
+        // Password protection (WordPress REST content.protected). For a caller who cannot edit the
+        // entry, content/excerpt/meta._puck_data arrive empty when this is true.
+        '    protected?: boolean;',
         '    featuredMedia?: { id: number; url: string; title?: string };',
         '    categories?: ContentTermRef[];',
         '    tags?: ContentTermRef[];',

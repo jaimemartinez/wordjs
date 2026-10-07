@@ -286,11 +286,17 @@ describe('API HTTP layer', () => {
     // unauthenticated / non-moderator caller. toJSON(canModerate) gates those fields.
     it('GET /comments does not expose authorEmail/authorIp to anonymous callers', async () => {
         const Comment = require('../models/Comment');
+        // A REAL published entry: a comment whose post does not exist (or is not public) is no longer
+        // listed to anonymous callers at all, which would make this assertion vacuous.
+        const parent = await database.getDbAsync().run(
+            `INSERT INTO posts (author_id, post_title, post_content, post_status, post_type, comment_status)
+             VALUES (1, 'PII host', 'body', 'publish', 'post', 'open') RETURNING id`);
+        const postId = parent.lastID;
         await Comment.create({
-            postId: 7777, author: 'Admin', authorEmail: 'private-admin@secret.test',
+            postId, author: 'Admin', authorEmail: 'private-admin@secret.test',
             authorUrl: '', authorIp: '10.9.8.7', content: 'hello', status: '1'
         });
-        const anon = await request(app).get('/api/v1/comments?post=7777');
+        const anon = await request(app).get(`/api/v1/comments?post=${postId}`);
         assert.strictEqual(anon.status, 200);
         assert.ok(Array.isArray(anon.body) && anon.body.length >= 1, 'expected the approved comment');
         const c = anon.body[0];

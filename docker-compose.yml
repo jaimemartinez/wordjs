@@ -1,5 +1,6 @@
 # WordJS — realistic multi-service stack: Postgres + Redis + TWO app replicas sharing both.
 #
+#   export WORDJS_JWT_SECRET="$(openssl rand -hex 64)"   # or put it in a .env file next to this one
 #   docker compose up --build
 #
 # `app` and `app2` are the SAME image, both pointed at the SAME Postgres and the SAME Redis with the
@@ -27,9 +28,13 @@ x-app-env: &app-env
   # Come up ALREADY INSTALLED, wired from the variables below, with the setup wizard skipped. Required
   # here for two reasons: the database is external (the wizard would otherwise have to be told about
   # Postgres interactively), and `app2` must join the site `app` is already serving rather than run an
-  # installer of its own. The cost is that no administrator is ever created, so this stack demonstrates
-  # cross-node coherence and public browsing — it is NOT a stack you can log into. For a site you can
-  # actually install and administer, use deploy/compose (single container, SQLite, wizard-driven).
+  # installer of its own. The cost is that nobody chooses the administrator: the first replica to boot
+  # over the empty database creates a bootstrap administrator `admin` with a RANDOM password, written
+  # (mode 0600) into that replica's data volume — read it with
+  #   docker compose exec app cat /app/backend/data/initial-admin-password
+  # (or `app2` if that replica won the boot lease). So this stack CAN be logged into — sign in, change the
+  # password and the admin@example.com address, then delete that file. For a site you install and
+  # administer through the wizard, use deploy/compose (single container, SQLite, wizard-driven).
   #
   # ⚠ THESE VALUES ARE READ ONCE, ON THE FIRST BOOT OF EACH REPLICA. The entrypoint writes the config
   # into the DATA VOLUME (`app-data` / `app2-data` below) and, on every later start, takes its "existing
@@ -50,8 +55,11 @@ x-app-env: &app-env
   WORDJS_REDIS_ENABLED: "true"
   WORDJS_REDIS_HOST: redis
   WORDJS_REDIS_PORT: "6379"
-  # SHARED across replicas so tokens issued by one node validate on the other. Change for any real use.
-  WORDJS_JWT_SECRET: wordjs-shared-dev-secret-change-me
+  # SHARED across replicas so tokens issued by one node validate on the other. REQUIRED, with no default:
+  # it is the key every session is signed with, and a value printed in this file would let anyone who has
+  # read it sign in as the bootstrap administrator (the backend refuses to start on the old placeholder).
+  # Generate it with `openssl rand -hex 64` (at least 64 characters; the entrypoint checks).
+  WORDJS_JWT_SECRET: ${WORDJS_JWT_SECRET:?set WORDJS_JWT_SECRET, e.g. export WORDJS_JWT_SECRET="$(openssl rand -hex 64)"}
   PORT: "3000"
 
 services:

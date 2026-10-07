@@ -6,6 +6,7 @@
 const crypto = require('crypto');
 const { getOption, updateOption } = require('./options');
 const { doAction, applyFilters } = require('./hooks');
+const { escHtml, escAttr } = require('./formatting');
 
 // Registered widgets
 const registeredWidgets = new Map();
@@ -132,8 +133,37 @@ async function setWidgetSettings(widgetId: string, instanceId: string, settings:
 }
 
 /**
+ * Resolve a sidebar instance key ("<widgetId>-<instanceId>") to its widget and instance ids.
+ *
+ * Neither half is delimiter-free: widget ids may contain '-' (plugin widgets, 'recent-posts'), and
+ * instance ids are now crypto.randomUUID() values, which contain four. Splitting on the LAST '-' (the
+ * previous rule) turned "categories-1b9d…-…-…" into widget "categories-1b9d…-…-…" minus its tail, an
+ * unregistered id, so every widget added since the switch to UUIDs was silently skipped. Splitting on
+ * the FIRST '-' breaks hyphenated widget ids instead. So the key is matched against the REGISTERED
+ * widget ids as a prefix — longest first, so 'recent-posts' wins over a 'recent' widget — which covers
+ * both shapes: legacy base-36 keys ("categories-lx3k9a") and UUID keys. Returns null when no registered
+ * widget owns the key (the widget's plugin was removed): the caller skips it, as before.
+ */
+function parseInstanceKey(instanceKey: string): { widgetId: string; instanceId: string } | null {
+    if (typeof instanceKey !== 'string' || !instanceKey) return null;
+    let best: string | null = null;
+    for (const id of registeredWidgets.keys()) {
+        if (instanceKey === id || instanceKey.startsWith(`${id}-`)) {
+            if (best === null || id.length > best.length) best = id;
+        }
+    }
+    if (best === null) return null;
+    return { widgetId: best, instanceId: instanceKey.length > best.length ? instanceKey.slice(best.length + 1) : '' };
+}
+
+/**
  * Render a sidebar
  * Equivalent to dynamic_sidebar()
+ *
+ * The result is served ANONYMOUSLY as text/html (GET /widgets/sidebars/:id/render) and painted into
+ * every public page, so every value a built-in widget interpolates is escaped here — term names, post
+ * titles and widget titles are written by editors, not by the administrator. Only the widgets whose
+ * PURPOSE is markup ('text', 'custom_html', both admin-only to configure) emit their setting as HTML.
  */
 async function renderSidebar(sidebarId: string) {
     const sidebar = registeredSidebars.get(sidebarId);
@@ -143,11 +173,9 @@ async function renderSidebar(sidebarId: string) {
     let output = '';
 
     for (const instanceKey of widgetInstances) {
-        // Split on the LAST '-' so widget ids that themselves contain hyphens
-        // (e.g. 'recent-posts', 'custom-html', plugin widgets) resolve correctly.
-        const sep = instanceKey.lastIndexOf('-');
-        const widgetId = sep === -1 ? instanceKey : instanceKey.slice(0, sep);
-        const instanceId = sep === -1 ? '' : instanceKey.slice(sep + 1);
+        const parsed = parseInstanceKey(instanceKey);
+        if (!parsed) continue;
+        const { widgetId, instanceId } = parsed;
         const widget = registeredWidgets.get(widgetId);
 
         if (!widget) continue;
@@ -158,7 +186,7 @@ async function renderSidebar(sidebarId: string) {
         output += sidebar.beforeWidget;
 
         if (title) {
-            output += sidebar.beforeTitle + title + sidebar.afterTitle;
+            output += sidebar.beforeTitle + escHtml(title) + sidebar.afterTitle;
         }
 
         output += await widget.render(settings);
@@ -205,7 +233,7 @@ async function removeWidgetFromSidebar(sidebarId: string, instanceKey: any) {
 registerWidget('text', 'Text', {
     description: 'Arbitrary text or HTML',
     render: async (settings: any) => `<div class="textwidget">${settings.content || ''}</div>`,
-    form: (settings: any) => `<textarea name="content">${settings.content || ''}</textarea>`
+    form: (settings: any) => `<textarea name="content">${escHtml(settings.content || '')}</textarea>`
 });
 
 registerWidget('recent_posts', 'Recent Posts', {
@@ -217,7 +245,8 @@ registerWidget('recent_posts', 'Recent Posts', {
 
         let html = '<ul class="recent-posts">';
         posts.forEach((p: any) => {
-            html += `<li><a href="/${p.postName}">${p.postTitle}</a></li>`;
+            // Path segment encoded, then attribute-escaped; the title is text, never markup.
+            html += `<li><a href="/${escAttr(encodeURIComponent(String(p.postName ?? '')))}">${escHtml(p.postTitle)}</a></li>`;
         });
         html += '</ul>';
         return html;
@@ -232,7 +261,8 @@ registerWidget('categories', 'Categories', {
 
         let html = '<ul class="categories">';
         categories.forEach((c: any) => {
-            html += `<li><a href="/category/${c.slug}">${c.name}</a> (${c.count})</li>`;
+            // Term names are stored as typed by anyone with manage_categories: escape them as text.
+            html += `<li><a href="/category/${escAttr(encodeURIComponent(String(c.slug ?? '')))}">${escHtml(c.name)}</a> (${Number(c.count) || 0})</li>`;
         });
         html += '</ul>';
         return html;
@@ -278,6 +308,7 @@ module.exports = {
     getWidgetSettings,
     setWidgetSettings,
     renderSidebar,
+    parseInstanceKey,
     addWidgetToSidebar,
     removeWidgetFromSidebar
 };

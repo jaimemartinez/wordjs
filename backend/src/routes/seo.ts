@@ -101,6 +101,10 @@ function isNoindexMeta(value: any): boolean {
  * a JOIN: post_meta has no UNIQUE (post_id, meta_key) on legacy installs, and a duplicate row would
  * print the same <url> twice.
  *
+ * PASSWORD-PROTECTED ENTRIES ARE NOT SUBMITTED (WordPress core sitemaps exclude them too): a search
+ * engine would only ever crawl the "this content is password protected" placeholder, and the read
+ * projection withholds the body anyway (routes/posts.ts serializeVisibleContent).
+ *
  * SHARED ON PURPOSE. The index advertises which children exist and each child prints a slice; if the
  * two read the catalogue differently — a different filter, a different ORDER BY, a different cap —
  * a URL falls between them and is never submitted at all. One loader, one ordering, one filter.
@@ -112,6 +116,7 @@ async function loadSitemapContent() {
         "(SELECT pm.meta_value FROM post_meta pm WHERE pm.post_id = p.id AND pm.meta_key = 'noindex' LIMIT 1) AS noindex_meta " +
         "FROM posts p " +
         "WHERE p.post_type IN ('post', 'page') AND p.post_status = 'publish' " +
+        "AND (p.post_password IS NULL OR p.post_password = '') " +
         `ORDER BY p.post_date DESC LIMIT ${Number(SITEMAP_FETCH_CAP)}`
     );
     return rows.map((r: any) => ({
