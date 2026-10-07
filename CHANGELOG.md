@@ -256,7 +256,7 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
-- **A plugin scaffolded with `wordjs create plugin` works out of the box again.** The template's manifest
+- **A plugin scaffolded with `wordjs create plugin` works out of the box.** The template's manifest
   requested only `settings` read/write while its `index.js` registers routes and an admin menu item, so a
   fresh plugin lost its routes and `adminMenu.add` threw on activation. The template now declares
   `express: register_route` and `admin_menu: register`.
