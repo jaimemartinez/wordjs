@@ -58,6 +58,7 @@
     "puppeteer-core": "^25.9.0"
   },
   "overrides": {
-    "shell-quote": "^1.11.0"
+    "shell-quote": "^1.11.0",
+    "uuid": "^11.1.1"
   }
 }
