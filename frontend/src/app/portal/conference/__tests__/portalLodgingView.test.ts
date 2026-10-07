@@ -347,9 +347,16 @@ describe("whose remembered position it is (another coordinator in the same brows
 
     it("gives the position back to the same location, even after the admin added or took away a room", () => {
         const record = JSON.stringify(navRecord(saved, navOwner(mine)));
-        expect(restoreExplorerNav(record, navOwner(mine))).toEqual(saved);
-        expect(restoreExplorerNav(record, navOwner([...mine, room({ id: 14 })]))).toEqual(saved);
-        expect(restoreExplorerNav(record, navOwner(mine.slice(0, 2)))).toEqual(saved);
+        const position = { ...saved, query: '', gender: 'all' };
+        expect(restoreExplorerNav(record, navOwner(mine))).toEqual(position);
+        expect(restoreExplorerNav(record, navOwner([...mine, room({ id: 14 })]))).toEqual(position);
+        expect(restoreExplorerNav(record, navOwner(mine.slice(0, 2)))).toEqual(position);
+    });
+
+    it("never writes the search text or the gender filter to storage (the search is usually an attendee's name)", () => {
+        const record = JSON.stringify(navRecord(saved, navOwner(mine)));
+        expect(record).not.toContain('María');
+        expect(Object.keys(JSON.parse(record)).sort()).toEqual(['hotel', 'occupancy', 'owner', 'room']);
     });
 
     it("never hands it to ANOTHER location (same hotel names, other rooms): no hotel, no search text", () => {

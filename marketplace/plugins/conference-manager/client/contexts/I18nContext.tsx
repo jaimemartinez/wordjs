@@ -1,7 +1,7 @@
 // @ts-nocheck — backend plugin client source; bundled by the plugin loader, not type-checked by the frontend.
 "use client";
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState } from 'react';
 import { Language, getStoredLanguage, setStoredLanguage, t } from '../lib/i18n';
 
 interface I18nContextType {

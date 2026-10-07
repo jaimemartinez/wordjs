@@ -68,13 +68,12 @@ const firstAllowedView = (p: Perms): View => TAB_VIEWS.find(v => viewAllowed(v, 
 // moved to lib/lodgingView.ts in 2.13.0.
 
 function ConferenceManagerContent() {
-    const { currentConference, conferences, setCurrentConference, refreshConferences, loading } = useConference();
+    const { currentConference, setCurrentConference, loading } = useConference();
     // useI18n from global context
-    const { t, language } = useI18n();
+    const { t } = useI18n();
     const tx = useTx();
     const perms = usePerms();
     const [view, setViewState] = useState<View>('list');
-    const [selectedConferenceId, setSelectedConferenceId] = useState<number | null>(null);
     const firstView = firstAllowedView(perms);
 
     // Initialize state from local storage — a saved view the role may not open falls back to the first
@@ -104,7 +103,6 @@ function ConferenceManagerContent() {
     // Cuando se selecciona una conferencia, cambiar a dashboard (o a la primera vista que permita el rol)
     const handleManageConference = (conference: Conference) => {
         setCurrentConference(conference);
-        setSelectedConferenceId(conference.id);
         setView(viewAllowed('dashboard', perms) ? 'dashboard' : firstView);
     };
 
@@ -3278,26 +3276,6 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
         }
     };
 
-    const handleMove = async (field: ConferenceField, direction: 'up' | 'down') => {
-        const index = fields.findIndex(f => f.id === field.id);
-        if (direction === 'up' && index === 0) return;
-        if (direction === 'down' && index === fields.length - 1) return;
-
-        const newFields = [...fields];
-        const swapIndex = direction === 'up' ? index - 1 : index + 1;
-        [newFields[index], newFields[swapIndex]] = [newFields[swapIndex], newFields[index]];
-
-        // Update sort orders and save all
-        try {
-            await Promise.all(newFields.map((f, i) =>
-                conferenceApi.saveField({ ...f, sort_order: i, conference_id: conferenceId })
-            ));
-            loadData();
-        } catch (e) {
-            addToast('Error reordering fields', 'error');
-        }
-    };
-
     const isPublished = !!conference?.is_form_published;
 
     const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
@@ -3769,7 +3747,6 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
     );
 }
 
-const INSCRIPTION_FIELDS: string[] = [];
 
 // Assignment Component
 // The four composable assignment-rule primitives (must match the backend engine's rule types).

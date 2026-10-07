@@ -14,7 +14,7 @@
  * the drag & drop, the room picker, the free-bed picker and «Quitar» all share its sequencing, its
  * error toasts (the server's message) and the tab's edit gate. Nothing here talks to the network.
  *
- * Where the user was (hotel, room, filters) is remembered in sessionStorage — never in the history
+ * Where the user was (hotel, room, occupancy filter — never the search text or gender filter) is remembered in sessionStorage — never in the history
  * (the portal runs inside the app router, which hard-reloads on foreign history states) — together
  * with the rooms it belongs to, so another location's coordinator in the same browser tab never
  * inherits it (see `restoreExplorerNav`). A position whose room or hotel disappears is forgotten.

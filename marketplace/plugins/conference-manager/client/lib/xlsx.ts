@@ -62,7 +62,7 @@ const STYLE = { normal: 0, header: 1, money: 2, bold: 3, boldMoney: 4 };
 
 function cellXml(ref: string, v: XlsxCell, bold: boolean): string {
     if (v === null || v === undefined || v === '') return '';
-    if (typeof v === 'object' && v && 'money' in v) {
+    if (typeof v === 'object' && 'money' in v) {
         const n = Number(v.money);
         if (!Number.isFinite(n)) return '';
         return `<c r="${ref}" s="${bold ? STYLE.boldMoney : STYLE.money}"><v>${n}</v></c>`;

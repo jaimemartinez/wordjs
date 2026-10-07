@@ -215,7 +215,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   hotel to see every room with its occupants' full names and free beds, and enters a room to see each occupant
   in full: location, family group, document, email, phone, payment status, registration code and the
   conference's own fields. *Volver*, breadcrumbs and Esc step back one level; *Anterior / Siguiente* walk the
-  rooms; the last hotel and room are remembered per browser tab. From a room you assign people to a free bed
+  rooms; the last hotel and room are remembered per browser tab (the search text and the gender filter are
+  not: they never reach browser storage). From a room you assign people to a free bed
   (searchable, optionally moving someone from another room), move or unassign an occupant, with the same
   rules the server enforces (allotted locations, frozen or validated arrangements, capacity). In a
   women-only or men-only room the picker lists that gender first and flags the others. Everything the

@@ -401,11 +401,15 @@ export const sameNavOwner = (a: readonly number[], b: readonly number[]): boolea
     return shared * 2 >= new Set([...sa, ...sb]).size;
 };
 
-/** What is written to sessionStorage: the position plus the rooms it belongs to. */
-export type StoredExplorerNav = ExplorerNav & { owner: number[] };
+/**
+ * What is written to sessionStorage: the position (hotel, room, occupancy filter) plus the rooms it belongs
+ * to. The search text and the gender filter are NOT stored: the search is typically an attendee's name, and
+ * neither belongs in browser storage in clear text. They live in memory and start empty after a reload.
+ */
+export type StoredExplorerNav = Pick<ExplorerNav, 'hotel' | 'room' | 'occupancy'> & { owner: number[] };
 
 export const navRecord = (nav: ExplorerNav, owner: readonly number[]): StoredExplorerNav => ({
-    hotel: nav.hotel, room: nav.room, query: nav.query, occupancy: nav.occupancy, gender: nav.gender, owner: [...owner],
+    hotel: nav.hotel, room: nav.room, occupancy: nav.occupancy, owner: [...owner],
 });
 
 /**

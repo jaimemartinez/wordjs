@@ -951,7 +951,6 @@ function DeliveryTab({ conferenceId, services, locations, serviceId, setServiceI
 function ReportTab({ services, serviceId, setServiceId, slug }: any) {
     const tx = useTx();
     const txn = makeTxn(tx);
-    const { language } = useI18n();
     const { addToast } = useToast();
     // The Excel export is a «Reportes» permission, like every other Excel of the plugin.
     const canExcel = usePerms().can('reports');
