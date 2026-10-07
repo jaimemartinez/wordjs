@@ -47,7 +47,8 @@ const MAX_UNPACKED_BYTES = 200 * 1024 * 1024;
 const SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/; // the installer's slug rule (routes/plugins.ts)
 const SKIP_NAME_RE = /^(\.DS_Store|Thumbs\.db|desktop\.ini|__MACOSX|\.git|node_modules)$/i;
 // Backend files whose require()s say nothing about runtime: tests, compiled/front-end code, fixtures.
-const NOT_RUNTIME_RE = /(^|\/)(tests?|__tests__|dist|client|data|node_modules)\/|\.(test|spec)\.[cm]?js$/;
+const NOT_RUNTIME_DIR_RE = /(?:^|\/)(?:tests?|__tests__|dist|client|data|node_modules)\//;
+const TEST_FILE_RE = /\.(?:test|spec)\.[cm]?js$/;
 const FIXED_DATE = new Date('2026-01-01T00:00:00Z');
 const NPM_BIN = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const REPO_ROOT = path.resolve(__dirname, '../..');
@@ -111,7 +112,7 @@ function packageName(spec) {
 function requiredPackages(stageDir) {
     const found = new Map(); // name → first file that loads it
     for (const rel of listFiles(stageDir)) {
-        if (!/\.[cm]?js$/.test(rel) || NOT_RUNTIME_RE.test(rel)) continue;
+        if (!/\.[cm]?js$/.test(rel) || NOT_RUNTIME_DIR_RE.test(rel) || TEST_FILE_RE.test(rel)) continue;
         const code = fs.readFileSync(path.join(stageDir, rel), 'utf8');
         let ast = null;
         for (const sourceType of ['module', 'script']) {
