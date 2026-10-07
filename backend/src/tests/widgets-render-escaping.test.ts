@@ -140,4 +140,11 @@ describe('sidebar render: escaping, headers and instance keys', () => {
         assert.strictEqual(kept.name, 'Renamedx');
         await assert.rejects(() => Term.create({ name: PAYLOAD, taxonomy: 'category' }), /required/);
     });
+
+    it('does not let nested tags splice a new tag together (one pass is not enough)', () => {
+        assert.strictEqual(Term.sanitizeName('a<scr<script>ipt>alert(1)</script>b'), 'aalert(1)b');
+        assert.strictEqual(Term.sanitizeName('<<img src=x>img src=x onerror=alert(1)>'), '');
+        assert.ok(!/<[a-z]/i.test(Term.sanitizeName('<sc<sc<script>ript>ript>x')));
+        assert.strictEqual(Term.sanitizeName('R&D < Ops > Sales'), 'R&D < Ops > Sales');
+    });
 });

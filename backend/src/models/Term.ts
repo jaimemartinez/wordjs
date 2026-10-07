@@ -55,11 +55,20 @@ class Term {
      * escape it (the anonymous sidebar endpoint did). Renderers escape it now; this is defence in depth
      * so the stored value is not a payload waiting for the next one. Only tag-shaped runs are removed
      * ("A < B" and "R&D" survive untouched, and nothing is entity-encoded). `[^<>]*` cannot cross the
-     * next '<', so the pass is linear even on hostile input. Non-strings are returned unchanged.
+     * next '<', so each pass is linear even on hostile input. Passes repeat until nothing changes:
+     * one pass over `<scr<script>ipt>` removes the inner tag and splices a new `<script>` together, so a
+     * single replace is not enough. Each pass removes at least one '<', so the loop is bounded by the
+     * number of '<' in the name. Non-strings are returned unchanged.
      */
     static sanitizeName(name: any) {
         if (typeof name !== 'string') return name;
-        return name.replace(/<\/?[A-Za-z!?][^<>]*>/g, '').trim();
+        let out = name;
+        let prev;
+        do {
+            prev = out;
+            out = out.replace(/<\/?[A-Za-z!?][^<>]*>/g, '');
+        } while (out !== prev);
+        return out.trim();
     }
 
     /**
