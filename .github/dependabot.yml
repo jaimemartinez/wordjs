@@ -90,7 +90,8 @@ updates:
       # rate-limit-redis 5+ requires the express-rate-limit v7 store contract — paired migration.
       - dependency-name: "rate-limit-redis"
         update-types: ["version-update:semver-major"]
-      # file-type 17+ is ESM-only; the backend is CommonJS (tsconfig module: commonjs).
+      # file-type stays on 21.x (loaded through core/file-type-detect.ts, it is ESM-only): 22+ requires
+      # Node 22 and the engines floor is 20.9. Patches on 21.x still flow through the minor/patch group.
       - dependency-name: "file-type"
         update-types: ["version-update:semver-major"]
 
