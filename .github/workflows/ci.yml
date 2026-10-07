@@ -853,7 +853,10 @@ jobs:
     # revisa — una palanca más floja que él hace que el spec ni se recolecte.
     name: Verso E2E (Playwright chromium, monolito efímero HTTP)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 15 minutes for the install, the browser and the suite, plus up to 5 for the Playwright step's
+    # one bounded wait on a stalled apt (see that step). A run that needs the wait still finishes; a
+    # genuine hang still fails the same afternoon.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -876,11 +879,31 @@ jobs:
       - name: Install Playwright chromium (with system deps)
         working-directory: frontend
         # `--with-deps` shells out to apt-get, and both that and the browser download have stalled
-        # here for 40+ minutes. `timeout` kills a stuck attempt at five minutes so the retry starts
-        # clean: a transient network stall heals itself instead of failing someone's PR, and a real
-        # hang fails in ten minutes rather than in six hours. The install itself takes under a minute.
+        # here for 40+ minutes. `timeout` kills a stuck attempt at five minutes so a real hang fails in
+        # minutes rather than in six hours. The install itself takes under a minute.
+        #
+        # THE RETRY USED TO BE DEAD ON ARRIVAL. `timeout` kills `npx`, not the root `apt-get` that
+        # Playwright started through sudo: the orphan keeps /var/lib/apt/lists/lock, so the second
+        # attempt failed at once with "Could not get lock … held by process … (apt-get)" — seen twice
+        # on 2026-10-07 while azure.archive.ubuntu.com stalled and apt waited out its default timeout
+        # on every index before falling back to archive.ubuntu.com. Two changes:
+        #   - short per-connection timeouts and retries, so a stalled mirror fails over in seconds
+        #     instead of eating the five minutes (the fallback mirror was answering the whole time);
+        #   - before retrying, wait (bounded) for apt-get/dpkg to exit, so the retry really starts clean.
         run: |
-          timeout 5m npx playwright install --with-deps chromium ||
+          set -u
+          printf '%s\n' 'Acquire::http::Timeout "20";' 'Acquire::https::Timeout "20";' 'Acquire::Retries "3";' \
+            | sudo tee /etc/apt/apt.conf.d/90-ci-mirror-failover > /dev/null
+          apt_idle() {
+            for _ in $(seq 1 60); do
+              pgrep -x apt-get > /dev/null || pgrep -x dpkg > /dev/null || return 0
+              sleep 5
+            done
+            return 1
+          }
+          timeout 5m npx playwright install --with-deps chromium && exit 0
+          echo "::warning::Playwright install failed or timed out; waiting for apt to release its lock before the retry"
+          apt_idle || { echo "::error::apt-get/dpkg still running five minutes after the first attempt"; exit 1; }
           timeout 5m npx playwright install --with-deps chromium
       - name: Run Verso E2E suite (webServer arranca dev:mono WORDJS_HTTP=1)
         working-directory: frontend
