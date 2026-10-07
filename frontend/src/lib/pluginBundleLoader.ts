@@ -429,7 +429,9 @@ const hooksRegistration = new Map<string, Promise<boolean>>();
 // no hooks never land here — they are not warned about at all.
 const hooksAbsentWarned = new Set<string>();
 
-// The public plugin registry (GET /plugins/registry → each ACTIVE plugin's full manifest). Fetched
+// The public plugin registry (GET /plugins/registry → one MINIMAL entry per ACTIVE plugin: id, path,
+// whether it declares `frontend.hooks`, and whether its browser:script capability is granted — never the
+// manifest, which an anonymous caller has no business reading). Fetched
 // LAZILY — only to classify a hooks-bundle 404 — so a healthy install pays nothing on the happy path.
 // Same discipline as activePromise: only a SUCCESSFUL fetch is memoized, so a session makes at most ONE
 // SUCCESSFUL registry request no matter how many 404s need classifying; a FAILED one — including one that
@@ -440,7 +442,10 @@ let registryPromise: Promise<PluginRegistryEntry[]> | null = null;
 // `frontend: null` is not "no frontend": routes/plugins.ts emits exactly that when it cannot READ the
 // plugin's manifest.json (folder missing, or invalid JSON). A manifest without a `frontend` key leaves
 // the property absent instead — which is how the two 404 causes are told apart below.
-type PluginRegistryEntry = { id?: string; path?: string; frontend?: { hooks?: string } | null };
+// `browser: false` means the administrator has not granted the plugin browser:script, so the host
+// deliberately does not serve its bundles (routes/plugin-bundles.ts) — a 404 that is the gate working.
+// `hooks` is `true` from the current backend; an older one sent the manifest's entry path (a string).
+type PluginRegistryEntry = { id?: string; path?: string; browser?: boolean; frontend?: { hooks?: string | boolean } | null };
 
 /**
  * The ACTUAL response shape of GET /plugins/registry is an OBJECT: backend/src/routes/plugins.ts ends
@@ -507,8 +512,11 @@ function fetchPluginRegistry(): Promise<PluginRegistryEntry[]> {
  *  - 'not-built'  → it DOES declare `frontend.hooks`, so dist/hooks.bundle.js should exist: the install
  *                   was never built, or its dist/ was lost. Actionable.
  *  - 'unreadable' → the backend could not read its manifest.json at all. Broken install. Actionable.
+ *  - 'not-granted'→ it declares hooks, but its browser:script capability is not granted, so the host
+ *                   refuses to serve its browser code. The gate working — said once, as a pointer to
+ *                   the switch, not as an error.
  */
-type HooksAbsence = 'none' | 'not-built' | 'unreadable';
+type HooksAbsence = 'none' | 'not-built' | 'unreadable' | 'not-granted';
 
 async function classifyMissingHooksBundle(pluginId: string): Promise<HooksAbsence> {
     const registry = await fetchPluginRegistry();
@@ -517,9 +525,10 @@ async function classifyMissingHooksBundle(pluginId: string): Promise<HooksAbsenc
     // to report — the hooks of an inactive plugin are supposed to be absent.
     if (!entry) return 'none';
     if (entry.frontend === null) return 'unreadable';
-    return typeof entry.frontend?.hooks === 'string' && entry.frontend.hooks.length > 0
-        ? 'not-built'
-        : 'none';
+    const declaresHooks = entry.frontend?.hooks === true
+        || (typeof entry.frontend?.hooks === 'string' && entry.frontend.hooks.length > 0);
+    if (!declaresHooks) return 'none';
+    return entry.browser === false ? 'not-granted' : 'not-built';
 }
 
 /**
@@ -543,6 +552,14 @@ async function warnIfHooksBundleShouldExist(pluginId: string): Promise<void> {
     // Re-check after the await: concurrent 404s for the same plugin must still log only once.
     if (hooksAbsentWarned.has(pluginId)) return;
     hooksAbsentWarned.add(pluginId);
+    if (cause === 'not-granted') {
+        console.warn(
+            `[PluginLoader] ACTIVE plugin '${pluginId}' ships admin UI extensions, but its "browser:script" ` +
+            `permission is not granted, so the host does not serve that code and the extensions will not ` +
+            `appear. Grant it in Plugins → Permissions only if you trust this plugin with your session.`
+        );
+        return;
+    }
     console.warn(
         cause === 'not-built'
             ? `[PluginLoader] ACTIVE plugin '${pluginId}' declares frontend.hooks but its hooks bundle is ` +
@@ -631,9 +648,10 @@ async function fetchAndRegisterPluginHooks(pluginId: string): Promise<boolean> {
     // But 404 is NOT proof the plugin merely ships no hooks: routes/plugin-bundles.ts resolves the slug to
     // a folder FIRST and returns 404 whenever that resolution fails — unknown slug, missing plugin
     // directory, or a manifest.json that is unreadable/invalid (its JSON.parse error is swallowed) — as
-    // well as for a genuinely absent dist/hooks.bundle.js. Resolving that ambiguity needs no new backend
-    // status codes: GET /plugins/registry already exposes every ACTIVE plugin's manifest, and its
-    // `frontend.hooks` field says whether the plugin ever asked for a hooks bundle. So classify the 404
+    // well as for a genuinely absent dist/hooks.bundle.js, and for a plugin whose browser:script
+    // capability is not granted (the host serves no browser code for it). Resolving that ambiguity needs
+    // no new backend status codes: GET /plugins/registry says, per ACTIVE plugin, whether it declares
+    // `frontend.hooks` and whether browser:script is granted. So classify the 404
     // and warn ONLY when something is actually wrong. Warning on every 404 instead — as this did — put
     // one scary "the install is broken" line per hook-less plugin in the console of a perfectly healthy
     // site (30 of the 31 catalog plugins declare no hooks), which teaches admins to ignore the one

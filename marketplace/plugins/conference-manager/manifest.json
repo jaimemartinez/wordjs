@@ -1,7 +1,7 @@
 {
     "id": "conference-manager",
     "name": "Conference Manager",
-    "version": "2.15.0",
+    "version": "2.15.1",
     "description": "Manage conference inscriptions, payments, and lodging assignments.",
     "author": "WordJS",
     "isolated": true,
@@ -15,6 +15,11 @@
         }
     },
     "permissions": [
+        {
+            "scope": "browser",
+            "access": "script",
+            "reason": "Run the plugin's own compiled interface in the browser: its admin page. Without it the host does not serve these bundles and that interface does not load."
+        },
         {
             "scope": "database",
             "access": "read",

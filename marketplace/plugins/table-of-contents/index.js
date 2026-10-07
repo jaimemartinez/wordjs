@@ -10,7 +10,7 @@
 
 exports.metadata = {
     name: 'Table of Contents',
-    version: '1.0.0',
+    version: '1.0.1',
     description: 'Verso block "TableOfContents": anchored nested page index built from the rendered H2/H3 headings, with smooth scroll and scroll-spy',
     author: 'WordJS',
 };

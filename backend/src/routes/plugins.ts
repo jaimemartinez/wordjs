@@ -17,7 +17,7 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { getAllPlugins, activatePlugin, deactivatePlugin, createSamplePlugin, isPluginActive, validatePluginPermissions, validateManifestPermissions, uninstallPluginData, listOrphanedPlugins, reclaimOrphanedPlugin, clearOrphanNotice, PLUGINS_DIR } = require('../core/plugins');
+const { getAllPlugins, activatePlugin, deactivatePlugin, createSamplePlugin, isPluginActive, validatePluginPermissions, validateManifestPermissions, validateManifestDependencies, validateBrowserCapability, browserCodeSources, BROWSER_SCRIPT_TOKEN, uninstallPluginData, listOrphanedPlugins, reclaimOrphanedPlugin, clearOrphanNotice, PLUGINS_DIR } = require('../core/plugins');
 const { assertZipWithinBudget } = require('../core/zip-guard');
 const { authenticate, authenticateAllowQuery } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
@@ -555,6 +555,18 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
             if (manifest.isolated !== true) throw new Error('Plugin must declare "isolated": true (all WordJS plugins run sandboxed).');
             const permProblems = validateManifestPermissions(manifest.permissions);
             if (permProblems.length) throw new Error(`Invalid permissions:\n- ${permProblems.join('\n- ')}`);
+            // C1: `dependencies` are installed by the HOST with npm at activation. Only plain registry
+            // version ranges are accepted — git/GitHub/file:/link:/workspace:/npm: aliases/tarball URLs
+            // can run build scripts on the server or install unscanned code under another name. Refused
+            // here, at install, so the administrator sees why before anything is activated (and again
+            // inside installPluginDependencies, for whatever reaches the disk another way).
+            const depProblems = validateManifestDependencies(manifest.dependencies);
+            if (depProblems.length) throw new Error(`Invalid dependencies:\n- ${depProblems.join('\n- ')}`);
+            // Browser code (admin page, hooks, Verso blocks, prebuilt dist bundles) runs in the admin's
+            // origin with the viewer's session — it must be DECLARED as browser:script so the activation
+            // dialog asks about it. See core/plugins.ts BROWSER_SCRIPT_TOKEN.
+            const browserProblems = validateBrowserCapability(installedDir, manifest);
+            if (browserProblems.length) throw new Error(`Invalid permissions:\n- ${browserProblems.join('\n- ')}`);
             // Static AST scan in DECLARATION mode (the default) — deliberately NOT grant mode. Nothing is
             // granted at install time; this pass is what produces the requested-permission list the admin
             // approves from. The grant-aware pass runs at ACTIVATION (core/plugins.ts), which is where a
@@ -831,10 +843,43 @@ async function recoverInterruptedPluginUpdates(): Promise<void> {
  * /plugins/registry:
  *   get:
  *     summary: Get public plugin registry (for frontend)
+ *     description: >-
+ *       Unauthenticated. One entry per ACTIVE plugin carrying only what the admin shell's hooks loader
+ *       needs to explain a missing hooks bundle — never the manifest (no name, version, author,
+ *       permissions or dependencies), so the endpoint cannot be used to fingerprint the install.
  *     tags: [Plugins]
+ *     security: []
  *     responses:
  *       200:
- *         description: List of active plugins with manifest data
+ *         description: The active plugins
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               required: [plugins]
+ *               properties:
+ *                 plugins:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     required: [id, path, browser]
+ *                     properties:
+ *                       id:
+ *                         type: string
+ *                       path:
+ *                         type: string
+ *                       browser:
+ *                         type: boolean
+ *                         description: Whether the plugin's browser:script capability is granted (its bundles are served).
+ *                       frontend:
+ *                         type: object
+ *                         nullable: true
+ *                         description: >-
+ *                           Absent when the manifest declares no frontend; null when the manifest could not
+ *                           be read; otherwise an object whose `hooks` is true when a hooks bundle is declared.
+ *                         properties:
+ *                           hooks:
+ *                             type: boolean
  */
 /**
  * @swagger
@@ -891,49 +936,49 @@ router.get('/assets', asyncHandler(async (req: Request, res: Response) => {
 }));
 
 router.get('/registry', asyncHandler(async (req: Request, res: Response) => {
-    // Await getAllPlugins()
+    // ANONYMOUS endpoint, so it answers only what its one consumer needs — never the manifest.
+    //
+    // This used to spread each active plugin's FULL manifest: name, exact version, author, every
+    // requested permission and its reason, the dependency list. To an anonymous caller that is a
+    // fingerprint of the install ("which plugins, which versions, which of them hold network or
+    // database:write") — exactly the inventory an attacker needs to pick a known-vulnerable version.
+    // The consumer is frontend/src/lib/pluginBundleLoader.ts, which reads it ONLY to explain a 404 on
+    // an active plugin's hooks bundle: it needs the id/path to find the entry, whether the plugin
+    // declares `frontend.hooks`, whether its manifest was readable at all (`frontend: null`), and
+    // whether its browser:script capability is granted (a 404 for an ungranted plugin is the gate
+    // working, not a broken build). Nothing else is emitted. The slugs themselves are already public
+    // through GET /plugins/active, which the public site needs to load blocks.
+    const { isGranted } = require('../core/plugin-permissions');
     const plugins = await getAllPlugins();
     const activePlugins = plugins.filter((p: any) => p.active);
 
     const registry: any[] = [];
 
     for (const plugin of activePlugins) {
+        const entry: any = {
+            id: plugin.slug,
+            path: `/plugins/${plugin.slug}`,
+            browser: isGranted(plugin.slug, 'browser', 'script'),
+        };
         // A directory name read back from disk is still a segment we did not write — resolve it through
         // the same allowlist + containment proof, and treat "cannot resolve" as "no manifest" (fail closed).
         const manifestPath = pluginFile(plugin.slug, 'manifest.json');
-
+        let manifest: any = null;
         if (manifestPath && fs.existsSync(manifestPath)) {
             try {
-                const manifestContent = fs.readFileSync(manifestPath, 'utf8');
-                const manifest = JSON.parse(manifestContent);
-                registry.push({
-                    ...manifest,
-                    active: true,
-                    path: `/plugins/${plugin.slug}`
-                });
+                manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
             } catch (err) {
                 console.warn('Failed to read manifest for %s:', logSafe(plugin.slug), err.message);
-                // Still include basic info even without manifest
-                registry.push({
-                    id: plugin.slug,
-                    name: plugin.name || plugin.slug,
-                    version: plugin.version || '1.0.0',
-                    active: true,
-                    path: `/plugins/${plugin.slug}`,
-                    frontend: null
-                });
             }
-        } else {
-            // Plugin exists but no manifest - include basic info
-            registry.push({
-                id: plugin.slug,
-                name: plugin.name || plugin.slug,
-                version: plugin.version || '1.0.0',
-                active: true,
-                path: `/plugins/${plugin.slug}`,
-                frontend: null
-            });
         }
+        if (!manifest || typeof manifest !== 'object') {
+            // `frontend: null` is the "manifest unreadable" signal the loader reports as a broken install.
+            entry.frontend = null;
+        } else if (manifest.frontend && typeof manifest.frontend === 'object') {
+            entry.frontend = manifest.frontend.hooks ? { hooks: true } : {};
+        }
+        // (A readable manifest with no `frontend` key leaves the property ABSENT — "declares nothing".)
+        registry.push(entry);
     }
 
     res.json({ plugins: registry });
@@ -1014,7 +1059,28 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
         wasActive: !!o.active,           // it was listed in active_plugins when we looked
         removable: !!o.residual,         // its directory holds no code, so cleanup may delete it
     }));
-    res.json(orphanRows.concat(plugins.map((p: any) => {
+    res.json(orphanRows.concat(plugins.map((raw: any) => {
+        // browser:script for a plugin that ships browser code WITHOUT declaring it — one installed before
+        // the capability existed. Its manifest cannot be rewritten from here, but the administrator must
+        // still see (and be able to revoke) the capability: the permissions screen only offers switches
+        // for what is listed, and saving that screen would otherwise drop the upgrade-time grant. So the
+        // listing projects an explicit, flagged entry; the manifest on disk is untouched.
+        let permissions: any[] = Array.isArray(raw.permissions) ? raw.permissions : [];
+        try {
+            const mp = pluginFile(raw.slug, 'manifest.json');
+            const manifest = mp ? JSON.parse(fs.readFileSync(mp, 'utf8')) : null;
+            const sources = manifest ? browserCodeSources(path.dirname(mp as string), manifest) : [];
+            const declared = permissions.some((x: any) => x && x.scope === 'browser' && x.access === 'script');
+            if (sources.length && !declared) {
+                permissions = [...permissions, {
+                    scope: 'browser',
+                    access: 'script',
+                    undeclared: true,
+                    reason: `Not declared by this plugin (it predates the "${BROWSER_SCRIPT_TOKEN}" permission), but it ships browser code: ${sources.join(', ')}.`,
+                }];
+            }
+        } catch { /* unreadable manifest: nothing to project */ }
+        const p = { ...raw, permissions };
         const requested = Array.from(new Set((p.permissions || [])
             .map((perm: any) => (perm && perm.scope) ? (perm.scope === 'network' ? 'network' : `${perm.scope}:${perm.access || 'read'}`) : null)
             .filter(Boolean)));
@@ -1128,6 +1194,24 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
     const slug = safeSlugParam(req.params.slug);
     if (!slug) {
         return res.status(400).json({ error: 'Invalid plugin slug' });
+    }
+
+    // browser:script must be DECLARED by a plugin that ships browser code, or the activation dialog
+    // the admin just confirmed never mentioned that this plugin's code will run with their session.
+    // Checked HERE (the administrator's activation) and at install, deliberately NOT inside
+    // core.activatePlugin: that function also re-activates an already-running plugin after an update
+    // or its rollback, and a plugin that was active before this rule existed must keep running (it was
+    // granted the capability once at upgrade — see migrateBrowserCapabilityGrants).
+    {
+        const manifestPath = pluginFile(slug, 'manifest.json');
+        let manifest: any = null;
+        try { if (manifestPath) manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); } catch { /* activatePlugin reports it */ }
+        if (manifest && manifestPath && !(await isPluginActive(slug))) {
+            const problems = validateBrowserCapability(path.dirname(manifestPath), manifest);
+            if (problems.length) {
+                return res.status(400).json({ message: problems.join(' '), error: problems.join(' '), code: 'plugin_browser_capability_undeclared' });
+            }
+        }
     }
 
     // Default-deny grants: when an admin activates a plugin (having seen its requested permissions in the
@@ -2191,6 +2275,10 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request,
  * /plugins/{slug}/download:
  *   get:
  *     summary: Download plugin as ZIP
+ *     description: >-
+ *       The plugin's own files under `<slug>/`. Its top-level data/ folder (runtime state such as
+ *       encryption keys and attachments), node_modules/, .git, OS junk and symbolic links are never
+ *       included — the same rule the plugin packer stages with.
  *     tags: [Plugins]
  *     security:
  *       - bearerAuth: []
@@ -2229,12 +2317,16 @@ router.get('/:slug/download', authenticateAllowQuery, isAdmin, asyncHandler(asyn
         return res.status(404).json({ error: 'Plugin not found' });
     }
 
-    // Initialize zip
+    // The plugin's CODE, never its runtime state. `zip.addLocalFolder(pluginPath)` used to archive the
+    // whole folder: data/ (mail-server's data/.mailenc — the key to every stored mailbox secret — and
+    // its attachments), node_modules/, .git and whatever a symlink pointed at. The file list now comes
+    // from the same rule the packer stages with (core/plugin-package-files.ts), and each file is added
+    // under `<slug>/` by its relative path.
+    const { listPluginPackageFiles } = require('../core/plugin-package-files');
     const zip = new AdmZip();
-
-    // Add local folder to zip
-    // 2nd param defines path in zip - we want it in a folder named {slug}
-    zip.addLocalFolder(pluginPath, slug);
+    for (const rel of listPluginPackageFiles(pluginPath)) {
+        zip.addFile(`${slug}/${rel}`, fs.readFileSync(path.join(pluginPath, ...rel.split('/'))));
+    }
 
     // Create a buffer
     const zipBuffer = zip.toBuffer();

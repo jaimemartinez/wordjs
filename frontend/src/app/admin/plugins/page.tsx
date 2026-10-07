@@ -30,7 +30,7 @@ function RiskBadge({ risk }: { risk: PermissionRisk }) {
 }
 
 // A single permission row (platform label + risk + platform description + optional plugin reason).
-function PermissionRow({ token, reason }: { token: string; reason?: string }) {
+function PermissionRow({ token, reason, platformNote = false }: { token: string; reason?: string; platformNote?: boolean }) {
     const meta = permMeta(token);
     return (
         <div className={`flex gap-3 p-4 rounded-2xl border backdrop-blur-sm transition-all duration-300 hover:shadow-sm ${RISK_CLASSES[meta.risk]}`}>
@@ -46,9 +46,27 @@ function PermissionRow({ token, reason }: { token: string; reason?: string }) {
                 {meta.description && <p className="text-xs text-slate-600 font-medium leading-relaxed">{meta.description}</p>}
                 {reason && (
                     <p className="text-xs text-slate-500 leading-relaxed mt-1.5 italic">
-                        <span className="not-italic font-bold text-slate-400">Plugin says: </span>{reason}
+                        <span className="not-italic font-bold text-slate-400">{platformNote ? 'WordJS note: ' : 'Plugin says: '}</span>{reason}
                     </p>
                 )}
+            </div>
+        </div>
+    );
+}
+
+/**
+ * The browser:script capability is the one grant that is not sandboxed: the plugin's compiled UI runs in
+ * this admin app's own origin, with the session of whoever is looking. A row in a list of a dozen badges
+ * is not enough for that, so every screen that asks for (or toggles) it also shows this banner.
+ */
+const BROWSER_SCRIPT_TOKEN = 'browser:script';
+function BrowserScriptWarning({ title, body }: { title: string; body: string }) {
+    return (
+        <div role="alert" className="flex gap-3 p-4 mb-4 rounded-2xl border-2 border-rose-300 bg-rose-50 text-rose-800">
+            <FaExclamationTriangle className="mt-0.5 shrink-0 text-rose-600" />
+            <div className="min-w-0">
+                <p className="font-extrabold text-sm">{title}</p>
+                <p className="text-xs font-semibold leading-relaxed mt-1">{body}</p>
             </div>
         </div>
     );
@@ -230,6 +248,10 @@ export default function PluginsPage() {
     // Platform reason lookup for a token (first declaring permission's reason).
     const reasonFor = (plugin: Plugin, token: string) =>
         (plugin.permissions || []).find(p => permToken(p) === token)?.reason;
+    // An entry the BACKEND projected (browser:script for a plugin that predates it): its reason is
+    // platform text, not the plugin's own words, and is labelled as such.
+    const isUndeclared = (plugin: Plugin, token: string) =>
+        !!(plugin.permissions || []).find(p => permToken(p) === token)?.undeclared;
 
     const { addToast } = useToast();
 
@@ -918,10 +940,14 @@ export default function PluginsPage() {
                                 {t('plugins.requests.permissions')} <strong className="text-slate-900 font-extrabold">{pluginToActivate.name}</strong>:
                             </p>
 
+                            {declaredTokens(pluginToActivate).includes(BROWSER_SCRIPT_TOKEN) && (
+                                <BrowserScriptWarning title={t('plugins.browserScript.title')} body={t('plugins.browserScript.warning')} />
+                            )}
+
                             <div className="space-y-3 mb-5">
                                 {declaredTokens(pluginToActivate).length > 0 ? (
                                     declaredTokens(pluginToActivate).map((token) => (
-                                        <PermissionRow key={token} token={token} reason={reasonFor(pluginToActivate, token)} />
+                                        <PermissionRow key={token} token={token} reason={reasonFor(pluginToActivate, token)} platformNote={isUndeclared(pluginToActivate, token)} />
                                     ))
                                 ) : (
                                     <div className="flex flex-col items-center justify-center p-8 bg-emerald-50/55 rounded-[24px] border border-emerald-100/60 text-center shadow-sm">
@@ -977,6 +1003,10 @@ export default function PluginsPage() {
                         <div className="px-8 overflow-y-auto flex-1 custom-scrollbar">
                             <p className="mb-4 text-slate-500 text-xs font-semibold leading-relaxed">Grant only what this plugin needs. Anything left off is <strong className="text-slate-800">denied</strong> (default-deny) — the plugin can use a capability only if it both requested it and you grant it here.</p>
 
+                            {declaredTokens(permsModalPlugin).includes(BROWSER_SCRIPT_TOKEN) && (
+                                <BrowserScriptWarning title={t('plugins.browserScript.title')} body={t('plugins.browserScript.warning')} />
+                            )}
+
                             <div className="space-y-2 mb-4">
                                 {declaredTokens(permsModalPlugin).length === 0 ? (
                                     <div className="p-6 bg-slate-50 border border-slate-100 rounded-2xl text-slate-400 text-xs font-semibold text-center">This plugin declares no permissions — it can&apos;t access anything beyond its own sandbox.</div>
@@ -1001,7 +1031,7 @@ export default function PluginsPage() {
                                                         <span className="text-[10px] font-mono text-slate-400/80 font-bold">{token}</span>
                                                     </span>
                                                     {meta.description && <span className="block text-xs text-slate-600 font-medium leading-relaxed mt-1.5">{meta.description}</span>}
-                                                    {reason && <span className="block text-xs text-slate-500 font-semibold leading-relaxed mt-1.5 italic"><span className="not-italic font-bold text-slate-400">Plugin says: </span>{reason}</span>}
+                                                    {reason && <span className="block text-xs text-slate-500 font-semibold leading-relaxed mt-1.5 italic"><span className="not-italic font-bold text-slate-400">{isUndeclared(permsModalPlugin, token) ? 'WordJS note: ' : 'Plugin says: '}</span>{reason}</span>}
                                                 </span>
                                                 <span className={`relative inline-flex h-6 w-11 items-center rounded-full transition-all duration-300 shrink-0 mt-0.5 ${on ? knobOn.split(' ')[0] : 'bg-slate-300'}`}>
                                                     <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform duration-300 ${on ? 'translate-x-6' : 'translate-x-1'} shadow-sm`} />

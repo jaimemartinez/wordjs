@@ -1,7 +1,7 @@
 {
     "id": "notification-bar",
     "name": "Notification Bar",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Slim site-wide announcement bar (top or bottom): message + optional CTA link, dismissible with version-based re-show, colors, and an optional schedule window.",
     "author": "WordJS",
     "isolated": true,
@@ -21,6 +21,11 @@
         "order": 68
     },
     "permissions": [
+        {
+            "scope": "browser",
+            "access": "script",
+            "reason": "Run the plugin's own compiled interface in the browser: its admin page. Without it the host does not serve these bundles and that interface does not load."
+        },
         {
             "scope": "settings",
             "access": "read",
