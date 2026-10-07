@@ -3,7 +3,12 @@ const https = require('https');
 const http = require('http');
 
 // changeOrigin:true => upstream receives the TARGET's Host; xfwd:true preserves the original
-// client Host as X-Forwarded-Host (the backend's migration guard reads x-forwarded-host first).
+// client Host as X-Forwarded-Host (the backend's address gate reads x-forwarded-host first).
+//
+// xfwd treats an EMPTY X-Forwarded-Host as missing and writes the Host header in its place, so the
+// gateway removes the Host of a request its edge judged host-less before proxying it (host-edge
+// pinForwardedHeaders): the upstream then judges what the edge judged. WebSocket upgrades need nothing:
+// http-proxy's WebSocket pass never writes X-Forwarded-Host.
 function createProxyServer() {
     return httpProxy.createProxyServer({ xfwd: true, changeOrigin: true });
 }

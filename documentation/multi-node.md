@@ -73,7 +73,11 @@ a node without the file.
 ## Per-node configuration
 
 Each node shares the same `wordjs-config.json` EXCEPT `advertiseHost`, which must be the address the
-gateway uses to reach that specific node:
+gateway uses to reach that specific node. That includes the site's addresses (`siteUrl`, `siteAliases`,
+`hostPolicy`, `siteAddress`): a change made in Settings → Site address or with `npm run site` is written
+to the config of the node that made it, so share the file or repeat the change on every node. The gateway
+keeps the set the last backend sent with a change or at its boot, and a backend whose set differs logs it
+(see [site-address.md](site-address.md#split-and-separate-mode-the-gateway)):
 
 ```jsonc
 {
@@ -146,21 +150,43 @@ and do **nothing at all** on the release ZIP, which ships a prebuilt `.next` —
 you deploy to N nodes. So `frontend/server.js` applies the same resolution **at runtime**: when
 `WORDJS_BACKEND_URL` is set it proxies `/api/*` and `/uploads/*` itself, ahead of Next, mirroring
 what Next's own rewrite proxy sends (upstream `Host` = the target, caller's host preserved in
-`x-forwarded-host`) so the backend's CSRF/Origin and host guards see exactly what they saw before.
+`x-forwarded-host`, `x-forwarded-proto` pinned to the scheme the replica itself was reached on).
 Streaming is passed straight through, which is what keeps the collaboration SSE channel live.
 
 Set it at **build** time as well if you build from source (`next build`) and want the baked rewrite to agree. `npm run bundle-release` is the exception: it builds with `WORDJS_HERMETIC_BUILD=1`, which ignores `WORDJS_BACKEND_URL`, `gatewayPort` and `WORDJS_MODE` and always bakes the compiled-in default, so a release never carries the packaging machine's setup. Pin release replicas at runtime, as above.
 
-Two knock-on settings when a frontend is reached directly rather than through the gateway:
+Three knock-on settings when a frontend is reached directly rather than through the gateway:
 
-- **`siteUrl`** on the backend that replica talks to must be the origin the **browser** uses
-  (e.g. `http://10.0.1.23:3001`), or the backend's same-origin CSRF check rejects every POST —
-  including every collaboration op. The origin check is only half of it: a cookie-authenticated
-  write must also carry an `X-CSRF-Token` header equal to its own `wjs_csrf` cookie. That pair is
-  compared inside the node handling the request, so it needs no shared state across replicas.
+- **`WORDJS_TRUST_PROXY`** (or `trustProxy` in `wordjs-config.json`) on **every backend** a replica
+  talks to must list the replicas' addresses or their subnet, e.g.
+  `WORDJS_TRUST_PROXY=10.0.1.30,10.0.1.31` or `10.0.1.0/24`. **Without it every proxied `/api` call and
+  every SSR fetch from the replica gets `421 rest_host_not_allowed`.** The backend believes
+  `X-Forwarded-Host` only from a trusted hop (the mTLS gateway, a loopback peer that addressed a
+  loopback name, or a peer inside an address-based `trustProxy`). From anyone else it judges the `Host`
+  the replica sent, here the IP literal `10.0.1.23:4000` arriving with proxy headers, and refuses it:
+  a proxy that rewrites `Host` to an IP would otherwise switch the named-host check off. Point
+  `WORDJS_BACKEND_URL` and `internalApiUrl` at the backend by **IP** (or a single-label service name such
+  as `backend:4000`): even from a trusted peer, `X-Forwarded-Host` is believed only when the `Host` it
+  sent is an IP, a loopback name or a single-label name. When the setting is missing the backend logs
+  `<peer> forwards X-Forwarded-Host but is not in trustProxy; if it is your frontend replica or proxy, set WORDJS_TRUST_PROXY=<peer>`.
+  A hop count (`1`) or `true` does not count here. See
+  [site-address.md](site-address.md#frontend-replicas-that-reach-a-backend-directly).
+- The origin the **browser** uses to reach the replica (e.g. `http://10.0.1.23:3001`) must be an
+  address the site answers: the main address, one of its other addresses (Settings → Site address, or
+  `npm run site -- add <url>`), or an IP address under the default `hostPolicy.ipLiterals: any`.
+  Signing in there follows [the sign-in rules](site-address.md#signing-in-on-an-address-other-than-the-main-one):
+  on an IP address it is off in production unless `hostPolicy.ipSignIn` is on. With the forwarded host
+  trusted, the backend's same-origin CSRF check matches that origin. The origin check is only half of
+  CSRF: a cookie-authenticated write must also carry an `X-CSRF-Token` header equal to its own
+  `wjs_csrf` cookie. That pair is compared inside the node handling the request, so it needs no shared
+  state across replicas.
 - **`internalApiUrl`** / **`INTERNAL_API_URL`** points **server-side rendering** at the same backend
   (`http://10.0.1.23:4000/api/v1`). `WORDJS_BACKEND_URL` covers the browser's path; SSR has its own
   resolution (see [frontend.md](frontend.md)). Set both, to the same backend.
+
+Behind a TLS-terminating load balancer the replica reports `http` to the backend (it pins
+`x-forwarded-proto` to the scheme of its own listener). On an https site that only matters for signing
+in on an address other than the main one, which is then refused; the main address is unaffected.
 
 ### Real-time collaboration across replicas
 
@@ -254,7 +280,13 @@ listener (`acme.http01Port`, e.g. 80) reachable so the challenge can be validate
 
 ## Load balancer
 
-Point your L4/L7 load balancer at the gateway. Health probes (added for orchestration):
+Point your L4/L7 load balancer at the gateway. An L7 balancer must forward the client's `Host`
+unchanged: the gateway answers only the site's addresses, so a `Host` rewritten to the gateway's own
+name (or to its IP, with `X-Forwarded-For` added) gets `421` (see [site-address.md](site-address.md#reverse-proxies-tls-termination-and-frontend-replicas)),
+unless the balancer is in `trustProxy` / `WORDJS_TRUST_PROXY` on the backend (pushed to the gateway) and
+dials the gateway by IP: then its `X-Forwarded-Host` names the address, exactly as at the backend.
+The probes below are answered on any `Host`, at exactly these paths (a query string is allowed).
+Health probes (added for orchestration):
 
 - `GET /healthz` — liveness (always 200 while the process is up; answered by the gateway directly).
 - `GET /readyz` — readiness (200 only when installed, booted and the DB is reachable; 503 otherwise) —

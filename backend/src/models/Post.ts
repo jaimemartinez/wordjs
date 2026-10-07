@@ -430,15 +430,22 @@ class Post {
                 ? this._featuredImageCache.attachedFile
                 : await Post.getMeta(featuredImage.id, '_wp_attached_file');
             let dynamicUrl = featuredImage.guid;
+            let sitePath: string | undefined;
 
             if (attachedFile) {
                 const safePath = attachedFile.replace(/\\/g, '/');
                 dynamicUrl = `${config.site.url}/uploads/${safePath}`;
+                // The same file as a SAME-ORIGIN path. `url` stays absolute on the main address (og:image
+                // and API consumers need that), but a page opened through another accepted address (an
+                // alias, the server's LAN IP) must not load every thumbnail from a host the visitor may
+                // not reach. Leading slashes are stripped so the path can never become `//host/...`.
+                sitePath = `/uploads/${safePath.replace(/^\/+/, '')}`;
             }
 
             json.featuredMedia = {
                 id: featuredImage.id,
                 url: dynamicUrl,
+                ...(sitePath ? { path: sitePath } : {}),
                 title: featuredImage.postTitle
             };
         }

@@ -47,6 +47,9 @@ const IGNORE_PATTERNS = [
     'wordjs-config.json', // Local config
     'gateway-config.json', // SECURITY: gateway-config.json holds the live gatewaySecret — never ship it
     'gateway-registry.json', // Gateway state
+    // The host policy the backend pushed to THIS gateway (POST /host-policy). Shipped, it would make a
+    // fresh install answer 421 on every address but the developer's own main address.
+    'gateway-host-policy.json',
     '.env',
     // SECURITY + SIZE: agent/assistant working directories. They are LOCAL developer state, they
     // are gitignored (so a CI release built from a clean checkout never sees them), but a release
@@ -472,6 +475,9 @@ function shouldIgnore(filePath) {
     // wordjs-config.backup.json (created by index.ts on config rewrite) which carry the same
     // jwtSecret/gatewaySecret/dbPassword and would otherwise slip past the `*-config.json$` anchor. (DEPLOY-01)
     if (/(^|-)config\.json$/.test(lowerBase) || lowerBase.includes('wordjs-config') || lowerBase.includes('gateway-config')) return true;
+    // The gateway's pushed host policy and the temp file an interrupted push leaves next to it
+    // (gateway-host-policy.json.<pid>.tmp): per-install state, never part of a release.
+    if (lowerBase.startsWith('gateway-host-policy.json')) return true;
 
     // THE STRUCTURAL RULE, last so the explicit ones above still short-circuit: if git does not track
     // it and it is not one of the build artifacts we deliberately ship, it is developer-local and does

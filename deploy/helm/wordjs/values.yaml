@@ -22,13 +22,26 @@ replicaCount: 1
 # The public origin users will browse, exported to the pod as WORDJS_SITE_URL. With ingress.enabled=true
 # and a host set, it is derived from that host unless you override it here.
 #
-# HONEST SCOPE: docker/entrypoint.sh is the only reader of WORDJS_SITE_URL, and it writes the value into
-# wordjs-config.json only under WORDJS_PRESEED_CONFIG=1 (the extraEnv example further down). This chart
-# does not set that, so the pod boots into SETUP MODE and the origin that actually reaches the config —
-# the one the CSRF/CORS checks compare against — is the `siteUrl` the wizard POSTs to
-# /api/v1/setup/install. So set this to the URL you will expose, and then INSTALL THROUGH IT; the two
-# then agree, and the release notes point operators at the right address.
+# HONEST SCOPE: this is a SUGGESTION to the setup wizard, not the site's main address. The pod boots into
+# SETUP MODE (this chart does not set WORDJS_PRESEED_CONFIG=1, the one case where docker/entrypoint.sh
+# writes it into the config). The wizard's "Site address" field is prefilled with the address you opened
+# it on (http://localhost:3000 through a port-forward) and offers this value as "the server's suggested
+# address": PICK IT, because the main address is the base of every link and email the site sends.
+# Whatever you pick, this host is also exported in WORDJS_ALLOWED_HOSTS (below), so it is answered.
 siteUrl: ""
+
+# Extra addresses the site must answer besides the main one, as host names or URLs
+# (`https://www.example.com`). Exported in WORDJS_ALLOWED_HOSTS together with siteUrl and every ingress
+# host. Only add names whose DNS you control. See documentation/site-address.md.
+allowedHosts: []
+
+# Which peers are your proxies, exported as WORDJS_TRUST_PROXY: an IP, a CIDR, `loopback`, `uniquelocal`,
+# or a comma-separated list — typically your ingress controller's pod network (e.g. "10.244.0.0/16").
+# Address-based values only: a hop count or `true` is not believed for the forwarded host or scheme.
+# Needed for two things behind a TLS-terminating ingress: rate limits keyed on the real client IP, and
+# signing in over https on an address other than the main one (the ingress's X-Forwarded-Proto is
+# otherwise not believed, and every request looks like plain http). Empty = not set.
+trustProxy: ""
 
 # The one-time token gating POST /api/v1/setup/install.
 installToken:
@@ -51,6 +64,10 @@ ingress:
   className: ""
   annotations: {}
   host: wordjs.example.com
+  # More host names routed to the same Service (e.g. the www twin). Each one gets an ingress rule AND is
+  # exported in WORDJS_ALLOWED_HOSTS, so the site answers it instead of returning 421.
+  extraHosts: []
+  # - www.wordjs.example.com
   path: /
   pathType: Prefix
   tls: []

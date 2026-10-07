@@ -102,7 +102,45 @@ const ADMIN_USER = 'gateadmin';
 const ADMIN_PASS = 'GateAdminPassw0rd!';
 const ADMIN_MAIL = 'gate@wordjs.invalid';
 
-const SABOTAGES = new Set(['install-host', 'install-identity', 'public-route']);
+/**
+ * SELF-TEST patches (see applySabotage): per sabotage, the exact-substring edits that revert ONE fix in
+ * the DEPLOYED tree. `file` is relative to the deployed app; a `backend/dist/...` file is the compiled
+ * twin of `backend/src/...ts`. Exported, with the gate itself behind an entrypoint check, so
+ * backend/src/tests/separate-mode-gate-anchors.test.ts can prove every anchor still exists in the code
+ * that ships — an anchor that drifted turned a sabotage run into "ANCHOR NOT FOUND" instead of a red check.
+ */
+export const SABOTAGE_PATCHES = Object.freeze({
+    // BUG 1: judge the install address by the raw Host again, dropping the X-Forwarded-Host of the trusted
+    // gateway hop (which rewrites Host with changeOrigin): the backend records its OWN address as siteUrl.
+    // Every requestAuthority call in setup.js is patched (the address, the install alias, the classify).
+    'install-host': [{
+        node: 'backend',
+        file: 'backend/dist/routes/setup.js',
+        from: `hostPolicy.requestAuthority(req, policy)`,
+        to: `hostPolicy.requestAuthority(Object.assign(Object.create(req), { headers: { host: req.headers.host } }), policy)`,
+    }],
+    // BUG 2: stop recognising an enrolled node, so the installer re-mints the cluster CA over it.
+    'install-identity': [{
+        node: 'backend',
+        file: 'backend/dist/routes/setup.js',
+        from: `const isEnrolledNode = isEnrolledConfig(`,
+        to: `const isEnrolledNode = false && isEnrolledConfig(`,
+    }],
+    // BUG 3: drop /public from what the backend declares AND from the gateway's role allowlist.
+    'public-route': [{
+        node: 'backend',
+        file: 'backend/dist/index.js',
+        from: `'/plugins', '/public', '/.well-known'`,
+        to: `'/plugins', '/.well-known'`,
+    }, {
+        node: 'gateway',
+        file: 'gateway/src/routing.js',
+        from: `'/plugins', '/public', '/.well-known'`,
+        to: `'/plugins', '/.well-known'`,
+    }],
+});
+
+const SABOTAGES = new Set(Object.keys(SABOTAGE_PATCHES));
 
 // ---------------------------------------------------------------------------------------------
 // CLI
@@ -410,22 +448,9 @@ fs.writeFileSync(file, src.split(from).join(to));
 console.log("patched " + file);
 ' ${file}`;
 
-    if (SABOTAGE === 'install-host') {
-        // BUG 1: read the raw Host header again instead of preferring X-Forwarded-Host.
-        ct(BE, `set -e\n` + patch(`${APP}/backend/dist/routes/setup.js`,
-            `pickInstallHost(req.get('x-forwarded-host'), req.get('host'))`,
-            `pickInstallHost(undefined, req.get('host'))`));
-    } else if (SABOTAGE === 'install-identity') {
-        // BUG 2: stop recognising an enrolled node, so the installer re-mints the cluster CA over it.
-        ct(BE, `set -e\n` + patch(`${APP}/backend/dist/routes/setup.js`,
-            `isEnrolledConfig(enrolledConfig, !!enrolledConfig.mtls?.cert && fs.existsSync(path.resolve(enrolledConfig.mtls.cert)))`,
-            `false`));
-    } else if (SABOTAGE === 'public-route') {
-        // BUG 3: drop /public from what the backend declares AND from the gateway's role allowlist.
-        ct(BE, `set -e\n` + patch(`${APP}/backend/dist/index.js`,
-            `'/plugins', '/public', '/.well-known'`, `'/plugins', '/.well-known'`));
-        ct(GW, `set -e\n` + patch(`${APP}/gateway/src/index.js`,
-            `'/plugins', '/public', '/.well-known'`, `'/plugins', '/.well-known'`));
+    // The edits themselves live in SABOTAGE_PATCHES (where the anchor test reads them).
+    for (const p of SABOTAGE_PATCHES[SABOTAGE]) {
+        ct(p.node === 'gateway' ? GW : BE, `set -e\n` + patch(`${APP}/${p.file}`, p.from, p.to));
     }
 }
 
@@ -912,7 +937,16 @@ async function main() {
 
 function preflightLite() { if (!fs.existsSync(SSH_KEY)) throw new Error(`ssh key not found: ${SSH_KEY}`); }
 
-main()
+/** Run only when invoked as a program (npm run gate:separate); importing it (the anchor test) runs nothing. */
+function invokedDirectly() {
+    if (!process.argv[1]) return false;
+    const real = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
+    const a = real(process.argv[1]);
+    const b = real(fileURLToPath(import.meta.url));
+    return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+if (invokedDirectly()) main()
     .then(() => { if (!args.keep && !args.teardown) teardown(); process.exit(0); })
     .catch((e) => {
         console.log('\n╔════════════════════════════════════════════════════════════════════════════════════╗');

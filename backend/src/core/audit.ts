@@ -84,6 +84,22 @@ const AUDIT_ACTIONS = Object.freeze({
     // ── Configuration ───────────────────────────────────────────────────────────────────────────────
     SETTINGS_UPDATE: 'settings.update',
 
+    // ── The site's addresses (core/site-address) ─────────────────────────────────────────────────────
+    // Each change of where the site lives is recorded with {from, to, added, removed, via, force, rev}
+    // (and forcedPast when an override went past something): the main address is the base of every
+    // emailed link, so a move is security-relevant on its own. One row per revision, the CLI's included.
+    SITE_ADDRESS_CANONICAL: 'site.address.canonical',
+    SITE_ADDRESS_ALIASES: 'site.address.aliases',
+    SITE_ADDRESS_POLICY: 'site.address.policy',
+    // An AUTOMATIC change: the same host moving http → https with the gateway, the repair of the old
+    // `https,http://host` corruption. Separate from canonical so "which moves did a person make" is one query.
+    SITE_ADDRESS_REPAIR: 'site.address.repair',
+    SITE_ADDRESS_CONFLICT_RESOLVED: 'site.address.conflict_resolved',
+    // Revisions `npm run site` wrote whose details the config's bounded change log no longer holds (more
+    // changes than it keeps before the backend applied them — stopped, or a burst inside one watcher
+    // tick): {from, to, revisions}, one row per run of consecutive revisions. Never silently skipped.
+    SITE_ADDRESS_GAP: 'site.address.gap',
+
     // ── The log about the log ───────────────────────────────────────────────────────────────────────
     AUDIT_PRUNE: 'audit.prune'
 } as const);

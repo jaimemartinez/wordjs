@@ -279,15 +279,21 @@ export async function serverFetch<T>(endpoint: string, options: ServerFetchOptio
     // the backend's guards don't require one until a siteUrl exists to compare against.
     // Per-user reads (forwardCookies) are the one legitimate consumer of the request — their
     // routes (/preview, admin SSR) are force-dynamic, where headers() is allowed.
+    //
+    // The address relayed is the one the public listener judged, an EMPTY one included: the gateway
+    // pins `X-Forwarded-Host: ''` for a request that names no address, and the monolith leaves a direct
+    // client's Host (or none) with no X-Forwarded-Host. `X-Forwarded-Host || Host` turned the empty
+    // value into Next's own Host (the gateway's changeOrigin target, 127.0.0.1:3001), so the backend
+    // judged loopback where the edge had judged no address (review R3S-6). So: a present header as it
+    // is, else Host, else '' — and '' is sent, never dropped, for the backend to judge no address too.
     if (options.forwardCookies) {
         try {
             const { headers: nextHeaders } = await import('next/headers');
             const inbound = await nextHeaders();
-            const host = inbound.get('x-forwarded-host') || inbound.get('host');
-            if (host) {
-                headers['x-forwarded-host'] = host;
-                headers['x-forwarded-proto'] = inbound.get('x-forwarded-proto') || 'https';
-            }
+            const relayed = inbound.get('x-forwarded-host');
+            const host = relayed !== null ? relayed : (inbound.get('host') ?? '');
+            headers['x-forwarded-host'] = host;
+            if (host) headers['x-forwarded-proto'] = inbound.get('x-forwarded-proto') || 'https';
             const cookieHeader = inbound.get('cookie');
             if (cookieHeader) headers['cookie'] = cookieHeader;
         } catch {

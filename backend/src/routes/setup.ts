@@ -1,10 +1,13 @@
-import type { Request, Response, NextFunction } from 'express';
+import type { Request, Response } from 'express';
+import type { SiteHost, SiteUrl } from '../core/host-policy';
 const express = require('express');
 const router = express.Router();
 const { getConfig, saveConfig, isInstalled } = require('../core/configManager');
 const config = require('../config/app');
 const path = require('path');
 const { verifyInstallToken } = require('../core/install-token');
+const hostPolicy: typeof import('../core/host-policy') = require('../core/host-policy');
+const { siteHostPolicy, signInRefusal, signInRetiring, sessionCookieOptions } = require('../middleware/auth');
 // The installer runs before any account exists, so its 500s are the most exposed in the product:
 // whatever broke (a filesystem path, a database DSN, a TLS library) is logged, never answered.
 const { publicErrorText } = require('../middleware/errorHandler');
@@ -24,40 +27,143 @@ function requireInstallToken(req: Request, res: Response): boolean {
 }
 
 /**
- * Which host did the operator actually install on?
+ * WHICH ADDRESS IS THIS SITE BEING INSTALLED AT?
  *
- * The gateway proxies with `changeOrigin: true`, so an install that arrives through it carries the
- * UPSTREAM's address in `Host` (e.g. backend:4000) and the operator's real address only in
- * `X-Forwarded-Host`. Reading `Host` alone made the backend record ITSELF as the site origin. On one
- * host that lands on loopback, which the migration guard exempts — so the bug stayed invisible until
- * separate mode, where it wrote the backend node's LAN IP and every later API call 409'd
- * `migration_required`. Same precedence as the migration guard in index.ts.
+ * An explicit `siteUrl` in the body always wins (the wizard sends the address the operator confirmed).
+ * Without one, the address is the request's own: core/host-policy `requestAuthority` for the host and
+ * `trustedScheme` for the scheme — the same derivation the host gate, CORS and CSRF use. That matters in
+ * two directions:
  *
- * Exported for tests — pure; the caller supplies the header values and validates the result.
+ *   · behind the gateway (`changeOrigin: true`) `Host` is the UPSTREAM's address and the operator's real
+ *     one is X-Forwarded-Host. Reading `Host` alone once made the backend record ITSELF as the site, and
+ *     in separate mode every later API call was refused. The gateway is a trusted hop (mTLS CN, or a
+ *     loopback peer that addressed a loopback authority), so its X-Forwarded-Host is honoured;
+ *   · nobody else's X-Forwarded-Host / X-Forwarded-Proto is. Both used to be read from any client, so a
+ *     direct caller holding the install token could name the canonical address — or downgrade it to http
+ *     with `X-Forwarded-Proto: http` — through headers instead of the body.
+ *
+ * Both paths end in `parseSiteUrl`, the one validator for an operator-supplied address: http(s) only,
+ * no userinfo, path, query or fragment, IPv6 accepted in brackets. An absent or malformed host is a 400
+ * — it can never become the literal 'http://undefined' a template string would build.
+ *
+ * Returns the parsed address, or a reason to answer 400.
  */
-function pickInstallHost(forwardedHost: unknown, host: unknown): string {
-    return String(forwardedHost || host || '').split(',')[0].trim();
+function installSiteAddress(req: Request): { site: SiteUrl } | { error: string } {
+    const explicit = req.body && req.body.siteUrl !== undefined && req.body.siteUrl !== null && req.body.siteUrl !== ''
+        ? String(req.body.siteUrl)
+        : '';
+    if (explicit) {
+        const site = hostPolicy.parseSiteUrl(explicit);
+        return site ? { site } : { error: 'siteUrl must be an http(s) address with no path, query or credentials (e.g. https://example.com).' };
+    }
+    const policy = siteHostPolicy.get();
+    const authority = hostPolicy.requestAuthority(req, policy);
+    if (!authority.parsed) return { error: 'Could not determine a valid install host. Pass an explicit siteUrl in the installer.' };
+    const site = hostPolicy.parseSiteUrl(`${hostPolicy.trustedScheme(req, policy)}://${hostPolicy.serialize(authority.parsed)}`);
+    return site ? { site } : { error: 'Could not determine a valid install host. Pass an explicit siteUrl in the installer.' };
+}
+
+/** A tunnel name is handed to the next customer when the tunnel restarts, so it is accepted for a week. */
+const TUNNEL_ALIAS_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * The OPTIONAL install-time alias: "also accept the address I am installing from".
+ *
+ * The wizard prefills the site address from the browser's location, but the operator may correct it —
+ * installing through `http://blog.lan:3000` while declaring `https://blog.example.com`. Without an alias
+ * the gate would answer 421 to the very tab that just finished the install. So, only when the body asks
+ * for it (`acceptCurrentAddress: true`, under the install token), the request's own address becomes an
+ * alias — and only a NAMED one: loopback and IP literals are accepted by rule already, and a request
+ * address equal to the chosen one needs nothing. A tunnel name gets the same 7-day expiry the
+ * site-address API applies; a .local name (anyone on the LAN can answer for it) needs `confirmLocal:
+ * true`, exactly as it does there.
+ *
+ * Returns the alias entry to store, a reason it was not added, or null when nothing was asked or needed.
+ */
+function installTimeAlias(req: Request, site: SiteUrl): { alias: Record<string, unknown> } | { skipped: string } | null {
+    if (!req.body || req.body.acceptCurrentAddress !== true) return null;
+    const policy = siteHostPolicy.get();
+    const authority = hostPolicy.requestAuthority(req, policy);
+    const current = authority.parsed;
+    if (!current || current.kind !== 'dns' || hostPolicy.isLoopbackAuthority(current) || current.hostname === site.hostname) return null;
+    if (hostPolicy.isLanName(current.hostname) && req.body.confirmLocal !== true) return { skipped: 'local-name-needs-confirmation' };
+    const entry = hostPolicy.parseSiteUrl(`${hostPolicy.trustedScheme(req, policy)}://${hostPolicy.serialize(current)}`);
+    if (!entry) return { skipped: 'invalid-address' };
+    const now = Date.now();
+    return {
+        alias: {
+            url: entry.origin,
+            mode: 'serve',
+            source: 'install',
+            addedAt: new Date(now).toISOString(),
+            ...(hostPolicy.isTunnelHost(entry.hostname) ? { expiresAt: new Date(now + TUNNEL_ALIAS_LIFETIME_MS).toISOString() } : {}),
+        },
+    };
 }
 
 /**
- * The shape a request-derived host must have before this file will build a site origin out of it.
- *
- * Hoisted to module scope, and consumed by BOTH endpoints that write one. It used to be declared inside
- * the POST /setup/install handler only, so POST /setup/migrate — the one endpoint of this router that
- * outlives the install, and the only other one that PERSISTS a site origin — derived its host as a bare
- * `req.get('x-forwarded-host') || req.get('host')`. `req.get()` is `string | undefined`, so an absent Host
- * (HTTP/1.0 imposes none, and Node delivers such a request with `req.headers.host === undefined`) made
- * `` `${protocol}://${host}` `` the literal string 'http://undefined', which /migrate then saved as
- * config.siteUrl and as the `siteurl` option — and config.site.url is an entry of the same-origin
- * allow-lists in middleware/auth.ts and routes/collab.ts. One host-less migrate installed
- * 'http://undefined' as a same-origin PERMANENTLY, and re-minted the mTLS SANs around it. Two endpoints,
- * one question about the same header, and only one of them was answering it.
- *
- * NOTE that the pattern ACCEPTS the label 'undefined' — it is a syntactically valid host. That is exactly
- * why the absent header must arrive here as the empty string (pickInstallHost above) and not as the word:
- * the guard cannot tell the two apart, so the derivation must never produce the word in the first place.
+ * Classify the install request the way the host gate would have, had the site been installed when it
+ * arrived (it was not, so the gate let it through unclassified). 'unknown' means the gate will refuse
+ * this address from the next request on; null means there is nothing to classify (no Host, no valid
+ * canonical), which every reader treats as today's behaviour.
  */
-const INSTALL_HOST_PATTERN = /^(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)(?:\.(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?))*|(?:\d{1,3}\.){3}\d{1,3})(?::\d{1,5})?$/;
+function classifyInstallRequest(req: Request): SiteHost | 'unknown' | null {
+    const policy = siteHostPolicy.get();
+    if (!policy.canonical) return null;
+    const authority = hostPolicy.requestAuthority(req, policy);
+    if (!authority.parsed) return null;
+    const verdict = hostPolicy.classify(authority.parsed, policy, { proxied: authority.proxied });
+    if (verdict.cls === 'unknown') return 'unknown';
+    return {
+        hostname: authority.parsed.hostname,
+        port: authority.parsed.port,
+        kind: authority.parsed.kind,
+        host: hostPolicy.serialize(authority.parsed),
+        cls: verdict.cls,
+        reason: verdict.reason,
+        entry: verdict.entry,
+        hop: authority.hop,
+        viaTrustedHop: authority.viaTrustedHop,
+        scheme: hostPolicy.trustedScheme(req, policy),
+    };
+}
+
+/**
+ * The pre-install suggestion for the wizard's site-address field: WORDJS_SITE_URL, when it is a valid
+ * site address that is NOT loopback (REDTEAM R6). Compose exports `http://localhost:3000` by default;
+ * offering that would pin a public install's links to the recipient's own machine. The wizard prefills
+ * from the browser's location and shows this only as an alternative.
+ */
+function suggestedSiteUrl(): string | null {
+    const site = hostPolicy.parseSiteUrl(process.env.WORDJS_SITE_URL);
+    return site && !hostPolicy.isLoopbackAuthority(site) ? site.origin : null;
+}
+
+/**
+ * Mint the cluster CA and the three service identities of a single-host install, and point the backend's
+ * gateway control-plane target at this machine. Mutates `newConfig` (gatewayHost, mtls).
+ *
+ * INTERNAL IDENTITIES ARE NOT PUBLIC NAMES. These certificates authenticate the three services of ONE
+ * machine to each other (peers are pinned by CN: gateway-internal, backend, frontend) and every leg dials
+ * loopback. They used to also carry `gateway.<host>` / `backend.<host>`, derived from the address the
+ * install request arrived on — a name chosen by whoever sent that request, minted into the cluster's
+ * trust, unresolvable on most machines (the gateway's control plane binds loopback), and wrong after
+ * every change of the site's address. generateServiceCert always includes localhost and 127.0.0.1, which
+ * is exactly what the single-host legs verify against. Nothing here reads the request.
+ */
+function issueLocalClusterIdentity(newConfig: Record<string, any>): void {
+    const { generateClusterCA, generateServiceCert } = require('../core/certManager');
+    const ca = generateClusterCA();
+    newConfig.gatewayHost = 'localhost';
+    newConfig.mtls = {
+        ca: './certs/cluster-ca.crt',
+        key: './certs/backend.key',
+        cert: './certs/backend.crt'
+    };
+    generateServiceCert('gateway-internal', ca.key, ca.cert);
+    generateServiceCert('backend', ca.key, ca.cert);
+    generateServiceCert('frontend', ca.key, ca.cert);
+}
 
 /**
  * Was this node provisioned by cluster enrollment (scripts/node-join.js) rather than being a fresh
@@ -76,8 +182,9 @@ function isEnrolledConfig(cfg: any, certExists: boolean): boolean {
  * tags:
  *   name: Setup
  *   description: >-
- *     The installation wizard and the post-move repair endpoint. These predate any account, so they are
- *     gated by the one-time install token minted at boot (0600 file; printed only on a TTY) rather than by a session.
+ *     The installation wizard. Its doors predate any account, so they are gated by the one-time install
+ *     token minted at boot (0600 file; printed only on a TTY) rather than by a session. After install the
+ *     whole subtree is behind the host gate like every other API route.
  */
 
 /**
@@ -98,11 +205,12 @@ function isEnrolledConfig(cfg: any, certExists: boolean): boolean {
  * @swagger
  * /setup/status:
  *   get:
- *     summary: Is this instance installed, and does its stored URL still match the request host?
+ *     summary: Is this instance installed?
  *     description: >-
- *       Public and unauthenticated — the wizard and the migration screen both poll it before anything
- *       exists to authenticate against. `mismatch` is what the migration guard keys on: while it is
- *       true, every route outside /setup answers 409 migration_required.
+ *       Public and unauthenticated — the wizard polls it before anything exists to authenticate against.
+ *       It reads nothing from the request: the address a site answers is decided by the host gate, and
+ *       the site's own address is never derived from request headers here. After install it is behind
+ *       the host gate, so an address the site does not answer gets 421 rest_host_not_allowed.
  *     tags: [Setup]
  *     security: []
  *     responses:
@@ -115,47 +223,22 @@ function isEnrolledConfig(cfg: any, certExists: boolean): boolean {
  *               properties:
  *                 installed:
  *                   type: boolean
- *                 mismatch:
- *                   type: boolean
- *                   description: The configured site URL does not match the host this request arrived on.
- *                 configUrl:
+ *                 suggestedSiteUrl:
  *                   type: string
- *                   nullable: true
- *                 detectedUrl:
- *                   type: string
- *                   description: Derived from X-Forwarded-Proto / X-Forwarded-Host, falling back to the request's own.
+ *                   description: >-
+ *                     Before install only, and only when WORDJS_SITE_URL is a valid, non-loopback site
+ *                     address: an alternative the wizard may offer next to the browser's own location.
+ *       421:
+ *         description: rest_host_not_allowed — installed, and this address is not one the site answers.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
  */
-router.get('/status', (req: Request, res: Response) => {
+router.get('/status', (_req: Request, res: Response) => {
     const installed = isInstalled();
-    const currentConfig = getConfig();
-
-    // Check for URL mismatch if installed
-    let mismatch = false;
-    let detectedUrl = '';
-
-    if (installed && currentConfig && currentConfig.siteUrl) {
-        // Fix: Trust upstream Gateway protocol
-        const protocol = req.get('x-forwarded-proto') || req.protocol;
-        // Fix: Use X-Forwarded-Host if available (from Next.js proxy)
-        const host = req.get('x-forwarded-host') || req.get('host');
-        detectedUrl = `${protocol}://${host}`;
-
-        // Simple normalization for comparison (remove trailing slash)
-        // Remove protocol for safer comparison if protocol proxying is tricky
-        const storedUrl = currentConfig.siteUrl.replace(/\/$/, '').replace(/^https?:\/\//, '');
-        const currentHost = detectedUrl.replace(/^https?:\/\//, '');
-
-        if (storedUrl !== currentHost) {
-            mismatch = true;
-        }
-    }
-
-    res.json({
-        installed,
-        mismatch,
-        configUrl: currentConfig ? currentConfig.siteUrl : null,
-        detectedUrl
-    });
+    const suggestion = installed ? null : suggestedSiteUrl();
+    res.json(suggestion ? { installed, suggestedSiteUrl: suggestion } : { installed });
 });
 
 // Test a database connection BEFORE committing the install, so the wizard can validate Postgres
@@ -311,10 +394,13 @@ router.post('/test-db', async (req: Request, res: Response) => {
  *       administrator, runs the migrations, optionally seeds starter content, and auto-logs the
  *       administrator in by issuing a session cookie. Exempt from the CSRF checks (no origin and no user
  *       exist yet) — the one-time install token is the gate. The site URL is taken from an explicit
- *       `siteUrl` when given; otherwise it is derived from X-Forwarded-Proto / X-Forwarded-Host and
- *       validated against a strict hostname-or-IP pattern, because those headers are caller-controlled
- *       and the value ends up in the same-origin allow-list. On a cluster-enrolled node the enrollment
- *       identity and gateway wiring are preserved rather than overwritten.
+ *       `siteUrl` when given; otherwise it is the address the request was sent to — Host, or
+ *       X-Forwarded-Host / X-Forwarded-Proto only from a trusted hop (the gateway, a loopback proxy, the
+ *       operator's address-based trustProxy). Either way it must be a plain http(s) origin (IPv6 in
+ *       brackets accepted). Auto-login happens only when the address the request used is one the site
+ *       will answer and may sign in on; otherwise the response says so and the administrator signs in at
+ *       `siteUrl`. On a cluster-enrolled node the enrollment identity and gateway wiring are preserved
+ *       rather than overwritten.
  *     tags: [Setup]
  *     security: []
  *     parameters:
@@ -370,8 +456,18 @@ router.post('/test-db', async (req: Request, res: Response) => {
  *               siteUrl:
  *                 type: string
  *                 description: >-
- *                   Explicit absolute http(s) origin. Takes precedence over the request headers; its host
- *                   must still be a valid hostname or IP.
+ *                   Explicit http(s) origin — scheme, host and optional port, nothing else. Takes
+ *                   precedence over the request's own address.
+ *               acceptCurrentAddress:
+ *                 type: boolean
+ *                 default: false
+ *                 description: >-
+ *                   Also answer the NAMED address this request was sent to when it differs from siteUrl,
+ *                   by storing it as an alias (a tunnel name expires after 7 days). Loopback and IP
+ *                   literals are accepted by rule and never stored.
+ *               confirmLocal:
+ *                 type: boolean
+ *                 description: Required for acceptCurrentAddress to store a .local name, which anyone on the LAN can claim.
  *               frontendUrl:
  *                 type: string
  *               demoContent:
@@ -390,8 +486,26 @@ router.post('/test-db', async (req: Request, res: Response) => {
  *                   type: boolean
  *                 autoLoggedIn:
  *                   type: boolean
+ *                 autoLoginSkipped:
+ *                   type: string
+ *                   enum: [address-not-accepted, sign-in-refused, address-retiring]
+ *                   description: >-
+ *                     Present when no session was issued because this address will be refused from now
+ *                     on, may not mint a session (see POST /auth/login 403 rest_insecure_transport), or
+ *                     was retired a few seconds ago (see POST /auth/login 503 rest_address_retiring).
  *                 redirectTo:
  *                   type: string
+ *                   description: A path, to be opened at siteUrl when the current address is not accepted.
+ *                 siteUrl:
+ *                   type: string
+ *                   description: The main address the site was installed with.
+ *                 acceptedAddress:
+ *                   type: string
+ *                   nullable: true
+ *                   description: The alias stored for acceptCurrentAddress, or null.
+ *                 acceptedAddressSkipped:
+ *                   type: string
+ *                   description: Why acceptCurrentAddress stored nothing (local-name-needs-confirmation, invalid-address).
  *                 emailProviderAvailable:
  *                   type: boolean
  *                   description: >-
@@ -460,48 +574,14 @@ router.post('/install', async (req: Request, res: Response) => {
         return fail(`${dbDriver === 'mysql' ? 'MySQL' : 'PostgreSQL'} requires host, database, and user.`);
     }
 
-    // SECURITY: siteUrl and the mTLS cert SANs below are derived from the request host. The Host /
-    // X-Forwarded-* headers are attacker-controllable, so an explicit operator-provided siteUrl takes
-    // precedence; otherwise we accept the request host ONLY after validating it against a strict
-    // hostname/IP[:port] allow-pattern (defeats header injection / CRLF / bogus SAN poisoning).
-    // Install is already gated by the one-time install token; this is defense-in-depth on top of that.
-    // The pattern lives at module scope (INSTALL_HOST_PATTERN) so /setup/migrate validates identically.
-    const HOST_PATTERN = INSTALL_HOST_PATTERN;
-
-    let protocol: string;
-    let host: string;
-    const explicitSiteUrl = req.body.siteUrl ? String(req.body.siteUrl).trim() : '';
-    if (explicitSiteUrl) {
-        // Operator passed an explicit site URL — trust it but parse + validate its shape.
-        let parsed: URL;
-        try {
-            parsed = new URL(explicitSiteUrl);
-        } catch {
-            return fail('siteUrl must be a valid absolute URL (e.g. https://example.com).');
-        }
-        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-            return fail('siteUrl must use http or https.');
-        }
-        if (!HOST_PATTERN.test(parsed.host)) {
-            return fail('siteUrl host is not a valid hostname or IP address.');
-        }
-        protocol = parsed.protocol.replace(':', '');
-        host = parsed.host;
-    } else {
-        // Derive from the (attacker-controllable) request headers — validate before any use.
-        const rawProto = req.get('x-forwarded-proto') || req.protocol;
-        protocol = String(rawProto).split(',')[0].trim().toLowerCase();
-        if (protocol !== 'http' && protocol !== 'https') {
-            return fail('Invalid request protocol; pass an explicit siteUrl in the installer.');
-        }
-        // Prefer X-Forwarded-Host over Host — see pickInstallHost() above for why.
-        const rawHost = pickInstallHost(req.get('x-forwarded-host'), req.get('host'));
-        if (!HOST_PATTERN.test(rawHost)) {
-            return fail('Could not determine a valid install host. Pass an explicit siteUrl in the installer.');
-        }
-        host = rawHost;
-    }
-    const siteUrl = `${protocol}://${host}`;
+    // SECURITY: siteUrl comes from this one address, and it lands in the same-origin allow-lists — see
+    // installSiteAddress() for where it may come from. (The gateway wiring and the internal mTLS
+    // certificates below deliberately do NOT derive from it.)
+    const address = installSiteAddress(req);
+    if ('error' in address) return fail(address.error);
+    const site = address.site;
+    const siteUrl = site.origin;
+    const currentAddress = installTimeAlias(req, site);
 
     // Save config
     const crypto = require('crypto');
@@ -577,11 +657,21 @@ router.post('/install', async (req: Request, res: Response) => {
         // Host for the backend server listen binding (usually localhost or 0.0.0.0). An enrolled node
         // MUST keep the binding enrollment chose — the gateway lives on another machine.
         host: isEnrolledNode ? (enrolledConfig.host || '0.0.0.0') : 'localhost',
-        // Public Gateway URL (FQDN/IP) captured from the request (Forwarded or Host)
-        gatewayUrl: `${protocol}://${host}`, // Store full URL just in case
+        // Public Gateway URL: the site's own origin at install time.
+        gatewayUrl: siteUrl,
         // Which host this backend DIALS for the gateway control plane. On an enrolled node that is the
-        // gateway machine (from the join), NOT the public site host the browser used.
-        gatewayHost: isEnrolledNode ? enrolledConfig.gatewayHost : host.split(':')[0],
+        // gateway machine (from the join); on a single-host install it is this machine — the gateway's
+        // control plane binds loopback by default. Never the public site host the browser used: that
+        // name may not resolve here at all, and it is not what the internal certificates are issued for.
+        gatewayHost: isEnrolledNode ? enrolledConfig.gatewayHost : 'localhost',
+        // The address the operator installed FROM, when they asked for it to keep working (see
+        // installTimeAlias). Appended to any list enrollment already carried, never replacing it.
+        ...(currentAddress && 'alias' in currentAddress
+            ? { siteAliases: [...(Array.isArray(enrolledConfig.siteAliases) ? enrolledConfig.siteAliases : []), currentAddress.alias] }
+            : {}),
+        // Revision 1 of the site's addresses, recorded as the installer's (site_address_rev follows with
+        // the other options below), not as the legacy upgrade the first reconcile would otherwise record.
+        siteAddress: require('../core/site-address').installRecord(Date.now()),
         // Rotating this on an enrolled node would desynchronise it from the gateway's shared secret.
         gatewaySecret: isEnrolledNode ? enrolledConfig.gatewaySecret : gatewaySecret,
         // The live signing secret (see above) — what the next boot will sign and verify with.
@@ -627,6 +717,8 @@ router.post('/install', async (req: Request, res: Response) => {
             await updateOption('blogdescription', String(siteDescription ?? ''));
             await updateOption('siteurl', String(siteUrl ?? ''));
             await updateOption('home', String(frontendUrl ?? ''));
+            // The mirror of siteAddress.rev in the config just written (core/site-address installRecord).
+            await updateOption('site_address_rev', newConfig.siteAddress.rev);
 
             // SECURITY: Generate mTLS Certificates — but NEVER on a cluster-enrolled node. There the
             // cluster CA already exists on the GATEWAY (its private key deliberately never leaves that
@@ -640,56 +732,8 @@ router.post('/install', async (req: Request, res: Response) => {
             } else {
                 console.log('🔐 Setup: Generating mTLS certificates...');
                 try {
-                    const { generateClusterCA, generateServiceCert } = require('../core/certManager');
-                    const ca = generateClusterCA();
-
-                    // Derive Subdomains based on installation host
-                    const baseHost = host.split(':')[0];
-                    const isIp = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(baseHost);
-
-                    // Logic: If host is "wordjs.com", we create "gateway.wordjs.com", "backend.wordjs.com", etc.
-                    // If it's an IP, we just use the IP.
-                    const getSubdomain = (prefix: string) => {
-                        if (isIp || baseHost === 'localhost') return baseHost;
-                        // Avoid double prefixing if user installed on a subdomain already
-                        const parts = baseHost.split('.');
-                        if (parts.length > 2) {
-                            // Already a subdomain, just replace the first part or append
-                            return `${prefix}.${parts.slice(1).join('.')}`;
-                        }
-                        return `${prefix}.${baseHost}`;
-                    };
-
-                    const gatewayHost = getSubdomain('gateway');
-                    const backendHost = getSubdomain('backend');
-                    const frontendHost = getSubdomain('frontend');
-
-                    // Save identities to config for persistence
-                    newConfig.gatewayHost = gatewayHost; // Align target with identity
-                    newConfig.gatewayHostIdentity = gatewayHost;
-                    newConfig.backendHostIdentity = backendHost;
-                    newConfig.frontendHostIdentity = frontendHost;
-
-                    // SAVE EXPLICIT mTLS PATHS
-                    newConfig.mtls = {
-                        ca: './certs/cluster-ca.crt',
-                        key: './certs/backend.key',
-                        cert: './certs/backend.crt'
-                    };
-
-                    // Generate Service Certs with specific SANs
-                    generateServiceCert('gateway-internal', ca.key, ca.cert, [
-                        isIp ? { type: 7, ip: gatewayHost } : { type: 2, value: gatewayHost }
-                    ]);
-                    generateServiceCert('backend', ca.key, ca.cert, [
-                        isIp ? { type: 7, ip: backendHost } : { type: 2, value: backendHost }
-                    ]);
-                    generateServiceCert('frontend', ca.key, ca.cert, [
-                        isIp ? { type: 7, ip: frontendHost } : { type: 2, value: frontendHost }
-                    ]);
-
-                    console.log(`✅ mTLS Certificates generated for: ${gatewayHost}, ${backendHost}, ${frontendHost}`);
-
+                    issueLocalClusterIdentity(newConfig);
+                    console.log('✅ mTLS certificates generated for the local services (localhost, 127.0.0.1).');
                 } catch (e) {
                     console.error('❌ Setup failed during mTLS generation:', e);
                     res.status(500).json({ error: publicErrorText(e, 'Setup failed during mTLS generation.') });
@@ -795,10 +839,32 @@ router.post('/install', async (req: Request, res: Response) => {
                 // We don't block installation, just warn
             }
 
-            // Auto-login: issue the admin's session cookie so the wizard lands straight in /admin.
+            // Auto-login: issue the admin's session cookie so the wizard lands straight in /admin — but
+            // only where that session could be used and may be minted. The site exists now, so the
+            // request is classified exactly as the host gate will classify the next one: on an address
+            // the gate is about to refuse, a cookie is useless (every API call answers 421); on one the
+            // sign-in rule refuses (plain http to an https site, an IP not enabled for sign-in), the
+            // Set-Cookie would carry the administrator's token in clear. Either way the response says so
+            // and the administrator signs in at `siteUrl`.
             let autoLoggedIn = false;
+            let autoLoginSkipped: string | null = null;
+            const where = classifyInstallRequest(req);
+            if (where === 'unknown') {
+                autoLoginSkipped = 'address-not-accepted';
+            } else {
+                // What the gate would have attached had the site existed when this request arrived, so
+                // the cookie's Secure attribute and the sign-in rule judge THIS address, not a default.
+                if (where) Object.assign(req, { siteHost: where });
+                if (signInRefusal(req)) autoLoginSkipped = 'sign-in-refused';
+                // Asked here, like the sign-in rule, so the one door below never answers this request with
+                // its 503 (the install would then end before the install token is cleared and site-address
+                // is started). The new config's record retires nothing today; this keeps it that way.
+                else if (signInRetiring(req)) autoLoginSkipped = 'address-retiring';
+            }
             try {
-                const createdAdmin = await User.findByLogin(adminUser) || await User.findByEmail(adminEmailDisplay);
+                const createdAdmin = autoLoginSkipped
+                    ? null
+                    : (await User.findByLogin(adminUser) || await User.findByEmail(adminEmailDisplay));
                 if (createdAdmin) {
                     // THE ONE DOOR (middleware/auth.ts:issueSessionCookie) — not a hand-rolled res.cookie.
                     // The rule "a headless request may never cause a session cookie to be emitted" is only
@@ -808,15 +874,12 @@ router.post('/install', async (req: Request, res: Response) => {
                     // so req.apiToken never exists here), which is precisely why it was easy to miss — the
                     // hygiene test in auth-headless-session.test.ts now fails if a third copy appears.
                     const { generateToken, issueSessionCookie } = require('../middleware/auth');
-                    const token = generateToken(createdAdmin);
+                    // With the request, so a session minted on an alias is bound to it like any other.
+                    const token = generateToken(createdAdmin, req);
                     // Returns true when it REFUSED and already sent the response — the caller must return.
-                    if (issueSessionCookie(req, res, token, {
-                        httpOnly: true,
-                        secure: siteUrl.startsWith('https://'),
-                        sameSite: 'lax',
-                        maxAge: 7 * 24 * 60 * 60 * 1000,
-                        path: '/'
-                    })) return;
+                    // The options are the session cookie's own (sessionCookieOptions), so the install
+                    // session follows the same Secure rule as every later sign-in at this address.
+                    if (issueSessionCookie(req, res, token, sessionCookieOptions(req))) return;
                     autoLoggedIn = true;
                 }
             } catch (e: any) {
@@ -834,10 +897,20 @@ router.post('/install', async (req: Request, res: Response) => {
             let emailProviderAvailable = false;
             try { emailProviderAvailable = require('../core/mail-provider').isEmailProviderAvailable() === true; } catch { /* default false */ }
 
+            // The site exists now. A backend that booted uninstalled never ran the boot reconcile (it is
+            // gated on isInstalled()), so run it in THIS process: it releases the gateway sync waiting on
+            // whenReconciled(), arms the gateway's host edge (split / separate) and starts the CLI watcher.
+            // Not awaited and never fatal — the install already succeeded.
+            require('../core/site-address').ensureStarted().catch((e: any) => console.warn('[site-address] post-install start failed:', e && e.message));
+
             res.json({
                 success: true,
                 autoLoggedIn,
+                ...(autoLoginSkipped ? { autoLoginSkipped } : {}),
                 redirectTo: autoLoggedIn ? '/admin' : '/login?installed=true',
+                siteUrl,
+                acceptedAddress: currentAddress && 'alias' in currentAddress ? currentAddress.alias.url : null,
+                ...(currentAddress && 'skipped' in currentAddress ? { acceptedAddressSkipped: currentAddress.skipped } : {}),
                 emailProviderAvailable,
                 tests: { total: testResults.tests, passed: testResults.passed, failed: testResults.failed }
             });
@@ -855,286 +928,56 @@ router.post('/install', async (req: Request, res: Response) => {
  * @swagger
  * /setup/migrate:
  *   post:
- *     summary: Repoint an installed instance at the host it now answers on
+ *     summary: Removed — change the site address in Settings or with the CLI
  *     description: >-
- *       The escape hatch from a domain move. While the stored site URL disagrees with the request host,
- *       the migration guard answers 409 on every route outside /setup — including /auth/login — so this
- *       endpoint authenticates raw ADMINISTRATOR credentials from the body instead of a session. It is
- *       NOT CSRF-exempt (unlike /setup/install and /setup/test-db): it needs no ambient cookie, so the
- *       same-origin check costs it nothing. Wrong password and correct-password-but-not-an-administrator
- *       are answered identically, so the only distinguishable outcome is a correct administrator
- *       credential; repeated failures buy an escalating bounded WAIT under a dedicated throttle bucket
- *       that can never lock the real administrator out of interactive login. The new host is derived
- *       from X-Forwarded-Host / Host and validated exactly as POST /setup/install validates it.
+ *       This used to repoint the site at whatever host the request arrived on, authenticated by raw
+ *       administrator credentials in the body. It is gone: the site's address is never taken from a
+ *       request again. Every method answers 410 rest_migrate_removed and nothing is read or written —
+ *       no credential is evaluated, so it is no longer a password oracle either. Change the address in
+ *       Settings → Site address, or on the server with `npm run site`. It is still NOT CSRF-exempt, and
+ *       still behind the strict per-IP auth limiter, for one release.
  *     tags: [Setup]
  *     security: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [username, password]
- *             properties:
- *               username:
- *                 type: string
- *               password:
- *                 type: string
  *     responses:
- *       200:
- *         description: >-
- *           Site URL repointed and the mTLS identities re-issued for the new domain. Only the safe
- *           fields are echoed — never the whole config, which carries the JWT and gateway secrets.
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 siteUrl:
- *                   type: string
- *                 frontendUrl:
- *                   type: string
- *       400:
- *         description: >-
- *           The instance is not installed, or no valid site host could be derived from this request —
- *           send the migration through the host you are migrating TO.
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/PlainError'
- *       401:
- *         description: >-
- *           Credentials absent, or the uniform refusal for "wrong password" and "correct password but
- *           not an administrator" — deliberately indistinguishable.
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/PlainError'
  *       403:
- *         description: The same-origin CSRF check refused the request.
+ *         description: The same-origin CSRF check refused the request (it runs before the route).
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       410:
+ *         description: rest_migrate_removed — always; nothing was changed.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       421:
+ *         description: rest_host_not_allowed — this address is not one the site answers.
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/RestError'
  *       429:
- *         description: >-
- *           Too many simultaneous attempts for this account from this address, or the strict per-IP auth
- *           limiter (10 per hour) that this route is mounted behind.
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/PlainError'
- *       500:
- *         description: The new configuration could not be written.
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/PlainError'
+ *         description: The strict per-IP auth limiter (10 per hour) this path is still mounted behind.
  */
-// Migration endpoint
-router.post('/migrate', async (req: Request, res: Response) => {
-    if (!isInstalled()) {
-        return res.status(400).json({ error: 'Not installed' });
-    }
-
-    const { username, password } = req.body;
-    if (!username || !password) {
-        return res.status(401).json({ error: 'Authentication required. Please provide admin credentials.' });
-    }
-
-    try {
-        // Why this endpoint MUST stay reachable pre-auth: during a domain move the Installation/Migration Guard
-        // (index.ts) 409s every non-/setup route — including /auth/login — while siteUrl != detected host, so an
-        // admin CANNOT obtain a session to bootstrap out of the mismatch. /setup/migrate is the
-        // guard-bypassed path that repairs siteUrl, so requiring an authenticated admin session here would break
-        // the very flow it exists for. It is NOT CSRF-exempt, though — that exemption is enumerated in
-        // middleware/auth.ts and covers only the two pre-install doors. This route needs no ambient cookie
-        // (the credentials are in the body), so the same-origin check costs the migration page nothing while
-        // keeping the password oracle below off any random visitor's browser. It authenticates raw
-        // credentials, which made it a password
-        // ORACLE (#26): wrong password → 401, correct NON-admin password → 403, correct admin password → 200 were
-        // all DISTINGUISHABLE, giving an unthrottled brute-force oracle (per #25 we deliberately never call
-        // recordLoginFail here, so account lockout never trips it).
-        //
-        // #26 fix WITHOUT reintroducing #25's DoS:
-        //   (a) throttle this route under its OWN dedicated per-account bucket keyed with a SEPARATE
-        //       'migrate:' prefix (Finding #14, LOW). Earlier we only READ the shared /auth/login bucket and
-        //       never wrote to it (recordLoginFail on the SHARED lock was #25's DoS lever — an unauthenticated
-        //       caller could lock the real admin out of interactive login). But because this route never
-        //       incremented that bucket, its own password guesses were unthrottled per-account, leaving a
-        //       distributed brute-force ORACLE that only the per-IP authLimiter (defeatable by a botnet)
-        //       covered. A DISTINCT 'migrate:' bucket lets us recordLoginFail on failures here safely: it
-        //       cannot touch the interactive-login lock, so a brute-forcer only rate-limits themselves out of
-        //       /setup/migrate, never the admin's real login;
-        //   (b) collapse the wrong-password AND correct-non-admin branches into ONE uniform 401 (identical status
-        //       + body), so the ONLY distinguishable outcome is a correct ADMINISTRATOR credential — which is the
-        //       legitimate migration path, not information an attacker profits from;
-        //   (c) this route is additionally throttled by the strict authLimiter (10/hr/IP, mounted in index.ts on
-        //       /setup/migrate), far tighter than the setupLimiter (20/15min) guarding the pre-install endpoints.
-        // clearLoginFails on a SUCCESSFUL admin auth stays (it requires the correct password, so it's not an
-        // unauthenticated lever), and clears only the dedicated 'migrate:' bucket.
-        const auth = require('./auth');
-        // ─── WHY THIS IS A WAIT AND NOT A LOCK ────────────────────────────────────────────────────
-        // The dedicated bucket (Finding #14) was the right half of the answer and the check-then-refuse
-        // was the wrong one. `username` comes from the body of an ANONYMOUS request, the lock was read
-        // BEFORE User.authenticate, and clearLoginFails only ran after a successful ADMIN authentication —
-        // which the lock itself prevented. So ten wrong passwords against {username:'admin'} answered the
-        // real administrator, holding the CORRECT password, with the same 429 as the attacker. And this is
-        // the worst possible door to jam: during a domain move the Installation/Migration Guard 409s every
-        // non-/setup route including /auth/login, so /setup/migrate is the ONLY way to repair siteUrl —
-        // the site is down and its escape hatch answers "too many attempts", renewably (authLimiter allows
-        // one arming per hour per IP; four addresses give permanent denial), with no owner action to clear
-        // it. That is exactly the Class 2 hostage routes/users.ts:511-527 declares erased.
-        //
-        // Same shape as the MFA doors now: the failures buy an escalating BOUNDED WAIT (auth.payFailureDelay
-        // — literally the sudo ladder, so the three cannot drift), paid INSIDE the concurrency slot, and the
-        // correct credential is never refused. recordLoginFail stays as the counter that feeds the ladder;
-        // 'migrate' is a COUNT-ONLY purpose in routes/auth.ts, so it arms no lock anywhere. The uniform 401
-        // below is what closes the oracle (#26); the wait is what makes guessing expensive.
-        const identity = await auth.resolveLockIdentifier(username);
-        // lockBucket, not a hand-built prefix: `'migrate:' + x` produced the same string, but only by
-        // coincidence — the day 'migrate' became a real purpose the two spellings would have silently
-        // merged into one counter with nothing comparing them. Now there is one spelling.
-        const lockKey = auth.lockBucket('migrate', identity);
-        // Concurrency backstop (audit AUTH-A3 class, mirrors /login and /auth/mfa): User.authenticate
-        // (bcrypt) yields the event loop, so a parallel burst of guesses would otherwise all sleep through
-        // the wait together and the ladder would bound latency instead of throughput. The slot is keyed by
-        // (account, source address) — NOT by account alone — because the wait is now paid inside it, and an
-        // account-wide slot held for seconds is a refusal an anonymous caller could inflict on the admin:
-        // the hostage in a different costume. Released in finally.
-        const slotKey = auth.lockBucket('migrate', `${identity}|${require('../core/client-ip').clientIp(req)}`);
-        if (!(await auth.beginLoginAttempt(slotKey))) {
-            return res.status(429).json({ error: 'Too many simultaneous attempts. Try again in a moment.' });
-        }
-        const User = require('../models/User');
-        let user: any = null;
-        try {
-            await auth.payFailureDelay(lockKey);
-            try { user = await User.authenticate(username, password); } catch { user = null; }
-
-            // UNIFORM response for BOTH wrong password (user === null) and correct-password-non-admin (#26): same
-            // status + body so neither is distinguishable from the other — only a correct administrator credential
-            // proceeds past this point. recordLoginFail (Finding #14) increments the DEDICATED 'migrate:' bucket
-            // only — never the interactive-login lock — so it throttles this oracle without the #25 DoS.
-            if (!user || user.getRole() !== 'administrator') {
-                await auth.recordLoginFail(lockKey);
-                return res.status(401).json({ error: 'Invalid credentials' });
-            }
-            await auth.clearLoginFails(lockKey);
-        } finally {
-            await auth.endLoginAttempt(slotKey);
-        }
-
-        // Fix: Trust upstream Gateway protocol
-        const protocol = req.get('x-forwarded-proto') || req.protocol;
-        // The host the operator migrated TO — derived and validated EXACTLY as POST /setup/install does,
-        // because what is derived here is persisted as config.siteUrl / the `siteurl` option, and that
-        // value is itself an entry of the same-origin allow-lists (middleware/auth.ts, routes/collab.ts).
-        // A bare `req.get('x-forwarded-host') || req.get('host')` yields `undefined` on a request with no
-        // Host header, and `${protocol}://${undefined}` is the string 'http://undefined' — which this
-        // endpoint then wrote onto those allow-lists permanently. Fail closed: no derivable host, no
-        // migration. See INSTALL_HOST_PATTERN at the top of this file.
-        const host = pickInstallHost(req.get('x-forwarded-host'), req.get('host'));
-        if (!INSTALL_HOST_PATTERN.test(host)) {
-            return res.status(400).json({ error: 'Could not determine a valid site host from this request. Send the migration through the host you are migrating to.' });
-        }
-        const newSiteUrl = `${protocol}://${host}`;
-
-        // Update config
-        const currentConfig = getConfig();
-
-        // Infer new frontend URL
-        // If current backend is localhost:3000 and frontend is localhost:3001
-        // And new backend is ip:3000
-        // We assume new frontend is ip:3001
-
-        let newFrontendUrl = currentConfig.frontendUrl;
-        try {
-            const oldHostname = new URL(currentConfig.siteUrl).hostname;
-            const newHostname = new URL(newSiteUrl).hostname;
-            newFrontendUrl = currentConfig.frontendUrl.replace(oldHostname, newHostname);
-        } catch (e) {
-            console.warn('Could not infer new frontend URL, keeping old one');
-        }
-
-        const newConfig = {
-            ...currentConfig,
-            siteUrl: newSiteUrl,
-            frontendUrl: newFrontendUrl
-        };
-
-        if (saveConfig(newConfig)) {
-            // Update DB options
-            const { updateOption } = require('../core/options');
-            await updateOption('siteurl', newConfig.siteUrl);
-            await updateOption('home', newConfig.frontendUrl);
-
-            // SECURITY: Regenerate mTLS Certificates for new domain
-            console.log('🔐 Migration: Regenerating mTLS certificates for new domain...');
-            try {
-                const { generateClusterCA, generateServiceCert } = require('../core/certManager');
-                const fs = require('fs');
-                const path = require('path');
-
-                // Read CA (we keep the same CA for stability, just issue new identities)
-                const caKey = fs.readFileSync(path.resolve(__dirname, '../../certs/cluster-ca.key'), 'utf8');
-                const caCert = fs.readFileSync(path.resolve(__dirname, '../../certs/cluster-ca.crt'), 'utf8');
-
-                // Derive New Subdomains
-                const baseHost = new URL(newConfig.siteUrl).hostname;
-                const isIp = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(baseHost);
-
-                const getSubdomain = (prefix: string) => {
-                    if (isIp || baseHost === 'localhost') return baseHost;
-                    const parts = baseHost.split('.');
-                    return parts.length > 2 ? `${prefix}.${parts.slice(1).join('.')}` : `${prefix}.${baseHost}`;
-                };
-
-                const identities = {
-                    gateway: getSubdomain('gateway'),
-                    backend: getSubdomain('backend'),
-                    frontend: getSubdomain('frontend')
-                };
-
-                // Generate New Identities
-                generateServiceCert('gateway-internal', caKey, caCert, [{ type: isIp ? 7 : 2, [isIp ? 'ip' : 'value']: identities.gateway }]);
-                generateServiceCert('backend', caKey, caCert, [{ type: isIp ? 7 : 2, [isIp ? 'ip' : 'value']: identities.backend }]);
-                generateServiceCert('frontend', caKey, caCert, [{ type: isIp ? 7 : 2, [isIp ? 'ip' : 'value']: identities.frontend }]);
-
-                // Redistribute
-                const rootDir = path.resolve(__dirname, '../../');
-                const frontDir = path.resolve(__dirname, '../../admin-next');
-                const backendCertsDir = path.join(rootDir, 'certs');
-
-                if (fs.existsSync(backendCertsDir)) {
-                    fs.cpSync(backendCertsDir, path.join(rootDir, 'certs'), { recursive: true });
-                    if (fs.existsSync(frontDir)) {
-                        fs.cpSync(backendCertsDir, path.join(frontDir, 'certs'), { recursive: true });
-                    }
-                }
-
-                console.log('✅ Identity Migration Complete');
-            } catch (e) {
-                console.error('❌ Failed to regenerate certificates during migration:', e.message);
-            }
-
-            // Return ONLY the safe, caller-relevant fields — NOT the whole config, which carries
-            // jwtSecret / gatewaySecret / dbPassword (audit MEDIUM: the full config was echoed back).
-            res.json({ success: true, siteUrl: newConfig.siteUrl, frontendUrl: newConfig.frontendUrl });
-        } else {
-            res.status(500).json({ error: 'Failed to save new configuration' });
-        }
-    } catch (e) {
-        console.error(e);
-        return res.status(401).json({ error: e.message || 'Authentication failed' });
-    }
+// Every method, so an old client (or an old /migration page still cached somewhere) gets the one
+// honest answer instead of a 404 that reads as "try another URL".
+router.all('/migrate', (_req: Request, res: Response) => {
+    res.status(410).json({
+        code: 'rest_migrate_removed',
+        message: 'Change the site address in Settings → Site address or with `npm run site`.',
+        data: { status: 410 },
+    });
 });
 
 module.exports = router;
-// Pure decision helpers, exported for the install-state tests (the router itself stays the default).
-module.exports.pickInstallHost = pickInstallHost;
-// Exported for tests — the ONE host allow-pattern both /install and /migrate validate against.
-module.exports.INSTALL_HOST_PATTERN = INSTALL_HOST_PATTERN;
+// Decision helpers, exported for the install-state tests (the router itself stays the default). A full
+// install cannot run in a unit suite, so the address it records, the alias it may add, the suggestion it
+// offers and how it classifies its own request are asserted through these — the very functions the
+// handler calls, not re-implementations.
 module.exports.isEnrolledConfig = isEnrolledConfig;
+module.exports.installSiteAddress = installSiteAddress;
+module.exports.installTimeAlias = installTimeAlias;
+module.exports.classifyInstallRequest = classifyInstallRequest;
+module.exports.suggestedSiteUrl = suggestedSiteUrl;
+module.exports.issueLocalClusterIdentity = issueLocalClusterIdentity;

@@ -107,6 +107,52 @@ export function isSessionEnded(error: unknown): boolean {
         && SESSION_ENDED_CODES.has((error as { code?: string }).code ?? "");
 }
 
+/** Where a fresh install funnels every page: the one navigation an API response may cause. */
+const INSTALL_PATH = "/install";
+
+/**
+ * Fired once per page on `window` when the backend answers 421: this site is not served at the address
+ * in the location bar. HostNotAllowedNotice (root layout) listens for it and explains where the site
+ * does answer; AuthContext uses the same signal to withhold the sign-in form.
+ */
+export const HOST_NOT_ALLOWED_EVENT = "wordjs:host-not-allowed";
+
+/** What the backend's host gate answers for an address it does not serve (421 rest_host_not_allowed). */
+export class HostNotAllowedError extends Error {
+    readonly code = "rest_host_not_allowed";
+    readonly status = 421;
+
+    constructor(message = "This address is not configured for this site.") {
+        super(message);
+        this.name = "HostNotAllowedError";
+    }
+}
+
+/** True for the 421 refusal, whether `api()` threw it or a raw-fetch caller rebuilt it. */
+export function isHostNotAllowed(error: unknown): boolean {
+    return error instanceof HostNotAllowedError
+        || (!!error && typeof error === "object" && (error as { code?: string }).code === "rest_host_not_allowed");
+}
+
+// Once per page: a refused address refuses EVERY call the page makes (fonts, settings, the session
+// probe, polling), and the notice needs to hear about it once, not once per request.
+let hostNotAllowedAnnounced = false;
+
+/**
+ * Tell the page its address is refused. Idempotent, so `api()` and the raw-fetch callers (AuthContext)
+ * can each report what they saw without coordinating.
+ */
+export function announceHostNotAllowed(): void {
+    if (typeof window === "undefined" || hostNotAllowedAnnounced) return;
+    hostNotAllowedAnnounced = true;
+    window.dispatchEvent(new CustomEvent(HOST_NOT_ALLOWED_EVENT, { detail: { host: window.location.host } }));
+}
+
+/** Whether this page already learned its address is refused — for a listener that mounts after the event. */
+export function hostNotAllowedWasAnnounced(): boolean {
+    return hostNotAllowedAnnounced;
+}
+
 type RequestMethod = "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
 
 interface ApiOptions {
@@ -150,14 +196,29 @@ export async function api<T>(endpoint: string, options: ApiOptions = {}): Promis
             error = null;
         }
 
+        // 421 Misdirected Request: the backend's host gate does not serve the address in the location
+        // bar. That is a property of the PAGE, not of this request (every other call is refused the
+        // same way), so it is announced once for the notice to explain and thrown as a typed error that
+        // callers can stay quiet about. Never a navigation: a refused address must not be able to send
+        // the browser anywhere; the notice links to the configured main address instead.
+        if (res.status === 421) {
+            announceHostNotAllowed();
+            throw new HostNotAllowedError(typeof error?.message === "string" && error.message ? error.message : undefined);
+        }
+
         if (error) {
-            // Handle global redirects (Installation/Migration)
-            if (typeof window !== 'undefined' && error.redirect) {
-                // Prevent infinite redirect loops if already on the page
-                if (!window.location.pathname.startsWith(error.redirect)) {
-                    window.location.href = error.redirect;
-                    // Don't throw, just interrupt flow or throw specific redirect error
-                    throw new Error(`Redirecting to ${error.redirect}...`);
+            // A fresh install answers 503 setup_required to every call, and the wizard lives at a fixed
+            // path — the only place a response body can send the browser. The body's `redirect` field is
+            // deliberately NOT followed: any route, plugin routes included, can put a URL there, so
+            // following it made every API response a potential open redirect, and the old host guard
+            // used it to steer visitors to whatever address it believed in.
+            if (typeof window !== 'undefined' && res.status === 503 && error.error === 'setup_required') {
+                if (!window.location.pathname.startsWith(INSTALL_PATH)) {
+                    // A full page load on purpose: api() is not a component (no router), and the wizard
+                    // must start from a clean document, not from whatever page tripped over the 503.
+                    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+                    window.location.href = INSTALL_PATH;
+                    throw new Error(`Redirecting to ${INSTALL_PATH}...`);
                 }
             }
 
@@ -187,13 +248,16 @@ export async function api<T>(endpoint: string, options: ApiOptions = {}): Promis
             // Not JSON (e.g. HTML 500 error): include the raw text snippet.
             errorMessage += `: ${raw.slice(0, 100)}`;
         }
-        const thrown: Error & { details?: unknown; status?: number; errors?: string[]; code?: string } = new Error(errorMessage);
+        const thrown: Error & { details?: unknown; data?: Record<string, unknown>; status?: number; errors?: string[]; code?: string } = new Error(errorMessage);
         // Carry the backend's STABLE error code. Callers that need to tell one 401 from another must key
         // on this, never on the human-readable message (which is copy, and translated).
         if (error && typeof error.code === 'string') thrown.code = error.code;
         // Preserve any structured `details` (e.g. a plugin activation reject's
         // missingPermissions/dangerousCalls) so callers can render more than a flat string.
         if (error && error.details !== undefined) thrown.details = error.details;
+        // ...and the WordPress-style `data` member, where REST errors put their structure next to
+        // `status` (e.g. the site-address interlock's list of what still depends on an address).
+        if (error && error.data && typeof error.data === 'object' && !Array.isArray(error.data)) thrown.data = error.data;
         // Preserve a validator's `errors` array (e.g. the chrome contract's 400) the same way.
         if (error && Array.isArray(error.errors)) thrown.errors = error.errors;
         thrown.status = res.status;
@@ -222,6 +286,11 @@ export const apiDelete = <T>(endpoint: string) => api<T>(endpoint, { method: "DE
  */
 export async function apiGetPaged<T>(endpoint: string): Promise<{ data: T; total: number; totalPages: number }> {
     const res = await fetch(`${API_URL}${endpoint}`, { cache: "no-store", credentials: "include" });
+    if (res.status === 421) {
+        // Same page-level condition as in api(): announce once, throw the typed error.
+        announceHostNotAllowed();
+        throw new HostNotAllowedError();
+    }
     if (!res.ok) {
         let msg = `HTTP ${res.status} ${res.statusText}`;
         try { const e = await res.json(); msg = e?.message || e?.error || msg; } catch { /* non-JSON body */ }

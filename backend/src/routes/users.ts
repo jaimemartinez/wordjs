@@ -11,7 +11,9 @@ const User = require('../models/User');
 // THE DOCTRINE OF THIS ROUTER: an API token — even an administrator's — must never drive an
 // account-security operation. It is enforced ONCE, for every route, by refuseHeadlessAccountSecurity
 // below — never route by route, which is how it came to cover 2 routes out of 8.
-const { authenticate, sessionOnly } = require('../middleware/auth');
+// THE SECOND DOCTRINE, enforced the same way: a session started at a secondary address (an alias, an IP,
+// a tunnel name) may write only its OWN account here — refuseBoundSessionOnOthers below, for every route.
+const { authenticate, sessionOnly, refuseBoundSession } = require('../middleware/auth');
 const { can, isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { getRoles } = require('../core/roles');
@@ -127,10 +129,43 @@ function refuseHeadlessAccountSecurity(req: Request, res: Response, next: NextFu
     return sessionOnly(req, res, next);
 }
 
-// `authenticate` is mounted here for the WHOLE router (every route below needs it), so the gate that
-// follows can read the headless mark `authenticate` sets. Individual routes therefore no longer repeat
-// it — repeating it would authenticate twice per request.
-router.use(authenticate, refuseHeadlessAccountSecurity);
+// ─── THE BOUND-SESSION DOCTRINE, ENFORCED ONCE FOR THE WHOLE ROUTER ───────────────────────────────
+//
+// A session started at a secondary address is bound to it and ends when the address is retired; an
+// account it creates, or another account it re-credentials, would outlive that (middleware/auth.ts
+// refuseBoundSession). It used to be asked route by route — POST / and PUT /:id asked, DELETE /:id and
+// POST /:id/mfa/reset did not (lab findings M-23, N3) — the very drift the headless gate above was
+// inverted to end. So it is inverted the same way: EVERY write in this router is refused to a bound
+// session by default, a route added later inherits that, and the one exemption is a predicate over the
+// target — the request names the caller's own account.
+
+/**
+ * Does this request name the caller's OWN account — `/me…`, or `/:id…` with the caller's id?
+ *
+ * Judged on the path this router receives, as the router will route it: case-insensitive like Express,
+ * repeated separators collapsed. Only a plain id (the route-id contract, core/query-params) can match, so
+ * an encoded or padded spelling that the router would decode into SOMEONE ELSE'S id is never "own" — the
+ * failure mode is a refusal, never a pass.
+ */
+function targetsOwnAccount(req: Request): boolean {
+    const first = String(req.path || '').toLowerCase().split('/').filter(Boolean)[0];
+    if (first === 'me') return true;
+    const id = routeIdOrNull(first);
+    return id !== null && !!req.user && id === req.user.id;
+}
+
+function refuseBoundSessionOnOthers(req: Request, res: Response, next: NextFunction) {
+    const method = String(req.method || '').toUpperCase();
+    if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return next();
+    if (targetsOwnAccount(req)) return next();
+    if (refuseBoundSession(req, res)) return;
+    next();
+}
+
+// `authenticate` is mounted here for the WHOLE router (every route below needs it), so the gates that
+// follow can read the marks `authenticate` sets (headless, and the address a session is bound to).
+// Individual routes therefore no longer repeat it — repeating it would authenticate twice per request.
+router.use(authenticate, refuseHeadlessAccountSecurity, refuseBoundSessionOnOthers);
 
 
 /**
@@ -454,8 +489,9 @@ router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
  *       403:
  *         description: >-
  *           rest_forbidden (not an administrator), rest_csrf_token / rest_csrf_invalid,
- *           mfa_enrollment_required, or the headless refusal — every POST in this router is an
- *           account-security operation, so a `wjt_` API token may not create accounts.
+ *           mfa_enrollment_required, the headless refusal — every POST in this router is an
+ *           account-security operation, so a `wjt_` API token may not create accounts — or
+ *           rest_account_bound_session (a session started at an address other than the main one).
  *         content:
  *           application/json:
  *             schema:
@@ -595,9 +631,10 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
  *           rest_cannot_edit_own_role, rest_bad_current_password (the sudo re-auth failed),
  *           rest_reserved_mail_domain / rest_mailbox_address_locked (a self-service caller claiming an
  *           address on the site's mail domain), rest_csrf_token / rest_csrf_invalid,
- *           mfa_enrollment_required, or the headless refusal when the body carries an account-security
+ *           mfa_enrollment_required, the headless refusal when the body carries an account-security
  *           field (password, currentPassword, email, personalEmail, role, professionalMailbox) — a
- *           cosmetic-only PUT is still allowed on an API token.
+ *           cosmetic-only PUT is still allowed on an API token — or rest_account_bound_session (another
+ *           user's account, from a session started at an address other than the main one).
  *         content:
  *           application/json:
  *             schema:
@@ -1149,6 +1186,8 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
     }
 
     // Users can edit themselves, admins can edit anyone
+    // (A session bound to a secondary address never reaches here for another account: see
+    // refuseBoundSessionOnOthers at the top of this router.)
     const isOwn = req.user.id === userId;
     if (!isOwn && !req.user.can('edit_users')) {
         return res.status(403).json({
@@ -1426,6 +1465,7 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
  *         description: >-
  *           rest_forbidden (no edit_users capability, or a non-administrator acting on a privileged
  *           account), the headless refusal (a leaked API token must never strip a second factor),
+ *           rest_account_bound_session (a session started at an address other than the main one),
  *           rest_csrf_token / rest_csrf_invalid, or mfa_enrollment_required.
  *         content:
  *           application/json:
@@ -1523,7 +1563,8 @@ router.post('/:id/mfa/reset', can('edit_users'), asyncHandler(async (req: Reques
  *       403:
  *         description: >-
  *           rest_forbidden (not an administrator), the headless refusal (a `wjt_` API token may not
- *           destroy an account), rest_csrf_token / rest_csrf_invalid, or mfa_enrollment_required.
+ *           destroy an account), rest_account_bound_session (a session started at an address other than
+ *           the main one), rest_csrf_token / rest_csrf_invalid, or mfa_enrollment_required.
  *         content:
  *           application/json:
  *             schema:

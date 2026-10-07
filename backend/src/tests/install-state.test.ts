@@ -127,6 +127,9 @@ describe('option serialisation — an absent value is empty, never the text "und
  *    the site origin. On one host that is loopback and the migration guard exempts it — invisible. In
  *    separate mode it was the backend node's LAN IP, and every subsequent API call 409'd
  *    `migration_required` against the gateway's host: the whole site was unreachable after install.
+ *    The fix then over-corrected into "X-Forwarded-Host from ANYONE wins". The derivation is now the
+ *    host gate's own (core/host-policy requestAuthority): the gateway's forwarded host wins because the
+ *    gateway is a TRUSTED hop, and a direct client's forwarded headers are ignored.
  *
  * 4. The installer then re-minted a cluster CA over the node's enrolled identity. Enrollment had
  *    already given it a CN=backend leaf signed by the CA whose private key lives ONLY on the gateway;
@@ -134,28 +137,155 @@ describe('option serialisation — an absent value is empty, never the text "und
  *    CA private key onto a machine that must never hold one). It survived until the next restart.
  */
 describe('separate mode — the installer must not undo cluster enrollment', () => {
-    const { pickInstallHost, isEnrolledConfig: isEnrolled } = require('../routes/setup');
+    const setup = require('../routes/setup');
+    const { isEnrolledConfig: isEnrolled } = setup;
+    const hostPolicy = require('../core/host-policy');
+    const { siteHostPolicy } = require('../middleware/auth');
 
-    describe('pickInstallHost — X-Forwarded-Host wins over the proxied Host', () => {
-        test('behind the gateway, the operator-facing host is used, not the upstream target', () => {
-            // What the backend actually sees for an install POSTed to the gateway.
-            assert.strictEqual(
-                pickInstallHost('192.168.182.145:3000', '192.168.182.146:4000'),
-                '192.168.182.145:3000'
-            );
+    // The policy the installer consults is the process provider's; pin it so these assertions do not
+    // depend on whatever wordjs-config.json (or WORDJS_TRUST_PROXY) the machine running them has.
+    const realGet = siteHostPolicy.get;
+    const pinPolicy = (config: Record<string, unknown> | null) => {
+        const pinned = hostPolicy.buildPolicy({ config, env: {}, nodeEnv: 'production', ownAddresses: () => new Set() });
+        siteHostPolicy.get = () => pinned;
+    };
+    after(() => { siteHostPolicy.get = realGet; });
+
+    // The request shapes the backend really receives.
+    const GATEWAY_MTLS = () => ({ remoteAddress: '10.0.0.5', authorized: true, encrypted: true, getPeerCertificate: () => ({ subject: { CN: 'gateway-internal' } }) });
+    const LOOPBACK_PEER = () => ({ remoteAddress: '127.0.0.1' });
+    const REMOTE_PEER = (encrypted = false) => ({ remoteAddress: '203.0.113.5', encrypted });
+    const installReq = (headers: Record<string, string>, socket: any, body: Record<string, unknown> = {}) => ({ headers, socket, body });
+    const originOf = (r: any) => (r && r.site ? r.site.origin : r);
+
+    describe('installSiteAddress — the forwarded host counts only from a trusted hop', () => {
+        before(() => pinPolicy(null));
+
+        test('behind the gateway (mTLS), the operator-facing host is used, not the upstream target', () => {
+            const r = setup.installSiteAddress(installReq(
+                { host: '192.168.182.146:4000', 'x-forwarded-host': '192.168.182.145:3000', 'x-forwarded-proto': 'http' }, GATEWAY_MTLS()));
+            assert.strictEqual(originOf(r), 'http://192.168.182.145:3000');
         });
 
-        test('direct (unproxied) install still uses Host', () => {
-            assert.strictEqual(pickInstallHost(undefined, 'example.com'), 'example.com');
-            assert.strictEqual(pickInstallHost('', 'example.com:3000'), 'example.com:3000');
+        test('the pre-certs gateway on the same machine (loopback peer, loopback Host) is trusted too, with its scheme', () => {
+            const r = setup.installSiteAddress(installReq(
+                { host: '127.0.0.1:4000', 'x-forwarded-host': 'blog.example.com:3000', 'x-forwarded-proto': 'https' }, LOOPBACK_PEER()));
+            assert.strictEqual(originOf(r), 'https://blog.example.com:3000');
+        });
+
+        test('a direct client\'s X-Forwarded-Host and X-Forwarded-Proto are ignored: its Host and its transport decide', () => {
+            const r = setup.installSiteAddress(installReq(
+                { host: 'example.com:3000', 'x-forwarded-host': 'evil.example', 'x-forwarded-proto': 'https' }, REMOTE_PEER()));
+            assert.strictEqual(originOf(r), 'http://example.com:3000');
+            const tls = setup.installSiteAddress(installReq({ host: 'example.com' }, REMOTE_PEER(true)));
+            assert.strictEqual(originOf(tls), 'https://example.com', 'a TLS listener is https');
         });
 
         test('only the FIRST hop of a comma-joined chain is taken', () => {
-            assert.strictEqual(pickInstallHost('edge.example.com, inner.example.com', 'be:4000'), 'edge.example.com');
+            const r = setup.installSiteAddress(installReq(
+                { host: 'be:4000', 'x-forwarded-host': 'edge.example.com, inner.example.com', 'x-forwarded-proto': 'https' }, GATEWAY_MTLS()));
+            assert.strictEqual(originOf(r), 'https://edge.example.com');
         });
 
-        test('no headers at all yields empty, so the caller rejects it', () => {
-            assert.strictEqual(pickInstallHost(undefined, undefined), '');
+        test('an IPv6 install address is accepted, bracketed', () => {
+            const r = setup.installSiteAddress(installReq({ host: '[2001:DB8::1]:3000' }, REMOTE_PEER()));
+            assert.strictEqual(originOf(r), 'http://[2001:db8::1]:3000');
+        });
+
+        test('no host at all — or a malformed one — is refused, never turned into "http://undefined"', () => {
+            const cases: Array<Record<string, string>> = [{}, { host: '' }, { host: 'a@b' }, { host: 'example.com:99999' }];
+            for (const headers of cases) {
+                const r = setup.installSiteAddress(installReq(headers, REMOTE_PEER()));
+                assert.ok(r && typeof r.error === 'string', `${JSON.stringify(headers)} must be refused, got ${JSON.stringify(r)}`);
+            }
+        });
+
+        test('an explicit siteUrl wins, and only a plain http(s) origin is accepted', () => {
+            const r = setup.installSiteAddress(installReq({ host: 'lan-box:3000' }, REMOTE_PEER(), { siteUrl: 'https://Example.com/' }));
+            assert.strictEqual(originOf(r), 'https://example.com');
+            for (const bad of ['https://example.com/blog', 'javascript:alert(1)', 'https://a@b.example', 'https,https://x.example', 'https://*.example.com', 'http://[::1']) {
+                const refused = setup.installSiteAddress(installReq({ host: 'lan-box:3000' }, REMOTE_PEER(), { siteUrl: bad }));
+                assert.ok(refused && typeof refused.error === 'string', `${bad} must be refused`);
+            }
+        });
+    });
+
+    describe('installTimeAlias — "also accept the address I am installing from"', () => {
+        before(() => pinPolicy(null));
+        const site = hostPolicy.parseSiteUrl('https://blog.example.com');
+        const from = (host: string, body: Record<string, unknown> = { acceptCurrentAddress: true }) =>
+            setup.installTimeAlias(installReq({ host }, REMOTE_PEER(), body), site);
+
+        test('only when asked', () => {
+            assert.strictEqual(setup.installTimeAlias(installReq({ host: 'blog.lan:3000' }, REMOTE_PEER()), site), null);
+        });
+
+        test('a different NAMED address is stored as an install alias', () => {
+            const r = from('blog.lan:3000');
+            assert.ok(r && r.alias, JSON.stringify(r));
+            assert.strictEqual(r.alias.url, 'http://blog.lan:3000');
+            assert.strictEqual(r.alias.source, 'install');
+            assert.strictEqual(r.alias.expiresAt, undefined);
+            const policy = hostPolicy.buildPolicy({ config: { siteUrl: site.origin, siteAliases: [r.alias] }, env: {}, nodeEnv: 'production' });
+            assert.strictEqual(hostPolicy.classify(hostPolicy.parseHost('blog.lan:3000'), policy).cls, 'alias', 'the stored entry is one the policy reads');
+        });
+
+        test('nothing to store for the chosen address itself, loopback or an IP literal (accepted by rule)', () => {
+            for (const host of ['blog.example.com', 'localhost:3000', '127.0.0.1:3000', '192.168.1.50:3000', '[2001:db8::1]:3000']) {
+                assert.strictEqual(from(host), null, host);
+            }
+        });
+
+        test('a tunnel name expires after a week', () => {
+            const r = from('ab12.ngrok-free.app');
+            assert.ok(r && r.alias && r.alias.expiresAt, JSON.stringify(r));
+            const days = (Date.parse(r.alias.expiresAt) - Date.now()) / 86400000;
+            assert.ok(days > 6.9 && days <= 7, `expected ~7 days, got ${days}`);
+        });
+
+        test('a .local name needs confirmLocal, as in the site-address API', () => {
+            assert.deepStrictEqual(from('blog.local:3000'), { skipped: 'local-name-needs-confirmation' });
+            const confirmed = setup.installTimeAlias(installReq({ host: 'blog.local:3000' }, REMOTE_PEER(), { acceptCurrentAddress: true, confirmLocal: true }), site);
+            assert.strictEqual(confirmed.alias.url, 'http://blog.local:3000');
+        });
+    });
+
+    describe('classifyInstallRequest — the install request judged as the gate will judge the next one', () => {
+        test('the chosen address, an accepted rule address, and an address about to be refused', () => {
+            pinPolicy({ siteUrl: 'https://example.com', siteAliases: ['https://www.example.com'] });
+            const canonical = setup.classifyInstallRequest(installReq({ host: 'example.com' }, REMOTE_PEER()));
+            assert.strictEqual(canonical.cls, 'canonical');
+            assert.strictEqual(canonical.scheme, 'http', 'the scheme is the real transport');
+            assert.strictEqual(setup.classifyInstallRequest(installReq({ host: 'www.example.com' }, REMOTE_PEER())).cls, 'alias');
+            assert.strictEqual(setup.classifyInstallRequest(installReq({ host: '192.168.1.50:3000' }, REMOTE_PEER())).cls, 'ip');
+            assert.strictEqual(setup.classifyInstallRequest(installReq({ host: 'lan-box:3000' }, REMOTE_PEER())), 'unknown');
+            assert.strictEqual(setup.classifyInstallRequest(installReq({}, REMOTE_PEER())), null, 'no Host: nothing to classify');
+            pinPolicy(null);
+            assert.strictEqual(setup.classifyInstallRequest(installReq({ host: 'example.com' }, REMOTE_PEER())), null, 'no canonical: nothing to classify');
+        });
+    });
+
+    describe('suggestedSiteUrl — WORDJS_SITE_URL is only a non-loopback suggestion (REDTEAM R6)', () => {
+        const saved = process.env.WORDJS_SITE_URL;
+        after(() => { if (saved === undefined) delete process.env.WORDJS_SITE_URL; else process.env.WORDJS_SITE_URL = saved; });
+        const suggest = (value: string | undefined) => {
+            if (value === undefined) delete process.env.WORDJS_SITE_URL; else process.env.WORDJS_SITE_URL = value;
+            return setup.suggestedSiteUrl();
+        };
+
+        test('compose\'s default localhost is never offered', () => {
+            assert.strictEqual(suggest('http://localhost:3000'), null);
+            assert.strictEqual(suggest('http://127.0.0.1:3000'), null);
+        });
+
+        test('a real address is offered, normalised', () => {
+            assert.strictEqual(suggest('https://Blog.Example.com/'), 'https://blog.example.com');
+        });
+
+        test('nothing, or garbage, offers nothing', () => {
+            assert.strictEqual(suggest(undefined), null);
+            assert.strictEqual(suggest('blog.example.com'), null);
+            assert.strictEqual(suggest('https://blog.example.com/path'), null);
         });
     });
 

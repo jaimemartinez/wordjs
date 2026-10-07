@@ -41,8 +41,19 @@ spec:
               containerPort: 3000
               protocol: TCP
           env:
+            # A suggestion for the setup wizard, not the main address (see values.yaml siteUrl).
             {{- with (include "wordjs.siteUrl" .) }}
             - name: WORDJS_SITE_URL
+              value: {{ . | quote }}
+            {{- end }}
+            # Every address this release routes to the pod (siteUrl, the ingress hosts, allowedHosts), so
+            # none of them gets 421 whatever main address the wizard records. _helpers.tpl wordjs.allowedHosts.
+            {{- with (include "wordjs.allowedHosts" .) }}
+            - name: WORDJS_ALLOWED_HOSTS
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.trustProxy }}
+            - name: WORDJS_TRUST_PROXY
               value: {{ . | quote }}
             {{- end }}
             {{- if .Values.installToken.existingSecret }}

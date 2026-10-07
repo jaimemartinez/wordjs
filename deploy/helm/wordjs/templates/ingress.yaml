@@ -28,4 +28,17 @@ spec:
                 name: {{ include "wordjs.fullname" . }}
                 port:
                   number: {{ .Values.service.port }}
+    {{- /* Every extra host is also exported in WORDJS_ALLOWED_HOSTS (_helpers.tpl), so the app answers it. */}}
+    {{- range .Values.ingress.extraHosts }}
+    - host: {{ . | quote }}
+      http:
+        paths:
+          - path: {{ $.Values.ingress.path }}
+            pathType: {{ $.Values.ingress.pathType }}
+            backend:
+              service:
+                name: {{ include "wordjs.fullname" $ }}
+                port:
+                  number: {{ $.Values.service.port }}
+    {{- end }}
 {{- end }}

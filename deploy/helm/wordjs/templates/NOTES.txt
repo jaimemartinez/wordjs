@@ -32,17 +32,30 @@ WordJS is starting as a single monolith pod.
 {{- $url := include "wordjs.siteUrl" . }}
 {{- if $url }}
 
-   This release is configured for the public origin {{ $url }} -- browse there once the pod is READY,
-   and RUN THE WIZARD THERE: the config's siteUrl, which the CSRF/CORS checks compare against, is taken
-   from the install request itself, so requests arriving on any other origin will be rejected.
-   (WORDJS_SITE_URL is exported to the pod, but the entrypoint only writes it into the config under
-   WORDJS_PRESEED_CONFIG=1, which this chart does not set.)
+   On the wizard's first step, set "Site address" to {{ $url }}. The field is prefilled with the
+   address you opened the wizard on (http://localhost:3000 through this port-forward) and the wizard
+   offers {{ $url }} as the server's suggested address -- click it. The main address is the base of
+   every link and email the site sends, so it must be the public one. Either way localhost keeps
+   working for the port-forward, and every address this release routes is exported to the pod in
+   WORDJS_ALLOWED_HOSTS ({{ include "wordjs.allowedHosts" . }}), so the site answers it instead of
+   returning 421. Change the main address later in Settings > Site address, or on the pod:
+
+     kubectl --namespace {{ .Release.Namespace }} exec deployment/{{ include "wordjs.fullname" . }} -- npm run site -- canonical {{ $url }}
 {{- else }}
 
-   NOTE: neither siteUrl nor an ingress host is set, so nothing pins the public origin -- whatever URL
-   you run the wizard from becomes the config's siteUrl (http://localhost:3000 for the port-forward
-   above). Fine for a test. Before exposing this release, set `siteUrl` AND install through that URL,
-   or admin requests from the real origin will fail the CSRF origin check.
+   NOTE: neither siteUrl nor an ingress host is set. The wizard's "Site address" field is prefilled
+   with http://localhost:3000 (this port-forward): fine for a test, but every link and email the site
+   sends would then point at localhost. Before exposing this release, set `siteUrl` (or enable the
+   ingress), upgrade, and make that the main address in Settings > Site address or with
+   `kubectl exec deployment/{{ include "wordjs.fullname" . }} -- npm run site -- canonical <url>`.
+   Any other name the site must answer goes in `allowedHosts`; an undeclared name gets 421.
+{{- end }}
+{{- if and .Values.ingress.enabled (not .Values.trustProxy) }}
+
+   trustProxy is not set, so the app does not believe the ingress controller's forwarded headers:
+   rate limits key on the controller's address instead of the client's, and on an https site only the
+   main address can sign in (every request looks like plain http inside the pod). Set trustProxy to
+   the controller's pod network (e.g. --set trustProxy=10.244.0.0/16) to fix both.
 {{- end }}
 
 4. Finish the wizard: pick a database (SQLite needs nothing) and create the administrator. The pod

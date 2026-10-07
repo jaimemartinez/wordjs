@@ -407,10 +407,9 @@ test('the setup exemption survives a doubled separator, a trailing slash and a q
 });
 
 test('POST /setup/migrate is NOT exempt — only the pre-install doors are', async () => {
-    // /migrate is the one route of the subtree that stays alive AFTER installation. A subtree exemption
-    // handed its (throttled, but real) admin-password oracle to any visitor's browser, from the VICTIM's
-    // IP. It authenticates credentials in the body and needs no ambient cookie, so it has no claim on the
-    // exemption at all.
+    // /migrate is the one route of the subtree that stays reachable AFTER installation. A subtree exemption
+    // once handed its admin-password oracle to any visitor's browser, from the VICTIM's IP. It is a 410
+    // stub now, and it still has no claim on the exemption: only the pre-install doors predate an origin.
     const res = await request(csrfProbe).post(`${B}/setup/migrate`).send({ username: 'admin', password: 'x' });
     assert.strictEqual(res.status, 403, JSON.stringify(res.body));
     assert.strictEqual(res.body.code, 'rest_csrf_invalid');
