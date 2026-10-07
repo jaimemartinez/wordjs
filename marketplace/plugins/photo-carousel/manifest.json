@@ -1,7 +1,7 @@
 {
     "id": "photo-carousel",
     "name": "Photo Carousel",
-    "version": "2.0.0",
+    "version": "2.0.1",
     "description": "Create and manage image carousels with admin UI",
     "author": "WordJS",
     "isolated": true,
@@ -54,6 +54,11 @@
         "order": 50
     },
     "permissions": [
+        {
+            "scope": "browser",
+            "access": "script",
+            "reason": "Run the plugin's own compiled interface in the browser: its admin page, its Verso block (in the editor and on public pages) and its site components. Without it the host does not serve these bundles and that interface does not load."
+        },
         {
             "scope": "settings",
             "access": "read",

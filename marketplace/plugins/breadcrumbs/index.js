@@ -9,7 +9,7 @@
 
 exports.metadata = {
     name: "Breadcrumbs",
-    version: "1.0.0",
+    version: "1.0.1",
     description: "Verso block that renders the navigation trail of the current page with BreadcrumbList JSON-LD.",
     author: "WordJS"
 };

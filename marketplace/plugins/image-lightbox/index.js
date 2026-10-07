@@ -15,7 +15,7 @@
 
 exports.metadata = {
     name: 'Image Lightbox',
-    version: '1.0.0',
+    version: '1.0.1',
     description: 'Click-to-zoom lightbox for content images (dark overlay, captions, prev/next, keyboard)',
     author: 'WordJS',
 };

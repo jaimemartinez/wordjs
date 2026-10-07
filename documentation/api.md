@@ -330,10 +330,10 @@ Base path: `/api/v1/users` (`backend/src/routes/users.ts`). `PUT /me` is declare
 | `GET`  | `/notices`                | Admin | List persistent admin notices (e.g. a plugin CrashGuard auto-disabled). Rendered at `/admin/notices` |
 | `DELETE` | `/notices/:id`          | Admin | Dismiss one notice                    |
 | `GET`  | `/plugins`                  | Admin | List all installed plugins (annotated with requested/granted permissions + live isolate runtime state) |
-| `GET`  | `/plugins/registry`         | No    | Manifest registry of **active** plugins (feeds the public frontend) |
+| `GET`  | `/plugins/registry`         | No    | Minimal registry of **active** plugins — `{ id, path, browser, frontend: { hooks } }` only, never the manifest (feeds the admin hooks loader) |
 | `GET`  | `/plugins/active`           | No    | Array of active plugin slugs                        |
 | `GET`  | `/plugins/assets`           | No    | Enqueued frontend scripts/styles of active plugins (cached 60s) |
-| `GET`  | `/plugins/:slug/bundle` (+`/manifest`, `/css`) | No | Pre-compiled client bundle of a plugin (`routes/plugin-bundles.ts`, mounted under `/plugins`) |
+| `GET`  | `/plugins/:slug/bundle` (+`/manifest`, `/css`) | No | Pre-compiled client bundle of a plugin (`routes/plugin-bundles.ts`, mounted under `/plugins`) — served only while the plugin is **active** and granted **`browser:script`**, otherwise 404 |
 | `POST` | `/plugins/upload`           | Admin | Install a plugin from ZIP (AST-scanned at install)  |
 | `POST` | `/plugins/:slug/activate`   | Admin | Activate a plugin                                   |
 | `POST` | `/plugins/:slug/deactivate` | Admin | Deactivate a plugin                                 |
@@ -344,7 +344,7 @@ Base path: `/api/v1/users` (`backend/src/routes/users.ts`). `PUT /me` is declare
 | `GET`/`POST` | `/plugins/:slug/egress-hosts` | Admin | Read / set a plugin's outbound host allowlist (only meaningful once `network` is granted). Body `{ hosts: [...] }`; **empty** = every public host allowed, **non-empty** = default-deny except those hosts and their subdomains. Setting it re-spawns the isolate so the child re-installs the list |
 | `POST` | `/plugins/:slug/install-theme` | Admin | Install the companion theme a plugin bundles in its own `theme/` folder (optionally activating it); `404` if the plugin bundles none, `409` if the theme is already installed |
 | `DELETE` | `/plugins/:slug`          | Admin | Uninstall a plugin. Body `{ password, dropData }`: password-confirmed, refuses an **active** plugin, always clears grants + crash strikes, and drops the plugin's `wjp_<slug>_` tables only when `dropData` is set |
-| `GET`  | `/plugins/:slug/download`   | Admin | Download an installed plugin as a ZIP (`authenticateAllowQuery`: cookie/Bearer **or** a `?token=` query param) |
+| `GET`  | `/plugins/:slug/download`   | Admin | Download an installed plugin as a ZIP (`authenticateAllowQuery`: cookie/Bearer **or** a `?token=` query param) — code only: no top-level `data/`, `node_modules/`, `.git`, OS junk or symlinks |
 | `GET`  | `/plugins/:slug/port-conflicts` | Admin | Which process holds the ports the plugin's manifest claims, and whether WordJS can free them |
 | `POST` | `/plugins/:slug/free-port`  | Admin | Body `{ port, allowDisable }`: disable the known system MTA squatting a **manifest-claimed** port (explicit consent required, else `409 CONSENT_REQUIRED`), then reload the plugin |
 | `POST` | `/plugins/sample`           | Admin | Generate the `hello-world` sample plugin            |

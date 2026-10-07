@@ -26,7 +26,7 @@
 
 exports.metadata = {
     name: 'Restaurant Menu',
-    version: '2.0.0',
+    version: '2.0.1',
     description: 'Menú con modificadores, horarios, pedidos en mesa por QR, reservas, pago en línea (Stripe), cocina en vivo e informes.',
     author: 'WordJS',
 };

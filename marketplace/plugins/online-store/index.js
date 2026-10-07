@@ -43,7 +43,7 @@
 
 exports.metadata = {
     name: 'Online Store',
-    version: '2.0.0',
+    version: '2.0.1',
     description: 'Tienda completa: variantes, galerías, zonas de envío, impuestos, reembolsos, informes, webhooks de Stripe y pedidos por cuenta.',
     author: 'WordJS',
 };
