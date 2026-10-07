@@ -41,6 +41,7 @@ import type { SiteUrl, SiteHost, LastSeen, HostPolicy, PolicyProvider } from './
 
 const hostPolicy: typeof import('./host-policy') = require('./host-policy');
 const configManager = require('./configManager');
+const { logSafe } = require('./log-safe');
 
 // ─── Constants ──────────────────────────────────────────────────────────────────────────────────────
 
@@ -878,17 +879,6 @@ function serial<T>(fn: () => Promise<T>): Promise<T> {
 
 function policyProvider(): PolicyProvider {
     return require('../middleware/auth').siteHostPolicy;
-}
-
-/**
- * A value as it may enter one log line: line breaks removed, so a request- or peer-derived string (a
- * path, a Host, a gateway or driver error message) cannot forge or split entries in the operator's log.
- * Two single-constant replacements on purpose — the log-injection analysis recognises the sanitizer
- * syntactically and does not match the equivalent alternation (see core/plugins.ts logSafe). Interpolate
- * the result into ONE string and pass no further console argument.
- */
-function logSafe(v: any): string {
-    return String(v == null ? '' : v).replace(/\n/g, '').replace(/\r/g, '');
 }
 
 function warn(message: string) {

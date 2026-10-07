@@ -117,10 +117,12 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 - **The site-address code paths cannot be used to forge log lines or to make a request read slowly.** The
   `for=` values of a `Forwarded` header are read in a single left-to-right pass instead of a backtracking
   pattern whose value class also matched the port's characters; a test checks that the scan gives the
-  pattern's exact answers on random headers and stays linear on long hostile ones. The CSRF guard's
-  host-less refusal, the site-address warnings and the certificate manager's gateway errors remove line
-  breaks from the request path or error message they log. The backend's control-plane calls to the gateway
-  now carry the node's mTLS key and certificate in one TLS context instead of as request options.
+  pattern's exact answers on random headers and stays linear on long hostile ones. A new
+  `core/log-safe` turns a logged value into one inert line (line breaks, other control characters, ANSI
+  escapes, Unicode line separators and bidirectional controls removed); the CSRF guard's refusals, the
+  site-address warnings and every certificate-manager error now log through it, and an error is logged by
+  its message and code instead of as an object. The backend's control-plane calls to the gateway carry the
+  node's mTLS key and certificate in one TLS context instead of as request options.
 
 - **Remaining dependency advisories with a fix are closed.** Frontend: DOMPurify 3.4.16 (GHSA-p98j-92pf-mc4p,
   GHSA-6688-9rhm-gjv2), and js-yaml and brace-expansion moved to fixed releases in the lint toolchain;

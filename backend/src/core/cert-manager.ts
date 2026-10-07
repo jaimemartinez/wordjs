@@ -11,6 +11,7 @@ const dns = require('dns').promises;
 // browser — POST /certs/dns-finish), so it gets the full treatment: allowlist the FORM, resolve
 // canonically, prove containment on the value that is RETURNED.
 const { resolveCertDir, resolveWithin } = require('./safe-path');
+const { logSafeError } = require('./log-safe');
 
 const DATA_DIR = path.resolve(__dirname, '../../data/ssl'); // Store ACME account keys here
 const LIVE_DIR = path.resolve(__dirname, '../../ssl/live'); // Store real certs here
@@ -21,16 +22,6 @@ const WWW_ROOT = path.resolve(__dirname, '../../public'); // For HTTP-01
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
 if (!fs.existsSync(LIVE_DIR)) fs.mkdirSync(LIVE_DIR, { recursive: true, mode: 0o700 });
 
-/**
- * A value as it may enter one log line: line breaks removed, so a request- or peer-derived string (a
- * path, a Host, a gateway or driver error message) cannot forge or split entries in the operator's log.
- * Two single-constant replacements on purpose — the log-injection analysis recognises the sanitizer
- * syntactically and does not match the equivalent alternation (see core/plugins.ts logSafe). Interpolate
- * the result into ONE string and pass no further console argument.
- */
-function logSafe(v: any): string {
-    return String(v == null ? '' : v).replace(/\n/g, '').replace(/\r/g, '');
-}
 
 /**
  * `<domainDir>/<name>` for the two files a provisioned certificate is stored as. The name is a
@@ -227,7 +218,7 @@ class CertManager {
             });
             console.log('[CertManager] Account registered/found.');
         } catch (e) {
-            console.error('[CertManager] Account Registration Error:', e.message);
+            console.error(`[CertManager] Account Registration Error: ${logSafeError(e)}`);
             throw e;
         }
     }
@@ -373,7 +364,7 @@ class CertManager {
             return { success: true, message: 'Certificate provisioned and installed.', domains };
 
         } catch (e) {
-            console.error('[CertManager] Auto HTTP Provision Error:', e);
+            console.error(`[CertManager] Auto HTTP Provision Error: ${logSafeError(e)}`);
             throw new Error(`Provisioning failed: ${e.message}`, { cause: e });
         }
     }
@@ -431,7 +422,7 @@ class CertManager {
                 directoryUrl: this.directoryUrl
             };
         } catch (e) {
-            console.error('[CertManager] DNS Start Error:', e);
+            console.error(`[CertManager] DNS Start Error: ${logSafeError(e)}`);
             throw new Error(`DNS challenge start failed: ${e.message}`, { cause: e });
         }
     }
@@ -509,7 +500,7 @@ class CertManager {
                 message: 'Certificate provisioned successfully!'
             };
         } catch (e) {
-            console.error('[CertManager] DNS Finish Error:', e);
+            console.error(`[CertManager] DNS Finish Error: ${logSafeError(e)}`);
             // "No such challenge" means the CA does not recognise the challenge URL we posted to — the
             // order is gone (expired / already finalized) or it belongs to the OTHER ACME endpoint.
             // Raw, that message sends the operator to re-check a TXT record that is perfectly correct.
@@ -554,7 +545,7 @@ class CertManager {
             gwCfg.ssl = { ...(gwCfg.ssl || {}), key: './ssl/live/imported/privkey.pem', cert: './ssl/live/imported/fullchain.pem', enabled: true };
             fs.writeFileSync(gwCfgPath, JSON.stringify(gwCfg, null, 2));
         } catch (e: any) {
-            console.warn('[CertManager] embedded: could not update gateway-config.json:', e && e.message);
+            console.warn(`[CertManager] embedded: could not update gateway-config.json: ${logSafeError(e)}`);
         }
 
         // Live hot-reload of the running monolith HTTPS server (no restart) if it exposed the hook.
@@ -566,7 +557,7 @@ class CertManager {
                 console.log('[CertManager] embedded: cert written — restart the monolith to serve it (no live-reload hook present).');
             }
         } catch (e: any) {
-            console.warn('[CertManager] embedded TLS reload failed:', e && e.message);
+            console.warn(`[CertManager] embedded TLS reload failed: ${logSafeError(e)}`);
         }
         return { success: true, embedded: true };
     }
@@ -584,7 +575,7 @@ class CertManager {
             if (status !== 200) throw gatewayError(status, text);
             return JSON.parse(text);
         } catch (e) {
-            console.error(`[CertManager] Push Error: ${logSafe(e && e.message ? e.message : e)}`);
+            console.error(`[CertManager] Push Error: ${logSafeError(e)}`);
             throw e;
         }
     }
@@ -625,7 +616,7 @@ class CertManager {
             await this.pushCertToGateway(keyContent, certContent);
             console.log('[CertManager] Certificate pushed to Gateway.');
         } catch (e) {
-            console.error('[CertManager] Failed to push cert to gateway:', e);
+            console.error(`[CertManager] Failed to push cert to gateway: ${logSafeError(e)}`);
             throw e;
         }
     }
@@ -730,7 +721,7 @@ class CertManager {
 
             return { success: true, path: customDir };
         } catch (e) {
-            console.error('[CertManager] Custom Install Error:', e);
+            console.error(`[CertManager] Custom Install Error: ${logSafeError(e)}`);
             throw new Error(`Failed to install custom cert: ${e.message}`, { cause: e });
         }
     }
@@ -829,10 +820,10 @@ class CertManager {
             }
         } catch (e) {
             if (e && e.code === NO_CLUSTER_IDENTITY) {
-                console.error(`[CertManager] getConfig Error: ${logSafe(e.message)}`);
+                console.error(`[CertManager] getConfig Error: ${logSafeError(e)}`);
                 return { ...defaultResult, error: e.message };
             }
-            console.error(`[CertManager] Gateway connection failed: ${logSafe(e && e.message ? e.message : e)}`);
+            console.error(`[CertManager] Gateway connection failed: ${logSafeError(e)}`);
             return { ...defaultResult, error: 'Gateway Unreachable' };
         }
     }
@@ -983,7 +974,7 @@ class CertManager {
             await this.provisionAutoHTTP(domains, acme.email, !!acme.staging);
             return record({ ok: true, domain, domains, validTo: this.readLocalCertValidTo(domain) });
         } catch (e) {
-            console.error('[CertManager] Auto-renewal failed:', e.message);
+            console.error(`[CertManager] Auto-renewal failed: ${logSafeError(e)}`);
             return record({ ok: false, domain, error: e.message });
         }
     }
@@ -1013,7 +1004,7 @@ class CertManager {
             }
             return { success: true, message: 'Certificate already exists' };
         } catch (e) {
-            console.error('[CertManager] Ensure Cert Error:', e);
+            console.error(`[CertManager] Ensure Cert Error: ${logSafeError(e)}`);
             return { success: false, error: e.message };
         }
     }
@@ -1033,7 +1024,7 @@ class CertManager {
             console.log('[CertManager] Gateway configuration pushed successfully.');
             return JSON.parse(text);
         } catch (e) {
-            console.error(`[CertManager] Config Push Error: ${logSafe(e && e.message ? e.message : e)}`);
+            console.error(`[CertManager] Config Push Error: ${logSafeError(e)}`);
             throw e;
         }
     }

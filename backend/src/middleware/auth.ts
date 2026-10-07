@@ -21,6 +21,7 @@ const User = require('../models/User');
 const ApiToken = require('../models/ApiToken');
 const mfa = require('../core/mfa');
 const hostPolicy: typeof import('../core/host-policy') = require('../core/host-policy');
+const { logSafe } = require('../core/log-safe');
 
 /**
  * THE SITE'S ADDRESS POLICY — one memoised provider for the whole backend process.
@@ -47,16 +48,6 @@ const siteHostPolicy: PolicyProvider = hostPolicy.createPolicyProvider({
     ownAddresses: () => require('../core/site-address').publicOwnAddresses(),
 });
 
-/**
- * A value as it may enter one log line: line breaks removed, so a request- or peer-derived string (a
- * path, a Host, a gateway or driver error message) cannot forge or split entries in the operator's log.
- * Two single-constant replacements on purpose — the log-injection analysis recognises the sanitizer
- * syntactically and does not match the equivalent alternation (see core/plugins.ts logSafe). Interpolate
- * the result into ONE string and pass no further console argument.
- */
-function logSafe(v: any): string {
-    return String(v == null ? '' : v).replace(/\n/g, '').replace(/\r/g, '');
-}
 
 /**
  * What the host gate (core/host-policy hostGateFactory) attached to this request, or null when it did
@@ -813,7 +804,7 @@ function csrfTokenGate(req: Request, res: Response, next: NextFunction) {
     const cookieToken = csrfCookie(req);
     const headerToken = req.get(CSRF_HEADER);
     if (!cookieToken || !headerToken || !timingSafeStringEqual(cookieToken, headerToken)) {
-        console.warn(`[CSRF] Missing or mismatched ${CSRF_HEADER} on ${req.method} ${req.path}`);
+        console.warn(`[CSRF] Missing or mismatched ${CSRF_HEADER} on ${logSafe(req.method)} ${logSafe(req.path)}`);
         return res.status(403).json({
             code: 'rest_csrf_token',
             message: 'Missing or invalid CSRF token. Reload the page and try again.',
@@ -1379,7 +1370,7 @@ function csrfProtection(req: Request, res: Response, next: NextFunction) {
             // future change to the gate's exemptions cannot silently miss this branch.
             return csrfTokenGate(req, res, next);
         }
-        console.warn(`[CSRF] Blocked header-less cookie request to ${req.path}`);
+        console.warn(`[CSRF] Blocked header-less cookie request to ${logSafe(req.path)}`);
         return res.status(403).json({
             code: 'rest_csrf_invalid',
             message: 'Cross-site request blocked.',
@@ -1400,7 +1391,7 @@ function csrfProtection(req: Request, res: Response, next: NextFunction) {
         return csrfTokenGate(req, res, next);
     }
 
-    console.warn(`[CSRF] Blocked request from ${requestOrigin || 'unknown'} to ${req.path}`);
+    console.warn(`[CSRF] Blocked request from ${logSafe(requestOrigin || 'unknown')} to ${logSafe(req.path)}`);
     return res.status(403).json({
         code: 'rest_csrf_invalid',
         message: 'Cross-site request blocked.',
