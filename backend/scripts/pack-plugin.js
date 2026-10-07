@@ -44,7 +44,7 @@ const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 const MAX_ENTRIES = 5000;
 const MAX_UNPACKED_BYTES = 200 * 1024 * 1024;
 
-const SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+const SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/; // the installer's slug rule (routes/plugins.ts)
 const SKIP_NAME_RE = /^(\.DS_Store|Thumbs\.db|desktop\.ini|__MACOSX|\.git|node_modules)$/i;
 // Backend files whose require()s say nothing about runtime: tests, compiled/front-end code, fixtures.
 const NOT_RUNTIME_RE = /(^|\/)(tests?|__tests__|dist|client|data|node_modules)\/|\.(test|spec)\.[cm]?js$/;
@@ -221,7 +221,7 @@ function loadInstaller() {
 
 function pack(opts) {
     const slug = opts.slug;
-    if (!SLUG_RE.test(slug)) fail(`"${slug}" is not a plugin slug (lowercase letters, digits, - and _).`);
+    if (!SLUG_RE.test(slug)) fail(`"${slug}" is not a plugin slug (letters, digits, - and _).`);
 
     const pluginDir = path.join(opts.dir, slug);
     const manifestPath = path.join(pluginDir, 'manifest.json');

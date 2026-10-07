@@ -1030,6 +1030,8 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
             runtime: p.active ? (getIsolateStatus(p.slug) || null) : null,
             hasTheme,
             themeInstalled: hasTheme && fs.existsSync(path.join(THEMES_DIR, `${p.slug}-theme`)),
+            // Dev-only "build & download ZIP" (POST /plugins/:slug/pack) is available.
+            packable: isDevMode(),
         };
     })));
 }));
@@ -1508,6 +1510,97 @@ router.post('/:slug/reload', authenticate, isAdmin, asyncHandler(async (req: Req
     }
     await reloadIsolatedPlugin(slug);
     res.json({ success: true, slug, message: `Isolate for '${slug}' reloaded.` });
+}));
+
+/**
+ * DEV-ONLY "build & download": the same thing as `npm run pack:plugin -- <slug>` (scripts/pack-plugin.js),
+ * from the admin screen. Only when config.nodeEnv === 'development' — the same switch as the plugin
+ * hot-reload watcher — because packing runs esbuild and may run `npm ci` for a bundled plugin: tools a
+ * production server should not be launching on request. Outside development the route answers 404, as if
+ * it did not exist, and GET /plugins advertises `packable: false` so the UI hides the button.
+ *
+ * The packer runs as a CHILD PROCESS (async execFile, argument array, no shell), never in this process:
+ * the build is CPU-heavy, may take a while, and loads ts-node for the installer scan. Its last "❌" line is
+ * the refusal reason (bad manifest, undeclared dependency, AST-scan block…), returned as a 422.
+ */
+const PACK_SCRIPT = path.resolve(__dirname, '../../scripts/pack-plugin.js');
+const PACK_TIMEOUT_MS = 5 * 60 * 1000;
+const isDevMode = () => require('../config/app').nodeEnv === 'development';
+
+/**
+ * @swagger
+ * /plugins/{slug}/pack:
+ *   post:
+ *     summary: Build a plugin and download it as an installable ZIP (development mode only)
+ *     description: >
+ *       Runs scripts/pack-plugin.js on the installed plugin folder: manifest check, frontend build,
+ *       dependency resolution, the installer's permission + AST scan, and the upload limits. Answers
+ *       404 unless the backend runs with NODE_ENV=development.
+ *     tags: [Plugins]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: The packed plugin ZIP (`<slug>-<version>.zip`)
+ *         content:
+ *           application/zip:
+ *             schema:
+ *               type: string
+ *               format: binary
+ *       400:
+ *         description: Invalid plugin slug
+ *       404:
+ *         description: Not in development mode, or the plugin is not installed
+ *       409:
+ *         description: Another operation on this plugin is in progress
+ *       422:
+ *         description: The packer refused the plugin; `error` holds the reason and `details.log` the output tail
+ */
+router.post('/:slug/pack', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    if (!isDevMode()) return res.status(404).json({ error: 'Not found' });
+    const slug = safeSlugParam(req.params.slug);
+    if (!slug) return res.status(400).json({ error: 'Invalid plugin slug' });
+    if (!pluginFile(slug, 'manifest.json') || !fs.existsSync(pluginFile(slug, 'manifest.json') as string)) {
+        return res.status(404).json({ error: `Plugin '${slug}' is not installed.` });
+    }
+    if (pluginOpInProgress.has(slug)) {
+        return res.status(409).json({ error: `Another operation on plugin '${slug}' is already in progress.` });
+    }
+    pluginOpInProgress.add(slug);
+    fs.mkdirSync(OS_TMP_DIR, { recursive: true });
+    const outDir = fs.mkdtempSync(path.join(OS_TMP_DIR, 'plugin-pack-'));
+    try {
+        const run = await new Promise<{ code: number; output: string }>((resolve) => {
+            execFile(process.execPath, [PACK_SCRIPT, slug, '--dir', path.resolve(PLUGINS_DIR), '--out', outDir],
+                { cwd: path.dirname(PACK_SCRIPT), timeout: PACK_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 },
+                (err: any, stdout: string, stderr: string) => {
+                    resolve({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, output: `${stdout || ''}${stderr || ''}` });
+                });
+        });
+        const zipName = run.code === 0 ? fs.readdirSync(outDir).find((f: string) => f.endsWith('.zip')) : undefined;
+        if (!zipName) {
+            const lines = run.output.split('\n').map((l) => l.trimEnd()).filter(Boolean);
+            const reason = [...lines].reverse().find((l) => l.startsWith('❌'));
+            return res.status(422).json({
+                error: reason ? reason.replace(/^❌\s*/, '') : `Packing '${slug}' failed.`,
+                details: { log: lines.slice(-40).join('\n') },
+            });
+        }
+        const buf = fs.readFileSync(path.join(outDir, zipName));
+        res.set('Content-Type', 'application/zip');
+        res.set('Content-Disposition', `attachment; filename="${zipName}"`);
+        res.set('Content-Length', String(buf.length));
+        res.send(buf);
+    } finally {
+        pluginOpInProgress.delete(slug);
+        fs.rmSync(outDir, { recursive: true, force: true });
+    }
 }));
 
 /**

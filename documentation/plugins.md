@@ -307,6 +307,11 @@ This is also the way to ship a **private** plugin that never goes through the Ma
     - runs the permission check and AST scan on exactly what goes into the ZIP, and refuses a ZIP the
       upload would reject (over 10 MB, more than 5000 entries, or more than 200 MB unpacked); it
       prints the sha256.
+    **From the admin screen:** while the backend runs with `NODE_ENV=development` (`npm run dev`),
+    every plugin card in `/admin/plugins` has a **Build & download ZIP** button that runs the same
+    packer on the installed plugin (`POST /api/v1/plugins/:slug/pack`) and saves the ZIP; a refusal
+    shows its reason, and the full packer output goes to the browser console. Outside development the
+    button is hidden and the route answers 404.
 2.  **Upload:** Go to **Plugins** -> **Add New** in the Admin panel and pick the ZIP. Deactivate or
     uninstall an installed copy first.
 3.  **Activate:** Plugin works instantly using the pre-compiled bundle.

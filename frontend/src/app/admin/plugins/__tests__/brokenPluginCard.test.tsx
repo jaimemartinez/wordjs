@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Plugin } from "@/lib/api";
-import { BrokenPluginCard, brokenReasonText, partitionPlugins } from "../page";
+import { BrokenPluginCard, PackPluginButton, brokenReasonText, partitionPlugins } from "../page";
 
 /**
  * THE "INSTALACIÓN INCOMPLETA" CARD.
@@ -106,5 +106,26 @@ describe("BrokenPluginCard", () => {
         el.props.onCleanup(el.props.plugin);
         expect(onReinstall).toHaveBeenCalledWith(p);
         expect(onCleanup).toHaveBeenCalledWith(p);
+    });
+});
+
+describe("PackPluginButton (dev-mode build & download ZIP)", () => {
+    it("is not rendered unless the backend reports the pack route (development only)", () => {
+        expect(render(<PackPluginButton plugin={healthy()} packing={false} onPack={() => {}} />)).toBe("");
+        expect(render(<PackPluginButton plugin={healthy({ packable: false })} packing={false} onPack={() => {}} />)).toBe("");
+    });
+
+    it("renders for a packable plugin and is disabled while its pack runs", () => {
+        const idle = render(<PackPluginButton plugin={healthy({ packable: true })} packing={false} onPack={() => {}} />);
+        expect(idle).toContain("Build and download Real One as a ZIP");
+        expect(idle).not.toContain("disabled=\"\"");
+        expect(render(<PackPluginButton plugin={healthy({ packable: true })} packing={true} onPack={() => {}} />)).toContain("disabled=\"\"");
+    });
+
+    it("hands the plugin itself to the action", () => {
+        const onPack = vi.fn();
+        const el = PackPluginButton({ plugin: healthy({ packable: true }), packing: false, onPack }) as React.ReactElement<{ onClick: () => void }>;
+        el.props.onClick();
+        expect(onPack).toHaveBeenCalledWith(expect.objectContaining({ slug: "real-one" }));
     });
 });
