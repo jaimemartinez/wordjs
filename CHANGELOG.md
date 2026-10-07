@@ -32,6 +32,16 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   paths listed in `.release-exclude` — do not reach the bundle, and fails if the packager names an
   individual plugin or theme.
 
+- **Remaining dependency advisories with a fix are closed.** Frontend: DOMPurify 3.4.16 (GHSA-p98j-92pf-mc4p,
+  GHSA-6688-9rhm-gjv2), and js-yaml and brace-expansion moved to fixed releases in the lint toolchain;
+  `@tailwindcss/typography` is removed — nothing loaded it (Tailwind 4 needs an `@plugin` line, and there is
+  none), and it pinned a `postcss-selector-parser` affected by GHSA-rj75-hqrm-r3gf. Root workspace: `uuid` is
+  overridden to 11.1.1 under `autocannon` (GHSA-w5hq-g745-h8pq), as the frontend already did. Every workspace
+  now audits clean for production dependencies apart from node-forge (no fixed release; dated exception
+  above). Left as they are: `braces` in the frontend lint toolchain (development only, no fixed release) and
+  `file-type` in the backend (GHSA-5v7r-6r5c-r473, moderate; the fixed line requires Node 22, and the upload
+  path already bounds detection by size and time).
+
 ### Fixed
 
 - **Sessions issued right after the install survive the first restart.** A fresh instance signs with a
