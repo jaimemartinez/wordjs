@@ -48,7 +48,7 @@
     "ci:all": "node scripts/ci-install.mjs"
   },
   "dependencies": {
-    "compression": "^1.8.1",
+    "compression": "^1.8.2",
     "concurrently": "^10.0.3",
     "helmet": "^8.3.0",
     "selfsigned": "^5.5.0"
@@ -56,5 +56,8 @@
   "devDependencies": {
     "autocannon": "^8.0.0",
     "puppeteer-core": "^25.9.0"
+  },
+  "overrides": {
+    "shell-quote": "^1.11.0"
   }
 }

@@ -8,6 +8,21 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Security
 
+- **Production dependencies updated for the advisories that blocked every CI run.** Next.js 16.3.6
+  (critical: RCE in `next/og` `ImageResponse`), proxy-addr 2.0.8 (critical: IP spoofing through an
+  IPv4-mapped IPv6 trust subnet; via Express 4.22.3), shell-quote 1.12.0 (critical, under `concurrently`),
+  nodemailer 10.0.15 with mailparser 3.9.36 and smtp-server 3.19.17, adm-zip 0.6.1, sharp 0.35.5,
+  compression 1.8.2, axios 1.20.0, brace-expansion 5.0.12 and source-map-js 1.2.2. Express stays on 4.x.
+- **Cluster enrolment verifies the CSR signature with Node's crypto instead of node-forge.** Every
+  node-forge release is affected by advisory GHSA-86w9-cpqp-85rv (its RSA PKCS#1 v1.5 verifier accepts
+  extra nested DigestAlgorithm elements) and none is fixed; the gateway's proof-of-possession check was the
+  only place WordJS verified a signature with it. Enrolment now accepts `sha256WithRSAEncryption` CSRs only,
+  and `node-join` asks openssl for SHA-256 explicitly.
+- **The CI audit gate can carry a dated, per-advisory exception** (`scripts/audit-exceptions.json`) for an
+  advisory with no fixed release anywhere: one advisory id on one package, with the reachability reasoning,
+  expiring at most 60 days after it was added and printed as a workflow warning on every run. The node-forge
+  advisory above is the only entry (until 2026-11-05); a test fails if a node-forge signature verification
+  returns to the code.
 - **The release packager no longer names private plugins in its public source.** `scripts/make-release.js`
   kept two private, untracked plugin directories out of the bundle by listing them in `IGNORE_PATTERNS`,
   which published in the repository the names it was meant to protect. They are now kept out without being
