@@ -320,7 +320,7 @@ test('main() runs the preflight right after the platform check, before the creat
     const main = source.slice(source.indexOf('async function main()'));
     const pre = main.indexOf('systemdPreflight(');
     assert.ok(pre > 0, 'main() must call systemdPreflight');
-    for (const later of ["if (opts.mode === 'upgrade') return upgrade(opts);", 'fs.mkdirSync(targetDir', 'resolveReleaseAsset(']) {
+    for (const later of ["if (opts.mode === 'upgrade') return upgrade(opts);", 'fs.mkdirSync(targetDir', 'obtainBundleZip(']) {
         assert.ok(main.indexOf(later) > pre, `systemdPreflight must run before: ${later}`);
     }
     // And a refusal inside emitSystemd THROWS (so upgrade's `finally { cleanup() }` runs) instead of exiting.
