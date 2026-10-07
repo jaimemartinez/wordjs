@@ -69,6 +69,7 @@ config.dbDriver = 'sqlite-native';
 const database = require('../config/database');
 const roles = require('../core/roles');
 const Post = require('../models/Post');
+const User = require('../models/User');
 
 const express = require('express');
 const cookieParser = require('cookie-parser');
@@ -230,6 +231,93 @@ describe("CLASS — an absent Host puts NO entry on the allow-list, at EVERY gat
         assert.strictEqual(named.site && named.site.origin, 'http://undefined');
     });
 });
+
+describe('lab finding N2 — an absent Host fails the same-origin check whatever the Origin says; Bearer callers keep their rules', () => {
+    // A CONFIGURED public origin (config.site.url): the allow-list holds it for requests sent TO that
+    // address, and before the fix it also vouched for a request that names no address at all.
+    const configured = () => new URL(config.site.url).origin;
+    const bearer = () => `Authorization: Bearer ${jwt.sign({ userId: adminId, username: 'jefa' }, SECRET, { algorithm: 'HS256', expiresIn: '1h' })}`;
+
+    test('CONTROL: with a real Host, a write carrying the configured origin passes the origin check', async () => {
+        const res = await csrfPost(['Host: example.com', `Origin: ${configured()}`]);
+        assert.notStrictEqual(res.status, 403, `the configured origin is on the allow-list: ${res.body}`);
+    });
+
+    for (const header of ['Origin', 'Referer']) {
+        test(`csrfProtection: a cookie write with NO Host and the configured ${header} is refused`, async () => {
+            const res = await csrfPost([`${header}: ${configured()}${header === 'Referer' ? '/admin' : ''}`]);
+            assert.strictEqual(res.status, 403, `a host-less write must fail the CSRF check: ${res.body}`);
+            assert.match(res.body, /rest_csrf_invalid/);
+        });
+    }
+
+    test('csrfProtection: a sign-in with NO Host never reaches the credential check (the lab reproduction)', async () => {
+        const res = await rawRequest(port(), `POST ${PREFIX}/auth/login HTTP/1.0`, [`Origin: ${configured()}`, 'Content-Type: application/json']);
+        assert.strictEqual(res.status, 403, res.body);
+        assert.match(res.body, /rest_csrf_invalid/);
+    });
+
+    test('routes/collab.ts sameOrigin(): the twin refuses the same host-less request', async () => {
+        const res = await collabStream([`Origin: ${configured()}`]);
+        assert.strictEqual(res.status, 403, '404 here means the gate let it through to the post gate');
+        assert.match(res.body, /rest_csrf_invalid/);
+    });
+
+    test('a Bearer caller with no Host is unaffected, with or without the configured Origin', async () => {
+        for (const extra of [[], [`Origin: ${configured()}`]]) {
+            const res = await rawRequest(port(), `POST ${PREFIX}/posts HTTP/1.0`, [bearer(), ...extra]);
+            assert.doesNotMatch(res.body, /rest_csrf/, `${extra.join(' ') || 'no Origin'}: ${res.status} ${res.body}`);
+            assert.notStrictEqual(res.status, 403);
+        }
+    });
+
+    test('an HTTP/1.0 GET with no Host (a probe) still passes', async () => {
+        const res = await rawRequest(port(), `GET ${PREFIX}/posts HTTP/1.0`, [`Origin: ${configured()}`]);
+        assert.strictEqual(res.status, 200);
+    });
+
+    // Review S3: any `Authorization: Bearer` header — even one that authenticates nothing — keeps the
+    // Bearer caller's CSRF rules, and sign-in reads the body, not that header. So the CSRF gate alone let
+    // the lab reproduction through again, with an UNBOUND session (no `mh`: nothing names an address)
+    // that no address's removal would ever end. The refusal now lives where sessions are minted.
+    test('review S3: no session is ever minted on a request without a Host, whatever Authorization it carries', async () => {
+        const username = `nohost_${Date.now()}`;
+        const password = 'Correct-Horse-9-Battery';
+        await User.create({ username, email: `${username}@example.com`, password, displayName: 'No Host', role: 'subscriber' });
+        const signIn = (lines: string[]) => rawExchange(port(), [`POST ${PREFIX}/auth/login HTTP/1.0`, 'Content-Type: application/json', ...lines], JSON.stringify({ username, password }));
+
+        // CONTROL: the credentials are good, so a refusal below is the rule and not the password.
+        const control = await signIn(['Host: example.com', 'Authorization: Bearer x']);
+        assert.strictEqual(control.status, 200, control.body);
+        assert.match(control.head, /set-cookie: wordjs_token=/i);
+
+        for (const extra of [[`Origin: ${configured()}`], []]) {
+            const res = await signIn(['Authorization: Bearer x', ...extra]);
+            assert.strictEqual(res.status, 403, `${extra.join(' ') || 'no Origin'}: ${res.body}`);
+            assert.strictEqual(JSON.parse(res.body).code, 'rest_insecure_transport');
+            assert.strictEqual(JSON.parse(res.body).data.reason, 'address');
+            assert.doesNotMatch(res.head, /set-cookie: wordjs_token=/i, 'no session cookie');
+        }
+    });
+});
+
+/** A raw HTTP/1.0 exchange with a body, answering the head (Set-Cookie included) and the body apart. */
+function rawExchange(p: number, lines: string[], body: string): Promise<{ status: number; head: string; body: string }> {
+    return new Promise((resolve, reject) => {
+        const socket = net.connect(p, '127.0.0.1', () => {
+            socket.write(lines.concat([`Content-Length: ${Buffer.byteLength(body)}`, '', body]).join(CRLF));
+        });
+        let raw = '';
+        socket.setTimeout(8000, () => { socket.destroy(); reject(new Error('raw socket timeout')); });
+        socket.on('data', (d: Buffer) => { raw += d.toString(); });
+        socket.on('error', reject);
+        socket.on('close', () => resolve({
+            status: Number((raw.split(CRLF)[0] || '').split(' ')[1]),
+            head: raw.split(CRLF + CRLF)[0],
+            body: raw.split(CRLF + CRLF).slice(1).join(CRLF + CRLF),
+        }));
+    });
+}
 
 /* ------------------------------------------------------------------------------------------- */
 /* THE RATCHET — the class stays closed only if a fourth copy cannot appear unnoticed.           */

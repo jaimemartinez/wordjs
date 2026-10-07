@@ -63,8 +63,10 @@ function missingRev(res: Response): void {
  *     summary: Read the site's addresses
  *     description: >-
  *       The main address, the other addresses (with when each was last used), the addresses accepted by
- *       rule (environment, this server's IPs, development origins), the address this request came in on,
- *       recently refused hosts, and any unresolved conflict. Administrator, browser session only.
+ *       rule (environment, the IPs `own` answers — this server's, or behind a gateway the gateway's, as it
+ *       reported them — and development origins), the address this request came in on, recently refused
+ *       hosts (each saying whether the gateway's edge, this backend's gate or both refused it), and any
+ *       unresolved conflict. Administrator, browser session only.
  *     tags: [Site address]
  *     security:
  *       - bearerAuth: []
@@ -88,6 +90,20 @@ function missingRev(res: Response): void {
  *                 ipLiterals:
  *                   type: string
  *                   enum: [any, own, none]
+ *                 ownAddresses:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                   description: The IP literals `own` answers.
+ *                 ownAddressesFrom:
+ *                   type: string
+ *                   enum: [gateway, server]
+ *                   description: The gateway's report (split and separate mode), or this server's interfaces.
+ *                 ownAddressesReportedAt:
+ *                   type: string
+ *                   format: date-time
+ *                   nullable: true
+ *                   description: When the gateway's report arrived; null for this server's own interfaces.
  *       401:
  *         description: "rest_not_logged_in — no valid credential."
  *         content:

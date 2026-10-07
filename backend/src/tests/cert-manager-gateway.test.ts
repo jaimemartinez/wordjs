@@ -79,6 +79,10 @@ const rogueCaKeys = keyPair();
 const rogueCa = certificate('Rogue CA', rogueCaKeys, null);
 const rogueKeys = keyPair();
 const rogueCert = certificate('gateway-internal', rogueKeys, { cert: rogueCa.cert, key: rogueCaKeys.priv }, [{ type: 2, value: 'localhost' }, { type: 7, ip: '127.0.0.1' }]);
+// Issued by the RIGHT cluster CA, to another service: every service certificate names localhost and
+// 127.0.0.1, so a process holding frontend.key that binds the control-plane port passes the name check.
+const feKeys = keyPair();
+const frontendCert = certificate('frontend', feKeys, issuer, [{ type: 2, value: 'localhost' }, { type: 7, ip: '127.0.0.1' }]);
 
 const CERTS = path.join(TMP, 'certs');
 fs.mkdirSync(CERTS);
@@ -104,14 +108,18 @@ function controlPlane(certPem: string, keyPem: string) {
 const genuine = controlPlane(gatewayCert.pem, gwKeys.pem);
 const impostor = controlPlane(rogueCert.pem, rogueKeys.pem);
 const ipOnly = controlPlane(ipOnlyCert.pem, gwKeys.pem);
+const sibling = controlPlane(frontendCert.pem, feKeys.pem);
 let genuinePort = 0;
 let impostorPort = 0;
 let ipOnlyPort = 0;
+let siblingPort = 0;
 
 before(async () => {
     await new Promise<void>((r) => genuine.listen(0, '127.0.0.1', r));
     await new Promise<void>((r) => impostor.listen(0, '127.0.0.1', r));
     await new Promise<void>((r) => ipOnly.listen(0, '127.0.0.1', r));
+    await new Promise<void>((r) => sibling.listen(0, '127.0.0.1', r));
+    siblingPort = sibling.address().port;
     genuinePort = genuine.address().port;
     impostorPort = impostor.address().port;
     ipOnlyPort = ipOnly.address().port;
@@ -121,6 +129,7 @@ after(async () => {
     await new Promise<void>((r) => genuine.close(() => r()));
     await new Promise<void>((r) => impostor.close(() => r()));
     await new Promise<void>((r) => ipOnly.close(() => r()));
+    await new Promise<void>((r) => sibling.close(() => r()));
     if (SAVED_MODE === undefined) delete process.env.WORDJS_MODE; else process.env.WORDJS_MODE = SAVED_MODE;
     if (SAVED_EMBEDDED === undefined) delete process.env.WORDJS_EMBEDDED; else process.env.WORDJS_EMBEDDED = SAVED_EMBEDDED;
     try { process.chdir(ORIGINAL_CWD); } catch { /* */ }
@@ -204,6 +213,18 @@ describe('the gateway control plane is dialled at gatewayHost:gatewayInternalPor
         await assert.rejects(() => certManager.pushCertToGateway('-----BEGIN PRIVATE KEY-----', '-----BEGIN CERTIFICATE-----'));
         assert.deepStrictEqual(seen, [], 'the private key never left: the handshake failed first');
         assert.strictEqual((await certManager.getConfig()).error, 'Gateway Unreachable');
+    });
+
+    test('a listener with another service\'s certificate from the same cluster CA never receives the request (review R3S-4)', async () => {
+        // The gateway's answer to a policy push now decides what `own` answers, and the other calls carry
+        // private keys: the peer must be the gateway (CN gateway-internal, or gateway), not merely a
+        // certificate the cluster CA issued that names localhost.
+        for (const cfg of [{ mtls: MTLS, gatewayInternalPort: siblingPort }, { mtls: MTLS, gatewayHost: '127.0.0.1', advertiseHost: '127.0.0.1', gatewayInternalPort: siblingPort }]) {
+            stage(cfg);
+            await assert.rejects(() => certManager.pushHostPolicyToGateway({ enforce: true, config: {}, env: {}, nodeEnv: 'production' }), /gateway/i);
+            await assert.rejects(() => certManager.pushCertToGateway('-----BEGIN PRIVATE KEY-----', '-----BEGIN CERTIFICATE-----'));
+            assert.deepStrictEqual(seen, [], 'nothing reached it: the handshake failed first');
+        }
     });
 
     test('a node without cluster identity says so instead of dialling', async () => {

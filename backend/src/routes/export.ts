@@ -10,7 +10,10 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const { exportSite, importSite, exportToWXR } = require('../core/import-export');
-const { authenticate } = require('../middleware/auth');
+// refuseBoundSession: importing accounts, or the settings that decide who may register, is not for a
+// session started at an address other than the main one (middleware/auth.ts).
+const { authenticate, refuseBoundSession } = require('../middleware/auth');
+const { changedRegistrationSettings } = require('../core/registration-settings');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 // THE SCALAR QUERY RULE — see core/query-params.
@@ -224,7 +227,10 @@ router.get('/export/wxr', authenticate, isAdmin, asyncHandler(async (req: Reques
  *       401:
  *         description: Not logged in (rest_not_logged_in)
  *       403:
- *         description: Not an administrator
+ *         description: >-
+ *           Not an administrator, or rest_account_bound_session: a session started at an address other
+ *           than the main one may not import accounts (importUsers) nor change the registration settings
+ *           (data.params names what was refused).
  */
 router.post('/import', authenticate, isAdmin, upload.single('file'), asyncHandler(async (req: ImportRequest, res: Response) => {
     let data;
@@ -254,6 +260,17 @@ router.post('/import', authenticate, isAdmin, upload.single('file'), asyncHandle
         updateExisting: req.body.updateExisting === 'true' || req.body.updateExisting === true,
         importUsers: req.body.importUsers === 'true' || req.body.importUsers === true
     };
+
+    // An import creates and rewrites accounts (roles included) when asked to, and writes the bundle's
+    // settings: neither may come from a session bound to a secondary address. Only what the importer will
+    // write is judged: it skips settings with no value and every protected option (isProtectedOption —
+    // users_can_register, default_role and the two-factor policy among them), whoever imports.
+    const { isProtectedOption } = require('../core/plugin-api');
+    const bundleSettings = data && typeof data === 'object' && data.settings && typeof data.settings === 'object' && !Array.isArray(data.settings)
+        ? Object.fromEntries(Object.entries(data.settings).filter(([k, v]) => v !== null && v !== undefined && !isProtectedOption(k)))
+        : {};
+    const refused = [...(options.importUsers ? ['importUsers'] : []), ...(await changedRegistrationSettings(bundleSettings))];
+    if (refused.length && refuseBoundSession(req, res, refused)) return;
 
     const results = await importSite(data, options);
 

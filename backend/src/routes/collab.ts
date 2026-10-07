@@ -36,7 +36,7 @@ const express = require('express');
 const router = express.Router();
 
 const jwt = require('jsonwebtoken');
-const { authenticate, trustedHost, originMatchesHost, sameOriginAllowList, sessionAddressStillAccepted } = require('../middleware/auth');
+const { authenticate, trustedHost, originMatchesHost, sameOriginAllowList, hostlessAmbientRequest, sessionAddressStillAccepted } = require('../middleware/auth');
 const { asyncHandler, offStack } = require('../middleware/errorHandler');
 const { canEditPostRecord, isRestExposedPostType } = require('../core/post-capabilities');
 const config = require('../config/app');
@@ -106,6 +106,9 @@ function sameOrigin(req: Request): boolean {
     // The host comes from core/host-policy requestAuthority (X-Forwarded-Host only from a trusted hop) and
     // both sides go through the one parser, so this check and csrfProtection cannot answer differently.
     const host = trustedHost(req);
+    // No host of its own: the configured origins below do not stand in for one (lab finding N2) — the
+    // same predicate csrfProtection applies.
+    if (hostlessAmbientRequest(req, host)) return false;
     if (originMatchesHost(requestOrigin, host)) return true;
 
     const allowed: string[] = sameOriginAllowList(host);

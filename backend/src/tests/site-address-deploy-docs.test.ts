@@ -73,13 +73,48 @@ describe('documentation/site-address.md — the operator guide matches the code'
         const api = read('documentation/api.md');
         const gateCodes = [...read('backend/src/core/host-policy.js').matchAll(/code: '(rest_[a-z_]+)'/g)].map((m: RegExpMatchArray) => m[1]);
         assert.deepStrictEqual(gateCodes.sort(), ['rest_host_not_allowed', 'rest_invalid_host'], 'positive control: the gate codes parsed');
-        for (const code of [...gateCodes, 'rest_insecure_transport']) {
+        // The sign-in refusals, from the code that answers them (lab R2V-M-NF1 added the retiring one).
+        const signInCodes = [...read('backend/src/middleware/auth.ts').matchAll(/code: '(rest_(?:insecure_transport|address_retiring))'/g)].map((m: RegExpMatchArray) => m[1]);
+        assert.deepStrictEqual([...new Set(signInCodes)].sort(), ['rest_address_retiring', 'rest_insecure_transport'], 'positive control: the sign-in codes parsed');
+        for (const code of [...gateCodes, ...new Set(signInCodes)]) {
             assert.ok(doc.includes(code), `site-address.md does not explain ${code}`);
             assert.ok(api.includes(code), `api.md does not list ${code}`);
         }
         const writerCodes = [...new Set([...read('backend/src/core/site-address.ts').matchAll(/'(rest_[a-z_]+)'/g)].map((m: RegExpMatchArray) => m[1]))];
         assert.ok(writerCodes.includes('rest_site_address_stale'), 'positive control: the writer codes parsed');
         for (const code of writerCodes) assert.ok(api.includes(code), `api.md does not document ${code} (core/site-address.ts throws it)`);
+    });
+
+    test('what an address-bound session is refused is documented, in the guide and in api.md (lab finding M-23)', () => {
+        const api = read('documentation/api.md');
+        // Parsed from the code that answers them, so a renamed code cannot leave the docs naming a dead one.
+        const bindingCodes = [
+            ...read('backend/src/middleware/auth.ts').matchAll(/code: '(rest_(?:account_bound_session|token_revoked))'/g),
+            ...read('backend/src/routes/auth.ts').matchAll(/code: '(rest_token_bound_session)'/g),
+        ].map((m: RegExpMatchArray) => m[1]);
+        assert.deepStrictEqual([...new Set(bindingCodes)].sort(), ['rest_account_bound_session', 'rest_token_bound_session', 'rest_token_revoked'], 'positive control: the binding codes parsed');
+        for (const code of new Set(bindingCodes)) {
+            assert.ok(doc.includes(code), `site-address.md does not explain ${code}`);
+            assert.ok(api.includes(code), `api.md does not list ${code}`);
+        }
+        for (const route of ['DELETE /users/:id', 'POST /users/:id/mfa/reset', 'PUT /auth/mfa/policy', 'POST /roles', '`users_can_register`', '`default_role`']) {
+            assert.ok(doc.includes(route), `site-address.md does not say a bound session is refused ${route}`);
+        }
+    });
+
+    test('the periodic re-send and the change log are documented with the numbers the code uses (lab N1 / M-16)', () => {
+        // Parsed from core/site-address.ts, so changing either constant fails here until the docs follow.
+        const code = read('backend/src/core/site-address.ts');
+        const syncS = Number((/^const GATEWAY_SYNC_MS = (\d+) \* 1000;$/m.exec(code) || [])[1]);
+        const logSize = Number((/^const MAX_CHANGE_LOG = (\d+);$/m.exec(code) || [])[1]);
+        assert.ok(syncS > 0 && logSize > 0, `positive control: parsed ${syncS} s and ${logSize} entries`);
+        const gateway = read('documentation/gateway.md');
+        for (const [name, text] of [['site-address.md', section(doc, '## Split and separate mode')], ['gateway.md', section(gateway, '### Host policy push')]]) {
+            assert.ok(text.includes(`every ${syncS} seconds`), `${name} does not say the backend re-sends the policy every ${syncS} seconds`);
+            assert.ok(text.includes(`up to ${Math.round(syncS * 0.2)} seconds`), `${name} does not give the jitter (up to ${Math.round(syncS * 0.2)} seconds)`);
+        }
+        assert.ok(section(doc, '## Managing addresses: command line').includes(`last ${logSize} revisions`), `site-address.md does not say the CLI's log keeps the last ${logSize} revisions`);
+        assert.ok(doc.includes('site.address.gap'), 'site-address.md does not explain the gap audit row');
     });
 });
 
@@ -140,6 +175,65 @@ describe('deployment notes the redesign needs', () => {
         assert.ok(routes.includes('POST /register') && routes.includes('POST /host-policy'), `positive control: routes parsed: ${routes}`);
         for (const route of routes) assert.ok(gatewayDoc.includes(route), `gateway.md does not document ${route}`);
         assert.match(gatewayDoc, /gateway-host-policy\.json/, 'gateway.md must name the file the pushed policy is stored in');
+    });
+
+    test('the gateway\'s answer, the own-address report and the refusal tags are documented as the code produces them (lab R2-NEW-1, R2-X2-tag)', () => {
+        const doc = read('documentation/site-address.md');
+        const gatewayDoc = read('documentation/gateway.md');
+        const api = read('documentation/api.md');
+        // The answer's keys, from the res.json of mountHostPolicyPush.
+        const edge = read('gateway/src/host-edge.js');
+        const mount = edge.slice(edge.indexOf('function mountHostPolicyPush'), edge.indexOf('// ─── What the gateway\'s edge refused'));
+        const answer = mount.slice(mount.indexOf('return res.json({'));
+        const keys = [...answer.slice(0, answer.indexOf('});')).matchAll(/^\s+(?:\.\.\.\(([a-zA-Z]+) \?|([a-zA-Z]+)[,:])/gm)].map((m: RegExpMatchArray) => m[1] || m[2]);
+        assert.ok(keys.includes('refused') && keys.includes('ownAddresses'), `positive control: the answer's keys parsed: ${keys}`);
+        const bullet = gatewayDoc.slice(gatewayDoc.indexOf('*   **Answer.**'));
+        for (const key of keys) assert.ok(bullet.slice(0, bullet.indexOf('\n')).includes(key), `gateway.md's Answer bullet does not name ${key}`);
+        // Where the backend keeps the report for `npm run site`.
+        const file = /'(gateway-own-addresses\.json)'/.exec(read('backend/src/core/site-address.ts'));
+        assert.ok(file, 'positive control: the report file name parsed');
+        for (const [name, text] of [['site-address.md', doc], ['gateway.md', gatewayDoc]] as const) assert.ok(text.includes(file![1]), `${name} does not name ${file![1]}`);
+        // GET /site-address: whose addresses `own` are, and who refused each host.
+        assert.ok(api.includes('ownAddressesFrom'), 'api.md does not document ownAddressesFrom');
+        const hostPolicy = require('../core/host-policy');
+        assert.deepStrictEqual([...hostPolicy.REFUSAL_SOURCES], ['edge', 'gate', 'both'], 'positive control: the sources');
+        const getRow = api.split('\n').find((l: string) => l.startsWith('| `GET`  | `/` | — | `{ rev, canonical'));
+        assert.ok(getRow, 'positive control: the GET /site-address row');
+        for (const source of hostPolicy.REFUSAL_SOURCES) {
+            assert.ok(getRow!.includes(`\`${source}\``), `api.md's GET /site-address row does not explain source ${source}`);
+            assert.ok(doc.includes(`\`${source}\``), `site-address.md does not explain source ${source}`);
+        }
+    });
+
+    test('api.md\'s GET /site-address row names every key the route answers, none as optional (review DOC-2)', () => {
+        // The route answers describeState() as it is; its keys are parsed from the returned object.
+        const code = read('backend/src/core/site-address.ts');
+        const body = code.slice(code.indexOf('async function describeState('));
+        const returned = body.slice(body.indexOf('\n    return {\n'), body.indexOf('\n    };\n'));
+        const keys = [...returned.matchAll(/^ {8}([a-zA-Z]+)[,:]/gm)].map((m: RegExpMatchArray) => m[1]);
+        assert.ok(keys.includes('rev') && keys.includes('lastChange') && keys.includes('ownAddressesReportedAt') && keys.length >= 18, `positive control: parsed ${keys}`);
+        const getRow = read('documentation/api.md').split('\n').find((l: string) => l.startsWith('| `GET`  | `/` | — | `{ rev, canonical'))!;
+        const shape = getRow.slice(getRow.indexOf('`{'), getRow.indexOf('}`') + 2);
+        for (const key of keys) assert.match(shape, new RegExp(`\\b${key}\\b(?!\\?)`), `api.md's GET /site-address shape does not name ${key} (or marks it optional)`);
+    });
+
+    test('every sign-in route that answers rest_address_retiring says so in api.md\'s auth table (review DOC-6)', () => {
+        // The routes that ask before the credentials (refuseRetiringSignIn), parsed from routes/auth.ts.
+        const routes = read('backend/src/routes/auth.ts');
+        const asking = [...routes.matchAll(/router\.post\('(\/[a-z]+)'/g)]
+            .filter((m: RegExpMatchArray) => {
+                const start = m.index!;
+                const next = routes.indexOf('router.', start + 10);
+                return routes.slice(start, next === -1 ? undefined : next).includes('refuseRetiringSignIn(req, res)');
+            })
+            .map((m: RegExpMatchArray) => m[1]);
+        assert.deepStrictEqual(asking.sort(), ['/login', '/mfa', '/register'], `positive control: parsed ${asking}`);
+        const table = read('documentation/api.md').split('\n');
+        for (const route of [...asking, '/refresh']) {
+            const row = table.find((l: string) => new RegExp(`^\\| \`POST\` \\| \`${route}\` +\\|`).test(l));
+            assert.ok(row, `positive control: the ${route} row`);
+            assert.match(row!, /503 rest_address_retiring/, `api.md's ${route} row does not mention 503 rest_address_retiring`);
+        }
     });
 
     test('docker: no document claims config writes avoid an atomic rename while configManager renames', () => {

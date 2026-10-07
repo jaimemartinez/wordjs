@@ -197,15 +197,31 @@ function trustedForwardedScheme(req, getPolicy) {
 }
 
 /**
+ * X-Forwarded-Host for the in-process backend and Next: the address the edge judged, and only when it
+ * came from a TRUSTED hop's X-Forwarded-Host (host-policy requestAuthority — a proxy in trustProxy, a
+ * loopback hop). When the edge judged Host — every direct client — the header is removed, so a client's
+ * own value never survives and the backend, whose rule is the edge's, reads the same Host itself.
+ *
+ * Not a copy of Host, as it used to be: the backend shares this request's socket (nothing relayed it),
+ * and a present X-Forwarded-Host from a trusted hop is how host-policy knows a hop relayed the Host it
+ * received — which decides who sent a loopback name (looksLikeProxyCollapse).
+ */
+function pinForwardedHost(req) {
+    const judged = hostEdge.judgedAddress(req);
+    if (judged && judged.source === 'x-forwarded-host') req.headers['x-forwarded-host'] = judged.raw;
+    else delete req.headers['x-forwarded-host'];
+}
+
+/**
  * The public listener's request handler — the REAL one main() mounts, exported so a test can drive it
  * with stand-ins for the backend app and Next. The order is the contract:
  *
  *   TRACE/TRACK 405 → /healthz → EDGE address check → forwarded-header pins → SEO rewrites → dispatch
  *
- * The edge runs BEFORE the pins: they overwrite X-Forwarded-Host with Host, and a reverse proxy's own
- * X-Forwarded-Host is one of the signals (REDTEAM R4) that an IP-literal Host is the proxy's upstream
- * address rather than the one the browser used. And before the rewrites, so it judges the URL the client
- * asked for: /sitemap.xml on a foreign name gets the page, not the API's JSON.
+ * The edge runs BEFORE the pins: they rewrite X-Forwarded-Host to the address the edge judged, and a
+ * reverse proxy's own X-Forwarded-Host is one of the signals (REDTEAM R4) that an IP-literal Host is the
+ * proxy's upstream address rather than the one the browser used. And before the rewrites, so it judges
+ * the URL the client asked for: /sitemap.xml on a foreign name gets the page, not the API's JSON.
  */
 function createDispatch({ backendApp, handle, proto, edge }) {
     return (req, res) => {
@@ -226,8 +242,8 @@ function createDispatch({ backendApp, handle, proto, edge }) {
         // Read BEFORE the pins overwrite it: a trusted proxy's X-Forwarded-Proto (TLS terminated in front
         // of a plain-http listener), else this listener's scheme.
         const scheme = (edge && typeof edge.scheme === 'function' && edge.scheme(req)) || proto;
-        // Pin forwarded headers so backend CSRF/origin sees the real public host (gateway parity).
-        req.headers['x-forwarded-host'] = req.headers['host'] || '';
+        // Pin forwarded headers so backend CSRF/origin sees the address the edge judged (gateway parity).
+        pinForwardedHost(req);
         req.headers['x-forwarded-proto'] = scheme;
         // SEO rewrites (gateway parity).
         if (req.url === '/sitemap.xml') req.url = '/api/v1/seo/sitemap.xml';
@@ -238,17 +254,94 @@ function createDispatch({ backendApp, handle, proto, edge }) {
     };
 }
 
+// The only WebSocket WordJS serves in this process: Next's development HMR channel (the App Router
+// client dials `/_next/hmr?id=…`; Next 16 serves no other HMR path). Matched EXACTLY, query string
+// aside: Next's own upgrade handler serves that path and returns, but runs every other upgrade through
+// its routes — rewrites included, and the build bakes `/api/:path*` (and the other backend prefixes) →
+// http://localhost:<gatewayPort>, which in this shape is THIS listener — and leaves a socket open when
+// nothing matches.
+const NEXT_HMR_PATHS = Object.freeze(['/_next/hmr']);
+const isNextHmrPath = (url) => NEXT_HMR_PATHS.includes(String(url || '/').split('?')[0]);
+
 /**
- * WebSocket upgrades (Next dev HMR; the backend serves none). They bypass the request handler, so the
- * edge check runs here as well: an upgrade to an address the site does not answer is refused on the
- * socket instead of reaching Next.
+ * WebSocket upgrades. They bypass the request handler, so the edge check runs here as well: an upgrade
+ * to an address the site does not answer gets one 421 on the socket and nothing else. Of the rest, only
+ * Next's development HMR channel is handed on (`hmr`, null in production); every other upgrade is closed.
+ * The backend serves no WebSocket, and Next serves none in production — the only thing its upgrade
+ * handler could do there is proxy a rewrite back into this listener, which re-entered it forever (one
+ * anonymous `new WebSocket('/api/…')` became an endless loop of loopback connections).
+ *
+ * This must be the ONLY 'upgrade' listener on the public server: see createPublicServer.
  */
-function createUpgradeHandler({ upgrade, edge }) {
+function createUpgradeHandler({ hmr, edge }) {
     return (req, socket, head) => {
         if (edge && edge.handleUpgrade(req, socket)) return;
-        if (upgrade && !isBackendPath(req.url)) return upgrade(req, socket, head);
+        if (hmr && isNextHmrPath(req.url)) return hmr(req, socket, head);
         socket.destroy();
     };
+}
+
+/**
+ * What Next.js receives as its `httpServer` (a documented NextServerOptions field): a plain emitter that
+ * no socket ever reaches. Next's custom-server wrapper attaches its OWN 'upgrade' listener, on the first
+ * request, to `options.httpServer || req.socket.server` (setupWebSocketHandler in
+ * next/dist/server/next.js) — without this, to the public server itself, where it handled every upgrade
+ * a second time with no edge check. Its listener lands here instead, and `forwardUpgrade(sink)` is how
+ * the monolith's own handler hands it the HMR channel in development.
+ */
+function createNextUpgradeSink() {
+    return new (require('events').EventEmitter)();
+}
+
+/** The Next.js app main() runs, its WebSocket listener pointed at `upgrades` (createNextUpgradeSink). */
+function createNextServer(createNext, { dev, dir, upgrades }) {
+    return createNext({ dev, dir, httpServer: upgrades });
+}
+
+/** Hand an upgrade to whatever listens on `sink` (Next's HMR handler), or close it when nothing does. */
+function forwardUpgrade(sink) {
+    return (req, socket, head) => {
+        if (!sink.emit('upgrade', req, socket, head)) socket.destroy();
+    };
+}
+
+/**
+ * The public server, on which every upgrade goes to `upgradeHandler` and nothing else. The Next.js sink
+ * is what keeps Next's listener off it today; this is what keeps it so if a later Next version attaches
+ * anywhere else.
+ *
+ * The guarantee is the server's own emit: an 'upgrade' event is delivered to `upgradeHandler` alone,
+ * whatever else is registered, so no listener can run first or instead — not even one attached during
+ * the very request that a pipelined upgrade follows in the same socket read (Node emits that upgrade
+ * synchronously after the request, before any later tick). Any other 'upgrade' listener added to the
+ * server is then moved onto the sink, behind the monolith's handler (that is how a Next that ignored
+ * httpServer would still get its HMR channel in development), and reported once.
+ */
+function createPublicServer({ ssl, requestListener, upgradeHandler, sink, logger }) {
+    const log = logger || console;
+    const server = ssl ? require('https').createServer(ssl, requestListener) : require('http').createServer(requestListener);
+    const emit = server.emit;
+    server.emit = function emitWithOneUpgradeHandler(event, ...args) {
+        if (event !== 'upgrade') return emit.call(this, event, ...args);
+        upgradeHandler(...args);
+        return true;
+    };
+    let reported = false;
+    server.on('newListener', (event, listener) => {
+        if (event !== 'upgrade' || listener === upgradeHandler) return;
+        process.nextTick(() => {
+            server.removeListener('upgrade', listener);
+            sink.on('upgrade', listener);
+            if (!reported) {
+                reported = true;
+                log.warn('[monolith] another module attached an \'upgrade\' listener to the public server; it now sits behind the monolith\'s upgrade handler, which alone decides what reaches it.');
+            }
+        });
+    });
+    // Registered as well: Node treats a request as an upgrade only while the server has an 'upgrade'
+    // listener.
+    server.on('upgrade', upgradeHandler);
+    return server;
 }
 
 /**
@@ -294,11 +387,15 @@ async function main() {
     //    never bites because Next runs in its own process.)
     const nextLib = require(require.resolve('next', { paths: [FRONTEND] }));
     const createNext = nextLib.default || nextLib;
-    const nextApp = createNext({ dev, dir: FRONTEND });
-    // prepare() MUST run before getRequestHandler/getUpgradeHandler (Next 16 throws otherwise).
+    // Next attaches its own 'upgrade' listener to `httpServer`: the sink, never the public server (see
+    // createNextUpgradeSink). Its HMR channel is reached through the monolith's handler, in dev only.
+    // (nextApp.getUpgradeHandler() is not that channel: in Next 16 it resolves to NextNodeServer's
+    // handleUpgrade, which is empty — HMR only ever worked through the listener Next attached itself.)
+    const nextUpgrades = createNextUpgradeSink();
+    const nextApp = createNextServer(createNext, { dev, dir: FRONTEND, upgrades: nextUpgrades });
+    // prepare() MUST run before getRequestHandler (Next 16 throws otherwise).
     await nextApp.prepare();
     const handle = nextApp.getRequestHandler();
-    const upgrade = typeof nextApp.getUpgradeHandler === 'function' ? nextApp.getUpgradeHandler() : null;
 
     // 2) Backend Express app (compiled dist in prod; ts-node in dev) — registered AFTER Next so the
     //    ts-node resolver overlays Next's hook. Module load installs io-guard, secure-require,
@@ -345,7 +442,14 @@ async function main() {
         helmetMw(req, res, () => compressionMw(req, res, () => dispatch(req, res)));
 
     const http = require('http');
-    const server = ssl ? require('https').createServer(ssl, requestListener) : http.createServer(requestListener);
+    // Next dev HMR is the only WebSocket served here; everything else is refused or closed, and nothing
+    // else may listen for upgrades on this server (createPublicServer).
+    const server = createPublicServer({
+        ssl,
+        requestListener,
+        upgradeHandler: createUpgradeHandler({ hmr: dev ? forwardUpgrade(nextUpgrades) : null, edge }),
+        sink: nextUpgrades,
+    });
     // Let ACME auto-renewal hot-swap the live TLS cert in-process (no restart). cert-manager calls
     // this after writing a renewed cert in embedded mode. Only meaningful when serving HTTPS.
     if (ssl) {
@@ -354,8 +458,6 @@ async function main() {
             catch (e) { console.warn('[monolith] TLS hot-reload failed:', e.message); }
         };
     }
-    // Next dev HMR uses a WebSocket on the same server; backend serves no WS, so route upgrades to Next.
-    server.on('upgrade', createUpgradeHandler({ upgrade, edge }));
     // Outlive any fronting proxy's idle timeout (nginx default 60s): with Node's 5s default the
     // server races the proxy's socket reuse and drops requests mid-flight.
     server.keepAliveTimeout = 65000;
@@ -396,4 +498,17 @@ if (require.main === module) {
     main().catch((e) => { console.error('❌ Monolith failed to start:', e); process.exit(1); });
 }
 
-module.exports = { BACKEND_PREFIXES, isBackendPath, createMonolithEdge, createDispatch, createUpgradeHandler, createAcmeHandler, main };
+module.exports = {
+    BACKEND_PREFIXES,
+    isBackendPath,
+    createMonolithEdge,
+    createDispatch,
+    NEXT_HMR_PATHS,
+    createUpgradeHandler,
+    createNextUpgradeSink,
+    createNextServer,
+    forwardUpgrade,
+    createPublicServer,
+    createAcmeHandler,
+    main,
+};

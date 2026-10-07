@@ -46,24 +46,67 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   with no redirect on every API path, `/api/v1/setup/*` included once installed, and — at the monolith and
   gateway edges — a static 421 page for pages, static files and WebSockets too; a malformed or repeated
   `Host` gets `400`. In split and separate mode the backend pushes the policy to the gateway
-  (`POST /host-policy`, mTLS CN `backend`) after every change, at boot and after every registration.
+  (`POST /host-policy`, mTLS CN `backend`) after every change, at boot, after registering, and every
+  30 seconds from then on, so a gateway that comes back without its stored policy is armed again within
+  about 40 seconds (a worker started on an unreadable policy file says it holds none, instead of claiming
+  to keep the last good one, and one whose file is deleted says once that it now enforces nothing); an
+  unchanged push rewrites nothing, and the gateway answers with what its
+  edge refused, which **Recently refused** lists next to the backend's own refusals, each entry labelled
+  with who refused it (edge, backend or both); that periodic push only
+  arms a gateway holding no policy, so backends whose settings differ cannot make the edge switch between
+  them. Every change is audited, one row per revision, committed in the same transaction as the revision:
+  those made with `npm run site` too, from a 20-entry change log in the config (older ones the backend
+  never applied become `site.address.gap` rows), also when an admin-screen change overtakes them,
+  `--force` and **Change anyway** with what they went past; administrators get one notice per batch, which
+  names the IP sign-in switch, a main address confirmed rather than moved, and an upgrade conflict it ends
+  (`npm run site` prints the same sentence for the revision it saved).
+  Writers of `wordjs-config.json` hold a lock file, so two of them never both save the same revision.
   `X-Forwarded-Host` / `-Proto` are believed only from a trusted hop (the mTLS gateway, a loopback peer
   that addressed a loopback name, or an address-based `trustProxy` peer, whose forwarded host is believed
   only when the `Host` it sent is an IP, loopback or single-label name), which closes the `127.0.0.1:4000`
-  forged-`X-Forwarded-Host` rebinding path; the gateway also drops a client's `X-Forwarded-Proto`.
-  Sign-in on an address other than the main one follows new rules in production: IP literals, tunnel
+  forged-`X-Forwarded-Host` rebinding path; the gateway also drops a client's `X-Forwarded-Proto`. The
+  edges apply that same rule (the backend's own function), so they judge the address the backend judges
+  and forward exactly that one, an empty `X-Forwarded-Host` from a local hop included (http-proxy's `xfwd`
+  replaced it with the hop's own loopback `Host`, which the backend judged as loopback; the gateway now
+  removes that `Host` before proxying, so this holds for a request with `Expect: 100-continue` and for one
+  that waited for an upstream connection too, and Next.js's per-user server-side reads pass the empty value
+  on as well). Probes (`/healthz`, `/health`, `/readyz`, `/metrics`) and ACME challenges
+  (`/.well-known/acme-challenge/<token>`) stay answered on any address, matched exactly: a path below them
+  or with `..` is checked like any other. A path with a dot segment or a backslash gets
+  `400 rest_invalid_path` at the edges, and Next.js rewrites are case-sensitive, so no request reaches the
+  API through Next's own rewrite. Sign-in on an address other than the main one follows new rules in production: IP literals, tunnel
   names and `.local` names are off by default (`hostPolicy.ipSignIn` / per-alias `signIn` opt in), and on
   an https site the connection must really be https (`403 rest_insecure_transport`). Every session except
   a loopback one is bound to the address it was started on, the main address included: removing that
   address (or dropping the old main address in a move) revokes its sessions, a refresh keeps the
-  binding, and a session from an address other than the main one cannot mint API tokens. Reset and verification links, feeds, the sitemap and plugin `site.url()` never
+  binding, and a session from an address other than the main one cannot mint API tokens. A removal made
+  in Settings → Site address or with `npm run site` is recorded, so adding the address back does not
+  revive its sessions, a sign-in in the five seconds after a retirement answers `503 rest_address_retiring`
+  with `Retry-After` instead of handing out a cookie that is already dead (judged on the config file as it
+  is at that moment, so a removal and re-add made with `npm run site` within the two-second config cache
+  counts too; the installer's auto-login is skipped instead), and a session that is already dead cannot
+  sign its user out elsewhere. Behind a gateway, `ipLiterals: own` means the gateway's own
+  addresses, which it reports in its answer to every push: the backend's gate, its session check and the
+  sessions a narrowing ends use them (`npm run site` too, from `backend/data/gateway-own-addresses.json`;
+  its `list` and `check` say which list they judged with), so in separate mode a session started on the
+  backend node's IP no longer outlives a narrowing that the public edge applies. The report is kept only
+  as unicast IP literals, at most 64, and dropped when a gateway too old to send one answers and when a
+  monolith boots; Settings → Site address then calls the `own` choice "Only the gateway's addresses". The
+  backend's calls to the gateway's control plane (certificate uploads, the TLS switch, the address and
+  policy pushes) now also check that the peer presents the gateway's certificate CN (`gateway-internal`
+  or `gateway`), not just any certificate the cluster CA issued for `localhost`. A session
+  from an address other than the main one also cannot create or change another user's account, import
+  accounts, or change roles, the two-factor policy or who may register (`403 rest_account_bound_session`);
+  a site import never writes the two-factor policy. No session is started on a request without a `Host`,
+  and a host-less cookie write fails the CSRF check whatever its `Origin` says. Reset and verification links, feeds, the sitemap and plugin `site.url()` never
   come from the request any more; `PUT /settings` refuses `siteurl` / `home`; `POST /setup/migrate`
   answers `410`. After an SSL toggle in split mode the main address follows the same host from http to
   https at once (audited) instead of at the next restart. Guide: `documentation/site-address.md`.
 
   **Upgrading.** Nothing to migrate by hand: at the first boot the config and the database are
   reconciled, and if they name different main addresses nothing is written and administrators get a
-  banner to choose. No name is accepted automatically, so declare any other name browsers use (a `www`
+  banner to choose either one (or `npm run site -- canonical <url>`, the config's own address included).
+  A fresh install records itself as revision 1 (`lastChange.kind: "install"`). No name is accepted automatically, so declare any other name browsers use (a `www`
   twin, a LAN name) or it gets 421. A reverse proxy must forward the browser's `Host`
   (`proxy_set_header Host $host`). A frontend replica that reaches a backend directly
   (`WORDJS_BACKEND_URL`, or SSR via `internalApiUrl` to another machine) needs `WORDJS_TRUST_PROXY` on that
@@ -135,6 +178,21 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   default `WordJS`, a non-default API rewrite — or on a plugin module git does not track in the generated
   registries; a check that cannot look (a missing registry, a page whose HTML is not where it reads it)
   fails instead of passing.
+- **`/api/revalidate/<anything>` looped back into the public port.** Every dispatcher (gateway, monolith,
+  frontend replica) handed everything below the Next-owned `/api/revalidate` to Next, which has no
+  handler there and sent it through its own `/api/:path*` rewrite back to the gateway's port, which handed
+  it to Next again: one anonymous request became an endless chain of loopback requests. Only the route
+  itself (and its trailing-slash form) is Next's now; anything below it goes to the backend.
+
+- **Monolith: one WebSocket request could start an endless loop of loopback connections.** Next.js attached
+  its own `upgrade` listener to the public port on the first page request, so every upgrade was handled a
+  second time, and its `/api` rewrite (baked into the build as `http://localhost:<port>`) proxied an upgrade
+  to `/api/…` back into the same port, forever: about 500 connections a second and journald dropping log
+  lines, from one anonymous `new WebSocket()`. The monolith's own handler is now the only `upgrade`
+  listener (Next's goes to an emitter handed to it as `httpServer`, anything else that attaches is moved
+  behind the handler, and the server delivers every upgrade to that handler alone); the only WebSocket
+  served is Next's development HMR channel.
+
 - **Conference Manager 2.2.0 — the plugin can be activated again, and 23 defects from a functional audit are
   closed.** Activation had failed since the 2026-08-15 hardening (a `DEFAULT '{}'` column definition was
   refused by the column-definition allowlist — fixed in core, see above). In the plugin: the portal's bulk

@@ -73,7 +73,11 @@ a node without the file.
 ## Per-node configuration
 
 Each node shares the same `wordjs-config.json` EXCEPT `advertiseHost`, which must be the address the
-gateway uses to reach that specific node:
+gateway uses to reach that specific node. That includes the site's addresses (`siteUrl`, `siteAliases`,
+`hostPolicy`, `siteAddress`): a change made in Settings → Site address or with `npm run site` is written
+to the config of the node that made it, so share the file or repeat the change on every node. The gateway
+keeps the set the last backend sent with a change or at its boot, and a backend whose set differs logs it
+(see [site-address.md](site-address.md#split-and-separate-mode-the-gateway)):
 
 ```jsonc
 {
@@ -278,8 +282,11 @@ listener (`acme.http01Port`, e.g. 80) reachable so the challenge can be validate
 
 Point your L4/L7 load balancer at the gateway. An L7 balancer must forward the client's `Host`
 unchanged: the gateway answers only the site's addresses, so a `Host` rewritten to the gateway's own
-name (or to its IP, with `X-Forwarded-For` added) gets `421` (see [site-address.md](site-address.md#reverse-proxies-tls-termination-and-frontend-replicas)).
-The probes below are answered on any `Host`. Health probes (added for orchestration):
+name (or to its IP, with `X-Forwarded-For` added) gets `421` (see [site-address.md](site-address.md#reverse-proxies-tls-termination-and-frontend-replicas)),
+unless the balancer is in `trustProxy` / `WORDJS_TRUST_PROXY` on the backend (pushed to the gateway) and
+dials the gateway by IP: then its `X-Forwarded-Host` names the address, exactly as at the backend.
+The probes below are answered on any `Host`, at exactly these paths (a query string is allowed).
+Health probes (added for orchestration):
 
 - `GET /healthz` — liveness (always 200 while the process is up; answered by the gateway directly).
 - `GET /readyz` — readiness (200 only when installed, booted and the DB is reachable; 503 otherwise) —

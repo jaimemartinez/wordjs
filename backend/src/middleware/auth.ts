@@ -34,10 +34,17 @@ const hostPolicy: typeof import('../core/host-policy') = require('../core/host-p
  * Both readers go through the live module objects on every call: configManager.getConfig returns the
  * same object until the file's mtime changes (that identity IS the memo key), and config.nodeEnv is
  * read live because the installer and the tests change it after this module is first required.
+ *
+ * `own` (hostPolicy.ipLiterals) means the addresses of the server browsers connect to: behind a gateway,
+ * the ones the gateway reported (core/site-address publicOwnAddresses), so the gate, the session check
+ * and the edge agree on which IPs are answered even when the gateway is another machine (lab finding
+ * R2-NEW-1). Read on every call, so a new report applies without rebuilding the policy; required lazily
+ * for the same reason as sessionAddressStillAccepted below.
  */
 const siteHostPolicy: PolicyProvider = hostPolicy.createPolicyProvider({
     getConfig: () => require('../core/configManager').getConfig(),
     nodeEnv: () => config.nodeEnv,
+    ownAddresses: () => require('../core/site-address').publicOwnAddresses(),
 });
 
 /**
@@ -121,6 +128,42 @@ function sessionBoundToSecondaryAddress(req: Request): boolean {
 }
 
 /**
+ * WHAT A BOUND SESSION MAY NOT DO TO ACCOUNTS (REDTEAM R2; lab findings M-23 and N3).
+ *
+ * A session started at a secondary address ends when that address is retired, so nothing it does may
+ * outlive the address in the form of an account or a credential. Besides minting an API token
+ * (POST /auth/tokens, rest_token_bound_session) it may not:
+ *   · create an account, or change, delete or re-credential SOMEONE ELSE'S: every write in routes/users.ts
+ *     except on the caller's own account, and the imports that create accounts (POST /import with
+ *     importUsers, POST /import/wordpress);
+ *   · change what accounts may do or who gets one: role definitions (POST/DELETE /roles), the two-factor
+ *     policy (PUT /auth/mfa/policy) and the registration settings (core/registration-settings) in
+ *     PUT /settings and in the site import.
+ * Each would turn a revocable session into access the removal cannot reach: a fresh administrator, a
+ * reset password, a stripped second factor, a role holding every capability, open registration into an
+ * administrator role. Those need a session started at the main address or on loopback. It is not a
+ * privilege boundary: everything else an administrator can do stays available on any accepted address.
+ *
+ * Returns true when it refused and already answered (the caller must return), false otherwise — the
+ * "true means handled" convention of issueSessionCookie. `params` names the fields that were refused.
+ */
+function refuseBoundSession(req: Request, res: Response, params?: string[]): boolean {
+    if (!sessionBoundToSecondaryAddress(req)) return false;
+    res.status(403).json({
+        code: 'rest_account_bound_session',
+        message: 'Accounts, roles, the two-factor policy and the registration settings can only be changed from a session started at the main address.',
+        data: { status: 403, ...(params && params.length ? { params } : {}) }
+    });
+    return true;
+}
+
+/** refuseBoundSession as route middleware, for a route a bound session may not use at all. */
+function unboundSessionOnly(req: Request, res: Response, next: NextFunction) {
+    if (refuseBoundSession(req, res)) return;
+    next();
+}
+
+/**
  * Is the address this session was minted on still one the site answers? Judged from the CLAIM against
  * the current policy, never from the request's own Host, so the SSR loopback hop and the gateway (which
  * reach the API on other addresses with the browser's cookie) are unaffected. A session without `mh`
@@ -132,10 +175,19 @@ function sessionBoundToSecondaryAddress(req: Request): boolean {
  * While the config has no valid main address the host gate answers every address (and raises the
  * missing-canonical error); the sessions follow it instead of all being revoked at once — a broken or
  * half-edited siteUrl must not sign out every main-address session on the site.
+ *
+ * Retirement is not undone by accepting the address again (lab finding S6.6): a change that stopped
+ * answering it, through the admin screen or the CLI, recorded when (core/site-address sessionRetired),
+ * and every session issued until then stays refused — the cookies whoever held the name in between may
+ * have collected included. That record is checked first, so it holds even while the main address is
+ * broken. Required lazily, as the provider above requires configManager: core/site-address loads
+ * configManager, whose file path is fixed by the cwd at its first load, and loading this module must
+ * not be what fixes it.
  */
 function sessionAddressStillAccepted(decoded: any): boolean {
     if (!decoded || decoded.mh === undefined) return true;
     if (typeof decoded.mh !== 'string') return false;
+    if (require('../core/site-address').sessionRetired(decoded.mh, decoded.iat)) return false;
     const policy = siteHostPolicy.get();
     if (!policy.canonical) return true;
     return hostPolicy.classify(hostPolicy.parseHost(decoded.mh), policy).cls !== 'unknown';
@@ -356,7 +408,7 @@ async function verifyAndAttachUser(token: string, req: Request, res: Response, n
         if (!sessionAddressStillAccepted(decoded)) {
             return res.status(401).json({
                 code: 'rest_token_revoked',
-                message: 'This session was started at an address this site no longer answers. Please log in again.',
+                message: 'This session was started at an address this site has stopped answering. Please log in again.',
                 data: { status: 401 }
             });
         }
@@ -794,6 +846,9 @@ function issueSessionCookie(req: Request, res: Response, token: string, options:
     // The one door is also where the address rule lives, so login, register, refresh, MFA completion
     // and the installer's auto-login all obey it without each remembering to ask.
     if (refuseInsecureSignIn(req, res)) return true;
+    // And it never hands out a cookie the session check already refuses: the token's own claims, judged
+    // the way every later request will judge them.
+    if (refuseRetiringSession(res, jwt.decode(token))) return true;
     res.cookie(SESSION_COOKIE, token, options);
     res.cookie(CSRF_COOKIE, newCsrfToken(), csrfCookieOptions(options));
     return false;
@@ -823,11 +878,18 @@ type SignInRefusal = 'transport' | 'address';
  *     a Secure cookie, a sniffer does not. The single relaxation is an alias DECLARED as http with an
  *     explicit `signIn: true`: the operator wrote down that sessions travel in clear on that address.
  *
- * A request the gate did not classify (no siteHost: gate not mounted, no Host, not installed, no valid
+ * A request that names NO address at all (HTTP/1.0 without Host, or a trusted hop relaying a client
+ * that sent none) is refused ('address'), on every site: there is nothing to bind the session to, so it
+ * would be the one session no address's removal ever ends. Browsers always send Host. This is decided
+ * here, where sessions are minted, and not only by the CSRF gate: a request with any
+ * `Authorization: Bearer` header keeps the Bearer caller's CSRF rules there, and sign-in reads the body.
+ *
+ * Any other request the gate did not classify (no siteHost: gate not mounted, not installed, no valid
  * siteUrl) keeps today's behaviour. Nothing here is authorisation: it only decides whether a cookie is
  * minted, never what an existing session may do.
  */
 function signInRefusal(req: Request): SignInRefusal | null {
+    if (hostPolicy.requestAuthority(req, siteHostPolicy.get()).absent) return 'address';
     const siteHost = siteHostOf(req);
     if (!siteHost) return null;
     const policy = siteHostPolicy.get();
@@ -870,6 +932,65 @@ function refuseInsecureSignIn(req: Request, res: Response): boolean {
         data: { status: 403, reason }
     });
     return true;
+}
+
+/**
+ * A SESSION THAT WOULD BE DEAD ON ARRIVAL (lab finding R2V-M-NF1). Retiring an address ends every session
+ * minted on it until a few seconds after the change (core/site-address RETIREMENT_GRACE_S: the other
+ * processes pick the change up within that window), and that record outlives the address coming back.
+ * So in those seconds after an alias is removed and added back, or the IP policy narrowed and widened
+ * again, a sign-in on that address passed every check, got 200 and a cookie — and the cookie's first
+ * request got 401 rest_token_revoked. Such a session is refused instead: 503 `rest_address_retiring` with
+ * Retry-After, the seconds until a session started there is accepted. `claims` are the session's `mh` and
+ * `iat` — the token about to be issued (issueSessionCookie), or the ones a sign-in on this request would
+ * carry (refuseRetiringSignIn). Returns true when it refused and already answered.
+ *
+ * The record is read from the config file itself, not from the 2-second cache every other request uses
+ * (core/site-address sessionRetiredUntil `fresh`): `npm run site` can remove an address and add it back
+ * inside one cache window, and a session minted then was refused as soon as the cache caught up
+ * (review R3S-2).
+ */
+function retiringUntil(claims: { mh?: unknown; iat?: unknown } | null | undefined): number | null {
+    if (!claims || typeof claims.mh !== 'string') return null;
+    return require('../core/site-address').sessionRetiredUntil(claims.mh, claims.iat, { fresh: true });
+}
+
+function refuseRetiringSession(res: Response, claims: { mh?: unknown; iat?: unknown } | null | undefined): boolean {
+    const until = retiringUntil(claims);
+    if (until === null) return false;
+    const retryAfter = Math.max(1, until - Math.floor(Date.now() / 1000));
+    res.set('Retry-After', String(retryAfter));
+    res.status(503).json({
+        code: 'rest_address_retiring',
+        message: `This address stopped being answered a moment ago, and the sessions started on it are ending. Try signing in again in ${retryAfter} second${retryAfter === 1 ? '' : 's'}.`,
+        data: { status: 503, retryAfter }
+    });
+    return true;
+}
+
+/**
+ * refuseRetiringSession for the session a sign-in on THIS request would start, before the credentials are
+ * checked (POST /auth/login, /auth/register, /auth/mfa): nothing is counted or spent — a failed-login
+ * count, a one-time backup code — for a session that could not be issued anyway. issueSessionCookie
+ * checks the token itself again.
+ */
+function refuseRetiringSignIn(req: Request, res: Response): boolean {
+    return refuseRetiringSession(res, signInClaims(req));
+}
+
+/** The `mh` and `iat` a session started on this request now would carry, or null (loopback: no binding). */
+function signInClaims(req: Request): { mh: string; iat: number } | null {
+    const claims = sessionAddressClaims(req);
+    return claims ? { mh: claims.mh, iat: Math.floor(Date.now() / 1000) } : null;
+}
+
+/**
+ * Would a session started on this request now be refused as retiring? For a caller that must not be
+ * answered by issueSessionCookie's 503 — the installer's auto-login, which still has the install to finish
+ * after it (routes/setup.ts) — and so asks first, as it asks signInRefusal.
+ */
+function signInRetiring(req: Request): boolean {
+    return retiringUntil(signInClaims(req)) !== null;
 }
 
 /**
@@ -1136,6 +1257,24 @@ function sameOriginAllowList(host: string | undefined): string[] {
 }
 
 /**
+ * NO HOST, NO SAME ORIGIN (lab finding N2, separate mode) — the other half of the rule above.
+ *
+ * Contributing no entry was not enough: the CONFIGURED public origins stayed on the list, so an HTTP/1.0
+ * POST /auth/login with no Host but `Origin: https://<main address>` passed the check and reached the
+ * credential test, where the documented behaviour is "no Host at all: passed; writes still fail the CSRF
+ * check". Those origins vouch for requests sent TO those addresses, and a request without a host names
+ * none. So a host-less request that is not a Bearer caller is refused by both same-origin gates
+ * (csrfProtection, and sameOrigin() in routes/collab.ts), whatever its Origin or Referer say.
+ *
+ * Browsers always send Host, so no browser is affected. A Bearer caller (an API token or a session JWT in
+ * the header) carries no ambient credential and keeps the rules it had; a health probe is a GET and never
+ * reaches the write gate. `host` is trustedHost(req): undefined for an absent or malformed host.
+ */
+function hostlessAmbientRequest(req: Request, host: string | undefined): boolean {
+    return host === undefined && !hasBearerCredential(req);
+}
+
+/**
  * CSRF Protection for state-changing requests — TWO independent checks, AND-ed.
  *
  *  1. ORIGIN PINNING (this function): Origin/Referer must be an exact match for one of our own
@@ -1186,6 +1325,17 @@ function csrfProtection(req: Request, res: Response, next: NextFunction) {
     const origin = req.get('Origin');
     const referer = req.get('Referer');
     const host = trustedHost(req);
+
+    // No host of its own (an HTTP/1.0 request without Host): fails whatever its Origin says — see
+    // hostlessAmbientRequest. A Bearer caller keeps the rules below, unchanged.
+    if (hostlessAmbientRequest(req, host)) {
+        console.warn(`[CSRF] Blocked host-less request to ${req.path}`);
+        return res.status(403).json({
+            code: 'rest_csrf_invalid',
+            message: 'Cross-site request blocked.',
+            data: { status: 403 }
+        });
+    }
 
     // If no Origin header, check Referer (some browsers)
     // Annotated because the catch below assigns `null` (an unparseable Referer) while `req.get()` yields
@@ -1260,6 +1410,7 @@ module.exports = {
     trustedHost,
     originMatchesHost,
     sameOriginAllowList,
+    hostlessAmbientRequest,
     mfaComplianceGate,
     // The site's address policy (one provider per process; index.ts mounts the host gate with it and
     // publishes it as app.hostPolicy) and what the gate attached to a request.
@@ -1274,11 +1425,17 @@ module.exports = {
     // password is evaluated; GET /auth/me tells the login screen not to render the form).
     signInRefusal,
     refuseInsecureSignIn,
+    // ...and no session in the seconds after its address was retired (rest_address_retiring).
+    refuseRetiringSignIn,
+    signInRetiring,
     // Sessions bound to the address they were minted on (REDTEAM R2): the check every verifier of a
     // session JWT outside this file must also apply (routes/collab.ts re-verifies its live streams),
     // and the question POST /auth/tokens asks before minting an unbound credential from a session.
     sessionAddressStillAccepted,
     sessionBoundToSecondaryAddress,
+    // ...and what such a session may not do to accounts, roles and registration (rest_account_bound_session).
+    refuseBoundSession,
+    unboundSessionOnly,
     // Double-submit CSRF token — the cookie's name/options and the header the client must echo, so
     // routes/auth.ts (logout) and the tests consume the same definitions the gate enforces.
     CSRF_COOKIE,

@@ -16,6 +16,8 @@
  *     on an API path, the same JSON 421 the backend gate answers;
  *   - a `mode: "redirect"` alias gets a 308 to the main address for GET/HEAD outside the API;
  *   - a repeated or malformed Host gets 400, and a WebSocket upgrade to an unknown address is refused;
+ *   - a path with a dot segment or a backslash gets 400 on every address (Next.js would resolve it into
+ *     another path than the one this listener routed);
  *   - the port-80 ACME listener redirects to an address the site answers, never to a raw Host.
  * Probes and ACME challenges stay exempt: they are addressed by pod/container IP or by a name whose
  * certificate does not exist yet.
@@ -23,6 +25,8 @@
  * WHAT IT DOES TO FORWARDED HEADERS (gateway, phase 1). The gateway tells the upstream how the client
  * connected (X-Forwarded-Host/-Proto), and the backend trusts those headers from the gateway. So the
  * client's own values must never survive the hop: they are pinned here, for HTTP and for upgrades.
+ * X-Forwarded-Host is pinned to the address the edge judged, which is the client's own X-Forwarded-Host
+ * only when host-policy trusts that client as a hop (the rule the backend applies itself).
  *
  * WHERE THE GATEWAY'S POLICY COMES FROM. The gateway has no wordjs-config.json of its own in separate
  * mode, so the backend PUSHES the inputs of buildPolicy to the internal mTLS listener (POST /host-policy,
@@ -45,18 +49,48 @@ function listenerScheme(req) {
     return sock && sock.encrypted ? 'https' : 'http';
 }
 
+// What the edge judged for this request (see judgedAddress), kept on the request object itself: in-process
+// and per request, so no header a client sends can stand in for it.
+const JUDGED = Symbol('wordjs.hostEdge.judged');
+
+/**
+ * The address the edge judged for this request — `{ raw, source }`, requestAuthority's value as
+ * received ('' when absent) and the header it came from — or null when no edge has looked at it.
+ */
+function judgedAddress(req) {
+    return (req && req[JUDGED]) || null;
+}
+
+/** X-Forwarded-Host for the upstream: the address the edge judged, else (no edge) the Host received. */
+function forwardedHost(req) {
+    const judged = judgedAddress(req);
+    return judged ? judged.raw : req.headers.host || '';
+}
+
 /**
  * Before proxy.web: state how the client connected, never what the client CLAIMED about it.
  *
- * X-Forwarded-Host becomes the Host this listener received (http-proxy's xfwd would otherwise keep a
- * client-supplied value). X-Forwarded-Proto and -Port are DELETED so http-proxy's xfwd writes exactly
- * the listener's scheme and port: it APPENDS to an existing value, so a client sending
- * `X-Forwarded-Proto: https` over plain http used to reach the backend as `https,http` — and the first
- * element is the one a trusted hop is believed on, which is how a cleartext request posed as TLS (the
- * Secure-cookie and sign-in rules read it).
+ * X-Forwarded-Host becomes the address the edge judged: the Host this listener received, or the
+ * X-Forwarded-Host of a hop host-policy trusts (requestAuthority) — never an untrusted client's own
+ * value, which http-proxy's xfwd would otherwise keep. The backend then judges the same address the edge
+ * did — an empty one too. xfwd writes `X-Forwarded-Host || Host`, so for a request the edge judged
+ * host-less the Host header is removed here: a local hop (a loopback peer with a loopback Host) that
+ * relays an EMPTY X-Forwarded-Host names no address to host-policy, and with its Host left in place it
+ * reached the backend as `X-Forwarded-Host: localhost:3000` — loopback, where the edge had judged no
+ * address (review NEW-V1). Nothing reads the Host after this point: changeOrigin gives the upstream the
+ * target's own. (Restoring the header on http-proxy's 'proxyReq' event instead was not enough: the event
+ * is skipped for a request that carries Expect, and comes after the headers are frozen for a request that
+ * waited for a socket — review R3S-1.)
+ *
+ * X-Forwarded-Proto and -Port are DELETED so http-proxy's xfwd writes exactly the listener's scheme
+ * and port: it APPENDS to an existing value, so a client sending `X-Forwarded-Proto: https` over plain
+ * http used to reach the backend as `https,http` — and the first element is the one a trusted hop is
+ * believed on, which is how a cleartext request posed as TLS (the Secure-cookie and sign-in rules read it).
  */
 function pinForwardedHeaders(req) {
-    req.headers['x-forwarded-host'] = req.headers.host || '';
+    const value = forwardedHost(req);
+    req.headers['x-forwarded-host'] = value;
+    if (value === '') delete req.headers.host;
     delete req.headers['x-forwarded-server'];
     delete req.headers['x-forwarded-proto'];
     delete req.headers['x-forwarded-port'];
@@ -64,13 +98,14 @@ function pinForwardedHeaders(req) {
 
 /**
  * Before proxy.ws: the same pins for an upgrade. http-proxy's WebSocket pass never touches
- * X-Forwarded-Host at all, so without this a client's forged value reached the upstream verbatim. Its
+ * X-Forwarded-Host at all (so an empty judged value also reaches the upstream empty, Host or not), and
+ * without this a client's forged value reached the upstream verbatim. Its
  * proto is `ws`/`wss`, which no reader of X-Forwarded-Proto understands, so the listener's http scheme
  * is pinned first and http-proxy appends after it (`https,wss`): the first element — the one a trusted
  * hop is read by — is the real scheme.
  */
 function pinUpgradeHeaders(req) {
-    req.headers['x-forwarded-host'] = req.headers.host || '';
+    req.headers['x-forwarded-host'] = forwardedHost(req);
     delete req.headers['x-forwarded-server'];
     delete req.headers['x-forwarded-port'];
     req.headers['x-forwarded-proto'] = listenerScheme(req);
@@ -82,17 +117,23 @@ function pinUpgradeHeaders(req) {
 // or container IP (and `ipLiterals` may be `none`), and an ACME HTTP-01 challenge is fetched for a name
 // that may not be declared until its certificate exists. Everything else — pages, static trees,
 // uploads — belongs to the site and is answered only on the site's addresses.
-const EDGE_EXEMPT_PATHS = Object.freeze(['/.well-known/acme-challenge', '/health', '/healthz', '/readyz', '/metrics']);
+//
+// EXACT paths, never prefixes. The exemption used to be a prefix test on the raw request target, and the
+// listener behind the edge resolves dot segments the edge never looked at: `/healthz/../api/v1/settings`
+// on a foreign name was exempt here, and Next.js normalised it and fetched the API through its own /api
+// rewrite as `Host: localhost`, which every address check accepts. A probe is one fixed path (a query
+// string is allowed); a challenge is `/.well-known/acme-challenge/<token>` with a single token of the
+// base64url alphabet ACME tokens are made of (RFC 8555 §8.3) — no dot, '%', slash or backslash, so no
+// spelling of it can mean anything else further on. ('/health' is the backend's database check in the
+// monolith and the frontend's liveness route behind the gateway; both answer JSON, never a page.)
+const EDGE_PROBE_PATHS = Object.freeze(['/health', '/healthz', '/readyz', '/metrics']);
+const ACME_CHALLENGE_PATH = /^\/\.well-known\/acme-challenge\/[A-Za-z0-9_-]+$/;
 
 // The headers only a forwarding proxy adds (REDTEAM R4), WITHOUT X-Forwarded-Host. See createHostEdge.
 const FORWARDING_MARKERS = ['x-forwarded-for', 'x-real-ip', 'forwarded', 'via'];
 
 function requestPath(req) {
     return String((req && req.url) || '/').split('?')[0];
-}
-
-function matchesPrefix(p, prefixes) {
-    return prefixes.some((prefix) => p === prefix || p.startsWith(prefix + '/'));
 }
 
 function isApiPath(p) {
@@ -111,6 +152,23 @@ function countHostHeaders(req) {
 function hasForwardingMarkers(req) {
     const headers = (req && req.headers) || {};
     return FORWARDING_MARKERS.some((name) => headers[name] !== undefined);
+}
+
+/**
+ * The address this request was sent to, by the BACKEND's rule — host-policy requestAuthority: Host, or
+ * the X-Forwarded-Host of a trusted hop (the gateway's mTLS identity, a loopback hop that addressed a
+ * loopback name, an address-based trustProxy peer whose own Host is an IP, loopback or single-label
+ * name). The edge used to judge Host alone, so behind a trusted proxy the edge and the backend judged
+ * two different addresses. `pol` may be null (nothing pushed yet): then only the hops that need no
+ * configuration are trusted, as in the backend.
+ *
+ * `proxied` (R4) is host-policy's, except that a listener whose own SSR clients relay the public host in
+ * X-Forwarded-Host (the gateway: forwardedHostIsMarker false) does not count that header as a proxy.
+ */
+function edgeAuthority(req, pol, forwardedHostIsMarker) {
+    const authority = hp.requestAuthority(req, pol);
+    if (forwardedHostIsMarker === false) authority.proxied = authority.hop === null && hasForwardingMarkers(req);
+    return authority;
 }
 
 /**
@@ -150,11 +208,13 @@ function safeLocation(origin, rawUrl) {
  *                    it would refuse the site's own server-side rendering.
  *   logger, refused  where refusals are logged (throttled) and counted; refused defaults to
  *                    host-policy's per-process tracker. The monolith passes the BACKEND's tracker so
- *                    Settings → Site address lists page refusals too.
+ *                    Settings → Site address lists page refusals too; a gateway worker passes
+ *                    createReportingRefusals, whose lists reach the backend through the primary.
  *   now()            clock for alias expiry.
  *
  * Returns { decide(req), handle(req, res), handleUpgrade(req, socket) }. `handle` and `handleUpgrade`
- * return true when they answered the request (the caller must stop) and false to let it through.
+ * return true when they answered the request (the caller must stop) and false to let it through. Both
+ * record the address they judged on the request, for the forwarded-header pins (judgedAddress).
  */
 function createHostEdge(opts) {
     const o = opts || {};
@@ -162,12 +222,11 @@ function createHostEdge(opts) {
     const logger = o.logger || console;
     const refused = o.refused || hp.refusedHosts;
     const now = typeof o.now === 'function' ? o.now : Date.now;
-    const exempt = o.exemptPaths || EDGE_EXEMPT_PATHS;
     const forwardedHostIsMarker = o.forwardedHostIsMarker !== false;
     let policyErrorReported = false;
 
-    function enforcingPolicy() {
-        if (typeof o.isInstalled === 'function' && !o.isInstalled()) return null;
+    /** The policy (its trust settings apply even while nothing is enforced), or null. Never throws. */
+    function readPolicy() {
         let pol = null;
         try {
             pol = o.getPolicy();
@@ -180,37 +239,59 @@ function createHostEdge(opts) {
             return null;
         }
         policyErrorReported = false;
-        return pol && pol.canonical ? pol : null;
+        return pol || null;
     }
 
-    function isProxied(req, pol) {
-        if (hp.trustedHop(req, pol) !== null) return false;
-        return forwardedHostIsMarker ? hp.hasProxyMarkers(req) : hasForwardingMarkers(req);
+    function isEnforcing(pol) {
+        if (!pol || !pol.canonical) return false;
+        return typeof o.isInstalled !== 'function' || Boolean(o.isInstalled());
+    }
+
+    function isExempt(p) {
+        return EDGE_PROBE_PATHS.includes(p) || ACME_CHALLENGE_PATH.test(p);
     }
 
     /**
      * { action: 'pass', reason, cls? } | { action: 'invalid' } | { action: 'redirect', location }
-     * | { action: 'refuse', hostname, reason, hint, canonicalOrigin }
+     * | { action: 'refuse', hostname, reason, hint, canonicalOrigin } | { action: 'bad-path' }
      *
-     * The edge judges `Host`: the very value it forwards as X-Forwarded-Host. Judging anything else
-     * (a relayed X-Forwarded-Host) would check one value and send another upstream.
+     * The edge judges the address the backend would (edgeAuthority), and records it on the request so
+     * the pins forward that very value as X-Forwarded-Host: judging one value and sending another
+     * upstream would let the two disagree. Probes and challenges are exempt, but never on an upgrade:
+     * nothing behind them speaks WebSocket.
+     *
+     * Nothing with a dot segment or a backslash in its path is let through (hp.hasDotSegments), on any
+     * address and whether or not anything is enforced: the listeners route on the raw path, and Next.js
+     * resolves it first, so `/x/../api/v1/settings` on the main address reached the API through Next's
+     * own /api rewrite — back into this listener from loopback, with Next's loopback Host and the
+     * client's X-Forwarded-For, the exact shape of a proxy that rewrites Host (the proxy-collapse notice),
+     * and with a Host even when the client sent none. Browsers resolve both before sending. An unknown
+     * address is still answered 421 first, so the refusal is recorded like any other; a redirect alias
+     * still gets its 308, whose Location the WHATWG parser has already resolved (safeLocation).
      */
-    function decide(req) {
-        const p = requestPath(req);
-        if (matchesPrefix(p, exempt)) return { action: 'pass', reason: 'exempt' };
-        const pol = enforcingPolicy();
-        if (!pol) return { action: 'pass', reason: 'not-enforcing' };
-        if (countHostHeaders(req) > 1) return { action: 'invalid' };
-        const raw = (req.headers || {}).host;
-        // HTTP/1.0 without Host: nothing to judge. The backend's CSRF and CORS already fail closed on it.
-        if (raw === undefined || raw === '') return { action: 'pass', reason: 'no-host' };
-        const parsed = hp.parseHost(raw);
-        if (!parsed) return { action: 'invalid' };
+    function decide(req, upgrade) {
+        const verdict = judge(req, upgrade);
+        if (verdict.action === 'pass' && hp.hasDotSegments(requestPath(req))) return { action: 'bad-path' };
+        return verdict;
+    }
 
-        const verdict = hp.classify(parsed, pol, { proxied: isProxied(req, pol), now: now() });
+    function judge(req, upgrade) {
+        const pol = readPolicy();
+        const authority = edgeAuthority(req, pol, forwardedHostIsMarker);
+        req[JUDGED] = { raw: authority.absent ? '' : authority.raw, source: authority.source };
+        if (!upgrade && isExempt(requestPath(req))) return { action: 'pass', reason: 'exempt' };
+        if (!isEnforcing(pol)) return { action: 'pass', reason: 'not-enforcing' };
+        if (countHostHeaders(req) > 1) return { action: 'invalid' };
+        // HTTP/1.0 without Host: nothing to judge. The backend's CSRF and CORS already fail closed on it.
+        if (authority.absent) return { action: 'pass', reason: 'no-host' };
+        const parsed = authority.parsed;
+        if (!parsed) return { action: 'invalid' };
+        const p = requestPath(req);
+
+        const verdict = hp.classify(parsed, pol, { proxied: authority.proxied, now: now() });
         if (verdict.cls === 'unknown') {
             const hint = hp.refusalHint(parsed, pol, verdict.reason);
-            if (refused.record(parsed.hostname, hint)) {
+            if (refused.record(parsed.hostname, hint, 'edge')) {
                 // The hostname passed the parser grammar ([a-z0-9._-], brackets, colons): safe to log.
                 logger.warn(`[host-edge] 421 for ${hp.serialize(parsed)} (${verdict.reason})` + (hint ? ': ' + hp.REFUSAL_HINTS[hint] : '; add it in Settings > Site address if it should work.'));
             }
@@ -229,15 +310,18 @@ function createHostEdge(opts) {
             const v = decide(req);
             if (v.action === 'pass') return false;
             if (v.action === 'invalid') sendEdgeInvalid(req, res);
+            else if (v.action === 'bad-path') sendBadPath(res);
             else if (v.action === 'refuse') sendEdgeRefusal(req, res, v.canonicalOrigin);
             else sendRedirect(res, v.location);
             return true;
         },
         /** A WebSocket cannot follow a redirect, so a redirect alias is served on upgrades. */
         handleUpgrade(req, socket) {
-            const v = decide(req);
-            if (v.action !== 'invalid' && v.action !== 'refuse') return false;
-            rejectUpgrade(socket, v.action === 'refuse' ? 421 : 400);
+            const v = decide(req, true);
+            if (v.action === 'refuse') rejectUpgrade(socket, 421);
+            else if (v.action === 'invalid') rejectUpgrade(socket, 400);
+            else if (v.action === 'bad-path') rejectUpgrade(socket, 400, BAD_PATH_BODY);
+            else return false;
             return true;
         },
     };
@@ -303,6 +387,17 @@ function sendEdgeInvalid(req, res) {
     }, 'Bad Request: the Host header is malformed or repeated.\n');
 }
 
+const BAD_PATH_BODY = JSON.stringify({ code: 'rest_invalid_path', error: 'invalid_path', message: 'The request path has a dot segment or a backslash.', data: { status: 400 } });
+
+/** 400 for a path with dot segments or backslashes (see decide), in the backend's JSON shape on any path. */
+function sendBadPath(res) {
+    writeBody(res, 400, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+    }, BAD_PATH_BODY);
+}
+
 /**
  * 308 keeps the method and body semantics and is what search engines read as "this name moved". The
  * cache lifetime is short on purpose: a permanent redirect without one is cached by browsers
@@ -318,10 +413,10 @@ function sendRedirect(res, location) {
 }
 
 /** Answer an upgrade on the raw socket (there is no ServerResponse) and close it. */
-function rejectUpgrade(socket, status) {
-    const body = status === 421
+function rejectUpgrade(socket, status, bodyOverride) {
+    const body = bodyOverride || (status === 421
         ? JSON.stringify({ code: 'rest_host_not_allowed', error: 'host_not_allowed', message: 'This address is not configured for this site.', data: { status: 421 } })
-        : JSON.stringify({ code: 'rest_invalid_host', error: 'invalid_host', message: 'The Host header is malformed or repeated.', data: { status: 400 } });
+        : JSON.stringify({ code: 'rest_invalid_host', error: 'invalid_host', message: 'The Host header is malformed or repeated.', data: { status: 400 } }));
     const reason = status === 421 ? 'Misdirected Request' : 'Bad Request';
     try {
         socket.end(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\nContent-Type: application/json; charset=utf-8\r\n`
@@ -355,16 +450,17 @@ function acmeRedirectLocation(req, opts) {
         }
     }
     if (pol && !pol.canonical) pol = null;
-    const parsed = countHostHeaders(req) > 1 ? null : hp.parseHost((req.headers || {}).host);
+    // The same address the edge would judge (edgeAuthority), so this listener cannot name a host the
+    // site's own edge would have refused.
+    const authority = edgeAuthority(req, pol, o.forwardedHostIsMarker);
+    const parsed = countHostHeaders(req) > 1 ? null : authority.parsed;
 
     let hostname = null;
     if (pol) {
         hostname = pol.canonical.hostname;
         if (parsed) {
-            const proxied = hp.trustedHop(req, pol) === null
-                && (o.forwardedHostIsMarker === false ? hasForwardingMarkers(req) : hp.hasProxyMarkers(req));
             const now = typeof o.now === 'function' ? o.now() : Date.now();
-            const v = hp.classify(parsed, pol, { proxied, now });
+            const v = hp.classify(parsed, pol, { proxied: authority.proxied, now });
             const redirectAlias = v.cls === 'alias' && v.entry && v.entry.mode === 'redirect';
             if (v.cls !== 'unknown' && !redirectAlias) hostname = parsed.hostname;
         }
@@ -529,7 +625,10 @@ function writePolicyFile(file, value) {
  * changed — or the file is younger than the file system's timestamp granularity could hide — is it
  * read again. A file that cannot be read or parsed keeps the LAST GOOD policy (REDTEAM R10: a policy
  * that silently dropped to "nothing enforced" would reopen every address while an operator is merely
- * mid-edit). A file that disappears means nothing is enforced, exactly like before the first push.
+ * mid-edit). A file that disappears means nothing is enforced, exactly like before the first push — and
+ * so does an unreadable file in a process that has read no good one yet (a worker started on a corrupt
+ * file has nothing to keep; its log line says so, and the backend's next periodic push re-arms it). A
+ * worker that held a policy logs the deletion once (review DOC-1: it used to stop enforcing silently).
  */
 function createPushedPolicySource(opts) {
     const o = opts || {};
@@ -542,11 +641,24 @@ function createPushedPolicySource(opts) {
     let text = null;
     let lastCheck = -Infinity;
     let badReported = false;
+    // Whether `policy` comes from a file this process read: false at start and after the file was deleted.
+    let held = false;
 
+    // A process that holds no policy keeps nothing: it says so, rather than "the last good policy" (lab
+    // finding R2V-NV1: a gateway restarted on a corrupt file claimed to keep one). It does not close the edge
+    // either: with no policy it cannot tell the site's own addresses from any other, so refusing would turn
+    // a damaged file into a site-wide outage — the install wizard included — until the backend re-sends.
     function reportBad(why) {
         if (badReported) return;
         badReported = true;
-        logger.error(`[host-edge] ${path.basename(o.file)} is unreadable (${why}); keeping the last good host policy.`);
+        const name = path.basename(o.file);
+        if (held) {
+            logger.error(`[host-edge] ${name} is unreadable (${why}); keeping the last good host policy.`);
+        } else {
+            logger.error(`[host-edge] ${name} is unreadable (${why}), and this process holds no host policy (none was read since it started, or the file was deleted): `
+                + 'the edge enforces nothing (pages and static files are answered on every address; the backend\'s own gate still guards the API) '
+                + 'until the backend sends the site\'s addresses again, which it does every half minute once it reaches the gateway.');
+        }
     }
 
     function refresh() {
@@ -555,9 +667,17 @@ function createPushedPolicySource(opts) {
             st = fs.statSync(o.file);
         } catch (e) {
             if (e && e.code === 'ENOENT') {
+                if (held) {
+                    logger.error(`[host-edge] ${path.basename(o.file)} was deleted: this process now holds no host policy, and the edge enforces nothing `
+                        + '(pages and static files are answered on every address; the backend\'s own gate still guards the API) '
+                        + 'until the backend sends the site\'s addresses again, which it does every half minute once it reaches the gateway.');
+                }
                 policy = null;
                 signature = null;
                 text = null;
+                held = false;
+                // A file that comes back unreadable is a new incident, worth its own (accurate) line.
+                badReported = false;
             }
             return;
         }
@@ -587,6 +707,7 @@ function createPushedPolicySource(opts) {
         policy = policyFromPush(checked.value, o.ownAddresses);
         signature = next;
         text = raw;
+        held = true;
         badReported = false;
     }
 
@@ -602,17 +723,45 @@ function createPushedPolicySource(opts) {
     };
 }
 
+/** The validated push the file holds now, or null (no file, or one that does not parse or validate). */
+function storedPolicyValue(file) {
+    let doc;
+    try {
+        doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch {
+        return null;
+    }
+    const checked = sanitizePolicyPush(doc);
+    return checked.ok ? checked.value : null;
+}
+
 /**
  * POST /host-policy on the gateway's INTERNAL mTLS listener: the backend states which addresses the
  * site answers. CN=backend only — the same identity that may already reconfigure the gateway
  * (/config-update) — and validated by sanitizePolicyPush before anything is stored. Workers pick the
  * new file up by its modification time; nothing is restarted, so no request in flight is dropped.
  *
+ * The backend also re-sends its addresses every half minute (core/site-address startGatewaySync), so a
+ * gateway restarted without this file, or a new one, is armed again without waiting for the backend to
+ * restart. The same set again is therefore the usual push: it is answered without rewriting the file
+ * (every worker would re-read it) and without logging. A re-send carries `onlyIfMissing: true` and only
+ * ARMS: a valid stored policy that differs is kept ('kept'). Otherwise two backends whose files differ
+ * re-sent their own sets in turn, and an address was answered for half a minute and refused for the next
+ * (review PL-3); the set a backend sends with a change or at its boot replaces the stored one, as it
+ * always did. The answer carries what this gateway's edge refused (`refusals`, the workers' lists merged
+ * in the primary), which is how those refusals reach Settings → Site address — the backend never sees a
+ * request the edge refused. It also carries the IP addresses this gateway's edge treats as its own
+ * (`ownAddresses`, what `hostPolicy.ipLiterals: own` answers here): in separate mode the gateway is
+ * another machine than the backend, and the backend judges `own` — in its gate, its session check and
+ * the sessions a narrowing ends — with these, so it cannot accept an IP the public edge refuses (lab
+ * finding R2-NEW-1).
+ *
  * Body: { enforce?: boolean = true, config: { siteUrl, siteAliases, hostPolicy, trustProxy },
  *         env?: { WORDJS_ALLOWED_HOSTS, WORDJS_IP_HOSTS, WORDJS_DEV_ORIGINS, WORDJS_TRUST_PROXY },
- *         nodeEnv?: string }
- * Answers { success, enforce, canonical, warnings } — `canonical` is null when the pushed siteUrl is
- * missing or invalid, in which case the edge answers every address (and the warnings say why).
+ *         nodeEnv?: string, onlyIfMissing?: boolean }
+ * Answers { success, enforce, canonical, warnings, stored: 'written' | 'unchanged' | 'kept', refused,
+ * ownAddresses } — `canonical` is null when the pushed siteUrl is missing or invalid, in which case the
+ * edge answers every address (and the warnings say why).
  */
 function mountHostPolicyPush(app, opts) {
     const o = opts || {};
@@ -624,28 +773,125 @@ function mountHostPolicyPush(app, opts) {
         const checked = sanitizePolicyPush(req.body);
         if (!checked.ok) return res.status(400).json({ error: checked.error });
         const pol = policyFromPush(checked.value, o.ownAddresses);
-        try {
-            writePolicyFile(o.file, checked.value);
-        } catch (e) {
-            logger.error(`[Gateway] [Internal] could not store the host policy: ${e && e.message}`);
-            return res.status(500).json({ error: 'could not store the host policy' });
-        }
+        const stored = storedPolicyValue(o.file);
+        const unchanged = stored !== null && JSON.stringify(stored) === JSON.stringify(checked.value);
+        const kept = !unchanged && stored !== null && req.body.onlyIfMissing === true;
         const canonical = pol && pol.canonical ? pol.canonical.origin : null;
-        if (pol) for (const warning of pol.warnings) logger.warn(`[Gateway] [Internal] host policy: ${warning}`);
-        logger.info(checked.value.enforce
-            ? `[Gateway] [Internal] host policy received: main address ${canonical || '(none — every address answered)'}, ${pol.aliases.size} other address(es), IP literals ${pol.ipLiterals}`
-            : '[Gateway] [Internal] host policy received: not enforced at the edge');
-        return res.json({ success: true, enforce: checked.value.enforce, canonical, warnings: pol ? pol.warnings.slice() : [] });
+        if (!unchanged && !kept) {
+            try {
+                writePolicyFile(o.file, checked.value);
+            } catch (e) {
+                logger.error(`[Gateway] [Internal] could not store the host policy: ${e && e.message}`);
+                return res.status(500).json({ error: 'could not store the host policy' });
+            }
+            if (pol) for (const warning of pol.warnings) logger.warn(`[Gateway] [Internal] host policy: ${warning}`);
+            logger.info(checked.value.enforce
+                ? `[Gateway] [Internal] host policy received: main address ${canonical || '(none — every address answered)'}, ${pol.aliases.size} other address(es), IP literals ${pol.ipLiterals}`
+                : '[Gateway] [Internal] host policy received: not enforced at the edge');
+        }
+        let refused = [];
+        try {
+            refused = typeof o.refusals === 'function' ? hp.mergeRefusedHosts([o.refusals()], { max: MAX_REPORTED_REFUSALS }) : [];
+        } catch { /* the policy is stored; the list is informational */ }
+        // The same reader the workers' edges use (policyFromPush with o.ownAddresses: this machine's
+        // interfaces by default). Always sent: the backend reads an answer WITHOUT the list as a gateway
+        // too old to report one, and drops the last list it had (review R3S-5). If reading them fails, the
+        // list is empty — no IP answered under `own`, as createOwnAddresses reads a failed enumeration.
+        let ownAddresses = [];
+        try {
+            ownAddresses = [...(typeof o.ownAddresses === 'function' ? o.ownAddresses : hp.ownAddresses)()].sort().slice(0, MAX_REPORTED_OWN_ADDRESSES);
+        } catch { /* fail closed: [] */ }
+        return res.json({
+            success: true,
+            enforce: checked.value.enforce,
+            canonical,
+            warnings: pol ? pol.warnings.slice() : [],
+            stored: unchanged ? 'unchanged' : kept ? 'kept' : 'written',
+            refused,
+            ownAddresses,
+        });
     });
+}
+
+// ─── What the gateway's edge refused, for Settings → Site address ───────────────────────────────────
+
+/** The IPC message a gateway worker sends its primary with the hosts its edge refused. */
+const REFUSALS_MESSAGE = 'HOST_EDGE_REFUSALS';
+const MAX_REPORTED_REFUSALS = 32;
+/** Bound on the own addresses reported to the backend with them (the backend applies the same bound). */
+const MAX_REPORTED_OWN_ADDRESSES = 64;
+
+/**
+ * A gateway worker's refusal tracker (createHostEdge's `refused`) that also tells the primary what it
+ * refused. Recording and the log throttle are the tracker's own, so each worker logs a host at most once
+ * a minute by itself; the list goes to the primary at most once per `everyMs`, and only after a new
+ * refusal (anonymous traffic must not turn into one IPC message per request).
+ *
+ * opts: { send(message) (required), tracker? (default: a new host-policy tracker), everyMs? (2000) }
+ */
+function createReportingRefusals(opts) {
+    const o = opts || {};
+    if (typeof o.send !== 'function') throw new TypeError('createReportingRefusals: send() is required');
+    const tracker = o.tracker || hp.createRefusedHosts();
+    let dirty = false;
+    function flush() {
+        if (!dirty) return;
+        dirty = false;
+        try {
+            o.send({ type: REFUSALS_MESSAGE, refused: tracker.list() });
+        } catch { /* no primary to tell: it is going away, and this worker with it */ }
+    }
+    const timer = setInterval(flush, typeof o.everyMs === 'number' ? o.everyMs : 2000);
+    if (typeof timer.unref === 'function') timer.unref();
+    return {
+        record(hostname, hint, source) {
+            dirty = true;
+            return tracker.record(hostname, hint, source);
+        },
+        list: () => tracker.list(),
+        clear() {
+            tracker.clear();
+            dirty = true;
+        },
+        flush,
+        stop() {
+            clearInterval(timer);
+        },
+    };
+}
+
+/**
+ * The primary's view of what every worker's edge refused (the answer to the backend's POST /host-policy).
+ * One list per live worker, replaced by each report; a worker that exits leaves its last list folded into
+ * the rest, so a respawn does not make counts go backwards. Bounded: one list per worker, `max` hosts each.
+ */
+function createRefusalAggregate(opts) {
+    const max = (opts && opts.max) || MAX_REPORTED_REFUSALS;
+    const byWorker = new Map();
+    let exited = [];
+    return {
+        update(workerId, list) {
+            byWorker.set(workerId, hp.mergeRefusedHosts([list], { max }));
+        },
+        remove(workerId) {
+            const last = byWorker.get(workerId);
+            byWorker.delete(workerId);
+            if (last) exited = hp.mergeRefusedHosts([exited, last], { max });
+        },
+        list: () => hp.mergeRefusedHosts([exited, ...byWorker.values()], { max }),
+    };
 }
 
 module.exports = {
     // forwarded headers
     listenerScheme,
+    judgedAddress,
     pinForwardedHeaders,
     pinUpgradeHeaders,
     // the edge
-    EDGE_EXEMPT_PATHS,
+    EDGE_PROBE_PATHS,
+    ACME_CHALLENGE_PATH,
+    edgeAuthority,
     createHostEdge,
     safeLocation,
     renderRefusalPage,
@@ -657,4 +903,8 @@ module.exports = {
     writePolicyFile,
     createPushedPolicySource,
     mountHostPolicyPush,
+    // what the edge refused, for the backend
+    REFUSALS_MESSAGE,
+    createReportingRefusals,
+    createRefusalAggregate,
 };

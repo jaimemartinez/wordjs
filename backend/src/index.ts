@@ -1429,6 +1429,11 @@ async function initialize() {
                     // gateway listened, and a gateway on a fresh machine has no policy stored. Before
                     // install it is told not to enforce. Never fatal; a failure is logged there.
                     await require('./core/site-address').armGateway().catch(() => null);
+                    // ...and keep re-sending them: nothing here notices a gateway restart, and one that
+                    // comes back without its stored policy (a new container) would otherwise answer every
+                    // address until THIS process restarted. The answers also carry what the gateway's
+                    // edge refused, for Settings → Site address.
+                    require('./core/site-address').startGatewaySync();
                 }
             };
 

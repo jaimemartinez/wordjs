@@ -188,6 +188,81 @@ function writeFileAtomic(target: string, text: string, expectText?: string | nul
     return 'written';
 }
 
+// ─── One writer at a time, across processes ─────────────────────────────────────────────────────────
+
+/** A lock this old is abandoned whoever holds it: a write takes milliseconds (a few hundred at worst). */
+const LOCK_STALE_MS = 5000;
+/** How long a writer waits for the lock — past LOCK_STALE_MS, so a dead holder's lock is broken first. */
+const LOCK_WAIT_MS = 6000;
+const LOCK_BUSY_CODES = new Set(['EEXIST', 'EPERM', 'EACCES', 'EBUSY']);
+
+function processAlive(pid: number): boolean {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (e: any) {
+        return !!e && e.code === 'EPERM';
+    }
+}
+
+/** A lock left by a process that is gone (it died between taking and releasing it), or simply too old. */
+function lockIsAbandoned(lock: string): { abandoned: boolean; text: string | null } {
+    let text: string | null = null;
+    try {
+        const age = Date.now() - fs.statSync(lock).mtimeMs;
+        text = readTextOrNull(lock);
+        if (age > LOCK_STALE_MS) return { abandoned: true, text };
+        const owner = text ? JSON.parse(text) : null;
+        return { abandoned: !!owner && Number.isInteger(owner.pid) && owner.pid !== process.pid && !processAlive(owner.pid), text };
+    } catch {
+        return { abandoned: false, text };
+    }
+}
+
+/**
+ * Run `fn` holding `<config>.lock`, so the compare half of the compare-and-swap and the swap itself are
+ * one step for every process that writes the file through this module: the backend, `npm run site`, a
+ * second CLI run. They used to be separate system calls (re-read, compare, rename — with a Windows
+ * sharing-violation retry of up to a few hundred milliseconds in between), so two writers could compare
+ * against the same bytes, both rename, and both report the same revision as saved: one change silently
+ * gone, and never audited.
+ *
+ * The lock is a file created exclusively beside the config (beside the link's target when the config is
+ * a symlink, where the replacement is written too), naming its owner's pid. One left by a process that
+ * died holding it, or older than LOCK_STALE_MS, is broken — after reading it again, so a lock another
+ * writer has just taken is not. Returns `{ ok: false }` when the lock could not be had within LOCK_WAIT_MS.
+ */
+function withConfigLock<T>(fn: () => T): { ok: true; value: T } | { ok: false } {
+    const lock = `${resolveWriteTarget(CONFIG_FILE)}.lock`;
+    const deadline = Date.now() + LOCK_WAIT_MS;
+    let fd: number | null = null;
+    for (let attempt = 0; fd === null; attempt++) {
+        try {
+            fd = fs.openSync(lock, 'wx', 0o600);
+        } catch (e: any) {
+            // EPERM/EACCES/EBUSY too: on Windows a lock file that is being deleted cannot be created yet.
+            if (!LOCK_BUSY_CODES.has(e && e.code)) throw e;
+            const seen = lockIsAbandoned(lock);
+            if (seen.abandoned && readTextOrNull(lock) === seen.text) {
+                try { fs.rmSync(lock, { force: true }); } catch { /* someone else broke it */ }
+                continue;
+            }
+            if (Date.now() >= deadline) return { ok: false };
+            sleepSync(Math.min(5 * (attempt + 1), 50));
+        }
+    }
+    try {
+        fs.writeSync(fd, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }));
+    } finally {
+        fs.closeSync(fd);
+    }
+    try {
+        return { ok: true, value: fn() };
+    } finally {
+        try { fs.rmSync(lock, { force: true }); } catch { /* broken as abandoned meanwhile */ }
+    }
+}
+
 /**
  * Refresh the in-memory runtime config (siteUrl → CSRF/CORS allowed-origins, the site's aliases and
  * host policy, …) from the object just written, so a persisted change takes effect WITHOUT a process
@@ -210,10 +285,30 @@ type ConfigUpdate =
  * when `expectRev` is given and `siteAddress.rev` on disk is another value — or when the bytes change
  * between this read and the rename. `previousText` is the exact prior content, for a caller that must
  * roll back. `reload: false` skips refreshing config/app (the CLI has no running server to refresh).
+ * The read, the check and the rename happen under the cross-process lock (withConfigLock); a lock that
+ * cannot be had is `write-failed`, and nothing is written.
  */
 function updateConfig(
     mutate: (current: Record<string, any>) => Record<string, any>,
     opts: { expectRev?: number; reload?: boolean } = {}
+): ConfigUpdate {
+    let locked: { ok: true; value: ConfigUpdate } | { ok: false };
+    try {
+        locked = withConfigLock(() => updateConfigLocked(mutate, opts));
+    } catch (e) {
+        console.error('Failed to lock the config file:', e);
+        return { ok: false, reason: 'write-failed', error: e };
+    }
+    if (!locked.ok) {
+        console.error(`Refusing to write ${CONFIG_FILE}: another process kept it locked for ${LOCK_WAIT_MS / 1000} s.`);
+        return { ok: false, reason: 'write-failed', error: new Error('the config file is locked') };
+    }
+    return locked.value;
+}
+
+function updateConfigLocked(
+    mutate: (current: Record<string, any>) => Record<string, any>,
+    opts: { expectRev?: number; reload?: boolean }
 ): ConfigUpdate {
     const before = readConfigFresh();
     if (before.exists && before.parseError) {
@@ -245,6 +340,16 @@ function updateConfig(
  * the failed change wrote. If anyone wrote after it (the CLI), their change wins and nothing is undone.
  */
 function restoreConfigText(text: string, opts: { expectRev: number; reload?: boolean }): boolean {
+    try {
+        const locked = withConfigLock(() => restoreConfigTextLocked(text, opts));
+        return locked.ok && locked.value;
+    } catch (e) {
+        console.error('Failed to lock the config file:', e);
+        return false;
+    }
+}
+
+function restoreConfigTextLocked(text: string, opts: { expectRev: number; reload?: boolean }): boolean {
     const now = readConfigFresh();
     if (!now.exists || now.parseError || siteAddressRev(now.parsed) !== opts.expectRev) return false;
     let restored: any;

@@ -221,6 +221,8 @@ export function signInPolicy(
 export type IpLiteralMode = "any" | "own" | "none";
 export type HostClass = "canonical" | "alias" | "env" | "loopback" | "ip" | "dev";
 export type RefusalHint = "forward-host" | "tunnel" | "www-apex" | "local";
+/** Who refused a host: the public listener's edge check, the backend's own gate, or each of them. */
+export type RefusalSource = "edge" | "gate" | "both";
 export type SiteNotice = "proxy-collapse" | "missing-canonical";
 export type AliasMode = "serve" | "redirect";
 
@@ -248,11 +250,15 @@ export interface SiteAddressState {
     ipLiterals: IpLiteralMode;
     ipLiteralsSource: "default" | "config" | "env";
     ipSignIn: boolean;
+    /** The IP addresses `own` answers. */
     ownAddresses: string[];
+    /** Whose they are: the gateway's, as it reported them (split and separate mode), or this server's. */
+    ownAddressesFrom: "gateway" | "server";
     devOrigins: string[];
     dev: boolean;
     connectedVia: { host: string; cls: HostClass | string } | null;
-    recentlyRefused: Array<{ host: string; count: number; lastSeen: number | null; hint: RefusalHint | null }>;
+    /** `source` is null when the backend did not say (an older version). */
+    recentlyRefused: Array<{ host: string; count: number; lastSeen: number | null; hint: RefusalHint | null; source: RefusalSource | null }>;
     /** Upgrade conflict: the config file and the database name different main addresses. */
     conflict: { config: string; db: string } | null;
     /** The gateway reports a main address different from the configured one (typically after an SSL toggle). */
@@ -315,7 +321,30 @@ function envHostFrom(raw: unknown): string | null {
     return hostname ? `${hostname}${typeof r.port === "number" ? `:${r.port}` : ""}` : null;
 }
 
+/**
+ * The heading over the addresses `own` answers. Behind a gateway they are the gateway's (it reports
+ * them), and saying "this server's" there named the wrong machine in separate mode (lab R2-NEW-1).
+ */
+export function ownAddressesHeadingKey(from: SiteAddressState["ownAddressesFrom"]): string {
+    return from === "gateway" ? "siteAddress.accepted.ownGateway" : "siteAddress.accepted.own";
+}
+
+/**
+ * The text of an IP-rule choice, in the <option> list and in the confirmation summary. `own` says whose
+ * addresses it keeps, as the heading above it does (review UX-1: "Only this server's addresses" sat right
+ * under "The gateway's addresses", and meant the gateway's).
+ */
+export function ipLiteralsLabelKey(mode: IpLiteralMode, from: SiteAddressState["ownAddressesFrom"]): string {
+    return mode === "own" && from === "gateway" ? "siteAddress.ip.ownGateway" : `siteAddress.ip.${mode}`;
+}
+
+/** The small «Recently refused» label naming who refused a host, or null when the backend did not say. */
+export function refusedByKey(source: RefusalSource | null): string | null {
+    return source === "edge" || source === "gate" || source === "both" ? `siteAddress.refusedBy.${source}` : null;
+}
+
 const HINTS: readonly RefusalHint[] = ["forward-host", "tunnel", "www-apex", "local"];
+const SOURCES: readonly RefusalSource[] = ["edge", "gate", "both"];
 const NOTICES: readonly SiteNotice[] = ["proxy-collapse", "missing-canonical"];
 
 /** Hosts the screen shows as text. They passed the backend's grammar, so this only drops junk. */
@@ -347,6 +376,7 @@ export function normalizeSiteAddressState(raw: unknown): SiteAddressState {
         ipLiteralsSource: ipSource === "config" || ipSource === "env" ? ipSource : "default",
         ipSignIn: r.ipSignIn === true,
         ownAddresses: asList(r.ownAddresses).map(asString).filter((h): h is string => h !== null),
+        ownAddressesFrom: r.ownAddressesFrom === "gateway" ? "gateway" : "server",
         devOrigins: asList(r.devOrigins).map(asString).filter((h): h is string => h !== null),
         dev: r.dev === true,
         connectedVia: via && asString(via.host) ? { host: asString(via.host) as string, cls: asString(via.cls) ?? "unknown" } : null,
@@ -355,8 +385,9 @@ export function normalizeSiteAddressState(raw: unknown): SiteAddressState {
             const host = e ? asString(e.host ?? e.hostname) : null;
             if (!e || !host || !SAFE_HOST_TEXT.test(host)) return [];
             const hint = HINTS.find((h) => h === e.hint) ?? null;
+            const source = SOURCES.find((s) => s === e.source) ?? null;
             const count = typeof e.count === "number" && e.count > 0 ? Math.floor(e.count) : 1;
-            return [{ host, count, lastSeen: toMillis(e.lastSeen), hint }];
+            return [{ host, count, lastSeen: toMillis(e.lastSeen), hint, source }];
         }),
         conflict: conflictConfig && conflictDb ? { config: conflictConfig, db: conflictDb } : null,
         gatewayDrift: driftGateway && driftConfig ? { gateway: driftGateway, config: driftConfig } : null,
@@ -459,12 +490,14 @@ export type CanonicalNote = "links" | "mail" | "tls" | "seo" | "downgrade" | "dr
 
 /**
  * The new main address the change dialog would submit, or why not. Only an exact repeat of the current
- * ORIGIN is refused: the same name with another scheme or port is a real change (moving to https).
+ * ORIGIN is refused: the same name with another scheme or port is a real change (moving to https). Not
+ * while an upgrade conflict is shown (`conflict`): the database still names another address, and
+ * confirming the configured one ("Use A") is how that is resolved; the server records it as a choice.
  */
-export function canonicalChoice(url: string, current: SiteAddress | null): { site: SiteAddress } | { error: "invalid" | "is-canonical" } {
+export function canonicalChoice(url: string, current: SiteAddress | null, opts: { conflict?: boolean } = {}): { site: SiteAddress } | { error: "invalid" | "is-canonical" } {
     const site = parseSiteAddress(url);
     if (!site) return { error: "invalid" };
-    if (current && current.origin === site.origin) return { error: "is-canonical" };
+    if (current && current.origin === site.origin && !opts.conflict) return { error: "is-canonical" };
     return { site };
 }
 

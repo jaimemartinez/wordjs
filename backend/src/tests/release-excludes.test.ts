@@ -75,9 +75,13 @@ describe('release packager — agent/assistant directories never ship', () => {
     test('secrets and local state stay out', () => {
         for (const rel of [
             'wordjs-config.json',
+            // The writers' lock beside it (core/configManager), left behind by a crash mid-write.
+            'backend/wordjs-config.json.lock',
             'gateway/gateway-config.json',
             '.env',
             'backend/data/database.sqlite',
+            // The gateway's own addresses, as it last reported them (core/site-address): per-install state.
+            'backend/data/gateway-own-addresses.json',
             'marketplace/plugins/faq/index.js',
             '.release-exclude',
         ]) {

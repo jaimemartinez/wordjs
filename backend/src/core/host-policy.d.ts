@@ -89,6 +89,8 @@ export interface RequestAuthority {
     /** null when absent, or present but malformed (absent === false then: answer 400). */
     parsed: ParsedHost | null;
     absent: boolean;
+    /** The value judged, as received ('' when absent): what a relaying listener forwards as X-Forwarded-Host. */
+    raw: string;
     hop: TrustedHop;
     viaTrustedHop: boolean;
     /**
@@ -122,6 +124,8 @@ export interface SiteHost {
 }
 
 export type RefusalHint = 'forward-host' | 'tunnel' | 'www-apex' | 'local';
+/** Who refused a host: a public listener's edge check, the backend's gate, or each of them. */
+export type RefusalSource = 'edge' | 'gate' | 'both';
 
 export interface RefusedHostEntry {
     host: string;
@@ -129,11 +133,13 @@ export interface RefusedHostEntry {
     firstSeen: number;
     lastSeen: number;
     hint: RefusalHint | null;
+    /** null only when no recorder named a source; the backend tags the gateway's whole list 'edge' itself (site-address noteEdgeRefusals). */
+    source: RefusalSource | null;
 }
 
 export interface RefusedHosts {
     /** Count a refusal; true when the caller should log it (per-host and global rate caps). */
-    record(hostname: string, hint: RefusalHint | null): boolean;
+    record(hostname: string, hint: RefusalHint | null, source?: 'edge' | 'gate'): boolean;
     /** Most recent first. */
     list(): RefusedHostEntry[];
     clear(): void;
@@ -227,7 +233,10 @@ export function createPolicyProvider(opts: {
     logger?: Pick<Logger, 'warn'>;
 }): PolicyProvider;
 
+export const REFUSAL_SOURCES: readonly RefusalSource[];
 export function createRefusedHosts(opts?: { max?: number; logsPerMinute?: number; now?: () => number }): RefusedHosts;
+/** Several refusal lists as one (per host: counts added, sources combined, latest lastSeen first); invalid entries are dropped. */
+export function mergeRefusedHosts(lists: unknown, opts?: { max?: number }): RefusedHostEntry[];
 export function createLastSeen(opts?: { max?: number; now?: () => number }): LastSeen;
 /** Shared trackers the default gate writes and GET /site-address reads. */
 export const refusedHosts: RefusedHosts;
@@ -235,6 +244,10 @@ export const lastSeen: LastSeen;
 export function noteAuthenticatedUse(req: { siteHost?: SiteHost } | null | undefined, tracker?: LastSeen): void;
 
 export const EXEMPT_PATHS: readonly string[];
+/** A dot segment (literal or percent-encoded, also before ';') or a raw backslash: what a URL parser resolves into another path. */
+export function hasDotSegments(path: string): boolean;
+/** A dot segment (literal or percent-encoded), an encoded slash, backslash or '%', or a raw backslash: never exempt. */
+export function isAmbiguousPath(path: string): boolean;
 export function hostGateFactory(opts: HostGateOptions): HostGate;
 export function sendHostNotAllowed(res: ServerResponse): void;
 export function sendInvalidHost(res: ServerResponse): void;

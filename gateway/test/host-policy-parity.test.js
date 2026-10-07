@@ -137,6 +137,7 @@ test('vectors: requestAuthority', () => {
         const e = v.expect;
         if ('host' in e) assert.strictEqual(got.parsed ? hp.serialize(got.parsed) : null, e.host, `${v.name}: host`);
         if ('absent' in e) assert.strictEqual(got.absent, e.absent, `${v.name}: absent`);
+        if ('raw' in e) assert.strictEqual(got.raw, e.raw, `${v.name}: raw`);
         if ('hop' in e) assert.strictEqual(got.hop, e.hop, `${v.name}: hop`);
         if ('source' in e) assert.strictEqual(got.source, e.source, `${v.name}: source`);
         if ('proxied' in e) assert.strictEqual(got.proxied, e.proxied, `${v.name}: proxied`);
@@ -147,4 +148,16 @@ test('vectors: trustedScheme', () => {
     for (const v of VECTORS.trustedScheme) {
         assert.strictEqual(hp.trustedScheme(fakeReq(v.req), { trustProxy: v.trustProxy }), v.expect, v.name);
     }
+});
+
+test('vectors: ambiguousPath', () => {
+    for (const v of VECTORS.ambiguousPath.ambiguous) assert.strictEqual(hp.isAmbiguousPath(v.in), true, `${v.in}: ${v.why}`);
+    for (const v of VECTORS.ambiguousPath.plain) assert.strictEqual(hp.isAmbiguousPath(v.in), false, `${v.in}: ${v.why}`);
+});
+
+test('vectors: dotSegments', () => {
+    for (const v of VECTORS.dotSegments.dotted) assert.strictEqual(hp.hasDotSegments(v.in), true, `${v.in}: ${v.why}`);
+    for (const v of VECTORS.dotSegments.plain) assert.strictEqual(hp.hasDotSegments(v.in), false, `${v.in}: ${v.why}`);
+    // Every dotted path is ambiguous too: the edge's rule is a subset of the gate's.
+    for (const v of VECTORS.dotSegments.dotted) assert.strictEqual(hp.isAmbiguousPath(v.in), true, v.in);
 });

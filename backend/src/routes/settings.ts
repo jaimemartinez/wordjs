@@ -11,10 +11,13 @@ const { getOption, updateOption } = require('../core/options');
 const { getActiveThemeVersion, isActiveThemeMissing } = require('../core/themes');
 // Plugin-sandbox hardening state, surfaced to admins (see DERIVED_ADMIN_SETTINGS below). Required lazily
 // inside the compute functions so a load error there can never break the settings route at import time.
-const { authenticate } = require('../middleware/auth');
+// refuseBoundSession: a session started at an address other than the main one may not change who can
+// register, or as what (core/registration-settings).
+const { authenticate, refuseBoundSession } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { recordAudit } = require('../core/audit');
+const { changedRegistrationSettings } = require('../core/registration-settings');
 
 /**
  * @swagger
@@ -526,6 +529,13 @@ router.put('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
         }
     }
 
+    // A session started at another address may save the rest of the screen (which sends every field
+    // back), but not a CHANGE to who may register or as what — refused as a whole, before any write.
+    // Only what this route writes is judged: a key it skips changes nothing.
+    const writable = Object.fromEntries(Object.entries(updates).filter(([key]) => ALL_SETTINGS.includes(key) && !DEDICATED_WRITE_API.has(key)));
+    const registration = await changedRegistrationSettings(writable);
+    if (registration.length && refuseBoundSession(req, res, registration)) return;
+
     for (const [key, value] of Object.entries(updates)) {
         if (ALL_SETTINGS.includes(key) && !DEDICATED_WRITE_API.has(key)) {
             // Se escribe (y se devuelve) el valor NORMALIZADO, no el recibido: la respuesta es lo que
@@ -595,6 +605,10 @@ router.put('/:key', authenticate, isAdmin, asyncHandler(async (req: Request, res
             data: { status: 400, params: [key] }
         });
     }
+
+    // The same rule as the bulk save above. `key` is one of ALL_SETTINGS by now, never a prototype name.
+    const registration = await changedRegistrationSettings({ [key]: value });
+    if (registration.length && refuseBoundSession(req, res, registration)) return;
 
     await updateOption(key, normalizedSettingValue(key, value));
 

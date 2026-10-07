@@ -152,6 +152,7 @@ describe('vectors: requestAuthority', () => {
             const e = v.expect;
             if ('host' in e) assert.strictEqual(got.parsed ? hp.serialize(got.parsed) : null, e.host, `${v.name}: host`);
             if ('absent' in e) assert.strictEqual(got.absent, e.absent, `${v.name}: absent`);
+            if ('raw' in e) assert.strictEqual(got.raw, e.raw, `${v.name}: raw`);
             if ('hop' in e) assert.strictEqual(got.hop, e.hop, `${v.name}: hop`);
             if ('hop' in e) assert.strictEqual(got.viaTrustedHop, e.hop !== null, `${v.name}: viaTrustedHop`);
             if ('source' in e) assert.strictEqual(got.source, e.source, `${v.name}: source`);
@@ -166,6 +167,21 @@ describe('vectors: trustedScheme', () => {
         for (const v of VECTORS.trustedScheme) {
             assert.strictEqual(hp.trustedScheme(fakeReq(v.req), { trustProxy: v.trustProxy }), v.expect, v.name);
         }
+    });
+});
+
+describe('vectors: ambiguousPath', () => {
+    test('paths a later parser could read as another path are never exempt (lab E1)', () => {
+        for (const v of VECTORS.ambiguousPath.ambiguous) assert.strictEqual(hp.isAmbiguousPath(v.in), true, `${v.in}: ${v.why}`);
+        for (const v of VECTORS.ambiguousPath.plain) assert.strictEqual(hp.isAmbiguousPath(v.in), false, `${v.in}: ${v.why}`);
+    });
+});
+
+describe('vectors: dotSegments', () => {
+    test('what a URL parser resolves into another path (the edge answers 400: review EDGE-R1)', () => {
+        for (const v of VECTORS.dotSegments.dotted) assert.strictEqual(hp.hasDotSegments(v.in), true, `${v.in}: ${v.why}`);
+        for (const v of VECTORS.dotSegments.plain) assert.strictEqual(hp.hasDotSegments(v.in), false, `${v.in}: ${v.why}`);
+        for (const v of VECTORS.dotSegments.dotted) assert.strictEqual(hp.isAmbiguousPath(v.in), true, v.in);
     });
 });
 
@@ -456,6 +472,26 @@ describe('createRefusedHosts (R7)', () => {
         r.clear();
         assert.strictEqual(r.record('late.example', null), true, 'after clear() the next refusal is logged');
     });
+    test('each entry says who refused it — the edge, the gate, or both — and the merge keeps and combines that (lab R2-X2-tag)', () => {
+        let clock = 0;
+        const r = hp.createRefusedHosts({ now: () => ++clock });
+        r.record('edge.example', null, 'edge');
+        r.record('gate.example', null, 'gate');
+        r.record('both.example', null, 'edge');
+        r.record('both.example', null, 'gate');
+        r.record('unsaid.example', null);
+        r.record('odd.example', null, 'elsewhere' as any);
+        assert.deepStrictEqual(Object.fromEntries(r.list().map((e: any) => [e.host, e.source])),
+            { 'odd.example': null, 'unsaid.example': null, 'both.example': 'both', 'gate.example': 'gate', 'edge.example': 'edge' });
+        const merged = hp.mergeRefusedHosts([r.list(), [
+            { host: 'gate.example', count: 1, firstSeen: 1, lastSeen: 100, hint: null, source: 'edge' },
+            { host: 'unsaid.example', count: 1, firstSeen: 1, lastSeen: 99, hint: null, source: 'edge' },
+            { host: 'forged.example', count: 1, firstSeen: 1, lastSeen: 98, hint: null, source: '<script>' },
+        ]]);
+        assert.deepStrictEqual(merged.map((e: any) => [e.host, e.source]),
+            [['gate.example', 'both'], ['unsaid.example', 'edge'], ['odd.example', null], ['both.example', 'both'], ['edge.example', 'edge']]);
+        assert.deepStrictEqual([...hp.REFUSAL_SOURCES], ['edge', 'gate', 'both']);
+    });
 });
 
 describe('createLastSeen (R7)', () => {
@@ -635,6 +671,24 @@ describe('hostGate: refusals', () => {
         for (const p of ['/uploadsX', '/healthzz', '/api/v1/uploads/x', '/Uploads/x', '/metrics.json']) {
             assert421(await request(app).get(p).set('Host', 'attacker.example'), `${p} is not exempt`);
         }
+    });
+    test('an ambiguous path is never exempt, whatever its prefix (lab E1): it is classified like any request', async () => {
+        // A prefix test on the raw path exempted /healthz/../api/v1/settings; the hop after it (Next.js)
+        // resolved the dot segments and served the API. Sent raw: an HTTP client library may resolve them.
+        const { app } = gateApp();
+        await withServer(app, async (port) => {
+            const send = (p: string, host: string) => rawRequest(port, `GET ${p} HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`);
+            for (const p of ['/healthz/../api/v1/settings', '/public/../api/v1/settings', '/uploads/%2e%2e/api/v1/settings', '/uploads/.%2E/api',
+                '/themes/..;/api', '/plugins/x/%2fapi', '/plugins/x/%5Capi', '/.well-known/acme-challenge/..\\api', '/uploads/%252e%252e/api', '/health/./x']) {
+                assert.match(await send(p, 'attacker.example'), /^HTTP\/1\.1 421 /, p);
+            }
+            // On an accepted address the same paths are classified and passed on, like any request.
+            assert.match(await send('/public/../api/v1/settings', 'example.com'), /"cls":"canonical"/);
+            // Dots inside a segment are not dot segments.
+            for (const p of ['/uploads/2026/a..b.png', '/uploads/.hidden', '/uploads/.../x', '/.well-known/acme-challenge/tok']) {
+                assert.match(await send(p, 'attacker.example'), /"siteHost":null/, p);
+            }
+        });
     });
     test('a malformed host is 400, never classified', async () => {
         const { app } = gateApp();
@@ -881,6 +935,80 @@ describe('hostGate: proxy collapse warning', () => {
         await request(loopbackSite.app).get('/x').set('Host', '127.0.0.1:3000').set('X-Real-IP', '203.0.113.9');
         assert.deepStrictEqual(loopbackSite.notices, []);
     });
+
+    // Who SENT the loopback name decides it (lab X3). Most shapes below need an mTLS gateway peer or a
+    // peer on another machine, which a socket from this test cannot be, so the real gate is run on
+    // request-shaped objects (gateOnce); the pre-certificate shape is also sent over a real socket.
+    function collapseGate(config?: any) {
+        const { logger, lines } = captureLogger();
+        const notices: string[] = [];
+        const provider = hp.createPolicyProvider({ getConfig: () => config || { siteUrl: 'https://example.com' }, env: {}, nodeEnv: 'production', ownAddresses: () => new Set(), logger });
+        const gate = hp.hostGateFactory({ getPolicy: provider.get, isInstalled: () => true, logger, refused: hp.createRefusedHosts(), lastSeen: hp.createLastSeen(), onNotice: (kind: string) => notices.push(kind) });
+        return { gate, notices, lines };
+    }
+    function gateOnce(gate: any, v: any): boolean {
+        const req = fakeReq(v);
+        req.url = '/api/v1/posts';
+        const res: any = { statusCode: 200, setHeader() { /* not inspected */ }, end() { /* not inspected */ } };
+        let passed = false;
+        gate(req, res, () => { passed = true; });
+        return passed;
+    }
+
+    test('lab X3: the gateway relaying a direct remote client that typed a loopback Host is NOT a collapse', async () => {
+        const shapes = [
+            // Split mode over mTLS: the gateway's certificate, its own upstream as Host, the client's Host
+            // relayed, and the client's address appended last by http-proxy's xfwd.
+            { remoteAddress: '127.0.0.1', authorized: true, peerCN: 'gateway', headers: { host: '127.0.0.1:4000', 'x-forwarded-host': 'localhost:3000', 'x-forwarded-for': '203.0.113.9' } },
+            // Before the cluster certificates the same gateway dials 127.0.0.1:4000 in clear: a loopback hop.
+            { remoteAddress: '127.0.0.1', headers: { host: '127.0.0.1:4000', 'x-forwarded-host': 'localhost:3000', 'x-forwarded-for': '::ffff:203.0.113.9' } },
+            // The client typed the gateway's own upstream address and forged a chain ending in loopback:
+            // the gateway still appended the client's real address last.
+            { remoteAddress: '127.0.0.1', authorized: true, peerCN: 'gateway', headers: { host: '127.0.0.1:4000', 'x-forwarded-host': '127.0.0.1:4000', 'x-forwarded-for': '198.51.100.1, 127.0.0.1, 203.0.113.9' } },
+            { remoteAddress: '127.0.0.1', headers: { host: '127.0.0.1:4000', 'x-forwarded-host': '127.0.0.1:4000', 'x-forwarded-for': '127.0.0.1, 203.0.113.9', 'x-real-ip': '198.51.100.1' } },
+            // Separate mode: the gateway on its own machine.
+            { remoteAddress: '10.0.0.7', authorized: true, peerCN: 'gateway', headers: { host: '10.0.0.5:4000', 'x-forwarded-host': '[::1]:3000', 'x-forwarded-for': '203.0.113.9' } },
+        ];
+        for (const v of shapes) {
+            const { gate, notices, lines } = collapseGate();
+            assert.strictEqual(gateOnce(gate, v), true, JSON.stringify(v.headers));
+            assert.deepStrictEqual(notices, [], JSON.stringify(v.headers));
+            assert.ok(!lines.warn.some((l) => /loopback Host/.test(l)), JSON.stringify(v.headers));
+        }
+        const { app, notices } = gateApp();
+        const res = await request(app).get('/x').set('Host', '127.0.0.1:4000').set('X-Forwarded-Host', 'localhost:3000').set('X-Forwarded-For', '203.0.113.9');
+        assert.strictEqual(res.status, 200);
+        assert.strictEqual(res.body.siteHost.cls, 'loopback');
+        assert.deepStrictEqual(notices, []);
+    });
+
+    test('a proxy on this machine that rewrites Host IS a collapse — in front of the monolith and in front of the gateway', () => {
+        const shapes = [
+            // nginx → monolith: the backend shares nginx's socket, and the monolith forwards no
+            // X-Forwarded-Host for a Host it judged itself.
+            { remoteAddress: '127.0.0.1', headers: { host: '127.0.0.1:3000', 'x-forwarded-for': '203.0.113.9' } },
+            // nginx → gateway → backend over mTLS: the gateway appended nginx's loopback address after the client.
+            { remoteAddress: '127.0.0.1', authorized: true, peerCN: 'gateway', headers: { host: '127.0.0.1:4000', 'x-forwarded-host': '127.0.0.1:3000', 'x-forwarded-for': '203.0.113.9, ::ffff:127.0.0.1' } },
+            // … before the cluster certificates, with nginx reporting the client in X-Real-IP only.
+            { remoteAddress: '127.0.0.1', headers: { host: '127.0.0.1:4000', 'x-forwarded-host': 'localhost:3000', 'x-forwarded-for': '127.0.0.1', 'x-real-ip': '203.0.113.9' } },
+            // Separate mode: nginx on the gateway's machine (the old heuristic never saw this one: its
+            // socket peer, the gateway, is not on loopback).
+            { remoteAddress: '10.0.0.7', authorized: true, peerCN: 'gateway', headers: { host: '10.0.0.5:4000', 'x-forwarded-host': 'localhost:3000', 'x-forwarded-for': '203.0.113.9, 127.0.0.1' } },
+        ];
+        for (const v of shapes) {
+            const { gate, notices, lines } = collapseGate();
+            assert.strictEqual(gateOnce(gate, v), true, JSON.stringify(v.headers));
+            assert.deepStrictEqual(notices, ['proxy-collapse'], JSON.stringify(v.headers));
+            assert.ok(lines.warn.some((l) => /loopback Host/.test(l)), JSON.stringify(v.headers));
+        }
+    });
+
+    test('a hop not known to append its peer proves nothing: a trusted replica on another machine copies X-Forwarded-For', () => {
+        const { gate, notices } = collapseGate({ siteUrl: 'https://example.com', trustProxy: '10.0.0.0/8' });
+        assert.strictEqual(gateOnce(gate, { remoteAddress: '10.0.1.30', headers: { host: '10.0.1.23:4000', 'x-forwarded-host': 'localhost:3001', 'x-forwarded-for': '8.8.8.8, 127.0.0.1' } }), true);
+        assert.deepStrictEqual(notices, []);
+    });
+
     test('a throwing notice callback does not break the request', async () => {
         const { app, lines } = gateApp({ onNotice: () => { throw new Error('boom'); } });
         const res = await request(app).get('/x').set('Host', '127.0.0.1:3000').set('X-Forwarded-For', '203.0.113.9');

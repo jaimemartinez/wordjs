@@ -134,6 +134,15 @@ const nextConfig: NextConfig = {
   // proxies straight through (helmet on the gateway only strips its OWN Express header). Removing it at
   // the source drops the version-fingerprint header in every deploy mode (audit F-09).
   poweredByHeader: false,
+  experimental: {
+    // Rewrites (and headers) match the path EXACTLY as the gateway and the monolith route it. Next's
+    // default compares them case-insensitively, so `/API/v1/settings` — which both dispatchers hand to
+    // Next, since it is not `/api` — matched the `/api/:path*` rewrite below and came back into the
+    // public listener from loopback as /api/v1/settings: an anonymous visitor could make the backend
+    // see "a local proxy rewriting Host" (its proxy-collapse notice). The edge refuses the other spelling
+    // that did this, dot segments (gateway/src/host-edge.js).
+    caseSensitiveRoutes: true,
+  },
   turbopack: {
     // We must include the parent directory as root because we import from ../plugins
     root: require('path').resolve(__dirname, '..'),

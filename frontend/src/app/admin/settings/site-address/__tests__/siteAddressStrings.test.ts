@@ -10,12 +10,13 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { translations, type Language } from "@/lib/i18n";
-import type { AliasError, CanonicalNote, HostClass, IpLiteralMode, OldAddressAction, RefusalHint, SignInWarning } from "@/lib/siteAddress";
+import type { AliasError, CanonicalNote, HostClass, IpLiteralMode, OldAddressAction, RefusalHint, RefusalSource, SignInWarning } from "@/lib/siteAddress";
 import type { SignInRefusal } from "@/contexts/AuthContext";
 
 const SRC = path.resolve(import.meta.dirname, "../../../../..");
 const CONSUMERS = [
     "app/admin/settings/site-address/page.tsx",
+    "app/admin/settings/site-address/RefusedByLabel.tsx",
     "app/admin/DashboardLayoutClient.tsx",
     "app/admin/settings/page.tsx",
     "components/HostNotAllowedNotice.tsx",
@@ -47,6 +48,7 @@ const errors: Record<AliasError | "is-canonical" | "invalid" | "localConfirm", t
 };
 const classes: Record<HostClass | "unknown", true> = { canonical: true, alias: true, env: true, loopback: true, ip: true, dev: true, unknown: true };
 const hints: Record<RefusalHint, true> = { "forward-host": true, tunnel: true, "www-apex": true, local: true };
+const refusedBy: Record<RefusalSource, true> = { edge: true, gate: true, both: true };
 const notes: Record<CanonicalNote, true> = { links: true, mail: true, tls: true, seo: true, downgrade: true, dropCurrent: true };
 const ipModes: Record<IpLiteralMode, true> = { any: true, own: true, none: true };
 const oldActions: Record<OldAddressAction, true> = { keep: true, redirect: true, drop: true };
@@ -57,8 +59,13 @@ const DYNAMIC = [
     ...Object.keys(errors).map((k) => `siteAddress.error.${k}`),
     ...Object.keys(classes).map((k) => `siteAddress.cls.${k}`),
     ...Object.keys(hints).map((k) => `siteAddress.hint.${k}`),
+    ...Object.keys(refusedBy).map((k) => `siteAddress.refusedBy.${k}`),
     ...Object.keys(notes).map((k) => `siteAddress.consequence.${k}`),
     ...Object.keys(ipModes).map((k) => `siteAddress.ip.${k}`),
+    // Chosen by lib/siteAddress ipLiteralsLabelKey / ownAddressesHeadingKey (pinned in siteAddress.test.ts).
+    "siteAddress.ip.ownGateway",
+    "siteAddress.accepted.own",
+    "siteAddress.accepted.ownGateway",
     ...Object.keys(oldActions).map((k) => `siteAddress.old.${k}`),
     ...Object.keys(warnings).map((k) => `siteAddress.signIn.warn.${k}`),
     ...["serve", "redirect"].map((k) => `siteAddress.mode.${k}`),
@@ -82,6 +89,19 @@ describe("site-address strings", () => {
         const own = Object.keys(translations.en).filter((k) => OWN_PREFIXES.some((p) => k.startsWith(p)));
         expect(own.length).toBeGreaterThan(100);
         expect(own.filter((k) => !used.has(k))).toEqual([]);
+    });
+
+    it("the page renders what the helpers decide (review UX-1 / UX-2)", () => {
+        // Who refused a host: the row renders the label from the entry's own `source`, unconditionally
+        // (the component renders nothing for null). Whose addresses `own` means: the heading, the
+        // <option> and the confirmation summary all ask the same helpers, with the state's own answer.
+        const page = fs.readFileSync(path.join(SRC, "app/admin/settings/site-address/page.tsx"), "utf8");
+        expect(page).toMatch(/^[ \t]*<RefusedByLabel source=\{entry\.source\} t=\{t\} \/>\r?$/m);
+        expect(page).toMatch(/\{t\(ownAddressesHeadingKey\(state\.ownAddressesFrom\)\)\}/);
+        expect(page).toMatch(/<option key=\{mode\} value=\{mode\}>\{t\(ipLiteralsLabelKey\(mode, state\.ownAddressesFrom\)\)\}<\/option>/);
+        expect(page).toMatch(/\$\{t\(ipLiteralsLabelKey\(body\.ipLiterals, state\.ownAddressesFrom\)\)\}/);
+        expect(page).not.toMatch(/siteAddress\.(ip|refusedBy)\.\$\{/);
+        expect(page).not.toMatch(/siteAddress\.accepted\.own(Gateway)?["']/);
     });
 
     it("keeps the placeholders the code fills in every language", () => {

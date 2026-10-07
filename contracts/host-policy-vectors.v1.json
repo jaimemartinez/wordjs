@@ -304,7 +304,7 @@
     { "policy": "env-precedence", "host": "localhost", "cls": "env", "why": "environment before loopback" }
   ],
   "requestAuthority": [
-    { "name": "rebinding page on the loopback port: its forged XFH is ignored", "req": { "remoteAddress": "127.0.0.1", "headers": { "host": "rebind.test:4000", "x-forwarded-host": "example.com" } }, "expect": { "host": "rebind.test:4000", "absent": false, "hop": null, "source": "host", "proxied": true } },
+    { "name": "rebinding page on the loopback port: its forged XFH is ignored", "req": { "remoteAddress": "127.0.0.1", "headers": { "host": "rebind.test:4000", "x-forwarded-host": "example.com" } }, "expect": { "host": "rebind.test:4000", "raw": "rebind.test:4000", "absent": false, "hop": null, "source": "host", "proxied": true } },
     { "name": "loopback hop that addressed loopback: XFH honoured", "req": { "remoteAddress": "127.0.0.1", "headers": { "host": "127.0.0.1:4000", "x-forwarded-host": "example.com" } }, "expect": { "host": "example.com", "hop": "local", "source": "x-forwarded-host", "proxied": false } },
     { "name": "loopback hop relays whatever it was sent", "req": { "remoteAddress": "127.0.0.1", "headers": { "host": "127.0.0.1:4000", "x-forwarded-host": "evil.example" } }, "expect": { "host": "evil.example", "hop": "local" } },
     { "name": "IPv6 loopback hop", "req": { "remoteAddress": "::1", "headers": { "host": "[::1]:4000", "x-forwarded-host": "example.com" } }, "expect": { "host": "example.com", "hop": "local" } },
@@ -319,12 +319,13 @@
     { "name": "R11: a numeric string hop count", "trustProxy": "1", "req": { "remoteAddress": "10.1.2.3", "headers": { "host": "10.0.0.5:3000", "x-forwarded-host": "example.com" } }, "expect": { "host": "10.0.0.5:3000", "hop": null } },
     { "name": "R11: trust everything", "trustProxy": true, "req": { "remoteAddress": "10.1.2.3", "headers": { "host": "10.0.0.5:3000", "x-forwarded-host": "example.com" } }, "expect": { "host": "10.0.0.5:3000", "hop": null } },
     { "name": "operator trust list as an array", "trustProxy": ["192.168.0.0/16", "10.0.0.0/8"], "req": { "remoteAddress": "10.1.2.3", "headers": { "host": "10.0.0.5:3000", "x-forwarded-host": "example.com" } }, "expect": { "host": "example.com", "hop": "operator" } },
-    { "name": "comma-joined XFH: the first hop", "req": { "remoteAddress": "127.0.0.1", "headers": { "host": "127.0.0.1:4000", "x-forwarded-host": "a.example, b.example" } }, "expect": { "host": "a.example", "hop": "local" } },
-    { "name": "HTTP/1.0 with no Host", "req": { "remoteAddress": "203.0.113.9", "headers": {} }, "expect": { "absent": true, "host": null } },
-    { "name": "trusted hop relaying an empty Host (the gateway pins Host || '')", "req": { "remoteAddress": "127.0.0.1", "headers": { "host": "127.0.0.1:4000", "x-forwarded-host": "" } }, "expect": { "absent": true, "host": null, "hop": "local" } },
+    { "name": "comma-joined XFH: the first hop", "req": { "remoteAddress": "127.0.0.1", "headers": { "host": "127.0.0.1:4000", "x-forwarded-host": "a.example, b.example" } }, "expect": { "host": "a.example", "raw": "a.example", "hop": "local" } },
+    { "name": "HTTP/1.0 with no Host", "req": { "remoteAddress": "203.0.113.9", "headers": {} }, "expect": { "absent": true, "host": null, "raw": "" } },
+    { "name": "trusted hop relaying an empty Host (the gateway pins Host || '')", "req": { "remoteAddress": "127.0.0.1", "headers": { "host": "127.0.0.1:4000", "x-forwarded-host": "" } }, "expect": { "absent": true, "host": null, "raw": "", "hop": "local" } },
+    { "name": "a loopback client relaying an empty XFH under its own loopback name is host-less, not loopback (review NEW-V1: the gateway forwards it empty)", "req": { "remoteAddress": "127.0.0.1", "headers": { "host": "localhost:3000", "x-forwarded-host": "" } }, "expect": { "absent": true, "host": null, "raw": "", "hop": "local", "source": "x-forwarded-host" } },
     { "name": "trusted hop without XFH: its own Host", "req": { "remoteAddress": "127.0.0.1", "headers": { "host": "127.0.0.1:4000" } }, "expect": { "host": "127.0.0.1:4000", "hop": "local" } },
     { "name": "malformed Host is present, not absent", "req": { "remoteAddress": "203.0.113.9", "headers": { "host": "evil.example@localhost" } }, "expect": { "absent": false, "host": null } },
-    { "name": "malformed XFH from a trusted hop", "req": { "remoteAddress": "127.0.0.1", "headers": { "host": "127.0.0.1:4000", "x-forwarded-host": "127.1" } }, "expect": { "absent": false, "host": null, "hop": "local" } },
+    { "name": "malformed XFH from a trusted hop", "req": { "remoteAddress": "127.0.0.1", "headers": { "host": "127.0.0.1:4000", "x-forwarded-host": "127.1" } }, "expect": { "absent": false, "host": null, "raw": "127.1", "hop": "local" } },
     { "name": "R4: a direct client sends no proxy headers", "req": { "remoteAddress": "192.168.1.77", "headers": { "host": "192.168.1.11:3000" } }, "expect": { "host": "192.168.1.11:3000", "proxied": false } },
     { "name": "R4: X-Forwarded-For from an untrusted peer", "req": { "remoteAddress": "192.168.5.9", "headers": { "host": "192.168.5.20:3000", "x-forwarded-for": "203.0.113.9" } }, "expect": { "proxied": true } },
     { "name": "R4: X-Real-IP", "req": { "remoteAddress": "192.168.5.9", "headers": { "host": "192.168.5.20:3000", "x-real-ip": "203.0.113.9" } }, "expect": { "proxied": true } },
@@ -335,11 +336,11 @@
     { "name": "R4: proxy headers from a trusted hop are expected", "req": { "remoteAddress": "127.0.0.1", "headers": { "host": "127.0.0.1:4000", "x-forwarded-host": "192.168.1.11:3000", "x-forwarded-for": "192.168.1.77" } }, "expect": { "host": "192.168.1.11:3000", "proxied": false } },
     { "name": "operator trust 'loopback' does not reopen DNS rebinding: a dotted Host keeps a forged XFH unread", "trustProxy": "loopback", "req": { "remoteAddress": "127.0.0.1", "headers": { "host": "rebind.attacker:4000", "x-forwarded-host": "example.com" } }, "expect": { "host": "rebind.attacker:4000", "absent": false, "hop": "operator", "source": "host", "proxied": false } },
     { "name": "operator trust on a LAN subnet: a rebinding page in a LAN victim's browser", "trustProxy": "192.168.0.0/16", "req": { "remoteAddress": "192.168.1.77", "headers": { "host": "rebind.attacker:3000", "x-forwarded-host": "example.com" } }, "expect": { "host": "rebind.attacker:3000", "hop": "operator", "source": "host" } },
-    { "name": "operator proxy dialling a single-label upstream name: XFH read", "trustProxy": "10.0.0.0/8", "req": { "remoteAddress": "10.1.2.3", "headers": { "host": "wordjs_backend:4000", "x-forwarded-host": "example.com" } }, "expect": { "host": "example.com", "hop": "operator", "source": "x-forwarded-host" } },
+    { "name": "operator proxy dialling a single-label upstream name: XFH read", "trustProxy": "10.0.0.0/8", "req": { "remoteAddress": "10.1.2.3", "headers": { "host": "wordjs_backend:4000", "x-forwarded-host": "example.com" } }, "expect": { "host": "example.com", "raw": "example.com", "hop": "operator", "source": "x-forwarded-host" } },
     { "name": "operator proxy dialling localhost from another address: XFH read", "trustProxy": "10.0.0.0/8", "req": { "remoteAddress": "10.1.2.3", "headers": { "host": "localhost:4000", "x-forwarded-host": "example.com" } }, "expect": { "host": "example.com", "hop": "operator", "source": "x-forwarded-host" } },
     { "name": "operator proxy dialling an IPv6 literal: XFH read", "trustProxy": "fd00::/8", "req": { "remoteAddress": "fd00::7", "headers": { "host": "[fd00::5]:4000", "x-forwarded-host": "example.com" } }, "expect": { "host": "example.com", "hop": "operator", "source": "x-forwarded-host" } },
     { "name": "operator proxy: an underscore earns a dotted name no exemption", "trustProxy": "10.0.0.0/8", "req": { "remoteAddress": "10.1.2.3", "headers": { "host": "wordjs_backend.internal:4000", "x-forwarded-host": "example.com" } }, "expect": { "host": "wordjs_backend.internal:4000", "hop": "operator", "source": "host" } },
-    { "name": "operator proxy with a malformed Host: XFH unread, the Host is judged (400)", "trustProxy": "10.0.0.0/8", "req": { "remoteAddress": "10.1.2.3", "headers": { "host": "127.1", "x-forwarded-host": "example.com" } }, "expect": { "absent": false, "host": null, "hop": "operator", "source": "host" } },
+    { "name": "operator proxy with a malformed Host: XFH unread, the Host is judged (400)", "trustProxy": "10.0.0.0/8", "req": { "remoteAddress": "10.1.2.3", "headers": { "host": "127.1", "x-forwarded-host": "example.com" } }, "expect": { "absent": false, "host": null, "raw": "127.1", "hop": "operator", "source": "host" } },
     { "name": "operator proxy that preserves Host needs no XFH", "trustProxy": "10.0.0.0/8", "req": { "remoteAddress": "10.1.2.3", "headers": { "host": "example.com", "x-forwarded-host": "example.com", "x-forwarded-for": "203.0.113.9" } }, "expect": { "host": "example.com", "hop": "operator", "source": "host", "proxied": false } }
   ],
   "trustedScheme": [
@@ -352,5 +353,49 @@
     { "name": "untrusted peer cannot claim http on TLS", "req": { "remoteAddress": "203.0.113.9", "encrypted": true, "headers": { "host": "example.com", "x-forwarded-proto": "http" } }, "expect": "https" },
     { "name": "operator-trusted proxy", "trustProxy": "loopback", "req": { "remoteAddress": "127.0.0.1", "headers": { "host": "example.com", "x-forwarded-proto": "https" } }, "expect": "https" },
     { "name": "operator proxy that preserves Host: its scheme is still read (only XFH depends on the Host it sent)", "trustProxy": "10.0.0.0/8", "req": { "remoteAddress": "10.1.2.3", "headers": { "host": "www.example.com", "x-forwarded-host": "www.example.com", "x-forwarded-proto": "https" } }, "expect": "https" }
-  ]
+  ],
+  "ambiguousPath": {
+    "ambiguous": [
+      { "in": "/healthz/../api/v1/settings", "why": "dot segment: Next.js resolves it to /api/v1/settings (lab E1)" },
+      { "in": "/public/..", "why": "trailing dot segment" },
+      { "in": "/health/./x", "why": "single-dot segment" },
+      { "in": "/uploads/%2e%2e/api", "why": "encoded dot segment" },
+      { "in": "/uploads/.%2E/api", "why": "mixed literal and encoded dots, any case" },
+      { "in": "/uploads/%2e/api", "why": "encoded single-dot segment" },
+      { "in": "/themes/..;/api", "why": "dot segment before a ';' parameter" },
+      { "in": "/plugins/x/%2fapi", "why": "encoded slash" },
+      { "in": "/plugins/x/%5Capi", "why": "encoded backslash" },
+      { "in": "/uploads/..\\api", "why": "raw backslash: WHATWG reads it as a slash" },
+      { "in": "/uploads/%252e%252e/api", "why": "encoded '%': one more decode makes a dot segment" }
+    ],
+    "plain": [
+      { "in": "/uploads/2026/a..b.png", "why": "dots inside a segment" },
+      { "in": "/uploads/.hidden", "why": "a leading dot is a name" },
+      { "in": "/uploads/.../x", "why": "three dots are a name, not a dot segment" },
+      { "in": "/.well-known/acme-challenge/tok", "why": "a dot-prefixed directory" },
+      { "in": "/file%2Ename", "why": "an encoded dot inside a segment" },
+      { "in": "/", "why": "the root" }
+    ]
+  },
+  "dotSegments": {
+    "dotted": [
+      { "in": "/x/../api/v1/settings", "why": "Next.js resolves it to /api/v1/settings and fetches it through its /api rewrite (review EDGE-R1)" },
+      { "in": "/..", "why": "a dot segment right under the root" },
+      { "in": "/about/.", "why": "trailing single-dot segment" },
+      { "in": "/x/%2e%2e/api", "why": "encoded dot segment: WHATWG resolves it too" },
+      { "in": "/x/.%2E/api", "why": "mixed literal and encoded dots, any case" },
+      { "in": "/x/..;/api", "why": "dot segment before a ';' parameter" },
+      { "in": "/x\\..\\api", "why": "raw backslash: a slash to WHATWG" },
+      { "in": "http://example.com/x/../api", "why": "absolute-form request target" }
+    ],
+    "plain": [
+      { "in": "/uploads/100%25%20off.png", "why": "an encoded '%' (ambiguous, but no parser resolves it into another path): a real upload name" },
+      { "in": "/plugins/x/%2fapi", "why": "an encoded slash is not resolved by WHATWG" },
+      { "in": "/plugins/x/%5Capi", "why": "nor is an encoded backslash" },
+      { "in": "/uploads/2026/a..b.png", "why": "dots inside a segment" },
+      { "in": "/uploads/.../x", "why": "three dots are a name" },
+      { "in": "/.well-known/acme-challenge/tok", "why": "a dot-prefixed directory" },
+      { "in": "/", "why": "the root" }
+    ]
+  }
 }

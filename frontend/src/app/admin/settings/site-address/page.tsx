@@ -18,10 +18,12 @@ import {
     defaultExpiryFor,
     expiryToDateInput,
     fillTemplate,
+    ipLiteralsLabelKey,
     isCurrentAddress,
     isLanName,
     needsLocalConfirmation,
     oldAddressApplies,
+    ownAddressesHeadingKey,
     parseSiteAddress,
     policyWrite,
     signInPolicy,
@@ -37,6 +39,7 @@ import {
     type SiteAddressState,
     type WriteResult,
 } from "@/lib/siteAddress";
+import { RefusedByLabel } from "./RefusedByLabel";
 
 /**
  * Settings → Site address (SPEC §6). The ONLY screen that changes where the site answers and which
@@ -318,7 +321,8 @@ function CanonicalDialog({ state, prefillUrl, usingCurrent, t, onSubmit, onClose
 }) {
     const [url, setUrl] = useState(prefillUrl);
     const [oldAddress, setOldAddress] = useState<OldAddressAction>("keep");
-    const choice = canonicalChoice(url, state.canonical);
+    // During an upgrade conflict the configured address is a choice too ("Use A" opens this prefilled with it).
+    const choice = canonicalChoice(url, state.canonical, { conflict: !!state.conflict });
     const next = "site" in choice ? choice.site : null;
     const askOld = !!next && oldAddressApplies(next, state.canonical);
     const notes = next ? canonicalChangeNotes({ next, current: state.canonical, oldAddress: askOld ? oldAddress : "keep", usingCurrent }) : [];
@@ -522,7 +526,7 @@ export default function SiteAddressPage() {
         const signInOn = body.ipSignIn ?? state.ipSignIn;
         const signInText = t(signInOn ? "siteAddress.ipSignIn.on" : "siteAddress.ipSignIn.off");
         setPending({
-            summary: `${t("siteAddress.accepted.ipPolicy")}: ${t(`siteAddress.ip.${body.ipLiterals}`)}. ${signInText}`,
+            summary: `${t("siteAddress.accepted.ipPolicy")}: ${t(ipLiteralsLabelKey(body.ipLiterals, state.ownAddressesFrom))}. ${signInText}`,
             run: (currentPassword) => siteAddressApi.putPolicy({ ...body, currentPassword, rev }),
         });
     };
@@ -676,7 +680,8 @@ export default function SiteAddressPage() {
                             <div className="p-8 space-y-6 text-sm text-gray-700">
                                 <p>{t("siteAddress.accepted.loopback")}</p>
                                 <div>
-                                    <h3 className="font-bold text-gray-900">{t("siteAddress.accepted.own")}</h3>
+                                    {/* Behind a gateway, `own` is the gateway's addresses: the ones browsers connect to. */}
+                                    <h3 className="font-bold text-gray-900">{t(ownAddressesHeadingKey(state.ownAddressesFrom))}</h3>
                                     {state.ownAddresses.length === 0
                                         ? <p className="mt-1 text-gray-500">{t("siteAddress.accepted.ownNone")}</p>
                                         : <ul className="mt-1 flex flex-wrap gap-2">{state.ownAddresses.map((a) => <li key={a} className="rounded-xl bg-gray-100 px-3 py-1 font-mono text-xs">{a}</li>)}</ul>}
@@ -691,7 +696,7 @@ export default function SiteAddressPage() {
                                             onChange={(e) => setIpChoice(e.target.value === "own" || e.target.value === "none" ? e.target.value : "any")}
                                             className={`${inputCls} sm:max-w-xs`}
                                         >
-                                            {(["any", "own", "none"] as const).map((mode) => <option key={mode} value={mode}>{t(`siteAddress.ip.${mode}`)}</option>)}
+                                            {(["any", "own", "none"] as const).map((mode) => <option key={mode} value={mode}>{t(ipLiteralsLabelKey(mode, state.ownAddressesFrom))}</option>)}
                                         </select>
                                         <button type="button" className={secondaryBtn} disabled={!policyChange} onClick={submitPolicy}>
                                             {t("save")}
@@ -753,7 +758,11 @@ export default function SiteAddressPage() {
                                         <tbody className="divide-y divide-gray-50">
                                             {state.recentlyRefused.map((entry) => (
                                                 <tr key={entry.host} className="text-gray-800">
-                                                    <td className="px-4 py-3 font-mono whitespace-nowrap">{entry.host}</td>
+                                                    <td className="px-4 py-3 font-mono whitespace-nowrap">
+                                                        {entry.host}
+                                                        {/* Who refused it: the public listener's edge, the backend's own gate, or each. */}
+                                                        <RefusedByLabel source={entry.source} t={t} />
+                                                    </td>
                                                     <td className="px-4 py-3">{entry.count}</td>
                                                     <td className="px-4 py-3 whitespace-nowrap">{formatTime(entry.lastSeen) ?? ""}</td>
                                                     <td className="px-4 py-3 text-xs text-gray-600">{entry.hint ? t(`siteAddress.hint.${entry.hint}`) : ""}</td>

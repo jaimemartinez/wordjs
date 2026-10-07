@@ -62,9 +62,27 @@ function writePrivateKey(filePath: string, content: any) {
  * WITH WHAT: the cluster CA and this node's CN=backend identity, resolved by the ONE resolver for those
  * paths (frontend-purge clusterCertPaths: anchored to the installation, absolute paths untouched).
  * Verification is never relaxed: these requests carry private keys and the site's identity.
+ *
+ * WHO ANSWERS: the gateway, by its certificate's CN (gateway-internal, or gateway), on top of the name
+ * check. The cluster CA issues every service a certificate naming localhost and 127.0.0.1, so the name
+ * alone let any of them stand in for the gateway on its port — a process holding frontend.key would have
+ * been handed certificate keys, and its answer to a policy push would decide which IPs `own` answers
+ * (review R3S-4). The gateway pins its own upstreams the same way (gateway/src/proxy-config.js).
  */
 /** The error code of a node that has no cluster identity yet (never enrolled / installed standalone). */
 const NO_CLUSTER_IDENTITY = 'WJS_NO_CLUSTER_IDENTITY';
+
+/** The CNs the gateway's control plane presents (host-policy GATEWAY_CNS: the same identities). */
+const GATEWAY_CONTROL_CNS = ['gateway-internal', 'gateway'];
+
+/** The default name check, then the gateway's identity. */
+function checkGatewayIdentity(host: string, peer: any): Error | undefined {
+    const err = require('tls').checkServerIdentity(host, peer);
+    if (err) return err;
+    const cn = peer && peer.subject && peer.subject.CN;
+    if (GATEWAY_CONTROL_CNS.includes(cn)) return undefined;
+    return new Error(`The gateway's control plane answered with the certificate of '${cn}', not the gateway's.`);
+}
 
 function gatewayControlTarget(cfg: any): { hostname: string; port: number; servername?: string } {
     const configured = typeof cfg.gatewayHost === 'string' ? cfg.gatewayHost.trim().replace(/^\[(.*)\]$/, '$1') : '';
@@ -96,6 +114,7 @@ function gatewayControlRequest(method: 'GET' | 'POST', urlPath: string, body: un
             cert: fs.readFileSync(paths.cert),
             ca: fs.existsSync(paths.ca) ? fs.readFileSync(paths.ca) : undefined,
             rejectUnauthorized: true,
+            checkServerIdentity: checkGatewayIdentity,
             // A pooled agent keyed on these options would outlive a certificate rotation: one-shot sockets.
             agent: false,
             timeout: timeoutMs,

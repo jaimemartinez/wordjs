@@ -21,6 +21,9 @@ backend/wordjs-config.json
 # Catch every wordjs-config variant (e.g. wordjs-config.backup.json) in any dir — these hold
 # jwtSecret/gatewaySecret/dbPassword and must NEVER be committed.
 **/wordjs-config*.json
+# The writers' lock beside it (core/configManager withConfigLock): there only while a write is under way,
+# or after a crash in the middle of one.
+**/wordjs-config.json.lock
 gateway/gateway-config.json
 gateway-registry.json
 # The host policy the backend pushes to the gateway (POST /host-policy) and its write-in-progress temp

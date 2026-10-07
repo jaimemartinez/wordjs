@@ -303,12 +303,16 @@ const NEXT_OWNED_API_PATHS = ['/api/revalidate'];
 const CONTESTED_API_PATHS = ['/api/internal/gateway-update'];
 
 /**
- * True when the App Router owns this path, so no dispatcher may forward it to the backend. Segment
- * boundary, like isProxiedPath: `/api/revalidateXYZ` is not `/api/revalidate`.
+ * True when the App Router owns this path, so no dispatcher may forward it to the backend: the route
+ * itself, or with the one trailing slash Next redirects back to it (`/api/revalidateXYZ` is not
+ * `/api/revalidate`). Never what lies BELOW it: no route handler exists there, so Next resolves such a
+ * path through its own `/api/:path*` rewrite, back into the public listener that handed it to Next — one
+ * request to `/api/revalidate/x` became an endless chain of loopback requests. Below the route the
+ * backend answers, exactly where Next's own rewrite would have sent it.
  */
 function isNextOwnedApiPath(pathname) {
     const p = String(pathname || '');
-    return NEXT_OWNED_API_PATHS.some((route) => p === route || p.startsWith(route + '/'));
+    return NEXT_OWNED_API_PATHS.some((route) => p === route || p === route + '/');
 }
 
 /**

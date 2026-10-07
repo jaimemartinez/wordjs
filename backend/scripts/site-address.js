@@ -166,6 +166,24 @@ function ipSignInNotes(policy, ipSignIn) {
     return notes;
 }
 
+/**
+ * Which IP addresses `own` answers, and where that list comes from: the gateway's own report (kept beside
+ * the config by the running backend) or this machine's interfaces. Printed so an operator can see which
+ * one this command judged with (review R3S-3), null with a dist/ from before the report existed.
+ */
+function ownSourceLine(siteAddress) {
+    if (typeof siteAddress.ownAddressReport !== 'function') return null;
+    const report = siteAddress.ownAddressReport();
+    const list = report.addresses.length ? report.addresses.join(', ') : '(none)';
+    if (report.from === 'gateway') return `\`own\` means the gateway's addresses, as it reported them${report.receivedAt ? ` at ${report.receivedAt}` : ''}: ${list}`;
+    return `\`own\` means this machine's addresses: ${list}`;
+}
+
+function printOwnSource(out, siteAddress) {
+    const own = ownSourceLine(siteAddress);
+    if (own) out(`  (${own})`);
+}
+
 function describeAlias(entry, now) {
     const parts = [entry.origin, entry.mode];
     parts.push(`sign-in ${entry.signIn ? 'yes' : 'no'}${entry.signInExplicit ? '' : ' (default)'}`);
@@ -219,7 +237,10 @@ async function run(argv, io = {}) {
     }
     const cfg = fresh.parsed;
     const nodeEnv = env.NODE_ENV || cfg.nodeEnv || 'production';
-    const policy = hostPolicy.buildPolicy({ config: cfg, env, nodeEnv });
+    // `own` means what it means to the running server: behind a gateway, the addresses the gateway last
+    // reported (kept beside the config by the backend), else this machine's (core/site-address).
+    const ownAddresses = typeof siteAddress.publicOwnAddresses === 'function' ? siteAddress.publicOwnAddresses : undefined;
+    const policy = hostPolicy.buildPolicy({ config: cfg, env, nodeEnv, ownAddresses });
 
     if (command === 'list') {
         out(`Main address: ${policy.canonical ? policy.canonical.origin : `(${policy.canonicalError}: ${JSON.stringify(cfg.siteUrl === undefined ? null : cfg.siteUrl)})`}`);
@@ -229,6 +250,8 @@ async function run(argv, io = {}) {
         if (policy.aliases.size === 0) out('  (none)');
         for (const entry of policy.aliases.values()) out(`  ${describeAlias(entry, now)}`);
         out(`IP addresses: ${policy.ipLiterals} (${policy.ipLiteralsSource}); sign-in on IP addresses: ${policy.ipSignIn ? 'on' : 'off'}`);
+        const own = ownSourceLine(siteAddress);
+        if (own) out(`  ${own}`);
         if (policy.envHosts.size) out(`From WORDJS_ALLOWED_HOSTS: ${[...policy.envHosts.values()].map((e) => e.origin || hostPolicy.serialize(e)).join(', ')}`);
         if (policy.dev && policy.devOrigins.size) out(`Development origins (WORDJS_DEV_ORIGINS): ${[...policy.devOrigins].join(', ')}`);
         for (const warning of policy.warnings) out(`warning: ${warning}`);
@@ -248,10 +271,12 @@ async function run(argv, io = {}) {
         if (verdict.cls === 'unknown') {
             const hint = hostPolicy.refusalHint(parsed, policy, verdict.reason);
             out(`${host}: refused (421) — ${verdict.reason}${hint ? `; ${hostPolicy.REFUSAL_HINTS[hint]}` : '; add it with: npm run site -- add <url>'}`);
+            if (verdict.reason === 'ip-not-own') printOwnSource(out, siteAddress);
             return 1;
         }
         out(`${host}: answered as ${verdict.cls} (${verdict.reason})`);
         if (verdict.cls === 'ip') out('  (for a direct request; behind a proxy that does not forward Host, an IP address is refused)');
+        if (verdict.cls === 'ip' && policy.ipLiterals === 'own') printOwnSource(out, siteAddress);
         return 0;
     }
 
@@ -322,8 +347,11 @@ async function run(argv, io = {}) {
 
     // The interlock, as far as the server's files can tell: the gateway and frontend URLs. Recent use is
     // only known to the running server, which applies the same check to changes made in the admin screen.
+    // applyPlan also records which addresses the change stops answering (their sessions end for good), so
+    // it is given the environment, mode and own addresses this command judged the policy with.
     const rev = configManager.siteAddressRev(cfg);
-    const next = siteAddress.applyPlan(cfg, plan, { via: 'cli', actorId: null, now });
+    const judged = { via: 'cli', actorId: null, now, env, nodeEnv, ...(ownAddresses ? { ownAddresses } : {}) };
+    const next = siteAddress.applyPlan(cfg, plan, judged);
     const dependents = siteAddress.interlock(next, plan.removedHosts, { now, lastSeen: { get: () => null } })
         .filter((d) => d.kind !== 'recent-use');
     if (dependents.length && !flags.force) {
@@ -332,8 +360,10 @@ async function run(argv, io = {}) {
         err('Change those first, or run the command again with --force.');
         return 1;
     }
+    // --force and what it went past travel with the revision; the running backend audits them from there.
+    const applied = { ...judged, force: flags.force === true, forcedPast: dependents.length ? siteAddress.describeDependents(dependents) : null };
 
-    const written = configManager.updateConfig((current) => siteAddress.applyPlan(current, plan, { via: 'cli', actorId: null, now }), { expectRev: rev, reload: false });
+    const written = configManager.updateConfig((current) => siteAddress.applyPlan(current, plan, applied), { expectRev: rev, reload: false });
     if (!written.ok) {
         err(written.reason === 'stale'
             ? 'The site address changed while this command ran (the admin screen or another command). Nothing was written; run it again.'
@@ -342,19 +372,43 @@ async function run(argv, io = {}) {
                 : `${configManager.CONFIG_FILE} could not be written.`);
         return 1;
     }
-    out(`Saved (revision ${rev + 1}): ${describePlan(plan)}`);
+    out(`Saved (revision ${rev + 1}): ${describePlan(siteAddress, hostPolicy, plan)}`);
     if (dependents.length) out(`Forced past: ${dependents.map((d) => `${d.kind} ${d.detail}`).join(', ')}`);
     out('A running server applies it within a few seconds; a stopped one at its next start.');
     for (const note of notes) out(note);
     return 0;
 }
 
-function describePlan(plan) {
+const OLD_ADDRESS = {
+    keep: 'The old address is kept as another address.',
+    redirect: 'The old address now redirects to the new one.',
+    drop: 'The old address is no longer answered.',
+};
+
+/**
+ * What was saved, in the words the administrators' notice uses (core/site-address describeChange): a main
+ * address confirmed rather than moved, a move from http to https, the IP rule apart from the sign-in
+ * switch, and no stored rule read as `any` (review UX-4: this line printed "X → X" and "default → any"
+ * while the notice for the same revision was right). A compiled dist/ from before describeChange existed
+ * gets the older line.
+ */
+function describePlan(siteAddress, hostPolicy, plan) {
     const s = plan.summary;
     const list = (v) => (Array.isArray(v) && v.length ? v.join(', ') : 'none');
-    if (plan.kind === 'canonical') return `main address ${s.from || '(none)'} → ${s.to} (old address: ${s.oldAddress})${s.rewritten && s.rewritten.length ? `; also updated ${s.rewritten.join(', ')}` : ''}`;
-    if (plan.kind === 'aliases') return `added ${list(s.added)}; removed ${list(s.removed)}; changed ${list(s.changed)}`;
-    return `IP addresses ${s.from} → ${s.to}; sign-in on IP addresses ${s.ipSignIn ? 'on' : 'off'}`;
+    if (typeof siteAddress.describeChange !== 'function') {
+        if (plan.kind === 'canonical') return `main address ${s.from || '(none)'} → ${s.to} (old address: ${s.oldAddress})${s.rewritten && s.rewritten.length ? `; also updated ${s.rewritten.join(', ')}` : ''}`;
+        if (plan.kind === 'aliases') return `added ${list(s.added)}; removed ${list(s.removed)}; changed ${list(s.changed)}`;
+        return `IP addresses ${s.from} → ${s.to}; sign-in on IP addresses ${s.ipSignIn ? 'on' : 'off'}`;
+    }
+    const sentences = [siteAddress.describeChange(plan.kind, s)];
+    if (plan.kind === 'canonical') {
+        // What happens to the previous main address matters only when the host itself moved.
+        const from = hostPolicy.parseSiteUrl(s.from);
+        const to = hostPolicy.parseSiteUrl(s.to);
+        if (from && to && from.hostname !== to.hostname && OLD_ADDRESS[s.oldAddress]) sentences.push(OLD_ADDRESS[s.oldAddress]);
+        if (Array.isArray(s.rewritten) && s.rewritten.length) sentences.push(`It also updated ${s.rewritten.join(', ')}.`);
+    }
+    return sentences.join(' ');
 }
 
 module.exports = { run, parseArgs, parseExpires, USAGE };

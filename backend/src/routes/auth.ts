@@ -13,9 +13,11 @@ const User = require('../models/User');
 // sessionCookieOptions/clearSessionCookies live there too: the session cookie and its `wjs_csrf`
 // double-submit partner must agree on secure/sameSite/path, so ONE module owns both halves.
 // refuseInsecureSignIn/signInRefusal are the sign-in rule behind that door (which address and which
-// transport may mint a session), exposed so login and register can refuse BEFORE a password is evaluated.
-// sessionBoundToSecondaryAddress keeps an address-bound session from minting an unbound API token.
-const { authenticate, generateToken, verifyToken, issueSessionCookie, sessionOnly, sessionCookie, sessionCookieOptions, clearSessionCookies, refuseInsecureSignIn, signInRefusal, sessionBoundToSecondaryAddress } = require('../middleware/auth');
+// transport may mint a session), exposed so login and register can refuse BEFORE a password is evaluated;
+// refuseRetiringSignIn likewise for an address retired a few seconds ago (503 rest_address_retiring).
+// sessionBoundToSecondaryAddress keeps an address-bound session from minting an unbound API token, and
+// unboundSessionOnly from changing which accounts need a second factor (PUT /mfa/policy).
+const { authenticate, generateToken, verifyToken, issueSessionCookie, sessionOnly, sessionCookie, sessionCookieOptions, clearSessionCookies, refuseInsecureSignIn, refuseRetiringSignIn, signInRefusal, sessionBoundToSecondaryAddress, unboundSessionOnly, sessionAddressStillAccepted } = require('../middleware/auth');
 const { isAdmin, can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 // THE ROUTE-ID CONTRACT — see core/query-params: one definition of "a route id" for the whole tree.
@@ -564,13 +566,24 @@ function withSignInEligibility(req: Request, res: Response, next: () => void): v
  *               $ref: '#/components/schemas/RestError'
  *       429:
  *         description: Rate limited by the strict per-IP auth limiter.
+ *       503:
+ *         description: >-
+ *           rest_address_retiring — this address was retired a few seconds ago (removed and added back,
+ *           or the IP policy narrowed and widened again), and a session started on it now would already
+ *           be ended. Carries Retry-After (data.retryAfter, seconds); answered before the body is looked at.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
  *     security: []
  */
 router.post('/register', asyncHandler(async (req: Request, res: Response) => {
     // The sign-in rule first (REDTEAM R13): on an address that may not mint a session, refuse before an
     // account is created and before the password is looked at — issueSessionCookie would refuse anyway,
-    // but only after the account existed and the password had been processed.
+    // but only after the account existed and the password had been processed. The same for an address
+    // whose sessions are still being ended (rest_address_retiring).
     if (refuseInsecureSignIn(req, res)) return;
+    if (refuseRetiringSignIn(req, res)) return;
     const registrationAllowed = await getOption('users_can_register', 0);
     if (!registrationAllowed || registrationAllowed == '0') {
         return res.status(403).json({
@@ -757,13 +770,25 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/RestError'
+ *       503:
+ *         description: >-
+ *           rest_address_retiring — this address was retired a few seconds ago (removed and added back,
+ *           or the IP policy narrowed and widened again), and a session started on it now would already
+ *           be ended. Carries Retry-After (data.retryAfter, seconds); answered before the credentials are
+ *           evaluated.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
  *     security: []
  */
 router.post('/login', asyncHandler(async (req: Request, res: Response) => {
     // The sign-in rule BEFORE the credentials are evaluated (REDTEAM R13): on an address that may not
     // mint a session there is no point verifying a password, counting a failure against the account or
-    // handing out an MFA challenge — the session could never be issued here.
+    // handing out an MFA challenge — the session could never be issued here. Nor on an address whose
+    // sessions are still being ended (retired seconds ago): that session would be dead on arrival.
     if (refuseInsecureSignIn(req, res)) return;
+    if (refuseRetiringSignIn(req, res)) return;
     const { username, password } = req.body;
 
     if (!username || !password) {
@@ -1051,6 +1076,14 @@ router.post('/validate', authenticate, (req: Request, res: Response) => {
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/RestError'
+ *       503:
+ *         description: >-
+ *           rest_address_retiring — the address the session is bound to was retired a few seconds ago, so
+ *           the refreshed session would already be ended; no cookie is set. Carries Retry-After.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
  */
 router.post('/refresh', authenticate, (req: Request, res: Response) => {
     // `req` carries the presented session's address binding (set by authenticate), so the new token is
@@ -1122,9 +1155,18 @@ router.post('/logout', asyncHandler(async (req: Request, res: Response) => {
         if (!token) token = sessionCookie(req);
         if (token) {
             const decoded = verifyToken(token);
-            if (decoded && decoded.userId) {
-                await User.updateMeta(decoded.userId, 'token_valid_after', String(Math.floor(Date.now() / 1000)));
-                actorId = decoded.userId;
+            // Only a LIVE session ends its user's sessions — the same test authenticate applies. A token
+            // that is already dead (minted on an address the site no longer answers, issued before an
+            // earlier logout or password change, or not a session token at all) revokes nothing: whoever
+            // holds a dead cookie — the next holder of a retired alias, say — could otherwise sign its owner
+            // out everywhere, as often as they liked, while the JWT lived.
+            if (decoded && decoded.userId && !decoded.purpose && sessionAddressStillAccepted(decoded)) {
+                const user = await User.findById(decoded.userId);
+                const validAfter = user ? parseInt(user.meta && user.meta.token_valid_after, 10) : 0;
+                if (user && !(validAfter && decoded.iat && decoded.iat <= validAfter)) {
+                    await User.updateMeta(decoded.userId, 'token_valid_after', String(Math.floor(Date.now() / 1000)));
+                    actorId = decoded.userId;
+                }
             }
         }
     } catch { /* invalid/expired token — nothing to revoke */ }
@@ -1896,6 +1938,15 @@ router.delete('/tokens/:id', authenticate, sessionOnly, can('manage_api_tokens')
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/RestError'
+ *       503:
+ *         description: >-
+ *           rest_address_retiring — this address was retired a few seconds ago, and a session started on
+ *           it now would already be ended. Carries Retry-After; answered before the code is checked, so no
+ *           backup code is used up and the same challenge can be sent again.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
  */
 router.post('/mfa', asyncHandler(async (req: Request, res: Response) => {
     const { mfaToken, code } = req.body || {};
@@ -1905,6 +1956,8 @@ router.post('/mfa', asyncHandler(async (req: Request, res: Response) => {
     }
     const user = await User.findById(challenge.userId);
     if (!user) return res.status(401).json({ code: 'rest_user_invalid', message: 'User not found.', data: { status: 401 } });
+    // Before the code is looked at: a backup code spent on a session that could not be issued is lost.
+    if (refuseRetiringSignIn(req, res)) return;
 
     // Throttle code guesses under a SEPARATE 'mfa:' lockout bucket. Crucially this is NOT the password
     // bucket (user.userLogin) that /login clears on a correct password — otherwise an attacker who knows
@@ -2496,14 +2549,15 @@ router.get('/mfa/policy', authenticate, sessionOnly, isAdmin, asyncHandler(async
  *               $ref: '#/components/schemas/RestError'
  *       403:
  *         description: >-
- *           rest_forbidden (not an administrator), the caller is headless, rest_csrf_token /
- *           rest_csrf_invalid, or mfa_enrollment_required.
+ *           rest_forbidden (not an administrator), the caller is headless, rest_account_bound_session
+ *           (a session started at an address other than the main one may not change which accounts need
+ *           a second factor), rest_csrf_token / rest_csrf_invalid, or mfa_enrollment_required.
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/RestError'
  */
-router.put('/mfa/policy', authenticate, sessionOnly, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.put('/mfa/policy', authenticate, sessionOnly, isAdmin, unboundSessionOnly, asyncHandler(async (req: Request, res: Response) => {
     const { requiredRoles, graceDays, enforceForApiTokens } = req.body || {};
     if (requiredRoles != null && !Array.isArray(requiredRoles)) {
         return res.status(400).json({ code: 'rest_invalid_param', message: 'requiredRoles must be an array of role slugs.', data: { status: 400 } });

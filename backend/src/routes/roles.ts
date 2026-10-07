@@ -7,7 +7,9 @@ import type { Request, Response } from 'express';
 const express = require('express');
 const router = express.Router();
 const { getRoles, setRole, getRole, removeRole, getAllAvailableCapabilities } = require('../core/roles');
-const { authenticate } = require('../middleware/auth');
+// unboundSessionOnly: a role definition is what every account holding it may do, so a session started at
+// an address other than the main one may not change one (middleware/auth.ts refuseBoundSession).
+const { authenticate, unboundSessionOnly } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 
@@ -107,8 +109,12 @@ router.get('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request, re
  *     responses:
  *       201:
  *         description: Role saved
+ *       403:
+ *         description: >-
+ *           rest_forbidden (not an administrator), or rest_account_bound_session (a session started at
+ *           an address other than the main one may not change what a role may do).
  */
-router.post('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.post('/', authenticate, isAdmin, unboundSessionOnly, asyncHandler(async (req: Request, res: Response) => {
     const { slug, name, capabilities } = req.body;
 
     if (!slug || !name) {
@@ -142,8 +148,12 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: R
  *         description: Role deleted
  *       400:
  *         description: Cannot delete core roles
+ *       403:
+ *         description: >-
+ *           rest_forbidden (not an administrator), or rest_account_bound_session (a session started at
+ *           an address other than the main one).
  */
-router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.delete('/:slug', authenticate, isAdmin, unboundSessionOnly, asyncHandler(async (req: Request, res: Response) => {
     const slug: string = req.params.slug as string;
 
     // Prevent deleting core roles

@@ -95,9 +95,16 @@ function prefixOwner(prefix) {
     return null;
 }
 
-/** True when the App Router owns this path. */
+/**
+ * True when the App Router owns this path: the route itself, or with the one trailing slash Next
+ * redirects back to it — never what lies BELOW it. No route handler exists there, so Next resolves such a
+ * path through its own `/api/:path*` rewrite, back into the public listener, which handed it to Next
+ * again: one anonymous request to `/api/revalidate/x` became an endless chain of loopback requests. Below
+ * the route the backend answers, exactly where Next's own rewrite would have sent it.
+ */
 function isNextOwnedApiPath(path) {
-    return NEXT_OWNED_API_PATHS.some((route) => underPrefix(requestPath(path), route));
+    const p = requestPath(path);
+    return NEXT_OWNED_API_PATHS.some((route) => p === route || p === route + '/');
 }
 
 /**

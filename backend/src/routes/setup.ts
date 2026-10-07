@@ -7,7 +7,7 @@ const config = require('../config/app');
 const path = require('path');
 const { verifyInstallToken } = require('../core/install-token');
 const hostPolicy: typeof import('../core/host-policy') = require('../core/host-policy');
-const { siteHostPolicy, signInRefusal, sessionCookieOptions } = require('../middleware/auth');
+const { siteHostPolicy, signInRefusal, signInRetiring, sessionCookieOptions } = require('../middleware/auth');
 // The installer runs before any account exists, so its 500s are the most exposed in the product:
 // whatever broke (a filesystem path, a database DSN, a TLS library) is logged, never answered.
 const { publicErrorText } = require('../middleware/errorHandler');
@@ -488,10 +488,11 @@ router.post('/test-db', async (req: Request, res: Response) => {
  *                   type: boolean
  *                 autoLoginSkipped:
  *                   type: string
- *                   enum: [address-not-accepted, sign-in-refused]
+ *                   enum: [address-not-accepted, sign-in-refused, address-retiring]
  *                   description: >-
  *                     Present when no session was issued because this address will be refused from now
- *                     on, or may not mint a session (see POST /auth/login 403 rest_insecure_transport).
+ *                     on, may not mint a session (see POST /auth/login 403 rest_insecure_transport), or
+ *                     was retired a few seconds ago (see POST /auth/login 503 rest_address_retiring).
  *                 redirectTo:
  *                   type: string
  *                   description: A path, to be opened at siteUrl when the current address is not accepted.
@@ -668,6 +669,9 @@ router.post('/install', async (req: Request, res: Response) => {
         ...(currentAddress && 'alias' in currentAddress
             ? { siteAliases: [...(Array.isArray(enrolledConfig.siteAliases) ? enrolledConfig.siteAliases : []), currentAddress.alias] }
             : {}),
+        // Revision 1 of the site's addresses, recorded as the installer's (site_address_rev follows with
+        // the other options below), not as the legacy upgrade the first reconcile would otherwise record.
+        siteAddress: require('../core/site-address').installRecord(Date.now()),
         // Rotating this on an enrolled node would desynchronise it from the gateway's shared secret.
         gatewaySecret: isEnrolledNode ? enrolledConfig.gatewaySecret : gatewaySecret,
         // The live signing secret (see above) — what the next boot will sign and verify with.
@@ -713,6 +717,8 @@ router.post('/install', async (req: Request, res: Response) => {
             await updateOption('blogdescription', String(siteDescription ?? ''));
             await updateOption('siteurl', String(siteUrl ?? ''));
             await updateOption('home', String(frontendUrl ?? ''));
+            // The mirror of siteAddress.rev in the config just written (core/site-address installRecord).
+            await updateOption('site_address_rev', newConfig.siteAddress.rev);
 
             // SECURITY: Generate mTLS Certificates — but NEVER on a cluster-enrolled node. There the
             // cluster CA already exists on the GATEWAY (its private key deliberately never leaves that
@@ -850,6 +856,10 @@ router.post('/install', async (req: Request, res: Response) => {
                 // the cookie's Secure attribute and the sign-in rule judge THIS address, not a default.
                 if (where) Object.assign(req, { siteHost: where });
                 if (signInRefusal(req)) autoLoginSkipped = 'sign-in-refused';
+                // Asked here, like the sign-in rule, so the one door below never answers this request with
+                // its 503 (the install would then end before the install token is cleared and site-address
+                // is started). The new config's record retires nothing today; this keeps it that way.
+                else if (signInRetiring(req)) autoLoginSkipped = 'address-retiring';
             }
             try {
                 const createdAdmin = autoLoginSkipped

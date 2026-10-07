@@ -13,7 +13,17 @@
  *   R10  the writer never replaces an unreadable file, compare-and-swaps on the revision, keeps no temp
  *        files, and a CLI change is never rolled back
  * and SPEC §7: a legacy install is upgraded without changing what it links to, and a disagreement between
- * the file and the database is shown, never auto-resolved.
+ * the file and the database is shown, never auto-resolved. From the 3-mode lab: every revision the CLI
+ * wrote gets its own audit row, however quickly they came (M-16), `--force` included — also when a commit
+ * overtakes it, committed with the revision (review PL-1/PL-2), with one notice per batch; either
+ * address resolves an upgrade conflict, the config's own too; a fresh install records itself (M-03).
+ *
+ * MUTATION PROOF (each applied to the source, watched to fail, restored): audit only the last revision;
+ * keep no change log; leave the gap unaudited; stop the CLI recording --force; make the config's own
+ * address a no-op again; end a conflict only when the link base moved; record the install as the upgrade;
+ * count bookkeeping records as changes; let a commit ignore a pending CLI revision; mark the pre-commit
+ * revision applied on a rollback; audit after the pushes, or outside the mirrors' transaction; drop the
+ * lastChange fallback; merge gaps into one span; notify per revision; wait on the mail server.
  */
 
 const { describe, test, before, after, beforeEach } = require('node:test');
@@ -336,6 +346,349 @@ describe('a change written by the CLI is applied by the running server', () => {
         assert.strictEqual(fileText(), written, 'the operator\'s change at the server stands');
         assert.strictEqual(await siteAddress.checkExternalChange(), 'applied', 'and the next tick applies it');
         assert.strictEqual(await option('siteurl'), 'https://cli.example');
+    });
+});
+
+// ─── lab finding M-16: every revision the CLI wrote is on the record ──────────────────────────────
+
+describe('every revision the CLI wrote is audited and announced, however quickly they came (lab M-16)', () => {
+    const notes = async () => (await db.all('SELECT message FROM notifications ORDER BY id')).map((n: any) => n.message);
+    const addAlias = (host: string) => cliWrite((cfg) => siteAddress.planAliases(cfg, {
+        aliases: [...(cfg.siteAliases || []), { url: `https://${host}` }], via: 'cli', now: Date.now(),
+    }));
+    const removeAlias = (host: string) => cliWrite((cfg) => siteAddress.planAliases(cfg, {
+        aliases: (cfg.siteAliases || []).filter((a: any) => hostPolicy.parseSiteUrl(a.url).hostname !== host), via: 'cli', now: Date.now(),
+    }));
+
+    test('two writes inside one watcher tick: one audit row EACH, in order, and one notice naming both', async () => {
+        await world({ ...BASE, siteAddress: { rev: 13 } }, { siteurl: 'https://example.com', rev: '13' });
+        assert.strictEqual((await siteAddress.reconcileAtBoot()).state, 'ok');
+        addAlias('tmp.example.com');
+        removeAlias('tmp.example.com');
+        assert.strictEqual(await siteAddress.checkExternalChange(), 'applied');
+        assert.strictEqual(await option('site_address_rev'), '15');
+        assert.deepStrictEqual((await audits()).map((a: any) => [a.action, a.detail.rev, a.detail.via, a.detail.added, a.detail.removed]), [
+            ['site.address.aliases', 14, 'cli', ['tmp.example.com'], undefined],
+            ['site.address.aliases', 15, 'cli', undefined, ['tmp.example.com']],
+        ], 'the address the second row removes was added by a row of its own');
+        // One notice per apply, not per revision (review PL-6: a scripted series sent one email per write).
+        const messages = await notes();
+        assert.strictEqual(messages.length, 1, JSON.stringify(messages));
+        assert.match(messages[0], /^2 changes to the site address were applied\. .*Added: tmp\.example\.com\..*Removed: tmp\.example\.com\./);
+        assert.strictEqual(await siteAddress.checkExternalChange(), 'unchanged', 'and nothing twice');
+        assert.strictEqual((await audits()).length, 2);
+    });
+
+    test('a series written while the backend was stopped is applied at boot, one row per revision', async () => {
+        await world({ ...BASE, siteAddress: { rev: 4 } }, { siteurl: 'https://example.com', rev: '4' });
+        cliWrite((cfg) => siteAddress.planPolicy(cfg, { ipLiterals: 'own' }));
+        addAlias('a.example.com');
+        cliWrite((cfg) => siteAddress.planCanonical(cfg, { url: 'https://moved.example', via: 'cli', now: Date.now() }));
+        assert.strictEqual((await siteAddress.reconcileAtBoot()).state, 'applied');
+        assert.deepStrictEqual((await audits()).map((a: any) => [a.action, a.detail.rev, a.actor]), [
+            ['site.address.policy', 5, null], ['site.address.aliases', 6, null], ['site.address.canonical', 7, null],
+        ]);
+        const messages = await notes();
+        assert.strictEqual(messages.length, 1, 'one notice for the whole series');
+        assert.match(messages[0], /^3 changes .*IP address policy changed.*Added: a\.example\.com.*main address changed from example\.com to moved\.example/);
+        assert.strictEqual(await option('siteurl'), 'https://moved.example');
+    });
+
+    test('more revisions than the log keeps: the ones it no longer holds are ONE gap row, never silently skipped', async () => {
+        await world({ ...BASE, siteAddress: { rev: 4 } }, { siteurl: 'https://example.com', rev: '4' });
+        for (let i = 0; i < siteAddress.MAX_CHANGE_LOG + 5; i++) cliWrite((cfg) => siteAddress.planPolicy(cfg, { ipLiterals: i % 2 ? 'any' : 'own' }));
+        assert.strictEqual(fileConfig().siteAddress.changes.length, siteAddress.MAX_CHANGE_LOG, 'the log is bounded');
+        assert.strictEqual((await siteAddress.reconcileAtBoot()).state, 'applied');
+        const rows = await audits();
+        assert.deepStrictEqual(rows.filter((a: any) => a.action === 'site.address.gap').map((a: any) => a.detail), [{ from: 5, to: 9, revisions: 5, rev: 29 }]);
+        assert.deepStrictEqual(rows.filter((a: any) => a.action === 'site.address.policy').map((a: any) => a.detail.rev),
+            Array.from({ length: siteAddress.MAX_CHANGE_LOG }, (_, i) => 10 + i));
+        assert.ok((await notes()).some((m: string) => /Revisions 5–9 of the site address were written at the server/.test(m)), 'administrators are told too');
+    });
+
+    test('a file from a writer without the log (an older CLI): its last revision is audited, the rest is a gap', async () => {
+        await world({ ...BASE, siteAliases: [{ url: 'https://www.example.com' }], siteAddress: { rev: 9, lastChange: { kind: 'aliases', via: 'cli', by: 7, at: '2026-10-06T00:00:00.000Z', added: ['www.example.com'] } } },
+            { siteurl: 'https://example.com', rev: '6' });
+        assert.strictEqual((await siteAddress.reconcileAtBoot()).state, 'applied');
+        assert.deepStrictEqual((await audits()).map((a: any) => [a.action, a.actor, a.detail.rev, a.detail.from, a.detail.to, a.detail.added]), [
+            ['site.address.aliases', null, 9, undefined, undefined, ['www.example.com']],
+            ['site.address.gap', null, 9, 7, 8, undefined],
+        ], 'a name written in the file is never taken as the actor');
+    });
+
+    test('changesSince: what the installer and the legacy upgrade numbered is bookkeeping, neither a change nor a gap', () => {
+        const install = { ...BASE, siteAddress: siteAddress.installRecord(Date.now()) };
+        assert.deepStrictEqual(siteAddress.changesSince(install, 0), { events: [], gaps: [] });
+        const upgraded = { ...BASE, siteAddress: { rev: 1, lastChange: { kind: 'repair', via: 'upgrade', by: null, at: 'x', reason: 'upgrade' } } };
+        assert.deepStrictEqual(siteAddress.changesSince(upgraded, 0), { events: [], gaps: [] });
+        assert.deepStrictEqual(siteAddress.changesSince({ ...BASE, siteAddress: { rev: 3, changes: [{ rev: 3, kind: 'nonsense' }, 'x', null] } }, 1).gaps, [{ from: 2, to: 3, revisions: 2 }],
+            'a record that does not read back is a gap, never a row of made-up content');
+    });
+});
+
+// ─── review of the pipeline fixes: the record survives every order of events ──────────────────────
+
+describe('every revision stays on the record — commits, crashes, older writers (review PL-1/2/5/6/8)', () => {
+    const notes = async () => (await db.all('SELECT message FROM notifications ORDER BY id')).map((n: any) => n.message);
+    const rows = async () => (await audits()).map((a: any) => [a.action, a.detail.rev, a.actor, a.detail.via]);
+    const addAlias = (host: string) => cliWrite((cfg) => siteAddress.planAliases(cfg, {
+        aliases: [...(cfg.siteAliases || []), { url: `https://${host}` }], via: 'cli', now: Date.now(),
+    }));
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+    test('PL-1: a CLI revision the watcher has not applied yet is audited by the commit that overtakes it', async () => {
+        await world({ ...BASE, siteAddress: { rev: 4 } }, { siteurl: 'https://example.com', rev: '4' });
+        assert.strictEqual((await siteAddress.reconcileAtBoot()).state, 'ok');
+        addAlias('tmp.example.com');
+        // An administrator saves before the next watcher tick: the commit writes revision 6 over the CLI's 5.
+        await siteAddress.commit((c: any) => siteAddress.planPolicy(c, { ipLiterals: 'own' }), { expectRev: 5, via: 'ui', actorId: adminId });
+        assert.strictEqual(await siteAddress.checkExternalChange(), 'unchanged');
+        assert.deepStrictEqual(await rows(), [['site.address.aliases', 5, null, 'cli'], ['site.address.policy', 6, adminId, 'ui']]);
+        const messages = await notes();
+        assert.strictEqual(messages.length, 1);
+        assert.match(messages[0], /Added: tmp\.example\.com.*command line.*IP address policy/);
+        assert.notStrictEqual(hostPolicy.classify(hostPolicy.parseHost('tmp.example.com'), siteHostPolicy.get()).cls, 'unknown', 'and it is in force');
+    });
+
+    test('PL-1: the gateway\'s automatic http → https upgrade overtaking a CLI revision audits it too', async () => {
+        await world({ ...BASE, siteUrl: 'http://example.com', siteAddress: { rev: 4 } }, { siteurl: 'http://example.com', rev: '4' });
+        assert.strictEqual((await siteAddress.reconcileAtBoot()).state, 'ok');
+        addAlias('tmp.example.com');
+        assert.strictEqual((await siteAddress.noteGatewaySiteUrl('https://example.com')).outcome, 'upgraded');
+        assert.strictEqual(await siteAddress.checkExternalChange(), 'unchanged');
+        assert.deepStrictEqual((await rows()).map((r: any[]) => r.slice(0, 2)), [['site.address.aliases', 5], ['site.address.repair', 6]]);
+    });
+
+    test('PL-1: when a commit is rolled back, a CLI revision pending before it is still applied by the next tick', async () => {
+        await world({ ...BASE, siteAddress: { rev: 4 } }, { siteurl: 'https://example.com', rev: '4' });
+        assert.strictEqual((await siteAddress.reconcileAtBoot()).state, 'ok');
+        addAlias('tmp.example.com');
+        const real = options.updateOption;
+        options.updateOption = async () => { throw new Error('database down (simulated)'); };
+        try {
+            await assert.rejects(() => siteAddress.commit((c: any) => siteAddress.planPolicy(c, { ipLiterals: 'own' }), { expectRev: 5, via: 'ui', actorId: adminId }),
+                (e: any) => e.code === 'rest_site_address_rollback');
+        } finally {
+            options.updateOption = real;
+        }
+        assert.strictEqual(configManager.siteAddressRev(fileConfig()), 5, 'the file is back at the CLI\'s revision');
+        assert.deepStrictEqual(await rows(), [], 'the refused commit left no row of its own');
+        assert.strictEqual(await siteAddress.checkExternalChange(), 'applied', 'the CLI revision is not taken for applied');
+        assert.deepStrictEqual(await rows(), [['site.address.aliases', 5, null, 'cli']]);
+    });
+
+    test('PL-2: a backend killed while it waits on the gateway has already put every revision on the record', async () => {
+        await world({ ...BASE, mtls: { cert: 'certs/backend.crt' }, siteAddress: { rev: 4 } }, { siteurl: 'https://example.com', rev: '4' });
+        const certManager = require('../core/cert-manager');
+        const realPush = certManager.pushHostPolicyToGateway;
+        let release: () => void = () => { /* set below */ };
+        certManager.pushHostPolicyToGateway = async () => ({ success: true, stored: 'unchanged', refused: [] });
+        try {
+            const { state, gatewayArmed } = await siteAddress.reconcileAtBoot();
+            assert.strictEqual(state, 'ok');
+            await gatewayArmed;
+            cliWrite((cfg) => siteAddress.planPolicy(cfg, { ipLiterals: 'own' }));
+            cliWrite((cfg) => siteAddress.planPolicy(cfg, { ipLiterals: 'none' }));
+            // The gateway does not answer: the apply stops inside the push, as a process killed there would.
+            certManager.pushHostPolicyToGateway = () => new Promise((resolve) => { release = () => resolve({ success: true, stored: 'written', refused: [] }); });
+            const tick = siteAddress.checkExternalChange();
+            const deadline = Date.now() + 5000;
+            while (await option('site_address_rev') !== '6' && Date.now() < deadline) await sleep(20);
+            await sleep(100);
+            // "The kill": what is in the database now is all a restarted backend will ever see, since its
+            // reconcile finds the file and the database at the same revision.
+            assert.strictEqual(await option('site_address_rev'), '6');
+            assert.deepStrictEqual((await rows()).map((r: any[]) => r.slice(0, 2)), [['site.address.policy', 5], ['site.address.policy', 6]]);
+            assert.strictEqual((await notes()).length, 1, 'and the administrators were told before the push');
+            release();
+            assert.strictEqual(await tick, 'applied');
+        } finally {
+            release();
+            certManager.pushHostPolicyToGateway = realPush;
+        }
+    });
+
+    test('PL-2: a revision and its audit rows commit together — a refused mirror write leaves neither, and the retry records once', async () => {
+        await world({ ...BASE, siteAddress: { rev: 4 } }, { siteurl: 'https://example.com', rev: '4' });
+        assert.strictEqual((await siteAddress.reconcileAtBoot()).state, 'ok');
+        cliWrite((cfg) => siteAddress.planPolicy(cfg, { ipLiterals: 'own' }));
+        const real = options.updateOption;
+        options.updateOption = async (name: string, ...rest: unknown[]) => {
+            if (name === 'site_address_rev') throw new Error('database down (simulated)');
+            return real(name, ...rest);
+        };
+        try {
+            await assert.rejects(() => siteAddress.checkExternalChange(), /database down/);
+        } finally {
+            options.updateOption = real;
+        }
+        assert.strictEqual(await option('site_address_rev'), '4');
+        assert.deepStrictEqual(await rows(), [], 'the rows were rolled back with the revision');
+        assert.strictEqual(await siteAddress.checkExternalChange(), 'applied');
+        assert.deepStrictEqual((await rows()).map((r: any[]) => r.slice(0, 2)), [['site.address.policy', 5]], 'exactly once');
+    });
+
+    test('PL-5: a revision an older writer added (lastChange, no log entry of its own) is audited, not a gap', async () => {
+        const at = '2026-10-06T00:00:00.000Z';
+        await world({
+            ...BASE,
+            siteAliases: [{ url: 'https://a.example.com' }, { url: 'https://b.example.com' }],
+            siteAddress: {
+                rev: 6,
+                // What HEAD's applyPlan writes: the log carried over untouched, lastChange without a revision.
+                lastChange: { kind: 'aliases', via: 'cli', by: null, at, added: ['b.example.com'] },
+                changes: [{ rev: 5, kind: 'aliases', via: 'cli', by: null, at, force: false, added: ['a.example.com'] }],
+            },
+        }, { siteurl: 'https://example.com', rev: '4' });
+        assert.strictEqual((await siteAddress.reconcileAtBoot()).state, 'applied');
+        assert.deepStrictEqual((await audits()).map((a: any) => [a.action, a.detail.rev, a.detail.added]), [
+            ['site.address.aliases', 5, ['a.example.com']],
+            ['site.address.aliases', 6, ['b.example.com']],
+        ]);
+    });
+
+    test('PL-8: revisions the log does not cover are one gap per run, never a span that includes audited ones', () => {
+        const changes = [...Array.from({ length: 5 }, (_, i) => 10 + i), ...Array.from({ length: 14 }, (_, i) => 16 + i)]
+            .map((rev) => ({ rev, kind: 'policy', via: 'cli', by: null, at: 'x', from: 'any', to: 'own' }));
+        const { events, gaps } = siteAddress.changesSince({ ...BASE, siteAddress: { rev: 29, changes } }, 4);
+        assert.strictEqual(events.length, 19);
+        assert.deepStrictEqual(gaps, [{ from: 5, to: 9, revisions: 5 }, { from: 15, to: 15, revisions: 1 }]);
+        // A hand-edited revision of any size is walked by what the log covers, not revision by revision.
+        const started = Date.now();
+        assert.deepStrictEqual(siteAddress.changesSince({ ...BASE, siteAddress: { rev: 1e12 } }, 0).gaps, [{ from: 1, to: 1e12, revisions: 1e12 }]);
+        assert.ok(Date.now() - started < 1000);
+    });
+
+    test('PL-6: a scripted series is one notice and one email, and the mail server never holds the queue', async () => {
+        await world({ ...BASE, siteAddress: { rev: 4 } }, { siteurl: 'https://example.com', rev: '4' });
+        assert.strictEqual((await siteAddress.reconcileAtBoot()).state, 'ok');
+        const realSend = (global as any).wordjs_send_mail;
+        const sent: any[] = [];
+        // A mail provider that never finishes delivering.
+        (global as any).wordjs_send_mail = (m: any) => { sent.push(m); return new Promise(() => { /* never */ }); };
+        await options.updateOption('admin_email', 'owner@example.org');
+        try {
+            for (let i = 0; i < siteAddress.MAX_CHANGE_LOG + 5; i++) cliWrite((cfg) => siteAddress.planPolicy(cfg, { ipLiterals: i % 2 ? 'any' : 'own' }));
+            const outcome = await Promise.race([siteAddress.checkExternalChange(), sleep(5000).then(() => 'still waiting on the mail server')]);
+            assert.strictEqual(outcome, 'applied');
+            assert.strictEqual((await rows()).length, siteAddress.MAX_CHANGE_LOG + 1, 'one row per revision the log holds, plus the gap');
+            assert.strictEqual((await notes()).length, 1, 'one notice');
+            assert.strictEqual(sent.length, 1, 'one email');
+            assert.match(sent[0].text, /^21 changes to the site address were applied\. /);
+        } finally {
+            (global as any).wordjs_send_mail = realSend;
+            await options.updateOption('admin_email', '');
+        }
+    });
+});
+
+// ─── critic: --force is on the record, through the real CLI ───────────────────────────────────────
+
+describe('an override of the interlock made with the CLI is audited as one (critic finding)', () => {
+    test('npm run site -- remove … --force → the running backend audits force:true and what it went past', async () => {
+        await world({ ...BASE, gatewayUrl: 'https://gw.example.com:3000', siteAliases: [{ url: 'https://gw.example.com' }], siteAddress: { rev: 2 } },
+            { siteurl: 'https://example.com', rev: '2' });
+        assert.strictEqual((await siteAddress.reconcileAtBoot()).state, 'ok');
+        const cli = require(path.join(__dirname, '..', '..', 'scripts', 'site-address.js'));
+        const out: string[] = [];
+        const code = await cli.run(['remove', 'gw.example.com', '--force', '--dir', TMP_INSTALL],
+            { stdout: (s: string) => out.push(s), stderr: (s: string) => out.push(s), env: {}, modules: { siteAddress, configManager, hostPolicy } });
+        assert.strictEqual(code, 0, out.join('\n'));
+        assert.match(out.join('\n'), /Forced past: gatewayUrl/);
+        assert.strictEqual(await siteAddress.checkExternalChange(), 'applied');
+        const [row] = await audits();
+        assert.deepStrictEqual({ action: row.action, via: row.detail.via, force: row.detail.force, forcedPast: row.detail.forcedPast, removed: row.detail.removed }, {
+            action: 'site.address.aliases', via: 'cli', force: true, forcedPast: ['gatewayUrl https://gw.example.com:3000'], removed: ['gw.example.com'],
+        });
+    });
+});
+
+// ─── critic: the upgrade conflict can be resolved with the CLI, either way ────────────────────────
+
+describe('an upgrade conflict is resolved with `npm run site -- canonical <url>`, whichever address is chosen (critic finding)', () => {
+    const cli = require(path.join(__dirname, '..', '..', 'scripts', 'site-address.js'));
+    const run = async (...args: string[]) => {
+        const out: string[] = [];
+        const code = await cli.run([...args, '--dir', TMP_INSTALL], { stdout: (s: string) => out.push(s), stderr: (s: string) => out.push(s), env: {}, modules: { siteAddress, configManager, hostPolicy } });
+        return { code, out: out.join('\n') };
+    };
+    const conflictWorld = async () => {
+        await world(BASE, { siteurl: 'https://old.example', home: 'https://old.example' });
+        assert.strictEqual((await siteAddress.reconcileAtBoot()).state, 'conflict');
+        assert.deepStrictEqual((await siteAddress.describeState(null)).conflict, { config: 'https://example.com', db: 'https://old.example' });
+    };
+
+    test('the config\'s own address (A) is a choice, not "nothing to change": mirrors written, conflict over, audited', async () => {
+        await conflictWorld();
+        const r = await run('canonical', 'https://example.com');
+        assert.strictEqual(r.code, 0, r.out);
+        assert.match(r.out, /Saved \(revision 1\)/);
+        assert.doesNotMatch(r.out, /Nothing to change/);
+        assert.strictEqual(await siteAddress.checkExternalChange(), 'applied');
+        assert.strictEqual(await option('siteurl'), 'https://example.com', 'links now use the chosen address');
+        assert.strictEqual(await option('home'), 'https://example.com');
+        assert.strictEqual(await siteAddress.linkBase(), 'https://example.com');
+        assert.strictEqual((await siteAddress.describeState(null)).conflict, null);
+        assert.deepStrictEqual((await audits()).map((a: any) => [a.action, a.detail.via, a.detail.chosen ?? a.detail.to]), [
+            ['site.address.canonical', 'cli', 'https://example.com'],
+            ['site.address.conflict_resolved', 'cli', 'https://example.com'],
+        ]);
+        const resolved = (await audits())[1].detail;
+        assert.deepStrictEqual({ config: resolved.config, db: resolved.db }, { config: 'https://example.com', db: 'https://old.example' });
+        assert.strictEqual((await siteAddress.reconcileAtBoot()).state, 'ok', 'and it stays resolved after a restart');
+    });
+
+    test('the database\'s address (B) resolves it too', async () => {
+        await conflictWorld();
+        const r = await run('canonical', 'https://old.example', '--drop-old');
+        assert.strictEqual(r.code, 0, r.out);
+        assert.strictEqual(await siteAddress.checkExternalChange(), 'applied');
+        assert.strictEqual(fileConfig().siteUrl, 'https://old.example');
+        assert.strictEqual(await option('siteurl'), 'https://old.example');
+        assert.strictEqual((await siteAddress.describeState(null)).conflict, null);
+        assert.deepStrictEqual((await audits()).map((a: any) => [a.action, a.detail.chosen ?? a.detail.to]), [
+            ['site.address.canonical', 'https://old.example'],
+            ['site.address.conflict_resolved', 'https://old.example'],
+        ]);
+    });
+
+    test('any other change made meanwhile writes the file\'s address into the mirrors like every change: the conflict ends with it, on the record', async () => {
+        await conflictWorld();
+        await siteAddress.commit((cfg: any) => siteAddress.planAliases(cfg, { aliases: ['https://www.example.com'], via: 'ui', actorId: adminId, now: Date.now() }),
+            { expectRev: 0, via: 'ui', actorId: adminId });
+        assert.strictEqual(await option('siteurl'), 'https://example.com');
+        assert.strictEqual((await siteAddress.describeState(null)).conflict, null, 'the banner no longer claims a disagreement that is gone');
+        const [change, resolved] = await audits();
+        assert.strictEqual(change.action, 'site.address.aliases');
+        assert.deepStrictEqual({ action: resolved.action, actor: resolved.actor, chosen: resolved.detail.chosen, db: resolved.detail.db, change: resolved.detail.change },
+            { action: 'site.address.conflict_resolved', actor: adminId, chosen: 'https://example.com', db: 'https://old.example', change: 'aliases' });
+    });
+
+    test('a site that has a revision still says "nothing to change" for its own address', async () => {
+        await world({ ...BASE, siteAddress: { rev: 3 } }, { siteurl: 'https://example.com', rev: '3' });
+        const before = fileText();
+        const r = await run('canonical', 'https://example.com');
+        assert.match(r.out, /Nothing to change/);
+        assert.strictEqual(fileText(), before);
+    });
+});
+
+// ─── lab finding M-03: a fresh install is recorded as one ──────────────────────────────────────────
+
+describe('a fresh install records itself, not the legacy upgrade (lab M-03)', () => {
+    test('what the installer writes is in step with the database: the first reconcile writes nothing and audits nothing', async () => {
+        const now = Date.parse('2026-10-06T12:00:00.000Z');
+        await world({ ...BASE, siteAddress: siteAddress.installRecord(now) }, { siteurl: 'https://example.com', home: 'https://example.com:3001', rev: '1' });
+        const before = fileText();
+        assert.strictEqual((await siteAddress.reconcileAtBoot()).state, 'ok');
+        assert.strictEqual(fileText(), before);
+        assert.deepStrictEqual(fileConfig().siteAddress.lastChange, { kind: 'install', via: 'install', by: null, at: '2026-10-06T12:00:00.000Z', rev: 1 });
+        assert.strictEqual(await option('home'), 'https://example.com:3001', 'the frontend origin the installer stored is left alone');
+        assert.deepStrictEqual(await audits(), []);
+        // The first change after it is revision 2, and the only thing audited.
+        cliWrite((cfg) => siteAddress.planPolicy(cfg, { ipLiterals: 'own' }));
+        assert.strictEqual(await siteAddress.checkExternalChange(), 'applied');
+        assert.deepStrictEqual((await audits()).map((a: any) => [a.action, a.detail.rev]), [['site.address.policy', 2]]);
     });
 });
 

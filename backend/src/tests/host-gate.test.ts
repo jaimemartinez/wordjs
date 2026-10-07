@@ -385,6 +385,33 @@ describe('exempt paths are answered on any address, exactly as before', () => {
     }
 });
 
+describe('lab E1: a traversal under an exempt prefix never reaches the API on this app', () => {
+    // Behind the edge, Next.js resolved /healthz/../api/v1/settings and served the API on a foreign name.
+    // The backend's own routing is the other half of that question: Express matches routes on the raw
+    // path and serve-static refuses to climb out of its root, so none of these reach /api here — and the
+    // gate no longer exempts them either (core/host-policy isAmbiguousPath). Sent raw, unresolved.
+    const traversals = ['/public/../api/v1/settings', '/uploads/%2e%2e/api/v1/settings', '/uploads/..%2fapi/v1/settings',
+        '/themes/../api/v1/settings', '/plugins/x/../../api/v1/settings', '/.well-known/../api/v1/settings',
+        '/health/../api/v1/settings', '/healthz/../api/v1/settings', '/metrics/%2e%2e/api/v1/settings', '/uploads/..\\api\\v1\\settings'];
+
+    test('on an unknown address: 421, like any other request', async () => {
+        for (const p of traversals) {
+            const res = await rawRequest([`GET ${p} HTTP/1.1`, 'Host: attacker.example', 'Connection: close']);
+            assert.strictEqual(res.status, 421, p);
+        }
+    });
+
+    test('on the main address: Express and serve-static never resolve them into the API', async () => {
+        const settings = await rawRequest([`GET ${API}/settings HTTP/1.1`, 'Host: example.com', 'Connection: close']);
+        assert.strictEqual(settings.status, 200, 'the control: the API itself answers there');
+        for (const p of traversals) {
+            const res = await rawRequest([`GET ${p} HTTP/1.1`, 'Host: example.com', 'Connection: close']);
+            assert.notStrictEqual(res.status, 200, `${p} answered 200`);
+            assert.notStrictEqual(res.body, settings.body, `${p} served the settings`);
+        }
+    });
+});
+
 describe('before install, and without a valid siteUrl, the gate steps aside', () => {
     test('not installed: any address reaches the install funnel (503 setup_required), /setup answers', async () => {
         const real = configManager.isInstalled;
@@ -726,7 +753,47 @@ describe('R2: retiring an address retires the sessions minted on it', () => {
         } finally {
             restoreConfig();
         }
-        assert.strictEqual((await me()).status, 200, 'the alias is back, and so is the session');
+        // A HAND EDIT of the file records no retirement (only the admin screen and the CLI do, see
+        // site-address.test.ts S6.6), so here the binding follows the current list alone.
+        assert.strictEqual((await me()).status, 200, 'hand edit: the alias is back, and so is the session');
+    });
+
+    test('review: a session that is already dead cannot sign its user out everywhere (POST /auth/logout)', async () => {
+        // Whoever holds a retired alias receives the cookies a returning browser still sends it; logout used
+        // to verify only the signature and stamp the user's revocation epoch, ending every session they had.
+        const logoutWith = (token: string) => direct('post', `${API}/auth/logout`, 'example.com').set('Origin', 'http://example.com')
+            .set('Cookie', `wordjs_token=${token}; wjs_csrf=t`).set('X-CSRF-Token', 't');
+        const meWith = (token: string) => direct('get', `${API}/auth/me`, 'example.com').set('Cookie', `wordjs_token=${token}`);
+        const alias = sessionFrom(await login(viaHop('post', `${API}/auth/login`, 'www.example.com', 'https'), 'https://www.example.com'));
+        const main = sessionFrom(await login(direct('post', `${API}/auth/login`, 'example.com'), 'http://example.com'));
+        stageConfig({ siteAliases: STAGED.siteAliases.filter((a: any) => a.url !== 'https://www.example.com') });
+        try {
+            assert.strictEqual((await meWith(alias)).status, 401, 'the alias session is dead');
+            assert.strictEqual((await logoutWith(alias)).status, 200, 'logout still clears the cookies');
+            assert.strictEqual((await meWith(main)).status, 200, 'and ends nothing else');
+        } finally {
+            restoreConfig();
+        }
+        // A token an earlier logout already revoked is just as dead.
+        assert.strictEqual((await logoutWith(main)).status, 200);
+        assert.strictEqual((await meWith(main)).status, 401);
+        await new Promise((resolve) => setTimeout(resolve, 1100)); // the epoch has one-second granularity
+        const next = sessionFrom(await login(direct('post', `${API}/auth/login`, 'example.com'), 'http://example.com'));
+        assert.strictEqual((await logoutWith(main)).status, 200);
+        assert.strictEqual((await meWith(next)).status, 200, 'replaying the revoked cookie does not end the new session');
+        assert.strictEqual((await logoutWith(next)).status, 200);
+        assert.strictEqual((await meWith(next)).status, 401, 'a live session still logs itself out');
+        // That logout stamped the epoch: a session the next test mints within the same second would be
+        // revoked by it.
+        await new Promise((resolve) => setTimeout(resolve, 1100));
+    });
+
+    test('a retirement is remembered for longer than any session it ends can live', () => {
+        const siteAddress = require('../core/site-address');
+        const { sessionCookieOptions } = require('../middleware/auth');
+        assert.ok(siteAddress.RETIRED_SESSION_RETENTION_S >= configuredLifetime() + siteAddress.RETIREMENT_GRACE_S,
+            'pruning must never forget a retirement while a token issued before it can still verify');
+        assert.ok(siteAddress.RETIRED_SESSION_RETENTION_S * 1000 >= sessionCookieOptions().maxAge, 'nor while its cookie can still be sent');
     });
 
     test('a session never outlives the alias it was minted on', async () => {
@@ -819,6 +886,130 @@ describe('R2: retiring an address retires the sessions minted on it', () => {
                 assert.notStrictEqual(own.body && own.body.code, 'rest_account_bound_session', 'its own profile stays editable');
             } finally {
                 await onMain('delete', `${API}/users/${otherId}`, main);
+            }
+        });
+
+        test('(e) lab M-23/N3: nor delete someone else\'s account or reset their second factor — every write on another account is refused by default', async () => {
+            const main = sessionFrom(await login(direct('post', `${API}/auth/login`, 'example.com'), 'http://example.com'));
+            const stamp = Date.now();
+            const other = await onMain('post', `${API}/users`, main).send({ username: `bound_victim_${stamp}`, email: `bound_victim_${stamp}@example.com`, password: 'Str0ng-Passw0rd-xyz!', role: 'subscriber' });
+            assert.strictEqual(other.status, 201, JSON.stringify(other.body));
+            const otherId = other.body.id;
+            try {
+                const bound = await aliasSession();
+                for (const [method, url] of [
+                    ['delete', `${API}/users/${otherId}`],
+                    ['post', `${API}/users/${otherId}/mfa/reset`],
+                    // No such route: a write added to this router later is refused by default, before it is routed.
+                    ['post', `${API}/users/${otherId}/sessions/revoke`],
+                ] as Array<[string, string]>) {
+                    const res = await onMain(method, url, bound).send({});
+                    assert.strictEqual(res.status, 403, `${method} ${url}: ${JSON.stringify(res.body)}`);
+                    assert.strictEqual(res.body.code, 'rest_account_bound_session', `${method} ${url}`);
+                }
+                const stillThere = await onMain('get', `${API}/users/${otherId}`, main);
+                assert.strictEqual(stillThere.status, 200, 'the account was not deleted');
+                // Its OWN account reaches the route (which answers for itself), however the path spells it.
+                const selfDelete = await onMain('delete', `${API}/users/${adminId}`, bound);
+                assert.strictEqual(selfDelete.body.code, 'rest_user_cannot_delete', JSON.stringify(selfDelete.body));
+                const viaMe = await onMain('put', `${API}/users/ME`, bound).send({ displayName: 'Admin via alias' });
+                assert.notStrictEqual(viaMe.body && viaMe.body.code, 'rest_account_bound_session', '/users/me is its own account');
+                // A main-address session still may.
+                const reset = await onMain('post', `${API}/users/${otherId}/mfa/reset`, main).send({});
+                assert.strictEqual(reset.status, 200, JSON.stringify(reset.body));
+            } finally {
+                const deleted = await onMain('delete', `${API}/users/${otherId}`, main);
+                assert.strictEqual(deleted.status, 200, `a main-address session deletes accounts: ${JSON.stringify(deleted.body)}`);
+            }
+        });
+
+        test('(f) nor change roles, the two-factor policy, or who may register (settings and imports); unchanged values and a main-address session pass', async () => {
+            const main = sessionFrom(await login(direct('post', `${API}/auth/login`, 'example.com'), 'http://example.com'));
+            const bound = await aliasSession();
+            const refused = (res: any, what: string) => {
+                assert.strictEqual(res.status, 403, `${what}: ${JSON.stringify(res.body)}`);
+                assert.strictEqual(res.body.code, 'rest_account_bound_session', what);
+            };
+            const slug = `bound-role-${Date.now()}`;
+
+            refused(await onMain('post', `${API}/roles`, bound).send({ slug, name: 'Bound', capabilities: { '*': true } }), 'POST /roles');
+            assert.strictEqual((await onMain('get', `${API}/roles/${slug}`, main)).status, 404, 'no role was created');
+            assert.strictEqual((await onMain('post', `${API}/roles`, main).send({ slug, name: 'Main', capabilities: { read: true } })).status, 201);
+            refused(await onMain('delete', `${API}/roles/${slug}`, bound), 'DELETE /roles/:slug');
+            assert.strictEqual((await onMain('delete', `${API}/roles/${slug}`, main)).status, 200);
+
+            refused(await onMain('put', `${API}/auth/mfa/policy`, bound).send({ requiredRoles: [] }), 'PUT /auth/mfa/policy');
+            assert.strictEqual((await onMain('put', `${API}/auth/mfa/policy`, main).send({ requiredRoles: [] })).status, 200);
+
+            const current = (await onMain('get', `${API}/settings/all`, main)).body;
+            const blogname = current.blogname;
+            const opening = await onMain('put', `${API}/settings`, bound).send({ blogname: 'Bound save', users_can_register: '1', default_role: 'administrator', require_email_verification: current.require_email_verification });
+            refused(opening, 'PUT /settings opening registration');
+            assert.deepStrictEqual(opening.body.data.params, ['users_can_register', 'default_role'], 'it names what was refused');
+            assert.strictEqual((await onMain('get', `${API}/settings/all`, main)).body.blogname, blogname, 'refused as a whole: nothing was written');
+            refused(await onMain('put', `${API}/settings/default_role`, bound).send({ value: 'administrator' }), 'PUT /settings/default_role');
+            // The settings screen sends every field back: the current values are not a change.
+            const save = await onMain('put', `${API}/settings`, bound).send({ blogname, users_can_register: String(current.users_can_register ?? '0'), default_role: current.default_role || 'subscriber' });
+            assert.strictEqual(save.status, 200, JSON.stringify(save.body));
+
+            refused(await onMain('post', `${API}/import`, bound).send({ data: { version: '1.0', settings: { require_email_verification: current.require_email_verification === '1' ? '0' : '1' } } }), 'POST /import with a registration setting');
+            refused(await onMain('post', `${API}/import`, bound).send({ data: { version: '1.0' }, importUsers: true }), 'POST /import with importUsers');
+            refused(await onMain('post', `${API}/import/wordpress`, bound), 'POST /import/wordpress');
+            const wxr = await onMain('post', `${API}/import/wordpress`, main);
+            assert.strictEqual(wxr.body.code, 'no_file', `a main-address session reaches the importer: ${JSON.stringify(wxr.body)}`);
+
+            const opened = await onMain('put', `${API}/settings/users_can_register`, main).send({ value: '1' });
+            assert.strictEqual(opened.status, 200, JSON.stringify(opened.body));
+            await onMain('put', `${API}/settings/users_can_register`, main).send({ value: '0' });
+        });
+
+        test('(g) review: a site import is no second way to the two-factor policy or the email-verification switch', async () => {
+            const options = require('../core/options');
+            const main = sessionFrom(await login(direct('post', `${API}/auth/login`, 'example.com'), 'http://example.com'));
+            const bound = await aliasSession();
+            const importing = (token: string, settings: Record<string, unknown>) => onMain('post', `${API}/import`, token).send({ data: { version: '1.0', settings } });
+            const saved = { rev: await options.getOption('require_email_verification', '0'), ready: await options.getOption('mail_delivery_ready', '0') };
+            const set = await onMain('put', `${API}/auth/mfa/policy`, main).send({ requiredRoles: ['editor'], graceDays: 7 });
+            assert.strictEqual(set.status, 200, JSON.stringify(set.body));
+            try {
+                // The two-factor policy has one writer, PUT /auth/mfa/policy: an import skips it, whoever sends it.
+                const dropped = { requiredRoles: [], graceDays: 0, enforcedAt: null, enforceForApiTokens: false };
+                for (const token of [bound, main]) {
+                    const imported = await importing(token, { mfa_policy: dropped });
+                    assert.strictEqual(imported.status, 200, JSON.stringify(imported.body));
+                    assert.deepStrictEqual(imported.body.results.settings.skipped, ['mfa_policy']);
+                    const policy = (await onMain('get', `${API}/auth/mfa/policy`, main)).body.policy;
+                    assert.deepStrictEqual(policy.requiredRoles, ['editor'], 'the policy is unchanged');
+                }
+
+                // Required email verification takes effect only while the mail provider says it can deliver:
+                // writing that flag off turns verification off as surely as the setting itself.
+                await options.updateOption('require_email_verification', '1');
+                await options.updateOption('mail_delivery_ready', '1');
+                const off = await importing(bound, { mail_delivery_ready: '0' });
+                assert.strictEqual(off.status, 403, JSON.stringify(off.body));
+                assert.strictEqual(off.body.code, 'rest_account_bound_session');
+                assert.deepStrictEqual(off.body.data.params, ['mail_delivery_ready']);
+                assert.strictEqual(String(await options.getOption('mail_delivery_ready', '0')), '1', 'nothing was written');
+                assert.strictEqual((await importing(bound, { mail_delivery_ready: '1' })).status, 200, 'the current value is no change');
+                // PUT /settings never writes the flag (it is not a setting there), so it is not refused for it.
+                const blogname = (await onMain('get', `${API}/settings/all`, main)).body.blogname;
+                const save = await onMain('put', `${API}/settings`, bound).send({ blogname, mail_delivery_ready: '0' });
+                assert.strictEqual(save.status, 200, JSON.stringify(save.body));
+                assert.strictEqual(String(await options.getOption('mail_delivery_ready', '0')), '1');
+                await options.updateOption('require_email_verification', '0');
+                assert.strictEqual((await importing(bound, { mail_delivery_ready: '0' })).status, 200, 'with verification off, readiness decides nothing about registration');
+
+                // users_can_register and default_role are protected options the importer never writes, so an
+                // import carrying them is not refused for them either: it reports them skipped.
+                const registration = await importing(bound, { users_can_register: '1', default_role: 'administrator' });
+                assert.strictEqual(registration.status, 200, JSON.stringify(registration.body));
+                assert.deepStrictEqual(registration.body.results.settings.skipped.sort(), ['default_role', 'users_can_register']);
+                assert.strictEqual(String(await options.getOption('users_can_register', '0')), '0');
+            } finally {
+                await onMain('put', `${API}/auth/mfa/policy`, main).send({ requiredRoles: [] });
+                await options.updateOption('require_email_verification', saved.rev);
+                await options.updateOption('mail_delivery_ready', saved.ready);
             }
         });
     });

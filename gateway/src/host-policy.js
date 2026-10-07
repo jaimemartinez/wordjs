@@ -357,7 +357,7 @@ function trustedHop(req, opts) {
 
 /**
  * Does the request carry headers only a proxy adds? X-Forwarded-Host counts only when it differs from
- * Host: the monolith pins XFH to the Host it received (monolith.js), which says nothing about a proxy.
+ * Host: a copy of Host says nothing about a proxy.
  */
 function hasProxyMarkers(req) {
     const headers = (req && req.headers) || {};
@@ -396,15 +396,19 @@ function operatorMayForwardHost(hostHeader) {
  * 'operator' hop only when its Host passes operatorMayForwardHost; everyone else is judged by `Host`,
  * which a browser cannot forge. From a trusted hop, a PRESENT but empty XFH means the client sent no Host
  * (the gateway pins `Host || ''`), so it is reported absent instead of falling back to the hop's own
- * loopback Host.
+ * loopback Host — also when a loopback client relays the empty value itself; the gateway forwards it
+ * empty, past http-proxy's xfwd, so the backend judges it host-less too (host-edge.js
+ * pinForwardedHeaders, reviews NEW-V1 and R3S-1).
  *
  * `proxied` is R4: the authority came from Host, yet the request carries proxy headers from a peer
  * nobody declared trusted. That is the signature of a reverse proxy that rewrote Host (nginx's default
  * `Host $proxy_host`), so an IP literal in that position names the upstream, not the address the
  * browser used — `classify` refuses it instead of letting it switch the named-host gate off.
  *
- * Returns `{ parsed, absent, hop, viaTrustedHop, source, proxied }`; `parsed` is null when the value is
- * present but malformed (answer 400).
+ * Returns `{ parsed, absent, raw, hop, viaTrustedHop, source, proxied }`; `parsed` is null when the value
+ * is present but malformed (answer 400). `raw` is the value that was judged, as received ('' when
+ * absent): what a listener that relays this request must forward as X-Forwarded-Host, so the next hop
+ * judges the same address (host-edge.js).
  */
 function requestAuthority(req, opts) {
     const headers = (req && req.headers) || {};
@@ -414,6 +418,7 @@ function requestAuthority(req, opts) {
     const fromForwarded = typeof xfh === 'string' && hop !== null && (hop !== 'operator' || operatorMayForwardHost(host));
     const raw = fromForwarded ? firstListValue(xfh) : host;
     const base = {
+        raw,
         hop,
         viaTrustedHop: hop !== null,
         source: fromForwarded ? 'x-forwarded-host' : 'host',
@@ -805,9 +810,25 @@ function createPolicyProvider(opts) {
 // ─── Bounded observations (REDTEAM R7) ──────────────────────────────────────────────────────────────
 
 /**
+ * Who refused a host, for "Recently refused": 'edge' (a public listener's edge check — the gateway worker,
+ * or the monolith's listener — before the request reached the backend), 'gate' (the backend's own gate),
+ * or 'both' (each refused it at least once).
+ */
+const REFUSAL_SOURCES = Object.freeze(['edge', 'gate', 'both']);
+
+/** The source two observations of one host add up to (null = not known). */
+function combineRefusalSources(a, b) {
+    if (!a) return b || null;
+    if (!b || a === b) return a;
+    return 'both';
+}
+
+/**
  * Recently refused hosts, for the admin page, and the gate's log throttle. Bounded twice, because it is
  * fed by anonymous requests that arrive before any rate limiter: at most `max` hosts (LRU), and at most
- * one log line per host per minute AND `logsPerMinute` lines per minute overall.
+ * one log line per host per minute AND `logsPerMinute` lines per minute overall. `record`'s `source` is
+ * 'edge' or 'gate' (who refused it); one tracker can be fed by both (the monolith's edge records into the
+ * backend's), and each entry says which did (REFUSAL_SOURCES).
  */
 function createRefusedHosts(opts) {
     const o = opts || {};
@@ -819,14 +840,15 @@ function createRefusedHosts(opts) {
     let windowCount = 0;
     return {
         /** Count a refusal; true when the caller should write a log line for it. */
-        record(hostname, hint) {
+        record(hostname, hint, source) {
             const t = now();
             let entry = entries.get(hostname);
             if (entry) entries.delete(hostname);
-            else entry = { host: hostname, count: 0, firstSeen: t, lastSeen: t, hint: null, lastLoggedAt: -Infinity };
+            else entry = { host: hostname, count: 0, firstSeen: t, lastSeen: t, hint: null, source: null, lastLoggedAt: -Infinity };
             entry.count += 1;
             entry.lastSeen = t;
             entry.hint = hint || null;
+            if (source === 'edge' || source === 'gate') entry.source = combineRefusalSources(entry.source, source);
             entries.set(hostname, entry);
             while (entries.size > max) entries.delete(entries.keys().next().value);
             if (t - entry.lastLoggedAt < 60000) return false;
@@ -841,7 +863,7 @@ function createRefusedHosts(opts) {
         },
         /** Most recent first. */
         list() {
-            return [...entries.values()].reverse().map((e) => ({ host: e.host, count: e.count, firstSeen: e.firstSeen, lastSeen: e.lastSeen, hint: e.hint }));
+            return [...entries.values()].reverse().map((e) => ({ host: e.host, count: e.count, firstSeen: e.firstSeen, lastSeen: e.lastSeen, hint: e.hint, source: e.source }));
         },
         /** Forget every refusal, and the log throttle with them: the next refusal is logged again. */
         clear() {
@@ -892,6 +914,49 @@ function createLastSeen(opts) {
     };
 }
 
+/**
+ * Several refusal lists as one, for "Recently refused": the backend's own and its gateway's edge, the
+ * gateway's workers. One entry per host (counts added, the earliest firstSeen, the latest lastSeen and
+ * the hint seen with it, and who refused it: 'edge', 'gate', or 'both' when the lists disagree), most
+ * recent first, at most `max`. These lists cross process and machine boundaries, so every entry is
+ * checked like wire input and dropped, never repaired, unless its host is a hostname this parser produces
+ * (canonical form, no port), its count a positive integer, its times numbers, its hint one of
+ * REFUSAL_HINTS and its source, when present, one of REFUSAL_SOURCES (an entry with none says nothing
+ * about who refused it, and the result's source is null only when no entry for that host said).
+ */
+function mergeRefusedHosts(lists, opts) {
+    const max = (opts && opts.max) || 32;
+    const merged = new Map();
+    for (const list of Array.isArray(lists) ? lists : []) {
+        if (!Array.isArray(list)) continue;
+        for (const e of list.slice(0, 256)) {
+            if (!e || typeof e !== 'object') continue;
+            const host = typeof e.host === 'string' && e.host.length <= 300 ? e.host : null;
+            const parsed = host ? parseHost(host) : null;
+            if (!parsed || parsed.hostname !== host) continue;
+            if (!Number.isSafeInteger(e.count) || e.count < 1) continue;
+            if (!Number.isFinite(e.firstSeen) || !Number.isFinite(e.lastSeen)) continue;
+            const hint = e.hint === null || e.hint === undefined ? null : e.hint;
+            if (hint !== null && !Object.prototype.hasOwnProperty.call(REFUSAL_HINTS, hint)) continue;
+            const source = e.source === null || e.source === undefined ? null : e.source;
+            if (source !== null && !REFUSAL_SOURCES.includes(source)) continue;
+            const prev = merged.get(host);
+            if (!prev) {
+                merged.set(host, { host, count: e.count, firstSeen: e.firstSeen, lastSeen: e.lastSeen, hint, source });
+                continue;
+            }
+            prev.count = Math.min(prev.count + e.count, Number.MAX_SAFE_INTEGER);
+            prev.firstSeen = Math.min(prev.firstSeen, e.firstSeen);
+            prev.source = combineRefusalSources(prev.source, source);
+            if (e.lastSeen >= prev.lastSeen) {
+                prev.lastSeen = e.lastSeen;
+                prev.hint = hint;
+            }
+        }
+    }
+    return [...merged.values()].sort((a, b) => b.lastSeen - a.lastSeen).slice(0, max);
+}
+
 const refusedHosts = createRefusedHosts();
 const lastSeen = createLastSeen();
 
@@ -904,7 +969,8 @@ function noteAuthenticatedUse(req, tracker) {
 // ─── The gate ───────────────────────────────────────────────────────────────────────────────────────
 
 // Exactly what the old guard never saw (static trees, ACME, probes): answering them on any host is
-// today's behaviour, and probes are often addressed by pod or container IP.
+// today's behaviour, and probes are often addressed by pod or container IP. Matched by segment, and
+// never for an ambiguous path (isAmbiguousPath): those are classified like any other request.
 const EXEMPT_PATHS = Object.freeze(['/uploads', '/themes', '/plugins', '/.well-known', '/public', '/health', '/healthz', '/readyz', '/metrics', '/favicon.ico']);
 
 function sendJson(res, status, body) {
@@ -932,7 +998,31 @@ function requestPath(req) {
     return String(req.url || '/').split('?')[0];
 }
 
+/**
+ * A path a URL parser rewrites into another path: a dot segment ('.' or '..' in any mix of literal and
+ * percent-encoded dots, also before a ';' parameter) or a raw backslash. The WHATWG parser Next.js uses
+ * resolves both (a backslash is a slash in an http URL), while the gateway and the monolith route on the
+ * raw path — so `/x/../api/v1/settings` went to Next, which fetched /api/v1/settings through its own
+ * rewrite. Browsers resolve these before sending and never send them.
+ */
+function hasDotSegments(path) {
+    if (path.includes('\\')) return true;
+    return path.split('/').some((segment) => /^(?:\.|%2e){1,2}$/i.test(segment.split(';')[0]));
+}
+
+/**
+ * A path that some later parser could read as ANOTHER path: hasDotSegments, an encoded slash or
+ * backslash, or an encoded '%' (a second decode away from any of those). Express matches routes on the
+ * raw path, but Next.js and the proxies in front of WordJS resolve dot segments first, so a prefix test
+ * on the raw path exempted `/healthz/../api/v1/settings` while the next hop served the API.
+ */
+function isAmbiguousPath(path) {
+    return /%2f|%5c|%25/i.test(path) || hasDotSegments(path);
+}
+
+/** Exempt by segment (`/uploads` covers `/uploads/x`, not `/uploadsX`), and never an ambiguous path. */
 function isExemptPath(path, prefixes) {
+    if (isAmbiguousPath(path)) return false;
     return prefixes.some((prefix) => path === prefix || path.startsWith(prefix + '/'));
 }
 
@@ -945,11 +1035,18 @@ function countHostHeaders(req) {
     return count;
 }
 
-/** Every address a proxy reported for the client (X-Forwarded-For, X-Real-IP, Forwarded for=). */
-function forwardedAddresses(req) {
+/** The X-Forwarded-For chain, oldest first; each relaying proxy appends the peer it received from. */
+function forwardedForChain(headers) {
+    return typeof headers['x-forwarded-for'] === 'string' ? headers['x-forwarded-for'].split(',').map((x) => x.trim()).filter((x) => x !== '') : [];
+}
+
+/**
+ * Every address a proxy reported for the client (X-Forwarded-For, X-Real-IP, Forwarded for=). `chain`
+ * replaces the X-Forwarded-For part (looksLikeProxyCollapse leaves out the relaying hop's own peer).
+ */
+function forwardedAddresses(req, chain) {
     const headers = req.headers || {};
-    const out = [];
-    if (typeof headers['x-forwarded-for'] === 'string') out.push(...headers['x-forwarded-for'].split(',').map((x) => x.trim()));
+    const out = (chain || forwardedForChain(headers)).slice();
     if (typeof headers['x-real-ip'] === 'string') out.push(headers['x-real-ip'].trim());
     if (typeof headers.forwarded === 'string') {
         for (const match of headers.forwarded.matchAll(/for=("?)\[?([^\]";,]+)\]?(?::\d+)?\1/gi)) out.push(match[2]);
@@ -958,17 +1055,37 @@ function forwardedAddresses(req) {
 }
 
 /**
- * A remote client arrived on a loopback Host through a loopback peer: a proxy on this machine rewrote
- * Host to the address it dialled (nginx's default `Host $proxy_host`), so every name it serves looks
- * like localhost here and the named-host gate cannot see it. Behaviour is unchanged (loopback was
- * always answered); the operator is told once.
+ * A remote client arrived on a loopback Host that a proxy on this machine put there: it rewrote Host to
+ * the address it dialled (nginx's default `Host $proxy_host`), so every name it serves looks like
+ * localhost here and the named-host gate cannot see it. Behaviour is unchanged (loopback was always
+ * answered); the operator is told once. Called only for an accepted loopback authority.
+ *
+ * The question is who SENT the loopback name, and that depends on where the authority came from:
+ *
+ *   · from Host: the socket peer sent it. A loopback peer (a proxy on this machine) with a non-loopback
+ *     client in the forwarded headers is the collapse.
+ *   · from X-Forwarded-Host: a trusted hop RELAYED the Host it received, and a relaying proxy appends
+ *     the address of the peer that sent it that Host as the LAST X-Forwarded-For element (http-proxy's
+ *     xfwd in the gateway, nginx's $proxy_add_x_forwarded_for). The gateway is always such a hop, and in
+ *     split mode it is also a loopback peer that sends a loopback Host of its own (its upstream), so
+ *     judging it by its socket would flag every remote client that typed `Host: localhost`. Only hops
+ *     known to append are read this way: the mTLS gateway and a loopback hop; an operator hop on another
+ *     machine (a frontend replica copies X-Forwarded-For verbatim) proves nothing.
+ *
+ * The monolith never relays its own pin: it forwards X-Forwarded-Host only when it judged a trusted
+ * hop's (monolith.js), so a Host its peer sent arrives here as Host.
  */
-function looksLikeProxyCollapse(req, pol) {
+function looksLikeProxyCollapse(req, pol, authority) {
     if (!pol.canonical || isLoopbackAuthority(pol.canonical)) return false;
-    const sock = socketOf(req);
-    if (!sock || !isLoopbackIp(sock.remoteAddress)) return false;
-    if (!isLoopbackAuthority(parseHost((req.headers || {}).host))) return false;
-    return forwardedAddresses(req).some((address) => !isLoopbackIp(address));
+    if (authority.source === 'host') {
+        const sock = socketOf(req);
+        if (!sock || !isLoopbackIp(sock.remoteAddress)) return false;
+        return forwardedAddresses(req).some((address) => !isLoopbackIp(address));
+    }
+    if (authority.hop !== 'gateway' && authority.hop !== 'local') return false;
+    const chain = forwardedForChain(req.headers || {});
+    if (chain.length === 0 || !isLoopbackIp(chain[chain.length - 1])) return false;
+    return forwardedAddresses(req, chain.slice(0, -1)).some((address) => !isLoopbackIp(address));
 }
 
 /** A socket peer as an operator would write it in trustProxy (IPv4-mapped IPv6 unwrapped), or null. */
@@ -1019,7 +1136,7 @@ function forwardingAdvice(req, authority, pol, now) {
 /**
  * The Express/connect middleware that answers only this site's addresses (SPEC §2.3).
  *
- *   1 exempt paths (segment match)          → next()
+ *   1 exempt path, not ambiguous            → next()
  *   2 more than one Host header             → 400 rest_invalid_host
  *   3 no host at all (HTTP/1.0)             → next()   (CSRF and CORS already fail closed on it)
  *   4 malformed host                        → 400 rest_invalid_host
@@ -1084,14 +1201,14 @@ function hostGateFactory(opts) {
             // can name the peer, carries the specific remedy.
             const advice = forwardingAdvice(req, authority, pol, t);
             const hint = advice ? 'forward-host' : refusalHint(parsed, pol, verdict.reason);
-            if (refused.record(parsed.hostname, hint)) {
+            if (refused.record(parsed.hostname, hint, 'gate')) {
                 const why = advice || (hint ? REFUSAL_HINTS[hint] : null);
                 logger.warn(`[host-gate] 421 for ${serialize(parsed)} (${verdict.reason})` + (why ? ': ' + why : '; add it in Settings > Site address if it should work.'));
             }
             return sendHostNotAllowed(res);
         }
 
-        if (verdict.cls === 'loopback' && !pol.dev && !proxyCollapseReported && looksLikeProxyCollapse(req, pol)) {
+        if (verdict.cls === 'loopback' && !pol.dev && !proxyCollapseReported && looksLikeProxyCollapse(req, pol, authority)) {
             proxyCollapseReported = true;
             logger.warn('[host-gate] remote clients reach WordJS with a loopback Host: a local reverse proxy is rewriting Host, so the address check cannot see which name they used. ' + REFUSAL_HINTS['forward-host'] + '.');
             notify('proxy-collapse', { host: serialize(parsed) });
@@ -1142,13 +1259,17 @@ module.exports = {
     buildPolicy,
     createPolicyProvider,
     // observations
+    REFUSAL_SOURCES,
     createRefusedHosts,
+    mergeRefusedHosts,
     createLastSeen,
     refusedHosts,
     lastSeen,
     noteAuthenticatedUse,
     // gate
     EXEMPT_PATHS,
+    hasDotSegments,
+    isAmbiguousPath,
     hostGateFactory,
     sendHostNotAllowed,
     sendInvalidHost,

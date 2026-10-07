@@ -59,6 +59,11 @@ const PROTECTED_OPTION_RE = /secret|passw(or)?d|pwd|priv(ate)?[_-]?key|privateke
 const PROTECTED_OPTION_NAMES = new Set([
     'wordjs_user_roles', 'user_roles', 'roles', 'active_plugins', 'default_role',
     'users_can_register', 'admin_email', 'siteurl', 'site_url', 'home',
+    // 'mfa_policy' says which roles must have a second factor. Its one writer is mfa.setPolicy (PUT
+    // /auth/mfa/policy: admin only, refused to a session bound to a secondary address), which validates the
+    // roles and owns the enforcement clock; written raw — by a settings:write plugin, or by a site import,
+    // which skips every name on this list — it dropped the requirement and could back-date the clock.
+    'mfa_policy',
     // 'site_address_rev' is the mirror of the config's site-address revision; core/site-address compares
     // it with the file to decide whether a change made at the server still has to be applied. A plugin
     // that could write it could make the backend skip (or replay) a change of the site's address.

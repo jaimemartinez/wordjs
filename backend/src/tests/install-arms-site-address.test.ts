@@ -35,6 +35,38 @@ describe('POST /setup/install starts site-address in-process', () => {
         assert.ok(call < answer, 'it is started before the success answer, so the wizard\'s next request already meets an armed edge');
     });
 
+    test('the config is born at site-address revision 1 as the INSTALLER\'s, and the database mirror with it (lab M-03)', () => {
+        // Without both, the reconcile ensureStarted() runs next took the new site for a legacy install and
+        // recorded `lastChange: { kind: 'repair', via: 'upgrade' }` for good. The record itself (installRecord)
+        // and the reconcile it meets are exercised in site-address-reconcile.test.ts.
+        const body = installHandler();
+        const config = body.slice(body.indexOf('const newConfig'), body.indexOf('if (saveConfig(newConfig))'));
+        assert.match(config, /^\s*siteAddress: require\('\.\.\/core\/site-address'\)\.installRecord\(Date\.now\(\)\),$/m,
+            'newConfig carries the install record');
+        const mirror = body.search(/^\s*await updateOption\('site_address_rev', newConfig\.siteAddress\.rev\);$/m);
+        const home = body.search(/^\s*await updateOption\('home', /m);
+        const start = body.search(/^[ \t]*require\('\.\.\/core\/site-address'\)\.ensureStarted\(\)\.catch\(/m);
+        assert.ok(home > 0 && mirror > home, 'site_address_rev is written with siteurl and home');
+        assert.ok(mirror < start, 'before the reconcile that would otherwise "upgrade" the new site');
+        const siteAddress = require('../core/site-address');
+        assert.deepStrictEqual(siteAddress.installRecord(Date.parse('2026-10-06T00:00:00Z')),
+            { rev: 1, lastChange: { kind: 'install', via: 'install', by: null, at: '2026-10-06T00:00:00.000Z', rev: 1 } });
+    });
+
+    test('the auto-login asks every refusal of the one door first, so the door never ends the install early (review R3S-7)', () => {
+        // issueSessionCookie answers (and the handler returns) when it refuses: the install token would
+        // stay on disk and site-address would not start until a restart. So each of its refusals is asked
+        // in advance and turned into autoLoginSkipped: the sign-in rule, and a retiring address.
+        const body = installHandler();
+        const door = body.search(/^[ \t]*if \(issueSessionCookie\(req, res, token, sessionCookieOptions\(req\)\)\) return;$/m);
+        const rule = body.search(/^[ \t]*if \(signInRefusal\(req\)\) autoLoginSkipped = 'sign-in-refused';$/m);
+        const retiring = body.search(/^[ \t]*else if \(signInRetiring\(req\)\) autoLoginSkipped = 'address-retiring';$/m);
+        assert.ok(door > 0, 'the one door is found');
+        assert.ok(rule > 0 && rule < door, 'the sign-in rule is asked before the door');
+        assert.ok(retiring > rule && retiring < door, 'and so is the retiring address');
+        assert.match(SETUP, /enum: \[address-not-accepted, sign-in-refused, address-retiring\]/, 'documented in the install answer');
+    });
+
     test('the start is not awaited and its failure is only logged (the install already succeeded)', () => {
         const body = installHandler();
         assert.match(body, /^[ \t]*require\('\.\.\/core\/site-address'\)\.ensureStarted\(\)\.catch\(/m);

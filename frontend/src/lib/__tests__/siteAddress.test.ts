@@ -38,13 +38,16 @@ import {
     isLanName,
     isLoopbackHostname,
     isTunnelHost,
+    ipLiteralsLabelKey,
     migrationRedirectTarget,
     needsLocalConfirmation,
     noticeLanguage,
     normalizeSiteAddressState,
     oldAddressApplies,
+    ownAddressesHeadingKey,
     parseSiteAddress,
     policyWrite,
+    refusedByKey,
     sameHostname,
     signInPolicy,
     siteAddressApi,
@@ -209,10 +212,49 @@ describe("normalizeSiteAddressState reads the shapes the backend naturally has",
         expect(s).toMatchObject({ ipLiterals: "own", ipLiteralsSource: "env", ipSignIn: true, dev: true, devOrigins: ["devbox"] });
         expect(s.connectedVia).toEqual({ host: "192.168.1.11:3000", cls: "ip" });
         expect(s.recentlyRefused).toEqual([
-            { host: "attacker.example", count: 3, lastSeen: 1_700_000_200_000, hint: null },
-            { host: "w_x", count: 1, lastSeen: 5, hint: "forward-host" },
+            { host: "attacker.example", count: 3, lastSeen: 1_700_000_200_000, hint: null, source: null },
+            { host: "w_x", count: 1, lastSeen: 5, hint: "forward-host", source: null },
         ]);
         expect(s.notices).toEqual(["proxy-collapse"]);
+        expect(s.ownAddressesFrom).toBe("server");
+    });
+
+    it("says who refused each host (edge, gate or both) and whose addresses `own` answers (lab R2-X2-tag, R2-NEW-1)", () => {
+        const s = normalizeSiteAddressState({
+            ownAddresses: ["192.168.182.157"],
+            ownAddressesFrom: "gateway",
+            recentlyRefused: [
+                { host: "edge.example", count: 2, lastSeen: 3, hint: null, source: "edge" },
+                { host: "gate.example", count: 1, lastSeen: 2, hint: null, source: "gate" },
+                { host: "both.example", count: 4, lastSeen: 1, hint: null, source: "both" },
+                { host: "odd.example", count: 1, lastSeen: 0, hint: null, source: "<b>edge</b>" },
+            ],
+        });
+        expect(s.recentlyRefused.map((e) => [e.host, e.source])).toEqual([
+            ["edge.example", "edge"], ["gate.example", "gate"], ["both.example", "both"], ["odd.example", null],
+        ]);
+        expect(s.ownAddressesFrom).toBe("gateway");
+        expect(normalizeSiteAddressState({ ownAddressesFrom: "elsewhere" }).ownAddressesFrom).toBe("server");
+    });
+
+    it("names whose addresses `own` means wherever it is shown: the heading, the IP-rule choice and its confirmation (review UX-1)", () => {
+        // Behind a gateway the list under the heading is the gateway's, and so is what choosing `own` keeps:
+        // "Only this server's addresses" right below "The gateway's addresses" contradicted it.
+        expect(ownAddressesHeadingKey("gateway")).toBe("siteAddress.accepted.ownGateway");
+        expect(ownAddressesHeadingKey("server")).toBe("siteAddress.accepted.own");
+        expect(ipLiteralsLabelKey("own", "gateway")).toBe("siteAddress.ip.ownGateway");
+        expect(ipLiteralsLabelKey("own", "server")).toBe("siteAddress.ip.own");
+        for (const from of ["gateway", "server"] as const) {
+            expect(ipLiteralsLabelKey("any", from)).toBe("siteAddress.ip.any");
+            expect(ipLiteralsLabelKey("none", from)).toBe("siteAddress.ip.none");
+        }
+    });
+
+    it("labels a refused host by who refused it, and not at all when nothing said (review UX-2)", () => {
+        expect(refusedByKey("edge")).toBe("siteAddress.refusedBy.edge");
+        expect(refusedByKey("gate")).toBe("siteAddress.refusedBy.gate");
+        expect(refusedByKey("both")).toBe("siteAddress.refusedBy.both");
+        expect(refusedByKey(null)).toBeNull();
     });
 
     it("takes the config's own entries (only what the operator wrote, ISO expiry)", () => {
@@ -335,6 +377,15 @@ describe("changing the main address", () => {
         expect(canonicalChoice("nope", current)).toEqual({ error: "invalid" });
         expect(canonicalChoice("https://example.com:8443", current)).toEqual({ site: site("https://example.com:8443") });
         expect(canonicalChoice("https://new.example", null)).toEqual({ site: site("https://new.example") });
+    });
+
+    it("during an upgrade conflict the configured address is a choice: \"Use A\" can be submitted (critic finding)", () => {
+        expect(canonicalChoice("https://example.com/", current, { conflict: true })).toEqual({ site: site("https://example.com") });
+        expect(canonicalChoice("nope", current, { conflict: true })).toEqual({ error: "invalid" });
+        expect(canonicalChoice("https://example.com", current, { conflict: false })).toEqual({ error: "is-canonical" });
+        // The dialog passes the screen's conflict state, so the banner's "Use A" button is not a dead end.
+        const page = fs.readFileSync(path.resolve(import.meta.dirname, "../../app/admin/settings/site-address/page.tsx"), "utf8");
+        expect(page).toMatch(/canonicalChoice\(url, state\.canonical, \{ conflict: !!state\.conflict \}\)/);
     });
 
     it("asks what happens to the old address only when the NAME changes", () => {
