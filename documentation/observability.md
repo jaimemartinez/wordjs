@@ -143,6 +143,15 @@ it is a diagnostic rather than a secret (`token: "unexpected end of input"` beco
 `token: "[redacted]"`), and a multi-parameter header value (`Digest username="u", response=…`) has its
 first parameter masked, not the whole list.
 
+#### Values from the request
+
+A value that comes from the request or from a peer — a path, an `Origin`, a `Host`, a gateway's or a
+CA's error message — is passed through `logSafe()` / `logSafeError()` (`backend/src/core/log-safe.ts`)
+before it is interpolated into a message: line breaks, the other C0/C1 control characters (ESC
+included, so an ANSI sequence loses its introducer), the Unicode line/paragraph separators and the
+bidirectional controls are removed, so the value cannot split or forge a log entry or rewrite what a
+terminal shows. `logSafeError()` keeps an error's message (and its `code`) and leaves out the stack.
+
 ### The console bridge, and the migration plan
 
 The backend has ~800 `console.*` calls across ~100 files. Rewriting them is a separate change, so
@@ -316,10 +325,10 @@ Notes on the ones with conditions attached:
 - **`unmatched` is not "the 404 surface".** It is every response produced without an Express route
   handler ever being reached, which on a real install is a large share of *successful* traffic:
   `express.static` hits (`/themes`, `/plugins`, `/uploads`), anything the frontend proxy answers, and
-  every request short-circuited by a rate limiter (429), by CORS, by CSRF or by the install/setup
-  guard (503) — as well as genuine 404s. So `sum by (route) (rate(...))` shows one large mixed bucket,
-  and a per-endpoint drill-down should filter `route!="unmatched"`. Split it by `status` if you want
-  the 404s specifically.
+  every request short-circuited by the host gate (421/400), by a rate limiter (429), by CORS, by CSRF
+  or by the install/setup guard (503) — as well as genuine 404s. So `sum by (route) (rate(...))`
+  shows one large mixed bucket, and a per-endpoint drill-down should filter `route!="unmatched"`.
+  Split it by `status` if you want the 404s specifically.
 - **`status="499"` means the client went away**, borrowing nginx's convention. An aborted request
   never fires `finish`, so it used to be counted nowhere at all: an endpoint that had started timing
   out *all* of its callers showed a **falling** request rate and a healthy p95, because only the fast
@@ -351,7 +360,7 @@ scrape_configs:
       type: Bearer
       credentials_file: /etc/prometheus/wordjs-metrics-token   # not `credentials:` — keep it off disk in plain config
     static_configs:
-      - targets: ['wordjs-1.internal:3001', 'wordjs-2.internal:3001']
+      - targets: ['wordjs-1.internal:4000', 'wordjs-2.internal:4000']
         labels:
           env: production
 ```

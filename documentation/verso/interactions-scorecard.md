@@ -3,6 +3,10 @@
 **Date**: 2026-08-16. **Status**: Phase 0 deliverable of the interactions program — the benchmark
 that decides what gets built, in what order, before touching the core.
 
+> **Note (2026-10-07):** the commit ids cited in the SHIPPED rows below are from the development
+> branch, which was squash-merged into `main` and then deleted; they do not resolve in this repository's
+> history. The work they name is in `main`.
+
 **Method**: capability-by-capability audit of Webflow Interactions with GSAP ("IX3", launched
 2025-07-10, feature drops through 2026-07-20), Motion (formerly Framer Motion, v13.1.0), and GSAP
 3.15 + ScrollTrigger/SplitText/Observer/Flip — verified against their official docs on 2026-08-16,

@@ -434,7 +434,7 @@ module.exports = {
 - ✅ `mail-server` — a **fully untrusted** (sandboxed) plugin: it uses the `database:read` +
   `database:write` grants (among others its manifest requests) and keeps its relational data — DKIM
   keys and relay SMTP secrets included — in its own `wjp_mail_server_*` tables (`_received_emails` /
-  `_email_attachments` / `_secrets`), precisely because `assertSqlAllowed` denies any table outside its
+  `_email_attachments` / `_secrets` / `_labels` / `_email_labels` / `_user_prefs`), precisely because `assertSqlAllowed` denies any table outside its
   prefix. Attachment **bytes** and the Bayes corpus do not go in the database: they live in the
   plugin's own directory via the `filesystem:read`/`write` grants (the `_email_attachments` table holds
   only the metadata and the `storage_path`).

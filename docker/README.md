@@ -81,7 +81,7 @@ backend tier from [`documentation/multi-node.md`](../documentation/multi-node.md
 - A working, browsable multi-service WordJS backed by external Postgres + Redis.
 - **Cross-node coherence**: an option / role / capability change on one node is published over Redis
   (`wordjs:option-changed`) and reflected on the other without a restart, and concurrent first-boot is
-  serialized by the Redis boot lease so schema migration + seeding run exactly once. (This is the
+  serialized by the database boot lease (`wordjs:boot`, a `wordjs_locks` row in the shared Postgres) so schema migration + seeding run exactly once. (This is the
   property the CI `multinode` job asserts directly and deterministically — see below.)
 
 ### What this stack does NOT prove (honest limits)

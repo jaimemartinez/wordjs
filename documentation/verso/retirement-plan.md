@@ -12,6 +12,13 @@
 > `scripts/generate-verso-plugin-registry.js`. What did NOT change, deliberately: `_puck_data` is
 > still the persisted post-meta key. Kept as the record of the retirement; the file paths and line
 > numbers below point at a tree that no longer exists.
+>
+> One exception to "every phase has landed": the Phase 9 grep gate (step 27) is not empty today.
+> Besides the listed exceptions (`_puck_data`, and `PUCK_HTML_FIELDS` because step 26 was not
+> executed), it still matches plugin-compatibility names (`puckComponents`/`puckComponentDef`, the
+> `puck` render prop that blocks in `components/versoConfig.tsx` read for `isEditing`), the public
+> `.puck-content` body class, backend sanitiser names (`sanitizePuckTree`, `safePuckUrl`,
+> `PUCK_URL_FIELDS`) and comments and tests that narrate the migration.
 
 > F5a. Plan EJECUTABLE para después de F7 (verificación final de Verso). Nada de este documento se
 > ejecuta ahora — es la lista de pasos, en orden seguro, para cuando se decida apagar el editor

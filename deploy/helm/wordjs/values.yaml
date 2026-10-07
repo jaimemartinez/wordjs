@@ -3,7 +3,7 @@
 image:
   # No image is published to a registry yet (there is no image publish step in release.yml), so there is
   # no default that would resolve. Build and push the repository's root Dockerfile, then set this:
-  #   docker build -t <registry>/wordjs:2.0.0 . && docker push <registry>/wordjs:2.0.0
+  #   docker build -t <registry>/wordjs:2.3.0 . && docker push <registry>/wordjs:2.3.0
   repository: ""
   # Defaults to .Chart.AppVersion when empty.
   tag: ""

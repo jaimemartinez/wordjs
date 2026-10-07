@@ -4,7 +4,10 @@
 > both been deleted, which is exactly what this audit concluded could be done. Kept as the record of
 > the derivation analysis that authorised the removal; every path it cites on the fork side, and the
 > retired app-side files (`puckConfig.tsx`, `puck-theme.css`,
-> `scripts/generate-puck-plugin-registry.js`), are gone from the tree.
+> `scripts/generate-puck-plugin-registry.js`), are gone from the tree. The plugin sources cited in §7
+> moved too: `client/puck/<Name>Puck.tsx` is now `client/verso/<Name>Verso.tsx` (e.g.
+> `marketplace/plugins/testimonials/client/verso/TestimonialsVerso.tsx`), and the corpus helper
+> (`lib/verso/__tests__/helpers.ts`) now reads `versoData`, falling back to `puckData`.
 
 > F5a. Encargo: para cada subsistema del fork retirable (`frontend/packages/puck`), enumerar el
 > equivalente en Verso y dictaminar, con evidencia de código leído en ambos lados (no solo grep de

@@ -72,5 +72,6 @@ window.addEventListener('wordjs:notification', (e) => {
 
 ## Stability Improvements
 *   **Heartbeat:** The SSE endpoint writes a `: keepalive` comment every **5 seconds** (and an initial `retry: 10000`) to keep proxies from timing out and to surface dead sockets quickly. The interval is cleared on `req` close, which also removes the client.
+*   **Stream caps:** concurrent SSE streams are capped at **8 per user** and **1000 per process** (`MAX_CLIENTS_PER_USER` / `MAX_TOTAL_CLIENTS`); a stream past either cap receives an `event: error` with `{"error":"too_many_streams"}` and is closed, while existing streams are untouched.
 *   **Resiliency:** Frontend implements **Exponential Backoff** (1s -> 30s) to prevent reconnection storms during outages.
 *   **Context Aware:** Connection state tracks accurate `user.id` to avoid duplicate streams on minor React state changes.

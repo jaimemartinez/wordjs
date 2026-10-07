@@ -134,7 +134,7 @@ Response (`summary`):
 }
 ```
 
-A malformed file (not a `<rss><channel>` WXR document) returns **HTTP 400** with `code: "invalid_wxr"`; a missing upload returns **400** with `code: "no_file"`. Up to the first 100 per-item problems are collected in `summary.errors` — the import continues past them rather than failing the whole run.
+A malformed file (not a `<rss><channel>` WXR document) returns **HTTP 400** with `code: "invalid_wxr"`; a missing upload returns **400** with `code: "no_file"`, and an upload that cannot be read returns **400** with `code: "read_failed"`. Because the import creates user accounts, `POST /api/v1/import/wordpress` (not the analyze endpoint) refuses a session started on a secondary site address with **403** `code: "rest_account_bound_session"` — run it from a session started at the main address or on loopback. Up to the first 100 per-item problems are collected in `summary.errors` — the import continues past them rather than failing the whole run.
 
 ## What gets mapped
 
