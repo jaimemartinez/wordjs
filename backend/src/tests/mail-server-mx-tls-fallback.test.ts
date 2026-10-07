@@ -102,7 +102,11 @@ const SUITE_HOOK = `
     },
 };`;
 
-const plugin: { deliverDirect: Function; isTlsVerifyError: (e: any) => boolean; install: Function } = (() => {
+const plugin: {
+    deliverDirect: (...args: any[]) => Promise<any>;
+    isTlsVerifyError: (e: any) => boolean;
+    install: (mxHost: string, pinnedIp: string) => void;
+} = (() => {
     const moduleObj: any = { exports: {} };
     const requireShim = (spec: string) => {
         if (spec === 'nodemailer') return nodemailerSeam;
