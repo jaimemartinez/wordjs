@@ -97,6 +97,7 @@ export interface ContentRecord {
     authorId?: number;
     commentStatus: string;
     meta?: Record<string, unknown>;
+    protected?: boolean;
     featuredMedia?: { id: number; url: string; title?: string };
     categories?: ContentTermRef[];
     tags?: ContentTermRef[];

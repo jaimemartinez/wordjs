@@ -5,6 +5,7 @@ import JsonLd from "@/components/public/JsonLd";
 import { getSettings, getPostById, getPosts, htmlToText, buildWebSiteJsonLd, resolveSiteBase } from "@/lib/server-api";
 import { withResolvedBlocks } from "@/lib/resolveDynamicBlocks";
 import ThemeTemplate from "@/components/content/ThemeTemplate";
+import { postCardExcerpt } from "@/lib/postExcerpt";
 
 // Server-rendered AND cached: the homepage serves from the Full-Route Cache (crawlers and first
 // paint still get the real blog roll / static page), revalidating every 60s + purged on publish.
@@ -116,7 +117,7 @@ export default async function HomePage() {
                                 </Link>
 
                                 <p className="wjs-post-card-excerpt text-[var(--wjs-color-text-muted,#4b5563)] mb-6 line-clamp-3 leading-relaxed">
-                                    {post.excerpt || post.content.substring(0, 200).replace(/<[^>]*>?/gm, "") + "..."}
+                                    {postCardExcerpt(post)}
                                 </p>
 
                                 <Link href={`/${post.slug || post.id}`} className="wjs-post-card-more inline-flex items-center text-[var(--wjs-color-primary,#2563eb)] font-semibold hover:gap-2 transition-all">

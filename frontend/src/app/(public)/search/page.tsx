@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { searchPosts } from "@/lib/server-api";
 import ThemeTemplate from "@/components/content/ThemeTemplate";
+import { postCardExcerpt } from "@/lib/postExcerpt";
 
 interface SearchParams {
     q?: string | string[];
@@ -129,7 +130,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                             </Link>
 
                             <p className="wjs-search-result-excerpt text-[var(--wjs-color-text-muted,#6b7280)] line-clamp-2 mb-4">
-                                {post.excerpt || post.content?.substring(0, 200).replace(/<[^>]*>?/gm, "") + "..."}
+                                {postCardExcerpt(post)}
                             </p>
 
                             <Link

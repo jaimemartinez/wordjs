@@ -1026,6 +1026,17 @@ class Post {
             }
         }
 
+        // PASSWORD-PROTECTED ENTRIES AND SEARCH. The read projection withholds a protected entry's body
+        // from whoever cannot manage it, but a search MATCHES on that body — so a hit (or a miss) on a
+        // guessed phrase disclosed the content one query at a time. WordPress drops protected posts
+        // from searches for exactly this reason. `searchProtectedVisibleTo` is the id of the caller
+        // whose OWN protected entries may still match (any value that is no user id, e.g. -1, for an
+        // anonymous caller); absent means an internal caller with no restriction.
+        if (search && options.searchProtectedVisibleTo !== undefined && options.searchProtectedVisibleTo !== null) {
+            conditions.push(`(${col}post_password IS NULL OR ${col}post_password = '' OR ${col}author_id = ?)`);
+            params.push(options.searchProtectedVisibleTo);
+        }
+
         return { joins, conditions, params };
     }
 
