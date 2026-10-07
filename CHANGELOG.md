@@ -114,6 +114,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   install wizard's suggested address (its new **Site address** field is prefilled from the address being
   browsed). The Helm chart exports `WORDJS_ALLOWED_HOSTS` from `siteUrl`, the ingress hosts (new
   `ingress.extraHosts`) and the new `allowedHosts`, and `trustProxy` as `WORDJS_TRUST_PROXY`.
+- **The site-address code paths cannot be used to forge log lines or to make a request read slowly.** The
+  `for=` values of a `Forwarded` header are read in a single left-to-right pass instead of a backtracking
+  pattern whose value class also matched the port's characters; a test checks that the scan gives the
+  pattern's exact answers on random headers and stays linear on long hostile ones. The CSRF guard's
+  host-less refusal, the site-address warnings and the certificate manager's gateway errors remove line
+  breaks from the request path or error message they log. The backend's control-plane calls to the gateway
+  now carry the node's mTLS key and certificate in one TLS context instead of as request options.
 
 - **Remaining dependency advisories with a fix are closed.** Frontend: DOMPurify 3.4.16 (GHSA-p98j-92pf-mc4p,
   GHSA-6688-9rhm-gjv2), and js-yaml and brace-expansion moved to fixed releases in the lint toolchain;

@@ -1048,10 +1048,75 @@ function forwardedAddresses(req, chain) {
     const headers = req.headers || {};
     const out = (chain || forwardedForChain(headers)).slice();
     if (typeof headers['x-real-ip'] === 'string') out.push(headers['x-real-ip'].trim());
-    if (typeof headers.forwarded === 'string') {
-        for (const match of headers.forwarded.matchAll(/for=("?)\[?([^\]";,]+)\]?(?::\d+)?\1/gi)) out.push(match[2]);
-    }
+    if (typeof headers.forwarded === 'string') for (const address of forwardedForValues(headers.forwarded)) out.push(address);
     return out.filter((x) => x !== '');
+}
+
+/** A character a `for=` value may hold (RFC 7239 node, read leniently): anything but `]`, `"`, `;` and `,`. */
+function isForwardedValueChar(c) {
+    return c !== undefined && c !== ']' && c !== '"' && c !== ';' && c !== ',';
+}
+
+/** Index just past the run of value characters that starts at `from`. */
+function forwardedValueRunEnd(value, from) {
+    let end = from;
+    while (isForwardedValueChar(value[end])) end += 1;
+    return end;
+}
+
+/** Index just past the ASCII digits that start at `from`. */
+function digitRunEnd(value, from) {
+    let end = from;
+    while (end < value.length && value.charCodeAt(end) >= 48 && value.charCodeAt(end) <= 57) end += 1;
+    return end;
+}
+
+/**
+ * The `for=` values of a Forwarded header (RFC 7239), oldest first: `for=203.0.113.9`,
+ * `for="[2001:db8::1]:443"`, `For=unknown`, anywhere in the header, without the brackets or the port of a
+ * bracketed IPv6 node. A quoted value with no closing quote yields nothing, and the `for=` occurrences
+ * inside it are still read.
+ *
+ * ONE LEFT-TO-RIGHT PASS on purpose. This used to be `/for=("?)\[?([^\]";,]+)\]?(?::\d+)?\1/gi`, whose
+ * value class also matches the `:` and digits of the optional port: a value that fails its closing quote
+ * can be retried at every split point, so the pattern's cost on a header any client sends rests on the
+ * regex engine's optimisations rather than on its shape. Here each character is read a bounded number of
+ * times, and the result is the one that pattern gave for every input (backend/src/tests/host-policy.test.ts
+ * compares the two).
+ */
+function forwardedForValues(value) {
+    const out = [];
+    const marker = /for=/gi;
+    let match;
+    while ((match = marker.exec(value)) !== null) {
+        const at = match.index + 4;
+        const quoted = value[at] === '"';
+        const open = quoted ? at + 1 : at;
+        // `[` opens a bracketed node only when something follows it; otherwise it is the value itself.
+        const start = value[open] === '[' && forwardedValueRunEnd(value, open + 1) > open + 1 ? open + 1 : open;
+        const end = forwardedValueRunEnd(value, start);
+        if (end === start) {
+            marker.lastIndex = match.index + 1;
+            continue;
+        }
+        // After the value: an optional `]`, an optional `:port`, and the closing quote of a quoted value.
+        let next = end;
+        if (value[next] === ']') next += 1;
+        if (value[next] === ':' && digitRunEnd(value, next + 1) > next + 1) {
+            const afterPort = digitRunEnd(value, next + 1);
+            if (!quoted || value[afterPort] === '"') next = afterPort;
+        }
+        if (quoted) {
+            if (value[next] !== '"') {
+                marker.lastIndex = match.index + 1;
+                continue;
+            }
+            next += 1;
+        }
+        out.push(value.slice(start, end));
+        marker.lastIndex = next;
+    }
+    return out;
 }
 
 /**
@@ -1249,6 +1314,7 @@ module.exports = {
     requestAuthority,
     requestHost,
     trustedScheme,
+    forwardedForValues,
     // classification and policy
     classify,
     refusalHint,

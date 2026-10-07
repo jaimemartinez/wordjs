@@ -48,6 +48,17 @@ const siteHostPolicy: PolicyProvider = hostPolicy.createPolicyProvider({
 });
 
 /**
+ * A value as it may enter one log line: line breaks removed, so a request- or peer-derived string (a
+ * path, a Host, a gateway or driver error message) cannot forge or split entries in the operator's log.
+ * Two single-constant replacements on purpose — the log-injection analysis recognises the sanitizer
+ * syntactically and does not match the equivalent alternation (see core/plugins.ts logSafe). Interpolate
+ * the result into ONE string and pass no further console argument.
+ */
+function logSafe(v: any): string {
+    return String(v == null ? '' : v).replace(/\n/g, '').replace(/\r/g, '');
+}
+
+/**
  * What the host gate (core/host-policy hostGateFactory) attached to this request, or null when it did
  * not classify it: the gate is not mounted (a test harness, a plugin isolate), the request carried no
  * Host at all (HTTP/1.0), the site is not installed yet, or the config has no valid siteUrl. Every
@@ -1329,7 +1340,7 @@ function csrfProtection(req: Request, res: Response, next: NextFunction) {
     // No host of its own (an HTTP/1.0 request without Host): fails whatever its Origin says — see
     // hostlessAmbientRequest. A Bearer caller keeps the rules below, unchanged.
     if (hostlessAmbientRequest(req, host)) {
-        console.warn(`[CSRF] Blocked host-less request to ${req.path}`);
+        console.warn(`[CSRF] Blocked host-less request to ${logSafe(req.path)}`);
         return res.status(403).json({
             code: 'rest_csrf_invalid',
             message: 'Cross-site request blocked.',

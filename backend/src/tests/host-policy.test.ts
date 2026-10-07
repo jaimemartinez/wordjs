@@ -1055,3 +1055,63 @@ describe('hostGateFactory contract', () => {
         }
     });
 });
+
+/**
+ * Forwarded `for=` values are read by a single left-to-right scan (forwardedForValues), not by the
+ * backtracking pattern it replaced. The pattern is kept here as the oracle: for every input both must
+ * agree, so the rewrite changes the cost and nothing else.
+ */
+describe('Forwarded for= values: linear scan, same answers as the pattern it replaced', () => {
+    const LEGACY = /for=("?)\[?([^\]";,]+)\]?(?::\d+)?\1/gi;
+    const legacy = (value: string) => [...value.matchAll(LEGACY)].map((m) => m[2]);
+
+    test('the shapes proxies send', () => {
+        const cases: Array<[string, string[]]> = [
+            ['for=203.0.113.9', ['203.0.113.9']],
+            ['for=192.0.2.60;proto=http;by=203.0.113.43', ['192.0.2.60']],
+            ['For="[2001:db8:cafe::17]:4711"', ['2001:db8:cafe::17']],
+            ['for=[::1]:8080, for=unknown', ['::1', 'unknown']],
+            ['for="198.51.100.7:443"', ['198.51.100.7:443']],
+            ['for=192.0.2.43, for="[2001:db8::1]"', ['192.0.2.43', '2001:db8::1']],
+            ['for="unterminated, for=10.0.0.1', ['10.0.0.1']],
+            ['for="[]"', ['[']],
+            ['for=,for=;proto=https', []],
+            ['proto=https', []],
+        ];
+        for (const [header, expected] of cases) {
+            assert.deepStrictEqual(hp.forwardedForValues(header), expected, header);
+            assert.deepStrictEqual(legacy(header), expected, `oracle: ${header}`);
+        }
+    });
+
+    test('agrees with the replaced pattern on random headers built from its delimiters', () => {
+        const ALPHABET = ['for=', 'FoR=', '"', '[', ']', ':', '1', '9', 'a', ',', ';', ' ', 'f', 'r', '=', 'İ'];
+        let seed = 0x2f6e2b1;
+        const rand = (n: number) => {
+            seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
+            return seed % n;
+        };
+        for (let i = 0; i < 20000; i++) {
+            let header = '';
+            for (let j = rand(14); j > 0; j--) header += ALPHABET[rand(ALPHABET.length)];
+            assert.deepStrictEqual(hp.forwardedForValues(header), legacy(header), JSON.stringify(header));
+        }
+    });
+
+    test('a long adversarial header is read in linear time', () => {
+        // Unclosed quoted values full of the port's own characters, each hiding further for= markers: the
+        // inputs where a backtracking reader retries every split point.
+        const hostile = [
+            'for="' + ':1'.repeat(200_000),
+            'for="[' + '1:'.repeat(200_000) + ']:x',
+            'for="' + 'for=,'.repeat(100_000),
+            'for="'.repeat(100_000),
+        ];
+        for (const header of hostile) {
+            const started = process.hrtime.bigint();
+            hp.forwardedForValues(header);
+            const ms = Number(process.hrtime.bigint() - started) / 1e6;
+            assert.ok(ms < 1000, `${header.length}-character header took ${ms.toFixed(0)} ms`);
+        }
+    });
+});

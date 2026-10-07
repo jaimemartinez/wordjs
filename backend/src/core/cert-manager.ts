@@ -22,6 +22,17 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o
 if (!fs.existsSync(LIVE_DIR)) fs.mkdirSync(LIVE_DIR, { recursive: true, mode: 0o700 });
 
 /**
+ * A value as it may enter one log line: line breaks removed, so a request- or peer-derived string (a
+ * path, a Host, a gateway or driver error message) cannot forge or split entries in the operator's log.
+ * Two single-constant replacements on purpose — the log-injection analysis recognises the sanitizer
+ * syntactically and does not match the equivalent alternation (see core/plugins.ts logSafe). Interpolate
+ * the result into ONE string and pass no further console argument.
+ */
+function logSafe(v: any): string {
+    return String(v == null ? '' : v).replace(/\n/g, '').replace(/\r/g, '');
+}
+
+/**
  * `<domainDir>/<name>` for the two files a provisioned certificate is stored as. The name is a
  * literal from this module, so a null here means the containment proof itself failed — which is a
  * bug, not a user error, and must stop the write rather than fall back to a join.
@@ -110,9 +121,13 @@ function gatewayControlRequest(method: 'GET' | 'POST', urlPath: string, body: un
             port: target.port,
             path: urlPath,
             ...(target.servername ? { servername: target.servername } : {}),
-            key: fs.readFileSync(paths.key),
-            cert: fs.readFileSync(paths.cert),
-            ca: fs.existsSync(paths.ca) ? fs.readFileSync(paths.ca) : undefined,
+            // One context built from this node's identity: the credentials authenticate the TLS handshake and
+            // are never part of what the request sends.
+            secureContext: require('tls').createSecureContext({
+                key: fs.readFileSync(paths.key),
+                cert: fs.readFileSync(paths.cert),
+                ca: fs.existsSync(paths.ca) ? fs.readFileSync(paths.ca) : undefined,
+            }),
             rejectUnauthorized: true,
             checkServerIdentity: checkGatewayIdentity,
             // A pooled agent keyed on these options would outlive a certificate rotation: one-shot sockets.
@@ -569,7 +584,7 @@ class CertManager {
             if (status !== 200) throw gatewayError(status, text);
             return JSON.parse(text);
         } catch (e) {
-            console.error('[CertManager] Push Error:', e);
+            console.error(`[CertManager] Push Error: ${logSafe(e && e.message ? e.message : e)}`);
             throw e;
         }
     }
@@ -814,10 +829,10 @@ class CertManager {
             }
         } catch (e) {
             if (e && e.code === NO_CLUSTER_IDENTITY) {
-                console.error('[CertManager] getConfig Error:', e);
+                console.error(`[CertManager] getConfig Error: ${logSafe(e.message)}`);
                 return { ...defaultResult, error: e.message };
             }
-            console.error('[CertManager] Gateway connection failed:', e && e.message);
+            console.error(`[CertManager] Gateway connection failed: ${logSafe(e && e.message ? e.message : e)}`);
             return { ...defaultResult, error: 'Gateway Unreachable' };
         }
     }
@@ -1018,7 +1033,7 @@ class CertManager {
             console.log('[CertManager] Gateway configuration pushed successfully.');
             return JSON.parse(text);
         } catch (e) {
-            console.error('[CertManager] Config Push Error:', e);
+            console.error(`[CertManager] Config Push Error: ${logSafe(e && e.message ? e.message : e)}`);
             throw e;
         }
     }
