@@ -7,7 +7,7 @@ import { reloadActivePlugins } from "@/lib/plugins";
 import { useMenu } from "@/contexts/MenuContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
-import { FaPlug, FaTrash, FaDownload, FaPowerOff, FaCheck, FaExclamationTriangle, FaSlidersH, FaSearch, FaSyncAlt, FaInfoCircle, FaTimes, FaShieldAlt, FaBan, FaUnlock, FaStore, FaPalette } from "react-icons/fa";
+import { FaPlug, FaTrash, FaDownload, FaPowerOff, FaCheck, FaExclamationTriangle, FaSlidersH, FaSearch, FaSyncAlt, FaInfoCircle, FaTimes, FaShieldAlt, FaBan, FaUnlock, FaStore, FaPalette, FaFileArchive } from "react-icons/fa";
 import { PageHeader, Button, EmptyState } from "@/components/ui";
 import MarketplaceTab from "./MarketplaceTab";
 
@@ -102,6 +102,26 @@ export function partitionPlugins(plugins: Plugin[]): { broken: Plugin[]; healthy
     };
 }
 
+/**
+ * Dev-mode "Build & download ZIP" (POST /plugins/:slug/pack). Rendered only when the backend says the
+ * route exists (`packable`, i.e. NODE_ENV=development); exported so the visibility rule is testable
+ * without mounting the fetch-on-mount page.
+ */
+export function PackPluginButton({ plugin, packing, onPack }: { plugin: Plugin; packing: boolean; onPack: (plugin: Plugin) => void }) {
+    if (!plugin.packable) return null;
+    return (
+        <button
+            onClick={() => onPack(plugin)}
+            disabled={packing}
+            className="p-2 rounded-xl bg-slate-50 border border-slate-200/60 text-slate-600 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 hover:scale-105 active:scale-95 transition-all shadow-sm disabled:opacity-50 disabled:cursor-wait"
+            title="Build & download ZIP (dev mode)"
+            aria-label={`Build and download ${plugin.name} as a ZIP`}
+        >
+            {packing ? <FaSyncAlt className="text-sm animate-spin" /> : <FaFileArchive className="text-sm" />}
+        </button>
+    );
+}
+
 export function BrokenPluginCard({ plugin, onReinstall, onCleanup, busy }: {
     plugin: Plugin;
     onReinstall: (plugin: Plugin) => void;
@@ -176,6 +196,7 @@ export default function PluginsPage() {
 
     // Restart-in-flight tracking (per slug) for the health card button.
     const [restarting, setRestarting] = useState<Record<string, boolean>>({});
+    const [packing, setPacking] = useState<Record<string, boolean>>({});
 
     // Companion-theme install in flight (per slug) + post-install "switch to it now?" prompt.
     const [installingTheme, setInstallingTheme] = useState<Record<string, boolean>>({});
@@ -407,6 +428,29 @@ export default function PluginsPage() {
             addToast(`${t('plugins.freeport.error')} ${conflict.port}: ` + (error.message || "Unknown error"), "error", 0);
         } finally {
             setFreeingPort(false);
+        }
+    };
+
+    // Dev mode: build + package the plugin exactly like `npm run pack:plugin`, then save the ZIP.
+    const handlePack = async (plugin: Plugin) => {
+        setPacking(prev => ({ ...prev, [plugin.slug]: true }));
+        try {
+            const blob = await pluginsApi.pack(plugin.slug);
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `${plugin.slug}-${plugin.version || "0.0.0"}.zip`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            addToast(`Packed "${plugin.name}"`, "success");
+        } catch (error: any) {
+            const log = error?.details?.log;
+            if (log) console.error(`pack:plugin ${plugin.slug}\n${log}`);
+            addToast("Build failed: " + (error.message || "Unknown error"), "error", 0);
+        } finally {
+            setPacking(prev => ({ ...prev, [plugin.slug]: false }));
         }
     };
 
@@ -1114,6 +1158,7 @@ export default function PluginsPage() {
                                         >
                                             <FaInfoCircle className="text-sm" />
                                         </button>
+                                        <PackPluginButton plugin={plugin} packing={!!packing[plugin.slug]} onPack={handlePack} />
                                         {!plugin.active && (
                                             <>
                                                 <button

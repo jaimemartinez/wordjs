@@ -82,6 +82,9 @@ If you want to avoid dependency conflicts entirely, you can **bundle** your plug
 }
 ```
 
+When you package with `npm run pack:plugin` (§5) you do not ship your working `node_modules/`: the
+packer installs the production dependencies into the ZIP itself.
+
 > [!TIP]
 > **When to use bundled plugins:**
 > - Your plugin requires a very specific version of a popular library
@@ -222,6 +225,16 @@ From the `backend` directory, run:
 node scripts/build-plugin.js hello-world
 ```
 
+The builder looks for the plugin in `backend/plugins/` by default. A plugin kept elsewhere — a
+private plugin in its own repository, for instance — is built by pointing `WORDJS_PLUGINS_DIR` at
+the folder that **contains** it:
+```bash
+WORDJS_PLUGINS_DIR=~/src/my-plugins node scripts/build-plugin.js my-plugin
+```
+
+To build **and** package in one step, use `npm run pack:plugin` (see
+[§5 The Distribution Workflow](#the-distribution-workflow-standard)).
+
 ### Step 2: Verification
 This script uses **esbuild** to create a `dist/` folder in your plugin with one bundle per declared
 frontend entry:
@@ -273,10 +286,61 @@ Submit by opening a pull request that adds `marketplace/plugins/<slug>/`, using 
 `review.status: "first-party"`, never `"reviewed"` — see §8 on why.
 
 ### The Distribution Workflow (Standard)
-1.  **Build:** Run `node scripts/build-plugin.js my-plugin`.
-2.  **Zip:** Compress your plugin folder (including the new `dist/` folder).
-3.  **Upload:** Go to **Plugins** -> **Add New** in the Admin panel.
-4.  **Activate:** Plugin works instantly using the pre-compiled bundle.
+This is also the way to ship a **private** plugin that never goes through the Marketplace.
+
+1.  **Pack:** from the `backend` directory, run
+    ```bash
+    npm run pack:plugin -- my-plugin                          # plugin in backend/plugins/
+    npm run pack:plugin -- my-plugin --dir ~/src/my-plugins   # plugin kept anywhere else
+    ```
+    The script (`backend/scripts/pack-plugin.js`) does what you would otherwise do by hand, and
+    refuses early with the same reason the installer would give:
+    - checks `manifest.json` (valid JSON, a `name`, `"isolated": true`, and an `id` — if present —
+      equal to the folder name);
+    - builds the frontend bundles with `build-plugin.js` (only when the manifest declares a
+      `frontend` block);
+    - settles the npm dependencies on its own (see
+      [Dependencies in the ZIP](#dependencies-in-the-zip) below);
+    - writes `release/plugins/<slug>-<version>.zip` (change it with `--out <folder>`) with a single
+      `<slug>/` root folder, leaving out the top-level `data/` folder, your working `node_modules/`,
+      `.git`, OS junk files and symlinks; timestamps are fixed, so the same sources give the same ZIP;
+    - runs the permission check and AST scan on exactly what goes into the ZIP, and refuses a ZIP the
+      upload would reject (over 10 MB, more than 5000 entries, or more than 200 MB unpacked); it
+      prints the sha256.
+    **From the admin screen:** while the backend runs with `NODE_ENV=development` (`npm run dev`),
+    every plugin card in `/admin/plugins` has a **Build & download ZIP** button that runs the same
+    packer on the installed plugin (`POST /api/v1/plugins/:slug/pack`) and saves the ZIP; a refusal
+    shows its reason, and the full packer output goes to the browser console. Outside development the
+    button is hidden and the route answers 404.
+2.  **Upload:** Go to **Plugins** -> **Add New** in the Admin panel and pick the ZIP. Deactivate or
+    uninstall an installed copy first.
+3.  **Activate:** Plugin works instantly using the pre-compiled bundle.
+
+#### Dependencies in the ZIP
+
+Nothing to choose: `pack:plugin` reads the plugin's `package.json` and code and picks the right one of
+the two models the server supports (see [Bundled Plugins](#bundled-plugins-advanced)).
+
+- **Default — the server installs them.** Your working `node_modules/` is never shipped. The
+  `dependencies` of the plugin's `package.json` are merged into the packed `manifest.json`
+  `dependencies`, which the server installs on activation and removes on deactivation. Keep using
+  `npm install <pkg>` in the plugin folder while you develop; `devDependencies` never reach the server.
+- **Bundled — the ZIP carries them.** With `"bundled": true` in the manifest, or automatically when a
+  dependency is one the server refuses to install by itself (native builds such as `sharp`, `sqlite3`,
+  `better-sqlite3`, `canvas`, `puppeteer`…), the packer installs the **production** dependencies fresh
+  into the package (`npm ci --omit=dev` with a `package-lock.json`, otherwise `npm install --omit=dev`)
+  and sets `"bundled": true`. Your plugin folder is not touched. Native binaries are built for the
+  machine that packs, so pack on the same OS and CPU as the server.
+
+Either way, every package your backend code `require()`s or `import`s (tests, `client/` and `dist/`
+excluded) must be declared: a package declared nowhere stops the pack with the file that needs it,
+instead of failing after upload with "Cannot find module". A package the WordJS server itself already
+has only gives a warning.
+
+Zipping by hand still works: compress the plugin folder (including `dist/`) so that it is either
+the ZIP's single root folder or, with the files at the root, the ZIP is named `<slug>.zip`. Leave
+`node_modules/` out unless the plugin is bundled: a non-empty `node_modules/` tells the server to skip
+installing the declared dependencies.
 
 ### The Local Development Workflow (Fast)
 1.  Scaffold with `node backend/cli/wordjs.js create plugin my-plugin` (or create the folder by hand in `backend/plugins/`), then restart the backend **once** so the new folder is discovered.

@@ -331,6 +331,7 @@ Base path: `/api/v1/users` (`backend/src/routes/users.ts`). `PUT /me` is declare
 | `POST` | `/plugins/:slug/deactivate` | Admin | Deactivate a plugin                                 |
 | `GET`  | `/plugins/:slug/status`     | Admin | Runtime health of a loaded isolate (state, restarts, last error); `404` if not a loaded isolate |
 | `POST` | `/plugins/:slug/reload`     | Admin | Hot-reload an isolated plugin's child process (re-runs the full AST-scan pipeline) |
+| `POST` | `/plugins/:slug/pack`       | Admin | **Development only** (`NODE_ENV=development`, else 404): build and package the plugin like `npm run pack:plugin`; returns the ZIP, or 422 with the refusal reason |
 | `POST` | `/plugins/:slug/permissions` | Admin | Set the per-permission grants (Android-style, default-deny). Body `{ granted: ["scope:access", ...], network: boolean }`; re-spawns the isolate so a `network` grant takes effect |
 | `GET`/`POST` | `/plugins/:slug/egress-hosts` | Admin | Read / set a plugin's outbound host allowlist (only meaningful once `network` is granted). Body `{ hosts: [...] }`; **empty** = every public host allowed, **non-empty** = default-deny except those hosts and their subdomains. Setting it re-spawns the isolate so the child re-installs the list |
 | `POST` | `/plugins/:slug/install-theme` | Admin | Install the companion theme a plugin bundles in its own `theme/` folder (optionally activating it); `404` if the plugin bundles none, `409` if the theme is already installed |

@@ -6,6 +6,22 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+
+- **`npm run pack:plugin -- <slug> [--dir <folder>]` packages a plugin into an installable ZIP.** It
+  checks the manifest, builds the frontend bundles, runs the installer's permission check and AST scan
+  on exactly what is packed, and writes `release/plugins/<slug>-<version>.zip` without `data/`, the
+  working `node_modules/` or OS junk, refusing anything the upload would reject. npm dependencies are
+  handled without flags: the plugin's `package.json` dependencies are declared in the packed manifest
+  for the server to install, or — for `"bundled": true` and for packages the server will not install
+  itself, such as native builds — a fresh production-only `node_modules/` ships in the ZIP; a required
+  package declared nowhere stops the pack.
+- **Dev-mode "Build & download ZIP" in `/admin/plugins`.** With `NODE_ENV=development`, each plugin card
+  offers a button that runs the same packer on the installed plugin (`POST /api/v1/plugins/:slug/pack`,
+  admin-only) and saves `<slug>-<version>.zip`, or shows the packer's refusal reason. Outside development
+  the route answers 404 and `GET /plugins` reports `packable: false`, so the button is hidden. `--dir` (and `WORDJS_PLUGINS_DIR` for `build-plugin.js`)
+  lets a private plugin live outside `backend/plugins/`. Documented in `documentation/plugins.md` §4–5.
+
 ### Changed
 
 - **`create-wordjs` is published to npm with trusted publishing, not a stored token.** npm restricted the

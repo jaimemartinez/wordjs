@@ -359,6 +359,7 @@ export interface Plugin {
     runtime?: PluginRuntime | null;   // live isolate health when active (null if inactive / not an isolate)
     hasTheme?: boolean;               // plugin bundles a companion theme/ folder (installable via installTheme)
     themeInstalled?: boolean;         // themes/<slug>-theme already exists
+    packable?: boolean;               // dev mode: POST /plugins/:slug/pack can build + package it (pluginsApi.pack)
     // ORPHANED entry: the backend claims this slug (active_plugins named it, or a directory is still
     // on disk) but nothing loadable is there. Always `active: false`, so no other consumer of a plugin
     // list can mistake one for a running plugin — only the admin screen acts on these.
@@ -785,6 +786,8 @@ export const pluginsApi = {
         const baseUrl = getBaseUrl();
         window.location.href = `${baseUrl}/plugins/${slug}/download`;
     },
+    /** DEV MODE ONLY: build the plugin and package it like `npm run pack:plugin` — resolves to the ZIP. */
+    pack: (slug: string) => api<Blob>(`/plugins/${encodeURIComponent(slug)}/pack`, { method: "POST", responseType: "blob" }),
     upload: (formData: FormData) => api<{ success: boolean; message: string }>("/plugins/upload", {
         method: "POST",
         body: formData,
