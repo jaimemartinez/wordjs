@@ -12,7 +12,7 @@
 // list read: two version numbers that disagree name two different builds of the same package.
 exports.metadata = {
     name: 'Video Gallery',
-    version: '1.0.0',
+    version: '1.0.1',
     description: 'A horizontal scrolling video carousel with YouTube integration and multi-gallery support',
     author: 'WordJS'
 };

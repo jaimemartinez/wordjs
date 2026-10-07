@@ -1,7 +1,7 @@
 {
     "id": "youtube-videos",
     "name": "YouTube Videos",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Pulls the videos of a YouTube channel (links, thumbnails, titles) and ships a Verso carousel block with title filtering and a video-count limit. Works keyless out of the box via the channel RSS feed (latest 15); add a YouTube Data API v3 key for the full upload history.",
     "author": "WordJS",
     "isolated": true,
@@ -29,6 +29,11 @@
         "order": 56
     },
     "permissions": [
+        {
+            "scope": "browser",
+            "access": "script",
+            "reason": "Run the plugin's own compiled interface in the browser: its admin page and its Verso block (in the editor and on public pages). Without it the host does not serve these bundles and that interface does not load."
+        },
         {
             "scope": "settings",
             "access": "read",

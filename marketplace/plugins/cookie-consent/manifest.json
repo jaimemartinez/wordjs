@@ -1,7 +1,7 @@
 {
     "id": "cookie-consent",
     "name": "Cookie Consent",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "GDPR cookie banner injected site-wide on every public page. The admin configures texts, position and theme; visitor choices are logged anonymously (no PII) for compliance stats, and consent can be re-requested from everyone by bumping the config version.",
     "author": "WordJS",
     "isolated": true,
@@ -21,6 +21,11 @@
         "order": 58
     },
     "permissions": [
+        {
+            "scope": "browser",
+            "access": "script",
+            "reason": "Run the plugin's own compiled interface in the browser: its admin page. Without it the host does not serve these bundles and that interface does not load."
+        },
         {
             "scope": "database",
             "access": "read",

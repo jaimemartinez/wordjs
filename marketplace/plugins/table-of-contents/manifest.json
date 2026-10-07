@@ -1,7 +1,7 @@
 {
     "id": "table-of-contents",
     "name": "Table of Contents",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Índice de contenidos automático: el bloque Verso \"TableOfContents\" escanea los H2/H3 de la página y genera un índice anidado con anclas, scroll suave y resaltado de la sección activa.",
     "author": "WordJS",
     "isolated": true,
@@ -13,5 +13,11 @@
             "entry": "client/verso/TableOfContentsVerso.tsx"
         }
     },
-    "permissions": []
+    "permissions": [
+        {
+            "scope": "browser",
+            "access": "script",
+            "reason": "Run the plugin's own compiled interface in the browser: its Verso block (in the editor and on public pages). Without it the host does not serve these bundles and that interface does not load."
+        }
+    ]
 }

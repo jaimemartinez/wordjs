@@ -1,7 +1,7 @@
 {
     "id": "vendor-marketplace",
     "name": "Marketplace",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Multi-vendor directory: vendors apply publicly, the admin approves them, and each vendor manages their own product listings through a code-protected self-service portal. Buyers browse approved vendors' products in a Verso block and contact vendors via per-product inquiries (v1 = lead generation, no centralized checkout).",
     "author": "WordJS",
     "isolated": true,
@@ -24,6 +24,11 @@
         "order": 70
     },
     "permissions": [
+        {
+            "scope": "browser",
+            "access": "script",
+            "reason": "Run the plugin's own compiled interface in the browser: its admin page and its Verso block (in the editor and on public pages). Without it the host does not serve these bundles and that interface does not load."
+        },
         {
             "scope": "database",
             "access": "read",

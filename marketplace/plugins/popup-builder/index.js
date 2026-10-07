@@ -18,7 +18,7 @@
 
 exports.metadata = {
     name: 'Popup Builder',
-    version: '1.0.0',
+    version: '1.0.1',
     description: 'Site-wide popups with triggers, frequency capping, scheduling and stats',
     author: 'WordJS',
 };

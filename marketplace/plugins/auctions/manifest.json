@@ -1,7 +1,7 @@
 {
     "id": "auctions",
     "name": "Auctions",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Auction listings with starting price, minimum increment and end time; public bidding with validation, anti-snipe extension, live polling updates and winner reporting. WordPress parity: YITH Auctions / Ultimate Auction.",
     "author": "WordJS",
     "isolated": true,
@@ -24,6 +24,11 @@
         "order": 78
     },
     "permissions": [
+        {
+            "scope": "browser",
+            "access": "script",
+            "reason": "Run the plugin's own compiled interface in the browser: its admin page and its Verso block (in the editor and on public pages). Without it the host does not serve these bundles and that interface does not load."
+        },
         {
             "scope": "database",
             "access": "read",
