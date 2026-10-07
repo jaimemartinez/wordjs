@@ -11,7 +11,7 @@
 // list read: two version numbers that disagree name two different builds of the same package.
 exports.metadata = {
     name: 'Card Gallery',
-    version: '1.0.0',
+    version: '1.0.1',
     description: 'Manage multiple card galleries with promo cards (isolated)',
     author: 'WordJS'
 };

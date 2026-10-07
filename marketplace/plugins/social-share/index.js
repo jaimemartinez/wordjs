@@ -11,7 +11,7 @@
 
 exports.metadata = {
     name: 'Social Share',
-    version: '1.0.0',
+    version: '1.0.1',
     description: 'Botones para compartir la página actual (Facebook, X, WhatsApp, LinkedIn, Telegram, Email, Copiar enlace) vía el bloque "SocialShare"',
     author: 'WordJS',
 };

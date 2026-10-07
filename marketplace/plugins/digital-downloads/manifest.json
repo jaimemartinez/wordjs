@@ -1,7 +1,7 @@
 {
     "id": "digital-downloads",
     "name": "Digital Downloads",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Sell or give away downloadable products (files hosted in the media library). Delivery is a token-gated reveal: buyers get an expiring, limited-use download link by email or on screen. Free products deliver instantly with an email; paid orders stay pending until the admin marks them paid (the link is then auto-emailed).",
     "author": "WordJS",
     "isolated": true,
@@ -24,6 +24,11 @@
         "order": 73
     },
     "permissions": [
+        {
+            "scope": "browser",
+            "access": "script",
+            "reason": "Run the plugin's own compiled interface in the browser: its admin page and its Verso block (in the editor and on public pages). Without it the host does not serve these bundles and that interface does not load."
+        },
         {
             "scope": "database",
             "access": "read",

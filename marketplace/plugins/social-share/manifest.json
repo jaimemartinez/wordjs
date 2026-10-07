@@ -1,7 +1,7 @@
 {
     "id": "social-share",
     "name": "Social Share",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Botones para compartir la página actual en redes sociales (Facebook, X, WhatsApp, LinkedIn, Telegram, Email y Copiar enlace) mediante el bloque \"SocialShare\" del editor visual. Todo funciona en el navegador: sin claves, sin configuración y sin llamadas al servidor.",
     "author": "WordJS",
     "isolated": true,
@@ -24,6 +24,11 @@
         "order": 61
     },
     "permissions": [
+        {
+            "scope": "browser",
+            "access": "script",
+            "reason": "Run the plugin's own compiled interface in the browser: its admin page and its Verso block (in the editor and on public pages). Without it the host does not serve these bundles and that interface does not load."
+        },
         {
             "scope": "admin_menu",
             "access": "register",

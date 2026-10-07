@@ -1,7 +1,7 @@
 {
     "id": "event-tickets",
     "name": "Event Tickets",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Ticket types for events with quantity caps: public purchase generates unique ticket codes (instantly for free tickets, after manual payment confirmation for paid ones), emails them, and provides an attendee list with check-in by code.",
     "author": "WordJS",
     "isolated": true,
@@ -24,6 +24,11 @@
         "order": 77
     },
     "permissions": [
+        {
+            "scope": "browser",
+            "access": "script",
+            "reason": "Run the plugin's own compiled interface in the browser: its admin page and its Verso block (in the editor and on public pages). Without it the host does not serve these bundles and that interface does not load."
+        },
         {
             "scope": "database",
             "access": "read",

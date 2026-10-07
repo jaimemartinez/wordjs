@@ -1,7 +1,7 @@
 {
     "id": "job-board",
     "name": "Job Board",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Job listings with a public application form (anti-spam honeypot + timing + rate cap), an applications inbox with statuses and CSV export, and a Verso block with search, type and remote filters. WordPress parity: WP Job Manager.",
     "author": "WordJS",
     "isolated": true,
@@ -24,6 +24,11 @@
         "order": 75
     },
     "permissions": [
+        {
+            "scope": "browser",
+            "access": "script",
+            "reason": "Run the plugin's own compiled interface in the browser: its admin page and its Verso block (in the editor and on public pages). Without it the host does not serve these bundles and that interface does not load."
+        },
         {
             "scope": "database",
             "access": "read",
