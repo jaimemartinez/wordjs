@@ -16,12 +16,15 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { spawnSync } = require('child_process');
 
 const { shouldIgnore, IGNORE_PATTERNS, ROOT_DIR } = require('../../../scripts/make-release.js');
 
 /** A path as the packager sees it: absolute, under the repo root. */
 const p = (rel: string) => path.join(ROOT_DIR, ...rel.split('/'));
+
+const PACKAGER = path.join(ROOT_DIR, 'scripts', 'make-release.js');
 
 /**
  * The packager's structural rule ("untracked ⇒ does not ship") IS git: `make-release.js` asks
@@ -76,7 +79,7 @@ describe('release packager — agent/assistant directories never ship', () => {
             '.env',
             'backend/data/database.sqlite',
             'marketplace/plugins/faq/index.js',
-            'backend/plugins/toscano/index.js',
+            '.release-exclude',
         ]) {
             assert.strictEqual(shouldIgnore(p(rel)), true, `debería excluirse: ${rel}`);
         }
@@ -141,5 +144,182 @@ describe('release packager — agent/assistant directories never ship', () => {
         ]) {
             assert.strictEqual(shouldIgnore(p(rel)), false, `NO debería excluirse: ${rel}`);
         }
+    });
+});
+
+/**
+ * PRIVATE, UNTRACKED PLUGINS — kept out of the bundle without being named anywhere public.
+ *
+ * The packager used to keep private plugin directories out of the ZIP by listing them in
+ * IGNORE_PATTERNS, which published in the repository exactly what it was meant to protect. What keeps
+ * them out now is structural (git does not track them), plus the gitignored `.release-exclude` for a
+ * tree where git cannot answer. These tests build a throwaway project, run the packager's own copy step
+ * over it and read what came out: the question is what lands in the bundle, not what a predicate says
+ * about one path.
+ */
+describe('release packager — private, untracked plugins never ship', () => {
+    /** Write `files` (project-relative path → content) under `root`. */
+    function writeTree(root: string, files: Record<string, string>) {
+        for (const [rel, body] of Object.entries(files)) {
+            const abs = path.join(root, ...rel.split('/'));
+            fs.mkdirSync(path.dirname(abs), { recursive: true });
+            fs.writeFileSync(abs, body);
+        }
+    }
+
+    /**
+     * A throwaway project with the packager inside it. make-release.js anchors ROOT_DIR on its own
+     * location (`scripts/..`), so a copy of the real file packages the fixture instead of this
+     * repository — and requiring it from there is a fresh module instance, with its own git and
+     * `.release-exclude` caches.
+     */
+    function fixtureProject(files: Record<string, string>): string {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-release-fixture-'));
+        writeTree(root, files);
+        fs.mkdirSync(path.join(root, 'scripts'));
+        fs.copyFileSync(PACKAGER, path.join(root, 'scripts', 'make-release.js'));
+        return root;
+    }
+
+    /** Every path in the bundle, directories included: an empty directory still publishes its name. */
+    function bundleListing(dir: string): string[] {
+        const out: string[] = [];
+        const walk = (rel: string) => {
+            for (const e of fs.readdirSync(path.join(dir, ...rel.split('/').filter(Boolean)), { withFileTypes: true })) {
+                const r = rel ? `${rel}/${e.name}` : e.name;
+                out.push(r);
+                if (e.isDirectory()) walk(r);
+            }
+        };
+        walk('');
+        return out.sort();
+    }
+
+    /**
+     * Run `fn` with git pointed where the test says. The packager shells out to git with the inherited
+     * environment, so a GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE left over from the caller (a git hook,
+     * say) would make it read some other repository.
+     */
+    function withGitEnv<T>(gitDir: string | undefined, fn: () => T): T {
+        const keys = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE'];
+        const saved = keys.map((k) => process.env[k]);
+        for (const k of keys) delete process.env[k];
+        if (gitDir !== undefined) process.env.GIT_DIR = gitDir;
+        try {
+            return fn();
+        } finally {
+            keys.forEach((k, i) => {
+                if (saved[i] === undefined) delete process.env[k];
+                else process.env[k] = saved[i];
+            });
+        }
+    }
+
+    /** Package `root` with its own copy of the packager; returns the bundle's listing. */
+    function packageFixture(root: string): string[] {
+        const out = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-release-bundle-'));
+        try {
+            const { copyFiles } = require(path.join(root, 'scripts', 'make-release.js'));
+            copyFiles(root, path.join(out, 'pkg'));
+            return bundleListing(path.join(out, 'pkg'));
+        } finally {
+            fs.rmSync(out, { recursive: true, force: true });
+        }
+    }
+
+    const PUBLIC: Record<string, string> = {
+        'backend/plugins/public-plugin/manifest.json': '{"slug":"public-plugin"}',
+        'backend/plugins/public-plugin/index.js': 'module.exports = {};',
+        'backend/themes/public-theme/theme.json': '{"slug":"public-theme"}',
+    };
+
+    test('an untracked plugin or theme directory does not reach the bundle — not even its name', (t: any) => {
+        if (!runnableOrSkip(t, packagerCanConsultGit(), 'git cannot list files here, so the structural rule cannot be exercised')) return;
+
+        const root = fixtureProject({
+            ...PUBLIC,
+            // Gitignored, as private extensions are in a real working tree...
+            '.gitignore': 'backend/plugins/private-ignored/\nbackend/themes/private-theme/\n',
+            'backend/plugins/private-ignored/manifest.json': '{"slug":"private-ignored"}',
+            'backend/plugins/private-ignored/index.js': 'module.exports = {};',
+            'backend/themes/private-theme/theme.json': '{"slug":"private-theme"}',
+            // ...and merely never added: no ignore rule, no name anywhere. It must not matter.
+            'backend/plugins/private-untracked/index.js': 'module.exports = {};',
+        });
+        try {
+            const listing = withGitEnv(undefined, () => {
+                const git = (...args: string[]) => {
+                    const r = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+                    assert.strictEqual(r.status, 0, `git ${args.join(' ')} failed: ${r.stderr}`);
+                };
+                git('init', '-q');
+                git('add', '--', '.gitignore', 'scripts', 'backend/plugins/public-plugin', 'backend/themes/public-theme');
+                return packageFixture(root);
+            });
+
+            // THE CONTROL: an exclusion that dropped everything would pass the assertion below.
+            for (const rel of Object.keys(PUBLIC)) {
+                assert.ok(listing.includes(rel), `tracked, should ship: ${rel}\nbundle: ${listing.join(', ')}`);
+            }
+            const leaked = listing.filter((rel) => rel.includes('private-'));
+            assert.deepStrictEqual(leaked, [], 'untracked extension directories reached the bundle');
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    test('where git cannot answer, .release-exclude keeps private paths out — and never ships itself', () => {
+        const root = fixtureProject({
+            ...PUBLIC,
+            'backend/plugins/private-listed/index.js': 'module.exports = {};',
+            'backend/themes/private-listed-theme/theme.json': '{"slug":"private-listed-theme"}',
+            // CRLF, a comment line, a blank line, a trailing slash, indentation and a trailing comment:
+            // the file is hand-written, so the parser has to take it as people write it.
+            '.release-exclude': [
+                '# private, untracked extensions',
+                'backend/plugins/private-listed/',
+                '',
+                '   backend/themes/private-listed-theme   # trailing comment',
+                '',
+            ].join('\r\n'),
+        });
+        try {
+            // GIT_DIR at a directory that does not exist: git fails, as it does on a tree copied without
+            // `.git/` (the Docker build context excludes it) or when git refuses the repository.
+            const listing = withGitEnv(path.join(root, 'no-such-git-dir'), () => packageFixture(root));
+
+            // THE CONTROL, and the proof the fallback ran: nothing here is tracked, so with git answering
+            // the public plugin would have been dropped too.
+            for (const rel of Object.keys(PUBLIC)) {
+                assert.ok(listing.includes(rel), `should ship in the name-list fallback: ${rel}\nbundle: ${listing.join(', ')}`);
+            }
+            const leaked = listing.filter((rel) => rel.includes('private-'));
+            assert.deepStrictEqual(leaked, [], 'paths listed in .release-exclude reached the bundle');
+            assert.ok(!listing.includes('.release-exclude'), '.release-exclude names what must stay private: it must never ship');
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    /**
+     * The other half of the fix: the packager keeps private extensions out WITHOUT naming them. A test
+     * cannot list the names it guards against without publishing them, so it asserts the shape instead —
+     * the packager names no individual plugin or theme directory at all, and no bare entry in its list
+     * is the name of an extension present in this tree (on a developer machine that includes the
+     * private, untracked ones).
+     */
+    test('make-release.js names no individual plugin or theme', () => {
+        const source = fs.readFileSync(PACKAGER, 'utf8');
+        const named = [...source.matchAll(/(?:^|[^\w-])((?:plugins|themes)\/[A-Za-z0-9_][\w.-]*)/g)].map((m) => m[1]);
+        assert.deepStrictEqual(named, [], 'make-release.js names extension directories; exclude them structurally or via .release-exclude');
+
+        const extensionDirs: string[] = ['backend/plugins', 'backend/themes'].flatMap((dir) =>
+            fs.readdirSync(p(dir), { withFileTypes: true })
+                .filter((e: any) => e.isDirectory())
+                .map((e: any) => e.name),
+        );
+        assert.ok(extensionDirs.length > 0, 'no plugin or theme directories found: the check below is looking at nothing');
+        const listed = IGNORE_PATTERNS.filter((entry: string) => extensionDirs.includes(entry));
+        assert.deepStrictEqual(listed, [], 'IGNORE_PATTERNS names an extension directory; exclude it structurally or via .release-exclude');
     });
 });

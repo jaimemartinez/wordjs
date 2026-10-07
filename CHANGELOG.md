@@ -23,6 +23,14 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   expiring at most 60 days after it was added and printed as a workflow warning on every run. The node-forge
   advisory above is the only entry (until 2026-11-05); a test fails if a node-forge signature verification
   returns to the code.
+- **The release packager no longer names private plugins in its public source.** `scripts/make-release.js`
+  kept two private, untracked plugin directories out of the bundle by listing them in `IGNORE_PATTERNS`,
+  which published in the repository the names it was meant to protect. They are now kept out without being
+  named: the packager already drops everything git does not track, and for a tree where git cannot answer it
+  reads extra exclusions from `.release-exclude`, a gitignored local file that is itself never bundled. A
+  test packages a throwaway repository and checks that untracked plugin and theme directories — and the
+  paths listed in `.release-exclude` — do not reach the bundle, and fails if the packager names an
+  individual plugin or theme.
 
 ### Fixed
 
