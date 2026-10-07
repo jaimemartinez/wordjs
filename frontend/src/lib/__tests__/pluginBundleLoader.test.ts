@@ -32,9 +32,14 @@ function textResponse(code: string): Response {
     return { ok: true, status: 200, text: async () => code } as Response;
 }
 
-/** A registry entry as GET /plugins/registry emits it: the plugin's manifest, spread. */
-function registryEntry(id: string, frontend: unknown): unknown {
-    return { id, name: id, version: '1.0.0', active: true, path: `/plugins/${id}`, frontend };
+/**
+ * A registry entry as GET /plugins/registry emits it: id, path, the browser:script grant and the
+ * `frontend` signal — never the manifest (that endpoint is anonymous; see routes/plugins.ts). The
+ * fixtures below still pass the historical string form of `hooks` in places: an older backend sent the
+ * manifest's entry path, and the loader accepts both.
+ */
+function registryEntry(id: string, frontend: unknown, browser = true): unknown {
+    return { id, path: `/plugins/${id}`, browser, frontend };
 }
 
 /**
@@ -258,6 +263,26 @@ describe("hooks-bundle 404 — warn only when the bundle SHOULD have been there"
         expect(console.warn).toHaveBeenCalledWith(
             expect.stringContaining("plugin 'mail-server' declares frontend.hooks"));
         expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('build-plugin.js mail-server'));
+    });
+
+    it("WARNS from the boolean `hooks: true` the current backend sends", async () => {
+        hooksBundle404([registryEntry('mail-server', { hooks: true })], ['mail-server']);
+        const { loadRuntimePluginHooks } = await freshLoader();
+        await expect(loadRuntimePluginHooks()).resolves.toBeUndefined();
+        expect(console.warn).toHaveBeenCalledWith(
+            expect.stringContaining("plugin 'mail-server' declares frontend.hooks"));
+    });
+
+    // browser:script NOT granted: the host refuses to serve the plugin's browser code, so the 404 is the
+    // gate working. It must not be reported as a broken build ("run build-plugin.js") — that would send
+    // the admin to rebuild something that is fine — but it must point at the switch, once.
+    it("says the capability is NOT GRANTED (not 'never built') when browser:script is off", async () => {
+        hooksBundle404([registryEntry('mail-server', { hooks: true }, false)], ['mail-server']);
+        const { loadRuntimePluginHooks } = await freshLoader();
+        await expect(loadRuntimePluginHooks()).resolves.toBeUndefined();
+        expect(console.warn).toHaveBeenCalledTimes(1);
+        expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('"browser:script" permission is not granted'));
+        expect(console.warn).not.toHaveBeenCalledWith(expect.stringContaining('build-plugin.js'));
     });
 
     // routes/plugins.ts emits `frontend: null` EXPLICITLY when it cannot read the plugin's manifest.json

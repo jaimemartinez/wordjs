@@ -22,7 +22,7 @@
 
 exports.metadata = {
     name: 'Marketplace',
-    version: '1.0.0',
+    version: '1.0.1',
     description: 'Multi-vendor directory: vendor applications, code-protected vendor portal, product listings and buyer inquiries (lead generation).',
     author: 'WordJS',
 };

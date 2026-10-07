@@ -1,7 +1,7 @@
 {
     "id": "bookings",
     "name": "Bookings",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Appointment booking system: services with weekly availability, a public slot picker with race-safe reservations, email confirmations, and an admin agenda. WordPress parity: Amelia / Bookly (v1 scope).",
     "author": "WordJS",
     "isolated": true,
@@ -24,6 +24,11 @@
         "order": 71
     },
     "permissions": [
+        {
+            "scope": "browser",
+            "access": "script",
+            "reason": "Run the plugin's own compiled interface in the browser: its admin page and its Verso block (in the editor and on public pages). Without it the host does not serve these bundles and that interface does not load."
+        },
         {
             "scope": "database",
             "access": "read",

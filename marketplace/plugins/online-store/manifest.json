@@ -1,7 +1,7 @@
 {
     "id": "online-store",
     "name": "Online Store",
-    "version": "2.0.0",
+    "version": "2.0.1",
     "description": "Tienda completa: catálogo con variantes y galerías, carrito, checkout con validación server-side, cupones, zonas de envío + recogida, impuestos simples, pedidos por cuenta, correos transaccionales, reembolsos (incluye Stripe), informes con CSV y webhooks de Stripe. Pago manual siempre disponible; Stripe opcional por sitio.",
     "author": "WordJS",
     "isolated": true,
@@ -24,6 +24,11 @@
         "order": 69
     },
     "permissions": [
+        {
+            "scope": "browser",
+            "access": "script",
+            "reason": "Run the plugin's own compiled interface in the browser: its admin page and its Verso block (in the editor and on public pages). Without it the host does not serve these bundles and that interface does not load."
+        },
         {
             "scope": "database",
             "access": "read",
