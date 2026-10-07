@@ -1,7 +1,7 @@
 {
     "id": "mail-server",
     "name": "Mail Server",
-    "version": "2.2.3",
+    "version": "2.2.4",
     "description": "Full webmail (spam folder, labels, undo send, vacation replies, search operators) on a real MTA with DKIM/SPF/DNS tooling",
     "author": "WordJS",
     "isolated": true,
@@ -25,6 +25,11 @@
         "order": 90
     },
     "permissions": [
+        {
+            "scope": "browser",
+            "access": "script",
+            "reason": "Run the plugin's own compiled interface in the browser: its admin page and its admin UI extension (a hooks bundle loaded on every admin page). Without it the host does not serve these bundles and that interface does not load."
+        },
         {
             "scope": "settings",
             "access": "read",

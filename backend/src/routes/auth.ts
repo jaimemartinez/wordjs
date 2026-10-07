@@ -39,6 +39,8 @@ const { refuseSelfServiceEmailChange, isValidAddress } = require('../core/mailbo
 // Append-only audit trail. Every call here is best-effort by construction (recordAudit swallows its
 // own errors) — an unwritable audit row must never turn a successful login into a 500.
 const { recordAudit } = require('../core/audit');
+// The one HTML escaper for every transactional mail body this router builds.
+const { escHtml } = require('../core/formatting');
 
 /**
  * A caller-supplied string, bounded, for an audit `detail`.
@@ -199,7 +201,9 @@ function inflightBucket(purpose: LockPurpose, subject: string | number, req: Req
 async function findAccountByIdentifier(identifier: any) {
     try {
         const User = require('../models/User');
-        return (await User.findByLogin(identifier)) || (await User.findByEmail(identifier)) || null;
+        // The same resolution as User.authenticate: an '@' identifier is an email first, so a legacy
+        // login shaped like an address can never shadow (and lock out) the account that owns it.
+        return (await User.findByIdentifier(identifier)) || null;
     } catch { return null; }
 }
 
@@ -532,6 +536,8 @@ function withSignInEligibility(req: Request, res: Response, next: () => void): v
  *         description: >-
  *           Account created. A session cookie is issued unless email verification is required, in which
  *           case the account stays inactive until POST /auth/verify-email consumes the emailed token.
+ *           With verification required the body is `{ verificationRequired, message }` (no `user`), and
+ *           an email that already has an account gets that same answer (its owner is notified instead).
  *         content:
  *           application/json:
  *             schema:
@@ -546,8 +552,10 @@ function withSignInEligibility(req: Request, res: Response, next: () => void): v
  *                   type: string
  *       400:
  *         description: >-
- *           rest_missing_param (username/email/password absent), rest_invalid_param (bad email format,
- *           password shorter than 8 or longer than 72 characters) or rest_user_exists.
+ *           rest_missing_param (username/email/password absent), rest_invalid_param (bad email format, a
+ *           username outside letters/digits/. _ - or longer than 60 characters, password shorter than 8 or
+ *           longer than 72 characters) or rest_user_exists (one generic message for a taken username or
+ *           email; a taken email answers 201 instead when email verification is required).
  *         content:
  *           application/json:
  *             schema:
@@ -638,62 +646,104 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
         });
     }
 
+    // The username rule (models/User.ts): no '@', no whitespace, at most 60 characters. Checked here only
+    // to answer a 400 — User.create enforces it for every caller.
+    const usernameProblem = User.usernameError(username);
+    if (usernameProblem) {
+        return res.status(400).json({ code: 'rest_invalid_param', message: usernameProblem, data: { status: 400 } });
+    }
+
+    // ACCOUNT ENUMERATION. This endpoint used to answer "Email already exists" / "Username already exists"
+    // verbatim, a free oracle for whether an address has an account here — while login, forgot-password and
+    // /users/me answer uniformly. Now:
+    //   · with email verification ON, an address that already has an account gets the SAME 201 as a new one
+    //     (no cookie either way, no `user` in either body), and its owner gets a short notice instead of a
+    //     verification link — only the mailbox owner learns anything;
+    //   · otherwise, and for a taken USERNAME, one generic 400. A username's availability is inherently
+    //     observable (it must be unique, and it is shown on public surfaces); an email's no longer is when
+    //     verification is on. With verification off a fresh username + a taken email still fails — the
+    //     residual, documented in documentation/security.md.
+    const verificationRequired = await emailVerificationRequired();
+    const VERIFY_MESSAGE = 'Check your email for a verification link before logging in.';
+    const registrationFailed = () => res.status(400).json({
+        code: 'rest_user_exists',
+        message: 'Registration failed: that username or email address cannot be used.',
+        data: { status: 400 }
+    });
+
+    let user: any;
     try {
         const defaultRole = await getOption('default_role', 'subscriber');
-        const user = await User.create({
+        user = await User.create({
             username,
             email,
             password,
             displayName: displayName || username,
             role: defaultRole
         });
-
-        // EMAIL VERIFICATION (opt-in, fail-closed). When required, the account is created UNVERIFIED and
-        // may NOT log in until it confirms via a tokenized link (the login route refuses on the
-        // `email_verification_pending` meta). We do NOT issue a session cookie here — verifying is the
-        // gate. The admin-creates-user path (routes/users.ts) never sets the pending flag, so those
-        // accounts stay pre-verified. Reuses the SAME single-use token machinery as password reset and
-        // the SAME email:provider capability (global.wordjs_send_mail).
-        if (await emailVerificationRequired()) {
-            const { raw, hash } = mintSingleUseToken();
-            await User.updateMeta(user.id, 'email_verification_hash', hash);
-            await User.updateMeta(user.id, 'email_verification_expires', String(Date.now() + VERIFY_TTL_MS));
-            await User.updateMeta(user.id, 'email_verification_pending', '1');
-
-            // The site's link base (core/site-address) — never this request's Host: whoever calls this
-            // endpoint must not be able to choose which host receives the verification token.
-            const base = await linkBase();
-            const link = `${base}/verify-email?uid=${user.id}&token=${raw}`;
-            const siteName = await getOption('blogname', 'WordJS');
+    } catch (error) {
+        if (!String(error && error.message).includes('already exists')) throw error;
+        // A taken identity skips create()'s bcrypt hash; burn the same cost so the answer's timing does not
+        // say which branch ran.
+        await require('bcryptjs').hash(String(password), 12);
+        if (verificationRequired && error.code === 'email_taken') {
+            // create() checks the username first, so this username is free: the only thing that collided is
+            // the address. Tell its owner, not the caller.
             try {
+                const siteName = await getOption('blogname', 'WordJS');
+                const text = `Someone tried to create a new ${siteName} account with this email address. It already has an account, so nothing was created.\n\nIf this was you, sign in instead, or use "Forgot password" if you no longer know your password. If it was not you, you can ignore this message.`;
                 (global as any).wordjs_send_mail({
                     to: String(email).trim().toLowerCase(),
-                    subject: `Verify your email for ${siteName}`,
-                    text: `Welcome to ${siteName}! Please confirm this email address to activate your account (${user.userLogin}).\n\nVerify your email (this link is valid for 24 hours):\n${link}\n\nIf you did not create this account, you can safely ignore this email.`,
-                    html: `<p>Welcome to <strong>${siteName}</strong>! Please confirm this email address to activate your account (<code>${user.userLogin}</code>).</p>`
-                        + `<p><a href="${link}">Verify your email</a> — this link is valid for 24 hours.</p>`
-                        + `<p>If you did not create this account, you can safely ignore this email.</p>`
+                    subject: `Sign-up attempt on ${siteName}`,
+                    text,
+                    html: `<p>${escHtml(text).replace(/\n\n/g, '</p><p>')}</p>`
                 });
-            } catch { /* swallow send errors — the account still exists and can request a new link */ }
-
-            // No session cookie: the user must verify before logging in.
-            return res.status(201).json({ user: user.toJSON(), verificationRequired: true, message: 'Account created. Check your email for a verification link before logging in.' });
+            } catch { /* swallow send errors — the answer must not depend on the mail system */ }
+            return res.status(201).json({ verificationRequired: true, message: VERIFY_MESSAGE });
         }
-
-        const token = generateToken(user, req);
-        if (issueSessionCookie(req, res, token, COOKIE_OPTIONS(req))) return;
-
-        res.status(201).json({ user: user.toJSON() });
-    } catch (error) {
-        if (error.message.includes('already exists')) {
-            return res.status(400).json({
-                code: 'rest_user_exists',
-                message: error.message,
-                data: { status: 400 }
-            });
-        }
-        throw error;
+        return registrationFailed();
     }
+
+    // EMAIL VERIFICATION (opt-in, fail-closed). When required, the account is created UNVERIFIED and
+    // may NOT log in until it confirms via a tokenized link (the login route refuses on the
+    // `email_verification_pending` meta). We do NOT issue a session cookie here — verifying is the
+    // gate. The admin-creates-user path (routes/users.ts) never sets the pending flag, so those
+    // accounts stay pre-verified. Reuses the SAME single-use token machinery as password reset and
+    // the SAME email:provider capability (global.wordjs_send_mail).
+    if (verificationRequired) {
+        const { raw, hash } = mintSingleUseToken();
+        await User.updateMeta(user.id, 'email_verification_hash', hash);
+        await User.updateMeta(user.id, 'email_verification_expires', String(Date.now() + VERIFY_TTL_MS));
+        await User.updateMeta(user.id, 'email_verification_pending', '1');
+
+        // The site's link base (core/site-address) — never this request's Host: whoever calls this
+        // endpoint must not be able to choose which host receives the verification token.
+        const base = await linkBase();
+        const link = `${base}/verify-email?uid=${user.id}&token=${raw}`;
+        const siteName = await getOption('blogname', 'WordJS');
+        try {
+            (global as any).wordjs_send_mail({
+                to: String(email).trim().toLowerCase(),
+                subject: `Verify your email for ${siteName}`,
+                text: `Welcome to ${siteName}! Please confirm this email address to activate your account (${user.userLogin}).\n\nVerify your email (this link is valid for 24 hours):\n${link}\n\nIf you did not create this account, you can safely ignore this email.`,
+                // Every interpolated value is escaped (core/formatting escHtml): the login is chosen by an
+                // anonymous caller and the site name by an administrator, and raw they put markup — a
+                // phishing link — into a message the site itself sends.
+                html: `<p>Welcome to <strong>${escHtml(siteName)}</strong>! Please confirm this email address to activate your account (<code>${escHtml(user.userLogin)}</code>).</p>`
+                    + `<p><a href="${escHtml(link)}">Verify your email</a> — this link is valid for 24 hours.</p>`
+                    + `<p>If you did not create this account, you can safely ignore this email.</p>`
+            });
+        } catch { /* swallow send errors — the account still exists and can request a new link */ }
+
+        // No session cookie: the user must verify before logging in. No `user` either: the body must be
+        // the one an already-registered address gets (see ACCOUNT ENUMERATION above).
+        return res.status(201).json({ verificationRequired: true, message: VERIFY_MESSAGE });
+    }
+
+    const token = generateToken(user, req);
+    if (issueSessionCookie(req, res, token, COOKIE_OPTIONS(req))) return;
+
+    res.status(201).json({ user: user.toJSON() });
 }));
 
 /**
@@ -1341,9 +1391,10 @@ router.post('/forgot-password', asyncHandler(async (req: Request, res: Response)
     if (!login) return ok();
     if (!(await mailReady())) return ok();
 
+    // An '@' identifier is resolved as an EMAIL first (User.findByIdentifier): trying the login first let a
+    // username equal to someone else's email receive that person's reset link.
     let user: any;
-    try { user = await User.findByLogin(login); } catch { user = null; }
-    if (!user && login.includes('@')) { try { user = await User.findByEmail(login); } catch { user = null; } }
+    try { user = await User.findByIdentifier(login); } catch { user = null; }
     if (!user) return ok();
 
     const to = await recoveryTarget(user);
@@ -1366,8 +1417,11 @@ router.post('/forgot-password', asyncHandler(async (req: Request, res: Response)
             to,
             subject: `Password reset for ${siteName}`,
             text: `Someone requested a password reset for your ${siteName} account (${user.userLogin}).\n\nReset your password (this link is valid for 30 minutes):\n${link}\n\nIf you did not request this, you can safely ignore this email — your password will not change.`,
-            html: `<p>Someone requested a password reset for your <strong>${siteName}</strong> account (<code>${user.userLogin}</code>).</p>`
-                + `<p><a href="${link}">Reset your password</a> — this link is valid for 30 minutes.</p>`
+            // Every interpolated value is escaped (core/formatting escHtml): the login and the site name are
+            // written by users and administrators, and raw they could put markup — a phishing link — into a
+            // message the site itself sends.
+            html: `<p>Someone requested a password reset for your <strong>${escHtml(siteName)}</strong> account (<code>${escHtml(user.userLogin)}</code>).</p>`
+                + `<p><a href="${escHtml(link)}">Reset your password</a> — this link is valid for 30 minutes.</p>`
                 + `<p>If you did not request this, you can safely ignore this email; your password will not change.</p>`
         });
     } catch { /* swallow send errors — keep the response uniform, don't leak mail-infra state */ }

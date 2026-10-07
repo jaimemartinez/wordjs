@@ -1,7 +1,7 @@
 {
     "id": "events-calendar",
     "name": "Events Calendar",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Manage events from the admin (title, dates, location, link, color) and show them anywhere with the EventsCalendar Verso block — as an upcoming-events list or a monthly calendar grid. WordPress parity: The Events Calendar.",
     "author": "WordJS",
     "isolated": true,
@@ -24,6 +24,11 @@
         "order": 57
     },
     "permissions": [
+        {
+            "scope": "browser",
+            "access": "script",
+            "reason": "Run the plugin's own compiled interface in the browser: its admin page and its Verso block (in the editor and on public pages). Without it the host does not serve these bundles and that interface does not load."
+        },
         {
             "scope": "database",
             "access": "read",

@@ -31,6 +31,93 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   nodes:** a gateway from an earlier release sends no CA in its chain, so a pinned join against it fails
   closed. `create-wordjs gateway` now fails instead of printing join commands with a placeholder
   fingerprint.
+- **Shortcode parsing no longer freezes the server on hostile post content.** The matcher was a regex whose
+  attribute run had no bound, so every `[tag` without a closing `]` scanned to the end of the document
+  before the next one did the same: `"[gallery ".repeat(n)` cost O(n²), about 5 s for 360 KB and 87 s for
+  1.4 MB, on every serialization of the post (content and excerpt), from a draft any contributor can
+  save. `doShortcode`, `doShortcodeAsync` and `stripShortcodes` now share a single-pass scanner that
+  matches exactly the same shortcodes (1.4 MB now takes about 40 ms). Output is rebuilt in one join
+  instead of one string copy per shortcode, and at most 2000 shortcodes are processed per document; any
+  beyond that are left as written.
+- **The anonymous sidebar render endpoint escapes what it outputs.** `GET /api/v1/widgets/sidebars/:id/render`
+  is public and returns `text/html` from the API origin, but the Categories and Recent Posts widgets
+  and the widget title wrote category names, post titles and slugs into the HTML unescaped. An editor
+  could name a category `<img src=x onerror=…>` and get script running for anyone who opened the
+  URL, administrators included. All of these values are now escaped, and the response carries
+  `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox` and `X-Content-Type-Options: nosniff`.
+  Category and tag names are also stripped of HTML tags when created or updated; a name made only of
+  markup is rejected with 400. Plugins can no longer filter the rendered sidebar: `dynamic_sidebar` joins
+  `wordjs_head`/`wordjs_footer` on the list of raw-HTML hooks denied to every plugin.
+- **Widgets added since instance ids became UUIDs render again.** The renderer split
+  `<widgetId>-<instanceId>` keys on the last `-`, which cut a UUID in half, so those widgets were
+  skipped without error and the sidebar came back empty. Keys are now matched against the registered
+  widget ids, so old-style keys, UUID keys and widget ids containing `-` all resolve. The admin widgets
+  page labels them the same way.
+- **Installed font names and URLs can no longer break out of the server-rendered `<style>`.** The
+  `@font-face` builder removed quotes from the family name only. It now removes quotes, backslashes,
+  `<`, `>` and control characters from both the family name and the URL.
+- **An installed site no longer starts with a JWT secret published in this repository.** With
+  `WORDJS_PRESEED_CONFIG=1` and no `WORDJS_JWT_SECRET`, `docker/entrypoint.sh` wrote an *installed* config
+  signed with `wordjs-shared-dev-secret-change-me` (the root `docker-compose.yml` set that very value), and
+  boot kept it because the site was installed — anyone could sign a session for the bootstrap
+  administrator (user id 1). The backend now refuses to start on an installed config whose `jwtSecret` is
+  any published placeholder, with instructions to set a real one (it does not rotate it silently, which
+  would split replicas). The entrypoint requires `WORDJS_JWT_SECRET` (≥ 64 characters, no default) when
+  pre-seeding, and the root compose file refuses to render without it (`openssl rand -hex 64`).
+  **Upgrade note:** a volume pre-seeded without the variable needs its `jwtSecret` replaced, the same value
+  on every replica. The docs no longer claim the root stack cannot be logged into: its bootstrap `admin`
+  password is written to `backend/data/initial-admin-password`.
+- **A username can no longer take over another account's email.** Sign-in and password recovery tried an
+  identifier as a username before an email, and any string was a valid username, so registering the
+  username `boss@gmail.com` broke that account's email sign-in and sent its reset link to the attacker;
+  `Boss` and ` boss` also registered beside `boss`. New logins are limited to letters, digits, `.`, `_`, `-`
+  (≤ 60 characters), must not collide case-insensitively with any login or email (nor a new email with a
+  login), and an identifier containing `@` is now resolved as an email first. Existing accounts are not
+  re-validated; importers convert an invalid source login.
+- **Transactional emails escape what they interpolate.** The verification and password-reset mails put the
+  login and site name into their HTML unescaped, and the Auctions plugin's outbid mail did the same with
+  the bidder name and auction title, so markup (a phishing link) could arrive in a message the site sent.
+  They now use `escHtml`.
+- **`POST /auth/register` no longer reveals whether an email has an account.** It answered "Email already
+  exists" / "Username already exists" verbatim. With email verification required, a taken email now gets
+  the same 201 as a new one (the owner is notified instead; the body no longer carries `user`); otherwise
+  both duplicates get one generic `400 rest_user_exists`. A username's availability, and an email's when
+  verification is off, remain observable — see `documentation/security.md`.
+- **Plugin `dependencies` accept only plain npm registry version ranges.** The host installs a plugin's
+  manifest `dependencies` with `npm install` in its own root at activation, and npm runs the `prepare`
+  script of a `git+…`/`github:` or `file:` directory dependency even with `--ignore-scripts` — so a
+  manifest entry such as `"x": "file:../evil"` was code execution on the server. `npm:` aliases and
+  tarball URLs installed unscanned code under a benign name. A dependency must now be an npm package name
+  mapped to a semver range (`^1.2.3`, `~1.0`, `1.x`, `>=1 <2`, `*`); git, GitHub, `file:`, `link:`,
+  `workspace:`, `npm:` aliases, paths, URLs and dist-tags are refused at upload and marketplace install,
+  again inside the dependency installer before npm runs (including at boot), by `npm run pack:plugin` and
+  by the marketplace submission gate. The install also sets `npm_config_ignore_scripts=true`.
+- **Running plugin code in the browser is now an explicit, default-deny capability: `browser:script`.**
+  A plugin's compiled frontend bundles (admin page, admin hooks, Verso blocks) run unsandboxed and
+  unscanned in the admin app's origin with the viewer's session, and were served unauthenticated for any
+  installed plugin, active or not — so a plugin granted only `settings:read` could act as every
+  administrator who opened the admin. Now a plugin that ships browser code must declare `browser:script`
+  (upload, activation and packing refuse it otherwise); the activation and permissions dialogs show it
+  as high risk with the warning "runs code in your browser with your administrator session"; and
+  `GET /api/v1/plugins/:slug/bundle` (and `/bundle/css`, `/bundle/manifest`) serve a plugin's files only
+  while it is **active and the capability is granted**, otherwise 404. This is a mitigation: granted code
+  still runs in the admin origin, and separate-origin sandboxed iframes are planned
+  (`documentation/security.md` §1.3b).
+  **Upgrade:** the first boot after upgrading grants `browser:script` once to every plugin that was
+  already active and already shipped browser code, so working sites keep their plugin pages, hooks and
+  blocks; it is logged and recorded in the `plugin_browser_capability_migrated` option, and never runs
+  again. A plugin installed before this release that does not declare the permission keeps running while
+  active and shows a flagged `browser:script` row in Admin → Plugins, but must be updated before it can
+  be activated again. Every catalog plugin and the `wordjs` CLI plugin template now declare it; the
+  catalog plugins get a patch version bump so installed copies are offered the update.
+- **`GET /api/v1/plugins/registry` no longer publishes plugin manifests.** The unauthenticated registry
+  returned every active plugin's name, exact version, author, requested permissions and dependencies — a
+  ready-made fingerprint of the install. It now returns only `{ id, path, browser, frontend: { hooks } }`,
+  which is what the admin's hooks loader reads.
+- **Plugin downloads no longer include runtime data.** `GET /api/v1/plugins/:slug/download` zipped the
+  whole plugin folder, including its top-level `data/` (mail-server's `data/.mailenc` encryption key and
+  attachments), `node_modules/` and `.git`. It now uses the same file rule as the plugin packer: no
+  top-level `data/`, no `node_modules/` or `.git`, no OS junk and no symbolic links.
 
 ### Added
 
@@ -56,6 +143,21 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   exchanges its GitHub OIDC token for a one-time publish credential (`id-token: write`, npm ≥ 11.5.1), so
   no npm credential is stored in the repository and each version carries provenance. It needs a trusted
   publisher configured once on npmjs.com for `jaimemartinez/wordjs`, workflow `release.yml`.
+
+### Fixed
+
+- **The F6 performance budget no longer fails the Linux CI on unchanged code.** Its ratio ceilings were
+  measured on one Windows host and judged on the Linux runners too, where the reference workload
+  (autocommit inserts) is cheaper and the mostly-CPU operations read up to ~2.5x their Windows ratios —
+  `contentRender` failed the Backend job at 0.183x and 0.187x against a 0.18x ceiling.
+  `performanceBudget` in `backend/f0-baseline.json` (schema 2) now keeps the host-independent fields once
+  and one calibration per platform under `calibrations.<platform>`: `linux` minted from 104 rounds the CI
+  perf job had recorded, at 1.5x the worst round, and the existing `win32` one. A platform with no
+  calibration has its ratio comparison skipped with the reason instead of borrowing another platform's;
+  `verify:f0` requires a `linux` calibration. `perf-calibrate.mjs` mints one platform's calibration,
+  can reduce already-recorded CI artifacts with `--from`, and reports a re-mint looser than the committed
+  ceiling as an error. The CI `Performance budgets` job now enforces the `linux` calibration on every
+  push and pull request (it is still not a required check).
 
 ## [2.3.0] - 2026-10-07
 

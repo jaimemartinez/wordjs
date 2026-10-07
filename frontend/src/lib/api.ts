@@ -351,6 +351,9 @@ export interface Plugin {
         scope: string;
         access: string;
         reason: string;
+        // Projected by GET /plugins (not in the manifest): browser:script for a plugin that ships browser
+        // code but predates the permission, so the admin can still see and revoke the upgrade-time grant.
+        undeclared?: boolean;
     }[];
     requestedPermissions?: string[];  // "scope:access" tokens the manifest requests (the togglable set)
     grantedPermissions?: string[];    // tokens the admin has granted (subset of requested + optional "network")
@@ -716,10 +719,11 @@ export const authApi = {
      * TWO OUTCOMES: with email verification off the backend sets the session cookie and the caller is
      * logged in; with `require_email_verification` on it returns `verificationRequired: true` and NO
      * cookie — the account cannot log in until it confirms. Callers MUST branch on that flag rather
-     * than navigating straight to the dashboard, which would land on a signed-out redirect.
+     * than navigating straight to the dashboard, which would land on a signed-out redirect. In that case
+     * the body carries no `user` (an already-registered address gets the same answer, by design).
      */
     register: (data: { username: string; email: string; password: string; displayName?: string }) =>
-        apiPost<{ user: User; verificationRequired?: boolean; message?: string }>("/auth/register", data),
+        apiPost<{ user?: User; verificationRequired?: boolean; message?: string }>("/auth/register", data),
     /** Consumes the single-use link from the verification email (/verify-email?uid=…&token=…). */
     verifyEmail: (data: { uid: number; token: string }) =>
         apiPost<{ ok: boolean; message: string }>("/auth/verify-email", data),

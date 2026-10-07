@@ -102,6 +102,102 @@ function parseAttrs(text: string) {
 }
 
 /**
+ * Upper bound on the shortcodes expanded (or stripped) in ONE document. Every match costs a callback
+ * invocation (and, in doShortcodeAsync, a pending Promise held until all of them settle), and the body
+ * of a post is contributor-controlled and may be megabytes long: "[gallery]".repeat(1e6) would otherwise
+ * queue a million handler calls on every serialization of that post. Real content uses a handful; past
+ * the cap the remaining text is left exactly as written (unexpanded), never dropped.
+ */
+const MAX_SHORTCODES_PER_DOCUMENT = 2000;
+
+interface ShortcodeMatch {
+    index: number;  // offset of the opening '['
+    end: number;    // offset just past the match
+    tag: string;
+    attrs: string;
+    inner: string | undefined; // undefined when there is no [/tag] closer (self-closing / bare form)
+}
+
+/**
+ * Find the shortcodes in `content`, in document order, in ONE linear pass.
+ *
+ * WHY NOT A REGEX. This used to be `\[(tags)([^\]]*?)(?:\/\]|\](?:([^\[]*?)\[\/\1\]|))` with the g
+ * flag. Its attribute run is unbounded, so an opening `[tag` with no `]` after it scans to the end of the
+ * document before failing — and the engine then retries at the NEXT `[tag`, which scans to the end
+ * again. Post content of "[gallery ".repeat(n) was therefore O(n²): 360 KB took ~5 s and 1.4 MB ~90 s of
+ * a blocked event loop, triggered by ANY contributor's draft on every Post.toJSON (content AND excerpt).
+ *
+ * This scanner reproduces that regex's matching EXACTLY (so every existing shortcode renders the same):
+ *   - a match starts at a '[' immediately followed by a registered tag; the tags are tried in
+ *     registration order and the first that is a prefix wins (the regex alternation; no word boundary);
+ *   - the attributes run to the FIRST ']' after the tag (they may contain '['); if that ']' is preceded
+ *     by '/' inside the run, the shortcode is self-closing and the '/' is not part of the attributes;
+ *   - otherwise, if the first '[' after that ']' starts `[/tag]`, the text in between is the inner
+ *     content and the match extends past the closer; if not, the match ends at the ']' (bare form);
+ *   - when no ']' follows a `[tag` at all, no later `[tag` can match either, so scanning stops.
+ * The next ']' and the next '[' are found with indexOf from a cursor that only moves forward, so each
+ * character is inspected a bounded number of times: O(n · longest tag) per document.
+ */
+function scanShortcodes(content: string, limit: number = MAX_SHORTCODES_PER_DOCUMENT): ShortcodeMatch[] {
+    const matches: ShortcodeMatch[] = [];
+    if (!content || shortcodes.size === 0) return matches;
+    const tagPattern = Array.from(shortcodes.keys()).map(escapeRegex).join('|');
+    if (!tagPattern) return matches;
+    // Sticky: tests the tag alternation AT a given '[' only (never searches ahead), in registration order.
+    const openRe = new RegExp(`\\[(${tagPattern})`, 'y');
+
+    let pos = 0;
+    let nextClose = -2; // cached index of the first ']' at or after the last search start (-1: none left)
+    while (matches.length < limit) {
+        const open = content.indexOf('[', pos);
+        if (open === -1) break;
+        openRe.lastIndex = open;
+        const m = openRe.exec(content);
+        if (!m) { pos = open + 1; continue; }
+
+        const tag = m[1];
+        const attrsStart = open + m[0].length;
+        if (nextClose !== -1 && nextClose < attrsStart) nextClose = content.indexOf(']', attrsStart);
+        if (nextClose === -1) break; // no ']' anywhere ahead: nothing further can match
+
+        const close = nextClose;
+        if (close > attrsStart && content.charCodeAt(close - 1) === 47 /* '/' */) {
+            matches.push({ index: open, end: close + 1, tag, attrs: content.slice(attrsStart, close - 1), inner: undefined });
+            pos = close + 1;
+            continue;
+        }
+
+        const attrs = content.slice(attrsStart, close);
+        const innerStart = close + 1;
+        const nextOpen = content.indexOf('[', innerStart);
+        const closer = `[/${tag}]`;
+        if (nextOpen !== -1 && content.startsWith(closer, nextOpen)) {
+            matches.push({ index: open, end: nextOpen + closer.length, tag, attrs, inner: content.slice(innerStart, nextOpen) });
+            pos = nextOpen + closer.length;
+        } else {
+            matches.push({ index: open, end: innerStart, tag, attrs, inner: undefined });
+            pos = innerStart;
+        }
+    }
+    return matches;
+}
+
+/**
+ * Rebuild `content` with each match replaced by its replacement — one join, not a slice-and-concat per
+ * match (which is O(n) per match, i.e. quadratic in the number of shortcodes).
+ */
+function spliceMatches(content: string, matches: ShortcodeMatch[], replacements: string[]) {
+    const parts: string[] = [];
+    let last = 0;
+    for (let i = 0; i < matches.length; i++) {
+        parts.push(content.slice(last, matches[i].index), replacements[i]);
+        last = matches[i].end;
+    }
+    parts.push(content.slice(last));
+    return parts.join('');
+}
+
+/**
  * Process shortcodes in content
  * Equivalent to do_shortcode()
  * 
@@ -111,23 +207,19 @@ function parseAttrs(text: string) {
 function doShortcode(content: string) {
     if (!content || shortcodes.size === 0) return content;
 
-    // Build regex pattern for all registered shortcodes
-    const tagPattern = Array.from(shortcodes.keys()).map(escapeRegex).join('|');
-    if (!tagPattern) return content;
+    // Match [tag attrs]content[/tag] or [tag attrs /] or [tag attrs] (see scanShortcodes)
+    const matches = scanShortcodes(content);
+    if (matches.length === 0) return content;
 
-    // Match [tag attrs]content[/tag] or [tag attrs /] or [tag attrs]
-    const pattern = new RegExp(
-        `\\[(${tagPattern})([^\\]]*?)(?:\\/\\]|\\](?:([^\\[]*?)\\[\\/\\1\\]|))`,
-        'g'
-    );
+    const replacements = matches.map((mm) => {
+        const callback = shortcodes.get(mm.tag);
+        if (!callback) return content.slice(mm.index, mm.end);
 
-    return content.replace(pattern, (match: string, tag: string, attrs: string, innerContent: string) => {
-        const callback = shortcodes.get(tag);
-        if (!callback) return match;
-
-        const parsedAttrs = parseAttrs(attrs.trim());
-        return callback(parsedAttrs, innerContent || '', tag);
+        const parsedAttrs = parseAttrs(mm.attrs.trim());
+        // String() mirrors what String.prototype.replace did with a replacer's return value.
+        return String(callback(parsedAttrs, mm.inner || '', mm.tag));
     });
+    return spliceMatches(content, matches, replacements);
 }
 
 /**
@@ -143,40 +235,25 @@ function doShortcode(content: string) {
 async function doShortcodeAsync(content: string) {
     if (!content || shortcodes.size === 0) return content;
 
-    const tagPattern = Array.from(shortcodes.keys()).map(escapeRegex).join('|');
-    if (!tagPattern) return content;
-
-    const pattern = new RegExp(
-        `\\[(${tagPattern})([^\\]]*?)(?:\\/\\]|\\](?:([^\\[]*?)\\[\\/\\1\\]|))`,
-        'g'
-    );
-
-    // Collect matches first (regex .exec loop), then resolve callbacks concurrently, then splice
-    // back-to-front so earlier indices stay valid. String.replace can't await, hence this approach.
-    const matches: Array<{ index: number; length: number; full: string; tag: string; attrs: string; inner: string }> = [];
-    let m;
-    while ((m = pattern.exec(content)) !== null) {
-        matches.push({ index: m.index, length: m[0].length, full: m[0], tag: m[1], attrs: m[2], inner: m[3] });
-    }
+    // Collect matches first, then resolve callbacks concurrently, then splice them back in one pass.
+    // String.replace can't await, hence this approach.
+    const matches = scanShortcodes(content);
     if (matches.length === 0) return content;
 
     const replacements = await Promise.all(matches.map(async (mm) => {
+        const full = content.slice(mm.index, mm.end);
         const callback = shortcodes.get(mm.tag);
-        if (!callback) return mm.full;
+        if (!callback) return full;
         const parsedAttrs = parseAttrs((mm.attrs || '').trim());
         try {
             const out = await callback(parsedAttrs, mm.inner || '', mm.tag);
             return out == null ? '' : String(out);
-        } catch (e) {
-            return mm.full; // leave the tag untouched if its handler errors
+        } catch {
+            return full; // leave the tag untouched if its handler errors
         }
     }));
 
-    let result = content;
-    for (let i = matches.length - 1; i >= 0; i--) {
-        result = result.slice(0, matches[i].index) + replacements[i] + result.slice(matches[i].index + matches[i].length);
-    }
-    return result;
+    return spliceMatches(content, matches, replacements);
 }
 
 /**
@@ -193,15 +270,10 @@ function escapeRegex(str: string) {
 function stripShortcodes(content: string) {
     if (!content || shortcodes.size === 0) return content;
 
-    const tagPattern = Array.from(shortcodes.keys()).map(escapeRegex).join('|');
-    if (!tagPattern) return content;
-
-    const pattern = new RegExp(
-        `\\[(${tagPattern})[^\\]]*?(?:\\/\\]|\\](?:[^\\[]*?\\[\\/\\1\\]|))`,
-        'g'
-    );
-
-    return content.replace(pattern, '');
+    // Same linear scanner as doShortcode (this runs on every excerpt, i.e. every Post.toJSON).
+    const matches = scanShortcodes(content);
+    if (matches.length === 0) return content;
+    return spliceMatches(content, matches, matches.map(() => ''));
 }
 
 // Register default shortcodes
@@ -280,5 +352,6 @@ module.exports = {
     doShortcode,
     doShortcodeAsync,
     stripShortcodes,
-    parseAttrs
+    parseAttrs,
+    MAX_SHORTCODES_PER_DOCUMENT
 };

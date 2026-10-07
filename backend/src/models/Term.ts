@@ -47,11 +47,37 @@ class Term {
     // Static methods
 
     /**
+     * Strip markup from a term name before it is stored.
+     *
+     * A term name is plain text everywhere it is shown (admin lists, the public category/tag pages, the
+     * Categories widget), but it is written by anyone holding manage_categories — an editor — and it
+     * used to be stored verbatim, so `<img src=x onerror=…>` reached every renderer that forgot to
+     * escape it (the anonymous sidebar endpoint did). Renderers escape it now; this is defence in depth
+     * so the stored value is not a payload waiting for the next one. Only tag-shaped runs are removed
+     * ("A < B" and "R&D" survive untouched, and nothing is entity-encoded). `[^<>]*` cannot cross the
+     * next '<', so each pass is linear even on hostile input. Passes repeat until nothing changes:
+     * one pass over `<scr<script>ipt>` removes the inner tag and splices a new `<script>` together, so a
+     * single replace is not enough. Each pass removes at least one '<', so the loop is bounded by the
+     * number of '<' in the name. Non-strings are returned unchanged.
+     */
+    static sanitizeName(name: any) {
+        if (typeof name !== 'string') return name;
+        let out = name;
+        let prev;
+        do {
+            prev = out;
+            out = out.replace(/<\/?[A-Za-z!?][^<>]*>/g, '');
+        } while (out !== prev);
+        return out.trim();
+    }
+
+    /**
      * Create a new term
      * Equivalent to wp_insert_term()
      */
     static async create(data: any) {
-        const { name, taxonomy, slug, description = '', parent = 0 } = data;
+        const { taxonomy, slug, description = '', parent = 0 } = data;
+        const name = Term.sanitizeName(data.name);
 
         if (!name || !taxonomy) {
             throw new Error('Name and taxonomy are required');
@@ -262,9 +288,11 @@ class Term {
             const updates: string[] = [];
             const values: any[] = [];
 
-            if (data.name) {
+            // A name that is nothing but markup leaves the stored name as it was.
+            const name = Term.sanitizeName(data.name);
+            if (name) {
                 updates.push('name = ?');
-                values.push(data.name);
+                values.push(name);
             }
             if (data.slug) {
                 const newSlug = await Term.generateUniqueSlug(sanitizeTitle(data.slug), termId);
@@ -272,8 +300,10 @@ class Term {
                 values.push(newSlug);
             }
 
-            values.push(termId);
-            await dbAsync.run(`UPDATE terms SET ${updates.join(', ')} WHERE term_id = ?`, values);
+            if (updates.length > 0) {
+                values.push(termId);
+                await dbAsync.run(`UPDATE terms SET ${updates.join(', ')} WHERE term_id = ?`, values);
+            }
         }
 
         // Update term_taxonomy table

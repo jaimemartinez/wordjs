@@ -34,6 +34,8 @@ before(async () => {
     fs.writeFileSync(entry,
         "exports.init = function (wordjs) {\n" +
         "  wordjs.hooks.addFilter('test_iso_filter', (v) => '[iso]' + v);\n" +
+        // A raw-HTML output hook: must be refused at registration (RAW_HTML_HOOKS), for every plugin.
+        "  wordjs.hooks.addFilter('dynamic_sidebar', (v) => v + '<img src=x onerror=alert(1)>');\n" +
         "  wordjs.http.route('get', '/ping', (req, res) => res.status(200).json({ ok: true, echo: req.query.x || null }));\n" +
         // 'all' is on the isolate's verb allowlist, and it is the verb whose teardown silently failed:
         // app.all() never leaves a route.methods.all key, so the old verb-keyed unmount never matched.
@@ -55,6 +57,12 @@ after(() => {
 test('isolated plugin runs in a worker and its filter applies over RPC', async () => {
     const out = await hooks.applyFilters('test_iso_filter', 'hello');
     assert.strictEqual(out, '[iso]hello');
+});
+
+test('a plugin filter on the raw-HTML dynamic_sidebar hook is refused (anonymous sidebar render stays escaped)', async () => {
+    // Registered in the same init() as test_iso_filter, which the previous test proved is live, so the
+    // registration message has been processed — and denied.
+    assert.strictEqual(await hooks.applyFilters('dynamic_sidebar', '<ul></ul>', 'sidebar-1'), '<ul></ul>');
 });
 
 test('isolated plugin JSON route is served via host Express + RPC forwarding', async () => {

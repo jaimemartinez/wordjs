@@ -81,6 +81,13 @@ router.get('/sidebars', asyncHandler(async (req: Request, res: Response) => {
  */
 router.get('/sidebars/:id/render', asyncHandler(async (req: Request, res: Response) => {
     const html = await renderSidebar(req.params.id);
+    // Anonymous text/html on the API origin, which is same-origin with the admin. The frontend fetches
+    // this as text and sanitizes it before painting it (PublicSidebar → sanitizeHTML), so these headers
+    // change nothing for it; they only matter when the URL is NAVIGATED to directly, where the markup
+    // would otherwise run as a document of this origin. Same policy as the uploads route in index.ts:
+    // no script, no subresources, and a sandboxed (opaque) origin.
+    res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     res.type('html').send(html);
 }));
 

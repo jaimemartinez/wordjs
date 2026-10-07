@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 /**
  * Run the F6 in-process performance harness on THIS host, print every observation next to the ceiling
- * it is judged by, and — on demand — mint a calibration in the exact shape of
- * `backend/f0-baseline.json#performanceBudget` so the committed budget can stop being a property of one
- * Windows laptop.
+ * it is judged by, and — on demand — mint a calibration for one platform in the exact shape of
+ * `backend/f0-baseline.json#performanceBudget.calibrations.<platform>`.
  *
  *   node backend/scripts/perf-calibrate.mjs --enforce            # one round, fail if anything exceeds
  *   node backend/scripts/perf-calibrate.mjs --calibrate          # eight rounds, emit a paste-ready block
  *   node backend/scripts/perf-calibrate.mjs --rounds 3 --out x.json
+ *   node backend/scripts/perf-calibrate.mjs --calibrate --platform linux --from <artifacts dir>
+ *                                                                # mint from rounds CI already recorded
  *
  * WHY THIS SCRIPT DOES NOT MEASURE ANYTHING ITSELF.
  *
@@ -20,12 +21,26 @@
  * harness (WORDJS_F6_PERF_PRINT=1 makes it emit its run as one JSON line) and does only the two things
  * the harness deliberately does not do: repeat it, and reduce many rounds into a budget.
  *
- * WHY THE COMMITTED BUDGET NEEDS THIS. `measuredOn.platform` is `win32`. Every ratio in the file was
- * observed on one Windows host, and the file says so in `provisionalMargin`: the denominator is ten
- * AUTOCOMMIT inserts while the numerators are transactions, per-statement durability costs more on that
- * filesystem than on a Linux runner's ext4, and the 2.0x margin is 1.5x for noise TIMES an allowance for
- * never having run anywhere else. Once the harness has run on the CI host that allowance is no longer
- * owed, which is why `--calibrate` mints ceilings at 1.5x the worst round instead of 2.0x.
+ * WHY THERE IS ONE CALIBRATION PER PLATFORM. The denominator is ten AUTOCOMMIT inserts, so it moves
+ * with what a per-statement durability flush costs on the host filesystem, while the four numerators do
+ * not all move with it: creation and update are transactions, query and render are mostly CPU. A ratio
+ * is therefore stable across runs on ONE host and not across hosts. Measured, not argued: the Linux
+ * runners record a reference of ~0.22 ms against the Windows calibration host's ~0.37 ms, so on Linux
+ * the write ratios come out at ~0.55x their Windows value and the CPU ratios at ~1.2x-2.5x — contentRender
+ * at a worst of 0.216x over 104 recorded CI rounds against a Windows-derived 0.18x ceiling. One budget
+ * judged on both platforms is too loose on one of them and flaps on the other, and that is the exact
+ * failure the Backend job kept reporting (contentRender 0.183x and 0.187x on code that had not changed).
+ * So each platform the harness is enforced on carries its own observation and its own ceiling, and a
+ * platform with no calibration is reported as uncalibrated instead of borrowing another host's numbers.
+ *
+ * `--calibrate` mints ceilings at 1.5x the worst round — the noise factor alone, because a calibration
+ * measured on the platform it is enforced on owes no cross-platform allowance.
+ *
+ * `--from` reduces rounds that were ALREADY measured instead of spawning new ones: every CI run uploads
+ * a one-round `perf-calibration.json` from this script's measure mode, so the history of real runner
+ * rounds is a far larger sample than eight back-to-back rounds on one runner, and its worst round is a
+ * truer tail. Only rounds measured with the committed methodology and the committed operation set are
+ * accepted; everything else is named and refused.
  *
  * WHAT --calibrate REFUSES TO DO. It never raises `maximumMillisecondsP95`. Those are the absolute
  * catastrophe ceilings that descend from `backend/f0-performance-budgets.json`, and
@@ -46,11 +61,12 @@ const REPO_ROOT = path.resolve(BACKEND_ROOT, '..');
 const BASELINE_PATH = path.join(BACKEND_ROOT, 'f0-baseline.json');
 const HARNESS = 'src/tests/f6-performance-budget.test.ts';
 
-/** Ceilings are this many times the WORST round. 2.0x in the committed file bought a single-platform
- *  allowance that a run on the target platform no longer needs; 1.5x is the noise factor alone, and it
- *  stays inside `methodology.ceilingMarginRange` (1.2–3.0), which both the F6 suite and
- *  verify-f0-baseline.ts check. */
+/** Ceilings are this many times the WORST round. 1.5x is the noise factor alone, and it stays inside
+ *  `methodology.ceilingMarginRange` (1.2–3.0), which both the F6 suite and verify-f0-baseline.ts check. */
 const CEILING_FACTOR = 1.5;
+
+/** The methodology fields a recorded round has to share with the committed budget to be comparable. */
+const METHODOLOGY_KEYS = ['warmupIterations', 'operationSamples', 'referenceSamples', 'trimFraction'];
 
 function parseArgs(argv) {
     const args = argv.slice(2);
@@ -58,9 +74,30 @@ function parseArgs(argv) {
     const enforce = args.includes('--enforce');
     const roundsFlag = args.indexOf('--rounds');
     const outFlag = args.indexOf('--out');
+    const platformFlag = args.indexOf('--platform');
+    const fromFlag = args.indexOf('--from');
     const rounds = roundsFlag >= 0 ? Number(args[roundsFlag + 1]) : (calibrate ? 8 : 1);
     const out = outFlag >= 0 ? args[outFlag + 1] : path.join(REPO_ROOT, 'perf-calibration.json');
-    return { calibrate, enforce, rounds, out: path.resolve(REPO_ROOT, out) };
+    const platform = platformFlag >= 0 ? args[platformFlag + 1] : process.platform;
+    // Every argument after --from that is not itself a flag is a source (a file or a directory).
+    const from = [];
+    if (fromFlag >= 0) {
+        for (let i = fromFlag + 1; i < args.length && !args[i].startsWith('--'); i++) from.push(path.resolve(args[i]));
+    }
+    return { calibrate, enforce, rounds, out: path.resolve(REPO_ROOT, out), platform, from: fromFlag >= 0 ? from : null };
+}
+
+/**
+ * The calibration a platform is judged by, or null when nobody has calibrated it.
+ *
+ * Exact key only. A platform with no calibration must NOT fall back to another one — that is the
+ * defect this lookup replaced: one Windows calibration judging Linux runs it was never measured on.
+ */
+export function calibrationFor(budget, platform) {
+    const calibrations = budget && budget.calibrations;
+    if (!calibrations || typeof calibrations !== 'object') return null;
+    if (!Object.prototype.hasOwnProperty.call(calibrations, platform)) return null;
+    return calibrations[platform] || null;
 }
 
 /**
@@ -93,7 +130,9 @@ function runHarness() {
         child.stdout.on('data', (b) => { stdout += b.toString(); });
         child.stderr.on('data', (b) => { stderr += b.toString(); });
         child.on('error', (e) => resolve({ run: null, harnessOk: false, stdout, stderr: `${stderr}\n${e && e.message}` }));
-        child.on('exit', (code) => resolve({ run: extractRun(stdout), harnessOk: code === 0, stdout, stderr }));
+        // 'close', not 'exit': 'exit' can fire before the stdout pipe has drained, and the measurement
+        // is the LAST thing the harness prints that matters here.
+        child.on('close', (code) => resolve({ run: extractRun(stdout), harnessOk: code === 0, stdout, stderr }));
     });
 }
 
@@ -129,11 +168,19 @@ const round3 = (n) => Number(Number(n).toFixed(3));
  * suite remains the authority: `--enforce` fails if EITHER this table finds a breach OR the harness
  * itself went red, so this table can only ever make the gate stricter, never pass something the suite
  * failed.
+ *
+ * The ratio ceilings come from `calibrations[platform]`. A platform with no calibration is a failure
+ * here, not a skip: this function is what `--enforce` reports, and "nothing to compare against" is not
+ * a verdict anyone can rely on.
  */
-export function evaluate(run, budget) {
+export function evaluate(run, budget, platform = process.platform) {
     const rows = [];
     const failures = [];
     const reference = run.reference.trimmedMeanMilliseconds;
+    const calibration = calibrationFor(budget, platform);
+    if (!calibration) {
+        failures.push(`${platform}: no calibration in performanceBudget.calibrations — the ratios below have no ceiling on this platform. Mint one with --calibrate.`);
+    }
 
     if (!Number.isFinite(reference) || reference <= 0) {
         failures.push(`reference workload produced no usable timing (${reference}ms) — every ratio below would be unanchored`);
@@ -152,25 +199,89 @@ export function evaluate(run, budget) {
             failures.push(`${id}: measured but has no committed budget — add it to performanceBudget.operations in backend/f0-baseline.json`);
             continue;
         }
-        const ratioOver = measured.ratioToReference > Number(spec.maximumRatioToReference);
+        const calibrated = calibration && calibration.operations ? calibration.operations[id] : undefined;
+        if (calibration && !calibrated) {
+            failures.push(`${id}: budgeted, but the ${platform} calibration records no ratio for it — re-mint the calibration`);
+        }
+        const ratioOver = Boolean(calibrated) && measured.ratioToReference > Number(calibrated.maximumRatioToReference);
         const p95Over = measured.p95Milliseconds > Number(spec.maximumMillisecondsP95);
         rows.push({
             operation: id,
             observedRatio: measured.ratioToReference,
-            committedObservedRatio: spec.observedRatioToReference,
-            ceilingRatio: spec.maximumRatioToReference,
+            committedObservedRatio: calibrated ? calibrated.observedRatioToReference : 'uncalibrated',
+            ceilingRatio: calibrated ? calibrated.maximumRatioToReference : 'uncalibrated',
             observedP95Ms: measured.p95Milliseconds,
-            committedObservedP95Ms: spec.observedMillisecondsP95,
+            committedObservedP95Ms: calibrated ? calibrated.observedMillisecondsP95 : 'uncalibrated',
             ceilingP95Ms: spec.maximumMillisecondsP95,
-            verdict: ratioOver || p95Over ? 'OVER' : 'ok',
+            verdict: ratioOver || p95Over ? 'OVER' : (calibrated ? 'ok' : 'UNCALIBRATED'),
         });
-        if (ratioOver) failures.push(`${id}: ratio ${measured.ratioToReference}x > ${spec.maximumRatioToReference}x committed ceiling (committed observation ${spec.observedRatioToReference}x)`);
+        if (ratioOver) failures.push(`${id}: ratio ${measured.ratioToReference}x > ${calibrated.maximumRatioToReference}x committed ${platform} ceiling (committed ${platform} observation ${calibrated.observedRatioToReference}x)`);
         if (p95Over) failures.push(`${id}: p95 ${measured.p95Milliseconds}ms > ${spec.maximumMillisecondsP95}ms absolute ceiling`);
     }
     for (const id of Object.keys(budget.operations)) {
         if (!run.operations[id]) failures.push(`${id}: has a committed budget but was not measured — the harness stopped exercising it`);
     }
     return { rows, failures };
+}
+
+/**
+ * Collect recorded rounds from perf-calibration.json artifacts (files, or directories searched
+ * recursively), keeping only those that are comparable with the committed budget.
+ *
+ * A round is refused — and every refusal is reported, never dropped quietly — when its host is another
+ * platform, when it was measured with a different methodology (sample counts, warmups, trim), or when
+ * its operation set is not exactly the committed one. Mixing any of those into a calibration would mint
+ * a ceiling from a measurement the enforcing harness no longer makes.
+ */
+export function collectRecordedRounds(sources, budget, platform) {
+    const files = [];
+    const walk = (entry) => {
+        let stat;
+        try { stat = fs.statSync(entry); } catch { return; }
+        if (stat.isDirectory()) {
+            for (const name of fs.readdirSync(entry).sort()) walk(path.join(entry, name));
+        } else if (path.basename(entry) === 'perf-calibration.json' || entry.endsWith('.json')) {
+            files.push(entry);
+        }
+    };
+    for (const source of sources) walk(source);
+
+    const committedIds = Object.keys(budget.operations).sort();
+    const runs = [];
+    const hosts = [];
+    const refused = [];
+    for (const file of files) {
+        let artifact;
+        try { artifact = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (error) {
+            refused.push(`${file}: not JSON (${error.message})`);
+            continue;
+        }
+        if (!artifact || artifact.generatedBy !== 'backend/scripts/perf-calibrate.mjs' || !Array.isArray(artifact.rounds)) {
+            refused.push(`${file}: not a perf-calibrate.mjs artifact`);
+            continue;
+        }
+        const host = artifact.host || {};
+        if (host.platform !== platform) {
+            refused.push(`${file}: measured on ${host.platform}, not ${platform}`);
+            continue;
+        }
+        const method = (artifact.comparedAgainst && artifact.comparedAgainst.methodology) || {};
+        const drift = METHODOLOGY_KEYS.filter((key) => method[key] !== budget.methodology[key]);
+        if (drift.length) {
+            refused.push(`${file}: measured with a different methodology (${drift.map((key) => `${key} ${method[key]} vs ${budget.methodology[key]}`).join(', ')})`);
+            continue;
+        }
+        for (const [index, run] of artifact.rounds.entries()) {
+            const ids = Object.keys((run && run.operations) || {}).sort();
+            if (!run || !run.reference || JSON.stringify(ids) !== JSON.stringify(committedIds)) {
+                refused.push(`${file} round ${index + 1}: operations ${JSON.stringify(ids)} are not the committed ${JSON.stringify(committedIds)}`);
+                continue;
+            }
+            runs.push(run);
+            hosts.push(host);
+        }
+    }
+    return { runs, hosts, files, refused };
 }
 
 function printTable(label, rows) {
@@ -194,18 +305,22 @@ function printTable(label, rows) {
 }
 
 /**
- * Reduce the rounds into a `performanceBudget` block.
+ * Reduce the rounds into ONE platform's calibration — the block that lives at
+ * `performanceBudget.calibrations.<platform>`.
  *
  * Every recorded observation is the WORST round, which is the convention the committed file already
  * documents ("observedRatioToReference records the WORST of the calibration runs"): calibrating off a
  * lucky round produces a ceiling the next ordinary run trips over, and the gate gets deleted in its
  * first bad week. Everything that is NOT an observation — the methodology, the reference bounds, the
- * call sites, the f0BudgetKey descent, the absolute catastrophe ceilings and the whole httpSteadyState
- * section, which this harness does not measure — is copied through from the committed budget unchanged.
+ * call sites, the f0BudgetKey descent, the absolute catastrophe ceilings, every OTHER platform's
+ * calibration and the whole httpSteadyState section — stays exactly as committed. `performanceBudget`
+ * in the result is the committed budget with only this platform's calibration replaced, so pasting it
+ * cannot disturb a calibration measured somewhere else.
  */
-export function mintBudget(runs, budget, { factor = CEILING_FACTOR, platform = process.platform } = {}) {
+export function mintCalibration(runs, budget, { factor = CEILING_FACTOR, platform = process.platform, hosts = [], source = 'spawned' } = {}) {
     const warnings = [];
     const ids = Object.keys(budget.operations);
+    const committed = calibrationFor(budget, platform);
 
     const references = runs.map((r) => r.reference.trimmedMeanMilliseconds);
     const worstReference = round4(Math.max(...references));
@@ -220,56 +335,52 @@ export function mintBudget(runs, budget, { factor = CEILING_FACTOR, platform = p
         const spread = Math.max(...ratios) / Math.min(...ratios);
         if (Number.isFinite(spread)) worstSpread = Math.max(worstSpread, spread);
 
-        const committed = budget.operations[id];
+        const shared = budget.operations[id];
         // The absolute ceiling is INHERITED, never minted: verify-f0-baseline.ts refuses an F6 ceiling
         // looser than the F0 one it descends from, and refuses a ceiling at or below a value already
         // measured. Both of those are protections, so a p95 that has grown past its ceiling is reported
         // as a finding here instead of being legislated away.
-        if (worstP95 >= Number(committed.maximumMillisecondsP95)) {
-            warnings.push(`${id}: worst observed p95 ${worstP95}ms is at or above the inherited absolute ceiling ${committed.maximumMillisecondsP95}ms (F0 key ${JSON.stringify(committed.f0BudgetKey)}). This calibration does NOT raise it — that ceiling descends from backend/f0-performance-budgets.json and F6 may not loosen what it inherits. Fix the regression, or take the F0 ceiling up deliberately and in its own review.`);
+        if (worstP95 >= Number(shared.maximumMillisecondsP95)) {
+            warnings.push(`${id}: worst observed p95 ${worstP95}ms is at or above the inherited absolute ceiling ${shared.maximumMillisecondsP95}ms (F0 key ${JSON.stringify(shared.f0BudgetKey)}). This calibration does NOT raise it — that ceiling descends from backend/f0-performance-budgets.json and F6 may not loosen what it inherits. Fix the regression, or take the F0 ceiling up deliberately and in its own review.`);
+        }
+        const maximumRatioToReference = round3(worstRatio * factor);
+        // A RE-mint that comes out looser than what this platform already commits is a regression being
+        // written into the budget. It may be the right call (a deliberate, reviewed slowdown), so it is
+        // emitted — but as a finding with a non-zero exit, never as a quiet number change.
+        const before = committed && committed.operations ? committed.operations[id] : undefined;
+        if (before && Number.isFinite(before.maximumRatioToReference) && maximumRatioToReference > before.maximumRatioToReference) {
+            warnings.push(`${id}: minted ${platform} ratio ceiling ${maximumRatioToReference}x is LOOSER than the committed ${before.maximumRatioToReference}x (worst round ${worstRatio}x against a committed observation of ${before.observedRatioToReference}x). Either the code got slower — find out why — or this host was noisier than the one that minted the committed number. Do not paste it without saying which.`);
         }
         operations[id] = {
-            planOperation: committed.planOperation,
-            callSite: committed.callSite,
             observedRatioToReference: worstRatio,
-            maximumRatioToReference: round3(worstRatio * factor),
+            maximumRatioToReference,
             observedMillisecondsP95: worstP95,
-            maximumMillisecondsP95: committed.maximumMillisecondsP95,
-            f0BudgetKey: committed.f0BudgetKey,
-            ...(committed.note ? { note: committed.note } : {}),
         };
     }
 
     const spread = round3(worstSpread);
-    const nodeMajor = process.version.replace(/^v/, '').split('.')[0];
-    const minted = {
-        ...budget,
-        // methodology is copied through EXCEPT its note, which names the ceiling factor in prose. A
-        // minted block whose ceilings are 1.5x while the paragraph beside them still says 2.0x is a
-        // budget that lies about itself, and the next person to read it would calibrate off the prose.
-        methodology: {
-            ...budget.methodology,
-            note: `observedRatioToReference records the WORST of the calibration rounds and every ceiling sits at ${factor}x it. ceilingMarginRange is the window a ceiling must stay inside relative to its own recorded observation: below ${budget.methodology.ceilingMarginRange[0]}x it flaps on a loaded host and gets disabled within a week, above ${budget.methodology.ceilingMarginRange[1]}x nothing can fail it, which is the same defect as having no threshold. Loosening a ceiling therefore forces re-recording the observation beside it — a visible act in review rather than a one-character edit.`,
-        },
+    const nodes = [...new Set((hosts.length ? hosts.map((h) => h.node) : [process.version]).filter(Boolean).map((v) => `${String(v).replace(/^v/, '').split('.')[0]}.x`))];
+    const arches = [...new Set((hosts.length ? hosts.map((h) => h.arch) : [process.arch]).filter(Boolean))];
+    const calibration = {
         measuredOn: {
             platform,
-            arch: process.arch,
-            node: `${nodeMajor}.x`,
+            arch: arches.join(', '),
+            node: nodes.join(', '),
             driver: 'sqlite-native',
             date: new Date().toISOString().slice(0, 10),
             runs: runs.length,
+            source: source === 'recorded'
+                ? `${runs.length} one-round perf-calibration.json artifacts recorded by CI in measure mode, reduced with perf-calibrate.mjs --calibrate --from`
+                : `${runs.length} rounds spawned back to back by perf-calibrate.mjs --calibrate`,
+            ceilingFactor: factor,
             worstObservedRunToRunRatioSpread: spread,
             sensitivityNote: `Ceilings are ${factor}x the worst of the ${runs.length} calibration rounds, and the worst run-to-run ratio spread across those rounds was ${spread}x. The gate therefore trips somewhere between a ${factor}x regression (measured on a bad run) and a ${round3(factor * spread)}x one (measured on a good run). That is the honest sensitivity: it catches the N+1 query, the lost index, the second sanitisation pass and the synchronous flush. It does not catch a 20% slowdown, and chasing 20% on a shared runner buys false failures rather than information.`,
-            provisionalMargin: `${factor}x is the measurement-noise factor ALONE. The ${platform} calibration retires the extra allowance the win32 file carried for having never run anywhere but its author's laptop (see the previous provisionalMargin): the denominator is ten autocommit inserts while the numerators are transactions, so the ratio is sensitive to what a per-statement durability flush costs on the host filesystem, and calibrating on the platform the gate actually runs on is what removes the guess. Minted by backend/scripts/perf-calibrate.mjs --calibrate; re-mint rather than hand-editing a ceiling, so the observation beside it moves at the same time.`,
         },
-        reference: {
-            ...budget.reference,
-            observedMillisecondsTrimmedMean: worstReference,
-        },
+        reference: { observedMillisecondsTrimmedMean: worstReference },
         operations,
     };
 
-    // The two structural rules verify-f0-baseline.ts and the F6 suite both enforce. Checking them HERE
+    // The structural rules verify-f0-baseline.ts and the F6 suite both enforce. Checking them HERE
     // means a bad calibration is caught by the machine that minted it, not three steps later by a gate
     // whose message is about the file rather than about the run.
     const [marginFloor, marginCap] = budget.methodology.ceilingMarginRange;
@@ -279,61 +390,92 @@ export function mintBudget(runs, budget, { factor = CEILING_FACTOR, platform = p
     if (worstReference <= Number(budget.reference.minimumMillisecondsTrimmedMean) || worstReference >= Number(budget.reference.maximumMillisecondsTrimmedMean)) {
         warnings.push(`reference observation ${worstReference}ms does not sit strictly inside its committed bounds [${budget.reference.minimumMillisecondsTrimmedMean}, ${budget.reference.maximumMillisecondsTrimmedMean}] — the denominator gate would be red or vacuous from the first run`);
     }
-    return { performanceBudget: minted, warnings };
+    const performanceBudget = {
+        ...budget,
+        calibrations: { ...(budget.calibrations || {}), [platform]: calibration },
+    };
+    return { calibration, performanceBudget, warnings };
 }
 
 async function main() {
-    const { calibrate, enforce, rounds, out } = parseArgs(process.argv);
+    const { calibrate, enforce, rounds, out, platform, from } = parseArgs(process.argv);
     if (!Number.isInteger(rounds) || rounds < 1) {
         console.error('--rounds expects a positive integer');
         process.exit(2);
     }
+    if (from === null && platform !== process.platform) {
+        // A spawned round measures THIS host. Labelling it as another platform would mint that platform's
+        // calibration from the wrong machine — the single-platform defect again, with a false label on it.
+        console.error(`--platform ${platform} only applies to --from: this host is ${process.platform}, and a round spawned here measures ${process.platform}.`);
+        process.exit(2);
+    }
+    if (from !== null && !from.length) {
+        console.error('--from expects at least one perf-calibration.json file or directory');
+        process.exit(2);
+    }
     const baseline = JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf8'));
     const budget = baseline.performanceBudget;
+    const committed = calibrationFor(budget, platform);
 
-    console.log(`perf-calibrate: ${rounds} round(s) of ${HARNESS} on ${process.platform}/${process.arch}, node ${process.version}`);
-    // The committed ceiling factor is not stored as a number anywhere, so derive it from the file
-    // rather than reprinting a constant that could drift out of step with what is actually committed.
-    const committedFactors = Object.values(budget.operations)
-        .map((spec) => Number(spec.maximumRatioToReference) / Number(spec.observedRatioToReference))
-        .filter((n) => Number.isFinite(n));
-    const committedFactor = committedFactors.length ? round3(Math.max(...committedFactors)) : null;
-    console.log(`committed budget was measured on ${budget.measuredOn.platform}/${budget.measuredOn.arch} (${budget.measuredOn.date}), ceilings at ${committedFactor === null ? 'an unreadable factor' : `${committedFactor}x`} the worst of ${budget.measuredOn.runs} runs`);
+    if (committed) {
+        const m = committed.measuredOn || {};
+        console.log(`committed ${platform} calibration: ${m.runs} rounds on ${m.platform}/${m.arch}, node ${m.node} (${m.date}), ceilings at ${m.ceilingFactor}x the worst round`);
+    } else {
+        console.log(`no committed ${platform} calibration — performanceBudget.calibrations has ${JSON.stringify(Object.keys(budget.calibrations || {}))}`);
+    }
 
     const runs = [];
+    let hosts = [];
     let harnessFailedOnce = false;
-    for (let i = 1; i <= rounds; i++) {
-        const started = Date.now();
-        const { run, harnessOk, stdout, stderr } = await runHarness();
-        if (!run) {
-            console.error(`round ${i}/${rounds}: the harness produced no measurement. It is not a pass — a round that could not run certifies nothing.`);
-            console.error(stdout.split('\n').slice(-40).join('\n'));
-            console.error(stderr.split('\n').slice(-20).join('\n'));
+    let recordedFrom = null;
+    if (from !== null) {
+        const recorded = collectRecordedRounds(from, budget, platform);
+        console.log(`perf-calibrate: ${recorded.runs.length} recorded ${platform} round(s) from ${recorded.files.length} file(s)`);
+        for (const reason of recorded.refused) console.log(`  refused: ${reason}`);
+        if (!recorded.runs.length) {
+            console.error(`no comparable ${platform} round in ${from.join(', ')} — nothing to calibrate or evaluate`);
             process.exit(1);
         }
-        if (!harnessOk) harnessFailedOnce = true;
-        runs.push(run);
-        const ratios = Object.entries(run.operations).map(([id, m]) => `${id}=${m.ratioToReference}x`).join(' ');
-        console.log(`round ${i}/${rounds} (${((Date.now() - started) / 1000).toFixed(1)}s, harness ${harnessOk ? 'green' : 'RED'}): reference=${run.reference.trimmedMeanMilliseconds}ms ${ratios}`);
-        if (!harnessOk) {
-            // A round whose measurement parsed but whose suite went red is the interesting case — a
-            // ceiling was exceeded, or a structural assertion (operation map vs budget) drifted. Print
-            // what the suite said rather than leaving the reader with one word.
-            console.error(`--- round ${i}: F6 suite output (last 40 lines) ---`);
-            console.error(stdout.split('\n').filter((l) => l.trim()).slice(-40).join('\n'));
-            if (stderr.trim()) console.error(stderr.split('\n').slice(-20).join('\n'));
+        runs.push(...recorded.runs);
+        hosts = recorded.hosts;
+        recordedFrom = { files: recorded.files.length, refused: recorded.refused };
+    } else {
+        console.log(`perf-calibrate: ${rounds} round(s) of ${HARNESS} on ${process.platform}/${process.arch}, node ${process.version}`);
+        for (let i = 1; i <= rounds; i++) {
+            const started = Date.now();
+            const { run, harnessOk, stdout, stderr } = await runHarness();
+            if (!run) {
+                console.error(`round ${i}/${rounds}: the harness produced no measurement. It is not a pass — a round that could not run certifies nothing.`);
+                console.error(stdout.split('\n').slice(-40).join('\n'));
+                console.error(stderr.split('\n').slice(-20).join('\n'));
+                process.exit(1);
+            }
+            if (!harnessOk) harnessFailedOnce = true;
+            runs.push(run);
+            const ratios = Object.entries(run.operations).map(([id, m]) => `${id}=${m.ratioToReference}x`).join(' ');
+            console.log(`round ${i}/${rounds} (${((Date.now() - started) / 1000).toFixed(1)}s, harness ${harnessOk ? 'green' : 'RED'}): reference=${run.reference.trimmedMeanMilliseconds}ms ${ratios}`);
+            if (!harnessOk) {
+                // A round whose measurement parsed but whose suite went red is the interesting case — a
+                // ceiling was exceeded, or a structural assertion (operation map vs budget) drifted. Print
+                // what the suite said rather than leaving the reader with one word.
+                console.error(`--- round ${i}: F6 suite output (last 40 lines) ---`);
+                console.error(stdout.split('\n').filter((l) => l.trim()).slice(-40).join('\n'));
+                if (stderr.trim()) console.error(stderr.split('\n').slice(-20).join('\n'));
+            }
         }
     }
 
-    const evaluations = runs.map((run) => evaluate(run, budget));
-    printTable(`observed on ${process.platform} vs the committed (${budget.measuredOn.platform}) ceilings — worst round`, mergeWorst(evaluations));
+    const evaluations = runs.map((run) => evaluate(run, budget, platform));
+    printTable(`observed on ${platform} vs the committed ${platform} ceilings — worst round`, mergeWorst(evaluations));
 
     const failures = [...new Set(evaluations.flatMap((e) => e.failures))];
     const artifact = {
         schemaVersion: 1,
         generatedBy: 'backend/scripts/perf-calibrate.mjs',
         mode: calibrate ? 'calibrate' : (enforce ? 'enforce' : 'measure'),
-        host: {
+        // A --from reduction did not measure anything on THIS machine, so it must not describe itself
+        // as a round from this host — otherwise the next --from would take it for one.
+        host: recordedFrom ? { platform, recorded: true } : {
             platform: process.platform,
             arch: process.arch,
             node: process.version,
@@ -342,11 +484,12 @@ async function main() {
             ci: Boolean(process.env.CI),
         },
         comparedAgainst: {
-            file: 'backend/f0-baseline.json#performanceBudget',
-            measuredOn: budget.measuredOn,
+            file: `backend/f0-baseline.json#performanceBudget.calibrations.${platform}`,
+            measuredOn: committed ? committed.measuredOn : null,
             methodology: budget.methodology,
         },
-        rounds: runs,
+        ...(recordedFrom ? { recordedFrom } : {}),
+        rounds: recordedFrom ? [] : runs,
         evaluation: evaluations.map((e, i) => ({ round: i + 1, rows: e.rows, failures: e.failures })),
         failures,
         harnessWentRed: harnessFailedOnce,
@@ -354,14 +497,21 @@ async function main() {
 
     let exitCode = 0;
     if (calibrate) {
-        const { performanceBudget, warnings } = mintBudget(runs, budget, { platform: process.platform });
+        const { calibration, performanceBudget, warnings } = mintCalibration(runs, budget, {
+            platform,
+            hosts,
+            source: recordedFrom ? 'recorded' : 'spawned',
+        });
+        artifact.calibration = calibration;
         artifact.performanceBudget = performanceBudget;
         artifact.calibrationWarnings = warnings;
-        console.log(`\ncalibration minted from ${runs.length} rounds — ceilings at ${CEILING_FACTOR}x the worst round (the committed file uses ${committedFactor === null ? 'an unreadable factor' : `${committedFactor}x`}):`);
-        for (const [id, spec] of Object.entries(performanceBudget.operations)) {
-            const before = budget.operations[id];
-            console.log(`  ${id.padEnd(16)} ratio ${String(spec.observedRatioToReference).padStart(8)}x -> ceiling ${String(spec.maximumRatioToReference).padStart(8)}x   (was ${before.observedRatioToReference}x -> ${before.maximumRatioToReference}x)`);
+        console.log(`\n${platform} calibration minted from ${runs.length} rounds — ceilings at ${CEILING_FACTOR}x the worst round:`);
+        for (const [id, spec] of Object.entries(calibration.operations)) {
+            const before = committed && committed.operations ? committed.operations[id] : null;
+            const was = before ? `(was ${before.observedRatioToReference}x -> ${before.maximumRatioToReference}x)` : '(no committed ceiling on this platform)';
+            console.log(`  ${id.padEnd(16)} ratio ${String(spec.observedRatioToReference).padStart(8)}x -> ceiling ${String(spec.maximumRatioToReference).padStart(8)}x   ${was}`);
         }
+        console.log(`paste the artifact's .calibration over performanceBudget.calibrations.${platform} in backend/f0-baseline.json`);
         for (const warning of warnings) {
             console.error(`::error::${warning}`);
             exitCode = 1;
@@ -375,13 +525,13 @@ async function main() {
     if (enforce) {
         for (const failure of failures) console.error(`::error::${failure}`);
         if (failures.length) {
-            console.error(`\n${failures.length} observation(s) exceeded the committed ceiling on ${process.platform}.`);
+            console.error(`\n${failures.length} observation(s) exceeded the committed ceiling on ${platform}, or ${platform} is not calibrated.`);
             exitCode = 1;
         } else if (harnessFailedOnce) {
             console.error('\nevery observation is inside its ceiling, but the F6 suite itself went red — see its output above; a structural assertion failed.');
             exitCode = 1;
         } else {
-            console.log(`\nevery observation is inside the committed ceiling on ${process.platform}.`);
+            console.log(`\nevery observation is inside the committed ceiling on ${platform}.`);
         }
     }
     process.exit(exitCode);

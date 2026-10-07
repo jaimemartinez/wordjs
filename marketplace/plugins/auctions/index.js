@@ -24,7 +24,7 @@
 
 exports.metadata = {
     name: 'Auctions',
-    version: '1.0.0',
+    version: '1.0.1',
     description: 'Auction listings with public bidding, minimum increments, anti-snipe extension and winner reporting.',
     author: 'WordJS',
 };
@@ -169,6 +169,12 @@ exports.init = async function (wordjs) {
         if (parts.length === 1) return parts[0];
         return parts[0] + ' ' + parts[1].charAt(0).toUpperCase() + '.';
     }
+
+    // Bidder- and admin-controlled values (a bidder's name, an auction title, the currency symbol) must
+    // be HTML-escaped before they are interpolated into an email body — otherwise any bidder can put
+    // markup (a phishing link) into the mail this plugin sends to the bidder they outbid.
+    const escHtml = (s) => String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
     function fmtMoney(cents, symbol) {
         return (symbol || '$') + ((Number(cents) || 0) / 100).toFixed(2);
@@ -484,7 +490,7 @@ exports.init = async function (wordjs) {
                         to: prevTop.bidder_email,
                         subject: `Te han superado en la subasta "${a.title}"`,
                         text: `Hola ${prevTop.bidder_name},\n\nAlguien superó tu puja en la subasta "${a.title}". El precio actual es ${fmtMoney(newPriceCents, symbol)}. Si quieres seguir participando, vuelve a pujar antes de que termine.\n\n— Subastas`,
-                        html: `<p>Hola ${prevTop.bidder_name},</p><p>Alguien superó tu puja en la subasta <strong>"${a.title}"</strong>. El precio actual es <strong>${fmtMoney(newPriceCents, symbol)}</strong>.</p><p>Si quieres seguir participando, vuelve a pujar antes de que termine.</p>`,
+                        html: `<p>Hola ${escHtml(prevTop.bidder_name)},</p><p>Alguien superó tu puja en la subasta <strong>"${escHtml(a.title)}"</strong>. El precio actual es <strong>${escHtml(fmtMoney(newPriceCents, symbol))}</strong>.</p><p>Si quieres seguir participando, vuelve a pujar antes de que termine.</p>`,
                     });
                 } catch (e) { /* mail provider missing/failing — silently degrade */ }
             }

@@ -25,6 +25,11 @@
     },
     "permissions": [
         {
+            "scope": "browser",
+            "access": "script",
+            "reason": "Run the plugin's own compiled interface in the browser: its admin page and its Verso block (in the editor and on public pages). Without it the host does not serve these bundles and that interface does not load."
+        },
+        {
             "scope": "settings",
             "access": "read",
             "reason": "Read this plugin's stored items (options API)."
