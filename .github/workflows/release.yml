@@ -256,6 +256,19 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         run: cp release/wordjs-compiled-release.zip "release/wordjs-${GITHUB_REF_NAME}.zip"
 
+      # The integrity anchor `npx create-wordjs` checks BEFORE it extracts the bundle: a sha256sum-format
+      # line (`<hex>  wordjs-<tag>.zip`) published as its own release asset. Generated from inside
+      # release/ so the file name in it is the bare asset name (what `sha256sum -c` and the installer
+      # expect), and re-verified at once so a malformed file never reaches the release.
+      - name: Checksum the tag-named bundle (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/')
+        working-directory: release
+        run: |
+          set -euo pipefail
+          sha256sum "wordjs-${GITHUB_REF_NAME}.zip" > "wordjs-${GITHUB_REF_NAME}.zip.sha256"
+          cat "wordjs-${GITHUB_REF_NAME}.zip.sha256"
+          sha256sum -c "wordjs-${GITHUB_REF_NAME}.zip.sha256"
+
       # Software Bill of Materials (CycloneDX) for the whole workspace — the supply-chain transparency
       # signal enterprise self-hosters check for. Generated on every run (so a workflow_dispatch validates
       # it too) and attached to the GitHub Release on a tag.
@@ -309,12 +322,14 @@ jobs:
           generate_release_notes: true
           files: |
             release/wordjs-${{ github.ref_name }}.zip
+            release/wordjs-${{ github.ref_name }}.zip.sha256
             release/wordjs-sbom.cdx.json
             marketplace/dist/*
           body: |
-            Pre-compiled WordJS bundle — download `wordjs-${{ github.ref_name }}.zip`, then:
+            Pre-compiled WordJS bundle — download `wordjs-${{ github.ref_name }}.zip` (and `wordjs-${{ github.ref_name }}.zip.sha256`), then:
 
             ```
+            sha256sum -c wordjs-${{ github.ref_name }}.zip.sha256   # verify the download
             npm run release:install   # installs runtime deps only (no compilation)
             npm run start:mono        # one process, one port  (or: npm start for the 3-service split)
             ```

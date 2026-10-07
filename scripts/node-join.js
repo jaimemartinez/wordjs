@@ -4,8 +4,13 @@
  * WordJS node join (run ON a new backend or frontend machine, inside the wordjs repo).
  *
  *   node scripts/node-join.js --role <backend|frontend> --gateway <gw-ip/dns> --token <join-token> \
- *        [--enroll-port 3101] [--advertise <this-node-ip>] [--ca-hash <sha256>] \
+ *        --ca-hash <sha256> [--enroll-port 3101] [--advertise <this-node-ip>] \
  *        [--port <svc-port>] [--install] [--build] [--start]
+ *
+ * --ca-hash (the cluster CA fingerprint `cluster.js token`/`info` prints on the gateway) is REQUIRED:
+ * the gateway's TLS certificate must chain to that exact CA before the token is sent. Enrolling without
+ * it is trust-on-first-use — an on-path attacker would receive the token, the cluster's gateway secret
+ * and a CA-signed cert — and needs the explicit opt-out `--insecure-skip-ca-verify`.
  *
  * It performs the ONE tokened call to the gateway's /enroll endpoint: generates a keypair + CSR with
  * openssl, sends {role, token, advertiseHost, csr}, and receives a signed CN=<role> mTLS cert + the
@@ -17,6 +22,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const https = require('https');
+const tls = require('tls');
 const crypto = require('crypto');
 const { execFileSync, spawn } = require('child_process');
 
@@ -40,15 +46,74 @@ function firstLanIp() {
 function readJson(p, fb = {}) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return fb; } }
 function writeJson(p, o) { fs.writeFileSync(p, JSON.stringify(o, null, 2)); }
 
-function post(host, port, pathname, body, caHash) {
+// The CN the gateway's own identity cert carries (scripts/cluster.js init). Enrollment FORCES CN=<role>
+// on every node cert, so a cluster-CA cert with this CN can only have been minted on the gateway.
+const GATEWAY_CN = 'gateway-internal';
+
+/** Lower-case 64-char hex, or null. Accepts the `AA:BB:…` colon form some tools print. */
+function normalizeCaHash(value) {
+    const hex = String(value == null || value === true ? '' : value).trim().replace(/:/g, '').toLowerCase();
+    return /^[0-9a-f]{64}$/.test(hex) ? hex : null;
+}
+
+function derToPem(der) {
+    return `-----BEGIN CERTIFICATE-----\n${der.toString('base64').match(/.{1,64}/g).join('\n')}\n-----END CERTIFICATE-----\n`;
+}
+
+/**
+ * Phase 1 of a pinned enrollment: obtain the cluster CA certificate from the TLS chain the enroll
+ * listener presents (it sends leaf + CA), and keep it ONLY if its SHA-256 equals --ca-hash. Nothing is
+ * sent on this connection, and nothing it returns is trusted beyond "these bytes hash to the pin" —
+ * the request that carries the token (phase 2) is then fully verified against that CA.
+ */
+function fetchPinnedCa(host, port, caHash, { timeoutMs = 15000 } = {}) {
+    return new Promise((resolve, reject) => {
+        const socket = tls.connect({
+            host, port, rejectUnauthorized: false,
+            servername: require('net').isIP(host) ? undefined : host,
+        }, () => {
+            const seen = [];
+            let cert = socket.getPeerCertificate(true);
+            while (cert && cert.raw && !seen.includes(cert)) {
+                seen.push(cert);
+                if (crypto.createHash('sha256').update(cert.raw).digest('hex') === caHash) {
+                    socket.destroy();
+                    return resolve(derToPem(cert.raw));
+                }
+                cert = cert.issuerCertificate;
+            }
+            socket.destroy();
+            reject(new Error('the gateway did not present a cluster CA matching --ca-hash in its TLS chain.\n'
+                + '   Either the fingerprint is wrong, something is intercepting this connection, or the gateway\n'
+                + '   predates CA-chained enrollment (upgrade it). Aborting — the token was NOT sent.'));
+        });
+        socket.setTimeout(timeoutMs, () => socket.destroy(new Error(`timed out connecting to ${host}:${port}`)));
+        socket.on('error', reject);
+    });
+}
+
+/**
+ * The single tokened call. With `ca` (the pinned cluster CA), the server certificate MUST chain to
+ * exactly that CA (full OpenSSL verification, rejectUnauthorized) and carry CN=gateway-internal — so
+ * the token and the secrets in the response can only reach the real gateway. The host name is not
+ * matched against the cert's SANs: operators dial the gateway by whatever address routes, and the
+ * pinned CA + gateway-only CN already identify it. Without `ca` (--insecure-skip-ca-verify) the call is
+ * trust-on-first-use.
+ */
+function post(host, port, pathname, body, { ca = null, insecure = false } = {}) {
+    if (!ca && !insecure) return Promise.reject(new Error('refusing to enroll without a pinned cluster CA'));
     return new Promise((resolve, reject) => {
         const payload = Buffer.from(JSON.stringify(body));
-        // The node has no trust anchor YET (it is fetching the cluster CA). Connect without chain
-        // verification (TOFU) but, if --ca-hash was supplied, verify the gateway's presented leaf chains
-        // to a CA whose fingerprint matches BEFORE trusting anything (kubeadm-style MITM guard).
+        const tlsOpts = ca
+            ? {
+                ca, rejectUnauthorized: true,
+                checkServerIdentity: (_host, cert) => (cert && cert.subject && cert.subject.CN === GATEWAY_CN
+                    ? undefined
+                    : new Error(`enroll server certificate is not the gateway's (CN=${cert && cert.subject ? cert.subject.CN : '?'}, expected ${GATEWAY_CN})`)),
+            }
+            : { rejectUnauthorized: false };
         const req = https.request({
-            host, port, path: pathname, method: 'POST',
-            rejectUnauthorized: false,
+            host, port, path: pathname, method: 'POST', agent: false, ...tlsOpts,
             headers: { 'Content-Type': 'application/json', 'Content-Length': payload.length }
         }, (res) => {
             let data = '';
@@ -75,6 +140,24 @@ async function main() {
     const role = args.role;
     if (!['backend', 'frontend'].includes(role)) { console.error('✖ --role must be backend or frontend'); process.exit(1); }
     if (!args.gateway || !args.token) { console.error('✖ --gateway and --token are required'); process.exit(1); }
+    const insecure = args['insecure-skip-ca-verify'] === true;
+    const caHash = args['ca-hash'] === undefined ? null : normalizeCaHash(args['ca-hash']);
+    if (args['ca-hash'] !== undefined && !caHash) {
+        console.error(`✖ --ca-hash must be the 64-character hex CA fingerprint (got "${args['ca-hash'] === true ? '' : args['ca-hash']}")`);
+        process.exit(1);
+    }
+    if (!caHash && !insecure) {
+        console.error('✖ --ca-hash <sha256> is required: the cluster CA fingerprint printed on the gateway by');
+        console.error('  `node scripts/cluster.js token <role>` (or `node scripts/cluster.js info`).');
+        console.error('  Without it the gateway cannot be authenticated and an on-path attacker would receive the token,');
+        console.error('  the cluster secret and a signed cert. Only on a network you fully trust, pass');
+        console.error('  --insecure-skip-ca-verify to enroll trust-on-first-use instead.');
+        process.exit(1);
+    }
+    if (caHash && insecure) {
+        console.error('✖ --ca-hash and --insecure-skip-ca-verify contradict each other — drop the opt-out.');
+        process.exit(1);
+    }
 
     const gateway = args.gateway;
     const enrollPort = Number(args['enroll-port'] || 3101);
@@ -98,17 +181,31 @@ async function main() {
     const csrPem = fs.readFileSync(csrPath, 'utf8');
     fs.unlinkSync(csrPath);
 
-    // 2) The single tokened call: enroll.
+    // 2) Authenticate the gateway BEFORE the token leaves this machine: fetch the CA from its TLS chain,
+    //    keep it only if it hashes to --ca-hash, then make the tokened call verified against it.
+    let pinnedCa = null;
+    if (caHash) {
+        console.log(`🔒 Verifying gateway ${gateway}:${enrollPort} against the pinned cluster CA...`);
+        pinnedCa = await fetchPinnedCa(gateway, enrollPort, caHash);
+        console.log('   ✓ gateway presents the pinned cluster CA');
+    } else {
+        console.warn('⚠️  --insecure-skip-ca-verify: enrolling WITHOUT authenticating the gateway (trust on first use).');
+        console.warn('   Anyone on the network path can impersonate it and receive the token, the cluster secret and a');
+        console.warn('   signed cert. Re-run with --ca-hash <fingerprint from the gateway> unless this network is trusted.');
+    }
+
+    // 3) The single tokened call: enroll.
     console.log(`🎟️  Enrolling with gateway ${gateway}:${enrollPort} (role=${role}, advertise=${advertise})...`);
-    const resp = await post(gateway, enrollPort, '/enroll', { role, token: args.token, advertiseHost: advertise, csr: csrPem });
+    const resp = await post(gateway, enrollPort, '/enroll', { role, token: args.token, advertiseHost: advertise, csr: csrPem },
+        { ca: pinnedCa, insecure });
     const { cert, ca, config: boot } = resp;
     if (!cert || !ca) { console.error('✖ enroll response missing cert/ca'); process.exit(1); }
 
-    // 3) Verify the returned CA against --ca-hash (MITM guard) before trusting it.
-    if (args['ca-hash']) {
+    // The CA handed back must be the same pinned CA (belt-and-braces: the channel was already verified).
+    if (caHash) {
         const got = pemFingerprint(ca);
-        if (got !== String(args['ca-hash']).toLowerCase()) {
-            console.error(`✖ CA fingerprint mismatch!\n   expected ${args['ca-hash']}\n   got      ${got}\n   Aborting — possible man-in-the-middle.`);
+        if (got !== caHash) {
+            console.error(`✖ CA fingerprint mismatch!\n   expected ${caHash}\n   got      ${got}\n   Aborting — possible man-in-the-middle.`);
             process.exit(1);
         }
         console.log('   ✓ CA fingerprint verified');
@@ -167,4 +264,9 @@ async function main() {
     console.log(`\n✅ ${role} enrolled and configured. It will register with the gateway on start.`);
 }
 
-main().catch((e) => { console.error('✖ node-join failed:', e.message); process.exit(1); });
+// Run only when invoked as a script, so the enrollment helpers can be required and tested.
+if (require.main === module) {
+    main().catch((e) => { console.error('✖ node-join failed:', e.message); process.exit(1); });
+}
+
+module.exports = { parseArgs, normalizeCaHash, fetchPinnedCa, post, pemFingerprint, GATEWAY_CN };

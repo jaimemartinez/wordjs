@@ -81,6 +81,60 @@ test('a bundle wrapped in a single top-level folder is flattened into the target
     assert.ok(!fs.existsSync(path.join(target, 'wordjs-v0.0.0')), 'the wrapper folder was left behind');
 });
 
+// adm-zip's addFile() normalises names on the way IN (it strips `../` and a leading `/`), so a hostile
+// archive cannot be built through its API. Build a benign one and rename entries in place instead —
+// same-length names, rewritten in BOTH the local and the central header; CRCs cover data, not names.
+function craftedZip(entries, renames, { symlink } = {}) {
+    const zip = new AdmZip();
+    for (const [name, content] of Object.entries(entries)) zip.addFile(name, Buffer.from(content));
+    if (symlink) zip.getEntry(symlink).attr = (0o120777 << 16) >>> 0; // S_IFLNK | 0777 in the Unix high bits
+    const buf = zip.toBuffer();
+    for (const [from, to] of Object.entries(renames || {})) {
+        assert.strictEqual(from.length, to.length, 'in-place renames must keep the length');
+        let n = 0;
+        for (let i = buf.indexOf(from); i !== -1; i = buf.indexOf(from, i + 1)) { buf.write(to, i, 'latin1'); n++; }
+        assert.strictEqual(n, 2, `expected ${from} once in the local header and once in the central directory`);
+    }
+    const zipPath = path.join(freshDir('zip'), 'crafted.zip');
+    fs.writeFileSync(zipPath, buf);
+    return zipPath;
+}
+
+test('a crafted ../ entry is REFUSED and nothing at all is extracted', () => {
+    const zipPath = craftedZip({ 'package.json': '{}', 'XXXescaped.txt': 'outside' }, { 'XXXescaped.txt': '../escaped.txt' });
+    const target = freshDir('site');
+    assert.throws(() => extractZip(zipPath, target), /Zip Slip/);
+    assert.ok(!fs.existsSync(path.join(path.dirname(target), 'escaped.txt')), 'a ../ entry was written outside the target');
+    assert.deepStrictEqual(fs.readdirSync(target), [], 'a refused archive must leave nothing half-extracted');
+});
+
+test('a crafted nested a/../../ entry is refused', () => {
+    const zipPath = craftedZip({ 'package.json': '{}', 'a/XXXXXXesc.txt': 'x' }, { 'a/XXXXXXesc.txt': 'a/../../esc.txt' });
+    assert.throws(() => extractZip(zipPath, freshDir('site')), /Zip Slip/);
+});
+
+test('a crafted backslash ..\\ entry is refused', () => {
+    const zipPath = craftedZip({ 'package.json': '{}', 'XXXwin.txt': 'x' }, { 'XXXwin.txt': '..\\win.txt' });
+    assert.throws(() => extractZip(zipPath, freshDir('site')), /Zip Slip/);
+});
+
+test('a crafted absolute-path entry is refused', () => {
+    const zipPath = craftedZip({ 'package.json': '{}', 'Xtmp/abs.txt': 'x' }, { 'Xtmp/abs.txt': '/tmp/abs.txt' });
+    assert.throws(() => extractZip(zipPath, freshDir('site')), /absolute path/);
+});
+
+test('a crafted Windows drive-letter entry is refused', () => {
+    const zipPath = craftedZip({ 'package.json': '{}', 'XXXwin.txt': 'x' }, { 'XXXwin.txt': 'C:/win.txt' });
+    assert.throws(() => extractZip(zipPath, freshDir('site')), /absolute path/);
+});
+
+test('a symbolic-link entry is refused', () => {
+    const zipPath = craftedZip({ 'package.json': '{}', 'link': '/etc/passwd' }, {}, { symlink: 'link' });
+    const target = freshDir('site');
+    assert.throws(() => extractZip(zipPath, target), /symbolic link/);
+    assert.deepStrictEqual(fs.readdirSync(target), []);
+});
+
 test('an entry that climbs out of the target is not written outside it', () => {
     const zip = new AdmZip();
     zip.addFile('package.json', Buffer.from('{}'));

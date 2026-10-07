@@ -25,7 +25,9 @@ npx create-wordjs@latest join frontend --gateway <ip> --token <t> --ca-hash <fp>
 That single command takes you from nothing to the browser install wizard:
 
 1. Downloads the latest **pre-compiled** WordJS release ZIP from GitHub — no build step,
-   no TypeScript compilation on your machine.
+   no TypeScript compilation on your machine — and verifies its **SHA-256** against the
+   `wordjs-<tag>.zip.sha256` asset published with the release before extracting anything
+   (see [Integrity](#integrity)).
 2. Extracts it into `my-site/` and installs the runtime dependencies (`npm run release:install`).
 3. Generates a one-time install token and starts the server (`npm run start:mono`), printing a
    clickable URL:
@@ -46,7 +48,8 @@ in CI — plus a pure-JS *SQLite (legacy / WASM)* fallback for hosts where the n
 
 | Option | Description |
 | --- | --- |
-| `--zip <path-or-url>` | Use a local release ZIP (or a direct ZIP URL) instead of querying the GitHub API. Handy offline or when rate-limited. |
+| `--zip <path-or-url>` | Use a local release ZIP (or a direct **`https://`** ZIP URL — plain `http://` is refused) instead of querying the GitHub API. Handy offline or when rate-limited. |
+| `--sha256 <hex>` | Refuse the ZIP unless its SHA-256 is exactly this (the value in the release's `.sha256` asset). Use it to pin a `--zip` file or URL; with a GitHub download it is checked on top of the release checksum. |
 | `--version <tag>` | Install a specific release (e.g. `--version v2.1.0`) instead of the latest. |
 | `--http` | Serve plain HTTP instead of self-signed HTTPS (sets `WORDJS_HTTP=1`). |
 | `--no-start` | Scaffold and install dependencies only — start the server yourself later. |
@@ -62,7 +65,8 @@ Separate-mode options:
 | `--host <ip/dns>` | (`gateway`) The address the other machines dial to reach this gateway. |
 | `--gateway <ip/dns>` | (`join`) The gateway's address. |
 | `--token <join-token>` | (`join`) A single-use token minted on the gateway. |
-| `--ca-hash <sha256>` | (`join`) Pin the cluster-CA fingerprint the gateway printed (MITM guard). |
+| `--ca-hash <sha256>` | (`join`) **Required.** The cluster-CA fingerprint the gateway printed. The gateway's TLS certificate must chain to exactly that CA before the join token is sent (MITM guard). |
+| `--insecure-skip-ca-verify` | (`join`) Enroll **without** `--ca-hash` (trust on first use). Anyone on the network path can then impersonate the gateway and receive the token, the cluster secret and a CA-signed certificate. Only for a network you fully trust. |
 | `--advertise <ip/dns>` | (`join`) This node's routable address the gateway will proxy to. |
 | `--enroll-port <port>` | (`join`) Gateway token-enrollment port (default `3101`). |
 
@@ -100,7 +104,8 @@ npx create-wordjs@latest join backend  --gateway 10.0.0.1 --token <t> --ca-hash 
 npx create-wordjs@latest join frontend --gateway 10.0.0.1 --token <t> --ca-hash <fp> --advertise 10.0.0.3
 ```
 
-Each `join` downloads the release, enrolls against the gateway (the token authorizes exactly one
+`--ca-hash` is required: `join` refuses to enroll without it (the `--insecure-skip-ca-verify` opt-out
+exists, but it makes enrollment trust-on-first-use). Each `join` downloads the release, enrolls against the gateway (the token authorizes exactly one
 certificate signing; it is burned afterwards, and the ones `gateway` printed also expire after 120
 minutes — mint more on the gateway with `node scripts/cluster.js token <backend|frontend>`, which
 defaults to a 60-minute TTL and takes `--ttl <minutes>`), then starts the service, which registers
@@ -123,9 +128,26 @@ need `openssl` on the PATH. Full details, port matrix and the manual (source-che
 - **GitHub rate limit / offline**: the release lookup uses the unauthenticated GitHub API. If it
   is rate-limited or you're offline, download `wordjs-v*.zip` from the
   [releases page](https://github.com/jaimemartinez/wordjs/releases) and run
-  `npx create-wordjs@latest my-site --zip ./wordjs-v2.1.0.zip`.
+  `npx create-wordjs@latest my-site --zip ./wordjs-v2.1.0.zip` — add
+  `--sha256 <hex>` with the value from `wordjs-v2.1.0.zip.sha256` to have it verified.
 - **Existing directories**: the target directory must not exist (or must be empty) — the tool
   refuses to overwrite anything.
+
+## Integrity
+
+- **GitHub downloads are verified.** Every release publishes `wordjs-<tag>.zip.sha256`
+  (`sha256sum` format) next to the bundle. `create-wordjs` — including `upgrade`, `gateway` and
+  `join` — downloads it and refuses to extract a ZIP whose SHA-256 differs. Releases published
+  **before** the checksum asset was introduced have nothing to verify against: they still install
+  (so `--version <old-tag>` rollbacks keep working) but with a clear warning that the download was
+  not verified. The checksum is fetched from the same GitHub release over HTTPS, so it catches a
+  corrupted or swapped download, not a compromised release.
+- **`--zip` sources**: a URL must be `https://` (plain `http://` and other schemes are refused); a
+  local path is accepted as is. Neither is verified unless you pass `--sha256 <hex>` (a URL
+  without it prints a warning).
+- **Extraction is contained**: every ZIP entry is checked before anything is written. An archive
+  with an absolute path, a `..` segment, an entry resolving outside the target directory, or a
+  symbolic-link entry is refused as a whole.
 
 ## What gets created
 

@@ -89,7 +89,7 @@ A fourth mTLS-only endpoint, `POST /purge` (CN `backend`), delivers **cross-mach
 
 ### Bootstrapping trust for a remote node (SEPARATE mode)
 
-A brand-new backend/frontend on **another machine** has no client cert yet, so it cannot use the strict mTLS `/register` path above. It first enrolls over the **token-enrollment listener** (`startEnrollServer()`, on `gatewayEnrollPort`, default `3101`; a separate HTTPS server that does **not** request a client cert):
+A brand-new backend/frontend on **another machine** has no client cert yet, so it cannot use the strict mTLS `/register` path above. It first enrolls over the **token-enrollment listener** (`startEnrollServer()`, on `gatewayEnrollPort`, default `3101`; a separate HTTPS server that does **not** request a client cert). It serves its `gateway-internal` identity cert **together with the cluster CA certificate** as its TLS chain, so a joining node can pin that CA against the `--ca-hash` the operator gave it and verify the connection **before** sending its token (see [security.md §6.4](security.md)):
 
 **Endpoint:** `POST /enroll` with body `{ "role": "backend"|"frontend", "token": "<join-token>", "advertiseHost": "<node-ip>", "csr": "<PEM CSR>" }`.
 
