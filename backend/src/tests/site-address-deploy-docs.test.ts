@@ -243,14 +243,17 @@ describe('deployment notes the redesign needs', () => {
         }
     });
 
-    test('CHANGELOG [Unreleased] carries the site-address change and its upgrade notes', () => {
+    test('CHANGELOG carries the site-address change and its upgrade notes in the release that ships it', () => {
+        // The change ships in 2.3.0. Before that release is cut it sits under [Unreleased]; cutting the
+        // release renames the heading, and a later release must not make this test look elsewhere.
         const changelog = read('CHANGELOG.md');
-        const start = changelog.indexOf('## [Unreleased]');
+        const heading = changelog.includes('## [2.3.0]') ? '## [2.3.0]' : '## [Unreleased]';
+        const start = changelog.indexOf(heading);
         const end = changelog.indexOf('\n## [', start + 1);
-        assert.ok(start !== -1 && end !== -1, 'positive control: the [Unreleased] section was found');
-        const unreleased = changelog.slice(start, end);
+        assert.ok(start !== -1 && end !== -1, `positive control: the ${heading} section was found`);
+        const section = changelog.slice(start, end);
         for (const needle of ['421', 'npm run site', 'WORDJS_TRUST_PROXY', 'WORDJS_ALLOWED_HOSTS', 'documentation/site-address.md']) {
-            assert.ok(unreleased.includes(needle), `CHANGELOG [Unreleased] does not mention ${needle}`);
+            assert.ok(section.includes(needle), `CHANGELOG ${heading} does not mention ${needle}`);
         }
     });
 });
