@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import { inter } from "./fonts";
 import "./globals.css";
 import { SystemFontsLoader } from "@/components/SystemFontsLoader";
+import HostNotAllowedNotice from "@/components/HostNotAllowedNotice";
 import { ModalProvider } from "@/contexts/ModalContext";
 import { AnalyticsTracker } from '@/components/AnalyticsTracker';
 import { getSettings, getFonts } from "@/lib/server-api";
@@ -66,7 +67,11 @@ export default async function RootLayout({
     // request-deduped + ISR-cached read generateMetadata above already performs, so this adds no
     // fetch. resolveDocumentLanguage is fail-closed: an unparseable locale or an out-of-enum
     // direction yields en/ltr rather than reaching the attribute.
-    const { lang, dir } = resolveDocumentLanguage(await getSettings());
+    const settings = await getSettings();
+    const { lang, dir } = resolveDocumentLanguage(settings);
+    // The configured main address, for the refused-address notice's one link. The same chain
+    // generateMetadata uses for metadataBase: never the request host, which is the thing in question.
+    const canonical = settings?.siteurl || settings?.home || null;
 
     return (
         // inter.variable must live on <html>, not <body>: --wjs-font-family-base is declared in
@@ -95,6 +100,7 @@ export default async function RootLayout({
                 trees (admin, login, …) re-apply inter.className in their own layouts. */}
             <body suppressHydrationWarning>
                 <ModalProvider>
+                    <HostNotAllowedNotice canonical={canonical} documentLang={lang} />
                     <SystemFontsLoader />
                     {/* AnalyticsTracker uses useSearchParams → must be Suspense-wrapped to not
                         bail out static prerendering of every page. */}

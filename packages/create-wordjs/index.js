@@ -795,4 +795,4 @@ if (require.main === module) {
     main().catch((e) => fail(e && e.message ? e.message : String(e)));
 }
 
-module.exports = { pickBundleAsset };
+module.exports = { pickBundleAsset, extractZip };

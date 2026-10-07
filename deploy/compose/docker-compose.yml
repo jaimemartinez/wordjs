@@ -33,14 +33,14 @@ services:
       # value of PORT (3000), which is what the app listens on and what the HEALTHCHECK probes.
       - "3000:3000"
     environment:
-      # The public origin — for the PRE-SEEDED path only. `docker/entrypoint.sh` is the ONLY reader of
-      # this variable, and it writes it into wordjs-config.json only under WORDJS_PRESEED_CONFIG=1,
-      # which this stack deliberately does not set (a pre-seeded container comes up already installed
-      # and can never run the wizard). In the SETUP MODE this file uses, the origin that lands in the
-      # config — the one the CSRF/CORS checks compare against — is the `siteUrl` the wizard POSTs to
-      # /api/v1/setup/install, i.e. the URL you were browsing. Here the variable only decorates the
-      # entrypoint's "finish setup at …" log line. Behind a reverse proxy: run the wizard AT your real
-      # https:// origin (and set this too, so a later pre-seed agrees with it).
+      # The public origin. `docker/entrypoint.sh` writes it into wordjs-config.json only under
+      # WORDJS_PRESEED_CONFIG=1, which this stack deliberately does not set (a pre-seeded container comes
+      # up already installed and can never run the wizard). In the SETUP MODE this file uses, the main
+      # address that lands in the config is the `siteUrl` the wizard POSTs to /api/v1/setup/install —
+      # by default the URL you are browsing; the wizard only SUGGESTS this variable when it is not a
+      # loopback address, and it never overrides an installed site's main address. It also decorates
+      # the entrypoint's "finish setup at …" log line. Behind a reverse proxy: run the wizard AT your
+      # real https:// origin (and set this too, so a later pre-seed agrees with it).
       WORDJS_SITE_URL: ${WORDJS_SITE_URL:-http://localhost:3000}
       # The one-time token gating the pre-install endpoints, so nobody who can reach a not-yet-installed
       # instance can complete the install before you do. Supply your OWN (>= 16 characters, or it is

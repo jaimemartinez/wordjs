@@ -53,6 +53,42 @@ back to its own default, which is only correct for a port-forwarded localhost te
 {{- end }}
 
 {{/*
+WORDJS_ALLOWED_HOSTS: every address this release routes to the pod, so the app answers each of them
+whatever main address the setup wizard records (an undeclared name gets 421 rest_host_not_allowed; see
+documentation/site-address.md). Comma-separated: siteUrl (or the origin derived from the ingress host),
+then every ingress host — ingress.host and ingress.extraHosts, the same two values the Ingress rules are
+rendered from — as https://host when a TLS entry covers it and http://host otherwise, then allowedHosts
+verbatim. The scheme matters: it lets an https host other than the main address sign in behind the
+TLS-terminating ingress (with trustProxy set). Empty when there is nothing to export.
+*/}}
+{{- define "wordjs.allowedHosts" -}}
+{{- $entries := list -}}
+{{- with (include "wordjs.siteUrl" .) -}}
+{{- $entries = append $entries . -}}
+{{- end -}}
+{{- if .Values.ingress.enabled -}}
+{{- $hosts := list .Values.ingress.host -}}
+{{- range .Values.ingress.extraHosts -}}
+{{- $hosts = append $hosts . -}}
+{{- end -}}
+{{- range $hosts -}}
+{{- if . -}}
+{{- $host := . -}}
+{{- $scheme := "http" -}}
+{{- range $.Values.ingress.tls -}}
+{{- if and .hosts (has $host .hosts) -}}{{- $scheme = "https" -}}{{- end -}}
+{{- end -}}
+{{- $entries = append $entries (printf "%s://%s" $scheme $host) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- range .Values.allowedHosts -}}
+{{- if . -}}{{- $entries = append $entries . -}}{{- end -}}
+{{- end -}}
+{{- join "," (uniq $entries) -}}
+{{- end }}
+
+{{/*
 Guard rails. This chart deploys ONE monolith pod against ReadWriteOnce volumes; rendering something the
 chart cannot actually support is worse than refusing to render it.
 */}}

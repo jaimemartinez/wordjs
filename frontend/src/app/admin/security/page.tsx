@@ -117,6 +117,8 @@ export default function SecurityPage() {
 
 import { apiGet, apiPost } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
+import { useRouter } from "next/navigation";
+import { afterGatewayConfigSave } from "@/lib/siteAddress";
 
 function GatewayConfigForm() {
     const [config, setConfig] = useState<any>(null);
@@ -124,6 +126,7 @@ function GatewayConfigForm() {
     const [saving, setSaving] = useState(false);
 
     const { alert } = useModal();
+    const router = useRouter();
 
     useEffect(() => {
         setLoading(true);
@@ -154,11 +157,14 @@ function GatewayConfigForm() {
         e.preventDefault();
         setSaving(true);
         try {
-            await apiPost('/system/certs/config', {
+            const saved = await apiPost<unknown>('/system/certs/config', {
                 port: config.gatewayPort,
                 sslEnabled: config.sslEnabled
             });
-            await alert('Settings saved. You may need to restart the gateway.');
+            // The answer also says what the change did to the site's main address: followed at once
+            // (same host, http → https) or only suggested — then the admin decides on the
+            // site-address screen, which opens the change dialog prefilled (SPEC §6, REDTEAM R1).
+            await afterGatewayConfigSave(saved, { alert, navigate: (href) => router.push(href) });
         } catch (e: any) {
             await alert('Failed to save settings: ' + e.message);
         } finally {

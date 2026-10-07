@@ -227,14 +227,12 @@ test('GATE 1c — a blank recovery address is stored as empty, never as the stri
 const LOGIN_STORE_HELPERS = /\b(recordLoginFail|clearLoginFails|isLoginLocked|resolveLockIdentifier|beginLoginAttempt|endLoginAttempt)\s*\(/;
 
 /**
- * The ONE declared exception, named so it cannot be forgotten: routes/setup.ts drives the database
- * migration door with a `'migrate:' + …` bucket. It is out of this wave's scope to re-key (it
- * authenticates by username+password with no session to key on), and it is REPORTED as residual risk:
- * the prefix lives in the same key space, so an anonymous POST /auth/login {username:'migrate:admin'}
- * can still arm it. This entry is here to keep that debt visible and honest — if the file is fixed (or
- * disappears) the assertion below fails and the exception must be removed with it.
+ * Declared exceptions, named so they cannot be forgotten. There are none left: the last one was
+ * routes/setup.ts, whose POST /setup/migrate drove the login store with a `migrate` bucket. That door was
+ * removed (it answers 410 and evaluates no credential), so the debt it represented is gone with it. The
+ * mechanism stays so a future exception has to be declared — and must still apply, see the loop below.
  */
-const DECLARED_LOGIN_STORE_EXCEPTIONS = ['routes/setup.ts'];
+const DECLARED_LOGIN_STORE_EXCEPTIONS: string[] = [];
 
 function sourceFilesUnder(dir: string, out: string[] = []): string[] {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

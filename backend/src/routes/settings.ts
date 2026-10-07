@@ -11,10 +11,13 @@ const { getOption, updateOption } = require('../core/options');
 const { getActiveThemeVersion, isActiveThemeMissing } = require('../core/themes');
 // Plugin-sandbox hardening state, surfaced to admins (see DERIVED_ADMIN_SETTINGS below). Required lazily
 // inside the compute functions so a load error there can never break the settings route at import time.
-const { authenticate } = require('../middleware/auth');
+// refuseBoundSession: a session started at an address other than the main one may not change who can
+// register, or as what (core/registration-settings).
+const { authenticate, refuseBoundSession } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { recordAudit } = require('../core/audit');
+const { changedRegistrationSettings } = require('../core/registration-settings');
 
 /**
  * @swagger
@@ -127,10 +130,22 @@ const ALL_SETTINGS = [
 // nothing reconciles a value written by hand — the site would render a structure the theme never
 // declared, until the next activation silently replaced it. ('active_theme_mods' is deliberately NOT
 // here: the customizer saves through this very API, and the overlay sanitizes it at render time.)
+// 'siteurl' / 'home' are MIRRORS of the site's main address, written only by core/site-address together
+// with wordjs-config.json (PUT /api/v1/site-address/canonical: session, MFA, password, audit, notice to
+// every administrator). Written here they had no validator and no re-authentication, and they are the
+// base of every password-reset link — a settings save could redirect the site's tokens to any host.
 const DEDICATED_WRITE_API = new Set([
     'site_chrome_header', 'site_chrome_footer', 'site_chrome_announcement',
     'template', 'stylesheet', 'active_theme_layout',
+    'siteurl', 'home',
 ]);
+
+/** Where a key that refuses the generic writers is changed instead, for the 400 that names it. */
+function dedicatedApiFor(key: string): string {
+    if (key.startsWith('site_chrome_')) return 'PUT /api/v1/chrome/:part';
+    if (key === 'siteurl' || key === 'home') return 'PUT /api/v1/site-address/canonical (Settings → Site address)';
+    return 'POST /api/v1/themes/:slug/activate';
+}
 
 // Public settings that are DERIVED, not stored. Computed per request from the memoized theme scan
 // (core/themes), so they add no SQL and no fs to the read path — and deliberately absent from
@@ -514,6 +529,13 @@ router.put('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
         }
     }
 
+    // A session started at another address may save the rest of the screen (which sends every field
+    // back), but not a CHANGE to who may register or as what — refused as a whole, before any write.
+    // Only what this route writes is judged: a key it skips changes nothing.
+    const writable = Object.fromEntries(Object.entries(updates).filter(([key]) => ALL_SETTINGS.includes(key) && !DEDICATED_WRITE_API.has(key)));
+    const registration = await changedRegistrationSettings(writable);
+    if (registration.length && refuseBoundSession(req, res, registration)) return;
+
     for (const [key, value] of Object.entries(updates)) {
         if (ALL_SETTINGS.includes(key) && !DEDICATED_WRITE_API.has(key)) {
             // Se escribe (y se devuelve) el valor NORMALIZADO, no el recibido: la respuesta es lo que
@@ -569,7 +591,7 @@ router.put('/:key', authenticate, isAdmin, asyncHandler(async (req: Request, res
         return res.status(400).json({
             code: 'rest_invalid_param',
             message: DEDICATED_WRITE_API.has(key)
-                ? 'This setting is managed by its dedicated API (PUT /api/v1/chrome/:part).'
+                ? `This setting is managed by its dedicated API (${dedicatedApiFor(key)}).`
                 : 'Invalid setting key.',
             data: { status: 400 }
         });
@@ -583,6 +605,10 @@ router.put('/:key', authenticate, isAdmin, asyncHandler(async (req: Request, res
             data: { status: 400, params: [key] }
         });
     }
+
+    // The same rule as the bulk save above. `key` is one of ALL_SETTINGS by now, never a prototype name.
+    const registration = await changedRegistrationSettings({ [key]: value });
+    if (registration.length && refuseBoundSession(req, res, registration)) return;
 
     await updateOption(key, normalizedSettingValue(key, value));
 

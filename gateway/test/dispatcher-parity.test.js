@@ -52,6 +52,10 @@ const ROUTE_TABLE = [
     ['/api/revalidate', false],               // NEXT owns it — the on-demand purge receiver
     ['/api/revalidate/', false],
     ['/api/revalidateXYZ', true],             // segment boundary: not the Next route
+    // Below the route no handler exists, so Next's own /api rewrite would send it back into the listener
+    // that handed it to Next, which handed it to Next again: an endless loop. The backend answers it.
+    ['/api/revalidate/x', true],
+    ['/api/revalidate/a/b', true],
     ['/uploads/2026/08/pic.png', true],
     ['/uploads', true],
     ['/themes/default/style.css', true],

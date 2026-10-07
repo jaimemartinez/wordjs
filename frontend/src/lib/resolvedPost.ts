@@ -24,16 +24,32 @@ export function toText(html: string | undefined | null, max = 160): string {
 }
 
 /**
- * URL de la imagen destacada tal y como la API la manda HOY: `featuredMedia:{id,url,title}`
+ * A same-origin path (`/uploads/...`): starts with ONE slash and has no backslash, because browsers read
+ * both `//host` and `/\host` as a different host.
+ */
+function sameOriginPath(value: unknown): string | undefined {
+    if (typeof value !== "string") return undefined;
+    const path = value.trim();
+    return path.startsWith("/") && !path.startsWith("//") && !path.includes("\\") ? path : undefined;
+}
+
+/**
+ * URL de la imagen destacada tal y como la API la manda HOY: `featuredMedia:{id,url,title,path}`
  * (backend Post.toJSON). El mapper leía `featuredImage`, una clave que la API nunca ha emitido, así
  * que ningún post con imagen destacada llegaba nunca con miniatura a PostsGrid/PostsList.
  * Se sigue tolerando la clave vieja (string, u objeto con `url`) por si algún caller la sintetiza.
+ *
+ * `path` (relative, `/uploads/...`) wins over `url` when present: `url` is absolute on the site's MAIN
+ * address (og:image needs that), so a page opened through another accepted address (an alias, the
+ * server's LAN IP) would otherwise load every thumbnail from a host the visitor may not be able to reach.
  */
 export function featuredImageUrl(raw: Record<string, unknown>): string | undefined {
     const candidates: unknown[] = [raw.featuredMedia, raw.featuredImage];
     for (const c of candidates) {
         if (typeof c === "string" && c.trim()) return c;
         if (c && typeof c === "object") {
+            const path = sameOriginPath((c as { path?: unknown }).path);
+            if (path) return path;
             const url = (c as { url?: unknown }).url;
             if (typeof url === "string" && url.trim()) return url;
         }

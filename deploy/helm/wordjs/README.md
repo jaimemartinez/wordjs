@@ -27,8 +27,22 @@ helm install wordjs deploy/helm/wordjs \
 
 # 3. Finish the wizard. Readiness gates the Service, so port-forward to the pod.
 kubectl -n wordjs port-forward deployment/wordjs 3000:3000
-# browse http://localhost:3000/install and paste the token
+# browse http://localhost:3000/install, paste the token, and set "Site address" to
+# https://cms.example.com (the wizard offers it as the server's suggested address)
 ```
+
+**The site address.** The wizard's *Site address* field is prefilled with the address you opened it on
+(`http://localhost:3000` through the port-forward); `siteUrl` reaches it only as a suggestion
+(`WORDJS_SITE_URL`). Pick the public one: the main address is the base of every link and email the site
+sends. Whatever you pick, the chart exports every address it routes to the pod — `siteUrl`, `ingress.host`,
+`ingress.extraHosts` (`https://` when an ingress TLS entry covers the host) and `allowedHosts` — in
+`WORDJS_ALLOWED_HOSTS`, so the site answers them; any other name gets `421`. `localhost` is always
+answered, so the port-forward keeps working. Change the main address later in Settings → Site address
+or with `kubectl exec deployment/wordjs -- npm run site -- canonical <url>`. Behind the TLS-terminating
+ingress, set `trustProxy` to the ingress controller's pod network: without it the app does not believe
+the ingress's forwarded headers, so rate limits key on the controller's address and, on an https site,
+only the main address can sign in. See
+[`documentation/site-address.md`](../../../documentation/site-address.md).
 
 Render it without installing anything:
 
@@ -98,7 +112,10 @@ See [`values.yaml`](values.yaml) — every key is commented there. The ones you 
 |---|---|---|
 | `image.repository` | `""` | **Required.** Rendering fails without it |
 | `image.tag` | `""` | Falls back to `.Chart.AppVersion` |
-| `siteUrl` | `""` | The public origin. Derived from `ingress.host` when unset. Must match the URL that reaches the pod, or admin POSTs fail the CSRF origin check |
+| `siteUrl` | `""` | The public origin. Derived from `ingress.host` when unset. Exported as `WORDJS_SITE_URL` (the wizard's suggested main address) and in `WORDJS_ALLOWED_HOSTS` (always answered) |
+| `allowedHosts` | `[]` | More addresses the site must answer (host names or URLs), exported in `WORDJS_ALLOWED_HOSTS` |
+| `trustProxy` | `""` | Exported as `WORDJS_TRUST_PROXY`: the ingress controller's address or pod network (an IP, a CIDR, `uniquelocal`, …). Needed for client-IP rate limits and for https sign-in on addresses other than the main one |
+| `ingress.extraHosts` | `[]` | More host names routed to the Service; each gets an ingress rule and is exported in `WORDJS_ALLOWED_HOSTS` |
 | `installToken.value` | `""` | Must be ≥ 16 characters; rendering fails on a shorter one, because the app would silently ignore it and mint its own. Empty means the app mints its own and writes it to `backend/data/install-token` (`0600`) in the data volume — read it with `kubectl exec`, not from the pod logs, where the banner omits it because a pod's stdout is not a TTY (set `WORDJS_PRINT_INSTALL_TOKEN=1` via `extraEnv` to print it there anyway) |
 | `installToken.existingSecret` | `""` | Use a Secret you manage; takes precedence over `value` |
 | `ingress.enabled` | `false` | |

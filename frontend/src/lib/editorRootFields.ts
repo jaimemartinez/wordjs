@@ -52,13 +52,22 @@ function toMediaId(raw: unknown): number | null {
 }
 
 /**
+ * A same-origin path (`/uploads/…`): ONE leading slash and no backslash, because browsers read both
+ * `//host` and `/\host` as a different host.
+ */
+function safeMediaPath(raw: unknown): string | undefined {
+    const path = typeof raw === "string" ? raw.trim() : "";
+    return path.startsWith("/") && !path.startsWith("//") && !path.includes("\\") ? path : undefined;
+}
+
+/**
  * URL de media ACEPTABLE. Solo rutas relativas (`/uploads/…`) o http(s) absolutas: el valor acaba en
  * `_puck_data` y podría llegar a un `src`, así que ni `javascript:` ni `data:` ni nada exótico.
  */
 function safeMediaUrl(raw: unknown): string | undefined {
     const url = typeof raw === "string" ? raw.trim() : "";
     if (!url) return undefined;
-    if (url.startsWith("/") && !url.startsWith("//")) return url;
+    if (url.startsWith("/")) return safeMediaPath(url);
     if (/^https?:\/\//i.test(url)) return url;
     return undefined;
 }
@@ -75,8 +84,10 @@ export function toFeaturedMediaRef(item: unknown): FeaturedMediaRef | undefined 
     const src = item as Record<string, unknown>;
     const id = toMediaId(src.id);
     if (id === null) return undefined;
-    // sourceUrl es RELATIVA; guid incrusta el host de subida (ver media-url-relative-not-guid).
-    const url = safeMediaUrl(src.sourceUrl) ?? safeMediaUrl(src.url) ?? safeMediaUrl(src.guid);
+    // sourceUrl (media picker) and path (the API's featuredMedia) are RELATIVE, so the editor canvas
+    // loads the image from whichever accepted address the admin is on; `url` is absolute on the main
+    // address and guid embeds the upload host (see media-url-relative-not-guid), so both only fill in.
+    const url = safeMediaUrl(src.sourceUrl) ?? safeMediaPath(src.path) ?? safeMediaUrl(src.url) ?? safeMediaUrl(src.guid);
     const title = typeof src.title === "string" ? src.title.slice(0, 200) : undefined;
     return { id, ...(url ? { url } : {}), ...(title ? { title } : {}) };
 }

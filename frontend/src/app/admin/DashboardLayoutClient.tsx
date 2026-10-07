@@ -9,6 +9,66 @@ import NotificationCenter from "@/components/NotificationCenter";
 import MfaSetup from "@/components/MfaSetup";
 import { UnsavedChangesProvider } from "@/contexts/UnsavedChangesContext";
 import { initPlugins } from "@/lib/plugins";
+import { useI18n } from "@/contexts/I18nContext";
+import {
+    SITE_ADDRESS_SETTINGS_PATH,
+    canManageSiteAddress,
+    dashboardBanners,
+    fillTemplate,
+    siteAddressApi,
+    type DashboardBanner,
+    type SiteAddressState,
+} from "@/lib/siteAddress";
+
+// Per tab and per address: an admin who deliberately works on another address dismisses the reminder
+// once, and sees it again in a new session or on yet another address.
+const LINK_BASE_DISMISS_KEY = (hostname: string) => `wjs-link-base-banner-dismissed:${hostname}`;
+
+/**
+ * The site-address banners of the admin shell (see dashboardBanners for which ones and when). Every
+ * value is rendered as text; the only action is a link to the settings screen, offered to administrators.
+ */
+export function SiteAddressBannerList({ banners, host, isAdmin, onDismissLinkBase }: {
+    banners: DashboardBanner[];
+    host: string;
+    isAdmin: boolean;
+    onDismissLinkBase: () => void;
+}) {
+    const { t } = useI18n();
+    if (banners.length === 0) return null;
+    const text = (banner: DashboardBanner): string => {
+        switch (banner.kind) {
+            case "link-base": return fillTemplate(t("siteBanner.linkBase"), { host, linkBase: banner.linkBase });
+            case "conflict": return fillTemplate(t("siteBanner.conflict"), { config: banner.config, db: banner.db });
+            case "gateway-drift": return fillTemplate(t("siteBanner.drift"), { gateway: banner.gateway, config: banner.config });
+            case "proxy-collapse": return t("siteBanner.proxyCollapse");
+            case "missing-canonical": return t("siteBanner.missingCanonical");
+        }
+    };
+    return (
+        <div className="flex-shrink-0" data-wjs-site-address-banners="">
+            {banners.map((banner) => (
+                <div
+                    key={banner.kind}
+                    className={`border-b px-4 py-2.5 flex items-center justify-center gap-3 text-sm ${banner.kind === "link-base" ? "bg-sky-50 border-sky-200 text-sky-900" : "bg-amber-50 border-amber-200 text-amber-900"}`}
+                >
+                    <i className={`fa-solid ${banner.kind === "link-base" ? "fa-link text-sky-500" : "fa-triangle-exclamation text-amber-500"}`} aria-hidden="true"></i>
+                    <span className="font-medium">{text(banner)}</span>
+                    {isAdmin && (
+                        <Link href={SITE_ADDRESS_SETTINGS_PATH} className="font-bold underline underline-offset-2 whitespace-nowrap">
+                            {t("siteBanner.review")}
+                        </Link>
+                    )}
+                    {banner.kind === "link-base" && (
+                        <button type="button" onClick={onDismissLinkBase} className="ml-1 text-sky-700 hover:text-sky-950" aria-label={t("siteBanner.dismiss")} title={t("siteBanner.dismiss")}>
+                            <i className="fa-solid fa-xmark" aria-hidden="true"></i>
+                        </button>
+                    )}
+                </div>
+            ))}
+        </div>
+    );
+}
 
 function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
     const { user, isLoading, logout, can, refreshUser } = useAuth();
@@ -19,6 +79,22 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
 
     const [logoUrl, setLogoUrl] = useState<string | null>(null);
     const [siteTitle, setSiteTitle] = useState("WordJS");
+    // The address links and emails really use (the public `siteurl` option) and, for administrators,
+    // the site-address state behind the conflict/drift/proxy banners.
+    const [linkBase, setLinkBase] = useState<string | null>(null);
+    const [siteAddress, setSiteAddress] = useState<SiteAddressState | null>(null);
+    // Read once, on the client: this component renders nothing that depends on them before the auth
+    // probe resolves, so the server render (no window) and hydration cannot disagree.
+    const [pageAddress] = useState<{ host: string; hostname: string } | null>(() =>
+        typeof window === "undefined" ? null : { host: window.location.host, hostname: window.location.hostname });
+    const [linkBaseDismissed, setLinkBaseDismissed] = useState(() => {
+        try {
+            return typeof window !== "undefined" && window.sessionStorage.getItem(LINK_BASE_DISMISS_KEY(window.location.hostname)) === "1";
+        } catch {
+            // No session storage (privacy mode): the reminder simply cannot be dismissed for long.
+            return false;
+        }
+    });
 
     // Initialize frontend plugins
     useEffect(() => {
@@ -30,12 +106,34 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
                 const settings = await settingsApi.get();
                 if (settings.site_logo) setLogoUrl(settings.site_logo);
                 if (settings.blogname) setSiteTitle(settings.blogname);
+                setLinkBase(settings.siteurl || settings.home || null);
             } catch (error) {
                 console.error("Failed to load header settings:", error);
             }
         };
         fetchSettings();
     }, []);
+
+    // GET /site-address is administrator-only (it lists the server's own addresses), so nobody else
+    // asks. A failure only means no admin banners: the settings screen reports errors properly.
+    const isAdmin = canManageSiteAddress(user);
+    useEffect(() => {
+        if (!isAdmin) return;
+        let active = true;
+        siteAddressApi.get()
+            .then((state) => { if (active) setSiteAddress(state); })
+            .catch(() => { /* no banners */ });
+        return () => { active = false; };
+    }, [isAdmin, user?.id]);
+
+    const dismissLinkBase = () => {
+        setLinkBaseDismissed(true);
+        try {
+            if (pageAddress) window.sessionStorage.setItem(LINK_BASE_DISMISS_KEY(pageAddress.hostname), "1");
+        } catch {
+            // Dismissed for this page view only.
+        }
+    };
 
     // Persist sidebar state
     useEffect(() => {
@@ -120,6 +218,15 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
         ? Math.max(0, Math.ceil((user.mfa.graceDeadline * 1000 - Date.now()) / 86400000))
         : null;
 
+    // The settings screen shows the conflict/drift/proxy state in full, so the shell does not repeat it there.
+    const siteBanners = pageAddress
+        ? dashboardBanners({
+            locationHostname: pageAddress.hostname,
+            linkBase,
+            admin: pathname === SITE_ADDRESS_SETTINGS_PATH ? null : siteAddress,
+        }).filter((banner) => !(banner.kind === "link-base" && linkBaseDismissed))
+        : [];
+
     return (
         <div className="flex h-screen bg-gray-100 overflow-hidden relative">
             <Sidebar
@@ -174,6 +281,13 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
                         </Link>
                     </div>
                 )}
+
+                <SiteAddressBannerList
+                    banners={siteBanners}
+                    host={pageAddress?.host ?? ""}
+                    isAdmin={isAdmin}
+                    onDismissLinkBase={dismissLinkBase}
+                />
 
                 <main className="flex-1 relative bg-white flex flex-col h-full overflow-hidden">
                     {children}

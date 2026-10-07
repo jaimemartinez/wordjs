@@ -36,6 +36,10 @@ const routing = require('./routing');
 // What a registration may write into the registry — above all the group LABEL the routing owner check
 // later trusts, which must come from the authenticated identity and never from the request body.
 const registration = require('./registration');
+// The edge half of the site's host policy: which addresses this listener answers, the forwarded-header
+// pins, and the policy the backend pushes (src/host-edge.js; the decision itself is src/host-policy.js,
+// byte-identical to the backend's).
+const hostEdge = require('./host-edge');
 
 // mTLS cluster-cert directory. SEPARATE mode: `scripts/cluster.js init` writes the gateway's certs to
 // gateway/certs. LOCAL split (one machine, `npm start`): the install generates the cluster certs into
@@ -80,6 +84,9 @@ const logSafe = (v) => String(v).replace(/\r\n|\r|\n/g, ' ');
 // --- GATEWAY CONFIG ---
 const REGISTRY_FILE = path.resolve(__dirname, '../gateway-registry.json');
 const REGISTRY_TEMP = path.resolve(__dirname, '../gateway-registry.json.tmp');
+// The host policy the backend last pushed (POST /host-policy). Written by the primary, read by every
+// worker by modification time. Absent = never pushed = the edge enforces nothing.
+const HOST_POLICY_FILE = path.resolve(__dirname, '../gateway-host-policy.json');
 
 let configSecret = null;
 let configPort = 3000;
@@ -168,6 +175,9 @@ function maybeStartAcmeHttpListener() {
     // Default webroot = the backend's public dir (../../backend/public relative to gateway/src).
     const webroot = path.resolve(__dirname, '../../', acme.webroot || 'backend/public');
     const challengeBase = path.join(webroot, '.well-known', 'acme-challenge');
+    // This listener runs in the PRIMARY, which has no edge of its own: it reads the pushed policy the
+    // same way a worker does, so it redirects only to addresses the workers answer.
+    const pushedPolicy = hostEdge.createPushedPolicySource({ file: HOST_POLICY_FILE, logger });
     const srv = http.createServer((req, res) => {
         try {
             const reqPath = decodeURIComponent((req.url || '/').split('?')[0]);
@@ -181,9 +191,15 @@ function maybeStartAcmeHttpListener() {
                 res.writeHead(404, { 'Content-Type': 'text/plain' });
                 return res.end('Not found');
             }
-            const host = (req.headers.host || '').split(':')[0];
-            const suffix = FINAL_PORT === 443 ? '' : `:${FINAL_PORT}`;
-            res.writeHead(301, { Location: `https://${host}${suffix}${req.url}` });
+            // Never a raw Host in the Location: an address the site answers, else the main address
+            // (src/host-edge.js acmeRedirectLocation; the old `Host.split(':')[0]` echoed any name and
+            // cut an IPv6 literal down to `[`).
+            const location = hostEdge.acmeRedirectLocation(req, { getPolicy: pushedPolicy.get, port: FINAL_PORT, forwardedHostIsMarker: false });
+            if (!location) {
+                res.writeHead(400, { 'Content-Type': 'text/plain' });
+                return res.end('Bad Request');
+            }
+            res.writeHead(301, { Location: location });
             res.end();
         } catch (e) {
             try { res.writeHead(500); res.end(); } catch (_) { /* ignore */ }
@@ -217,8 +233,13 @@ if (cluster.isPrimary) {
         maybeStartAcmeHttpListener();
     })();
 
+    // What every worker's edge refused (src/host-edge.js createReportingRefusals), merged here, where the
+    // control plane lives: the backend's POST /host-policy gets it back, for Settings → Site address.
+    const edgeRefusals = hostEdge.createRefusalAggregate();
+
     cluster.on('exit', (worker) => {
         logger.error(`[Gateway] Worker ${worker.process.pid} died. Respawning...`);
+        edgeRefusals.remove(worker.id);
         cluster.fork();
     });
 
@@ -434,6 +455,8 @@ if (cluster.isPrimary) {
         // /register endpoint (identity-, route-, host- and owner-checked).
         if (message.type === 'RESTART_GATEWAY') {
             restartGateway();
+        } else if (message && message.type === hostEdge.REFUSALS_MESSAGE) {
+            edgeRefusals.update(worker.id, message.refused);
         }
     });
 
@@ -756,6 +779,12 @@ if (cluster.isPrimary) {
                     }
                 });
 
+                // The site's addresses, pushed by the backend (CN=backend only) for the edge check every
+                // worker runs. Stored in HOST_POLICY_FILE; workers notice the new modification time on
+                // their own, so - unlike /config-update - nothing is restarted. The answer carries what
+                // the workers' edge refused. See src/host-edge.js.
+                hostEdge.mountHostPolicyPush(internalApp, { requireIdentity, file: HOST_POLICY_FILE, logger, refusals: () => edgeRefusals.list() });
+
                 const internalOptions = {
                     key: fs.readFileSync(MTLS_KEY),
                     cert: fs.readFileSync(MTLS_CERT),
@@ -951,6 +980,23 @@ if (cluster.isPrimary) {
         next();
     };
 
+    // THE EDGE ADDRESS CHECK - first, before anything spends work on the request or proxies it. An
+    // address the site does not answer gets the static 421 page (or the API's JSON 421), a redirect
+    // alias gets its 308, a repeated or malformed Host gets 400 (src/host-edge.js). The policy is the
+    // one the backend pushed; until it pushes, nothing is enforced. forwardedHostIsMarker is off here
+    // because frontend nodes address this listener by IP for SSR and relay the public host in
+    // X-Forwarded-Host, which pinForwardedHeaders discards before it could reach anyone (unless the node
+    // is a hop host-policy trusts, as the backend would). What it refuses is reported to the primary, which
+    // hands it to the backend (Settings → Site address, Recently refused): the backend never sees it.
+    const edgePolicy = hostEdge.createPushedPolicySource({ file: HOST_POLICY_FILE, logger });
+    const edgeRefused = hostEdge.createReportingRefusals({
+        send: (message) => { if (typeof process.send === 'function' && process.connected) process.send(message); },
+    });
+    const edge = hostEdge.createHostEdge({ getPolicy: edgePolicy.get, logger, forwardedHostIsMarker: false, refused: edgeRefused });
+    app.use((req, res, next) => {
+        if (!edge.handle(req, res)) next();
+    });
+
     // CSP restored (was `contentSecurityPolicy: false`): mirror the backend's policy shape so the gateway's
     // own responses carry the same headers the app already tolerates (Next/Puck need unsafe-inline/eval).
     // Proxied responses keep the upstream's own CSP — the upstream writes headers last, so its policy wins.
@@ -1066,13 +1112,14 @@ if (cluster.isPrimary) {
             res.setHeader('Allow', 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS');
             return res.status(405).send('Method Not Allowed');
         }
-        // SECURITY (CSRF / host-trust): the client must NOT control X-Forwarded-Host. http-proxy's
-        // xfwd keeps a client-supplied value (`clientXFH || host`), and the backend trusts XFH for
-        // its CSRF same-origin check and the migration guard. Pin XFH to the REAL client-facing Host
-        // this public listener saw, so a remote attacker can't forge it to bypass CSRF. (The internal
-        // mTLS listener is a separate app and is reached only by trusted, cert-authenticated peers.)
-        req.headers['x-forwarded-host'] = req.headers['host'] || '';
-        delete req.headers['x-forwarded-server'];
+        // SECURITY (CSRF / host-trust): the client must NOT control X-Forwarded-Host or -Proto. The
+        // backend believes both from this hop (its address gate, CSRF same-origin check, Secure-cookie
+        // and sign-in rules), and http-proxy's xfwd keeps a client-supplied XFH and APPENDS to a
+        // client-supplied XFP. So XFH is pinned to the address the edge judged (this listener's Host, or
+        // the X-Forwarded-Host of a hop host-policy trusts, as the backend would), and the client's
+        // XFP/XFPort are dropped for xfwd to write the listener's own (src/host-edge.js).
+        // (The internal mTLS listener is a separate app, reached only by cert-authenticated peers.)
+        hostEdge.pinForwardedHeaders(req);
         const target = getTarget(req.url) || bootstrapTarget(req.url);
         if (target) {
             const isHttps = target.startsWith('https:');
@@ -1184,6 +1231,12 @@ if (cluster.isPrimary) {
     server.headersTimeout = 66000;
 
     server.on('upgrade', (req, socket, head) => {
+        // Upgrades never pass through the Express chain above, so the edge check and the forwarded-header
+        // pins are applied here too: a WebSocket to an address the site does not answer is refused, and
+        // http-proxy's WebSocket pass - which leaves X-Forwarded-Host exactly as the client sent it -
+        // never relays a forged one.
+        if (edge.handleUpgrade(req, socket)) return;
+        hostEdge.pinUpgradeHeaders(req);
         const target = getTarget(req.url);
         if (target) {
             const isHttps = target.startsWith('https:');

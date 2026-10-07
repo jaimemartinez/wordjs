@@ -57,7 +57,7 @@ function stripHtml(s) {
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '2.2.2',
+    version: '2.2.3',
     description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
 };
@@ -2080,6 +2080,48 @@ function buildDnsRecords(domain, selector, publicKeyPem) {
     };
 }
 
+// SECURITY (TLS-downgrade): the certificate-VERIFICATION failures that — and only that — let
+// deliverDirect retry an MX host with verification disabled. No message-substring fallbacks (the old
+// msg.includes('tls')/'certificate'/'altname' matched transient/non-cert TLS and even generic errors,
+// letting an active MITM force the downgrade with a non-cert error), and no broad `ERR_TLS_` code prefix
+// (it matched handshake/protocol errors).
+//
+// Each entry pairs the Node/OpenSSL code with the text Node gives the error, because the code does not
+// reach us: Node destroys the STARTTLS socket with an Error carrying the verify code, and nodemailer (9
+// and 10) passes every socket error through _onError(err, 'ESOCKET') → _formatError, which OVERWRITES
+// err.code with 'ESOCKET' on that same object. A code-only match never fired, so every direct-MX
+// delivery to a host with a bad certificate failed outright instead of taking the logged downgrade.
+// What survives is the message: OpenSSL's fixed verify reason ("self signed" before OpenSSL 3), which
+// newer Node suffixes with "; if the root CA is installed locally, try running Node.js with
+// --use-system-ca", or Node's own ERR_TLS_CERT_ALTNAME_INVALID text. Every entry is driven through the
+// real nodemailer against a real TLS server in mail-server-mx-tls-fallback.test.ts, so a wording change
+// fails that suite on the runtime running it instead of silently disabling the fallback again — CI pins
+// one Node line, so run the suite on a new Node line before supporting it in production.
+const TLS_CERT_VERIFY_FAILURES = [
+    ['ERR_TLS_CERT_ALTNAME_INVALID', /^Hostname\/IP does not match certificate's altnames: /], // hostname / SAN mismatch
+    ['DEPTH_ZERO_SELF_SIGNED_CERT', /^self[- ]signed certificate(?:;|$)/],                       // self-signed leaf
+    ['SELF_SIGNED_CERT_IN_CHAIN', /^self[- ]signed certificate in certificate chain(?:;|$)/],    // self-signed CA in chain
+    ['UNABLE_TO_VERIFY_LEAF_SIGNATURE', /^unable to verify the first certificate(?:;|$)/],      // issuer neither sent nor trusted
+    ['CERT_HAS_EXPIRED', /^certificate has expired(?:;|$)/],                                     // expired cert
+];
+
+function isTlsVerifyError(e) {
+    if (!e) return false;
+    const code = e.code ? String(e.code).toUpperCase() : '';
+    // An error that still carries the verify code: what Node's TLS socket raises before nodemailer's
+    // rewrite, so the fallback keeps working if nodemailer ever stops overwriting err.code.
+    if (TLS_CERT_VERIFY_FAILURES.some(([c]) => c === code)) return true;
+    // Otherwise only nodemailer's socket-error shape qualifies: nodemailer tags nothing but the socket's
+    // own 'error' event ESOCKET, and never with a server reply, so its message is Node's local text. An
+    // error tied to an SMTP reply has another code and the server-chosen reply appended to its message —
+    // server text never reaches the anchored comparison below. (Defence in depth: nodemailer prefixes
+    // every reply-carrying message, so the anchors alone reject those today; the gate keeps server text
+    // out even for an error shape that does not.)
+    if (code !== 'ESOCKET') return false;
+    const message = String(e.message || '');
+    return TLS_CERT_VERIFY_FAILURES.some(([, reason]) => reason.test(message));
+}
+
 /**
  * Deliver ONE message to ONE recipient by connecting directly to its domain's MX servers.
  * Resolves on success ({ ok, mx, response }); rejects with err.permanent set (5xx = permanent,
@@ -2140,23 +2182,6 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
         } finally {
             try { transport.close(); } catch (e2) { /* ignore */ }
         }
-    };
-
-    // SECURITY (TLS-downgrade): only a genuine certificate-VERIFICATION failure may trigger the
-    // unauthenticated retry. Match the exact OpenSSL/Node cert codes ONLY — no message-substring
-    // fallbacks (the old msg.includes('tls')/'certificate'/'altname' matched transient/non-cert TLS
-    // and even generic errors, letting an active MITM force the downgrade with a non-cert error).
-    // The broad `ERR_TLS_` code prefix is likewise dropped (it matched handshake/protocol errors).
-    const TLS_CERT_VERIFY_CODES = new Set([
-        'ERR_TLS_CERT_ALTNAME_INVALID',       // hostname / SAN mismatch
-        'DEPTH_ZERO_SELF_SIGNED_CERT',        // self-signed leaf
-        'SELF_SIGNED_CERT_IN_CHAIN',          // self-signed CA in chain
-        'UNABLE_TO_VERIFY_LEAF_SIGNATURE',    // missing/untrusted issuer
-        'CERT_HAS_EXPIRED',                   // expired cert
-    ]);
-    const isTlsVerifyError = (e) => {
-        const code = e && e.code ? String(e.code).toUpperCase() : '';
-        return TLS_CERT_VERIFY_CODES.has(code);
     };
 
     let lastErr = null;

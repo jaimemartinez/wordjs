@@ -12,12 +12,20 @@ const User = require('../models/User');
 // (see middleware/auth.ts). sessionOnly lives there too, next to the headless mark it reads.
 // sessionCookieOptions/clearSessionCookies live there too: the session cookie and its `wjs_csrf`
 // double-submit partner must agree on secure/sameSite/path, so ONE module owns both halves.
-const { authenticate, generateToken, verifyToken, issueSessionCookie, sessionOnly, sessionCookie, sessionCookieOptions, clearSessionCookies } = require('../middleware/auth');
+// refuseInsecureSignIn/signInRefusal are the sign-in rule behind that door (which address and which
+// transport may mint a session), exposed so login and register can refuse BEFORE a password is evaluated;
+// refuseRetiringSignIn likewise for an address retired a few seconds ago (503 rest_address_retiring).
+// sessionBoundToSecondaryAddress keeps an address-bound session from minting an unbound API token, and
+// unboundSessionOnly from changing which accounts need a second factor (PUT /mfa/policy).
+const { authenticate, generateToken, verifyToken, issueSessionCookie, sessionOnly, sessionCookie, sessionCookieOptions, clearSessionCookies, refuseInsecureSignIn, refuseRetiringSignIn, signInRefusal, sessionBoundToSecondaryAddress, unboundSessionOnly, sessionAddressStillAccepted } = require('../middleware/auth');
 const { isAdmin, can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 // THE ROUTE-ID CONTRACT — see core/query-params: one definition of "a route id" for the whole tree.
 const { routeIdOrNull } = require('../core/query-params');
 const { getOption } = require('../core/options');
+// The one base for links sent by email (reset, verification) and the site's own domain — never the
+// request's Host (core/site-address linkBase).
+const { linkBase, linkHostname } = require('../core/site-address');
 const config = require('../config/app');
 const crypto = require('crypto');
 const mfa = require('../core/mfa');
@@ -144,6 +152,9 @@ const _inflightRedisKey = (key: string) => `wjlock:inflight:${key}`;
  * `CHANNEL 3 — every locking purpose is armed only by the doors it refuses` derives both sides of that
  * pair from the source and fails when a writer appears outside the reader's own handler.
  */
+// 'migrate' has no door any more (POST /setup/migrate answers 410 and evaluates no credential). It stays
+// in the closed set, count-only and inert, so the namespace it occupied cannot be re-used by a new
+// purpose while counters written under it may still sit in a shared store.
 const LOCK_PURPOSES = ['login', 'mfa', 'mfa_manage', 'migrate'] as const;
 type LockPurpose = (typeof LOCK_PURPOSES)[number];
 /**
@@ -383,8 +394,30 @@ async function endLoginAttempt(u: any): Promise<void> {
 // session options at the single door that issues both (issueSessionCookie). Keeping a second copy of
 // the derivation here is what would let an operator's HTTPS site end up with a `secure` session cookie
 // and a non-`secure` CSRF cookie. Called per request rather than snapshotted at module load, so a
-// config change (installer, tests) is not frozen into the first require of this file.
-const COOKIE_OPTIONS = (): CookieOptions => sessionCookieOptions();
+// config change (installer, tests) is not frozen into the first require of this file — and WITH the
+// request, because `secure` now depends on which of the site's addresses the cookie is set for.
+const COOKIE_OPTIONS = (req: Request): CookieOptions => sessionCookieOptions(req);
+
+/**
+ * GET /auth/me is the first call the admin makes, and an anonymous caller gets 401 — which the login
+ * screen reads as "show the form". On an address where the sign-in rule refuses (an https site reached
+ * over plain http, an IP that is not enabled for sign-in), rendering the form means the visitor types a
+ * password that crosses the wire before the 403 can say why (REDTEAM R13). So every 401 from this route
+ * carries `data.signIn` (and `data.signInRefused` with the reason when it is false), and the client can
+ * show "open the site at its main address" instead of a form. Only 401 bodies are decorated: a signed-in
+ * caller's user object is returned exactly as before.
+ */
+function withSignInEligibility(req: Request, res: Response, next: () => void): void {
+    const refused = signInRefusal(req);
+    const json = res.json.bind(res);
+    res.json = (body: any) => {
+        if (res.statusCode === 401 && body && typeof body === 'object' && body.data && typeof body.data === 'object') {
+            return json({ ...body, data: { ...body.data, signIn: refused === null, ...(refused ? { signInRefused: refused } : {}) } });
+        }
+        return json(body);
+    };
+    next();
+}
 
 /**
  * @swagger
@@ -521,19 +554,36 @@ const COOKIE_OPTIONS = (): CookieOptions => sessionCookieOptions();
  *               $ref: '#/components/schemas/RestError'
  *       403:
  *         description: >-
- *           rest_cannot_register (self-registration is disabled site-wide), or
+ *           rest_cannot_register (self-registration is disabled site-wide),
  *           rest_reserved_mail_domain / rest_mailbox_address_locked when the requested address belongs to
- *           the site's own mail domain — those are provisioned by an administrator, never claimed here.
+ *           the site's own mail domain — those are provisioned by an administrator, never claimed here —
+ *           or rest_insecure_transport when this address may not mint a session (data.reason is
+ *           `transport` for plain http on an https site, `address` for an address not enabled for
+ *           sign-in); it is answered before anything in the body is looked at.
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/RestError'
  *       429:
  *         description: Rate limited by the strict per-IP auth limiter.
+ *       503:
+ *         description: >-
+ *           rest_address_retiring — this address was retired a few seconds ago (removed and added back,
+ *           or the IP policy narrowed and widened again), and a session started on it now would already
+ *           be ended. Carries Retry-After (data.retryAfter, seconds); answered before the body is looked at.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
  *     security: []
  */
 router.post('/register', asyncHandler(async (req: Request, res: Response) => {
-    // ... (rest of the function)
+    // The sign-in rule first (REDTEAM R13): on an address that may not mint a session, refuse before an
+    // account is created and before the password is looked at — issueSessionCookie would refuse anyway,
+    // but only after the account existed and the password had been processed. The same for an address
+    // whose sessions are still being ended (rest_address_retiring).
+    if (refuseInsecureSignIn(req, res)) return;
+    if (refuseRetiringSignIn(req, res)) return;
     const registrationAllowed = await getOption('users_can_register', 0);
     if (!registrationAllowed || registrationAllowed == '0') {
         return res.status(403).json({
@@ -610,7 +660,9 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
             await User.updateMeta(user.id, 'email_verification_expires', String(Date.now() + VERIFY_TTL_MS));
             await User.updateMeta(user.id, 'email_verification_pending', '1');
 
-            const base = String((await getOption('siteurl', await getOption('home', config.siteUrl || 'http://localhost'))) || 'http://localhost').replace(/\/+$/, '');
+            // The site's link base (core/site-address) — never this request's Host: whoever calls this
+            // endpoint must not be able to choose which host receives the verification token.
+            const base = await linkBase();
             const link = `${base}/verify-email?uid=${user.id}&token=${raw}`;
             const siteName = await getOption('blogname', 'WordJS');
             try {
@@ -628,8 +680,8 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
             return res.status(201).json({ user: user.toJSON(), verificationRequired: true, message: 'Account created. Check your email for a verification link before logging in.' });
         }
 
-        const token = generateToken(user);
-        if (issueSessionCookie(req, res, token, COOKIE_OPTIONS())) return;
+        const token = generateToken(user, req);
+        if (issueSessionCookie(req, res, token, COOKIE_OPTIONS(req))) return;
 
         res.status(201).json({ user: user.toJSON() });
     } catch (error) {
@@ -703,7 +755,9 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
  *       403:
  *         description: >-
  *           rest_email_unverified — the password was correct but the account has not confirmed its email
- *           address yet.
+ *           address yet. Or rest_insecure_transport — this address may not mint a session (data.reason
+ *           is `transport` for plain http on an https site, `address` for an address not enabled for
+ *           sign-in); answered before the credentials are evaluated.
  *         content:
  *           application/json:
  *             schema:
@@ -716,9 +770,25 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/RestError'
+ *       503:
+ *         description: >-
+ *           rest_address_retiring — this address was retired a few seconds ago (removed and added back,
+ *           or the IP policy narrowed and widened again), and a session started on it now would already
+ *           be ended. Carries Retry-After (data.retryAfter, seconds); answered before the credentials are
+ *           evaluated.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
  *     security: []
  */
 router.post('/login', asyncHandler(async (req: Request, res: Response) => {
+    // The sign-in rule BEFORE the credentials are evaluated (REDTEAM R13): on an address that may not
+    // mint a session there is no point verifying a password, counting a failure against the account or
+    // handing out an MFA challenge — the session could never be issued here. Nor on an address whose
+    // sessions are still being ended (retired seconds ago): that session would be dead on arrival.
+    if (refuseInsecureSignIn(req, res)) return;
+    if (refuseRetiringSignIn(req, res)) return;
     const { username, password } = req.body;
 
     if (!username || !password) {
@@ -808,8 +878,8 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
             username: auditText(user.userLogin), method: 'password', ip: auditText(ip, 45)
         });
 
-        const token = generateToken(user);
-        if (issueSessionCookie(req, res, token, COOKIE_OPTIONS())) return;
+        const token = generateToken(user, req);
+        if (issueSessionCookie(req, res, token, COOKIE_OPTIONS(req))) return;
         res.json({ user: user.toJSON(), mfa: await mfa.evaluate(user) });
     } catch (error) {
         await recordLoginFail(lockId);
@@ -882,13 +952,17 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
  *                     mfa:
  *                       $ref: '#/components/schemas/MfaStatus'
  *       401:
- *         description: "rest_not_logged_in — no valid session cookie, session JWT or API token."
+ *         description: >-
+ *           rest_not_logged_in (or another rest_token_* code) — no valid session cookie, session JWT or API
+ *           token. Every 401 here also carries data.signIn: false means this address may not mint a
+ *           session (data.signInRefused is `transport` or `address`), so a login screen should point to
+ *           the site's main address instead of asking for a password.
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/RestError'
  */
-router.get('/me', authenticate, asyncHandler(async (req: Request, res: Response) => {
+router.get('/me', withSignInEligibility, authenticate, asyncHandler(async (req: Request, res: Response) => {
     // mfa is an EXTRA top-level key (the client reads /auth/me as the user object directly — do not re-wrap).
     res.json({ ...req.user.toJSON(), mfa: await mfa.evaluate(req.user) });
 }));
@@ -1002,12 +1076,22 @@ router.post('/validate', authenticate, (req: Request, res: Response) => {
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/RestError'
+ *       503:
+ *         description: >-
+ *           rest_address_retiring — the address the session is bound to was retired a few seconds ago, so
+ *           the refreshed session would already be ended; no cookie is set. Carries Retry-After.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
  */
 router.post('/refresh', authenticate, (req: Request, res: Response) => {
-    const token = generateToken(req.user);
+    // `req` carries the presented session's address binding (set by authenticate), so the new token is
+    // never less bound than the old one, whichever address this refresh arrives on (REDTEAM R2).
+    const token = generateToken(req.user, req);
 
     // Update HttpOnly cookie
-    if (issueSessionCookie(req, res, token, COOKIE_OPTIONS())) return;
+    if (issueSessionCookie(req, res, token, COOKIE_OPTIONS(req))) return;
 
     res.json({
         user: req.user.toJSON()
@@ -1071,9 +1155,18 @@ router.post('/logout', asyncHandler(async (req: Request, res: Response) => {
         if (!token) token = sessionCookie(req);
         if (token) {
             const decoded = verifyToken(token);
-            if (decoded && decoded.userId) {
-                await User.updateMeta(decoded.userId, 'token_valid_after', String(Math.floor(Date.now() / 1000)));
-                actorId = decoded.userId;
+            // Only a LIVE session ends its user's sessions — the same test authenticate applies. A token
+            // that is already dead (minted on an address the site no longer answers, issued before an
+            // earlier logout or password change, or not a session token at all) revokes nothing: whoever
+            // holds a dead cookie — the next holder of a retired alias, say — could otherwise sign its owner
+            // out everywhere, as often as they liked, while the JWT lived.
+            if (decoded && decoded.userId && !decoded.purpose && sessionAddressStillAccepted(decoded)) {
+                const user = await User.findById(decoded.userId);
+                const validAfter = user ? parseInt(user.meta && user.meta.token_valid_after, 10) : 0;
+                if (user && !(validAfter && decoded.iat && decoded.iat <= validAfter)) {
+                    await User.updateMeta(decoded.userId, 'token_valid_after', String(Math.floor(Date.now() / 1000)));
+                    actorId = decoded.userId;
+                }
             }
         }
     } catch { /* invalid/expired token — nothing to revoke */ }
@@ -1148,7 +1241,7 @@ async function emailVerificationRequired(): Promise<boolean> {
 }
 
 async function siteDomainName(): Promise<string> {
-    try { return new URL(await getOption('siteurl', await getOption('home', 'http://localhost'))).hostname.toLowerCase(); }
+    try { return (await linkHostname()).toLowerCase(); }
     catch { return ''; }
 }
 
@@ -1261,7 +1354,10 @@ router.post('/forgot-password', asyncHandler(async (req: Request, res: Response)
     await User.updateMeta(user.id, 'password_reset_hash', hash);
     await User.updateMeta(user.id, 'password_reset_expires', String(Date.now() + RESET_TTL_MS));
 
-    const base = String((await getOption('siteurl', await getOption('home', config.siteUrl || 'http://localhost'))) || 'http://localhost').replace(/\/+$/, '');
+    // The site's link base (core/site-address), NEVER the request's Host: an anonymous caller of
+    // forgot-password must not choose which of the site's addresses — or any host at all — receives the
+    // victim's reset token. Aliases are answered, never used as a link base.
+    const base = await linkBase();
     const link = `${base}/reset-password?uid=${user.id}&token=${raw}`;
     const siteName = await getOption('blogname', 'WordJS');
 
@@ -1595,13 +1691,26 @@ router.get('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), async
  *         description: >-
  *           The caller is headless, rest_forbidden (no manage_api_tokens), rest_csrf_token /
  *           rest_csrf_invalid, mfa_enrollment_required, or rest_mfa_required_for_tokens — the account's
- *           role requires 2FA and it has not enrolled, so it may not mint a token even during grace.
+ *           role requires 2FA and it has not enrolled, so it may not mint a token even during grace — or
+ *           rest_token_bound_session: the session was started at an address other than the main one (an
+ *           alias, an IP, a tunnel name); API tokens can only be created from a main-address session.
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/RestError'
  */
 router.post('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandler(async (req: Request, res: Response) => {
+    // An API token carries no address binding and can live forever. Minted from a session bound to a
+    // secondary address — whose cookie the next holder of that name may receive (REDTEAM R2) — it would
+    // outlive the address and survive its removal. Such a session may not create one; the main address
+    // (or loopback) can.
+    if (sessionBoundToSecondaryAddress(req)) {
+        return res.status(403).json({
+            code: 'rest_token_bound_session',
+            message: 'API tokens can only be created from a session started at the main address.',
+            data: { status: 403 }
+        });
+    }
     const { name, scopes, expiresInDays } = req.body || {};
 
     // Soft cap on active (non-revoked, unexpired) tokens to bound abuse / accidental runaway creation.
@@ -1829,6 +1938,15 @@ router.delete('/tokens/:id', authenticate, sessionOnly, can('manage_api_tokens')
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/RestError'
+ *       503:
+ *         description: >-
+ *           rest_address_retiring — this address was retired a few seconds ago, and a session started on
+ *           it now would already be ended. Carries Retry-After; answered before the code is checked, so no
+ *           backup code is used up and the same challenge can be sent again.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
  */
 router.post('/mfa', asyncHandler(async (req: Request, res: Response) => {
     const { mfaToken, code } = req.body || {};
@@ -1838,6 +1956,8 @@ router.post('/mfa', asyncHandler(async (req: Request, res: Response) => {
     }
     const user = await User.findById(challenge.userId);
     if (!user) return res.status(401).json({ code: 'rest_user_invalid', message: 'User not found.', data: { status: 401 } });
+    // Before the code is looked at: a backup code spent on a session that could not be issued is lost.
+    if (refuseRetiringSignIn(req, res)) return;
 
     // Throttle code guesses under a SEPARATE 'mfa:' lockout bucket. Crucially this is NOT the password
     // bucket (user.userLogin) that /login clears on a correct password — otherwise an attacker who knows
@@ -1874,8 +1994,8 @@ router.post('/mfa', asyncHandler(async (req: Request, res: Response) => {
         await recordAudit(user.id, 'auth.login.success', 'user', user.id, {
             username: auditText(user.userLogin), method: 'mfa', ip: auditText(clientIp(req), 45)
         });
-        const token = generateToken(user);
-        if (issueSessionCookie(req, res, token, COOKIE_OPTIONS())) return;
+        const token = generateToken(user, req);
+        if (issueSessionCookie(req, res, token, COOKIE_OPTIONS(req))) return;
         res.json({ user: user.toJSON(), mfa: await mfa.evaluate(user) });
     } finally {
         await endLoginAttempt(lockKey);
@@ -2429,14 +2549,15 @@ router.get('/mfa/policy', authenticate, sessionOnly, isAdmin, asyncHandler(async
  *               $ref: '#/components/schemas/RestError'
  *       403:
  *         description: >-
- *           rest_forbidden (not an administrator), the caller is headless, rest_csrf_token /
- *           rest_csrf_invalid, or mfa_enrollment_required.
+ *           rest_forbidden (not an administrator), the caller is headless, rest_account_bound_session
+ *           (a session started at an address other than the main one may not change which accounts need
+ *           a second factor), rest_csrf_token / rest_csrf_invalid, or mfa_enrollment_required.
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/RestError'
  */
-router.put('/mfa/policy', authenticate, sessionOnly, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.put('/mfa/policy', authenticate, sessionOnly, isAdmin, unboundSessionOnly, asyncHandler(async (req: Request, res: Response) => {
     const { requiredRoles, graceDays, enforceForApiTokens } = req.body || {};
     if (requiredRoles != null && !Array.isArray(requiredRoles)) {
         return res.status(400).json({ code: 'rest_invalid_param', message: 'requiredRoles must be an array of role slugs.', data: { status: 400 } });
@@ -2454,14 +2575,14 @@ router.put('/mfa/policy', authenticate, sessionOnly, isAdmin, asyncHandler(async
 }));
 
 module.exports = router;
-// Exposed so other credential-checking endpoints (e.g. /setup/migrate) share the SAME per-account
-// lockout — otherwise they become an unthrottled password oracle that bypasses this one (audit MEDIUM).
+// Exposed so any other credential-checking endpoint shares the SAME per-account lockout — otherwise it
+// becomes an unthrottled password oracle that bypasses this one (audit MEDIUM).
 module.exports.isLoginLocked = isLoginLocked;
 module.exports.recordLoginFail = recordLoginFail;
 module.exports.clearLoginFails = clearLoginFails;
 module.exports.resolveLockIdentifier = resolveLockIdentifier;
 // Shared so every OTHER credential/second-factor endpoint that check-then-arms the same per-account
-// lockout (POST /auth/mfa, POST /setup/migrate, DELETE /plugins/:slug) gets the SAME concurrency backstop
+// lockout (POST /auth/mfa, DELETE /plugins/:slug) gets the SAME concurrency backstop
 // — otherwise a burst of parallel guesses clears the lock check before it arms, bypassing the per-account
 // cap on that endpoint exactly as it did on /login before MAX_LOGIN_INFLIGHT (audit AUTH-A3, class fix).
 module.exports.beginLoginAttempt = beginLoginAttempt;
@@ -2478,6 +2599,6 @@ module.exports.LOCK_PURPOSES = LOCK_PURPOSES;
 // isLoginLocked readers it finds in the source, instead of restating either half.
 module.exports.LOCKING_PURPOSES = LOCKING_PURPOSES;
 module.exports.loginFailCount = loginFailCount;
-// The bounded wait itself, so a credential door in another module (POST /setup/migrate) throttles with the
-// SAME primitive instead of the check-then-refuse that made it a hostage. See payFailureDelay.
+// The bounded wait itself, so a credential door in another module throttles with the SAME primitive
+// instead of the check-then-refuse that makes a door a hostage. See payFailureDelay.
 module.exports.payFailureDelay = payFailureDelay;

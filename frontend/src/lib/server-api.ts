@@ -15,6 +15,7 @@ import { cache } from 'react';
 import type { Metadata } from 'next';
 import type { Post } from './api';
 import { THEME_CONTRACT } from '@/generated/visual-contract.generated';
+import { HERMETIC_BACKEND_BASE, isHermeticBuild } from '../../hermetic-build.js';
 
 const THEME_ASSET_NAME = new RegExp(THEME_CONTRACT.assetNamePattern);
 
@@ -100,8 +101,12 @@ function sanitizeBackendBase(candidate: string): string | null {
  *  - monolith: the in-process backend's plain-HTTP loopback listener (self-signed TLS never blocks SSR)
  *  - split:    the backend's own HTTP port (default 4000), read from wordjs-config.json
  *  - override: INTERNAL_API_URL (full `.../api/v1`) wins when set
+ *  - release build: WORDJS_HERMETIC_BUILD=1 overrides ALL of the above with a base fetch() refuses,
+ *    so a release packaged on a machine with a running dev backend cannot prerender its content
+ *    (see hermetic-build.js for why the fetch still happens instead of being skipped)
  */
 function backendBaseCandidates(): string[] {
+    if (isHermeticBuild()) return [HERMETIC_BACKEND_BASE];
     if (process.env.WORDJS_MODE === 'mono') {
         return [`${process.env.WORDJS_MONO_ORIGIN || 'http://127.0.0.1:4000'}/api/v1`, MONO_BACKEND_BASE];
     }
@@ -208,6 +213,8 @@ export function backendUrl(base: string, endpoint: string): string | null {
 // Exported alongside resolveServerBase for the same reason — see its comment.
 let _pubHost: { value: { host: string; proto: string } | null; at: number } | null = null;
 export function configuredPublicHost(): { host: string; proto: string } | null {
+    // A release build has no site: the packaging machine's siteUrl is not the deployment's.
+    if (isHermeticBuild()) return null;
     if (_pubHost && Date.now() - _pubHost.at < 10_000) return _pubHost.value;
     let value: { host: string; proto: string } | null = null;
     try {
@@ -272,15 +279,21 @@ export async function serverFetch<T>(endpoint: string, options: ServerFetchOptio
     // the backend's guards don't require one until a siteUrl exists to compare against.
     // Per-user reads (forwardCookies) are the one legitimate consumer of the request — their
     // routes (/preview, admin SSR) are force-dynamic, where headers() is allowed.
+    //
+    // The address relayed is the one the public listener judged, an EMPTY one included: the gateway
+    // pins `X-Forwarded-Host: ''` for a request that names no address, and the monolith leaves a direct
+    // client's Host (or none) with no X-Forwarded-Host. `X-Forwarded-Host || Host` turned the empty
+    // value into Next's own Host (the gateway's changeOrigin target, 127.0.0.1:3001), so the backend
+    // judged loopback where the edge had judged no address (review R3S-6). So: a present header as it
+    // is, else Host, else '' — and '' is sent, never dropped, for the backend to judge no address too.
     if (options.forwardCookies) {
         try {
             const { headers: nextHeaders } = await import('next/headers');
             const inbound = await nextHeaders();
-            const host = inbound.get('x-forwarded-host') || inbound.get('host');
-            if (host) {
-                headers['x-forwarded-host'] = host;
-                headers['x-forwarded-proto'] = inbound.get('x-forwarded-proto') || 'https';
-            }
+            const relayed = inbound.get('x-forwarded-host');
+            const host = relayed !== null ? relayed : (inbound.get('host') ?? '');
+            headers['x-forwarded-host'] = host;
+            if (host) headers['x-forwarded-proto'] = inbound.get('x-forwarded-proto') || 'https';
             const cookieHeader = inbound.get('cookie');
             if (cookieHeader) headers['cookie'] = cookieHeader;
         } catch {

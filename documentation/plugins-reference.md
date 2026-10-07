@@ -138,7 +138,7 @@ Manages YouTube video carousels. Galleries and their videos are stored in **opti
 ---
 
 ## 4. Mail Server 📧
-**ID:** `mail-server` | **Version:** 2.2.2
+**ID:** `mail-server` | **Version:** 2.2.3
 
 A complete SMTP server and email manager. Allows sending and receiving emails directly within WordJS.
 

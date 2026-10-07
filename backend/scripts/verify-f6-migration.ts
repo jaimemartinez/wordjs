@@ -59,7 +59,7 @@ const MAX_RESPONSE_ANY_OCCURRENCES = 0;
 /** Boundary files that still contain at least one `req: any`. A brand-new untyped route file raises it. */
 const MAX_UNTYPED_BOUNDARY_FILES = 0;
 /** Boundary files that are FULLY migrated: at least one typed `req` and not one `req: any` left. */
-const MIN_FULLY_TYPED_BOUNDARY_FILES = 44;
+const MIN_FULLY_TYPED_BOUNDARY_FILES = 45;
 /**
  * Does this workflow actually HAND `needle` to a runner, inside a `run:` step?
  *
@@ -1185,13 +1185,24 @@ function versoEditorBudgetFailures(editorBudget: Record<string, unknown>): strin
  * workflow with triggers and jobs. Delete the multi-node CI step and the multi-node leg goes red even
  * though its test file is still sitting in the tree.
  */
+/**
+ * Does ci.yml run the backend unit suite? Either directly (`npm test`), or through the coverage gate,
+ * which runs it once under c8 — accepted only while `test:coverage:check` really wraps `npm test`, so a
+ * coverage script that stopped running the canonical suite cannot stand in for it.
+ */
+function backendSuiteRunsInCi(ci: string, backendScripts: Record<string, string>): boolean {
+    if (/run:\s*npm test\b/.test(ci)) return true;
+    return /run:\s*npm run test:coverage:check\b/.test(ci)
+        && /\bnpm test\s*$/.test(String(backendScripts['test:coverage:check'] || ''));
+}
+
 function checkCertificationMatrixHasEvidence(): CheckOutcome {
     const failures: string[] = [];
     const notes: string[] = [];
     const backendScripts = JSON.parse(read('backend/package.json')).scripts || {};
     const ci = read('.github/workflows/ci.yml');
     const suiteGlobIsRun = /src\/tests\/\*\.test\.ts/.test(String(backendScripts.test || ''));
-    const suiteRunsInCi = /run:\s*npm test\b/.test(ci);
+    const suiteRunsInCi = backendSuiteRunsInCi(ci, backendScripts);
     if (!suiteGlobIsRun) failures.push('backend `npm test` no longer expands src/tests/*.test.ts, so committed evidence is not executed');
     if (!suiteRunsInCi) failures.push('no CI step runs the backend suite, so every suite-backed certification leg is unexecuted');
 
@@ -1277,7 +1288,7 @@ function checkPhaseArtefactsAreWired(): CheckOutcome {
     const explicitStep = workflows.some((file) => /npm run verify:f6(?![:\w-])/.test(fs.readFileSync(file, 'utf8')));
     const suiteGlobReachesEvidence = /src\/tests\/\*\.test\.ts/.test(String(backendScripts.test || ''))
         && exists('backend/src/tests/f6-final-criteria.test.ts');
-    const suiteRunsInCi = /run:\s*npm test\b/.test(read('.github/workflows/ci.yml'));
+    const suiteRunsInCi = backendSuiteRunsInCi(read('.github/workflows/ci.yml'), backendScripts);
     if (!explicitStep && !(suiteGlobReachesEvidence && suiteRunsInCi)) {
         failures.push('nothing in CI reaches this gate: no workflow runs `npm run verify:f6` and the evidence '
             + 'test that asserts its verdict is not reachable by a suite CI executes');

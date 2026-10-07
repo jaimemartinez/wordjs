@@ -81,6 +81,11 @@ const isBackendPath = (url) => {
     if (isNextOwnedApiPath(u)) return false;
     return BACKEND_PREFIXES.some((p) => u === p || u.startsWith(p + '/'));
 };
+// The edge half of the site's host policy, shared with the gateway worker so the 421 page, the
+// redirect-alias 308 and the refused WebSocket cannot differ between deployment shapes. Built-ins only
+// (plus the gateway's byte-identical host-policy.js), so requiring this file still boots nothing.
+const hostEdge = require('./gateway/src/host-edge.js');
+const hostPolicy = require('./gateway/src/host-policy.js');
 
 // Skip compression for SSE streams (parity with the gateway's shouldCompress). `compression` is
 // required inside main() (see applyMonolithEnvironment), so it is passed in rather than closed over.
@@ -151,6 +156,222 @@ async function resolveSSL() {
     return null;
 }
 
+/**
+ * The edge address check for the public listener, judged with the policy the BACKEND applies
+ * (`app.hostPolicy`, the provider its own gate, CORS and CSRF read) rather than a second copy built from
+ * another read of the config. `isInstalled` keeps the install wizard reachable on any address, as the
+ * backend gate does; `refused` is the backend's tracker, so Settings → Site address lists the pages
+ * refused here alongside the API requests its gate refused. Returns null — nothing enforced — for a
+ * backend that publishes no policy.
+ *
+ * The edge also answers `scheme(req)`: the scheme a TRUSTED hop in front of the monolith reports (see
+ * trustedForwardedScheme), which the dispatcher pins instead of its own listener's.
+ */
+function createMonolithEdge({ backendApp, isInstalled, refused, logger }) {
+    const provider = backendApp && backendApp.hostPolicy;
+    if (!provider || typeof provider.get !== 'function') return null;
+    const getPolicy = () => provider.get();
+    const edge = hostEdge.createHostEdge({ getPolicy, isInstalled, refused, logger: logger || console });
+    return Object.assign(edge, { scheme: (req) => trustedForwardedScheme(req, getPolicy) });
+}
+
+/**
+ * How the CLIENT reached the site, when a trusted hop says so — else null (the listener's own scheme
+ * applies). The production shape is a TLS-terminating proxy or ingress in front of a plain-http
+ * container listener (WORDJS_HTTP=1): pinning X-Forwarded-Proto to the listener's 'http' made the backend
+ * believe every request was cleartext even from a proxy the operator declared in trustProxy, so the
+ * sign-in rule refused every https alias and WORDJS_ALLOWED_HOSTS entry (REDTEAM R12) and no
+ * configuration could change it. The trust decision is host-policy's own (trustedHop / trustedScheme,
+ * with the backend's policy), so the monolith believes exactly the hops the backend would: a client
+ * nobody declared still gets the listener's scheme, whatever it claims.
+ */
+function trustedForwardedScheme(req, getPolicy) {
+    let pol;
+    try {
+        pol = getPolicy();
+    } catch {
+        return null;
+    }
+    if (!pol || hostPolicy.trustedHop(req, pol) === null) return null;
+    return hostPolicy.trustedScheme(req, pol);
+}
+
+/**
+ * X-Forwarded-Host for the in-process backend and Next: the address the edge judged, and only when it
+ * came from a TRUSTED hop's X-Forwarded-Host (host-policy requestAuthority — a proxy in trustProxy, a
+ * loopback hop). When the edge judged Host — every direct client — the header is removed, so a client's
+ * own value never survives and the backend, whose rule is the edge's, reads the same Host itself.
+ *
+ * Not a copy of Host, as it used to be: the backend shares this request's socket (nothing relayed it),
+ * and a present X-Forwarded-Host from a trusted hop is how host-policy knows a hop relayed the Host it
+ * received — which decides who sent a loopback name (looksLikeProxyCollapse).
+ */
+function pinForwardedHost(req) {
+    const judged = hostEdge.judgedAddress(req);
+    if (judged && judged.source === 'x-forwarded-host') req.headers['x-forwarded-host'] = judged.raw;
+    else delete req.headers['x-forwarded-host'];
+}
+
+/**
+ * The public listener's request handler — the REAL one main() mounts, exported so a test can drive it
+ * with stand-ins for the backend app and Next. The order is the contract:
+ *
+ *   TRACE/TRACK 405 → /healthz → EDGE address check → forwarded-header pins → SEO rewrites → dispatch
+ *
+ * The edge runs BEFORE the pins: they rewrite X-Forwarded-Host to the address the edge judged, and a
+ * reverse proxy's own X-Forwarded-Host is one of the signals (REDTEAM R4) that an IP-literal Host is the
+ * proxy's upstream address rather than the one the browser used. And before the rewrites, so it judges
+ * the URL the client asked for: /sitemap.xml on a foreign name gets the page, not the API's JSON.
+ */
+function createDispatch({ backendApp, handle, proto, edge }) {
+    return (req, res) => {
+        // Hardening (audit F-09): answer TRACE/TRACK with 405 instead of letting Next handle it as a page
+        // (a Cross-Site-Tracing primitive; no WordJS route needs it). Gateway parity — see gateway/src/index.js.
+        if (req.method === 'TRACE' || req.method === 'TRACK') {
+            res.writeHead(405, { 'Allow': 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS' });
+            return res.end('Method Not Allowed');
+        }
+        // Liveness probe — answer directly so it works even if the backend app is wedged (gateway parity).
+        if ((req.url || '/').split('?')[0] === '/healthz') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ status: 'ok', role: 'monolith', pid: process.pid, timestamp: new Date().toISOString() }));
+        }
+        // An address the site does not answer: 421 page (or the API's JSON), redirect alias: 308, repeated
+        // or malformed Host: 400 — for pages and static files too, which the backend gate never saw.
+        if (edge && edge.handle(req, res)) return;
+        // Read BEFORE the pins overwrite it: a trusted proxy's X-Forwarded-Proto (TLS terminated in front
+        // of a plain-http listener), else this listener's scheme.
+        const scheme = (edge && typeof edge.scheme === 'function' && edge.scheme(req)) || proto;
+        // Pin forwarded headers so backend CSRF/origin sees the address the edge judged (gateway parity).
+        pinForwardedHost(req);
+        req.headers['x-forwarded-proto'] = scheme;
+        // SEO rewrites (gateway parity).
+        if (req.url === '/sitemap.xml') req.url = '/api/v1/seo/sitemap.xml';
+        else if (req.url === '/robots.txt') req.url = '/api/v1/seo/robots.txt';
+        else if (req.url === '/feed' || req.url === '/feed.xml' || req.url === '/rss.xml') req.url = '/api/v1/seo/feed.xml';
+        if (isBackendPath(req.url)) return backendApp(req, res);
+        return handle(req, res);
+    };
+}
+
+// The only WebSocket WordJS serves in this process: Next's development HMR channel (the App Router
+// client dials `/_next/hmr?id=…`; Next 16 serves no other HMR path). Matched EXACTLY, query string
+// aside: Next's own upgrade handler serves that path and returns, but runs every other upgrade through
+// its routes — rewrites included, and the build bakes `/api/:path*` (and the other backend prefixes) →
+// http://localhost:<gatewayPort>, which in this shape is THIS listener — and leaves a socket open when
+// nothing matches.
+const NEXT_HMR_PATHS = Object.freeze(['/_next/hmr']);
+const isNextHmrPath = (url) => NEXT_HMR_PATHS.includes(String(url || '/').split('?')[0]);
+
+/**
+ * WebSocket upgrades. They bypass the request handler, so the edge check runs here as well: an upgrade
+ * to an address the site does not answer gets one 421 on the socket and nothing else. Of the rest, only
+ * Next's development HMR channel is handed on (`hmr`, null in production); every other upgrade is closed.
+ * The backend serves no WebSocket, and Next serves none in production — the only thing its upgrade
+ * handler could do there is proxy a rewrite back into this listener, which re-entered it forever (one
+ * anonymous `new WebSocket('/api/…')` became an endless loop of loopback connections).
+ *
+ * This must be the ONLY 'upgrade' listener on the public server: see createPublicServer.
+ */
+function createUpgradeHandler({ hmr, edge }) {
+    return (req, socket, head) => {
+        if (edge && edge.handleUpgrade(req, socket)) return;
+        if (hmr && isNextHmrPath(req.url)) return hmr(req, socket, head);
+        socket.destroy();
+    };
+}
+
+/**
+ * What Next.js receives as its `httpServer` (a documented NextServerOptions field): a plain emitter that
+ * no socket ever reaches. Next's custom-server wrapper attaches its OWN 'upgrade' listener, on the first
+ * request, to `options.httpServer || req.socket.server` (setupWebSocketHandler in
+ * next/dist/server/next.js) — without this, to the public server itself, where it handled every upgrade
+ * a second time with no edge check. Its listener lands here instead, and `forwardUpgrade(sink)` is how
+ * the monolith's own handler hands it the HMR channel in development.
+ */
+function createNextUpgradeSink() {
+    return new (require('events').EventEmitter)();
+}
+
+/** The Next.js app main() runs, its WebSocket listener pointed at `upgrades` (createNextUpgradeSink). */
+function createNextServer(createNext, { dev, dir, upgrades }) {
+    return createNext({ dev, dir, httpServer: upgrades });
+}
+
+/** Hand an upgrade to whatever listens on `sink` (Next's HMR handler), or close it when nothing does. */
+function forwardUpgrade(sink) {
+    return (req, socket, head) => {
+        if (!sink.emit('upgrade', req, socket, head)) socket.destroy();
+    };
+}
+
+/**
+ * The public server, on which every upgrade goes to `upgradeHandler` and nothing else. The Next.js sink
+ * is what keeps Next's listener off it today; this is what keeps it so if a later Next version attaches
+ * anywhere else.
+ *
+ * The guarantee is the server's own emit: an 'upgrade' event is delivered to `upgradeHandler` alone,
+ * whatever else is registered, so no listener can run first or instead — not even one attached during
+ * the very request that a pipelined upgrade follows in the same socket read (Node emits that upgrade
+ * synchronously after the request, before any later tick). Any other 'upgrade' listener added to the
+ * server is then moved onto the sink, behind the monolith's handler (that is how a Next that ignored
+ * httpServer would still get its HMR channel in development), and reported once.
+ */
+function createPublicServer({ ssl, requestListener, upgradeHandler, sink, logger }) {
+    const log = logger || console;
+    const server = ssl ? require('https').createServer(ssl, requestListener) : require('http').createServer(requestListener);
+    const emit = server.emit;
+    server.emit = function emitWithOneUpgradeHandler(event, ...args) {
+        if (event !== 'upgrade') return emit.call(this, event, ...args);
+        upgradeHandler(...args);
+        return true;
+    };
+    let reported = false;
+    server.on('newListener', (event, listener) => {
+        if (event !== 'upgrade' || listener === upgradeHandler) return;
+        process.nextTick(() => {
+            server.removeListener('upgrade', listener);
+            sink.on('upgrade', listener);
+            if (!reported) {
+                reported = true;
+                log.warn('[monolith] another module attached an \'upgrade\' listener to the public server; it now sits behind the monolith\'s upgrade handler, which alone decides what reaches it.');
+            }
+        });
+    });
+    // Registered as well: Node treats a request as an upgrade only while the server has an 'upgrade'
+    // listener.
+    server.on('upgrade', upgradeHandler);
+    return server;
+}
+
+/**
+ * The opt-in ACME HTTP-01 + HTTPS-redirect listener: serves challenge tokens from `challengeBase` and
+ * redirects everything else to https on `port`. The redirect names an address the site answers — the
+ * request's own when accepted, else the main address — never a raw Host (host-edge acmeRedirectLocation).
+ */
+function createAcmeHandler({ challengeBase, port, getPolicy, isInstalled }) {
+    return (req, res) => {
+        try {
+            const reqPath = decodeURIComponent((req.url || '/').split('?')[0]);
+            if (reqPath.startsWith('/.well-known/acme-challenge/')) {
+                const file = path.join(challengeBase, path.basename(reqPath));
+                if (file.startsWith(challengeBase + path.sep) && fs.existsSync(file)) {
+                    res.writeHead(200, { 'Content-Type': 'text/plain' });
+                    return res.end(fs.readFileSync(file));
+                }
+                res.writeHead(404); return res.end('Not found');
+            }
+            const location = hostEdge.acmeRedirectLocation(req, { getPolicy, isInstalled, port });
+            if (!location) {
+                res.writeHead(400, { 'Content-Type': 'text/plain' });
+                return res.end('Bad Request');
+            }
+            res.writeHead(301, { Location: location });
+            res.end();
+        } catch (e) { try { res.writeHead(500); res.end(); } catch (_) { /* ignore */ } }
+    };
+}
+
 async function main() {
     // 0) The process-wide wiring (env + cwd) the steps below depend on. Same order as before: it ran
     //    at module load when this file could only ever be the entrypoint.
@@ -166,21 +387,30 @@ async function main() {
     //    never bites because Next runs in its own process.)
     const nextLib = require(require.resolve('next', { paths: [FRONTEND] }));
     const createNext = nextLib.default || nextLib;
-    const nextApp = createNext({ dev, dir: FRONTEND });
-    // prepare() MUST run before getRequestHandler/getUpgradeHandler (Next 16 throws otherwise).
+    // Next attaches its own 'upgrade' listener to `httpServer`: the sink, never the public server (see
+    // createNextUpgradeSink). Its HMR channel is reached through the monolith's handler, in dev only.
+    // (nextApp.getUpgradeHandler() is not that channel: in Next 16 it resolves to NextNodeServer's
+    // handleUpgrade, which is empty — HMR only ever worked through the listener Next attached itself.)
+    const nextUpgrades = createNextUpgradeSink();
+    const nextApp = createNextServer(createNext, { dev, dir: FRONTEND, upgrades: nextUpgrades });
+    // prepare() MUST run before getRequestHandler (Next 16 throws otherwise).
     await nextApp.prepare();
     const handle = nextApp.getRequestHandler();
-    const upgrade = typeof nextApp.getUpgradeHandler === 'function' ? nextApp.getUpgradeHandler() : null;
 
     // 2) Backend Express app (compiled dist in prod; ts-node in dev) — registered AFTER Next so the
     //    ts-node resolver overlays Next's hook. Module load installs io-guard, secure-require,
     //    crash-guard and anchors plugin routes (setApp). It does NOT listen (EMBEDDED).
     let backendApp;
+    // The tree the backend was loaded from (compiled dist, or src under ts-node): the edge below reads
+    // the backend's OWN configManager and host-policy modules from it — the same instances, not copies.
+    let backendTree;
     const distEntry = path.join(BACKEND, 'dist', 'index.js');
     if (!dev && fs.existsSync(distEntry)) {
+        backendTree = path.join(BACKEND, 'dist');
         backendApp = require(distEntry);
     } else {
         require(require.resolve('ts-node/register', { paths: [BACKEND] }));
+        backendTree = path.join(BACKEND, 'src');
         backendApp = require(path.join(BACKEND, 'src', 'index.ts'));
     }
     // 3) Boot DB + plugins + theme engine (returns the same app). EMBEDDED skips listen + gateway register.
@@ -199,33 +429,27 @@ async function main() {
     // parses a clean request.
     const helmetMw = helmet({ contentSecurityPolicy: false });
     const compressionMw = compression({ filter: shouldCompress(compression) });
-    const dispatch = (req, res) => {
-        // Hardening (audit F-09): answer TRACE/TRACK with 405 instead of letting Next handle it as a page
-        // (a Cross-Site-Tracing primitive; no WordJS route needs it). Gateway parity — see gateway/src/index.js.
-        if (req.method === 'TRACE' || req.method === 'TRACK') {
-            res.writeHead(405, { 'Allow': 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS' });
-            return res.end('Method Not Allowed');
-        }
-        // Liveness probe — answer directly so it works even if the backend app is wedged (gateway parity).
-        if ((req.url || '/').split('?')[0] === '/healthz') {
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ status: 'ok', role: 'monolith', pid: process.pid, timestamp: new Date().toISOString() }));
-        }
-        // Pin forwarded headers so backend CSRF/origin sees the real public host (gateway parity).
-        req.headers['x-forwarded-host'] = req.headers['host'] || '';
-        req.headers['x-forwarded-proto'] = proto;
-        // SEO rewrites (gateway parity).
-        if (req.url === '/sitemap.xml') req.url = '/api/v1/seo/sitemap.xml';
-        else if (req.url === '/robots.txt') req.url = '/api/v1/seo/robots.txt';
-        else if (req.url === '/feed' || req.url === '/feed.xml' || req.url === '/rss.xml') req.url = '/api/v1/seo/feed.xml';
-        if (isBackendPath(req.url)) return backendApp(req, res);
-        return handle(req, res);
-    };
+    const configManager = require(path.join(backendTree, 'core', 'configManager'));
+    const isInstalled = () => configManager.isInstalled();
+    const edge = createMonolithEdge({
+        backendApp,
+        isInstalled,
+        refused: require(path.join(backendTree, 'core', 'host-policy')).refusedHosts,
+    });
+    if (!edge) console.warn('[monolith] the backend publishes no host policy (app.hostPolicy): pages are answered on every address.');
+    const dispatch = createDispatch({ backendApp, handle, proto, edge });
     const requestListener = (req, res) =>
         helmetMw(req, res, () => compressionMw(req, res, () => dispatch(req, res)));
 
     const http = require('http');
-    const server = ssl ? require('https').createServer(ssl, requestListener) : http.createServer(requestListener);
+    // Next dev HMR is the only WebSocket served here; everything else is refused or closed, and nothing
+    // else may listen for upgrades on this server (createPublicServer).
+    const server = createPublicServer({
+        ssl,
+        requestListener,
+        upgradeHandler: createUpgradeHandler({ hmr: dev ? forwardUpgrade(nextUpgrades) : null, edge }),
+        sink: nextUpgrades,
+    });
     // Let ACME auto-renewal hot-swap the live TLS cert in-process (no restart). cert-manager calls
     // this after writing a renewed cert in embedded mode. Only meaningful when serving HTTPS.
     if (ssl) {
@@ -234,11 +458,6 @@ async function main() {
             catch (e) { console.warn('[monolith] TLS hot-reload failed:', e.message); }
         };
     }
-    // Next dev HMR uses a WebSocket on the same server; backend serves no WS, so route upgrades to Next.
-    server.on('upgrade', (req, socket, head) => {
-        if (upgrade && !isBackendPath(req.url)) return upgrade(req, socket, head);
-        socket.destroy();
-    });
     // Outlive any fronting proxy's idle timeout (nginx default 60s): with Node's 5s default the
     // server races the proxy's socket reuse and drops requests mid-flight.
     server.keepAliveTimeout = 65000;
@@ -262,30 +481,34 @@ async function main() {
     const acmePort = Number((appConfig.acme && appConfig.acme.http01Port) || 0);
     if (acmePort && ssl) {
         const challengeBase = path.resolve(BACKEND, 'public', '.well-known', 'acme-challenge');
-        http.createServer((req, res) => {
-            try {
-                const reqPath = decodeURIComponent((req.url || '/').split('?')[0]);
-                if (reqPath.startsWith('/.well-known/acme-challenge/')) {
-                    const file = path.join(challengeBase, path.basename(reqPath));
-                    if (file.startsWith(challengeBase + path.sep) && fs.existsSync(file)) {
-                        res.writeHead(200, { 'Content-Type': 'text/plain' });
-                        return res.end(fs.readFileSync(file));
-                    }
-                    res.writeHead(404); return res.end('Not found');
-                }
-                const host = (req.headers.host || '').split(':')[0];
-                const suffix = PUBLIC_PORT === 443 ? '' : `:${PUBLIC_PORT}`;
-                res.writeHead(301, { Location: `https://${host}${suffix}${req.url}` });
-                res.end();
-            } catch (e) { try { res.writeHead(500); res.end(); } catch (_) { /* ignore */ } }
-        }).listen(acmePort, () => console.log(`   ↳ ACME HTTP-01 + HTTPS-redirect on :${acmePort}`));
+        const provider = backendApp.hostPolicy;
+        http.createServer(createAcmeHandler({
+            challengeBase,
+            port: PUBLIC_PORT,
+            getPolicy: provider && typeof provider.get === 'function' ? () => provider.get() : () => null,
+            isInstalled,
+        })).listen(acmePort, () => console.log(`   ↳ ACME HTTP-01 + HTTPS-redirect on :${acmePort}`));
     }
 }
 
-// Entrypoint only. Required as a module (dispatcher-parity test), this file boots nothing and exports
-// the REAL predicate the dispatcher uses — a test that re-implemented it would prove nothing.
+// Entrypoint only. Required as a module (dispatcher-parity and monolith-edge tests), this file boots
+// nothing and exports the REAL predicate and handlers main() mounts — a test that re-implemented them
+// would prove nothing.
 if (require.main === module) {
     main().catch((e) => { console.error('❌ Monolith failed to start:', e); process.exit(1); });
 }
 
-module.exports = { BACKEND_PREFIXES, isBackendPath, main };
+module.exports = {
+    BACKEND_PREFIXES,
+    isBackendPath,
+    createMonolithEdge,
+    createDispatch,
+    NEXT_HMR_PATHS,
+    createUpgradeHandler,
+    createNextUpgradeSink,
+    createNextServer,
+    forwardUpgrade,
+    createPublicServer,
+    createAcmeHandler,
+    main,
+};

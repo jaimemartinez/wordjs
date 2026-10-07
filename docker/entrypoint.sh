@@ -33,9 +33,13 @@ mkdir -p "$DATA_DIR" "$BACKEND_DIR/uploads"
 # A REGULAR file at $CONFIG (baked into an image, or bind-mounted by the operator) is authoritative and
 # left alone. Otherwise point $CONFIG at the volume. The symlink may dangle: `configManager` stats the
 # path (fs.statSync throws on a dangling link) so a dangling link reads as "no config" => SETUP MODE,
-# which is exactly right on a first boot. Every writer of this file (configManager.saveConfig,
-# config/app.ts's secret regeneration) uses a plain fs.writeFileSync — no atomic rename — so the write
-# FOLLOWS the symlink and lands in the volume instead of replacing the link.
+# which is exactly right on a first boot. Every writer of this file must FOLLOW the symlink, so the write
+# lands in the volume instead of replacing the link with a regular file in the container layer (which a
+# recreated container would lose, coming back in setup mode over a populated database).
+# core/configManager's atomic writer (saveConfig/updateConfig: the wizard, every site-address change,
+# `npm run site`) resolves the link first and creates its temp file and renames it in the TARGET's
+# directory — a rename onto the link itself would replace it. config/app.ts's secret regeneration uses a
+# plain fs.writeFileSync, which follows the link by nature.
 #
 # THE DIRECTORY CASE IS NOT HYPOTHETICAL, AND IT IS THE ONE THAT FAILS SILENTLY. `docker run -v
 # /host/path/that/does/not/exist:/app/backend/wordjs-config.json` (or the same thing as a compose
@@ -123,11 +127,13 @@ EOF
 elif [ -e "$PERSISTED_CONFIG" ] || [ -f "$CONFIG" ]; then
     echo "[entrypoint] Existing wordjs-config.json found — leaving it untouched."
 else
-    # WORDJS_SITE_URL only LABELS this line on the setup path — nothing writes it anywhere. The origin
-    # that ends up in wordjs-config.json is the `siteUrl` the wizard POSTs to /api/v1/setup/install, so
-    # install through the URL you will actually browse. (The pre-seed branch above is the one place this
-    # variable is persisted.) The app prints its own banner next, deriving the scheme from WORDJS_HTTP
-    # and the port from PORT — the same two values used here, so the two lines agree. That banner carries
+    # On the setup path WORDJS_SITE_URL is never written anywhere: it labels this line, and the backend
+    # offers it in the install wizard as the server's suggested main address (GET /setup/status
+    # suggestedSiteUrl, never a loopback address). The main address that ends up in wordjs-config.json is
+    # the `siteUrl` the wizard POSTs to /api/v1/setup/install — its Site address field, prefilled from the
+    # address being browsed. (The pre-seed branch above is the one place this variable is persisted.)
+    # The app prints its own banner next, deriving the scheme from WORDJS_HTTP and the port from PORT —
+    # the same two values used here, so the two lines agree. That banner carries
     # the TOKEN ITSELF only when stdout is a TTY (an attached `docker run -it` / `docker compose up`
     # without -d) or when WORDJS_PRINT_INSTALL_TOKEN=1; otherwise it prints the /install URL WITHOUT the
     # #token= fragment, because a detached container's stdout is a log stream that gets shipped and

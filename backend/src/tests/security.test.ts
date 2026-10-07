@@ -289,10 +289,10 @@ describe('CSRF Protection (real middleware, mounted at the api prefix)', () => {
     });
 
     it('does NOT exempt the rest of the /setup subtree — /migrate outlives the install', async () => {
-        // POST /setup/migrate is the one route of that subtree still alive AFTER installation, and it
-        // authenticates raw admin credentials from the body. A subtree exemption made its password oracle
-        // drivable from any visitor's browser — i.e. from the victim's IP, around the attacker's own
-        // per-IP limiter. The exemption is ENUMERATED, so only what actually predates the site gets it.
+        // POST /setup/migrate used to authenticate raw admin credentials from the body, and a subtree
+        // exemption made that password oracle drivable from any visitor's browser. The route is now a 410
+        // stub that evaluates nothing, and it STILL gets no exemption: the exemption is ENUMERATED, so only
+        // what actually predates the site gets it, and a route that outlives the install never does.
         for (const url of [`${PREFIX}/setup/migrate`, `${PREFIX}/setup`]) {
             const res = await post(url);
             assert.strictEqual(res.status, 403, `${url} must NOT be CSRF-exempt, got ${res.status}`);

@@ -174,6 +174,35 @@ let fileConfig: FileConfig = {};
 
 const crypto = require('crypto');
 
+// JWT secrets printed in this repository (defaultConfig above, the example config the deployment guide used
+// to ship, docker-compose's dev default). Anyone who has read them can sign a session.
+const PUBLISHED_JWT_SECRETS = new Set([
+    'wordjs-default-secret-change-me',
+    'auto-generated-secure-secret',
+    'wordjs-shared-dev-secret-change-me',
+]);
+// 64 hex characters = 32 random bytes, the shortest secret any WordJS generator has ever written.
+const MIN_PREINSTALL_JWT_SECRET_LENGTH = 64;
+
+/**
+ * Must boot replace this config's jwtSecret before anything signs with it?
+ *
+ * Always when it is missing, not a string (jsonwebtoken refuses it as key material, so the site could never
+ * issue a session) or the core placeholder. On a NOT-YET-INSTALLED config, also when it is short or any
+ * published placeholder: POST /setup/install persists the secret this process boots with, so whatever passes
+ * here becomes the site's permanent signing key. It has to be decided now, not at install, because
+ * core/collab-rooms derives a key from the live secret when it loads. An INSTALLED site keeps any other
+ * value: rotating it would sign every user out and split a multi-node tier that shares it.
+ */
+function jwtSecretNeedsReplacing(cfg: FileConfig): boolean {
+    const secret: unknown = cfg.jwtSecret;
+    if (typeof secret !== 'string' || !secret || secret === 'wordjs-default-secret-change-me') return true;
+    // Same predicate as core/configManager.isInstalledConfig. Not imported: that module resolves its file
+    // against the CWD when it loads, and config/app loads before anything else.
+    const installed = !!(cfg.installedAt || cfg.dbDriver);
+    return !installed && (secret.length < MIN_PREINSTALL_JWT_SECRET_LENGTH || PUBLISHED_JWT_SECRETS.has(secret));
+}
+
 // In the HOST: load wordjs-config.json and auto-generate/persist secrets. SKIP entirely inside an
 // isolated plugin worker (global.__WORDJS_ISOLATED__) — that file is outside the worker's sandbox
 // and the worker never needs these host secrets (it reaches config via the bridge). This avoids
@@ -194,8 +223,8 @@ if (!(globalThis as any).__WORDJS_ISOLATED__) {
     // 1.5 Secure Auto-Generation — generate secure keys ONLY if config exists but is insecure.
     let configChanged = false;
     if (fs.existsSync(configPath)) {
-        if (!fileConfig.jwtSecret || fileConfig.jwtSecret === 'wordjs-default-secret-change-me') {
-            fileConfig.jwtSecret = crypto.randomBytes(32).toString('hex');
+        if (jwtSecretNeedsReplacing(fileConfig)) {
+            fileConfig.jwtSecret = crypto.randomBytes(64).toString('hex');
             configChanged = true;
             console.log('🔐 Generated secure JWT secret for existing config.');
         }
@@ -236,10 +265,13 @@ function envInt(name: string, fallback: number, min: number, max: number): numbe
     return value;
 }
 
-// SECURITY: ephemeral fallback secret for when none is configured (see jwt.secret below).
-const EPHEMERAL_JWT_SECRET: string = crypto.randomBytes(32).toString('hex');
+// SECURITY: ephemeral fallback secret for when none is configured (see jwt.secret below). It is also
+// the value POST /setup/install persists — the installer adopts the secret this process already signs
+// with instead of minting another — so it carries the 64 bytes the installer used to generate, as does
+// the boot-time replacement above.
+const EPHEMERAL_JWT_SECRET: string = crypto.randomBytes(64).toString('hex');
 if (!fileConfig.jwtSecret) {
-    console.warn('⚠️  No JWT secret configured — using an ephemeral random secret (tokens reset on restart). Complete setup to persist one.');
+    console.warn('⚠️  No JWT secret configured — using an ephemeral random secret (tokens reset on restart). Completing setup persists it.');
 }
 
 const config: AppConfig = {
@@ -341,7 +373,8 @@ const config: AppConfig = {
         // anyone forge admin tokens. When no secret is configured (e.g. pre-install,
         // missing wordjs-config.json) use a per-process random secret so issued tokens
         // are unforgeable. Such tokens simply don't survive a restart, which is the
-        // correct behavior for a not-yet-configured instance.
+        // correct behavior for a not-yet-configured instance — until the installer
+        // persists this very value (routes/setup.ts), after which they do.
         secret: fileConfig.jwtSecret || EPHEMERAL_JWT_SECRET,
         expiresIn: '2h'
     },
@@ -509,18 +542,38 @@ const config: AppConfig = {
 };
 
 // Refresh the request-time runtime fields from wordjs-config.json WITHOUT a process restart. Called after
-// the config is persisted (setup install, settings save) so a just-set siteUrl is honored immediately by
-// CSRF / CORS / the allowed-origins list. Without this, config.site.url keeps its boot-time value and every
-// POST from the freshly-configured origin is CSRF-blocked ("rest_csrf_invalid") until the process restarts.
-function reloadFromFile() {
+// the config is persisted (setup install, settings save, a site-address change) so a just-set siteUrl is
+// honored immediately by CSRF / CORS / the allowed-origins list. Without this, config.site.url keeps its
+// boot-time value and every POST from the freshly-configured origin is CSRF-blocked ("rest_csrf_invalid")
+// until the process restarts.
+//
+// `fresh` is the object core/configManager just wrote; without it the file is read here. Passing it
+// matters: this module's configPath is anchored to the backend directory while configManager's is the
+// cwd, and the runtime must reflect the bytes that were actually written.
+//
+// The site-address keys are refreshed as well, because a change of main address is applied live:
+//   · siteAliases / hostPolicy / siteAddress — the host gate reads them through its policy provider from
+//     the file, but anything reading this runtime object must not see a pre-change copy;
+//   · gatewayUrl — a move rewrites it when it named the old main address (REDTEAM R3);
+//   · ssl.enabled — derived from siteUrl exactly as at load. Keeping the boot-time value after an
+//     https → http move would keep marking the session cookie Secure on a plain-http site: every sign-in
+//     would "succeed" into a cookie the browser then refuses to send back.
+// A site-address key absent from the file is cleared rather than kept, so a removed list is really gone.
+function reloadFromFile(fresh?: any) {
     try {
-        const fresh = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-        if (fresh.siteUrl) { config.site.url = fresh.siteUrl; (config as any).siteUrl = fresh.siteUrl; }
-        if (fresh.frontendUrl) (config as any).frontendUrl = fresh.frontendUrl;
-        if (fresh.siteName) config.site.name = fresh.siteName;
-        if (fresh.siteDescription) config.site.description = fresh.siteDescription;
+        const next = fresh && typeof fresh === 'object' ? fresh : JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        if (next.siteUrl) { config.site.url = next.siteUrl; (config as any).siteUrl = next.siteUrl; }
+        if (next.frontendUrl) (config as any).frontendUrl = next.frontendUrl;
+        if (next.gatewayUrl) (config as any).gatewayUrl = next.gatewayUrl;
+        if (next.siteName) config.site.name = next.siteName;
+        if (next.siteDescription) config.site.description = next.siteDescription;
+        for (const key of ['siteAliases', 'hostPolicy', 'siteAddress']) {
+            if (next[key] === undefined) delete (config as any)[key];
+            else (config as any)[key] = next[key];
+        }
+        config.ssl = { ...config.ssl, enabled: !!(next.ssl?.enabled || String(next.siteUrl || config.siteUrl || '').startsWith('https:')) };
         return true;
-    } catch (e) {
+    } catch {
         return false;
     }
 }

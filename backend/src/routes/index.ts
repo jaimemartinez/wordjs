@@ -104,6 +104,9 @@ router.use('/tags', tagsRoutes);
 router.use('/comments', commentsRoutes);
 router.use('/media', mediaRoutes);
 router.use('/settings', settingsRoutes);
+// Where the site lives: its main address, the other addresses it answers and the IP policy. Its own
+// namespace, not a setting: every write re-authenticates and is audited (core/site-address).
+router.use('/site-address', require('./site-address'));
 router.use('/plugins', pluginsRoutes);
 router.use('/marketplace', require('./marketplace'));
 router.use('/themes', themesRoutes);

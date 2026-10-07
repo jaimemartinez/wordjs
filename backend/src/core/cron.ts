@@ -6,6 +6,7 @@
 const { getOption, updateOption } = require('./options');
 const { doAction, doActionForPlugin, addAction } = require('./hooks');
 const { getCurrentPlugin } = require('./plugin-context');
+const { logSafe } = require('./log-safe');
 const database = require('../config/database');
 const { dbAsync } = database;
 
@@ -487,7 +488,7 @@ async function initDefaultCronEvents() {
             if (result && result.ok) {
                 console.log(`⏰ ACME: certificate renewed for ${result.domain}`);
             } else if (result && !result.skipped) {
-                console.warn(`⏰ ACME: renewal not completed: ${result.error || 'unknown error'}`);
+                console.warn(`⏰ ACME: renewal not completed: ${logSafe(result.error || 'unknown error')}`);
             }
         } catch (e) {
             console.error('ACME auto-renewal error:', e);

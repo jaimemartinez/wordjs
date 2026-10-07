@@ -39,10 +39,12 @@ it does so **only when `WORDJS_PRESEED_CONFIG=1`**, and never over an existing c
 `entrypoint.sh` also anchors `backend/wordjs-config.json` into the **data volume** with a symlink (the
 real file becomes `backend/data/wordjs-config.json`). Without that, the config the wizard writes lives in
 the container's writable layer and is lost on recreate, while its database survives — so the container
-would come back offering the wizard again on top of a populated database. Every writer of that file uses
-a plain `writeFileSync` (no atomic rename), so the write follows the symlink rather than replacing it,
-and a dangling symlink reads as "no config" (`fs.statSync` throws), which is exactly right on a first
-boot. A **regular** file at that path — baked in or bind-mounted — is left alone and wins.
+would come back offering the wizard again on top of a populated database. Every writer of that file
+follows the symlink rather than replacing it: `configManager`'s atomic writer resolves the link first and
+writes its temporary file and rename **in the target's directory** (the data volume), and the remaining
+plain `writeFileSync` writers follow it by nature. A dangling symlink reads as "no config" (`fs.statSync`
+throws), which is exactly right on a first boot. The same holds for `npm run site` run inside the
+container (`docker compose exec wordjs npm run site -- list`). A **regular** file at that path — baked in or bind-mounted — is left alone and wins.
 
 > **Password gotcha (real, load-bearing):** `backend/src/config/app.ts` regenerates and persists a
 > random `dbPassword` when the flat key is missing **or literally `"password"`**, and a random
@@ -63,7 +65,7 @@ boot. A **regular** file at that path — baked in or bind-mounted — is left a
 | `WORDJS_JWT_SECRET` | dev placeholder | **share across replicas** |
 | `WORDJS_REDIS_ENABLED` | `false` | `true` turns on cross-node coherence |
 | `WORDJS_REDIS_HOST` / `WORDJS_REDIS_PORT` | `127.0.0.1` / `6379` | shared Redis |
-| `WORDJS_SITE_URL` | `http://localhost:3000` | public origin, written as `siteUrl` in the generated config. In **setup mode** (the default) nothing reads it but the entrypoint's "finish setup at …" log line — there the config's `siteUrl` comes from the wizard's own install request |
+| `WORDJS_SITE_URL` | `http://localhost:3000` | public origin, written as `siteUrl` (the main address) in the generated config. In **setup mode** (the default) it is only a **suggestion**: the install wizard prefills its *Site address* field with the address you are browsing and offers this value (when it is not a loopback address) as the server's suggested address; it also labels the entrypoint's "finish setup at …" log line. It never overrides an installed main address — see [`documentation/site-address.md`](../documentation/site-address.md) |
 | `WORDJS_BACKEND_PORT` | `4000` | written as `port` in the generated config — the loopback port of the monolith's in-process backend (`monolith.js` reads `appConfig.port`); not exposed publicly, the public port is `PORT` |
 | `PORT` | `3000` | public HTTP port inside the container (written as `gatewayPort`) |
 

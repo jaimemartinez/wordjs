@@ -22,7 +22,14 @@ const ROOT_DIR = path.resolve(__dirname, '..');
 const RELEASE_DIR = path.join(ROOT_DIR, 'release');
 const TEMP_DIST = path.join(RELEASE_DIR, 'wordjs-package');
 
-// Files and folders to exclude from the release
+// Files and folders to exclude from the release.
+//
+// PRIVATE, UNTRACKED PLUGINS AND THEMES ARE NOT LISTED HERE, ON PURPOSE. This file is public, so every
+// name written into it is published: listing a private extension to keep it out of the ZIP discloses it
+// in the repository instead. They stay out structurally — git does not track them, and shouldIgnore drops
+// whatever git does not track — and, where git cannot answer, through the gitignored `.release-exclude`
+// file (see loadLocalExcludes). backend/src/tests/release-excludes.test.ts fails if this file names an
+// individual plugin or theme directory.
 const IGNORE_PATTERNS = [
     'node_modules',
     '.git',
@@ -40,6 +47,9 @@ const IGNORE_PATTERNS = [
     'wordjs-config.json', // Local config
     'gateway-config.json', // SECURITY: gateway-config.json holds the live gatewaySecret — never ship it
     'gateway-registry.json', // Gateway state
+    // The host policy the backend pushed to THIS gateway (POST /host-policy). Shipped, it would make a
+    // fresh install answer 421 on every address but the developer's own main address.
+    'gateway-host-policy.json',
     '.env',
     // SECURITY + SIZE: agent/assistant working directories. They are LOCAL developer state, they
     // are gitignored (so a CI release built from a clean checkout never sees them), but a release
@@ -64,11 +74,10 @@ const IGNORE_PATTERNS = [
     'dump-routes.js',
     'build-production.ps1',
     'marketplace', // Marketplace plugins are DISTRIBUTED separately (release assets), never bundled in the core package
-    // SECURITY: private CLIENT plugins. They are gitignored (CI releases built from git never see
-    // them) but they DO exist in local working trees — without these entries a locally-run
-    // `npm run bundle-release` would ship client code+secrets inside the public ZIP.
-    'backend/plugins/toscano',
-    'backend/plugins/toscano-platform',
+    // The local exclusion list (see loadLocalExcludes). Its whole job is to name what must stay private,
+    // so it must never ship — and it must stay out without relying on git, which is exactly the case it
+    // exists for.
+    '.release-exclude',
 ];
 
 // SECURITY: never ship local databases, private keys or TLS material in a release. The sensitive
@@ -145,13 +154,17 @@ async function run() {
         }
         fs.mkdirSync(TEMP_DIST, { recursive: true });
 
-        // 2. Build Frontend
+        // 2. Build Frontend — hermetically, then prove it (see buildFrontendForRelease).
         console.log('\n⚛️ Building Frontend (frontend)...');
         console.log('   (This may take a few minutes)');
-        execSync('npm run build', {
-            cwd: path.join(ROOT_DIR, 'frontend'),
-            stdio: 'inherit'
-        });
+        const prerender = buildFrontendForRelease();
+        console.log(`   ✅ ${prerender.prerendered} prerendered routes carry no data from a live backend.`);
+        if (prerender.pluginModules === null) {
+            console.log('   ⚠️  git unavailable — the plugins compiled into the frontend could NOT be checked against git.');
+            console.log('      Review the build before publishing: a local plugin may be compiled into .next.');
+        } else {
+            console.log(`   ✅ ${prerender.pluginModules} plugin module(s) compiled into the frontend, all tracked by git.`);
+        }
 
         // 2b. Compile Backend (TypeScript -> dist) so the release runs WITHOUT compiling on the
         //     user's machine. backend/server.js prefers dist/index.js when present.
@@ -205,6 +218,92 @@ async function run() {
         console.error('\n❌ Release failed:', error.message);
         process.exit(1);
     }
+}
+
+/**
+ * THE FRONTEND BUILD, MADE HERMETIC — and checked, because the artifact is what gets published.
+ *
+ * `next build` prerenders pages, and its server-side reads go to whatever backend the machine
+ * offers: the packager's wordjs-config.json, or `http://localhost:4000` without one. CI has nothing
+ * listening, so its pages carry the defaults; a developer machine with a dev backend running shipped
+ * private content from that running dev backend instead. Two inputs made that possible, and both are
+ * closed here:
+ *   - `WORDJS_HERMETIC_BUILD=1` points every server-side read at a backend fetch() refuses and bakes
+ *     the default API rewrite (frontend/hermetic-build.js);
+ *   - `.next/cache` is deleted first: Next keeps successful build-time fetches in
+ *     `.next/cache/fetch-cache` and a later build reuses them, so an older build's backend answers
+ *     could come back without any backend running. (`.next/cache` never ships — see IGNORE_PATTERNS.)
+ *     With retries: on Windows, or in a synced folder, a file the indexer or sync client holds open
+ *     for a moment fails the delete with EBUSY/EPERM, and `force` only forgives ENOENT.
+ * The same flag makes the prebuild plugin registries list only the plugins git tracks, and ask no
+ * running backend which are active (frontend/scripts/hermetic-plugins.js).
+ *
+ * Two more inputs of the packaging machine are values Next INLINES into the shipped bundles: the
+ * shell's NEXT_PUBLIC_* variables, which are dropped from the build's environment, and the frontend
+ * .env files a production build loads (`.env`, `.env.local`, `.env.production`,
+ * `.env.production.local` — all gitignored, so CI never has them). Next reads those itself, so a
+ * NEXT_PUBLIC_* value in one cannot be overridden from here; the build refuses to start instead.
+ *
+ * Then assertHermeticFrontendBuild throws, aborting the release, on any trace of a live backend or of
+ * a plugin git does not track.
+ *
+ * `exec`, `env` and `trackedFiles` are injectable so the test suite can drive this without a real
+ * `next build`.
+ */
+function buildFrontendForRelease({
+    frontendDir = path.join(ROOT_DIR, 'frontend'),
+    exec = execSync,
+    env = process.env,
+    trackedFiles = loadTrackedFiles() || null,   // null: git unavailable (loadTrackedFiles warns)
+} = {}) {
+    const { HERMETIC_BUILD_ENV } = require(path.join(ROOT_DIR, 'frontend', 'hermetic-build.js'));
+    const { assertHermeticFrontendBuild } = require('./release-hermetic-check.js');
+
+    const fromEnvFiles = publicValuesInEnvFiles(frontendDir);
+    if (fromEnvFiles.length) {
+        throw new Error(
+            'frontend .env file(s) set NEXT_PUBLIC_* values, which `next build` would inline into the release:\n' +
+                fromEnvFiles.map((f) => `      - ${f}`).join('\n') +
+                '\n   A CI build has none of them. Move those values out (or rename the file) while packaging.',
+        );
+    }
+    const buildEnv = {};
+    const dropped = [];
+    for (const [key, value] of Object.entries(env)) {
+        if (key.startsWith('NEXT_PUBLIC_')) dropped.push(key);
+        else buildEnv[key] = value;
+    }
+    if (dropped.length) console.log(`   (building without the shell's ${dropped.join(', ')} — a release gets CI's defaults)`);
+    buildEnv[HERMETIC_BUILD_ENV] = '1';
+
+    fs.rmSync(path.join(frontendDir, '.next', 'cache'), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    exec('npm run build', {
+        cwd: frontendDir,
+        stdio: 'inherit',
+        env: buildEnv,
+    });
+    // Throws, aborting the release, on any leak.
+    return assertHermeticFrontendBuild(frontendDir, { trackedFiles });
+}
+
+/** The .env files `next build` loads for a production build — @next/env's list for mode "production". */
+const PRODUCTION_ENV_FILES = ['.env.production.local', '.env.local', '.env.production', '.env'];
+
+/** `frontend/<file>: NEXT_PUBLIC_X` for every NEXT_PUBLIC_* key those files assign. Names only, never values. */
+function publicValuesInEnvFiles(frontendDir) {
+    const out = [];
+    for (const file of PRODUCTION_ENV_FILES) {
+        let text;
+        try {
+            text = fs.readFileSync(path.join(frontendDir, file), 'utf8');
+        } catch {
+            continue;   // absent: the normal case
+        }
+        for (const m of text.matchAll(/^[ \t]*(?:export[ \t]+)?(NEXT_PUBLIC_[A-Za-z0-9_]+)[ \t]*=/gm)) {
+            out.push(`frontend/${file}: ${m[1]}`);
+        }
+    }
+    return out;
 }
 
 /**
@@ -272,10 +371,59 @@ function loadTrackedFiles() {
         console.log(`   🔒 git knows ${trackedFiles.size} files — anything else is local and will NOT ship`);
     } catch (e) {
         trackedFiles = false;
-        console.log(`   ⚠️  git unavailable (${e.message}) — falling back to the name-based exclusion list ONLY.`);
-        console.log('      Review the archive before publishing: untracked local files may be included.');
+        console.log(`   ⚠️  git unavailable (${e.message}) — falling back to the name-based exclusion list and ${LOCAL_EXCLUDE_FILE} ONLY.`);
+        console.log(`      Untracked local files may be included: list private paths in ${LOCAL_EXCLUDE_FILE} and review the archive before publishing.`);
     }
     return trackedFiles;
+}
+
+/**
+ * LOCAL EXCLUSIONS — what must stay out of a release but cannot be named in this file.
+ *
+ * Private, untracked plugins and themes already stay out through the structural rule above: git does
+ * not track them, so nothing here needs to know they exist. That rule needs git, though, and a release
+ * packaged where git cannot answer (git missing or refusing the repository, a tree copied without
+ * `.git/`) is left with the name list alone. For that case, and for anything else local, the packager
+ * reads `.release-exclude` at the repository root: gitignored, never shipped (it is in IGNORE_PATTERNS),
+ * honoured with or without git. One entry per line, `#` starts a comment, and an entry follows the same
+ * rules as IGNORE_PATTERNS — with a `/` it is a path matched at segment boundaries, without one it is a
+ * file or directory name matched at any depth. No globs.
+ */
+const LOCAL_EXCLUDE_FILE = '.release-exclude';
+let localExcludes = null;     // string[] once read
+
+function loadLocalExcludes() {
+    if (localExcludes !== null) return localExcludes;
+    let text = '';
+    try {
+        text = fs.readFileSync(path.join(ROOT_DIR, LOCAL_EXCLUDE_FILE), 'utf8');
+    } catch (e) {
+        // Absent is the normal case. Present but unreadable aborts the release rather than shipping
+        // whatever it was meant to keep out.
+        if (e.code !== 'ENOENT') throw new Error(`${LOCAL_EXCLUDE_FILE} exists but cannot be read: ${e.message}`);
+    }
+    localExcludes = text.split(/\r?\n/)
+        .map((line) => line.replace(/#.*/, '').trim().replace(/\\/g, '/').replace(/^\.?\/+/, '').replace(/\/+$/, ''))
+        .filter(Boolean);
+    // The count only: the entries are private by definition, and build logs are not.
+    if (localExcludes.length) console.log(`   🔒 ${LOCAL_EXCLUDE_FILE}: ${localExcludes.length} local exclusion(s)`);
+    return localExcludes;
+}
+
+/**
+ * Does an exclusion entry cover this path? Entries are matched at PATH-SEGMENT boundaries, NOT as raw
+ * substrings. A bare directory name like `marketplace` or `logs` used with a naive `.includes()` also
+ * strips legitimate source whose path merely CONTAINS it — e.g. `backend/dist/routes/marketplace.js`
+ * (the compiled marketplace ROUTE), which silently vanished from the v1.6.0 bundle and crashed the
+ * backend on boot (`Cannot find module './marketplace'`). Segment matching keeps the top-level
+ * `marketplace/` catalog excluded while preserving `routes/marketplace.js`.
+ */
+function matchesEntry(relativePath, segments, entry) {
+    if (entry.includes('/')) {                                 // path fragment (e.g. backend/cli, .next/cache)
+        return relativePath === entry || relativePath.startsWith(entry + '/') ||
+            relativePath.includes('/' + entry + '/') || relativePath.endsWith('/' + entry);
+    }
+    return segments.includes(entry);                           // bare dir/file NAME → full-segment match
 }
 
 /** Is this path a build artifact we deliberately ship even though git ignores it? */
@@ -300,24 +448,17 @@ function shouldIgnore(filePath) {
     // Don't include the release folder itself
     if (relativePath.startsWith('release')) return true;
 
-    // Match ignore patterns at PATH-SEGMENT boundaries, NOT as raw substrings. A bare directory name
-    // like `marketplace` or `logs` used with a naive `.includes()` also strips legitimate source whose
-    // path merely CONTAINS it — e.g. `backend/dist/routes/marketplace.js` (the compiled marketplace
-    // ROUTE), which silently vanished from the v1.6.0 bundle and crashed the backend on boot
-    // (`Cannot find module './marketplace'`). Segment matching keeps the top-level `marketplace/`
-    // catalog excluded while preserving `routes/marketplace.js`.
+    // Match ignore patterns at PATH-SEGMENT boundaries (see matchesEntry).
     const segments = relativePath.split('/');
     const shippedCli = isShippedCli(relativePath);
     for (const pattern of IGNORE_PATTERNS) {
         if (pattern.startsWith('*')) continue;                 // extension globs are handled above
         if (pattern === 'backend/cli' && shippedCli) continue;  // product CLI carve-out (see CLI_SHIPPED)
-        if (pattern.includes('/')) {                           // path fragment (e.g. backend/cli, .next/cache)
-            if (relativePath === pattern || relativePath.startsWith(pattern + '/') ||
-                relativePath.includes('/' + pattern + '/') || relativePath.endsWith('/' + pattern)) return true;
-        } else if (segments.includes(pattern)) {               // bare dir/file NAME → full-segment match
-            return true;
-        }
+        if (matchesEntry(relativePath, segments, pattern)) return true;
     }
+
+    // What this public file must not name: the developer's own `.release-exclude` (see loadLocalExcludes).
+    if (loadLocalExcludes().some((entry) => matchesEntry(relativePath, segments, entry))) return true;
 
     // SECURITY: drop databases / private keys / TLS material — the secret DIRS are anchored to their
     // known top-level locations (SECRET_DIR_RE) so we never strip legitimate source (e.g.
@@ -334,6 +475,9 @@ function shouldIgnore(filePath) {
     // wordjs-config.backup.json (created by index.ts on config rewrite) which carry the same
     // jwtSecret/gatewaySecret/dbPassword and would otherwise slip past the `*-config.json$` anchor. (DEPLOY-01)
     if (/(^|-)config\.json$/.test(lowerBase) || lowerBase.includes('wordjs-config') || lowerBase.includes('gateway-config')) return true;
+    // The gateway's pushed host policy and the temp file an interrupted push leaves next to it
+    // (gateway-host-policy.json.<pid>.tmp): per-install state, never part of a release.
+    if (lowerBase.startsWith('gateway-host-policy.json')) return true;
 
     // THE STRUCTURAL RULE, last so the explicit ones above still short-circuit: if git does not track
     // it and it is not one of the build artifacts we deliberately ship, it is developer-local and does
@@ -387,5 +531,5 @@ async function createZip(sourceDir, outPath) {
 if (require.main === module) {
     run();
 } else {
-    module.exports = { shouldIgnore, IGNORE_PATTERNS, ROOT_DIR };
+    module.exports = { shouldIgnore, copyFiles, IGNORE_PATTERNS, ROOT_DIR, buildFrontendForRelease };
 }
