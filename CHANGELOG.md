@@ -8,6 +8,29 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Security
 
+- **`create-wordjs` verifies the release ZIP before extracting it.** The release workflow now publishes
+  `wordjs-<tag>.zip.sha256` (`sha256sum` format) next to every tag-named bundle, and `create-wordjs` —
+  create, `upgrade`, `gateway` and `join` — downloads it and refuses a ZIP whose SHA-256 differs.
+  Releases published before the checksum asset existed still install, with a warning that the download
+  was not verified. A new `--sha256 <hex>` option pins a checksum for `--zip` sources (and is checked on
+  top of the release checksum when both apply). `--zip` URLs must now be `https://`: plain `http://` and
+  other schemes are refused, and a redirect to a non-https URL is never followed. Local file paths are
+  unchanged.
+- **`create-wordjs` vets every ZIP entry before extracting any.** An archive containing an absolute path
+  (POSIX, drive letter or UNC), a `..` segment, an entry that resolves outside the target directory, or a
+  symbolic-link entry is refused as a whole, instead of relying on adm-zip silently rewriting such names.
+- **Separate-mode enrollment no longer trusts on first use.** `scripts/node-join.js` and
+  `create-wordjs join` now require `--ca-hash`, and the pin is enforced **before** the join token is sent:
+  the gateway's enroll listener presents the cluster CA in its TLS chain, the node accepts it only if its
+  SHA-256 matches, and the tokened request is made with full TLS verification against that CA and a
+  `CN=gateway-internal` server-identity check. Previously the request ran with TLS verification off and
+  the fingerprint, when given at all, was compared only after the gateway's response (token, cluster
+  secret and signed cert) had already been received — so an on-path attacker relaying the call was not
+  stopped even with `--ca-hash`. There is no opt-out: enrolling without a pinned CA is no longer
+  possible. **Upgrade the gateway before joining new
+  nodes:** a gateway from an earlier release sends no CA in its chain, so a pinned join against it fails
+  closed. `create-wordjs gateway` now fails instead of printing join commands with a placeholder
+  fingerprint.
 - **Scheduled and private posts now need the published-post capability.** The edit and delete gates
   applied `edit_published_*` / `delete_published_*` only to `publish`, so a contributor could rewrite
   their own scheduled post after an editor approved it (the unreviewed copy then went live on its own)

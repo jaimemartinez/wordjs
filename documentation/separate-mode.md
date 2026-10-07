@@ -81,6 +81,19 @@ which registers with the gateway over mTLS. Startup logs land in
 Options: `--enroll-port <port>` if you changed the default `3101`; `--no-start` to scaffold + enroll
 without starting; `[dir]` after the subcommand to pick the target directory.
 
+> **`--ca-hash` is required.** It is the cluster CA fingerprint the gateway prints (also
+> `node scripts/cluster.js info`). Before the join token leaves the node, the gateway's enroll
+> listener must present **that exact CA** in its TLS chain, and the tokened request is then made with
+> full TLS verification against it (the server cert must also be the gateway's own
+> `CN=gateway-internal` identity). A wrong fingerprint, or anything intercepting the connection, stops
+> the join **before** the token is sent. Without the pin an on-path attacker could answer the enroll
+> call and receive the token, the cluster's gateway secret and a CA-signed certificate — so `join`
+> (and `scripts/node-join.js`) refuse to run without it. There is no trust-on-first-use opt-out.
+>
+> This needs a gateway from a release that serves the CA in its enroll-listener chain. A gateway from
+> an older release makes a pinned join fail with *"the gateway did not present a cluster CA matching
+> --ca-hash"* — upgrade the gateway first (`npx create-wordjs@latest upgrade` on it), then join.
+
 Then jump to [Verify](#verify).
 
 ## Manual setup — from a pre-built release ZIP (advanced)
@@ -154,7 +167,8 @@ node scripts/cluster.js token frontend --host <frontend-ip>
 ```
 
 Each prints the exact `node-join` command to paste on the target machine, including the gateway address,
-enroll port, the token, and the CA fingerprint (`--ca-hash`, a MITM guard). Tokens default to a 60-minute
+enroll port, the token, and the CA fingerprint (`--ca-hash` — **required**; see the note in the
+[Quickstart](#quickstart--one-command-per-machine-recommended) for what it guards and the opt-out). Tokens default to a 60-minute
 TTL (`--ttl <minutes>`) and are single-use.
 
 ### 3. Backend machine

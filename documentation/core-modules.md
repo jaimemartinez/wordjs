@@ -350,7 +350,7 @@ The cluster CA is the trust root for **separate mode** — the three services ru
 *   **`ensureClusterCA()`** creates the cluster CA (self-signed root) on first use and returns its key/cert; it is idempotent, so re-running `cluster init` reuses the existing CA.
 *   **`issueIdentity({ cn, sans, … })`** mints the gateway's own identity/service certs (server+client, CN = role) directly from the CA — used at `init` for the gateway and, historically, the local split-mode certs.
 *   **`signCsr({ csrPem, cn, … })`** signs a **CSR** a joining node generated, **forcing `CN = role`** from the validated join token (the CSR's own subject is ignored) — this is the enrollment path.
-*   **`caFingerprint()`** exposes the CA's SHA-256 fingerprint, which `node-join` verifies against `--ca-hash` as a MITM guard before trusting the returned CA.
+*   **`caFingerprint()`** exposes the CA's SHA-256 fingerprint, which `node-join` requires as `--ca-hash`: it pins the CA the enroll listener presents in its TLS chain before the join token is sent (MITM guard).
 *   **`tokenStore(file)`** persists the **single-use, role-bound, TTL** join tokens (`cluster token <role>` mints, `node-join` burns on first use; `revoke-tokens` burns all).
 
 > The gateway runs a **separate** token-enrollment HTTPS listener on `gatewayEnrollPort` (default **3101**) that does **not** request a client cert (a brand-new node has none yet); it accepts `POST /enroll {role, token, csr}`, validates the token, signs via `signCsr`, and returns `{cert, cluster-ca, bootstrap config}`. The strict mTLS `/register` control plane on `gatewayInternalPort` (3100) is unchanged. See `scripts/cluster.js` / `scripts/node-join.js` (documented in **[cli.md](./cli.md)**).
