@@ -33,6 +33,16 @@
             "scope": "settings",
             "access": "write",
             "reason": "Save this plugin's items (options API)."
+        },
+        {
+            "scope": "express",
+            "access": "register_route",
+            "reason": "Serve this plugin's list, create and delete routes."
+        },
+        {
+            "scope": "admin_menu",
+            "access": "register",
+            "reason": "Add this plugin's page to the admin sidebar."
         }
     ]
 }
