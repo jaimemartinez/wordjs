@@ -903,6 +903,12 @@ router.post('/install', async (req: Request, res: Response) => {
             // Not awaited and never fatal — the install already succeeded.
             require('../core/site-address').ensureStarted().catch((e: any) => console.warn('[site-address] post-install start failed:', e && e.message));
 
+            // Same reason, for plugin routes: the boot releases the /api/v1/plugin/* guard (503
+            // plugins_starting) only after loading the active plugins, and a boot in setup mode loads none.
+            // Nothing is starting now, so release it here; otherwise every plugin activated after the
+            // wizard answers 503 until a restart.
+            require('../core/plugins-ready').markPluginsReady();
+
             res.json({
                 success: true,
                 autoLoggedIn,

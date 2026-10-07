@@ -832,8 +832,9 @@ let appReady = false;
 // Plugin isolates are forked one at a time (CrashGuard must be able to attribute a boot crash to
 // ONE plugin), so with several plugins that phase dominates boot. The listener now opens BEFORE it
 // in non-embedded modes, which means core routes serve while plugins are still coming up — and a
-// request for a plugin route in that window must say "not yet", not "does not exist".
-let pluginsReady = false;
+// request for a plugin route in that window must say "not yet", not "does not exist". The flag lives
+// in core/plugins-ready because a fresh install (routes/setup.ts) has to release it too.
+const pluginsReady = require('./core/plugins-ready');
 
 // Liveness — the process is up and the event loop is responsive. Deliberately does NOT touch the DB.
 /**
@@ -1026,7 +1027,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // instead of a 404 that reads as "this endpoint does not exist" (and would be cached as such by a
 // CDN). Scoped to /plugin/* only: every core route is fully functional at this point.
 app.use(`${config.api.prefix}/plugin`, (req: Request, res: Response, next: NextFunction) => {
-    if (pluginsReady) return next();
+    if (pluginsReady.arePluginsReady()) return next();
     res.setHeader('Retry-After', '5');
     res.setHeader('Cache-Control', 'no-store');
     return res.status(503).json({
@@ -1715,7 +1716,7 @@ async function initialize() {
         try { require('./core/plugins').fixMiddlewareOrder(); } catch (e: any) {
             console.warn('[boot] middleware reorder skipped:', e && e.message);
         }
-        pluginsReady = true;
+        pluginsReady.markPluginsReady();
 
         // Email-provider posture: the core cannot send mail itself; a plugin must register a host-wide
         // sender (email:provider capability). Checked HERE — after plugins load — because that is when a
@@ -1845,6 +1846,9 @@ async function initialize() {
         // taken over by whoever reaches it first. Held in memory only; a fresh token is minted on
         // each boot while the instance remains uninstalled.
         require('./core/install-token').generateInstallToken();
+
+        // No plugins load here, so the /plugin/* guard stays shut until POST /setup/install releases it
+        // (routes/setup.ts) — in this process, without a restart.
     }
 
 
