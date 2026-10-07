@@ -120,7 +120,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   pattern's exact answers on random headers and stays linear on long hostile ones. A new
   `core/log-safe` turns a logged value into one inert line (line breaks, other control characters, ANSI
   escapes, Unicode line separators and bidirectional controls removed); the CSRF guard's refusals, the
-  site-address warnings and every certificate-manager error now log through it, and an error is logged by
+  site-address warnings, every certificate-manager and certificate-route error and the ACME renewal
+  warning now log through it, and an error is logged by
   its message and code instead of as an object. The backend's control-plane calls to the gateway carry the
   node's mTLS key and certificate in one TLS context instead of as request options.
 
