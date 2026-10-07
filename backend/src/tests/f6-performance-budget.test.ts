@@ -302,7 +302,15 @@ describe('F6 performance budget — the four plan operations, measured as a rati
         }
     });
 
-    test('measured ratios stay inside the committed budget', () => {
+    // Under c8 — the CI "Coverage ratchet" step re-runs this whole suite with NODE_V8_COVERAGE set — V8
+    // block coverage instruments every function, and its cost is not proportional across the measured
+    // operations: contentRender (~0.03 ms a call) went from its recorded 0.088x to 0.189x on a run whose
+    // UNinstrumented Test step, same commit and same runner, passed. The ratio then measures the
+    // instrumentation, not the code. The budget is enforced by the uninstrumented run; under coverage only
+    // this comparison is skipped — the structural checks and the negative controls around it still run.
+    test('measured ratios stay inside the committed budget', {
+        skip: process.env.NODE_V8_COVERAGE ? 'NODE_V8_COVERAGE is set: ratios measure the coverage instrumentation; enforced by the uninstrumented run' : false,
+    }, () => {
         if (measurementError) throw measurementError;
         const failures = evaluateRun(run, budget);
         assert.deepStrictEqual(failures, [], `F6 performance budget exceeded:\n${failures.join('\n')}\nmeasured: ${JSON.stringify(run)}`);
