@@ -1,8 +1,8 @@
 {
     "id": "digital-downloads",
     "name": "Digital Downloads",
-    "version": "1.0.0",
-    "description": "Sell or give away downloadable products (files hosted in the media library). Delivery is a token-gated reveal: buyers get an expiring, limited-use download link by email or on screen. Free products deliver instantly with an email; paid orders stay pending until the admin marks them paid (the link is then auto-emailed).",
+    "version": "1.1.0",
+    "description": "Sell or give away downloadable products. Each product file is a PRIVATE media-library item (stored outside the public uploads folder); buyers get an expiring, limited-use download link by email or on screen, and every download is checked and streamed by the host, so no permanent file URL is ever revealed. Free products deliver instantly with an email; paid orders stay pending until the admin marks them paid (the link is then auto-emailed).",
     "author": "WordJS",
     "isolated": true,
     "backend": {
@@ -53,6 +53,11 @@
             "scope": "admin_menu",
             "access": "register",
             "reason": "Add the 'Descargas Digitales' entry to the admin sidebar."
+        },
+        {
+            "scope": "media",
+            "access": "private_read",
+            "reason": "Deliver each product's PRIVATE media file: confirm the selected file is private and have the host stream it as the response of the token-gated download route, after the paid/expiry/max-uses checks pass. Without it no product file can be delivered."
         },
         {
             "scope": "email",

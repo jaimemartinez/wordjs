@@ -441,6 +441,9 @@ const KNOWN_PERMISSIONS: Record<string, string[]> = {
     express: ['register_route'],
     admin_menu: ['register'],
     assets: ['write'],
+    // PRIVATE MEDIA (core/private-media.ts): read a private attachment's description and STREAM its bytes
+    // as the response of one of the plugin's own routes. A special verb — `admin` never implies it.
+    media: ['private_read'],
     network: [], // scope-only: {scope:'network'} carries no access token
 };
 

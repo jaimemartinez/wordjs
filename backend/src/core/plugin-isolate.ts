@@ -1446,6 +1446,9 @@ const ALLOWED_BRIDGE_METHODS = new Set([
     'assets.enqueueScript', 'assets.enqueueStyle',
     'users.findByEmail', 'users.findByLogin', 'users.findById', 'users.search',
     'site.url', 'site.domain', 'site.adminEmail',
+    // Private media description (gated host-side on media:private_read). Streaming the BYTES is not a
+    // bridge call: it is a route reply (`res.sendPrivateMedia`), so file contents never cross the IPC.
+    'media.getPrivate',
     // Host-mediated DNS (network-gated + private-IP-filtered host-side; see api.dns in plugin-api.ts).
     // The raw dns.resolve* surface is denied inside the isolate, so an MTA reaches MX/TXT records here.
     'dns.resolveMx', 'dns.resolveTxt', 'dns.resolve4', 'dns.resolve6', 'dns.resolve',
@@ -2648,6 +2651,22 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                     };
                     try {
                         const r = await invokeRoute(msg.routeId, reqData);
+                        // PRIVATE MEDIA DELIVERY (res.sendPrivateMedia in the isolate). The plugin names a
+                        // media id; the HOST checks the grant, refuses anything that is not a private
+                        // attachment and streams the file with its own download headers — plugin headers are
+                        // NOT applied to this response (no Content-Type/Encoding games on file bytes). Only
+                        // the clamped cookie path below still runs. Bytes never cross the IPC channel.
+                        if (r && r.media && typeof r.media === 'object') {
+                            const granted = runWithContext(slug, () => require('./plugin-context').hasPermission('media', 'private_read'));
+                            if (!granted) {
+                                console.warn(`[Isolate ${logSafe(slug)}] denied private media delivery: media:private_read not granted.`);
+                                res.status(403).json({ error: 'Plugin is not allowed to deliver private media (media:private_read not granted).' });
+                                return;
+                            }
+                            applyRouteCookies(r.cookies);
+                            await require('./private-media').streamPrivateMedia(res, r.media.id, { filename: r.media.filename });
+                            return;
+                        }
                         if (r.headers) {
                             // (#3) A plugin must not set response headers verbatim: Set-Cookie would
                             // re-inject a host cookie (e.g. wordjs_token), bypassing the clamped r.cookies
@@ -2667,8 +2686,22 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                             res.set(safe);
                         }
                         // Replay cookies the isolate set/cleared on the real response.
-                        if (Array.isArray(r.cookies)) {
-                            for (const c of r.cookies.slice(0, 20)) { // (#5) cap cookies per reply
+                        applyRouteCookies(r.cookies);
+                        res.status(r.status || 200);
+                        if (r.body === undefined) res.end(); else res.json(r.body);
+                    } catch (e: any) {
+                        // A request the host could not even hand to the (live) child — a body too deep to
+                        // structured-clone — is the CLIENT's fault: 400, not a 502 blaming the plugin.
+                        if (e && e.statusCode === 400) {
+                            res.status(400).json({ error: 'Bad request', detail: String(e.message) });
+                            return;
+                        }
+                        if (res.headersSent) { try { res.destroy(); } catch { /* already closed */ } return; }
+                        res.status(502).json({ error: 'Isolated plugin error', detail: String(e && e.message || e) });
+                    }
+                    function applyRouteCookies(cookies: any) {
+                        if (Array.isArray(cookies)) {
+                            for (const c of cookies.slice(0, 20)) { // (#5) cap cookies per reply
                                 let name = String(c.name || '');
                                 let options = c.options || {};
                                 // (#5) Plugins may set cookies ONLY in their own namespace and scope: never
@@ -2687,16 +2720,6 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                                 else res.cookie(name, c.value, options);
                             }
                         }
-                        res.status(r.status || 200);
-                        if (r.body === undefined) res.end(); else res.json(r.body);
-                    } catch (e: any) {
-                        // A request the host could not even hand to the (live) child — a body too deep to
-                        // structured-clone — is the CLIENT's fault: 400, not a 502 blaming the plugin.
-                        if (e && e.statusCode === 400) {
-                            res.status(400).json({ error: 'Bad request', detail: String(e.message) });
-                            return;
-                        }
-                        res.status(502).json({ error: 'Isolated plugin error', detail: String(e && e.message || e) });
                     }
                 };
                 const m = routeMethod; // validated against the HTTP-verb allowlist above

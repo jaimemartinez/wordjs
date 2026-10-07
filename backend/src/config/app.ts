@@ -52,6 +52,14 @@ export interface AppConfig {
     // Uploads
     uploads: {
         dir: string;
+        /**
+         * Where PRIVATE media lives (attachments with post_status 'private'). Deliberately OUTSIDE the
+         * publicly served uploads tree: no static handler mounts it, so a private file can only leave the
+         * server through an authorized, host-mediated download (routes/media.ts GET /media/:id/file, or a
+         * plugin route holding the media:private_read grant). Defaults under data/, which every deployment
+         * already persists.
+         */
+        privateDir: string;
         maxFileSize: number;
     };
 
@@ -331,6 +339,7 @@ const config: AppConfig = {
     // Uploads Configuration
     uploads: {
         dir: fileConfig.uploadDir || './uploads',
+        privateDir: fileConfig.privateUploadDir || './data/private-uploads',
         maxFileSize: fileConfig.maxFileSize || 10 * 1024 * 1024 // 10MB
     },
 

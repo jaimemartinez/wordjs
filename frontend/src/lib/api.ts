@@ -1034,6 +1034,11 @@ export interface MediaItem {
     sourceUrl: string;
     mimeType: string;
     date: string;
+    /**
+     * 'private' = stored outside the public uploads tree, hidden from every public listing; its
+     * sourceUrl is the authenticated /api/v1/media/:id/file route (backend/src/core/private-media.ts).
+     */
+    visibility?: MediaVisibility;
     mediaDetails?: {
         width: number;
         height: number;
@@ -1062,6 +1067,8 @@ export interface MediaDerivativeSource {
     filesize?: number;
 }
 
+export type MediaVisibility = "public" | "private";
+
 /** The query the media list endpoint understands (backend/src/routes/media.ts GET /). */
 export interface MediaListOptions {
     page?: number;
@@ -1071,6 +1078,8 @@ export interface MediaListOptions {
     mimeType?: string;
     orderby?: "date" | "modified" | "title" | "id";
     order?: "asc" | "desc";
+    /** "all" (server default), "public" or "private". Private items are only listed to uploaders. */
+    visibility?: "all" | MediaVisibility;
 }
 
 const mediaListQuery = (opts: MediaListOptions): URLSearchParams => {
@@ -1081,6 +1090,7 @@ const mediaListQuery = (opts: MediaListOptions): URLSearchParams => {
     if (opts.mimeType) params.append("mime_type", opts.mimeType);
     if (opts.orderby) params.append("orderby", opts.orderby);
     if (opts.order) params.append("order", opts.order);
+    if (opts.visibility) params.append("visibility", opts.visibility);
     return params;
 };
 
@@ -1103,10 +1113,14 @@ export const mediaApi = {
         body: formData,
         headers: {}
     }),
-    uploadWithProgress: (formData: FormData, onProgress: (progress: number) => void): Promise<MediaItem> => {
+    /**
+     * `visibility: "private"` goes in the QUERY STRING on purpose: the server picks the storage root
+     * before the body is streamed, so a private file is never written under the public uploads tree.
+     */
+    uploadWithProgress: (formData: FormData, onProgress: (progress: number) => void, opts: { visibility?: MediaVisibility } = {}): Promise<MediaItem> => {
         return new Promise((resolve, reject) => {
             const xhr = new XMLHttpRequest();
-            xhr.open("POST", `${API_URL}/media`);
+            xhr.open("POST", opts.visibility === "private" ? `${API_URL}/media?visibility=private` : `${API_URL}/media`);
             xhr.withCredentials = true; // Use HttpOnly cookies
             applyCsrfHeader(xhr); // cookie-authenticated mutation — must carry X-CSRF-Token (after open())
 
@@ -1144,7 +1158,7 @@ export const mediaApi = {
      * `edit_others_posts`, so a 403 `rest_forbidden` here is expected for an author touching another
      * user's upload and should be surfaced as such, not retried.
      */
-    update: (id: number, data: { title?: string; description?: string; caption?: string; alt?: string }) =>
+    update: (id: number, data: { title?: string; description?: string; caption?: string; alt?: string; visibility?: MediaVisibility }) =>
         apiPut<MediaItem>(`/media/${id}`, data),
     delete: (id: number) => apiDelete(`/media/${id}`),
 };

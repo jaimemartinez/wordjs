@@ -6,6 +6,36 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Security
+
+- **Paid Digital Downloads files could be downloaded by anyone (HIGH).** The bundled `digital-downloads`
+  plugin protected a product only by never listing its media-library URL, but the core media API listed
+  every unattached item to anonymous callers (`GET /api/v1/media?mime_type=application/zip` returned the
+  paid files with their `sourceUrl`) and `/uploads` served them with no authentication and a one-year
+  `immutable` cache; a buyer who saw the URL once also kept it past the link's expiry and use limit.
+  Fixed with **private media** in core: a media item can be `visibility: "private"`
+  (`POST /api/v1/media?visibility=private`, or `PUT /api/v1/media/:id {"visibility":…}`, which moves the
+  files). Its files live under `config.uploads.privateDir` (default `data/private-uploads/`, included in
+  backups), which nothing serves; the row (`post_status = 'private'`) is excluded from the anonymous media
+  list and its `X-WP-Total`, `GET /media/:id` (404), `/posts`, sitemaps, feeds, search and featured-image
+  projections. Only a caller who may edit the item sees it, and its bytes are reachable only through the
+  authenticated `GET /api/v1/media/:id/file` or a plugin route replying `res.sendPrivateMedia(id)` under the
+  new default-deny **`media:private_read`** permission — in both cases streamed by the host as an
+  attachment with `no-store`, never through a URL and never over the plugin IPC channel
+  (`backend/src/core/private-media.ts`). Public media behaves exactly as before. The admin media library
+  gets a "Subir como privado" option, a visibility filter, a private badge and a private/public toggle;
+  the content image picker lists public items only.
+- **`digital-downloads` 1.1.0: products are private media files streamed per download.** A product now
+  references a private media item (selected or uploaded as private from the plugin's admin page); the
+  token route re-checks paid + expiry + max-uses and consumes a use on **every** download, then has the
+  host stream the file, so no permanent URL is ever revealed. A file the host cannot deliver (no longer
+  private, deleted, or grant missing) answers 503 without consuming a use. Products created before 1.1.0
+  keep their public `file_url` working, but the admin list and editor flag them as public until their file
+  is re-selected as private (re-selecting drops the old URL). The plugin now requests `media:private_read`.
+  **Operators: grant it in `/admin/plugins` after updating, re-select every flagged product's file as
+  private, and treat files that were public before as already exposed** (re-upload them under a new name
+  if that matters — old copies may persist in caches).
+
 ### Added
 
 - **`npm run pack:plugin -- <slug> [--dir <folder>]` packages a plugin into an installable ZIP.** It

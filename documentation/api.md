@@ -254,9 +254,23 @@ Two rules in `backend/src/core/query-params.ts` decide what a malformed paramete
 | `PUT`    | `/comments/:id`     | `edit_comments` | Edit a comment                           |
 | `DELETE` | `/comments/:id`     | `moderate_comments` | Delete a comment                     |
 | `POST`   | `/comments/:id/approve`, `/comments/:id/spam` | `moderate_comments` | Moderate a comment |
-| `GET`    | `/media`, `/media/:id` | Opt. | List / get library items (optional auth)        |
-| `POST`   | `/media`            | `upload_files` | Upload a new media file                 |
-| `PUT`/`DELETE` | `/media/:id`  | `upload_files` | Update metadata / delete a media item    |
+| `GET`    | `/media`, `/media/:id` | Opt. | List / get library items (optional auth). `?visibility=all\|public\|private` (default `all`); private items are listed only to uploaders who may edit them |
+| `GET`    | `/media/:id/file`   | Auth (may edit the item) | Download a **private** item's file (attachment, `no-store`); 404 for a public item or a caller who may not edit it |
+| `POST`   | `/media`            | `upload_files` | Upload a new media file; `?visibility=private` stores it as private |
+| `PUT`/`DELETE` | `/media/:id`  | `upload_files` | Update metadata (and `visibility`) / delete a media item |
+
+> **Private media.** A media item can be **private** (`visibility: "private"`): its files are stored
+> under `config.uploads.privateDir` (default `data/private-uploads/`), which nothing serves, and the row
+> (`post_status = 'private'`) is excluded from every public listing. Anonymous callers, subscribers and
+> authors who do not own it get the public library only — `GET /media` never lists it nor counts it in
+> `X-WP-Total`, `GET /media/:id` answers `404 rest_post_invalid_id`. For callers who may edit it, its
+> `sourceUrl` is `/api/v1/media/:id/file`, never an `/uploads/` path. Upload as private with
+> `POST /media?visibility=private` (the query string, so the server chooses the private root before the
+> body is written; a `visibility` form field is honoured too, by moving the files before the row is
+> created), or switch with `PUT /media/:id {"visibility":"private"}` / `{"visibility":"public"}` — the
+> stored files move with it (`409 rest_media_visibility` for a `link`-mode import, which has no local
+> file). Plugins deliver private files only through `res.sendPrivateMedia` with the `media:private_read`
+> grant. See `documentation/security.md` §1.5.
 
 > **Modern image formats are produced at upload, beside every size.** For a JPEG/PNG/static-GIF upload, `POST /media` writes a **WebP** (quality 82) and — when this install's sharp can encode it — an **AVIF** (quality 55, effort 4) next to each entry of the size ladder *and* next to the full-size original, from the same single decode. They are recorded **additively** in `_wp_attachment_metadata`: `sizes.<name>.sources` for a size, and a top-level `sources` for the original, both keyed by MIME type — `{"image/webp": {file, width, height, mimeType, filesize}, …}`. No existing key is renamed or repurposed, so an attachment written before this feature simply has neither key and every reader falls back to the original format. The API exposes them verbatim as `mediaDetails.sources` and `mediaDetails.sizes.<name>.sources`. Guardrails: the full-size encode is **skipped** above `MODERN_MAX_DECODED_BYTES` (24MB decoded, the same budget `imageNegotiation` uses — an AVIF encode costs far more than the buffer it works on), at most `MODERN_ENCODE_CONCURRENCY` (**2**) modern encodes run at once, animated GIFs and SVGs are never touched, and a **failed encode never fails the upload** — it is logged, its partial file removed, and the attachment is created with the derivatives it did produce. AVIF support is detected at runtime from `sharp.format.avif` **or** `sharp.format.heif` (sharp 0.35 reports AVIF only under `heif`, with `alias: ['avif']`), so a build without libheif silently produces WebP only. There is no *regenerate thumbnails* command in WordJS: **attachments uploaded before this feature keep only their original format until they are re-uploaded** — on the public side they are still served AVIF/WebP on demand by `imageNegotiation` (above), just at the original URL rather than through `<picture>`. Deleting an attachment unlinks the derivatives along with the sizes, through the same `resolveWithin` containment proof (`Media._deletableFiles`).
 

@@ -135,6 +135,39 @@ Plugins must explicitly declare their requirements in `manifest.json`.
 *   **Transparency:** Administrators are presented with a clear "Authorization Modal" before activation.
 *   **Least Privilege:** Plugins only get what they ask for (and what the admin approves).
 
+### 1.5 Private media (files that must not be public)
+
+Everything under `uploads/` is public: `index.ts` serves it at `/uploads` with no authentication and a
+one-year `immutable` cache, and `GET /api/v1/media` lists unattached items to anonymous callers. A file
+that must only reach some people (a paid download, an internal document) therefore has to be a
+**private** media item (`backend/src/core/private-media.ts`):
+
+*   **Storage outside the served tree.** A private item's files (original, sizes, WebP/AVIF siblings)
+    live under `config.uploads.privateDir` (default `data/private-uploads/`, wordjs-config.json key
+    `privateUploadDir`), which no static handler mounts. Upload with `POST /api/v1/media?visibility=private`
+    (the query string is read before the body is streamed, so the bytes never touch `uploads/`), or flip
+    an existing item with `PUT /api/v1/media/:id {"visibility":"private"|"public"}`, which moves every
+    file and purges the image-negotiation cache. Backups archive the private root as `private-uploads/`
+    and restore it into the configured directory.
+*   **Invisible to the public.** The row carries `post_status = 'private'`. Every public media query is
+    pinned to `inherit`, so the item is absent from the anonymous media list (and its pager total),
+    `GET /media/:id` answers 404, `/posts` (anonymous callers only see `publish`), sitemaps, feeds and
+    search never reach it, and a post using it as featured image does not project it. Only a caller who
+    may edit the item (its uploader with `upload_files`, or anyone with `edit_others_posts`) lists or
+    reads it; its `sourceUrl` is `/api/v1/media/:id/file`, an authenticated download route — never a
+    `/uploads/` path.
+*   **Delivery is host-mediated.** Bytes leave the server only through that route or through a plugin
+    route that replies with `res.sendPrivateMedia(id)` while holding the default-deny
+    `media:private_read` grant. In both cases the host streams the file itself with
+    `Content-Disposition: attachment`, `X-Content-Type-Options: nosniff`, a sandbox CSP and
+    `Cache-Control: private, no-store`; plugin-supplied headers are not applied to that response, and
+    file contents never cross the plugin IPC channel. A plugin can describe a private item
+    (`wordjs.media.getPrivate(id)` — id, title, MIME type, size, file name; no path) but never learns
+    where it is stored.
+*   **Going private does not recall copies.** A file that was public before it was made private may
+    still sit in browser or proxy caches (the public mount sends `immutable`). Re-upload it as private
+    if that matters.
+
 ---
 
 ## 2. Forbidden Patterns & Developer Rules
@@ -194,6 +227,7 @@ These are the valid scopes and access levels you can declare in `manifest.json`.
 | **`users`**         | `read`  | Allows the safe-projection user bridges (`wordjs.users.findByEmail/findByLogin/findById/search`). Never exposes `user_pass` or core tables. |
 | **`express`**       | `register_route` | Register HTTP routes (mounted host-side under `/api/v1/plugin/<slug>`). |
 | **`admin_menu`**    | `register` | Add an item to the admin sidebar via `wordjs.adminMenu.add`. |
+| **`media`**         | `private_read` | Read the path-free description of a **private** media item (`wordjs.media.getPrivate`) and have the host stream its bytes as a route reply (`res.sendPrivateMedia(id, {filename})`, §1.5). The plugin decides who gets the file; the host decides how it is delivered. A special verb — no `admin` grant implies it. |
 | **`assets`**        | `write` | Enqueue front-end scripts/styles via `wordjs.assets.enqueueScript`/`enqueueStyle`. `src` must resolve **inside your plugin's `public/` directory** with a servable extension (§1.3a) — anywhere else throws. `public/` is read-only to the plugin, so what is served is what the admin installed and the AST scanner saw. |
 
 > **Capabilities are admin-granted per plugin (default-deny).** A manifest only **requests** a
@@ -411,7 +445,7 @@ There is **one** plugin model: every plugin is sandboxed, and each capability is
 | User / site data | via the safe bridges `wordjs.users.*` (`users:read`; projection only, never `user_pass`) and `wordjs.site.*` (`settings:read`). |
 | Options | non-secret keys only; secret-named options are never exposed. |
 | Routes | always namespaced under `/api/v1/plugin/<slug>`. Absolute paths were removed. |
-| Route I/O | host auth cookie `wordjs_token` (+ csrf/session) stripped from the forwarded request; `Set-Cookie`/`Set-Cookie2`/`CSP`/`HSTS`/`Location`/`Content-Type`/`Refresh` stripped from the reply; plugin-set cookies namespaced + path-confined + lifetime-clamped (max 20 per reply). Verbatim header control was removed. |
+| Route I/O | host auth cookie `wordjs_token` (+ csrf/session) stripped from the forwarded request; `Set-Cookie`/`Set-Cookie2`/`CSP`/`HSTS`/`Location`/`Content-Type`/`Refresh` stripped from the reply; plugin-set cookies namespaced + path-confined + lifetime-clamped (max 20 per reply). Verbatim header control was removed. A `res.sendPrivateMedia` reply (`media:private_read`) is streamed by the host with its own download headers; plugin headers are ignored for it (§1.5). |
 | Raw-HTML hooks | `wordjs_head`/`wordjs_footer` (SSR-injected, unescaped) **denied** for everyone (stored-XSS). |
 | Outbound network | **blocked** unless the `network` capability is granted (admin opt-in, exfiltration warning). The denial is kernel-backed by seccomp/Landlock, AppContainer or Seatbelt; a grant changes only that egress rule. |
 | Mail / notifications | `wordjs.mail` / `wordjs.notify` via grants; registering a host-wide provider needs `email:provider` / `notifications:provider`. Still sandboxed. |

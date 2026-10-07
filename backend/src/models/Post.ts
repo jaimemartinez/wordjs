@@ -419,9 +419,10 @@ class Post {
             json.content = await doShortcodeAsync(this.postContent);
         }
 
-        // Add featured image
+        // Add featured image. A PRIVATE attachment (core/private-media.ts) is never projected here: it
+        // has no public URL, and this serializer feeds anonymous readers.
         const featuredImage = await this.getFeaturedImage();
-        if (featuredImage) {
+        if (featuredImage && !(featuredImage.postType === 'attachment' && featuredImage.postStatus === 'private')) {
             // Dynamic URL for featured image
             // We need to fetch the file path meta to construct it safely
             // Circular dependency risk if we require Media here, so we do it manually or assume standard path

@@ -99,6 +99,12 @@ export const PERMISSION_META: Record<string, PermissionMeta> = {
         risk: 'low',
         icon: 'fa-route',
     },
+    'media:private_read': {
+        label: 'Deliver private media files',
+        description: 'Read the description of PRIVATE media-library files and send their contents as the response of the plugin\'s own routes. The plugin decides who receives a private file (for example, a buyer holding a paid download link), so grant it only to a plugin you trust to keep those files private.',
+        risk: 'high',
+        icon: 'fa-lock',
+    },
     'admin_menu:register': {
         label: 'Add admin menu',
         description: 'Add its own item(s) to the admin sidebar.',

@@ -782,6 +782,21 @@ function createPluginApi(slug: string) {
             async adminEmail() { verifyPermission('settings', 'read'); const { getOption } = require('./options'); return getOption('admin_email', ''); },
         },
 
+        // PRIVATE MEDIA (grant: media:private_read — default-deny, never implied by any other grant).
+        // getPrivate(id) answers a PATH-FREE description of a private attachment ({id,title,mimeType,
+        // filesize,filename}) or null when the id is not a private attachment. The bytes themselves are
+        // delivered by the host as a route reply (res.sendPrivateMedia in the isolate), never handed to
+        // the plugin and never given a public URL — see core/private-media.ts.
+        media: {
+            async getPrivate(id: any) {
+                verifyPermission('media', 'private_read');
+                // The lookup is the HOST's own read of core tables (posts/post_meta), not the plugin's:
+                // run it outside the plugin context so it is not judged against the plugin's db grants.
+                const { runAsHost } = require('./plugin-context');
+                return runAsHost(() => require('./private-media').describePrivateMedia(id));
+            },
+        },
+
         // Host-mediated DNS record lookups (gated on the `network` grant). The RAW c-ares resolver
         // surface (dns.resolve*/Resolver/setServers) is DENIED inside the isolate by the egress-guard
         // because it bypasses egress filtering and enables internal DNS recon — but getaddrinfo

@@ -13,6 +13,19 @@ const { v4: uuidv4 } = require('uuid');
 const Media = require('../models/Media');
 const Post = require('../models/Post');
 const config = require('../config/app');
+// PRIVATE MEDIA — files outside the served /uploads tree, hidden from every public listing.
+const privateMedia = require('../core/private-media');
+
+/**
+ * Did the caller ask for a PRIVATE upload / item? Accepted spelling: `visibility=private` (query string
+ * or form field). Anything else that is present but not `public`/`private` is a client error; absent
+ * means public, which is what every existing caller gets.
+ */
+function requestedVisibility(value: unknown): 'public' | 'private' | null | 'invalid' {
+    if (value === undefined || value === null || value === '') return null;
+    if (value === 'public' || value === 'private') return value;
+    return 'invalid';
+}
 
 // SECURITY (DoS): cap decoded pixels for EVERY sharp() pipeline in this file so a maliciously
 // oversized image (a "pixel bomb") can't exhaust memory and OOM/CPU-kill the single-process
@@ -255,7 +268,7 @@ router.param('id', requireRouteId({ code: 'rest_post_invalid_id', message: 'Inva
  * `orderByMap[String(orderby)]` misses the same way and silently falls back to post_date.
  */
 const MEDIA_LIST_QUERY_FIELDS: readonly string[] = Object.freeze([
-    'page', 'per_page', 'search', 'mime_type', 'orderby', 'order',
+    'page', 'per_page', 'search', 'mime_type', 'orderby', 'order', 'visibility',
 ]);
 
 // Ensure uploads directory exists
@@ -269,7 +282,14 @@ const storage = multer.diskStorage({
         // Create year/month subdirectory
         const date = new Date();
         const subDir = `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}`;
-        const uploadPath = path.join(config.uploads.dir, subDir);
+        // A PRIVATE upload is written straight into the private root, so its bytes never exist under
+        // the served tree, not even while the image ladder is being encoded. The query string is read
+        // here because it is known before the body is streamed; a `visibility` FORM field may arrive
+        // after the file part, and is honoured by moving the files before the row is created.
+        const root = requestedVisibility(req.query && req.query.visibility) === 'private'
+            ? privateMedia.privateUploadsRoot()
+            : config.uploads.dir;
+        const uploadPath = path.join(root, subDir);
 
         if (!fs.existsSync(uploadPath)) {
             fs.mkdirSync(uploadPath, { recursive: true });
@@ -355,6 +375,12 @@ const upload = multer({
  *         description: Filter by MIME type. A full type filters exactly (`image/png`); a bare family filters the whole family (`image` or `image/`).
  *         schema:
  *           type: string
+ *       - in: query
+ *         name: visibility
+ *         description: Which items to list - `all` (default), `public` or `private`. Private items (stored outside the public uploads tree) are only ever listed to a caller holding upload_files, and only those the caller may edit (their own, or any with edit_others_posts). For everyone else the list is the public library whatever is asked, and `private` answers an empty list.
+ *         schema:
+ *           type: string
+ *           enum: [all, public, private]
  *     responses:
  *       200:
  *         description: List of media files
@@ -376,8 +402,29 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
         search,
         mime_type,
         orderby = 'date',
-        order = 'desc'
+        order = 'desc',
+        visibility: rawVisibility
     } = req.query;
+
+    // PRIVATE MEDIA. Only a caller who may upload can ever be shown a private item, and then only the
+    // ones they could edit (their own, or anyone's with edit_others_posts) — filtered below. Everybody
+    // else gets exactly the public library this route always returned, whatever they ask for: a private
+    // row is not counted, not listed, and its existence is not hinted at by the pager.
+    const requested = rawVisibility === undefined || rawVisibility === '' ? 'all' : String(rawVisibility);
+    if (!['all', 'public', 'private'].includes(requested)) {
+        return res.status(400).json({
+            code: 'rest_invalid_param',
+            message: 'visibility must be one of: all, public, private.',
+            data: { status: 400 }
+        });
+    }
+    const mayListPrivate = !!(req.user && req.user.can('upload_files'));
+    const visibility = mayListPrivate ? requested : 'public';
+    if (!mayListPrivate && requested === 'private') {
+        res.set('X-WP-Total', '0');
+        res.set('X-WP-TotalPages', '0');
+        return res.json([]);
+    }
 
     // String() before parseInt() only spells out the coercion parseInt has always performed on these
     // values: a query parameter is `string | string[] | ParsedQs | ...`, and parseInt's first step is
@@ -404,6 +451,7 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
     const media = await Media.findAll({
         search,
         mimeType: mime_type,
+        visibility,
         limit,
         offset,
         orderBy: orderByMap[String(orderby)] || 'post_date',
@@ -419,14 +467,16 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
     // (parent=0) and dangling parents (deleted post → null) stay visible, exactly as the
     // single-item route treats them. A caller with edit_others_posts sees everything, so we
     // only pay the parent lookups when the caller lacks that cross-user capability.
-    let visibleMedia = media;
+    // Private items the caller may not edit are dropped first (only reachable with upload_files but
+    // without edit_others_posts: someone else's private upload).
+    let visibleMedia = media.filter((m: any) => m.visibility !== 'private' || privateMedia.canAccessPrivateMedia(req.user, m));
     if (!req.user || !req.user.can('edit_others_posts')) {
         const parentIds = [...new Set(media.filter((m: any) => m.parent).map((m: any) => m.parent))];
         const parents = await Promise.all(parentIds.map((pid: any) => Post.findById(pid)));
         const parentById = new Map<any, any>();
         parentIds.forEach((pid: any, i: number) => parentById.set(pid, parents[i]));
 
-        visibleMedia = media.filter((m: any) => {
+        visibleMedia = visibleMedia.filter((m: any) => {
             if (!m.parent) return true; // unattached upload → public
             const parent = parentById.get(m.parent);
             if (!parent || parent.postStatus === 'publish') return true; // dangling/published → public
@@ -438,7 +488,7 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
     // Discount the attachments hidden on THIS page so the pager total does not advertise the
     // existence of items the caller was just denied (mirrors GET /:id returning 404, not 403).
     const hiddenOnPage = media.length - visibleMedia.length;
-    const total = Math.max(0, (await Media.count({ search, mimeType: mime_type })) - hiddenOnPage);
+    const total = Math.max(0, (await Media.count({ search, mimeType: mime_type, visibility })) - hiddenOnPage);
     const totalPages = Math.ceil(total / limit);
 
     // String() is what res.set() already did to these numbers internally; spelling it out satisfies
@@ -458,7 +508,7 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
  * /media/{id}:
  *   get:
  *     summary: Read one media item
- *     description: An attachment inherits its visibility from its parent post. When that parent is not published, the item is hidden from anyone who is neither its author nor holder of edit_others_posts - and the answer is 404 rather than 403, so a hidden attachment does not reveal that it exists. An unattached attachment has no parent to inherit from and stays public.
+ *     description: An attachment inherits its visibility from its parent post. When that parent is not published, the item is hidden from anyone who is neither its author nor holder of edit_others_posts - and the answer is 404 rather than 403, so a hidden attachment does not reveal that it exists. An unattached attachment has no parent to inherit from and stays public. A PRIVATE item (visibility private) is likewise 404 to anyone who may not edit it, and its sourceUrl is the authenticated /media/{id}/file route, never a public /uploads path.
  *     tags: [Media]
  *     security: []
  *     parameters:
@@ -484,6 +534,15 @@ router.get('/:id', optionalAuth, asyncHandler(async (req: Request, res: Response
     const media = await Media.findById(parseInt(String(req.params.id), 10));
 
     if (!media) {
+        return res.status(404).json({
+            code: 'rest_post_invalid_id',
+            message: 'Invalid media ID.',
+            data: { status: 404 }
+        });
+    }
+
+    // PRIVATE MEDIA: invisible — 404, the same answer as "no such item" — to anyone who may not edit it.
+    if (media.visibility === 'private' && !privateMedia.canAccessPrivateMedia(req.user, media)) {
         return res.status(404).json({
             code: 'rest_post_invalid_id',
             message: 'Invalid media ID.',
@@ -517,6 +576,46 @@ router.get('/:id', optionalAuth, asyncHandler(async (req: Request, res: Response
 
 /**
  * @swagger
+ * /media/{id}/file:
+ *   get:
+ *     summary: Download the file of a private media item
+ *     description: The ONLY way a person reaches a private item's bytes - private files are stored outside the public /uploads tree, which serves them to nobody. Requires a logged-in caller who may edit the item (its uploader with upload_files, or anyone with edit_others_posts). Served as a download (Content-Disposition attachment, nosniff, no-store). A public item, or one this caller may not edit, answers 404.
+ *     tags: [Media]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: The file bytes
+ *         content:
+ *           application/octet-stream:
+ *             schema:
+ *               type: string
+ *               format: binary
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       404:
+ *         description: No such private item, or this caller may not read it (rest_post_invalid_id)
+ */
+router.get('/:id/file', authenticate, asyncHandler(async (req: Request, res: Response) => {
+    const media = await Media.findById(parseInt(String(req.params.id), 10));
+    if (!media || media.visibility !== 'private' || !privateMedia.canAccessPrivateMedia(req.user, media)) {
+        return res.status(404).json({
+            code: 'rest_post_invalid_id',
+            message: 'Invalid media ID.',
+            data: { status: 404 }
+        });
+    }
+    await privateMedia.streamPrivateMedia(res, media.id, { filename: path.basename(String(media.mediaDetails?.file || '')) });
+}));
+
+/**
+ * @swagger
  * /media:
  *   post:
  *     summary: Upload a new media file
@@ -536,6 +635,10 @@ router.get('/:id', optionalAuth, asyncHandler(async (req: Request, res: Response
  *                 type: string
  *               caption:
  *                 type: string
+ *               visibility:
+ *                 type: string
+ *                 enum: [public, private]
+ *                 description: '`private` stores the file outside the public uploads tree and hides the item from every public listing. May also be sent as the `visibility` query parameter, which is preferred (it is known before the file is streamed to disk).'
  *     responses:
  *       201:
  *         description: Media uploaded
@@ -698,8 +801,25 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
 
     const { title, description, caption, alt } = req.body;
 
+    // Where the file was written (multer's destination) and where it must END UP. They differ only when
+    // `visibility=private` arrived as a form field AFTER the file part; that file is moved (with all its
+    // derivatives) into the private root before the row exists, so no public URL is ever recorded.
+    const queryVisibility = requestedVisibility(req.query && req.query.visibility);
+    const bodyVisibility = requestedVisibility(req.body && req.body.visibility);
+    if (queryVisibility === 'invalid' || bodyVisibility === 'invalid') {
+        try { fs.unlinkSync(uploaded.path); } catch { /* best effort */ }
+        return res.status(400).json({
+            code: 'rest_invalid_param',
+            message: 'visibility must be public or private.',
+            data: { status: 400 }
+        });
+    }
+    const storedPrivate = queryVisibility === 'private';
+    const wantPrivate = storedPrivate || bodyVisibility === 'private';
+    const storedRoot = storedPrivate ? privateMedia.privateUploadsRoot() : path.resolve(config.uploads.dir);
+
     // Get relative path from uploads dir
-    const relativePath = path.relative(config.uploads.dir, uploaded.path).replace(/\\/g, '/');
+    const relativePath = path.relative(storedRoot, uploaded.path).replace(/\\/g, '/');
 
     // Image processing
     let width = 0;
@@ -843,7 +963,22 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
         }
     }
 
+    if (wantPrivate && !storedPrivate) {
+        const fromFiles = Media._deletableFiles(relativePath, sizes, sources, storedRoot);
+        const toFiles = Media._deletableFiles(relativePath, sizes, sources, privateMedia.privateUploadsRoot());
+        if (!fromFiles.length || fromFiles.length !== toFiles.length) {
+            for (const f of fromFiles) { try { fs.unlinkSync(f); } catch { /* best effort */ } }
+            return res.status(400).json({
+                code: 'rest_upload_invalid_file_type',
+                message: 'The uploaded file could not be stored privately.',
+                data: { status: 400 }
+            });
+        }
+        privateMedia.moveAttachmentFiles(fromFiles.map((f: string, i: number) => [f, toFiles[i]]));
+    }
+
     const media = await Media.create({
+        isPrivate: wantPrivate,
         authorId: req.user.id,
         title: title || uploaded.originalname,
         filename: relativePath,
@@ -871,7 +1006,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
  * /media/{id}:
  *   put:
  *     summary: Update the metadata of a media item
- *     description: upload_files alone is not enough. Editing your own item needs edit_posts; editing someone else item needs the cross-user edit_others_posts. Only the four descriptive fields can be changed here - the stored file is never replaced.
+ *     description: upload_files alone is not enough. Editing your own item needs edit_posts; editing someone else item needs the cross-user edit_others_posts. Only the four descriptive fields and the visibility can be changed here - the stored file is never replaced.
  *     tags: [Media]
  *     security:
  *       - bearerAuth: []
@@ -895,6 +1030,10 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
  *                 type: string
  *               alt:
  *                 type: string
+ *               visibility:
+ *                 type: string
+ *                 enum: [public, private]
+ *                 description: Make the item private (its files move out of the public uploads tree and it disappears from every public listing) or public again. A previously public URL may still be held by browsers or caches that fetched it before.
  *     responses:
  *       200:
  *         description: The updated media item
@@ -937,6 +1076,25 @@ router.put('/:id', authenticate, can('upload_files'), asyncHandler(async (req: R
     }
 
     const { title, description, caption, alt } = req.body;
+
+    const visibility = requestedVisibility(req.body && req.body.visibility);
+    if (visibility === 'invalid') {
+        return res.status(400).json({
+            code: 'rest_invalid_param',
+            message: 'visibility must be public or private.',
+            data: { status: 400 }
+        });
+    }
+    if (visibility) {
+        try {
+            await Media.setVisibility(mediaId, visibility === 'private');
+        } catch (e: any) {
+            if (e && (e.code === 'media_remote_linked' || e.code === 'media_file_missing')) {
+                return res.status(409).json({ code: 'rest_media_visibility', message: e.message, data: { status: 409 } });
+            }
+            throw e;
+        }
+    }
 
     const updated = await Media.update(mediaId, {
         title,
