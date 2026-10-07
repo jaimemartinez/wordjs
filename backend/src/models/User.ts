@@ -620,6 +620,43 @@ class User {
         return won;
     }
 
+    /** Every stored value of a meta key (normally one row; more only if a past race duplicated it). */
+    static async getMetaValues(userId: number, key: string): Promise<string[]> {
+        const rows = await dbAsync.all('SELECT meta_value FROM user_meta WHERE user_id = ? AND meta_key = ?', [userId, key]);
+        return (rows || []).map((r: any) => r.meta_value);
+    }
+
+    /**
+     * Insert `key = value` only if the user has NO row for `key` yet; returns true iff THIS call inserted
+     * it. user_meta carries no UNIQUE (user_id, meta_key) constraint, so a bare check-then-insert would let
+     * two concurrent callers both insert. Instead the check and the insert run in ONE transaction that
+     * first takes a write lock on the user's existing `lockKey` row (a no-op UPDATE — a row lock on
+     * Postgres/MySQL, the database write lock on SQLite): concurrent claimers queue on that lock, and each
+     * one's existence check runs only after the previous claimer committed, so exactly one inserts.
+     * Returns false without inserting when the `lockKey` row does not exist (nothing to serialize on).
+     */
+    static async insertMetaIfAbsent(userId: number, key: string, value: string, lockKey: string): Promise<boolean> {
+        let inserted: boolean;
+        try {
+            inserted = await dbAsync.transaction(async (tx: any) => {
+                await tx.run('UPDATE user_meta SET meta_value = meta_value WHERE user_id = ? AND meta_key = ?', [userId, lockKey]);
+                // Existence is read separately: MySQL reports 0 affected rows for a no-op UPDATE.
+                if (!(await tx.get('SELECT 1 AS present FROM user_meta WHERE user_id = ? AND meta_key = ?', [userId, lockKey]))) return false;
+                if (await tx.get('SELECT 1 AS present FROM user_meta WHERE user_id = ? AND meta_key = ?', [userId, key])) return false;
+                await tx.run('INSERT INTO user_meta (user_id, meta_key, meta_value) VALUES (?, ?, ?)', [userId, key, String(value)]);
+                return true;
+            });
+        } catch (e: any) {
+            // InnoDB may pick a concurrent claimer as a deadlock victim (gap locks on the scan) and roll
+            // it back; another claimer survives and inserts. The victim simply did not insert.
+            const code = e && (e.code || e.sqlState);
+            if (code === 'ER_LOCK_DEADLOCK' || code === '40001' || code === '40P01') return false;
+            throw e;
+        }
+        if (inserted) await require('../core/cache').del(`user:${userId}`);
+        return inserted;
+    }
+
     toJSON() {
         // Essential for frontend (camelCase)
         // AND legacy backend compatibility (snake_case)

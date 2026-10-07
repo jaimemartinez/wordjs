@@ -22,6 +22,38 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   the route answers 404 and `GET /plugins` reports `packable: false`, so the button is hidden. `--dir` (and `WORDJS_PLUGINS_DIR` for `build-plugin.js`)
   lets a private plugin live outside `backend/plugins/`. Documented in `documentation/plugins.md` §4–5.
 
+### Security
+
+- **The `wordjs.dns` bridge obeys the plugin's egress allowlist.** `resolveMx`, `resolveTxt`, `resolve4`,
+  `resolve6` and `resolve` now check the name being resolved against the plugin's egress allowlist
+  before querying, in addition to the `network` grant. Before, only the A/AAAA answers were filtered, so
+  a plugin limited to one vendor could still look up any name. That is outbound traffic in itself: a
+  query for `<data>.attacker.example` reaches the attacker's nameserver. An empty allowlist still allows
+  every public name. While the egress policy has not loaded, every lookup is refused, the same fail-closed
+  rule the plugin's sockets follow.
+- **A frontend replica no longer relays client forwarding headers to its backend.** With
+  `WORDJS_BACKEND_URL` set, the frontend's own proxy copied a client's `X-Forwarded-For` (and
+  `Forwarded`, `X-Real-IP`, `X-Forwarded-Port`, `X-Forwarded-Server`) through unchanged. The backend trusts
+  forwarded headers from a loopback hop, so a client could choose the IP address used for rate limiting,
+  lockouts and the audit log. The proxy now removes every client forwarding header and sets
+  `X-Forwarded-For` to the socket's peer address, `X-Forwarded-Host` to the Host it received and
+  `X-Forwarded-Proto` to its own listener's scheme, as the gateway does at its edge.
+- **The first TOTP use when the replay counter is missing is accepted exactly once.** TOTP anti-replay
+  advances `mfa_totp_last_step` with a compare-and-set. If the row was missing (a partial restore, an
+  imported database, or an enrollment written by other tooling), the compare-and-set matched nothing and
+  every TOTP code was refused, which locked the account out of TOTP (codes were never replayable).
+  Enrollment already creates the row. Now the first use creates it with an insert-if-absent inside a
+  transaction that locks the user's secret row, so exactly one of several concurrent submissions is
+  accepted and a replay of that code is refused. Enrollment now writes the counter before the secret.
+
+### Fixed
+
+- **Editing-presence rooms are reclaimed.** `POST /api/v1/presence/:postId` keeps one in-memory room per
+  post, and only an explicit `leave` deleted one. An editor that closed the tab without sending it (a
+  crash, a dropped beacon, lost network) left its room in memory for the life of the process. A periodic
+  sweep now removes rooms whose editors have all expired. It runs only while rooms exist and does not keep
+  the process alive.
+
 ### Changed
 
 - **`create-wordjs` is published to npm with trusted publishing, not a stored token.** npm restricted the

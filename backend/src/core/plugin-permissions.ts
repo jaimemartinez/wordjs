@@ -321,4 +321,14 @@ function _setGrantsInMemory(slug: string, tokens: string[]): void {
     grants.set(slug, new Set((tokens || []).map(t => String(t).toLowerCase().trim()).filter(Boolean)));
 }
 
-module.exports = { loadGrants, isGranted, isNetworkGranted, getGrants, setGrants, removeGrants, backfillActive, NETWORK_TOKEN, _setGrantsInMemory, loadEgressHosts, isEgressPolicyLoaded, getEgressAllowlist, setEgressAllowlist, PLUGIN_SLUG, FORBIDDEN_KEYS, isSafeSlugKey, writeSlugKey };
+// Test-only: install a plugin's egress allowlist in memory (no DB) AND mark the policy as loaded, so
+// unit tests can exercise allowlist-governed bridges. Same plugin-context guard as _setGrantsInMemory.
+function _setEgressAllowlistInMemory(slug: string, hosts: string[]): void {
+    if (require('./plugin-context').getEffectivePlugin()) {
+        throw new Error('🛡️ _setEgressAllowlistInMemory is not permitted from plugin/theme context.');
+    }
+    egressHosts.set(slug, Array.from(new Set((hosts || []).map(h => String(h).toLowerCase().trim()).filter(isValidEgressHost))));
+    egressPolicyLoaded = true;
+}
+
+module.exports = { loadGrants, isGranted, isNetworkGranted, getGrants, setGrants, removeGrants, backfillActive, NETWORK_TOKEN, _setGrantsInMemory, _setEgressAllowlistInMemory, loadEgressHosts, isEgressPolicyLoaded, getEgressAllowlist, setEgressAllowlist, PLUGIN_SLUG, FORBIDDEN_KEYS, isSafeSlugKey, writeSlugKey };

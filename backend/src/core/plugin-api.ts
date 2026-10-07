@@ -808,14 +808,34 @@ function createPluginApi(slug: string) {
                 try { granted = require('./plugin-permissions').isNetworkGranted(slug); } catch { granted = false; }
                 if (!granted) throw new Error(`🛡️ Security Block: plugin '${slug}' needs the 'network' grant for DNS lookups.`);
             };
+            const { hostMatchesAllowlist } = require('./egress-guard');
             const clean = (s: any) => String(s == null ? '' : s).slice(0, 253);
+            // EVERY lookup is governed by the plugin's EGRESS ALLOWLIST, applied to the NAME being
+            // resolved — the same policy (and the same fail-closed rule) its sockets obey in the child.
+            // Filtering the ANSWERS is not enough: MX/TXT records carry no IP to filter, and a lookup
+            // is itself egress — a query for `<secret>.attacker.example` reaches the attacker's
+            // authoritative server through the host resolver, so a plugin confined to `api.vendor.com`
+            // could still exfiltrate by name. Empty allowlist = allow-all-public (unchanged); policy not
+            // loaded = deny every name, exactly as the spawn path ships `egressDenyAll`.
+            const governed = (name: any): string => {
+                requireNetwork();
+                const host = clean(name);
+                const perms = require('./plugin-permissions');
+                let loaded: boolean;
+                let list: string[] = [];
+                try { loaded = perms.isEgressPolicyLoaded() === true; list = perms.getEgressAllowlist(slug) || []; } catch { loaded = false; }
+                if (!loaded || (list.length > 0 && !hostMatchesAllowlist(host, list))) {
+                    throw new Error(`🛡️ Security Block: plugin '${slug}' may not resolve '${host || '(empty)'}' — not in its egress allowlist.`);
+                }
+                return host;
+            };
             return {
-                async resolveMx(domain: string) { requireNetwork(); return realDns.resolveMx(clean(domain)); },
-                async resolveTxt(name: string) { requireNetwork(); return realDns.resolveTxt(clean(name)); },
-                async resolve4(host: string) { requireNetwork(); const a = await realDns.resolve4(clean(host)); return (a || []).filter((ip: string) => !isBlockedIp(ip)); },
-                async resolve6(host: string) { requireNetwork(); const a = await realDns.resolve6(clean(host)); return (a || []).filter((ip: string) => !isBlockedIp(ip)); },
+                async resolveMx(domain: string) { return realDns.resolveMx(governed(domain)); },
+                async resolveTxt(name: string) { return realDns.resolveTxt(governed(name)); },
+                async resolve4(host: string) { const a = await realDns.resolve4(governed(host)); return (a || []).filter((ip: string) => !isBlockedIp(ip)); },
+                async resolve6(host: string) { const a = await realDns.resolve6(governed(host)); return (a || []).filter((ip: string) => !isBlockedIp(ip)); },
                 // dns.promises.resolve() with no rrtype defaults to A records (string IPs) — mirror that.
-                async resolve(host: string) { requireNetwork(); const a = await realDns.resolve4(clean(host)); return (a || []).filter((ip: string) => !isBlockedIp(ip)); },
+                async resolve(host: string) { const a = await realDns.resolve4(governed(host)); return (a || []).filter((ip: string) => !isBlockedIp(ip)); },
             };
         })(),
 

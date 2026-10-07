@@ -195,12 +195,24 @@ function canonIp(s: string): string | null {
 export function isHostAllowed(host: string | undefined): boolean {
     if (denyAllEgress) return false;              // fail-closed: egress policy unavailable → deny every host
     if (!allowedHosts) return true;               // no allowlist configured → unchanged behavior
+    return hostMatchesAllowlist(host, allowedHosts);
+}
+/**
+ * The allowlist MATCH itself, for a list that is passed in rather than installed process-wide. The host
+ * process uses it to govern host-mediated bridges (wordjs.dns) by the calling plugin's own allowlist —
+ * the same rule its connect chokepoints apply inside the child. An EMPTY list matches nothing; callers
+ * decide what "no allowlist" means (allow-all-public) before calling.
+ */
+export function hostMatchesAllowlist(host: string | undefined, list: string[]): boolean {
     if (!host) return false;                      // default-deny a no-host / default-localhost target
+    const entries = (Array.isArray(list) ? list : [])
+        .map((h) => String(h).toLowerCase().trim().replace(/^\*?\./, '').replace(/\.$/, ''))
+        .filter(Boolean);
     // Strip [] brackets (URL.hostname keeps them for IPv6) + trailing dot so URL-derived hosts compare
     // equal to the bare entries the admin stored.
     const raw = String(host).toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
     const hIp = canonIp(raw);
-    for (const d of allowedHosts) {
+    for (const d of entries) {
         if (raw === d) return true;               // exact string match (hostnames + identical IP spellings)
         const dIp = canonIp(d);
         if (dIp) { if (hIp && hIp === dIp) return true; continue; } // IP entry: canonical-IP compare only

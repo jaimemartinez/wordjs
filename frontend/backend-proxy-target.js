@@ -179,21 +179,44 @@ function upstreamPath(target, requestUrl) {
  * proxy imposes 30s, which its 15s keepalive stays under — here there is nothing to trip over at
  * all), and Nagle is disabled so a 40-byte event leaves immediately instead of waiting for company.
  */
+/**
+ * The forwarding headers a client may NOT speak for itself through this proxy. When
+ * `WORDJS_BACKEND_URL` is set this replica is the front door, and the backend believes forwarded
+ * headers from a loopback hop: a client-supplied `X-Forwarded-For` relayed verbatim chose the address
+ * the backend rate-limits, locks out and audits by; a client `Forwarded` / `X-Real-IP` /
+ * `X-Forwarded-Port` / `X-Forwarded-Server` reached host-policy as if this hop had said it. They are all
+ * dropped and the ones the backend needs are rebuilt from what this server observed: the socket's peer
+ * address, the Host it received and the scheme of its own listener.
+ */
+const FORWARDING_HEADERS = Object.freeze([
+    'x-forwarded-for',
+    'x-forwarded-host',
+    'x-forwarded-proto',
+    'x-forwarded-port',
+    'x-forwarded-server',
+    'x-real-ip',
+    'forwarded',
+]);
+
 function proxyToBackend(req, res, target, options) {
     const base = new URL(target);
     const isHttps = base.protocol === 'https:';
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const transport = require(isHttps ? 'https' : 'http');
 
-    const headers = Object.assign({}, req.headers, {
-        host: base.host,
-        'x-forwarded-host': req.headers.host || '',
-        'x-forwarded-proto': req.socket && req.socket.encrypted ? 'https' : 'http',
-    });
+    const headers = Object.assign({}, req.headers);
     // Hop-by-hop headers belong to THIS connection and must not be relayed to the next one.
     delete headers.connection;
     delete headers['keep-alive'];
     delete headers['proxy-authorization'];
+    // Every forwarding header is stated by THIS hop, never relayed from the client (the gateway's
+    // pinForwardedHeaders, gateway/src/host-edge.js, does the same at its edge). See FORWARDING_HEADERS.
+    for (const name of FORWARDING_HEADERS) delete headers[name];
+    headers.host = base.host;
+    headers['x-forwarded-host'] = req.headers.host || '';
+    headers['x-forwarded-proto'] = req.socket && req.socket.encrypted ? 'https' : 'http';
+    const peer = req.socket && req.socket.remoteAddress;
+    if (peer) headers['x-forwarded-for'] = peer;
 
     const upstream = transport.request(
         {
