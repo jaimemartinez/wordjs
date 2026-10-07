@@ -375,14 +375,10 @@ jobs:
     # to gate the SAME suite this job certifies, and a second job would install and boot everything again
     # to measure the identical thing.
     #
-    # RAISED 32 -> 45 on 2026-10-07, measured: the suite now runs twice in this job on ~245 test files,
-    # and a run that adds no tests (#397, dependency bumps only) took 31m24s, 36s under the wall; #396 took
-    # 25m39s. The site-address change adds 13 backend suites, several of them driving real sockets, and its
-    # run was still passing tests (1259 so far, alphabetically at `sudo-classes`) when 32 minutes cut it off.
-    # 45 is that measured cost plus the cold-cache margin this budget was always sized with, and it still
-    # turns a real hang red well inside the hour. If it is approached again, the fix is to run the unit
-    # suite once (the coverage step's run can certify it), not another raise.
-    timeout-minutes: 45
+    # 2026-10-07: the twice-run suite reached this wall (a run adding no tests took 31m24s, and one adding
+    # 13 suites was cut off while still passing). The fix was to run the unit suite ONCE, under c8, in the
+    # Test step below — not a higher wall — which takes the duplicate run (~10 min) off the critical path.
+    timeout-minutes: 32
     services:
       postgres:
         image: postgres:16
@@ -464,15 +460,32 @@ jobs:
         # binary and makes no network round-trip. Do NOT restore `--yes`: it existed only to auto-confirm
         # a live download, which is exactly the ~7-min registry spike this step used to inflict.
         run: npx license-checker --production --failOn 'AGPL;SSPL'
-      - name: Test
+      - name: Test (under the c8 coverage ratchet)
         # WORDJS_CI_DB=1 turns the driver-conformance suite's postgres+mysql blocks from graceful skips
         # into hard failures: the service containers above are wired precisely so those drivers ARE
         # exercised, so a container that never came up must fail the job, not slip through green. This is
         # the only CI coverage of the SQLite→MySQL translation layer (translateCreateTable/translateSql).
+        #
+        # ONE RUN OF THE UNIT SUITE, NOT TWO. `test:coverage:check` is `c8 … npm test`: the suite is the
+        # canonical `npm test`, unchanged, and c8 only wraps it. c8 exports NODE_V8_COVERAGE, which npm, the
+        # flake-retry wrapper, `node --test` and its per-file children all inherit, and `--test-force-exit`
+        # does not truncate the profile (V8 flushes it on the process-exit path). This step used to run
+        # `npm test` and a later step ran the same suite again under c8, which roughly doubled the job and
+        # took it past its 32-minute wall on 2026-10-07. The one thing that changes is timing: the F6
+        # performance-ratio test does not compare ratios under coverage instrumentation (#391), and that
+        # comparison is made where timing is honest — the F6 certification workflow and `perf:f0` below.
+        #
+        # THE COVERAGE FLOOR IS A RATCHET, NOT A TARGET. `--lines` in backend/package.json sits two points
+        # under the number measured when it was introduced (82.65 % of lines, one clean pass), so it fails
+        # a run that DROPS coverage and says nothing about any percentage being good. Raise it when the
+        # measured number rises; never lower it to turn a red run green. `--all` counts a source file no
+        # test loads as uncovered instead of leaving it out of the denominator. A test failure and a
+        # coverage drop read differently in the log: node:test's own `# fail N` summary, versus c8's
+        # "ERROR: Coverage for lines (…) does not meet global threshold".
         working-directory: backend
         env:
           WORDJS_CI_DB: '1'
-        run: npm test
+        run: npm run test:coverage:check
       - name: F0 content performance budgets
         working-directory: backend
         run: npm run perf:f0
@@ -515,42 +528,6 @@ jobs:
           node backend/scripts/build-marketplace.js
           node backend/scripts/verify-marketplace.js --rebuild
 
-      - name: Coverage ratchet (c8 over the same suite)
-        # THE NUMBER THAT DID NOT EXIST. ~4,500 backend assertions and no coverage instrumentation
-        # anywhere in the repository — no c8, no nyc, no istanbul, no threshold. "Well tested" was a
-        # claim nobody could check, and the failure mode it hides is specific: a refactor deletes the
-        # last test of a module and every gate stays green, because a suite can only report on what it
-        # runs. `--all` is what closes that: a source file no test ever loads is counted as UNCOVERED
-        # rather than being absent from the denominator.
-        #
-        # THIS IS A RATCHET, NOT A TARGET. `--lines` is set two points under the number measured when
-        # the script was introduced, so it fails a run that DROPS coverage and says nothing about any
-        # percentage being good. Raise the floor when the measured number rises; the one move that is
-        # never correct is lowering it to turn a red run green.
-        #
-        # It runs LAST on purpose. The suite is executed a second time here, under instrumentation, so
-        # every pre-existing gate above reports first — a coverage-tooling problem can never delay or
-        # mask the real signal, and on a run that is already red this step simply never spends the time.
-        #
-        # `WORDJS_CI_DB=1` is set for the same reason as on the Test step, and it also keeps the RATCHET
-        # honest: without it the postgres/mysql conformance blocks skip gracefully when a service
-        # container is unreachable, and a skipped block is fewer covered lines — so a container hiccup
-        # would read as a coverage DROP and fail this gate for a reason that has nothing to do with the
-        # tests. Hard-failing on an unreachable engine turns that into the accurate error instead.
-        #
-        # c8 collects from the SPAWNED processes, which is the part that had to be verified rather than
-        # assumed: `npm test` goes through scripts/test-with-flake-retry.mjs, which spawns `node --test`,
-        # which spawns one child per test file — coverage two levels down. c8 works by exporting
-        # NODE_V8_COVERAGE, that variable is inherited by both spawns, and `--test-force-exit` does NOT
-        # truncate the profile (V8 flushes it on the process-exit path too). Measured on this repo: three
-        # test files alone reported 52% of the lines they load, so the collection is real. The full
-        # suite then measured 82.65% of lines (72,047/87,168) in ONE pass with no flake retry, which is
-        # where the floor of 80 comes from — and `--check-coverage` was proved to go red (at --lines 99)
-        # and green (at --lines 5) before it was wired in here.
-        working-directory: backend
-        env:
-          WORDJS_CI_DB: '1'
-        run: npm run test:coverage:check
 
       - name: Upload backend coverage (lcov)
         if: always()
