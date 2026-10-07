@@ -22,7 +22,7 @@
 
 exports.metadata = {
     name: 'Donations',
-    version: '1.0.0',
+    version: '1.0.1',
     description: 'Donation campaigns with goal thermometer, manual payment + optional Stripe Checkout, donor management and CSV export.',
     author: 'WordJS',
 };

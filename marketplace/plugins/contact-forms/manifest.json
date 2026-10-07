@@ -1,7 +1,7 @@
 {
     "id": "contact-forms",
     "name": "Contact Forms",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Form builder (Contact Form 7 / WPForms parity): create forms with custom fields, embed them anywhere with the Verso block ContactForms, collect visitor submissions into an admin inbox with unread tracking, CSV export and optional email notification.",
     "author": "WordJS",
     "isolated": true,
@@ -24,6 +24,11 @@
         "order": 57
     },
     "permissions": [
+        {
+            "scope": "browser",
+            "access": "script",
+            "reason": "Run the plugin's own compiled interface in the browser: its admin page and its Verso block (in the editor and on public pages). Without it the host does not serve these bundles and that interface does not load."
+        },
         {
             "scope": "database",
             "access": "read",

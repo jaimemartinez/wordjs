@@ -77,6 +77,80 @@ const BLOCKED_RUNTIME_DEPS = new Set([
 ]);
 
 /**
+ * ═══ WHAT A MANIFEST MAY ASK THE HOST TO `npm install` ═══════════════════════════════════════════════
+ *
+ * A plugin's `dependencies` are installed by the HOST, outside the plugin sandbox, into the host's own
+ * node_modules (installPluginDependencies below). `--ignore-scripts` was believed to make that inert. It
+ * does not: npm still runs the `prepare` script of a dependency it has to BUILD from source — a
+ * `git+…`/`github:` spec and a `file:<directory>` spec — even with --ignore-scripts (verified on npm
+ * 10.9: both a `file:../dep` and a `git+file://` dependency executed their `prepare`). A manifest entry
+ * `"x": "file:../evil"` was therefore host code execution at activation. And the specs that do not run
+ * anything are not harmless either: `npm:<other>@1` (an alias) and a tarball URL install arbitrary,
+ * never-scanned code under a benign name, and a `link:`/`workspace:` spec reaches outside the registry
+ * altogether.
+ *
+ * So the rule is an ALLOWLIST of shape, not a denylist of protocols: the name must be an npm package
+ * name and the version must be a semver RANGE that semver itself accepts, containing none of the
+ * characters every non-registry form needs (':' for a protocol or a drive letter, '/' or '\' for a
+ * path, a URL or a `user/repo` shorthand) and not starting with '.' (a relative path). What survives is
+ * exactly "this package, from the configured registry, in this version range" — which npm resolves as
+ * a registry fetch and nothing else. A dist-tag (`latest`, `next`) is refused too: it is not a range,
+ * and it is a moving target that a review of the manifest cannot pin.
+ *
+ * Enforced at THREE points that must agree, so they all call this one function: the install pipeline
+ * (routes/plugins.ts installPluginFromZip — upload AND marketplace), installPluginDependencies itself
+ * (defense in depth: whatever reached the disk by another path is still refused before npm runs), and
+ * the packer (scripts/pack-plugin.js), which refuses to produce a ZIP the installer would refuse.
+ */
+// An npm package name, scoped or not. The first character of each part is alphanumeric on purpose:
+// npm itself refuses '.'/'_' there, and a leading '-' would let a manifest KEY read as an npm flag
+// (`--registry=…`) in the argv. Upper case is accepted because pre-2017 packages may carry it.
+const NPM_PACKAGE_NAME_RE = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[A-Za-z0-9][A-Za-z0-9._~-]*$/;
+// Every non-registry spec form needs one of these: a protocol or drive letter (':'), a path, URL or
+// `user/repo` shorthand ('/' or '\'). Control characters have no place in a range either.
+const NON_REGISTRY_SPEC_CHARS_RE = /[:/\\\t\r\n\0]/;
+
+/**
+ * Is `spec` (the value of one manifest `dependencies` entry) a plain registry version range? Returns
+ * null when it is, or a human-readable reason when it is not.
+ */
+function dependencySpecProblem(name: unknown, spec: unknown): string | null {
+    const n = logSafe(name);
+    if (typeof name !== 'string' || name.length === 0 || name.length > 214 || !NPM_PACKAGE_NAME_RE.test(name)) {
+        return `dependency "${n}" is not a valid npm package name`;
+    }
+    if (typeof spec !== 'string' || spec.trim().length === 0) {
+        return `dependency "${n}" must declare a semver version range as a string (e.g. "^1.2.3")`;
+    }
+    if (spec.length > 256) return `dependency "${n}" has an implausibly long version range`;
+    const s = spec.trim();
+    if (NON_REGISTRY_SPEC_CHARS_RE.test(s) || s.startsWith('.') || s.startsWith('~/')) {
+        return `dependency "${n}": "${logSafe(spec)}" is not a registry version range — git, GitHub, file:, link:, workspace:, npm: aliases, paths and tarball URLs are not accepted (they can run build scripts on the server or install code under another name). Publish the package to npm and depend on a version range, or ship it inside the plugin ("bundled": true).`;
+    }
+    if (!semver.validRange(s)) {
+        return `dependency "${n}": "${logSafe(spec)}" is not a valid semver range (dist-tags such as "latest" are not accepted — use a range like "^1.2.3")`;
+    }
+    return null;
+}
+
+/**
+ * Validate a manifest's whole `dependencies` field. Returns human-readable problems (empty = valid).
+ * Absent is valid; anything other than a plain object of name → range is not.
+ */
+function validateManifestDependencies(dependencies: any): string[] {
+    if (dependencies === undefined || dependencies === null) return [];
+    if (typeof dependencies !== 'object' || Array.isArray(dependencies)) {
+        return ['`dependencies` must be an object mapping npm package names to semver ranges.'];
+    }
+    const problems: string[] = [];
+    for (const name of Object.keys(dependencies)) {
+        const p = dependencySpecProblem(name, dependencies[name]);
+        if (p) problems.push(p);
+    }
+    return problems;
+}
+
+/**
  * Check for dependency conflicts between a plugin and active plugins
  * Uses SemVer to determine if version ranges are compatible
  * 
@@ -240,6 +314,16 @@ ${solutions}
 async function installPluginDependencies(slug: string, manifest: any, pluginPath: any = null) {
     if (!manifest || !manifest.dependencies) return;
 
+    // SECURITY (defense in depth): only plain registry version ranges ever reach `npm install`. The
+    // install pipeline already refuses anything else, but a manifest can reach the disk by other paths
+    // (a hand-copied folder, an install that predates the rule), so the refusal is repeated HERE,
+    // before npm runs — and before the bundled shortcut, because a manifest declaring a git/file/alias
+    // spec is not one this host accepts whether or not it would be installed. See dependencySpecProblem.
+    const depProblems = validateManifestDependencies(manifest.dependencies);
+    if (depProblems.length) {
+        throw new Error(`Plugin '${slug}' declares dependencies the host refuses to install:\n- ${depProblems.join('\n- ')}`);
+    }
+
     // Skip bundled plugins - they have their own dependencies
     if (pluginPath && isBundledPlugin(pluginPath, manifest)) {
         console.log(`📦 Plugin '${logSafe(slug)}' is bundled - skipping shared dependency installation.`);
@@ -289,8 +373,13 @@ async function installPluginDependencies(slug: string, manifest: any, pluginPath
         try {
             // SECURITY: execFile with an argument array (no shell) so dependency names from
             // the plugin manifest cannot inject shell commands. Async so we don't block the event loop.
+            // --ignore-scripts on the argv AND npm_config_ignore_scripts in the environment, so an .npmrc
+            // the operator did not write cannot turn lifecycle scripts back on for the nested installs
+            // npm spawns. Neither stops a git/file dependency's `prepare` (npm builds those regardless) —
+            // which is why such specs never get this far (validateManifestDependencies above).
             await execFileAsync(NPM_BIN, ['install', ...toInstall, '--save', '--ignore-scripts'], {
-                cwd: ROOT_DIR
+                cwd: ROOT_DIR,
+                env: { ...process.env, npm_config_ignore_scripts: 'true' },
             });
             console.log(`   ✅ Dependencies installed successfully.`);
         } catch (error) {
@@ -441,8 +530,130 @@ const KNOWN_PERMISSIONS: Record<string, string[]> = {
     express: ['register_route'],
     admin_menu: ['register'],
     assets: ['write'],
+    // browser:script — the plugin's compiled frontend bundles (dist/{admin,hooks,component}.bundle.js)
+    // run in the ADMIN SHELL's origin, with the session of whoever is viewing. See BROWSER_SCRIPT_TOKEN.
+    browser: ['script'],
     network: [], // scope-only: {scope:'network'} carries no access token
 };
+
+/**
+ * ═══ browser:script — RUNNING CODE IN THE ADMINISTRATOR'S BROWSER IS A CAPABILITY ═══════════════════
+ *
+ * A plugin's frontend bundles are not sandboxed. The admin SPA import()s them into its own origin: the
+ * hooks bundle of every active plugin on EVERY admin page load, the admin bundle when its page opens,
+ * and the Verso block bundle in the editor and on public pages. Code that runs there runs with the
+ * viewer's session — an administrator's, on the admin screens — and can call any API the administrator
+ * can (create users, change roles, install plugins). Those bundles are never AST-scanned
+ * (core/scan-exclusions skips dist/, client/, frontend/: they are browser code, and the scanner models
+ * Node). So before this capability existed, a plugin granted nothing but `settings:read` could act as
+ * the administrator simply by shipping a hooks bundle.
+ *
+ * This does NOT isolate that code — the real fix is to run plugin UI in separate-origin sandboxed
+ * iframes, which is a redesign of the plugin frontend contract and is planned separately. What it does
+ * is make the exposure an explicit, DEFAULT-DENY grant that the administrator sees and approves like
+ * any other permission, with the consequence spelled out:
+ *   · a plugin that ships browser code must DECLARE browser:script (install and activation refuse it
+ *     otherwise — validateBrowserCapability below);
+ *   · the host SERVES a plugin's bundles only while the plugin is active AND browser:script is granted
+ *     (routes/plugin-bundles.ts), so revoking the switch stops the code at the next page load;
+ *   · plugins that were already active with frontend entries when this shipped were granted it once,
+ *     at boot (migrateBrowserCapabilityGrants), so an upgrade does not silently break a working site.
+ */
+const BROWSER_SCRIPT_TOKEN = 'browser:script';
+// The compiled bundles build-plugin.js produces and routes/plugin-bundles.ts serves. Shipping one of
+// these (even with no manifest entry that would build it) is shipping browser code.
+const BROWSER_BUNDLE_FILES = ['dist/admin.bundle.js', 'dist/component.bundle.js', 'dist/hooks.bundle.js'];
+
+function pascalCaseId(id: string): string {
+    return String(id).split(/[-_]/).filter(Boolean).map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join('');
+}
+
+/**
+ * What browser code does this plugin ship? Returns a list of human-readable sources (empty = none).
+ *
+ * Mirrors what build-plugin.js compiles — the manifest's frontend.adminPage.entry, frontend.hooks, the
+ * block entry in either spelling (frontend.versoComponents / legacy frontend.puckComponents), the legacy
+ * frontend.components[].entry channel, and the folder CONVENTION that compiles a block with no manifest
+ * key at all (client/verso/<Pascal>Verso.tsx, legacy client/puck/<Pascal>Puck.tsx; see
+ * scripts/plugin-block-contract.js) — plus any compiled bundle already present in dist/, because a zip
+ * can ship a prebuilt bundle no manifest key accounts for. Over-reporting here costs a plugin author
+ * one declaration; under-reporting would be code in the admin's origin nobody was asked about.
+ */
+function browserCodeSources(pluginDir: string | null, manifest: any): string[] {
+    const out: string[] = [];
+    const fe = manifest && typeof manifest.frontend === 'object' && manifest.frontend ? manifest.frontend : null;
+    if (fe) {
+        if (fe.adminPage && fe.adminPage.entry) out.push('frontend.adminPage');
+        if (fe.hooks) out.push('frontend.hooks');
+        if (fe.versoComponents && fe.versoComponents.entry) out.push('frontend.versoComponents');
+        if (fe.puckComponents && fe.puckComponents.entry) out.push('frontend.puckComponents');
+        if (Array.isArray(fe.components) && fe.components.some((c: any) => c && c.entry)) out.push('frontend.components');
+    }
+    if (pluginDir) {
+        const id = String((manifest && manifest.id) || path.basename(String(pluginDir)));
+        const pascal = pascalCaseId(id);
+        for (const rel of [`client/verso/${pascal}Verso.tsx`, `client/puck/${pascal}Puck.tsx`, ...BROWSER_BUNDLE_FILES]) {
+            try {
+                if (fs.statSync(path.join(pluginDir, ...rel.split('/'))).isFile()) out.push(rel);
+            } catch { /* absent */ }
+        }
+    }
+    return out;
+}
+
+/** Does the manifest DECLARE browser:script? */
+function declaresBrowserScript(manifest: any): boolean {
+    const list = manifest && Array.isArray(manifest.permissions) ? manifest.permissions : [];
+    return list.some((p: any) => p && p.scope === 'browser' && p.access === 'script');
+}
+
+/**
+ * Install/activation/pack gate: a plugin that ships browser code must declare browser:script, so the
+ * administrator is asked about it. Returns problems (empty = valid).
+ */
+function validateBrowserCapability(pluginDir: string | null, manifest: any): string[] {
+    const sources = browserCodeSources(pluginDir, manifest);
+    if (sources.length === 0 || declaresBrowserScript(manifest)) return [];
+    return [
+        `This plugin ships code that runs in the administrator's browser (${sources.join(', ')}) but does not declare the `
+        + `"browser:script" permission. Add {"scope": "browser", "access": "script", "reason": "<what the UI does>"} to `
+        + `manifest.json "permissions" — the administrator must approve running plugin code with their session.`,
+    ];
+}
+
+/**
+ * One-time upgrade step: grant browser:script to every plugin that was ALREADY ACTIVE and already
+ * shipped browser code when this capability was introduced, so the upgrade does not silently remove the
+ * admin pages, hooks and blocks of a working site. Plugins activated later go through the normal
+ * default-deny path (declare → shown in the activation dialog → granted on activation).
+ *
+ * Idempotent twice over: it records completion in the `plugin_browser_capability_migrated` option and
+ * never runs again once that is set, and it only ADDS the token (an existing grant is left alone, no
+ * other grant is touched). Must run AFTER plugin-permissions.loadGrants()/backfillActive(). Returns the
+ * slugs it granted.
+ */
+const BROWSER_CAPABILITY_MIGRATION_OPTION = 'plugin_browser_capability_migrated';
+async function migrateBrowserCapabilityGrants(): Promise<string[]> {
+    if (await getOption(BROWSER_CAPABILITY_MIGRATION_OPTION, null)) return [];
+    const perms = require('./plugin-permissions');
+    const active: string[] = await getActivePlugins();
+    const granted: string[] = [];
+    for (const plugin of scanPlugins()) {
+        if (!active.includes(plugin.slug)) continue;
+        let manifest: any = {};
+        try { manifest = JSON.parse(fs.readFileSync(path.join(plugin.path, 'manifest.json'), 'utf8')); } catch { /* no/invalid manifest: dist/ files still count */ }
+        if (browserCodeSources(plugin.path, manifest).length === 0) continue;
+        const current: string[] = perms.getGrants(plugin.slug);
+        if (current.includes(BROWSER_SCRIPT_TOKEN)) continue;
+        await perms.setGrants(plugin.slug, [...current, BROWSER_SCRIPT_TOKEN]);
+        granted.push(plugin.slug);
+    }
+    await updateOption(BROWSER_CAPABILITY_MIGRATION_OPTION, new Date().toISOString());
+    if (granted.length) {
+        console.log(`[PluginPermissions] One-time upgrade: granted "${BROWSER_SCRIPT_TOKEN}" to already-active plugins that ship browser code: ${logSafe(granted.join(', '))}. Review it in Admin → Plugins → Permissions.`);
+    }
+    return granted;
+}
 
 /**
  * Validate a manifest.permissions array against KNOWN_PERMISSIONS. Returns human-readable problems
@@ -2567,6 +2778,15 @@ module.exports = {
     RESIDUE_JUDGED_ELSEWHERE,
     validateManifestPermissions,
     KNOWN_PERMISSIONS,
+    // Non-registry dependency specs (git/file/alias/URL) are refused — see dependencySpecProblem.
+    validateManifestDependencies,
+    installPluginDependencies,
+    // browser:script — plugin code in the admin's browser is a declared, granted capability.
+    BROWSER_SCRIPT_TOKEN,
+    browserCodeSources,
+    validateBrowserCapability,
+    migrateBrowserCapabilityGrants,
+    BROWSER_CAPABILITY_MIGRATION_OPTION,
     fixMiddlewareOrder,
     // Hard Lock + Bundling utilities
     isBundledPlugin,

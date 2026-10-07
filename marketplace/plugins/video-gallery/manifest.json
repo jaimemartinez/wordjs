@@ -1,7 +1,7 @@
 {
     "id": "video-gallery",
     "name": "Video Gallery",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Manage and display YouTube video carousels",
     "author": "WordJS",
     "isolated": true,
@@ -48,6 +48,11 @@
         "order": 60
     },
     "permissions": [
+        {
+            "scope": "browser",
+            "access": "script",
+            "reason": "Run the plugin's own compiled interface in the browser: its admin page and its site components. Without it the host does not serve these bundles and that interface does not load."
+        },
         {
             "scope": "settings",
             "access": "read",

@@ -175,7 +175,8 @@ let fileConfig: FileConfig = {};
 const crypto = require('crypto');
 
 // JWT secrets printed in this repository (defaultConfig above, the example config the deployment guide used
-// to ship, docker-compose's dev default). Anyone who has read them can sign a session.
+// to ship, docker-compose's and docker/entrypoint.sh's old dev default). Anyone who has read them can sign a
+// session — including one for the bootstrap administrator (user id 1) — so none of them is ever a usable key.
 const PUBLISHED_JWT_SECRETS = new Set([
     'wordjs-default-secret-change-me',
     'auto-generated-secure-secret',
@@ -184,23 +185,49 @@ const PUBLISHED_JWT_SECRETS = new Set([
 // 64 hex characters = 32 random bytes, the shortest secret any WordJS generator has ever written.
 const MIN_PREINSTALL_JWT_SECRET_LENGTH = 64;
 
+/** Same predicate as core/configManager.isInstalledConfig. Not imported: that module resolves its file
+ *  against the CWD when it loads, and config/app loads before anything else. */
+function isInstalledFileConfig(cfg: FileConfig): boolean {
+    return !!(cfg.installedAt || cfg.dbDriver);
+}
+
 /**
  * Must boot replace this config's jwtSecret before anything signs with it?
  *
- * Always when it is missing, not a string (jsonwebtoken refuses it as key material, so the site could never
- * issue a session) or the core placeholder. On a NOT-YET-INSTALLED config, also when it is short or any
- * published placeholder: POST /setup/install persists the secret this process boots with, so whatever passes
- * here becomes the site's permanent signing key. It has to be decided now, not at install, because
- * core/collab-rooms derives a key from the live secret when it loads. An INSTALLED site keeps any other
- * value: rotating it would sign every user out and split a multi-node tier that shares it.
+ * Always when it is missing or not a string (jsonwebtoken refuses it as key material, so the site could
+ * never issue a session). On a NOT-YET-INSTALLED config, also when it is short or any published placeholder:
+ * POST /setup/install persists the secret this process boots with, so whatever passes here becomes the
+ * site's permanent signing key. It has to be decided now, not at install, because core/collab-rooms derives
+ * a key from the live secret when it loads.
+ *
+ * An INSTALLED site is never rotated here: rotating it would sign every user out and split a multi-node tier
+ * whose replicas share the value. A published placeholder on an installed site is not kept either — see
+ * assertInstalledJwtSecretIsNotPublished(), which refuses to start instead.
  */
 function jwtSecretNeedsReplacing(cfg: FileConfig): boolean {
     const secret: unknown = cfg.jwtSecret;
-    if (typeof secret !== 'string' || !secret || secret === 'wordjs-default-secret-change-me') return true;
-    // Same predicate as core/configManager.isInstalledConfig. Not imported: that module resolves its file
-    // against the CWD when it loads, and config/app loads before anything else.
-    const installed = !!(cfg.installedAt || cfg.dbDriver);
-    return !installed && (secret.length < MIN_PREINSTALL_JWT_SECRET_LENGTH || PUBLISHED_JWT_SECRETS.has(secret));
+    if (typeof secret !== 'string' || !secret) return true;
+    if (isInstalledFileConfig(cfg)) return false;
+    return secret.length < MIN_PREINSTALL_JWT_SECRET_LENGTH || PUBLISHED_JWT_SECRETS.has(secret);
+}
+
+/**
+ * SECURITY: an INSTALLED config whose jwtSecret is a value printed in this repository is a site on which
+ * anyone can forge an administrator session. Keeping it is not an option, and neither is silently rotating
+ * it (every replica of a multi-node tier would pick a different random key and stop validating each other's
+ * sessions). So boot stops, with the fix in the message. Exported for the regression test; the message never
+ * echoes the secret.
+ */
+function assertInstalledJwtSecretIsNotPublished(cfg: FileConfig, file: string = configPath): void {
+    const secret: unknown = cfg.jwtSecret;
+    if (!isInstalledFileConfig(cfg) || typeof secret !== 'string' || !PUBLISHED_JWT_SECRETS.has(secret)) return;
+    throw new Error(
+        `FATAL: ${file} is installed but its "jwtSecret" is a placeholder published in the WordJS source. ` +
+        'Anyone who has read it can sign an administrator session, so WordJS refuses to start with it. ' +
+        'Generate a real secret (for example `openssl rand -hex 64`), put the SAME value in "jwtSecret" on every ' +
+        'node of this site (with Docker pre-seeding: set WORDJS_JWT_SECRET and recreate the data volume, or edit ' +
+        'the persisted config), and start again. Every existing session is signed out by the change, as it must be.'
+    );
 }
 
 // In the HOST: load wordjs-config.json and auto-generate/persist secrets. SKIP entirely inside an
@@ -223,6 +250,8 @@ if (!(globalThis as any).__WORDJS_ISOLATED__) {
     // 1.5 Secure Auto-Generation — generate secure keys ONLY if config exists but is insecure.
     let configChanged = false;
     if (fs.existsSync(configPath)) {
+        // Outside the load's try/catch on purpose: this must stop the process, not be logged and ignored.
+        assertInstalledJwtSecretIsNotPublished(fileConfig);
         if (jwtSecretNeedsReplacing(fileConfig)) {
             fileConfig.jwtSecret = crypto.randomBytes(64).toString('hex');
             configChanged = true;
@@ -580,3 +609,5 @@ function reloadFromFile(fresh?: any) {
 (config as any).reloadFromFile = reloadFromFile;
 
 module.exports = config;
+// Not part of the config object: the boot-time secret gate, exported for its regression test.
+Object.defineProperty(module.exports, 'assertInstalledJwtSecretIsNotPublished', { value: assertInstalledJwtSecretIsNotPublished, enumerable: false });

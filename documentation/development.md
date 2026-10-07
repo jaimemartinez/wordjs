@@ -303,7 +303,7 @@ Behaviour: **idempotent / re-runnable** — existing users (by login/email), ter
 
 ---
 
-## ⏱️ Performance budgets, and calibrating them on Linux
+## ⏱️ Performance budgets, and calibrating them per platform
 
 There are three performance gates, and they measure different things:
 
@@ -311,31 +311,39 @@ There are three performance gates, and they measure different things:
 | --- | --- | --- |
 | `cd backend && npm run perf:f0` | Five **absolute p95 millisecond** ceilings for content operations | `backend/f0-performance-budgets.json#contentMilliseconds` |
 | `npm run perf:bench:enforce` | HTTP steady state, as a **ratio to `/healthz`** measured in the same run (needs a **production** build running — dev numbers are meaningless, Next's caches do not persist in dev) | `backend/f0-baseline.json#performanceBudget.httpSteadyState` |
-| `backend/src/tests/f6-performance-budget.test.ts` (runs inside `npm test`) | The four F6 plan operations — creation, update, query, render — as a **ratio to a same-run reference workload** (ten single-row inserts through the active driver) | `backend/f0-baseline.json#performanceBudget.operations` |
+| `backend/src/tests/f6-performance-budget.test.ts` (runs inside `npm test`) | The four F6 plan operations — creation, update, query, render — as a **ratio to a same-run reference workload** (ten single-row inserts through the active driver), judged by **this platform's** calibration | `backend/f0-baseline.json#performanceBudget.operations` (shared) and `#performanceBudget.calibrations.<platform>` (ratios) |
 
-The ratio form exists because **a millisecond is a property of the machine**: a slower host inflates numerator and denominator together, so the ratio survives being moved between machines, while a real regression moves the numerator alone. The absolute ceilings survive as a secondary catastrophe check and may never be looser than the F0 file they descend from — `backend/scripts/verify-f0-baseline.ts` enforces that descent.
+The ratio form exists because **a millisecond is a property of the machine**: a slower host inflates numerator and denominator together, so the ratio survives repeated runs on one machine, while a real regression moves the numerator alone. The absolute ceilings survive as a secondary catastrophe check and may never be looser than the F0 file they descend from — `backend/scripts/verify-f0-baseline.ts` enforces that descent.
 
-### The gap this closes
+### One calibration per platform
 
-`performanceBudget.measuredOn.platform` says `win32`. Every ratio in the committed budget was observed across eight runs on **one Windows laptop** and had never been measured on the platform that enforces it. The file itself records the consequence: the ceilings sit at **2.0×** the worst calibration run, which is `1.5×` for measurement noise **times** an allowance for having only ever been calibrated on one platform, and `provisionalMargin` states the remedy — *"once the harness has run on the CI host, record that observation and tighten the ceilings back toward 1.5×"*. Its own `sensitivityNote` is candid that at 2.0× the gate "does not catch a 20% slowdown".
+A ratio is stable across runs on **one** host, not across hosts. The denominator is ten **autocommit** inserts, so it moves with what a durability flush costs on the host filesystem, while two of the four numerators (query and render) are mostly CPU. The first budget was minted on one Windows laptop and judged on the Linux runners too, and it flapped exactly there: the Linux reference reads ~0.22 ms against Windows' ~0.37 ms, so `contentRender` — about 0.03 ms a call, the noisiest operation — failed the Backend job at 0.183× and 0.187× against a 0.18× ceiling on code that had not changed, and reached 0.216× across 104 rounds the CI perf job had recorded.
 
-The `Performance budgets (Linux measurement; calibrate/enforce on dispatch)` job in `ci.yml` runs the harness on `ubuntu-latest`. On every push and pull request it measures **one** round, prints each observation next to the ceiling it is judged by and uploads the table as an artifact, but it **does not fail** — the Windows-calibrated ceilings are already enforced on every run by `f6-performance-budget.test.ts` inside the Backend job, and a second enforcing copy on a second cold runner would only add flakes. `workflow_dispatch` runs the same four assertions with `--enforce`; `workflow_dispatch` with `calibrate: true` runs eight rounds and mints a paste-ready Linux budget. `--enforce` returns to the push path in the commit that lands that calibration.
+So `performanceBudget` keeps the host-independent fields once (methodology, the reference bounds, call sites, absolute ceilings, F0 descent) and each platform carries its own observations and ratio ceilings under `calibrations.<process.platform>`, with its own `measuredOn` (rounds, `ceilingFactor`, run-to-run spread). The committed calibrations are:
 
-### Calibration flow: dispatch → artifact → paste → PR
+- **`linux`** — minted from **104** one-round artifacts the CI perf job had already recorded on `ubuntu-latest`, ceilings at **1.5×** the worst round (the noise factor alone). `verify-f0-baseline.ts` **requires** it, because every CI job that runs the harness runs on Linux.
+- **`win32`** — the original eight rounds on an idle Windows 11 host, ceilings at **2.0×** the worst round. The extra margin was an allowance for being judged on Linux too; it no longer has that job, so re-minting it locally at 1.5× is the next step (`marginNote` says so in the file).
 
-1. **Dispatch.** Actions → *CI* → *Run workflow* → tick **`calibrate`**. The job then runs **eight** rounds instead of one.
-2. **Download.** Take the `perf-calibration.json` artifact from that run (it is uploaded on success *and* on failure — a run that went over a ceiling is exactly the run whose numbers you need).
-3. **Paste.** Copy the artifact's **`.performanceBudget`** value over `performanceBudget` in `backend/f0-baseline.json`. It is emitted in that exact shape, with `measuredOn.platform: linux` and ceilings at **1.5×** the worst of the eight rounds — the noise factor alone, because a calibration measured on the enforcing platform no longer owes the single-platform allowance.
-4. **PR.** Open one. Nothing is written by CI on purpose: a budget change is a review decision, and both `backend/src/tests/f6-performance-budget.test.ts` and `npm run verify:f0` re-check the pasted block (ceiling inside `methodology.ceilingMarginRange`, every operation measured and budgeted in both directions, the reference observation strictly inside its own bounds, no F6 ceiling looser than the F0 one it inherits).
+A platform with **no** calibration (macOS, for instance) does not borrow another platform's numbers: the ratio comparison is reported as **skipped** with the reason, while the absolute ceilings, the denominator bounds and the operation sets are still enforced there.
+
+The `Performance budgets (Linux, enforced; calibrate on dispatch)` job in `ci.yml` runs the harness on `ubuntu-latest` and, on every push and pull request, measures **one** round and **enforces** the `linux` calibration, printing each observation next to its ceiling and uploading the raw numbers as an artifact. It is not a required check: the Backend job's `npm test` and the F6 phase suites enforce the same calibration inside required checks. `workflow_dispatch` with `calibrate: true` runs eight rounds and mints a fresh `linux` calibration.
+
+### Calibration flow: measure → mint → paste → PR
+
+1. **Measure.** Either use the rounds CI already recorded — every run uploads a one-round `perf-calibration.json` artifact — or dispatch Actions → *CI* → *Run workflow* with **`calibrate`** ticked, which runs **eight** rounds in one job.
+2. **Mint.** From recorded artifacts, download them into one directory and reduce them locally:
+   `node backend/scripts/perf-calibrate.mjs --calibrate --platform linux --from <dir>`. Only rounds measured on that platform, with the committed methodology and the committed operation set, are used; every other artifact is listed as refused with the reason. A dispatched calibration run does the same reduction itself.
+3. **Paste.** Copy the output's **`.calibration`** over `performanceBudget.calibrations.<platform>` in `backend/f0-baseline.json` (the artifact also carries the whole `.performanceBudget` with only that platform replaced). Ceilings come out at **1.5×** the worst round. A re-mint that is **looser** than the committed ceiling for that platform is reported as an error: either the code got slower or the measuring host was noisier, and the PR has to say which.
+4. **PR.** Nothing is written by CI on purpose: a budget change is a review decision, and both `backend/src/tests/f6-performance-budget.test.ts` and `npm run verify:f0` re-check the pasted block (ceiling inside `methodology.ceilingMarginRange`, every operation calibrated, measured and budgeted in both directions, the reference observation strictly inside the shared bounds, no observed p95 at or above its absolute ceiling, no F6 ceiling looser than the F0 one it inherits).
 
 Run the same thing locally with:
 
 ```bash
-node backend/scripts/perf-calibrate.mjs --enforce             # one round, print the table, fail if over
-node backend/scripts/perf-calibrate.mjs --calibrate --rounds 8  # mint a block for THIS host
+node backend/scripts/perf-calibrate.mjs --enforce               # one round, print the table, fail if over
+node backend/scripts/perf-calibrate.mjs --calibrate --rounds 8  # mint a calibration for THIS host
 ```
 
-Two things the script deliberately will not do. It **does not measure anything itself** — it spawns `backend/src/tests/f6-performance-budget.test.ts` (with `WORDJS_F6_PERF_PRINT=1`, which makes that suite emit its run as one JSON line) and only repeats and reduces, so the calibration can never come from a harness other than the one CI enforces with. And it **never raises `maximumMillisecondsP95`**: those absolute ceilings descend from `f0-performance-budgets.json`, so a p95 that has grown past one is reported as a finding and exits non-zero, rather than being legislated away.
+Two things the script deliberately will not do. It **does not measure anything itself** — it spawns `backend/src/tests/f6-performance-budget.test.ts` (with `WORDJS_F6_PERF_PRINT=1`, which makes that suite emit its run as one JSON line), or reads rounds that same harness already emitted, and only repeats and reduces, so the calibration can never come from a harness other than the one CI enforces with. And it **never raises `maximumMillisecondsP95`**: those absolute ceilings descend from `f0-performance-budgets.json`, so a p95 that has grown past one is reported as a finding and exits non-zero, rather than being legislated away.
 
 Measure on an **idle** host. A round takes about **2.5 seconds** (10 warmups, 150 reference samples, 60 samples per operation, 10 % trimmed mean — all read from `performanceBudget.methodology`, so the harness and the budget cannot drift apart), so eight rounds cost under a minute and there is no reason to skimp. A busy machine, on the other hand, produces ratios that are noise: measured back to back on the same laptop, `contentQuery` read 1.02× idle and 2.04× while a full test suite was running — over its 1.72× ceiling, on identical code.
 
@@ -356,7 +364,7 @@ The backend, gateway, frontend, and install-channel (`packages/create-wordjs`) j
 - **Verso E2E (`verso-e2e`):** Playwright (chromium, headless) against an ephemeral plain-HTTP monolith that Playwright's own `webServer` starts (`npm run dev:mono` with `WORDJS_HTTP=1`); the `setup` project installs the instance through `WORDJS_INSTALL_TOKEN` and logs in by API, sharing `storageState` with the specs. Traces are uploaded as an artifact on failure.
 - **Compiled-bundle smoke-boot (`bundle-boot`):** builds the real release bundle (`npm run bundle-release`) and **deploys it in every mode** — monolith, split, and cluster enrollment — via `scripts/smoke-deploy.sh`, so a file that lives in `src/` but is stripped from the compiled `dist/` fails the PR instead of the release. This is the only job that runs the packaged **compiled** artifact rather than `ts-node` source; it mirrors the same step in `release.yml`.
 - **Docker image (`docker-image`):** checks that the deployment templates and the Helm chart parse and render, builds the image (which runs the whole product build), boots the container, reads its health endpoints and completes the install headlessly with the install token (the same install request as `scripts/smoke-deploy.sh`) — the container-shaped sibling of `bundle-boot`. Not a required check.
-- **Performance budgets (`perf-budgets`):** runs the F6 in-process performance harness on `ubuntu-latest` and prints every observed ratio/p95 next to the committed ceiling, without failing on push or pull request (the Backend job already enforces the committed ceilings); `--enforce` applies on `workflow_dispatch` only. On `workflow_dispatch` with `calibrate: true` it runs eight rounds and uploads a paste-ready `performanceBudget` block measured on Linux. Additive and **not a required check** — see § Performance budgets above for why, and for the dispatch → artifact → paste → PR flow.
+- **Performance budgets (`perf-budgets`):** runs the F6 in-process performance harness on `ubuntu-latest`, prints every observed ratio/p95 next to its ceiling and **enforces** the committed `linux` calibration on push and pull request; the raw numbers are uploaded as `perf-calibration.json`, which is also what a later `perf-calibrate.mjs --calibrate --from` reduces. On `workflow_dispatch` with `calibrate: true` it runs eight rounds and mints a fresh `linux` calibration. **Not a required check** — the Backend job and the F6 phase suites enforce the same calibration inside required checks; see § Performance budgets above for the measure → mint → paste → PR flow.
 
 The license gate keeps the distribution MIT-clean by failing on network-copyleft (AGPL/SSPL) production dependencies.
 

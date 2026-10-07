@@ -52,6 +52,54 @@ function normalizeEmail(email: any): string {
 }
 
 /**
+ * THE USERNAME RULE — one rule, enforced on every path that CREATES a login (User.create, which covers
+ * POST /auth/register, POST /users and both importers; the routes call usernameError() first only to
+ * answer a clean 400 instead of a 500).
+ *
+ * SECURITY. A login used to be "any non-empty string not already taken", and every sign-in lookup tried
+ * the identifier as a USERNAME before trying it as an EMAIL. So anyone allowed to register could take the
+ * username "boss@gmail.com" — another account's email — and from then on that account's email no longer
+ * signed it in (the attacker's row answered first) and POST /auth/forgot-password mailed the reset link
+ * for "boss@gmail.com" to the ATTACKER's address. "Boss" and " boss" registered beside "boss" too.
+ *
+ * The rule: the install wizard's character set (letters, digits, `_` `.` `-`, so no '@' and no
+ * whitespace — a username can never look like an email address), at most 60 characters. No minimum
+ * beyond one character here: a short login is not a security property, and imported sites carry them
+ * (the wizard keeps its own 3-character floor for the first administrator). Existing rows are NOT
+ * re-validated — an account created under an older rule keeps loading and signing in; the lookups below
+ * are what stop a legacy '@' login from shadowing anybody's email.
+ */
+const USERNAME_MAX_LENGTH = 60;
+const USERNAME_RE = /^[A-Za-z0-9_.-]+$/;
+
+/** Why `username` cannot be a NEW login, or null when it can. Messages are safe to show the caller. */
+function usernameError(username: any): string | null {
+    if (typeof username !== 'string' || !username) return 'Username is required.';
+    if (username.length > USERNAME_MAX_LENGTH) return `Username must be at most ${USERNAME_MAX_LENGTH} characters.`;
+    if (!USERNAME_RE.test(username)) return 'Username may only contain letters, numbers, dots, hyphens and underscores.';
+    return null;
+}
+
+/**
+ * A login an IMPORTER can create from a source site's login, which may break the rule above (WordPress
+ * allows spaces and '@', and many sites use email addresses as logins). Disallowed characters become '_'
+ * and the result is capped; the importer's own author map stays keyed on the source login.
+ */
+function importableUsername(login: any): string {
+    const raw = String(login == null ? '' : login).trim();
+    if (!usernameError(raw)) return raw;
+    const cleaned = raw.replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, USERNAME_MAX_LENGTH);
+    return cleaned || 'user';
+}
+
+/** An error whose `code` lets a caller tell WHICH identity collided without parsing the message. */
+function identityTaken(message: string, code: 'username_taken' | 'email_taken'): Error {
+    const err: any = new Error(message);
+    err.code = code;
+    return err;
+}
+
+/**
  * THE PUBLIC AUTHOR SLUG.
  *
  * `user_nicename` is the identity every public author surface is addressed by — the byline a post
@@ -211,12 +259,17 @@ class User {
         // domain. Rejecting it at the model covers every caller — REST, self-registration, both importers.
         if (!EMAIL_FORMAT_RE.test(normalizedEmail)) throw new Error('Invalid email format');
 
-        // Check if exists
-        const existingUser = await User.findByLogin(username);
-        if (existingUser) throw new Error('Username already exists');
+        const loginProblem = usernameError(username);
+        if (loginProblem) throw new Error(`Invalid username: ${loginProblem}`);
+
+        // Check if exists. Case-FOLDED, and across BOTH namespaces: a new login may not equal another
+        // account's login in any letter case ("Boss" beside "boss") or another account's email, and a new
+        // email may not equal an existing (legacy) login — see THE USERNAME RULE above for why the
+        // namespaces have to stay apart. The rule's charset is ASCII, so the SQL LOWER() folds it fully.
+        if (await User.identifierInUse(username)) throw identityTaken('Username already exists', 'username_taken');
 
         const existingEmail = await User.findByEmail(normalizedEmail);
-        if (existingEmail) throw new Error('Email already exists');
+        if (existingEmail || await User.identifierInUse(normalizedEmail)) throw identityTaken('Email already exists', 'email_taken');
 
         // Hash password
         const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
@@ -325,9 +378,36 @@ class User {
         return user;
     }
 
+    /**
+     * Is `value` (case-folded) already some account's login or email? `exceptId` skips one account, for
+     * an update that keeps its own value.
+     */
+    static async identifierInUse(value: string, exceptId?: number | string): Promise<boolean> {
+        const folded = String(value).toLowerCase();
+        const row = await dbAsync.get(
+            'SELECT id FROM users WHERE (LOWER(user_login) = ? OR LOWER(user_email) = ?) AND id <> ? LIMIT 1',
+            [folded, folded, exceptId === undefined || exceptId === null ? -1 : Number(exceptId)]);
+        return !!row;
+    }
+
+    /**
+     * The account a sign-in identifier names: a login or an email address.
+     *
+     * SECURITY: an identifier containing '@' is resolved as an EMAIL first. New logins can no longer contain
+     * '@' (THE USERNAME RULE), but rows created before that rule may, and trying the login first let such a
+     * row shadow another account's email — at sign-in and at password recovery. A legacy '@' login still
+     * resolves when no account has that email.
+     */
+    static async findByIdentifier(identifier: any) {
+        if (typeof identifier !== 'string' || !identifier) return null;
+        if (identifier.includes('@')) {
+            return (await User.findByEmail(identifier)) || (await User.findByLogin(identifier)) || null;
+        }
+        return (await User.findByLogin(identifier)) || null;
+    }
+
     static async authenticate(login: string, password: string) {
-        let user = await User.findByLogin(login);
-        if (!user) user = await User.findByEmail(login);
+        const user = await User.findByIdentifier(login);
 
         // Mitigation for Timing Attacks (Username Enumeration)
         // Always perform a hash comparison, even if user doesn't exist
@@ -368,6 +448,8 @@ class User {
             const normalizedEmail = normalizeEmail(email);
             const existing = await User.findByEmail(normalizedEmail);
             if (existing && String(existing.id) !== String(id)) throw new Error('Email already in use');
+            // Nor may it equal ANOTHER account's (legacy) login — see THE USERNAME RULE.
+            if (await User.identifierInUse(normalizedEmail, id)) throw new Error('Email already in use');
             updates.push('user_email = ?'); values.push(normalizedEmail);
         }
         if (data.displayName) { updates.push('display_name = ?'); values.push(data.displayName); }
@@ -654,3 +736,7 @@ class User {
 }
 
 module.exports = User;
+// The username rule, for the routes that answer a 400 before reaching create() and for the importers.
+module.exports.usernameError = usernameError;
+module.exports.importableUsername = importableUsername;
+module.exports.USERNAME_MAX_LENGTH = USERNAME_MAX_LENGTH;

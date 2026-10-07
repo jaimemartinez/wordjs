@@ -1420,7 +1420,10 @@ function egressPolicyLoaded(): boolean {
 // (theme-engine wraps wordjs_head/wordjs_footer in a Handlebars SafeString). A plugin shimming one of
 // these is a stored-XSS primitive (incl. the admin UI), so it is denied for EVERY plugin — no plugin
 // gets raw-HTML output hooks.
-const RAW_HTML_HOOKS = new Set(['wordjs_head', 'wordjs_footer', 'wp_head', 'wp_footer']);
+// `dynamic_sidebar` filters the whole rendered sidebar (core/widgets.ts renderSidebar), which is served
+// as text/html by the ANONYMOUS GET /widgets/sidebars/:id/render and painted into every public page —
+// the built-in widgets escape their values, but a filter returning markup would bypass all of that.
+const RAW_HTML_HOOKS = new Set(['wordjs_head', 'wordjs_footer', 'wp_head', 'wp_footer', 'dynamic_sidebar']);
 
 // Host auth/session cookies that must never be forwarded to (or overwritten by) an isolated
 // plugin's route handler: `wordjs_token` is the HttpOnly auth JWT, plus defensive csrf/session names.

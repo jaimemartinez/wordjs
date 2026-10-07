@@ -17,7 +17,9 @@ ingress in front.
 - **The multi-node stack** — Postgres + Redis + two replicas demonstrating cross-node coherence — is the
   compose file at the **repository root**. It is a different artifact answering a different question,
   and because a second replica can only join a site that is already installed, it comes up pre-installed
-  and cannot be logged into. See `docker/README.md` for what it does and does not prove.
+  and skips the wizard: its administrator is a bootstrap `admin` with a random password written into the
+  seeding replica's data volume, and it requires `WORDJS_JWT_SECRET` (`openssl rand -hex 64`). See
+  `docker/README.md` for what it does and does not prove.
 - **Horizontal scaling in general.** An external database, Redis, and the shared `themes/`, `plugins/`,
   `backups/`, `public/`, `ssl/` mounts are described in `documentation/multi-node.md`.
 - **Split and separate modes** (gateway + backend + frontend as distinct services, optionally on

@@ -103,6 +103,37 @@ function bundlePathFor(folder: string, bundleType: string): string | null {
 }
 
 /**
+ * MAY THIS PLUGIN'S BROWSER CODE BE SERVED AT ALL? Only while the plugin is ACTIVE and the administrator
+ * has GRANTED it `browser:script`.
+ *
+ * What is served here is executed, not displayed: the admin SPA import()s these bundles into its own
+ * origin — every active plugin's hooks bundle on EVERY admin page load — so they run with the viewer's
+ * session, an administrator's on the admin screens. They are build output the plugin author controls
+ * and the AST scanner never reads. These routes used to hand them out for ANY installed plugin, active
+ * or not, to anyone, which made "install a plugin" equivalent to "let it act as every administrator
+ * who opens the admin", whatever permissions it had been granted. The capability is now explicit and
+ * default-deny (core/plugins.ts BROWSER_SCRIPT_TOKEN): a plugin's code reaches a browser only if the
+ * administrator approved exactly that, and revoking the switch stops it at the next page load.
+ *
+ * The same answer gates the stylesheet and the build manifest: they belong to the same bundle, and
+ * serving them for an inactive plugin would only tell an anonymous caller what is installed. A refusal
+ * is a plain 404, indistinguishable from "not built", for the same reason.
+ *
+ * This is a MITIGATION, not isolation: granted code still runs in the admin's origin. Running plugin UI
+ * in separate-origin sandboxed iframes is the planned redesign (documentation/security.md).
+ */
+async function browserCodeServable(folder: string): Promise<boolean> {
+    // Read through the module objects at request time (not destructured at load), so the live grant
+    // store and the active list are what decides — a revoke takes effect on the very next request.
+    const { isPluginActive } = require('../core/plugins');
+    const { isGranted } = require('../core/plugin-permissions');
+    if (!isGranted(folder, 'browser', 'script')) return false;
+    return !!(await isPluginActive(folder));
+}
+
+const NOT_SERVED = { error: 'Bundle not found' };
+
+/**
  * GET /api/v1/plugins/:slug/bundle
  * 
  * Returns the admin.bundle.js for a plugin.
@@ -117,7 +148,7 @@ function bundlePathFor(folder: string, bundleType: string): string | null {
  * /plugins/{slug}/bundle:
  *   get:
  *     summary: Download a plugin pre-compiled frontend bundle
- *     description: Serves plugins/<folder>/dist/<type>.bundle.js. Unauthenticated, like the other static plugin assets. The slug may be either the on-disk folder or the admin page slug declared in the plugin manifest; anything outside the character allowlist, and any bundle type outside the allowlist, is refused rather than joined into a path. The URL is unversioned, so the response carries a weak ETag and Cache-Control no-cache - send If-None-Match to get a 304.
+ *     description: Serves plugins/<folder>/dist/<type>.bundle.js - ONLY while the plugin is active and the administrator has granted it the browser:script capability (the bundle runs in the admin origin with the viewer's session); otherwise 404. Unauthenticated, because the public site loads Verso block bundles too. The slug may be either the on-disk folder or the admin page slug declared in the plugin manifest; anything outside the character allowlist, and any bundle type outside the allowlist, is refused rather than joined into a path. The URL is unversioned, so the response carries a weak ETag and Cache-Control no-cache - send If-None-Match to get a 304.
  *     tags: [Plugins]
  *     security: []
  *     parameters:
@@ -151,7 +182,7 @@ function bundlePathFor(folder: string, bundleType: string): string | null {
  *       400:
  *         description: Invalid plugin slug, an unknown bundle type, or a repeated type parameter (rest_invalid_param)
  *       404:
- *         description: No such plugin, or the plugin has not been built
+ *         description: No such plugin, the plugin is inactive or not granted browser:script, or it has not been built
  */
 router.get('/:slug/bundle', asyncHandler(async (req: Request, res: Response) => {
     requireScalarQuery(req.query, BUNDLE_QUERY_FIELDS);
@@ -171,6 +202,10 @@ router.get('/:slug/bundle', asyncHandler(async (req: Request, res: Response) => 
 
     // Map the ADMIN slug to the on-disk folder (they differ for most plugins).
     const folder = resolvePluginDir(slug);
+    // Inactive, or browser:script not granted: not served (see browserCodeServable).
+    if (folder && !(await browserCodeServable(folder))) {
+        return res.status(404).json(NOT_SERVED);
+    }
     const bundlePath = folder ? bundlePathFor(folder, String(bundleType)) : null;
 
     if (!bundlePath || !fs.existsSync(bundlePath)) {
@@ -209,7 +244,7 @@ router.get('/:slug/bundle', asyncHandler(async (req: Request, res: Response) => 
  * /plugins/{slug}/bundle/manifest:
  *   get:
  *     summary: Read the build manifest of a plugin bundle
- *     description: Serves plugins/<folder>/dist/manifest.build.json. A slug that resolves to no installed folder is a 404 - the raw slug is never used as a directory name.
+ *     description: Serves plugins/<folder>/dist/manifest.build.json, under the same active + browser:script gate as the bundle. A slug that resolves to no installed folder is a 404 - the raw slug is never used as a directory name.
  *     tags: [Plugins]
  *     security: []
  *     parameters:
@@ -229,11 +264,11 @@ router.get('/:slug/bundle', asyncHandler(async (req: Request, res: Response) => 
  *       400:
  *         description: Invalid plugin slug
  *       404:
- *         description: No such plugin, or no build manifest was published
+ *         description: No such plugin, the plugin is inactive or not granted browser:script, or no build manifest was published
  *       500:
  *         description: The manifest could not be read or parsed
  */
-router.get('/:slug/bundle/manifest', async (req: Request, res: Response) => {
+router.get('/:slug/bundle/manifest', asyncHandler(async (req: Request, res: Response) => {
     const { slug } = req.params as { slug: string };
 
     if (!/^[a-zA-Z0-9_-]+$/.test(slug)) {
@@ -244,6 +279,9 @@ router.get('/:slug/bundle/manifest', async (req: Request, res: Response) => {
     // directory name (that reintroduced request-controlled text into the path after the folder
     // mapping had already refused it).
     const folder = resolvePluginDir(slug);
+    if (folder && !(await browserCodeServable(folder))) {
+        return res.status(404).json({ error: 'Build manifest not found' });
+    }
     const manifestPath = folder ? resolveBundleFile(folder, 'manifest.build.json') : null;
 
     if (!manifestPath || !fs.existsSync(manifestPath)) {
@@ -256,7 +294,7 @@ router.get('/:slug/bundle/manifest', async (req: Request, res: Response) => {
     } catch (e) {
         res.status(500).json({ error: 'Failed to read manifest' });
     }
-});
+}));
 
 /**
  * GET /api/v1/plugins/:slug/bundle/css
@@ -268,7 +306,7 @@ router.get('/:slug/bundle/manifest', async (req: Request, res: Response) => {
  * /plugins/{slug}/bundle/css:
  *   get:
  *     summary: Download the stylesheet that goes with a plugin bundle
- *     description: Same slug mapping, allowlist and containment proof as the JavaScript bundle. A plugin with no stylesheet is not an error - the response is 200 with an empty body, so the loader can always issue the request. Cached by ETag revalidation, like the bundle.
+ *     description: Same slug mapping, allowlist, containment proof and active + browser:script gate as the JavaScript bundle. A served plugin with no stylesheet is not an error - the response is 200 with an empty body, so the loader can always issue the request. Cached by ETag revalidation, like the bundle.
  *     tags: [Plugins]
  *     security: []
  *     parameters:
@@ -301,6 +339,8 @@ router.get('/:slug/bundle/manifest', async (req: Request, res: Response) => {
  *         description: The stylesheet is unchanged (ETag match)
  *       400:
  *         description: Invalid plugin slug, an unknown bundle type, or a repeated type parameter (rest_invalid_param)
+ *       404:
+ *         description: The plugin is inactive or not granted browser:script
  */
 router.get('/:slug/bundle/css', asyncHandler(async (req: Request, res: Response) => {
     requireScalarQuery(req.query, BUNDLE_QUERY_FIELDS);
@@ -321,6 +361,11 @@ router.get('/:slug/bundle/css', asyncHandler(async (req: Request, res: Response)
     // with path.join and no containment check at all — the one call site of this shape that the
     // hardening pass missed.
     const folder = resolvePluginDir(slug);
+    // Same gate as the JavaScript: the stylesheet of a bundle that is not served is not served either
+    // (and an inactive plugin's files are no business of an anonymous caller).
+    if (folder && !(await browserCodeServable(folder))) {
+        return res.status(404).json(NOT_SERVED);
+    }
     const cssPath = folder ? resolveBundleFile(folder, `${bundleType}.bundle.css`) : null;
 
     if (!cssPath || !fs.existsSync(cssPath)) {

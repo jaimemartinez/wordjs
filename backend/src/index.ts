@@ -1541,6 +1541,11 @@ async function initialize() {
                         .filter(Boolean))) as string[],
                 }));
             await require('./core/plugin-permissions').backfillActive(entries);
+            // One-time upgrade step for the browser:script capability: plugins that were already active
+            // and already shipped browser code keep their admin pages, hooks and blocks (the bundle routes
+            // now serve only granted plugins). Runs once — recorded in an option — and only ever adds
+            // that one token. See core/plugins.ts migrateBrowserCapabilityGrants.
+            await require('./core/plugins').migrateBrowserCapabilityGrants();
         } catch (e: any) {
             console.warn('[PluginPermissions] load/backfill skipped:', e && e.message);
         }

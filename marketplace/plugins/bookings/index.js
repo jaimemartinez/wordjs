@@ -22,7 +22,7 @@
 
 exports.metadata = {
     name: 'Bookings',
-    version: '1.0.0',
+    version: '1.0.1',
     description: 'Services with weekly availability, public slot picker, race-safe reservations, email confirmation, admin agenda.',
     author: 'WordJS',
 };

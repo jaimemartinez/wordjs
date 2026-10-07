@@ -23,8 +23,9 @@
  *
  * THE OTHER SIDE OF IT. Persisting the boot-time secret makes it permanent, so a value pre-seeded into a
  * not-yet-installed config (a published placeholder, a short or non-string value) must not survive the boot.
- * The old installer overwrote it. The last two suites pin both halves of config/app.ts's gate: such a value is
- * replaced before anything signs with it, and an INSTALLED site's secret is never rotated.
+ * The old installer overwrote it. The last three suites pin config/app.ts's gate: such a value is replaced
+ * before anything signs with it, an INSTALLED site's secret is never rotated, and an INSTALLED site whose
+ * secret is a published placeholder refuses to start rather than keep a key anyone can sign with.
  *
  * MUTATION PROOF: put back `const jwtSecret = crypto.randomBytes(64).toString('hex')` in the install
  * handler and every "still authenticates after a restart" test fails with 401 rest_token_invalid. Drop the
@@ -389,13 +390,49 @@ describe('a pre-install config with a weak jwtSecret: the install never makes it
 
 describe('an INSTALLED site keeps its jwtSecret: the pre-install gate never rotates a live site', () => {
     // Rotating an installed site's secret signs every user out, and on a multi-node tier it splits the
-    // replicas that share it (docker-compose's replicas share the dev placeholder on purpose).
-    for (const kept of ['wordjs-shared-dev-secret-change-me', 'short-installed-secret']) {
-        it(`"${kept}" survives the boot unchanged`, async () => {
+    // replicas that share it.
+    for (const kept of ['short-installed-secret', 'a'.repeat(128)]) {
+        it(`"${kept.slice(0, 24)}" survives the boot unchanged`, async () => {
             preseed({ installedAt: '2026-01-01T00:00:00.000Z', dbDriver: 'postgres', dbPassword: 'not-the-default', jwtSecret: kept });
             const first = await boot();
             assert.strictEqual(first.config.jwt.secret, kept);
             assert.strictEqual(persisted().jwtSecret, kept);
         });
     }
+});
+
+describe('an INSTALLED site whose jwtSecret is a published placeholder refuses to start', () => {
+    // docker/entrypoint.sh used to pre-seed an INSTALLED config with 'wordjs-shared-dev-secret-change-me'
+    // whenever WORDJS_PRESEED_CONFIG=1 came without WORDJS_JWT_SECRET (and the root docker-compose.yml set that
+    // very value), and the gate above kept it because the site was installed. Anyone could then sign
+    // { userId: 1 } with it and be the bootstrap administrator. Rotating it silently would desync the
+    // replicas of a multi-node tier, so the only safe answer is to stop, with the fix in the message.
+    //
+    // MUTATION PROOF: drop the assertInstalledJwtSecretIsNotPublished() call in config/app.ts and every case
+    // below boots with the placeholder as the live signing key.
+    const published = ['wordjs-shared-dev-secret-change-me', 'auto-generated-secure-secret', 'wordjs-default-secret-change-me'];
+    for (const secret of published) {
+        it(`"${secret}" on an installed config stops the boot, and the config is left as found`, async () => {
+            const cfg = { installedAt: '2026-01-01T00:00:00Z', dbDriver: 'sqlite-native', dbPassword: 'wordjs', jwtSecret: secret };
+            preseed(cfg);
+            await assert.rejects(boot(), (err: any) => {
+                assert.match(String(err && err.message), /refuses to start/);
+                assert.match(String(err && err.message), /openssl rand -hex 64/);
+                assert.ok(!String(err.message).includes(secret), 'the fatal message must not echo the secret');
+                return true;
+            });
+            assert.strictEqual(persisted().jwtSecret, secret, 'an installed site must never be rotated silently');
+        });
+    }
+
+    it('the gate is a pure function of the config: pre-install placeholders pass it (boot replaces them instead)', () => {
+        preseed({ installedAt: '2026-01-01T00:00:00Z', jwtSecret: 'x'.repeat(128) });
+        return boot().then(({ config }) => {
+            const gate = config.assertInstalledJwtSecretIsNotPublished;
+            assert.strictEqual(typeof gate, 'function');
+            assert.doesNotThrow(() => gate({ jwtSecret: 'wordjs-shared-dev-secret-change-me' }), 'not installed: boot replaces it');
+            assert.doesNotThrow(() => gate({ dbDriver: 'postgres', jwtSecret: 'x'.repeat(128) }));
+            assert.throws(() => gate({ dbDriver: 'postgres', jwtSecret: 'wordjs-shared-dev-secret-change-me' }), /refuses to start/);
+        });
+    });
 });

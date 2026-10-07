@@ -1,7 +1,7 @@
 {
     "id": "restaurant-menu",
     "name": "Restaurant Menu",
-    "version": "2.0.0",
+    "version": "2.0.1",
     "description": "Restaurante completo: menú por secciones con modificadores (tamaños/extras), alérgenos e i18n es/en, horarios de apertura, pedidos en línea y en mesa por código QR, reservas, pago en línea con Stripe, cocina en vivo e informes con CSV. Entrega por WhatsApp incluida.",
     "author": "WordJS",
     "isolated": true,
@@ -24,6 +24,11 @@
         "order": 76
     },
     "permissions": [
+        {
+            "scope": "browser",
+            "access": "script",
+            "reason": "Run the plugin's own compiled interface in the browser: its admin page and its Verso block (in the editor and on public pages). Without it the host does not serve these bundles and that interface does not load."
+        },
         {
             "scope": "database",
             "access": "read",

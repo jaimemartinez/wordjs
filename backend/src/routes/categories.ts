@@ -165,7 +165,9 @@ router.get('/:id', optionalAuth, asyncHandler(async (req: Request, res: Response
 router.post('/', authenticate, can('manage_categories'), asyncHandler(async (req: Request, res: Response) => {
     const { name, slug, description, parent } = req.body;
 
-    if (!name) {
+    // Term.create strips markup from the name; a name that is ONLY markup is a missing name (400), not
+    // a model error (500).
+    if (!Term.sanitizeName(name)) {
         return res.status(400).json({
             code: 'rest_missing_param',
             message: 'Category name is required.',
