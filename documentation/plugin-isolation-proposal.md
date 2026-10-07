@@ -429,7 +429,8 @@ time** assets, unaffected by runtime isolation — they keep being bundled (and 
   (`notifications:provider`). Activating it grants these declared caps (admin-approved, revocable), but it
   runs fully sandboxed.
 - **conference-manager**: granted `database` (its own `wjp_conference_manager_` tables) +
-  namespaced routes on activation — all over the bridge, no unscoped DB or absolute routes (those no longer exist).
+  namespaced routes + its admin menu + `users:read` (the safe user projection, to find users for its
+  conference team) on activation — all over the bridge, no unscoped DB or absolute routes (those no longer exist).
   Isolated.
 - **db-migration**: was **de-pluginized** — it manages the database *server process* and runs at boot,
   which is core infrastructure, not a feature plugin. Moved to `backend/src/core/db-admin/`; it is no

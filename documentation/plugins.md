@@ -19,7 +19,7 @@ A WordJS plugin is simply a folder inside `backend/plugins/`.
 
 Follow these steps to create a plugin that shows a message in the admin panel.
 
-> **Fast path:** `node backend/cli/wordjs.js create plugin my-plugin` scaffolds everything below in one command — manifest (`"isolated": true`, requested permissions), a bridge-idiomatic `index.js` (typed via `backend/types/wordjs-bridge.d.ts` for JSDoc IntelliSense), an admin page and a Verso block — and prints the activate/regenerate flow. See `documentation/cli.md` §2. The tutorial below explains what each piece is.
+> **Fast path:** `node backend/cli/wordjs.js create plugin my-plugin` scaffolds everything below in one command — manifest (`"isolated": true`, requested permissions), a bridge-idiomatic `index.js` (typed via `backend/types/wordjs-bridge.d.ts` for JSDoc IntelliSense), an admin page and a Verso block — and prints the activate/regenerate flow. See `documentation/cli.md` §3. The tutorial below explains what each piece is.
 
 ### Step 1: Create the Folder and Manifest
 Create a folder named `hello-world` inside `backend/plugins/`. Inside it, create a `manifest.json`:
@@ -36,7 +36,9 @@ Create a folder named `hello-world` inside `backend/plugins/`. Inside it, create
       "uuid": "^10.0.0" 
   },
   "permissions": [
-      { "scope": "settings", "access": "read", "reason": "To display the site title" }
+      { "scope": "settings", "access": "read", "reason": "To display the site title" },
+      { "scope": "express", "access": "register_route", "reason": "To serve the /message API route" },
+      { "scope": "admin_menu", "access": "register", "reason": "To add the sidebar link" }
   ],
   "frontend": {
       "adminPage": {
@@ -386,10 +388,9 @@ dot-dirs and the browser-only `client/`, `frontend/` and `dist/` folders, and ta
     `child_process`, `fs/promises`, `http`, `https`, `dgram`, `cluster`, `async_hooks`, `vm`,
     `worker_threads`, `module`, `inspector`, `v8`, `repl`, `sqlite`, `wasi`. `dns` and `net` are the
     two that are **fixable rather than fatal**: they are reported as a *missing capability* instead of a
-    hard block. Watch the exact shape that clears them — the scan looks for a manifest entry with
-    `"access": "admin"` on `network` or `email`. The scope-only `{ "scope": "network" }` form that §12
-    documents (and that every first-party plugin uses) does **not** satisfy it; `mail-server` gets its
-    `require('net')` through on the strength of its `email: admin` entry.
+    hard block. What clears them is a `network` entry — the scope-only `{ "scope": "network" }` form §12
+    documents, matched on scope alone — or an `email: admin` entry, declared in the manifest and (outside
+    a declaration-only check) granted by the admin.
     A non-literal specifier (`require(x)`, `import('child'+'_process')`) is itself flagged as
     obfuscation.
 *   Undeclared capabilities inferred from the code: `fs.readFileSync`/`fs.writeFile`/… require
@@ -849,6 +850,6 @@ Blocks render inside the public site **and** the editor iframe — both load `wo
 
 Two reminders for committed plugin client files: start every `.tsx` with `// @ts-nocheck` (the frontend CI type-checks the generated registries, which import these files directly from `backend/plugins/`), and mark interactive blocks `"use client"`.
 
-> **Scaffold all of this:** `node backend/cli/wordjs.js create plugin my-plugin` generates a working single-block Verso component wired to the manifest — see `documentation/cli.md` §2.
+> **Scaffold all of this:** `node backend/cli/wordjs.js create plugin my-plugin` generates a working single-block Verso component wired to the manifest — see `documentation/cli.md` §3.
 
 

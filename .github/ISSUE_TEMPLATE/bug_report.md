@@ -25,7 +25,7 @@ A clear description of the bug and what you expected to happen instead.
 
 - **WordJS version / commit:**
 - **How you installed:** create-wordjs / release ZIP / from source
-- **Run mode:** one-process (`dev:mono` / `start:mono`) / three-service split
+- **Run mode:** one-process (`dev:mono` / `start:mono`) / three-service split / separate (multi-machine)
 - **Database:** SQLite (native) / SQLite (legacy WASM) / PostgreSQL / MySQL / MariaDB
 - **OS:**
 - **Node version:** (`node -v`)

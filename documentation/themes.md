@@ -1152,7 +1152,7 @@ a route's own slug and post type, and nothing else.
 | Search | `search/page.tsx` | `search.json` → `archive.json` → `page.json` |
 | Category archive, `/category/{slug}` | `category/[slug]/[[...paged]]/page.tsx` | `category-{slug}.json` → `category.json` → `archive.json` → `page.json` |
 | Tag archive, `/tag/{slug}` | `tag/[slug]/[[...paged]]/page.tsx` | `tag-{slug}.json` → `tag.json` → `archive.json` → `page.json` |
-| Author archive, `/author/{id}` | `author/[slug]/[[...paged]]/page.tsx` | `author-{id}.json` → `author.json` → `archive.json` → `page.json` |
+| Author archive, `/author/{nicename\|id}` | `author/[slug]/[[...paged]]/page.tsx` | `author-{slug}.json` (the author's nicename; the id only when the post payload carries no author slug) → `author.json` → `archive.json` → `page.json` |
 | Date archive, `/archive/{yyyy}[/{mm}]` | `archive/[...segments]/page.tsx` | `date.json` → `archive.json` → `page.json` |
 | **404** | `not-found.tsx` | `404.json` → `page.json` |
 
@@ -1283,7 +1283,7 @@ is a path (`/category/news/page/2`), never a query string — a query string wou
 and drop the whole archive out of the Full-Route Cache. `page/1`, a page past the end, an unknown term
 and a malformed tail are all **404**, never a soft-200 empty listing.
 
-**`templates/archive.html`** — the Handlebars file some bundled themes still ship — is *not* what these
+**`templates/archive.html`** — the Handlebars file the bundled `default` theme still ships — is *not* what these
 routes render. It belongs to the legacy backend renderer (`backend/src/routes/frontend.ts`); the Next
 public site reads `templates/archive.json` and the rest of this section's contract.
 

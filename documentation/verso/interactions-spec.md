@@ -98,6 +98,12 @@ el panel) sigue anunciado como futuro, hoy es *conditional playback* opcional.
 | 4 | reduced-motion siempre | Todo el CSS generado se emite dentro de `@media (prefers-reduced-motion: no-preference)`; el runtime consulta la media query y no arma. **Sin override por bloque ni por sitio.** |
 | 5 | Mismo markup canvas ↔ público | El compilador es **puro** y vive en `blockShell.ts` (sin `"use client"`). Las clases del bloque salen de `ixClasses()`, una función, dos superficies. Solo cambia el **canal de entrega de la hoja**, que ya es distinto hoy para el tema (`ThemeLoader` vs `swapThemeCss`). |
 
+> As built (row 5): the compiler is pure (no `"use client"`) but lives in
+> `frontend/src/lib/verso/interactions/` (`compile.ts`, types in `types.ts`), not in `blockShell.ts`.
+> There is no `ixClasses()`: the block's ix layer comes from `ixLayer()` in
+> `lib/verso/interactions/shell.ts`, re-exported by `blockShell.ts` and rendered by
+> `SharedBlockShell`, which both the public renderer and `VersoBlock` use.
+
 ---
 
 ## 3. DECISIÓN 1 — Modelo de datos
@@ -106,6 +112,11 @@ el panel) sigue anunciado como futuro, hoy es *conditional playback* opcional.
 
 Clave: **`ix`**. Se inyecta en `withSharedVersoFields` junto a `hide`/`anim`/`look`, **sin
 `defaultProps`**.
+
+> As built: `ix` is still a block prop without `defaultProps`, but it is NOT injected by
+> `withSharedVersoFields`. The interactions panel is mounted in the Advanced section of
+> `components/verso/editor/PropertiesPanel.tsx`, next to `anim`, so the anti-drift gate on the
+> shared fields (`verso-coreBlocks.test.ts`) is unaffected.
 
 > Por qué sin default, a diferencia de `anim: { type: "fade-up", … }`: un default cambia los bytes
 > de todo bloque nuevo. `anim` lo hace porque su default es una decisión de diseño (todo bloque

@@ -24,11 +24,12 @@ npm run install:all        # installs root + gateway + backend + frontend + setu
 **Run it as one process** (the simplest way — a single Node process with SQLite):
 
 ```bash
-npm run dev:mono           # → https://localhost:3000
+npm run dev:mono           # → http(s)://localhost:3000
 ```
 
 The first run serves a one-time install wizard at the printed URL — pick a database —
-SQLite (zero config), PostgreSQL, MySQL/MariaDB, or a legacy WASM SQLite — and create your admin account. The dev server uses a **self-signed localhost certificate**,
+SQLite (zero config), PostgreSQL, MySQL/MariaDB, or a legacy WASM SQLite — and create your admin account. On a fresh checkout it serves plain HTTP; once
+`gateway/gateway-config.json` enables TLS the dev server uses a **self-signed localhost certificate**,
 so your browser will warn once; that's expected.
 
 **Or run the three services split** (gateway + backend + frontend), useful when you're working on one
@@ -45,13 +46,15 @@ the [Separate-mode guide](documentation/separate-mode.md).
 
 ## Before you push
 
-`ci.yml` runs eight jobs — **Gates that travel** (every gate file is committed and actually run),
-**Backend (typecheck + test)**, **Multi-node coherence**, **Gateway (test)**, **Install channel
+`ci.yml` runs eleven jobs — **Gates that travel** (every gate file is committed and actually run),
+**Backend (typecheck + test)**, **Backend coverage (c8 ratchet)** (in parallel with Backend),
+**Multi-node coherence**, **Gateway (test)**, **Install channel
 (create-wordjs)** (`npm audit` gate, the package's tests with a zero-tests guard, and a
 `node index.js --help` smoke of the installer CLI), **Frontend (lint + build)**, **Verso E2E**
-(Playwright chromium against an ephemeral HTTP monolith), and **Compiled bundle smoke-boot** (builds
+(Playwright chromium against an ephemeral HTTP monolith), **Compiled bundle smoke-boot** (builds
 the real release ZIP and deploys it in mono, split and enrollment mode via
-`scripts/smoke-deploy.sh`). Two more workflows gate the same push: **Sandbox parity** (the
+`scripts/smoke-deploy.sh`), **Docker image (build + boot + install)**, and **Performance budgets**
+(measures on push and pull request, enforces on manual dispatch). Two more workflows gate the same push: **Sandbox parity** (the
 plugin sandbox on four OS runners) and **F6 certification**; **CodeQL** also runs on every push and
 pull request to `main`, but it reports into the Security tab rather than blocking a merge. Outside
 the push path, **Release** builds and publishes on a `v*` tag and **Dependency audit** sweeps daily

@@ -40,7 +40,7 @@ mean:
 catalog regardless of badge: each isolated plugin runs in its own OS process under a native sandbox
 (Landlock + seccomp on Linux, Seatbelt on macOS, AppContainer on Windows) with default-deny
 capabilities that an administrator grants one at a time. A reviewed plugin that turns malicious is
-confined by exactly the same walls as an unreviewed one. See `documentation/plugins.md` §7–8 and
+confined by exactly the same walls as an unreviewed one. See `documentation/plugins.md` §7 and §12, and
 `documentation/security.md` §1.
 
 This is also why the badge in the marketplace UI reads **"Reviewed"** and not "Sandboxed & reviewed".
@@ -89,8 +89,8 @@ Additionally:
 ## 3. Automated checks that must pass
 
 These run on the submission pull request
-(`.github/workflows/plugin-review.yml`) and again on the release branch. A submission is not looked
-at by a human until they are green.
+(`.github/workflows/plugin-review.yml`); the catalog integrity check (4) runs again in CI and in the
+release workflow. A submission is not looked at by a human until they are green.
 
 1. **Manifest requirements** — every field in §2, checked mechanically
    (`backend/scripts/scan-plugin.mjs`). Unknown permission scopes and invalid `access` values are
@@ -105,16 +105,18 @@ at by a human until they are green.
 
    **It does not install or boot YOUR package**, on three operating systems or on any: it never reads
    `marketplace/`. Nothing in CI does. So a submission that only works when the sandbox is absent is
-   still not shippable — but the machine will not be the one to notice, which is why §4's update path
-   asks you to have run it under all three yourself and asks the reviewer to confirm you did. "It
+   still not shippable — but the machine will not be the one to notice, which is why the review
+   checklist `plugin-review.yml` posts on the pull request asks the reviewer to confirm you ran it under
+   all three yourself. "It
    worked on Linux" has repeatedly not generalised.
 4. **`npm run verify:marketplace`** — the package is installable: sha256 and size match the catalog,
    the inner manifest matches what the entry advertises, every declared frontend entry is actually
    compiled into the zip, no runtime state or junk ships, the filename satisfies the installer's own
    pattern, and the build is byte-for-byte reproducible. It is also where §6's re-review triggers and
    §8's conflict-of-interest rule are enforced.
-5. **License gate** — the declared licence is OSI-approved and is not `AGPL`/`SSPL`; bundled
-   dependencies are checked to the same standard.
+5. **License gate** — the declared licence is OSI-approved and is not `AGPL`/`SSPL`
+   (`scan-plugin.mjs`, run with check 1). The licences of bundled dependencies are not checked
+   mechanically.
 6. **No `network` permission without a documented egress list.** A plugin that requests `network`
    states, in its `reason` (or `permissions_rationale`), where the traffic goes and why —
    `api.stripe.com`, `googleapis.com`. Where the destination is genuinely resolved at runtime and

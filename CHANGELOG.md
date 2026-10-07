@@ -4,7 +4,7 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
-## [Unreleased]
+## [2.3.0] - 2026-10-07
 
 ### Security
 
@@ -12,7 +12,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   (critical: RCE in `next/og` `ImageResponse`), proxy-addr 2.0.8 (critical: IP spoofing through an
   IPv4-mapped IPv6 trust subnet; via Express 4.22.3), shell-quote 1.12.0 (critical, under `concurrently`),
   nodemailer 10.0.15 with mailparser 3.9.36 and smtp-server 3.19.17, adm-zip 0.6.1, sharp 0.35.5,
-  compression 1.8.2, axios 1.20.0, brace-expansion 5.0.12 and source-map-js 1.2.2. Express stays on 4.x.
+  compression 1.8.2, axios 1.20.0, brace-expansion 5.0.12, source-map-js 1.2.2 and js-yaml 4.3.2. Express
+  stays on 4.x.
 - **Cluster enrolment verifies the CSR signature with Node's crypto instead of node-forge.** Every
   node-forge release is affected by advisory GHSA-86w9-cpqp-85rv (its RSA PKCS#1 v1.5 verifier accepts
   extra nested DigestAlgorithm elements) and none is fixed; the gateway's proof-of-possession check was the
@@ -124,7 +125,6 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   warning now log through it, and an error is logged by
   its message and code instead of as an object. The backend's control-plane calls to the gateway carry the
   node's mTLS key and certificate in one TLS context instead of as request options.
-
 - **Remaining dependency advisories with a fix are closed.** Frontend: DOMPurify 3.4.16 (GHSA-p98j-92pf-mc4p,
   GHSA-6688-9rhm-gjv2), and js-yaml and brace-expansion moved to fixed releases in the lint toolchain;
   `@tailwindcss/typography` is removed — nothing loaded it (Tailwind 4 needs an `@plugin` line, and there is
@@ -246,8 +246,20 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   registrations, and deleting an attendee who has payments requires the right to manage those payments.
   WordJS administrators keep full access and do not need to be on the team.
 
+### Changed
+
+- CI runs once per event: `push` builds only `main` and the release tags (branch pushes are covered by
+  `pull_request`), and a newer push to the same pull request cancels the run it supersedes.
+- The backend coverage ratchet runs in its own CI job (`backend-coverage`), in parallel with the Backend
+  job instead of re-running the whole suite as its last step, and `test:coverage` / `test:coverage:check`
+  now wrap `npm test` instead of repeating its command line.
+
 ### Fixed
 
+- **A plugin scaffolded with `wordjs create plugin` works out of the box.** The template's manifest
+  requested only `settings` read/write while its `index.js` registers routes and an admin menu item, so a
+  fresh plugin lost its routes and `adminMenu.add` threw on activation. The template now declares
+  `express: register_route` and `admin_menu: register`.
 - **Sessions issued right after the install survive the first restart.** A fresh instance signs with a
   per-boot random JWT secret until it is configured, and `POST /setup/install` generated a *different* one
   and wrote it to `wordjs-config.json` while the running process kept signing with the first — so the
@@ -304,7 +316,6 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   handler there and sent it through its own `/api/:path*` rewrite back to the gateway's port, which handed
   it to Next again: one anonymous request became an endless chain of loopback requests. Only the route
   itself (and its trailing-slash form) is Next's now; anything below it goes to the backend.
-
 - **Monolith: one WebSocket request could start an endless loop of loopback connections.** Next.js attached
   its own `upgrade` listener to the public port on the first page request, so every upgrade was handled a
   second time, and its `/api` rewrite (baked into the build as `http://localhost:<port>`) proxied an upgrade
@@ -313,10 +324,9 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   listener (Next's goes to an emitter handed to it as `httpServer`, anything else that attaches is moved
   behind the handler, and the server delivers every upgrade to that handler alone); the only WebSocket
   served is Next's development HMR channel.
-
 - **Conference Manager 2.2.0 — the plugin can be activated again, and 23 defects from a functional audit are
   closed.** Activation had failed since the 2026-08-15 hardening (a `DEFAULT '{}'` column definition was
-  refused by the column-definition allowlist — fixed in core, see above). In the plugin: the portal's bulk
+  refused by the column-definition allowlist — fixed in core, see below). In the plugin: the portal's bulk
   payment is bounded (200 unique ids, batched by size) so a coordinator can no longer take the plugin down;
   portal isolation is keyed by the location **id** instead of its editable name (a one-off backfill maps
   existing attendees; location names are now unique per conference); number fields are canonicalised on the
@@ -357,6 +367,15 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   around the literals rather than their text. A regression guard walks every shipped
   `marketplace/plugins/*/index.js` and runs its column definitions through the producer, and the F6
   compatibility bridge now hands each plugin's `createTable` columns to the real `buildCreateTable`.
+- **Plugins that write to the database load again on the pure-JS SQLite driver.** Under `sqlite-legacy`
+  (the fallback when the native module is missing) sql.js saves the database file from the host after every
+  write, and that save ran under the calling plugin's context, so io-guard refused it and every plugin
+  holding `database:write` failed to load. The host may now write the configured database file and its
+  sidecars under a plugin's context (an isolated child is still refused), and the table-prefix registry
+  (`data/wjp-prefix-registry.json`) is saved as the host instead of being refused and re-seeded at every boot.
+- Public navigation marks the current page: the link whose path is the page being viewed carries
+  `aria-current="page"` in the chrome nav and its mobile drawer, the NavMenu and MegaMenu blocks and the
+  default Header and Footer — a cue for screen readers and a hook for themes (no default style is added).
 
 ## [2.2.0] - 2026-09-05
 

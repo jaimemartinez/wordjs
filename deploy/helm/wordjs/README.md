@@ -14,14 +14,14 @@ emit a reference that cannot pull.
 
 ```bash
 # 1. Build and push the image.
-docker build -t <registry>/wordjs:2.0.0 .
-docker push <registry>/wordjs:2.0.0
+docker build -t <registry>/wordjs:2.3.0 .
+docker push <registry>/wordjs:2.3.0
 
 # 2. Install.
 helm install wordjs deploy/helm/wordjs \
   --namespace wordjs --create-namespace \
   --set image.repository=<registry>/wordjs \
-  --set image.tag=2.0.0 \
+  --set image.tag=2.3.0 \
   --set siteUrl=https://cms.example.com \
   --set installToken.value="$(openssl rand -hex 24)"
 
@@ -112,7 +112,7 @@ See [`values.yaml`](values.yaml) — every key is commented there. The ones you 
 |---|---|---|
 | `image.repository` | `""` | **Required.** Rendering fails without it |
 | `image.tag` | `""` | Falls back to `.Chart.AppVersion` |
-| `siteUrl` | `""` | The public origin. Derived from `ingress.host` when unset. Exported as `WORDJS_SITE_URL` (the wizard's suggested main address) and in `WORDJS_ALLOWED_HOSTS` (always answered) |
+| `siteUrl` | `""` | The public origin. Derived from `ingress.host` when unset and `ingress.enabled=true`. Exported as `WORDJS_SITE_URL` (the wizard's suggested main address) and in `WORDJS_ALLOWED_HOSTS` (always answered) |
 | `allowedHosts` | `[]` | More addresses the site must answer (host names or URLs), exported in `WORDJS_ALLOWED_HOSTS` |
 | `trustProxy` | `""` | Exported as `WORDJS_TRUST_PROXY`: the ingress controller's address or pod network (an IP, a CIDR, `uniquelocal`, …). Needed for client-IP rate limits and for https sign-in on addresses other than the main one |
 | `ingress.extraHosts` | `[]` | More host names routed to the Service; each gets an ingress rule and is exported in `WORDJS_ALLOWED_HOSTS` |

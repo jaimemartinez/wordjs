@@ -178,18 +178,40 @@ Complex business logic for managing church conferences.
         and an admin moves them to `validated` or `rejected` (`pending → validated | rejected`, `validated →
         rejected`, `rejected → validated`; a validated payment cannot be deleted); only validated payments count
         towards `amount_paid` / `payment_status`. Reviews are audited (`reviewed_at`, `reviewed_by`).
+    *   **Locations**: each location has a required **maximum number of registrants** (`capacity`; a full
+        location refuses new registrations from the portal and the admin with `409`; locations created before
+        2.3.0 stay unlimited until one is set) and the **forms of payment** it receives (`payment_methods`:
+        cash and/or bank transfer, both by default).
     *   Hotel & Room assignment, including a rule-based auto-assignment engine (`/assignment/rules`,
         `/assignment/run`, `/assignment/reset`) that reports its **violations** (keep-together groups that had
-        to be split, capacity) with the rule's name and whether the rule was hard.
+        to be split, capacity) with the rule's name and whether the rule was hard. **Lodging per location**:
+        the admin allots rooms to a location (`/hotels/:id/allot`), the coordinator arranges and submits it
+        from the portal (`/portal/lodging*`), and the admin validates, returns or reopens it
+        (`/locations/:id/lodging/validate|return|reopen`). A conference-wide **lodging deadline**
+        (`lodging_deadline`) closes portal lodging changes, with an optional per-location permission after it.
+        The admin and the portal share a lodging board / explorer (hotel → room → occupant, drag & drop).
+    *   **Registration codes**: every attendee gets a unique random 10-character `reg_code` (the Code 128
+        barcode payload), visible only in the admin panel with `inscriptions:view` — never in a portal response.
+    *   **Transport** (`/buses`, tickets and their own payments, sold apart from the participation fee),
+        **accounting** (`/accounting`: income/expense ledger plus the validated registration and transport
+        payments as read-only income) and **meals** (`/meals*`: services, a location × service plan, per-person
+        overrides, and deliveries recorded by scanning the attendee's barcode).
+    *   **Team & per-section permissions** (`/staff/*`, administrators only): roles give each section
+        (dashboard, inscriptions, payments, locations, lodging, transport, accounting, meals, meal delivery,
+        reports, settings) `none`, `view` or `manage`; members are WordJS users (found via `users:read`).
+        Every admin-panel route checks the caller's level on the server; WordJS administrators keep full access.
     *   **Coordinator portal** (`/portal/login`, `/portal/me`, `/portal/inscriptions`, `/portal/groups`,
-        `/portal/payments/bulk`) surfaced at `/portal/conference` on the frontend. A per-location 6-digit
+        `/portal/payments/bulk`, `/portal/lodging*`) surfaced at `/portal/conference` on the frontend. A per-location 6-digit
         access code is required; there is **no anonymous public registration**. Each coordinator's view is
         isolated by the location's **id** (not its name — names are unique per conference and renaming a
         location keeps its attendees), and the portal listing is a projection (no admin notes, room or status).
-    *   Reports (`/reports/summary`, cents-rounded totals) and CSV export of inscriptions (`/inscriptions/export`).
+    *   Reports (`/reports/summary`, cents-rounded totals), CSV export of inscriptions (`/inscriptions/export`),
+        and Excel (`.xlsx`) workbooks built in the browser (custom inscription export with optional barcode
+        images, hotel assignment, transport and accounting reports).
 *   **Documented caps** (a request over a cap answers `400` instead of running unbounded): 200 people per
-    bulk payment, 20 000 inscriptions per `/reprice`, 5 000 unassigned attendees per `/assignment/run`.
-*   **Requested capabilities:** `database` (read/write — its own `wjp_conference_manager_` tables), `express` (register_route — namespaced routes), `admin_menu` (register — sidebar item, gated on `manage_options`).
+    bulk payment, 20 000 inscriptions per `/reprice`, 5 000 unassigned attendees per `/assignment/run`,
+    500 passengers per bus operation, 60 dates per bulk meal-service creation.
+*   **Requested capabilities:** `database` (read/write — its own `wjp_conference_manager_` tables), `express` (register_route — namespaced routes), `admin_menu` (register — sidebar item, gated on `access_admin_panel`; the page then shows only the sections the user's team role allows), `users` (read — find WordJS users to add to the conference team).
 *   **Sandbox:** isolated, like every plugin — no trust bypass. Default-deny: activation grants its declared
     capabilities (admin-approved in the activation dialog, refinable/revocable in `/admin/plugins`). It
     stores its data in its own prefixed tables (no unscoped/core-table access — that capability no longer
@@ -296,7 +318,7 @@ Test Schema are bundled with core):
 | `bookings` | Appointment booking: services, weekly availability, race-safe slot reservations, email confirmations, admin agenda | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
 | `breadcrumbs` | Breadcrumbs Verso block with optional BreadcrumbList JSON-LD | — (frontend-only) |
 | `card-gallery` | Event/promo cards as an alternating-alignment ("zigzag") stack via the `CardGalleryVerso` block | `settings` r/w, `database` write, routes, admin menu |
-| `conference-manager` | Conference inscriptions/registration, hotel & room auto-assignment, per-inscription payments, attendee portal, reports + CSV export | `database` r/w, routes, admin menu |
+| `conference-manager` | Conference inscriptions/registration with per-location capacity and forms of payment, hotel & room auto-assignment plus per-location lodging, registration barcodes, payments, transport, accounting, meals, team roles, coordinator portal, reports + CSV/Excel export | `database` r/w, routes, admin menu, `users` read |
 | `contact-forms` | Form builder with a Verso embed block, submissions inbox, CSV export, email notification | `database` r/w, routes, admin menu, `email:admin` |
 | `cookie-consent` | GDPR cookie banner, anonymous consent logging, version-based re-consent | `database` r/w, `settings` r/w, routes, admin menu, `assets:write` |
 | `digital-downloads` | Sell/give away downloadable products with expiring token-gated download links | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |

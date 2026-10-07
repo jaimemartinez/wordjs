@@ -19,9 +19,10 @@ a migration. What is left is the part no generator produces:
 - When F6 opened (2026-08-24), 143 `req: any` annotations sat on the request boundary, across 24 of
   the 43 files under `src/routes` and `src/middleware`; nineteen files were fully typed and seven were
   half migrated, carrying typed handlers next to untyped ones. That debt was paid down to zero the next
-  day (`f95f139f`): all 43 boundary files are fully typed, and the gate's ratchets now hold at zero
-  `req: any`, zero `(req as any)` casts, zero `res: any`, zero untyped boundary files and a floor of 43
-  fully typed files. The ratchets stay in place so the debt cannot come back.
+  day (`f95f139f`): all 43 boundary files were fully typed, and the gate's ratchets now hold at zero
+  `req: any`, zero `(req as any)` casts, zero `res: any`, zero untyped boundary files and a floor of 45
+  fully typed files (43 when the debt was paid; two boundary files have been added since). The
+  ratchets stay in place so the debt cannot come back.
 - The built-in content types declare their fields through the F1 feature mapper, but three of those
   declarations bind to a posts column that does not exist (see F6-INV-04).
 - Thirty-one plugins ship in the marketplace. When F6 opened, none of them had executable
@@ -219,7 +220,7 @@ prints a note on every run asking for it back.
 
 The request-boundary ratchets are fully tightened: `MAX_REQUEST_ANY_OCCURRENCES`,
 `MAX_REQUEST_AS_ANY_CASTS`, `MAX_RESPONSE_ANY_OCCURRENCES` and `MAX_UNTYPED_BOUNDARY_FILES` are all `0`,
-and `MIN_FULLY_TYPED_BOUNDARY_FILES` is `43` — every `.ts` file under `backend/src/routes` and
+and `MIN_FULLY_TYPED_BOUNDARY_FILES` is `45` — every `.ts` file under `backend/src/routes` and
 `backend/src/middleware`. A file counts as fully typed when it carries at least one typed `req` handler
 and no `req: any`. The plugin ratchets are likewise closed: `MIN_COVERED_MARKETPLACE_PLUGINS` is `31`
 and `MAX_UNCOVERED_MARKETPLACE_PLUGINS` is `0`. There is nothing left to lower; the job now is to keep
@@ -228,7 +229,7 @@ the numbers from moving the wrong way.
 1. Write every new route or middleware handler with an explicit request and response type. A
    `req: any`, `res: any` or `(req as any)` anywhere under the boundary directories turns
    `npm run verify:f6` red.
-2. When a boundary file is added, run `npm run verify:f6 -- --print`; if the notes report more than 43
+2. When a boundary file is added, run `npm run verify:f6 -- --print`; if the notes report more than 45
    fully typed files, raise `MIN_FULLY_TYPED_BOUNDARY_FILES` to the reported value and refresh
    `backend/f0-baseline.json` with `verify:f0 --print`.
 3. When a marketplace plugin is added, `backend/src/tests/f6-plugin-compatibility.test.ts` picks it up

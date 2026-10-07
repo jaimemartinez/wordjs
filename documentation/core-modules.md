@@ -142,7 +142,7 @@ Loads any plugin marked `"isolated": true` in its manifest into a **separate OS 
 Monkey-patches `fs` inside the isolated child so plugin code is confined to its own dir plus a few safe zones. A plugin **cannot**:
 
 *   rewrite its own `manifest.json` (a permission-escalation primitive), read the raw DB files or secret-named files;
-*   **create/rename/copy a file into an executable code extension** — `EXECUTABLE_CODE_EXT` covers `.js/.cjs/.mjs/.jsx/.ts/.cts/.mts/.tsx/.node/.wasm` **and `.html`/`.htm`/`.xhtml`** (kills write-`.txt`-then-rename-`.js` scanner evasion). "Executable" here means executable *by the server* **or** by the browser: a `.html` file is a document in this origin, where the global CSP allows `'unsafe-inline'` and the frontend shares the origin in both shipped modes — so a plugin that wrote `pwn.html` had a stored-XSS primitive with zero permissions. Other data files (`.json`/`.txt`/images) stay writable.
+*   **create/rename/copy a file into an executable code extension** — `EXECUTABLE_CODE_EXT` covers `.js/.cjs/.mjs/.jsx/.ts/.cts/.mts/.tsx/.node/.wasm` **and `.html`/`.htm`/`.xhtml`/`.shtml`/`.xht`** (kills write-`.txt`-then-rename-`.js` scanner evasion). "Executable" here means executable *by the server* **or** by the browser: a `.html` file is a document in this origin, where the global CSP allows `'unsafe-inline'` and the frontend shares the origin in both shipped modes — so a plugin that wrote `pwn.html` had a stored-XSS primitive with zero permissions. Other data files (`.json`/`.txt`/images) stay writable.
 *   **write anywhere on the publicly-served surface** — `isPluginPublishedPath` denies the whole `plugins/<slug>/public/` subtree (case-folded off Linux) plus the three fixed host-known files. This module is the **single source of truth** for that surface: `isPluginServedRelPath` answers "may `backend/src/index.ts` serve this over HTTP?" and `isPluginPublishedPath` answers "may the plugin write it?", derived from one declaration so the two can never disagree. Serving an allowlist while leaving it writable would simply reopen the write→HTTP-read exfiltration channel next door. See `documentation/security.md` §1.3a.
 *   **Copy/link ends are both checked:** `copyFile`/`copyFileSync`/`cp`/`link`/`linkSync`/`symlink` validate **source-read AND dest-write**, closing the copy-the-DB / hard-link-a-secret exfiltration hole.
 *   **Per-plugin disk-write quota:** raw `writeFile`/`appendFile`/`createWriteStream` growth is capped (a single-write byte cap plus `PLUGIN_GROW_QUOTA` = 512 MB of append/stream growth per rolling window per plugin), surfaced as a normal stream error rather than silently filling the disk.
@@ -354,3 +354,24 @@ The cluster CA is the trust root for **separate mode** — the three services ru
 *   **`tokenStore(file)`** persists the **single-use, role-bound, TTL** join tokens (`cluster token <role>` mints, `node-join` burns on first use; `revoke-tokens` burns all).
 
 > The gateway runs a **separate** token-enrollment HTTPS listener on `gatewayEnrollPort` (default **3101**) that does **not** request a client cert (a brand-new node has none yet); it accepts `POST /enroll {role, token, csr}`, validates the token, signs via `signCsr`, and returns `{cert, cluster-ca, bootstrap config}`. The strict mTLS `/register` control plane on `gatewayInternalPort` (3100) is unchanged. See `scripts/cluster.js` / `scripts/node-join.js` (documented in **[cli.md](./cli.md)**).
+
+---
+
+## 11. Host Policy & Site Address 🧭
+
+**Location:** `backend/src/core/host-policy.js` (byte-identical copy in `gateway/src/host-policy.js`) + `backend/src/core/site-address.ts` + `backend/src/routes/site-address.ts` + `backend/scripts/site-address.js` (`npm run site`)
+
+Decides which addresses the site answers and is the one writer of "where does this site live". The operator guide is **[site-address.md](./site-address.md)**.
+
+### Responsibilities
+*   **`host-policy.js`** is the one parser and classifier for a request's address, shared by the backend and the gateway so the two can never read a `Host` header differently. It parses `Host` / trusted `X-Forwarded-Host` (`requestAuthority`, `trustedScheme`, `forwardedForValues` — a single linear scan of `Forwarded: for=`), classifies the authority against the policy (`classify`, `buildPolicy`) and mounts the **host gate** (`hostGateFactory`) right after Helmet in `index.ts`: an address the site does not answer gets `421 rest_host_not_allowed`, a malformed or repeated `Host` `400`. `gateway/test/host-policy-parity.test.js` fails if the two copies differ, and both run `contracts/host-policy-vectors.v1.json`.
+*   **`site-address.ts`** owns the main address (`siteUrl`), the aliases and the host policy in `wordjs-config.json`. `commit()` is the only write path (compare-and-swap on the revision, atomic file write, mirrors in one DB transaction, gateway push, cache purge, audit, admin notice); the planners (`planCanonical`, `planAliases`, `planPolicy`, `planRepair`) are shared with the CLI. It also reconciles at boot, applies changes made by `npm run site` while running (`checkExternalChange`), keeps the gateway armed (`startGatewaySync`, every 30 s) and answers which sessions an address's retirement ended (`sessionRetired`).
+*   Nothing here is derived from a request: no value comes from `Host` or `X-Forwarded-Host`.
+
+---
+
+## 12. Log Sanitiser 🧾
+
+**Location:** `backend/src/core/log-safe.ts`
+
+`logSafe(value)` turns a value that enters a log line — a request path, an `Origin`, a `Host`, a gateway's or a CA's error message — into one inert line: line breaks, other control characters, ANSI escapes, the Unicode line and paragraph separators and the bidirectional controls are removed. `logSafeError(e)` logs a caught value by its message and code, never its stack. Interpolate the result into **one** string and pass no further `console` argument (a template literal followed by more arguments becomes a format string). Used by the CSRF guard, the site-address module and the certificate manager and routes; see [observability.md](./observability.md).

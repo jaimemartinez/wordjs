@@ -98,7 +98,7 @@ npm run format
 
 Both test scripts run `node --test …` through `scripts/test-with-flake-retry.mjs` (repo root), a wrapper that re-runs the suite up to twice (three runs in all), and only when every failure in the run is node:test's known `--test-force-exit` deserialize flake ("Unable to deserialize cloned data …" reported against a file whose own suite passed). A run containing any real assertion failure is never retried.
 
-`npm test` runs the backend unit suite across every `src/tests/*.test.ts` file (220 at the time of writing; node:test + supertest). `npm run lint` **is** a CI gate (the backend job runs it between the typecheck and the build; ESLint exits non-zero on errors only, so warnings are surfaced but tolerated). `npm run format` stays a local command.
+`npm test` runs the backend unit suite across every `src/tests/*.test.ts` file (242 at the time of writing; node:test + supertest). `npm run lint` **is** a CI gate (the backend job runs it between the typecheck and the build; ESLint exits non-zero on errors only, so warnings are surfaced but tolerated). `npm run format` stays a local command.
 
 The DB driver conformance suite (`src/tests/driver-conformance.test.ts`) runs the **async** drivers it has a dialect-descriptor block for (`sqlite-native`, `postgres`, and `mysql`, each skipped gracefully when its backend isn't reachable — and hard-failed in CI via `WORDJS_CI_DB=1`) against the shared interface (`src/drivers/interface.ts`: `connect/get/all/run/exec/transaction/close`). The `mysql` (`mysql2`) block feeds the same SQLite-dialect SQL and asserts the driver's translation layer. The legacy `sqlite-legacy` (sql.js) driver uses the older **sync** shape and is intentionally out of scope here. The 6th interface method, `transaction(fn)`, is an atomic `BEGIN`/`COMMIT`/`ROLLBACK` wrapper that passes a `tx` bound to a single connection (the basis of the atomic-transaction guarantee). **Adding a new database** = implement that interface (including `transaction()`) and add a conformance block.
 
@@ -187,8 +187,9 @@ Every public route under `frontend/src/app/(public)/` (home `page.tsx`, post `[s
 ```bash
 node gateway/src/index.js   # or, from gateway/: node src/index.js
 cd gateway && npm test      # node --test test/*.test.js: proxy/mTLS integration, registration,
-                            # worker registry, cluster secret, rate limit, purge,
-                            # security headers, dispatcher parity
+                            # worker registry, cluster secret, cluster CA/CSR, rate limit,
+                            # purge, security headers, host edge, host-policy parity,
+                            # forwarded proto, monolith edge, dispatcher parity
 ```
 
 Config lives in `gateway/gateway-config.json` (`gatewaySecret`, `gatewayPort`, `gatewayInternalPort`, `ssl`, `mtls`). See **[gateway.md](gateway.md)**.
@@ -287,15 +288,18 @@ To migrate an existing WordPress site, import its **WXR** export (the `Tools →
 | `wp:author`   | `users` (random password — must be reset; matched by login/email) |
 | `wp:category` | `terms` (taxonomy `category`, with parent hierarchy)             |
 | `wp:tag`      | `terms` (taxonomy `post_tag`)                                    |
+| `wp:term`     | `terms` (custom taxonomies, best-effort); menus when the taxonomy is `nav_menu` |
 | `item`        | `posts`/`pages` (+ post meta, term relationships, threaded comments) |
+| `attachment`  | media library entries (see the `media` option)                   |
+| `nav_menu_item` | menu items on the imported menus (`backend/src/core/wxr-menus.ts`) |
 
 - **Core:** `backend/src/core/wxr-import.ts` exposes `parseWxr`, `analyzeWxr` (dry-run counts), and `importWxr`.
 - **Routes** (`backend/src/routes/import.ts`, admin-only, `multipart` field `file` = the `.xml`):
   - `POST /api/v1/import/wordpress/analyze` — dry-run; parses and returns entity counts without writing anything.
-  - `POST /api/v1/import/wordpress` — runs the import. Form options: `defaultAuthorId` (defaults to the importing admin), `importComments` (`1`/`0`, default on), `importAttachments` (`1`/`0`, default off).
+  - `POST /api/v1/import/wordpress` — runs the import (also refused `403 rest_account_bound_session` for a session started at an address other than the main one). Form options: `defaultAuthorId` (defaults to the importing admin), `importComments` (`1`/`0`, default on), `media` (`download` fetches every attachment into the media library — https only, 50 MB per file, 1 GB per run, under the SSRF guard; `link` creates the records and keeps the remote URLs; `skip` imports no attachments), `allowHttp` (`1`/`0`, default off — admits `http://` sources, never a private address), and the legacy `importAttachments` (`1`/`0`), used only when `media` is absent (`1` = `download`, anything else = `skip`).
 - **Admin UI:** `/admin/import` (sidebar **Import** in `frontend/src/components/Sidebar.tsx`).
 
-Behaviour: **idempotent / re-runnable** — existing users (by login/email), terms (by slug+taxonomy) and posts (by slug+type) are matched and reused, not duplicated; the import is deliberately **not** wrapped in one DB transaction (it's resumable and per-item failures are collected, not fatal). Original publish dates are preserved, and classic-editor content gets a light `wpautop`. It **skips attachments** by default (the WXR carries only media URLs, not the binaries), spam/pingback comments, and `nav_menu_item` entries.
+Behaviour: **idempotent / re-runnable** — existing users (by login/email), terms (by slug+taxonomy), posts (by slug+type), attachments (by source URL, then slug) and menu items are matched and reused, not duplicated (a re-run downloads no media again); the import is deliberately **not** wrapped in one DB transaction (it's resumable and per-item failures are collected, not fatal). Original publish dates are preserved, and classic-editor content gets a light `wpautop`. The WXR carries only media URLs, not the binaries, so attachments follow `media`: a request that sends neither `media` nor `importAttachments` skips them, while the admin screen preselects `download`. Pingback/trackback and trashed comments are skipped; spam comments are kept as spam.
 
 ---
 
@@ -339,7 +343,7 @@ Measure on an **idle** host. A round takes about **2.5 seconds** (10 warmups, 15
 
 ## 🤖 CI
 
-`.github/workflows/ci.yml` runs its jobs in parallel on every push/PR (Node 22), plus a `workflow_dispatch` entry point whose only input is `calibrate` (see § Performance budgets above):
+`.github/workflows/ci.yml` runs its jobs in parallel on every pull request and on pushes to `main` and `v*` tags (Node 22), plus a `workflow_dispatch` entry point whose only input is `calibrate` (see § Performance budgets above):
 
 The backend, gateway, frontend, and install-channel (`packages/create-wordjs`) jobs each run an **audit gate** — `node scripts/ci-audit.mjs`, a wrapper that runs `npm audit --omit=dev --audit-level=high --json` in the job's working directory with a per-attempt timeout and one retry — that fails on any high/critical **production** dependency CVE (and on any unrecognised audit failure). Only a confirmed npm advisory-service outage across both attempts is allowed through: the step then emits `::warning::` annotations and passes, so a registry outage does not make the whole repository un-mergeable. Then:
 
@@ -351,6 +355,7 @@ The backend, gateway, frontend, and install-channel (`packages/create-wordjs`) j
 - **Frontend:** audit gate → **generate plugin registries** (`generate-plugin-registry.js` + `generate-admin-plugin-registry.js` + `generate-verso-plugin-registry.js`, so type-check/lint/build only reference the checked-out plugins) → two **anti-drift gates** that regenerate a committed artifact and `git diff --exit-code` it (`backend/public/theme-tokens.json` via `scripts/generate-token-manifest.js`, and `frontend/src/lib/assetVersion.generated.ts` via `scripts/generate-asset-version.js`), each preceded by a `git ls-files --error-unmatch` guard so the diff can never be vacuously green on an untracked file → strict typecheck (`tsc --noEmit`) → lint → **vitest** (`npm run test`) → production build (`next build`) → the **coverage ratchet** (`npm run test:coverage`, threshold in `frontend/vitest.config.mts`, `coverage/lcov.info` uploaded as an artifact). (There is no vendored-editor build step any more: Verso is plain in-tree source under `frontend/src/components/verso/` + `frontend/src/lib/verso/`, compiled by `next build` like the rest of the app.)
 - **Verso E2E (`verso-e2e`):** Playwright (chromium, headless) against an ephemeral plain-HTTP monolith that Playwright's own `webServer` starts (`npm run dev:mono` with `WORDJS_HTTP=1`); the `setup` project installs the instance through `WORDJS_INSTALL_TOKEN` and logs in by API, sharing `storageState` with the specs. Traces are uploaded as an artifact on failure.
 - **Compiled-bundle smoke-boot (`bundle-boot`):** builds the real release bundle (`npm run bundle-release`) and **deploys it in every mode** — monolith, split, and cluster enrollment — via `scripts/smoke-deploy.sh`, so a file that lives in `src/` but is stripped from the compiled `dist/` fails the PR instead of the release. This is the only job that runs the packaged **compiled** artifact rather than `ts-node` source; it mirrors the same step in `release.yml`.
+- **Docker image (`docker-image`):** checks that the deployment templates and the Helm chart parse and render, builds the image (which runs the whole product build), boots the container, reads its health endpoints and completes the install headlessly with the install token (the same install request as `scripts/smoke-deploy.sh`) — the container-shaped sibling of `bundle-boot`. Not a required check.
 - **Performance budgets (`perf-budgets`):** runs the F6 in-process performance harness on `ubuntu-latest` and prints every observed ratio/p95 next to the committed ceiling, without failing on push or pull request (the Backend job already enforces the committed ceilings); `--enforce` applies on `workflow_dispatch` only. On `workflow_dispatch` with `calibrate: true` it runs eight rounds and uploads a paste-ready `performanceBudget` block measured on Linux. Additive and **not a required check** — see § Performance budgets above for why, and for the dispatch → artifact → paste → PR flow.
 
 The license gate keeps the distribution MIT-clean by failing on network-copyleft (AGPL/SSPL) production dependencies.
@@ -380,7 +385,7 @@ Marketplace plugins (sources under `marketplace/plugins/`) are packaged separate
 
 The recipient unzips, then — **no build step** — runs `npm run release:install` (installs runtime deps only, `--omit=dev`), starts with `npm run start:mono` (single process, default `https://localhost:3000`) or `npm start` (3-service split), and finishes in the browser install wizard (pick a database — SQLite, PostgreSQL, or MySQL/MariaDB — and create the admin). No secrets ship; they're generated locally at install.
 
-In CI, pushing a `v*` tag triggers `.github/workflows/release.yml`, which runs `npm run ci:all` (the CI counterpart of `install:all` — `node scripts/ci-install.mjs`, a parallel `npm ci` across the five workspaces) + `bundle-release`, then `npm run build:marketplace`, and publishes a GitHub Release with `wordjs-<tag>.zip` **plus the marketplace assets** (`marketplace/dist/*` — one zip per plugin + `marketplace-index.json`) and a **CycloneDX SBOM** (`wordjs-sbom.cdx.json`, generated by a SHA-pinned `anchore/sbom-action` step) attached; `workflow_dispatch` builds the same bundles as workflow artifacts only (`wordjs-compiled-release` + `wordjs-marketplace`, no Release). On version tags a second job publishes `create-wordjs` to npm (version synced to the tag; skipped cleanly when the `NPM_TOKEN` secret is not configured).
+In CI, pushing a `v*` tag triggers `.github/workflows/release.yml`. Its `verify` job repeats CI's audits, typechecks and unit tests first, and nothing is built or published unless it is green; the build job then runs `npm run ci:all` (the CI counterpart of `install:all` — `node scripts/ci-install.mjs`, a parallel `npm ci` across the five workspaces) + `bundle-release`, then `npm run build:marketplace`, and publishes a GitHub Release with `wordjs-<tag>.zip` **plus the marketplace assets** (`marketplace/dist/*` — one zip per plugin + `marketplace-index.json`) and a **CycloneDX SBOM** (`wordjs-sbom.cdx.json`, generated by a SHA-pinned `anchore/sbom-action` step) attached; `workflow_dispatch` builds the same bundles as workflow artifacts only (`wordjs-compiled-release` + `wordjs-marketplace`, no Release). On version tags a final `npm-publish` job publishes `create-wordjs` to npm (version synced to the tag); a tag push without the `NPM_TOKEN` secret fails that job instead of skipping it, so a release can no longer go green while the install channel stays on the previous version.
 
 ---
 

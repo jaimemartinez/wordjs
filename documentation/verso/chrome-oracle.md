@@ -20,6 +20,10 @@
 9 tipos, definidos por partida doble (frontend `lib/chromeData.ts` BLOCK_SPECS ↔ backend
 `core/chrome-validate.ts`, con harness de paridad):
 
+> Superseded by F5 (ADR-0006): the two hand-written copies are gone. Both `lib/chromeData.ts` and
+> `core/chrome-validate.ts` now read `CHROME_CONTRACT`, generated from `formats.chrome` in
+> `contracts/visual-contract.v1.json` (same 9 types and 64KB / 100 / depth-3 limits).
+
 | type | props (req=requerida, opt=opcional) | notas |
 |---|---|---|
 | `ChromeLogo` | `size` opt `'sm'\|'md'\|'lg'` | preview vacío si no hay site_logo ni blogname |

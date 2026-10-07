@@ -206,12 +206,10 @@ export function parseTemplate(raw: string | null | undefined): TemplateTree | nu
 export const TEMPLATE_NAME = new RegExp(THEME_CONTRACT.assetNamePattern);
 
 /**
- * What a route IS. Only five of these are reachable today (see the table in documentation/themes.md):
- * `home`, `single`, `page`, `search` and `notFound` have routes under frontend/src/app/(public).
- * `category`, `tag`, `author` and `date` have NO route in this codebase — WordJS has no archive pages
- * — so they are the hierarchy's shape, ready for the routes, and NOT something a theme can see today.
- * They are documented as unreachable rather than quietly implied, because this system already shipped
- * one promise of an "Archive route" that did not exist.
+ * What a route IS (see the table in documentation/themes.md). `home`, `single`, `page`, `search` and
+ * `notFound` have their own routes under frontend/src/app/(public); `category`, `tag`, `author` and `date`
+ * are the archive routes (category/, tag/, author/ and archive/), all rendered through
+ * lib/public/archiveRoute.tsx, which passes one of those four kinds here.
  */
 export type TemplateKind =
     | 'home' | 'single' | 'page' | 'search' | 'notFound'

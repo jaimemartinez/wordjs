@@ -40,7 +40,7 @@ There are **no AGPL or SSPL** dependencies anywhere in the tree (all six lockfil
 hosted / managed / SaaS deployment of WordJS therefore carries **no network-copyleft
 source-disclosure obligation**. CI enforces this for the **backend production dependency tree**
 with a license gate (`npx license-checker --production --failOn 'AGPL;SSPL'`, run in `backend/`
-by the Backend job; `license-checker` is a pinned backend devDependency), so a network-copyleft
+by the Backend job; `license-checker` is a backend devDependency, locked by `backend/package-lock.json`), so a network-copyleft
 dependency cannot silently enter the backend and undermine the MIT / commercial position. The
 frontend, gateway, setup and create-wordjs trees are **not** covered by that gate; new
 dependencies there must be checked at review time (`npx license-checker --production --failOn

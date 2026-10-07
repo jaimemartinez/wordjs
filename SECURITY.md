@@ -31,7 +31,7 @@ WordJS is built with a "Security First" architecture.
 - **Import Identifier Allowlist**: The JSON `custom_tables` import validates every table and column name against a strict simple-identifier regex and refuses core tables + `sqlite_*` reserved tables before any SQL interpolation.
 
 ### Authentication & Transport
-- **JWT Signing**: The signing secret never falls back to a public constant. When none is configured, a per-process ephemeral random secret is used (issued tokens stop working after a restart). Configure a real secret via setup for production.
+- **JWT Signing**: The signing secret never falls back to a public constant. When none is configured, a per-process ephemeral random secret is used (issued tokens stop working after a restart) until completing setup persists that same secret to `wordjs-config.json`, so sessions issued during the install survive the first restart. Configure a real secret via setup for production.
 - **Algorithm Pinning**: `jwt.verify` is pinned to `HS256`.
 - **Stateless-JWT Revocation**: Logout and password change stamp a per-user security epoch (`token_valid_after`); the auth middleware rejects any token whose `iat` predates it. A stolen token no longer stays valid until expiry after logout/password reset.
 - **Password Hashing**: bcrypt cost factor of 12.
@@ -97,7 +97,7 @@ WordJS is pre-production; only the latest `main` and the current `2.x` release l
 | Version   | Supported | Notes                                              |
 | :-------- | :-------- | :------------------------------------------------- |
 | `main`    | ✅         | Latest development line (the only one patched)     |
-| `2.x`     | ✅         | Current release line (latest tag and latest GitHub Release: `v2.2.0`) |
+| `2.x`     | ✅         | Current release line (latest tag and latest GitHub Release: `v2.3.0`) |
 | < `2.0`   | ⚠️        | Best-effort; upgrade to `2.x` or latest `main`     |
 
 > **There is no maintenance branch and there are no backports.** `2.x` is a tag line, not a branch —
