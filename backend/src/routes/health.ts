@@ -84,6 +84,16 @@ router.get('/', async (req: Request, res: Response) => {
  *       `sandbox.useKernelHardening: false` explicitly turns the Linux layer off.
  *
  *
+ *       `sandbox.hostPrivilege` is the Linux privilege the BACKEND PROCESS ITSELF holds (`NOT_APPLICABLE`
+ *       off Linux). `EXCESS` means it runs as root, keeps a root real/saved uid (`real-uid-root`: a
+ *       setuid-root wrapper) or holds capabilities — typically systemd `AmbientCapabilities=` or `setcap`
+ *       on the node binary, added so Node can bind 80/443. `source` names which, `sandbox` says what the
+ *       plugin sandbox does about it given its measured state (it empties every capability set for
+ *       plugins when active, but a root service's plugins keep uid 0; a degraded sandbox is tied to the
+ *       service's privilege only when the probe failed in its privilege-drop step), and `fix` says how to
+ *       remove it (drop the capability; lower `net.ipv4.ip_unprivileged_port_start` or use a reverse proxy).
+ *
+ *
  *       `sandbox.cpu` is the CPU bound isolated plugins actually have on this host: `preventive`
  *       (a kernel ceiling — cgroup `CPUQuota` or the Windows Job Object rate cap), `reactive` (no
  *       ceiling, but the host-side poll SIGKILLs a sustained burn) or `unbounded` (neither: a plugin
@@ -198,6 +208,42 @@ router.get('/', async (req: Request, res: Response) => {
  *                                       enum: [unknown, unsupported, disabled, active, degraded]
  *                                     note:
  *                                       type: string
+ *                     hostPrivilege:
+ *                       type: object
+ *                       description: LINUX ONLY (NOT_APPLICABLE elsewhere). The privilege the backend process itself holds.
+ *                       properties:
+ *                         status:
+ *                           type: string
+ *                           enum: [OK, EXCESS, UNKNOWN, NOT_APPLICABLE]
+ *                         root:
+ *                           type: boolean
+ *                         uid:
+ *                           type: integer
+ *                         capabilities:
+ *                           type: array
+ *                           description: Effective, permitted and ambient capabilities, e.g. CAP_NET_BIND_SERVICE.
+ *                           items:
+ *                             type: string
+ *                         ambient:
+ *                           type: array
+ *                           items:
+ *                             type: string
+ *                         inheritable:
+ *                           type: array
+ *                           items:
+ *                             type: string
+ *                         source:
+ *                           type: string
+ *                           enum: [root, real-uid-root, ambient, file-capabilities, inheritable-only]
+ *                         cause:
+ *                           type: string
+ *                         sandbox:
+ *                           type: string
+ *                           description: What the plugin sandbox does about it, from its measured state.
+ *                         fix:
+ *                           type: string
+ *                         message:
+ *                           type: string
  *                 purge:
  *                   type: object
  *                   properties:

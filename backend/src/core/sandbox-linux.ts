@@ -96,6 +96,48 @@ function logSafe(v: any): string {
     return String(v == null ? '' : v).replace(/\n/g, '').replace(/\r/g, '');
 }
 
+export type ShimLaunchFailure = {
+    /** 'unsupported' = exit 78, 'fail' = exit 79, 'launcher' = exit 127 before the shim ever ran. */
+    kind: 'unsupported' | 'fail' | 'launcher';
+    /** The launcher's own line, made path-free by operatorSafeText(). */
+    line: string;
+};
+
+/**
+ * Decide whether a child that exited during startup was stopped BY THE SANDBOX - and refuse to decide
+ * whenever the plugin itself could have produced what we are looking at.
+ *
+ * The shim prints exactly one `SHIM: …` line, immediately before it exec()s the target, and nothing of
+ * the plugin can run before that line exists. That single fact is the whole attribution rule:
+ *   . exit 79 with a `SHIM-FAIL:` line and NO `SHIM:` line before it - the shim refused before exec. The
+ *     plugin never ran; the line is the shim's own. ATTRIBUTED.
+ *   . exit 78 with `SHIM-UNSUPPORTED:` and no `SHIM:` line - same, for "this kernel cannot".
+ *   . exit 127 with no `SHIM:` line - the launch chain in front of the shim (`sh -c … exec "$@"`,
+ *     `env`, systemd-run) could not execute it: perl or the script is missing. ATTRIBUTED, to the
+ *     launcher, with its first stderr line.
+ *   . ANYTHING that follows a `SHIM:` line - including `SHIM-FAIL: exec …` with exit 127 - is NOT
+ *     attributed. The confinement was applied and the exec point was reached; from there on the same
+ *     bytes and the same exit status are producible by plugin code (`console.error('SHIM-FAIL: …');
+ *     process.exit(79)`), and a plugin that could make its own failure read as "the sandbox is broken"
+ *     could talk an administrator into switching the sandbox off. Those stay ordinary failed starts.
+ * Returns null whenever the evidence is missing too (an empty stderr proves nothing either way).
+ */
+function classifyShimLaunchFailure(code: number | null, stderr: string): ShimLaunchFailure | null {
+    if (code !== SHIM_EXIT.UNSUPPORTED && code !== SHIM_EXIT.FAIL && code !== SHIM_EXIT.EXEC) return null;
+    const { operatorSafeText } = require('./sandbox-refusal');
+    let firstLine = '';
+    for (const raw of String(stderr || '').split(/\r?\n/)) {
+        const line = raw.trim();
+        if (!line) continue;
+        if (line.startsWith('SHIM: ')) return null;
+        if (code === SHIM_EXIT.FAIL && line.startsWith('SHIM-FAIL: ')) return { kind: 'fail', line: operatorSafeText(line) };
+        if (code === SHIM_EXIT.UNSUPPORTED && line.startsWith('SHIM-UNSUPPORTED: ')) return { kind: 'unsupported', line: operatorSafeText(line) };
+        if (!firstLine) firstLine = line;
+    }
+    if (code === SHIM_EXIT.EXEC && firstLine) return { kind: 'launcher', line: operatorSafeText(firstLine) };
+    return null;
+}
+
 /**
  * Validate one path destined for the shim's argv, or return null when it cannot be passed SAFELY.
  *
@@ -238,6 +280,14 @@ function getLinuxZeroConfState(): ZeroConfState { return zeroConfState; }
 /** One human-readable sentence for admin GET /health/details, written where the verdict is decided. */
 let zeroConfNote = 'the Linux zero-config confinement probe has not run yet (it fires on the first isolated plugin load)';
 function getLinuxZeroConfNote(): string { return zeroConfNote; }
+/**
+ * The shim's OWN refusal line from the probe (`SHIM-FAIL: …` / `SHIM-UNSUPPORTED: …`), path-free, or
+ * null. Kept apart from the note because two readers need the bare line: the activation refusal shows
+ * it to the administrator, and the host-privilege diagnosis asks whether it names a privilege-drop step
+ * before it calls a capability "the cause" of a degraded sandbox.
+ */
+let zeroConfShimFailure: string | null = null;
+function getLinuxZeroConfShimFailure(): string | null { return zeroConfShimFailure; }
 
 /**
  * The probe child, as one `node -e` program. ASCII only, no regular expressions and no backslashes, so
@@ -281,7 +331,7 @@ const PROBE_SRC = [
     'try{process.kill(process.ppid,0);out.signalCode="OPEN";}catch(e){out.signalCode=(e&&e.code)||"THROW";}',
     'try{var q=cp.spawnSync(process.execPath,["-e","process.exit(0)"]);out.processCode=q.error?((q.error&&q.error.code)||"THROW"):(q.status===0?"OPEN":"FAIL");}catch(e){out.processCode=(e&&e.code)||"THROW";}',
     'try{var payload=inside+".sh";fs.writeFileSync(payload,"#!/bin/sh\\nexit 0\\n");fs.chmodSync(payload,448);var x=cp.spawnSync(payload,[],{encoding:"utf8"});out.execCode=x.error?((x.error&&x.error.code)||"THROW"):(x.status===0?"OPEN":"FAIL");}catch(e){out.execCode=(e&&e.code)||"THROW";}',
-    'try{var st=fs.readFileSync("/proc/self/status","utf8");var bad=[];for(var k of ["CapInh","CapPrm","CapEff","CapAmb"]){var m=st.match(new RegExp("^"+k+":\\\\s*([0-9a-f]+)","mi"));if(!m||!/^0+$/.test(m[1]))bad.push(k);}if(process.geteuid&&process.geteuid()===0){var b=st.match(/^CapBnd:\\s*([0-9a-f]+)/mi);if(!b||!/^0+$/.test(b[1]))bad.push("CapBnd");}out.capsCode=bad.length?"OPEN:"+bad.join(","):"ZERO";}catch(e){out.capsCode=(e&&e.code)||"THROW";}',
+    'try{var st=fs.readFileSync("/proc/self/status","utf8");var bad=[];for(var k of ["CapInh","CapPrm","CapEff","CapAmb"]){var m=st.match(new RegExp("^"+k+":\\\\s*([0-9a-f]+)","mi"));if(!m||!/^0+$/.test(m[1]))bad.push(k);}out.capsCode=bad.length?"OPEN:"+bad.join(","):"ZERO";var b=st.match(/^CapBnd:\\s*([0-9a-f]+)/mi);out.bndCode=!b?"MISSING":(/^0+$/.test(b[1])?"ZERO":"SET");out.euid=process.geteuid?process.geteuid():-1;}catch(e){out.capsCode=(e&&e.code)||"THROW";}',
     'function finish(){try{process.send(out,function(){process.exit(0);});}catch(e){process.exit(5);}}',
     'setTimeout(function(){process.exit(4);},12000);',
     'if(!process.send){process.exit(3);}',
@@ -305,8 +355,34 @@ const PROBE_SRC = [
  */
 const REFUSAL_CODES = new Set(['EPERM', 'EACCES']);
 
-type ProbeMsg = { wrote?: boolean; readSystem?: boolean; exactRead?: boolean; siblingCode?: string; readCode?: string; outCode?: string; signalCode?: string; processCode?: string; execCode?: string; capsCode?: string; netCode?: string; unixCode?: string };
+type ProbeMsg = { wrote?: boolean; readSystem?: boolean; exactRead?: boolean; siblingCode?: string; readCode?: string; outCode?: string; signalCode?: string; processCode?: string; execCode?: string; capsCode?: string; bndCode?: string; euid?: number; netCode?: string; unixCode?: string };
 type ProbeRun = { msg: ProbeMsg | null; code: number | null; stderr: string };
+
+/**
+ * Did the confined child start with nothing the service held? Decided from the child's own view of
+ * /proc/self/status AND from which privilege path the shim reports having run (`privdrop=` on its one
+ * `SHIM:` line, printed before the exec - nothing the child does can write it).
+ *
+ * Permitted, effective, inheritable and ambient must be empty, always. The BOUNDING set is required to be
+ * empty exactly when the shim says it emptied it (`privdrop=root`: every root step ran and the shim
+ * verified it) - and NOT on the paths where the process had no CAP_SETPCAP to empty it with
+ * (`root-partial`: a root unit with a reduced CapabilityBoundingSet=, a container with --cap-drop,
+ * PrivateUsers=; `caps`; `none`). There the shim sets no_new_privs before the exec, so the kernel
+ * intersects every later permitted set with the empty one and the bounding set bounds a gain that can no
+ * longer happen. Requiring it anyway is what made the probe report 'degraded' - and the fail-closed policy
+ * refuse every plugin - on a root host that simply lacked CAP_SETPCAP, though its plugins held nothing.
+ * A SHIM: line without a privdrop field (or none at all) keeps the old, stricter rule: a child running as
+ * uid 0 must see an empty bounding set.
+ */
+function capabilitiesShed(msg: ProbeMsg | null, shimStderr: string): boolean {
+    if (!msg || msg.capsCode !== 'ZERO') return false;
+    const shimLine = String(shimStderr || '').split(/\r?\n/).find((l) => l.startsWith('SHIM: ')) || '';
+    const m = / privdrop=([a-z-]+)\s*$/.exec(shimLine);
+    const path = m ? m[1] : null;
+    if (path === 'root') return msg.bndCode === 'ZERO';
+    if (path === 'root-partial' || path === 'caps' || path === 'none') return true;
+    return msg.euid !== 0 || msg.bndCode === 'ZERO';
+}
 
 /**
  * Run the probe child once and collect its message, its exit code and its stderr.
@@ -344,8 +420,27 @@ function runProbeChild(pre: string[], inside: string, outside: string, denyNet: 
         try { proc.stderr.on('data', (d: any) => { if (stderr.length < 4096) stderr += String(d); }); } catch { /* */ }
         proc.on('message', (m: any) => { if (m && typeof m === 'object') msg = m as ProbeMsg; });
         proc.on('error', () => { clearTimeout(overall); finish(null); });   // ENOENT / not executable
-        proc.on('exit', (code: number | null) => { clearTimeout(overall); finish(code); });
+        // 'exit' can fire while the stderr pipe still holds the shim's last words - and a `SHIM-FAIL:`
+        // line that arrives after the verdict is a verdict without its reason. Wait for stderr to drain,
+        // bounded, before reporting.
+        proc.on('exit', (code: number | null) => {
+            clearTimeout(overall);
+            afterStreamDrained(proc && proc.stderr, 1000, () => finish(code));
+        });
     });
+}
+
+/** Call `done` once `stream` has ended or closed (immediately when it already has, or is absent), or after `maxMs`. */
+function afterStreamDrained(stream: any, maxMs: number, done: () => void): void {
+    let called = false;
+    const once = () => { if (!called) { called = true; done(); } };
+    if (!stream || stream.readableEnded || stream.destroyed || stream.closed) { once(); return; }
+    const timer = setTimeout(once, maxMs);
+    if ((timer as any).unref) (timer as any).unref();
+    try {
+        stream.once('end', () => { clearTimeout(timer); once(); });
+        stream.once('close', () => { clearTimeout(timer); once(); });
+    } catch { clearTimeout(timer); once(); }
 }
 
 /** Read the sandbox config block without ever letting a missing or broken config throw into a launch path. */
@@ -485,9 +580,12 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
             // The shim's own verdict comes FIRST, because 'this kernel cannot' and 'this kernel could and
             // it failed' are different answers that demand different operator actions, and only the exit
             // code can tell them apart.
+            const confinedFailure = classifyShimLaunchFailure(confined.code, confined.stderr);
             if (confined.code === SHIM_EXIT.UNSUPPORTED) {
                 zeroConfState = 'unsupported';
-                zeroConfNote = 'this kernel has no usable Landlock (or the architecture has no verified syscall table), so the Linux kernel floor cannot be applied';
+                zeroConfShimFailure = confinedFailure ? confinedFailure.line : null;
+                zeroConfNote = 'this kernel has no usable Landlock (or the architecture has no verified syscall table), so the Linux kernel floor cannot be applied'
+                    + (zeroConfShimFailure ? ` (${zeroConfShimFailure})` : '');
                 console.warn(`[Sandbox] Linux zero-config confinement unsupported on this kernel: ${logSafe(confined.stderr.trim().slice(0, 200))}`);
                 return 'unsupported';
             }
@@ -502,7 +600,7 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
             const signalRefused = !!(confined.msg && REFUSAL_CODES.has(String(confined.msg.signalCode)));
             const processRefused = !!(confined.msg && REFUSAL_CODES.has(String(confined.msg.processCode)));
             const execRefused = !!(confined.msg && REFUSAL_CODES.has(String(confined.msg.execCode)));
-            const capsDropped = !!(confined.msg && confined.msg.capsCode === 'ZERO');
+            const capsDropped = capabilitiesShed(confined.msg, confined.stderr);
             const netRefused = !!(confined.msg && REFUSAL_CODES.has(String(confined.msg.netCode)));
             const unixRefused = !!(confined.msg && REFUSAL_CODES.has(String(confined.msg.unixCode)));
 
@@ -522,18 +620,26 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
                 && REFUSAL_CODES.has(String(allowed.msg.signalCode))
                 && REFUSAL_CODES.has(String(allowed.msg.processCode))
                 && REFUSAL_CODES.has(String(allowed.msg.execCode))
-                && allowed.msg.capsCode === 'ZERO'
+                && capabilitiesShed(allowed.msg, allowed.stderr)
                 && REFUSAL_CODES.has(String(allowed.msg.unixCode))
                 && allowed.msg.netCode === 'CONNECTED');
             if (ipcOk && positiveWrite && positiveRead && exactRead && siblingRefused && readRefused && outRefused && signalRefused
                 && processRefused && execRefused && capsDropped && netRefused && unixRefused && allowedOk) {
                 zeroConfState = 'active';
+                zeroConfShimFailure = null;
                 zeroConfNote = 'Landlock + seccomp-bpf certified with no host configuration for both network policies: reads/writes are scoped, process creation and dangerous syscalls are refused, all sockets are denied without a grant, and only IP client sockets are admitted with it';
                 console.log('[Sandbox] Linux kernel confinement ACTIVE (Landlock scopes reads/writes and cross-process access; seccomp-bpf refuses process creation and dangerous syscalls, denies all new sockets without a grant, and admits only AF_INET/AF_INET6 clients with it while preserving IPC).');
                 return 'active';
             }
             zeroConfState = 'degraded';
-            zeroConfNote = 'the Landlock/seccomp shim is available but its probe did NOT certify both network-policy launch shapes';
+            // When the shim itself refused (exit 79 before exec), its own line IS the diagnosis - e.g.
+            // `SHIM-FAIL: setgroups(clear): Operation not permitted` - and it belongs in the one sentence
+            // GET /health/details shows, not only in a log line nobody is tailing.
+            const shimRefusal = confinedFailure || classifyShimLaunchFailure(allowed.code, allowed.stderr);
+            zeroConfShimFailure = shimRefusal ? shimRefusal.line : null;
+            zeroConfNote = zeroConfShimFailure
+                ? `the Landlock/seccomp shim refused to start the probe child, so nothing could be certified: ${zeroConfShimFailure}`
+                : 'the Landlock/seccomp shim is available but its probe did NOT certify both network-policy launch shapes';
             console.warn('[Sandbox] Linux zero-config probe did NOT certify confinement on this host - isolated plugins keep the Node permission model and JS guards. '
                 + `ipc=${ipcOk ? 'ok' : 'FAILED'} zoneWrite=${positiveWrite ? 'ok' : 'FAILED'} systemRead=${positiveRead ? 'ok' : 'FAILED'} `
                 + `exactFileRead=${exactRead ? 'ok' : 'FAILED'} siblingFile=${siblingRefused ? 'refused' : logSafe((confined.msg && confined.msg.siblingCode) || 'unknown')} `
@@ -542,7 +648,7 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
                 + `kill=${signalRefused ? 'refused' : logSafe((confined.msg && confined.msg.signalCode) || 'unknown')} `
                 + `processCreate=${processRefused ? 'refused' : logSafe((confined.msg && confined.msg.processCode) || 'unknown')} `
                 + `zoneExec=${execRefused ? 'refused' : logSafe((confined.msg && confined.msg.execCode) || 'unknown')} `
-                + `capabilities=${capsDropped ? 'zero' : logSafe((confined.msg && confined.msg.capsCode) || 'unknown')} `
+                + `capabilities=${capsDropped ? 'zero' : logSafe(`${(confined.msg && confined.msg.capsCode) || 'unknown'}/bounding=${(confined.msg && confined.msg.bndCode) || 'unknown'}`)} `
                 + `rawIpConnect=${netRefused ? 'refused' : logSafe((confined.msg && confined.msg.netCode) || 'unknown')} `
                 + `unixConnect=${unixRefused ? 'refused' : logSafe((confined.msg && confined.msg.unixCode) || 'unknown')} `
                 + `networkGrantedShape=${allowedOk ? 'ok' : 'FAILED'} `
@@ -571,6 +677,13 @@ module.exports = {
     probeLinuxZeroConf,
     getLinuxZeroConfState,
     getLinuxZeroConfNote,
+    getLinuxZeroConfShimFailure,
+    // The probe's capability verdict, exported so its rule is pinned by a unit test on every host.
+    capabilitiesShed,
+    // The attribution rule for a child that died during startup: read by plugin-isolate.ts to decide
+    // whether a failed launch was the SANDBOX refusing (409 sandbox_unavailable) or an ordinary failure.
+    classifyShimLaunchFailure,
+    afterStreamDrained,
     // Exported for the unit test only: the path filter is the rejection boundary of this module, so it
     // is tested directly rather than inferred from an argv.
     shimPath,

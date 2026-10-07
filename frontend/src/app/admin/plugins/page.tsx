@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { pluginsApi, themesApi, Plugin, PluginPortConflict } from "@/lib/api";
+import { pluginsApi, themesApi, Plugin, PluginPortConflict, PluginRuntime } from "@/lib/api";
 import { permMeta, PermissionRisk } from "@/lib/permissionMeta";
 import { reloadActivePlugins } from "@/lib/plugins";
 import { useMenu } from "@/contexts/MenuContext";
@@ -79,6 +79,7 @@ const RUNTIME_META: Record<string, { dot: string; label: string; text: string }>
     crashed: { dot: 'bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.5)]', label: 'Crashed', text: 'text-rose-600' },
     'crash-looping': { dot: 'bg-rose-600 animate-pulse shadow-[0_0_8px_rgba(225,29,72,0.6)]', label: 'Crash-looping', text: 'text-rose-700' },
     stopped: { dot: 'bg-slate-400', label: 'Stopped', text: 'text-slate-500' },
+    refused: { dot: 'bg-rose-600', label: 'Refused by the sandbox', text: 'text-rose-700' },
 };
 
 function fmtMB(bytes?: number | null) {
@@ -110,6 +111,83 @@ export function brokenReasonText(plugin: Pick<Plugin, 'brokenReason'>): string {
     // An unknown/absent reason must still read as broken, never as healthy: the fallback is the
     // generic incomplete-install copy, not an empty string.
     return BROKEN_REASON_COPY[plugin.brokenReason || ''] || BROKEN_REASON_COPY['no-manifest'];
+}
+
+/**
+ * THE SANDBOX REFUSED TO START THE PLUGIN — POST /plugins/:slug/activate answers 409 with the stable code
+ * `sandbox_unavailable` when the server's plugin sandbox cannot confine plugins (or refused this launch).
+ *
+ * This screen used to show "Activation failed: The server encountered an internal error" for it: on a
+ * Linux host whose service held CAP_NET_BIND_SERVICE, every activation was refused by the fail-closed
+ * sandbox and the admin had nothing to act on, while the reason sat in the server log. Nothing about the
+ * PLUGIN was judged, so this is not the validation-reject panel: it says which sandbox, what failed, and
+ * what the operator can do. Keyed on the code, never on the wording. Exported for the unit test.
+ */
+export type SandboxRefusal = { message: string; mechanism: string; state: string; failure: string | null; action: string };
+
+export function sandboxRefusalFrom(error: unknown): SandboxRefusal | null {
+    const e = error as { code?: unknown; message?: unknown; details?: { sandbox?: Record<string, unknown> } } | null;
+    if (!e || e.code !== 'sandbox_unavailable') return null;
+    const s = (e.details && typeof e.details === 'object' && e.details.sandbox && typeof e.details.sandbox === 'object') ? e.details.sandbox : {};
+    const text = (v: unknown, fallback: string) => (typeof v === 'string' && v.trim() ? v : fallback);
+    return {
+        message: text(e.message, 'The plugin sandbox could not confine this plugin, so it was not started.'),
+        mechanism: text(s.mechanism, 'unknown'),
+        state: text(s.state, 'unknown'),
+        failure: typeof s.failure === 'string' && s.failure.trim() ? s.failure : null,
+        action: text(s.action, ''),
+    };
+}
+
+const SANDBOX_MECHANISM_LABEL: Record<string, string> = {
+    landlock: 'Linux — Landlock + seccomp',
+    appcontainer: 'Windows — AppContainer',
+    seatbelt: 'macOS — Seatbelt',
+    none: 'none on this platform',
+};
+
+export function SandboxRefusalPanel({ refusal }: { refusal: SandboxRefusal }) {
+    return (
+        <div data-testid="sandbox-refusal" className="mb-4 space-y-4">
+            <p className="text-xs text-slate-700 font-semibold leading-relaxed">{refusal.message}</p>
+            <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-[11px]">
+                <dt className="font-extrabold uppercase tracking-wider text-slate-400">Sandbox</dt>
+                <dd className="font-semibold text-slate-700">{SANDBOX_MECHANISM_LABEL[refusal.mechanism] || refusal.mechanism}</dd>
+                <dt className="font-extrabold uppercase tracking-wider text-slate-400">State</dt>
+                <dd className="font-semibold text-slate-700">{refusal.state}</dd>
+            </dl>
+            {refusal.failure && (
+                <div>
+                    <h4 className="font-extrabold text-xs uppercase tracking-wider text-rose-800 mb-2">What the sandbox reported</h4>
+                    <pre className="text-[11px] text-rose-800 bg-rose-50/50 border border-rose-100/50 rounded-xl px-3.5 py-2.5 font-mono whitespace-pre-wrap break-words">{refusal.failure}</pre>
+                </div>
+            )}
+            {refusal.action && (
+                <div>
+                    <h4 className="font-extrabold text-xs uppercase tracking-wider text-amber-800 mb-2">What to do (server operator)</h4>
+                    <p className="text-xs text-slate-600 leading-relaxed whitespace-pre-wrap">{refusal.action}</p>
+                </div>
+            )}
+            <p className="text-[11px] text-slate-500 leading-relaxed p-3 bg-slate-50 border border-slate-100 rounded-2xl">
+                {refusal.state === 'active'
+                    ? 'The sandbox is working on this server but refused this launch; the server log names the step that failed.'
+                    : 'This is a server problem, not a problem with this plugin: no isolated plugin can start until the sandbox is active again.'}
+                {' '}The server&apos;s sandbox diagnosis is at <code className="font-mono">GET /api/v1/health/details</code> (the <code className="font-mono">sandbox</code> section) and in the server log.
+            </p>
+        </div>
+    );
+}
+
+/**
+ * A refusal recorded on the plugin's RUNTIME rather than answered to a request: the sandbox would not
+ * start it at boot, on a supervised restart, or on another node (`runtime.state === 'refused'`). Before
+ * the backend recorded it, such a plugin showed as Active with no runtime and the drawer said "not an
+ * isolated plugin" — on a host whose sandbox is down, that was every plugin after a restart. Same shape
+ * as a 409's refusal, so the same panel renders it. Exported for the unit test.
+ */
+export function runtimeSandboxRefusal(runtime: PluginRuntime | null | undefined): SandboxRefusal | null {
+    if (!runtime || runtime.state !== 'refused') return null;
+    return sandboxRefusalFrom({ code: 'sandbox_unavailable', message: runtime.lastError || '', details: { sandbox: runtime.sandbox || {} } });
 }
 
 /** Broken entries lead the grid: they are the ones blocking an install and needing a decision. */
@@ -207,7 +285,7 @@ export default function PluginsPage() {
     const [dropData, setDropData] = useState(false);
 
     // Structured activation-reject panel (missing grants vs hard-blocked dangerous calls).
-    const [rejection, setRejection] = useState<{ pluginName: string; message?: string; missingPermissions?: string[]; dangerousCalls?: string[] } | null>(null);
+    const [rejection, setRejection] = useState<{ pluginName: string; message?: string; missingPermissions?: string[]; dangerousCalls?: string[]; sandbox?: SandboxRefusal } | null>(null);
 
     // Per-plugin detail drawer.
     const [detailPlugin, setDetailPlugin] = useState<Plugin | null>(null);
@@ -338,7 +416,16 @@ export default function PluginsPage() {
             refreshMenus();
             addToast(res.message || `Permissions updated for "${permsModalPlugin.name}"`, "success");
         } catch (error: any) {
-            addToast("Failed to update permissions: " + (error.message || "Unknown error"), "error");
+            // 409 sandbox_unavailable: the grants WERE saved, but the sandbox refused the restart and the
+            // plugin is now stopped. Say that, with the refusal, rather than "failed to update".
+            const sandbox = sandboxRefusalFrom(error);
+            if (sandbox) {
+                setPermsModalPlugin(null);
+                loadPlugins();
+                setRejection({ pluginName: permsModalPlugin.name, message: sandbox.message, sandbox });
+            } else {
+                addToast("Failed to update permissions: " + (error.message || "Unknown error"), "error");
+            }
         } finally {
             setSavingPerms(false);
         }
@@ -414,7 +501,13 @@ export default function PluginsPage() {
         } catch (error: any) {
             console.error("Failed to activate plugin:", error);
             const details = error && error.details;
-            if (details && (Array.isArray(details.missingPermissions) || Array.isArray(details.dangerousCalls))) {
+            const sandbox = sandboxRefusalFrom(error);
+            if (sandbox) {
+                // The SERVER's sandbox refused (409 sandbox_unavailable): say which sandbox, what it
+                // reported and what the operator can do, instead of a generic "failed".
+                setPermissionModalOpen(false);
+                setRejection({ pluginName: name, message: sandbox.message, sandbox });
+            } else if (details && (Array.isArray(details.missingPermissions) || Array.isArray(details.dangerousCalls))) {
                 // Structured reject: show a dedicated panel splitting fixable grants from hard blocks.
                 setPermissionModalOpen(false);
                 setRejection({
@@ -447,7 +540,15 @@ export default function PluginsPage() {
                 addToast(`${t('plugins.freeport.already')} ${plugin.name} ${t('plugins.freeport.success.post')} ${conflict.port}.`, "success");
             }
         } catch (error: any) {
-            addToast(`${t('plugins.freeport.error')} ${conflict.port}: ` + (error.message || "Unknown error"), "error", 0);
+            const sandbox = sandboxRefusalFrom(error);
+            if (sandbox) {
+                // The port was freed; the sandbox refused the restart that followed.
+                setPortConflictPrompt(null);
+                loadPlugins();
+                setRejection({ pluginName: plugin.name, message: sandbox.message, sandbox });
+            } else {
+                addToast(`${t('plugins.freeport.error')} ${conflict.port}: ` + (error.message || "Unknown error"), "error", 0);
+            }
         } finally {
             setFreeingPort(false);
         }
@@ -485,7 +586,13 @@ export default function PluginsPage() {
             loadPlugins();
         } catch (error: any) {
             console.error("Failed to restart plugin:", error);
-            addToast("Restart failed: " + (error.message || "Unknown error"), "error");
+            const sandbox = sandboxRefusalFrom(error);
+            if (sandbox) {
+                loadPlugins();
+                setRejection({ pluginName: plugin.name, message: sandbox.message, sandbox });
+            } else {
+                addToast("Restart failed: " + (error.message || "Unknown error"), "error");
+            }
         } finally {
             setRestarting(prev => ({ ...prev, [plugin.slug]: false }));
         }
@@ -748,12 +855,13 @@ export default function PluginsPage() {
                                     <FaShieldAlt className="text-xl" />
                                 </div>
                                 <div>
-                                    <h3 className="text-lg font-extrabold text-slate-900">Activation blocked</h3>
+                                    <h3 className="text-lg font-extrabold text-slate-900">{rejection.sandbox ? 'Plugin sandbox unavailable' : 'Activation blocked'}</h3>
                                     <p className="text-xs text-slate-400 font-semibold mt-0.5">{rejection.pluginName}</p>
                                 </div>
                             </div>
                         </div>
                         <div className="px-8 overflow-y-auto flex-1 custom-scrollbar">
+                            {rejection.sandbox && <SandboxRefusalPanel refusal={rejection.sandbox} />}
                             {(rejection.dangerousCalls && rejection.dangerousCalls.length > 0) && (
                                 <div className="mb-6">
                                     <div className="flex items-center gap-2 mb-3 text-rose-800">
@@ -780,7 +888,8 @@ export default function PluginsPage() {
                                     </ul>
                                 </div>
                             )}
-                            {(!rejection.dangerousCalls || rejection.dangerousCalls.length === 0) &&
+                            {!rejection.sandbox &&
+                                (!rejection.dangerousCalls || rejection.dangerousCalls.length === 0) &&
                                 (!rejection.missingPermissions || rejection.missingPermissions.length === 0) && (
                                     <p className="text-xs text-slate-600 whitespace-pre-wrap mb-4 font-semibold leading-relaxed p-4 bg-slate-50 border border-slate-100 rounded-2xl">{rejection.message || 'Activation failed.'}</p>
                                 )}
@@ -865,9 +974,15 @@ export default function PluginsPage() {
                                                             {!!detailPlugin.runtime.restarts && <span>restarts: <span className="text-slate-700">{detailPlugin.runtime.restarts}</span></span>}
                                                             {detailPlugin.runtime.lastExitCode != null && <span>last exit: <span className="text-slate-700">{detailPlugin.runtime.lastExitCode}</span></span>}
                                                         </div>
-                                                        {detailPlugin.runtime.lastError && (
-                                                            <p className="text-[10px] font-mono text-rose-600 bg-rose-50/50 border border-rose-100 rounded-xl p-2.5 break-words font-semibold">{detailPlugin.runtime.lastError}</p>
-                                                        )}
+                                                        {(() => {
+                                                            // Refused by the SANDBOX: which sandbox, what it reported and what
+                                                            // the operator can do — not just the error string.
+                                                            const refusal = runtimeSandboxRefusal(detailPlugin.runtime);
+                                                            if (refusal) return <SandboxRefusalPanel refusal={refusal} />;
+                                                            return detailPlugin.runtime.lastError ? (
+                                                                <p className="text-[10px] font-mono text-rose-600 bg-rose-50/50 border border-rose-100 rounded-xl p-2.5 break-words font-semibold">{detailPlugin.runtime.lastError}</p>
+                                                            ) : null;
+                                                        })()}
                                                     </>
                                                 );
                                             })()}
@@ -880,7 +995,7 @@ export default function PluginsPage() {
                                             </button>
                                         </div>
                                     ) : (
-                                        <p className="text-[11px] font-semibold text-slate-400 bg-slate-50 border border-slate-100 rounded-xl p-3.5">No live runtime data (not an isolated plugin).</p>
+                                        <p className="text-[11px] font-semibold text-slate-400 bg-slate-50 border border-slate-100 rounded-xl p-3.5">No live runtime data: no process has been started for this plugin. The server log says why.</p>
                                     )}
                                 </div>
                             )}
@@ -1165,6 +1280,7 @@ export default function PluginsPage() {
                             const rm = plugin.runtime ? (RUNTIME_META[plugin.runtime.state] || RUNTIME_META.stopped) : null;
                             const rss = fmtMB(plugin.runtime?.rssBytes);
                             const isCrashLooping = plugin.runtime?.state === 'crash-looping';
+                            const isRefused = plugin.runtime?.state === 'refused';
                             return (
                             <div
                                 key={plugin.slug}
@@ -1259,8 +1375,16 @@ export default function PluginsPage() {
                                                 <FaSyncAlt className={`text-[10px] ${restarting[plugin.slug] ? 'animate-spin' : ''}`} />
                                             </button>
                                         </div>
-                                        {isCrashLooping && plugin.runtime?.lastError && (
+                                        {(isCrashLooping || isRefused) && plugin.runtime?.lastError && (
                                             <p className="text-[10px] text-red-600 bg-red-50/50 border border-red-100 rounded-lg p-2 mt-2 font-mono break-words line-clamp-2" title={plugin.runtime.lastError}>{plugin.runtime.lastError}</p>
+                                        )}
+                                        {isRefused && (
+                                            <button
+                                                onClick={() => setDetailPlugin(plugin)}
+                                                className="mt-2 text-[10px] font-extrabold uppercase tracking-wider text-rose-700 hover:underline"
+                                            >
+                                                Why, and what to do
+                                            </button>
                                         )}
                                     </div>
                                 )}

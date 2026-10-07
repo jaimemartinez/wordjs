@@ -156,10 +156,15 @@ function attachLogLimiter(slug: string, child: any): void {
 // Health is keyed by SLUG (survives reload, which recreates the ephemeral handle), telemetry that is
 // per-child (pid/startedAt/rss) is refreshed on each (re)load.
 type IsolateHealth = {
-    state: 'running' | 'restarting' | 'crashed' | 'crash-looping' | 'stopped';
+    // 'refused': the PLUGIN SANDBOX would not start it (core/sandbox-refusal.ts) - the fail-closed gate,
+    // or the Linux shim refusing this launch before exec. Not a crash: nothing of the plugin ran, and
+    // restarting cannot help until the server's sandbox is fixed, so the supervisor does not retry it.
+    state: 'running' | 'restarting' | 'crashed' | 'crash-looping' | 'stopped' | 'refused';
     pid: number | null; startedAt: number; restarts: number;
     lastExitCode: number | null; lastError: string | null; rssBytes: number | null;
     crashWindow: number[]; // timestamps of recent auto-restarts (crash-loop detection)
+    // The refusal's path-free details (mechanism, state, failure line, operator action) while 'refused'.
+    sandbox?: any;
 };
 const isolateHealth = new Map<string, IsolateHealth>();
 const restartTimers = new Map<string, NodeJS.Timeout>();
@@ -414,7 +419,19 @@ function superviseRestart(slug: string, entryFile: string) {
             // reloadIsolatedPlugin calls it). Restore the ordering so recovered routes actually serve.
             try { require('./plugins').fixMiddlewareOrder(); } catch { /* best-effort */ }
         }
-        catch (e: any) { h.state = 'crashed'; h.lastError = e && e.message; superviseRestart(slug, entryFile); }
+        catch (e: any) {
+            // A SANDBOX REFUSAL is not another crash: loadIsolatedPlugin has recorded it as 'refused', and
+            // retrying cannot succeed while the server's sandbox refuses - it would only overwrite that
+            // diagnosis with 'crashed', then 'crash-looping'. Stop here and tell the administrator why.
+            if (require('./sandbox-refusal').findSandboxUnavailable(e)) {
+                try {
+                    const { addAdminNotice } = require('./plugins');
+                    if (typeof addAdminNotice === 'function') addAdminNotice(`Plugin "${slug}" stopped and the plugin sandbox refused to restart it: ${e.message}`, 'error');
+                } catch { /* notice is best-effort */ }
+                return;
+            }
+            h.state = 'crashed'; h.lastError = e && e.message; superviseRestart(slug, entryFile);
+        }
     }, delay);
     if (t.unref) t.unref();
     restartTimers.set(slug, t);
@@ -423,7 +440,31 @@ function superviseRestart(slug: string, entryFile: string) {
 function getIsolateStatus(slug: string) {
     const h = isolateHealth.get(slug);
     if (!h) return isolates.has(slug) ? { state: 'running' } : null;
-    return { state: h.state, pid: h.pid, startedAt: h.startedAt, uptimeMs: h.startedAt ? Date.now() - h.startedAt : 0, restarts: h.restarts, lastExitCode: h.lastExitCode, lastError: h.lastError, rssBytes: h.rssBytes };
+    return {
+        state: h.state, pid: h.pid, startedAt: h.startedAt, uptimeMs: h.startedAt ? Date.now() - h.startedAt : 0, restarts: h.restarts, lastExitCode: h.lastExitCode, lastError: h.lastError, rssBytes: h.rssBytes,
+        ...(h.state === 'refused' && h.sandbox ? { sandbox: h.sandbox } : {}),
+    };
+}
+
+/**
+ * Record a sandbox refusal of a launch in the plugin's health, whoever asked for the launch.
+ *
+ * WHY HERE. An activation answers the refusal itself (409 sandbox_unavailable). Every OTHER caller of
+ * loadIsolatedPlugin - the boot-time reload of active_plugins, the supervisor's restart, a cross-node
+ * activation - only logs it, and the plugin stays listed as active with no runtime. On a host whose
+ * sandbox is down that is every active plugin after a restart, shown as "Active" with no reason
+ * anywhere but the server log. Recording it on the health record is what puts it in GET /plugins
+ * (`runtime.state: 'refused'`, `runtime.lastError`, `runtime.sandbox`) where the admin screen can say why.
+ * The details are the refusal's own, already path-free (core/sandbox-refusal.ts).
+ */
+function recordLaunchRefusal(slug: string, err: unknown): void {
+    const refusal = require('./sandbox-refusal').findSandboxUnavailable(err);
+    if (!refusal) return;
+    const h = getHealth(slug);
+    h.state = 'refused';
+    h.pid = null;
+    h.lastError = refusal.message;
+    h.sandbox = refusal.sandbox;
 }
 function getAllIsolateStatuses() {
     const out: Record<string, any> = {};
@@ -1196,7 +1237,11 @@ function linuxFloorDecision(o: { platform: string; hardened?: boolean; zeroConf:
 
 let linuxZeroConfState: ConfinementState = 'unknown';
 let linuxZeroConfNote = 'the Linux confinement probe has not run yet';
+// The shim's own refusal line from the probe (path-free), when it refused before exec - see
+// sandbox-linux.ts getLinuxZeroConfShimFailure(). Null when it did not, or off Linux.
+let linuxZeroConfShimFailure: string | null = null;
 function getLinuxZeroConfState(): ConfinementState { return linuxZeroConfState; }
+function getLinuxZeroConfShimFailure(): string | null { return linuxZeroConfShimFailure; }
 let sandboxPlatformState: ConfinementState = 'unknown';
 let sandboxPlatformNetworkState: ConfinementState = 'unknown';
 let sandboxPlatformNote = 'the platform confinement probe has not run yet';
@@ -1274,6 +1319,82 @@ function isolatedLaunchPosture(): {
     };
 }
 
+/**
+ * The boot banner for the sandbox state, decided from the LAUNCH POSTURE and not from the state alone.
+ *
+ * The DEGRADED banner used to say, unconditionally, that isolated plugins "run WITHOUT the native OS
+ * backstop" and to suggest "set sandbox.requireHardening=true to fail closed". Under the default policy
+ * (requireHardening on) both halves were false - plugins are REFUSED, and the setting is already on - and
+ * the host-privilege warning printed right after said the opposite. On the incident host the operator
+ * read two contradictory claims back to back. What happens to a plugin is exactly what
+ * isolatedLaunchPosture() decides, so the text comes from it. Pure, for its unit test.
+ */
+function sandboxBootBanner(state: string, posture: { wouldRefuse: boolean; exempt: boolean; requireHardening: boolean }): { level: 'warn' | 'log'; lines: string[] } {
+    const bar = '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━';
+    const where = '   Inspect GET /health/details for the failed property. Visible to admins on GET /api/v1/settings/all';
+    if (state === 'degraded') {
+        const consequence = posture.wouldRefuse
+            ? ['   on this host, and sandbox.requireHardening is ON — isolated plugins are REFUSED', '   until the sandbox is active again (activation answers 409 sandbox_unavailable).']
+            : posture.exempt
+                ? ['   on this host — isolated plugins run WITHOUT the native OS backstop (this', '   development host is exempt from sandbox.requireHardening).']
+                : ['   on this host — isolated plugins run WITHOUT the native OS backstop, because', '   sandbox.requireHardening is off. Set it to true to fail closed.'];
+        return {
+            level: 'warn',
+            lines: [bar, '⚠️  Plugin sandbox DEGRADED: the native OS confinement probe FAILED', ...consequence,
+                where, '   (sandbox_hardening_degraded) and GET /health/details.', bar],
+        };
+    }
+    if (state === 'active') return { level: 'log', lines: ['🛡️  Plugin sandbox: native kernel confinement ACTIVE.'] };
+    if (state === 'unsupported') {
+        return {
+            level: posture.wouldRefuse ? 'warn' : 'log',
+            lines: [posture.wouldRefuse
+                ? '🛡️  Plugin sandbox: native kernel confinement UNAVAILABLE on this host, and sandbox.requireHardening is ON — isolated plugins are REFUSED.'
+                : '🛡️  Plugin sandbox: native kernel confinement UNAVAILABLE — isolated plugins use process separation + JS guards + Node permission model.'],
+        };
+    }
+    if (state === 'disabled') {
+        return {
+            level: posture.wouldRefuse ? 'warn' : 'log',
+            lines: [posture.wouldRefuse
+                ? '🛡️  Plugin sandbox: kernel hardening DISABLED via config (sandbox.useKernelHardening=false) while sandbox.requireHardening is ON — isolated plugins are REFUSED.'
+                : '🛡️  Plugin sandbox: kernel hardening DISABLED via config (sandbox.useKernelHardening=false).'],
+        };
+    }
+    return { level: 'log', lines: [] };
+}
+
+/**
+ * The refusal the fail-closed gate THROWS, built from exactly the state the gate acted on.
+ *
+ * It is a SandboxUnavailableError (core/sandbox-refusal.ts), which POST /plugins/:slug/activate answers
+ * as 409 `sandbox_unavailable`. On Linux it carries the probe's own shim line when the shim refused
+ * before exec - the line that names the cause, e.g. `SHIM-FAIL: setgroups(clear): Operation not
+ * permitted` on the host where a non-root service held CAP_NET_BIND_SERVICE. A parameter rather than a
+ * read of module state so the exact refusal an administrator sees is pinned by a test on every host,
+ * including the ones where the gate itself is exempt.
+ */
+function nativeGateRefusal(slug: string, mech: ConfinementMechanism, state: ConfinementState,
+    linux: { note: string; shimFailure: string | null } = { note: linuxZeroConfNote, shimFailure: linuxZeroConfShimFailure },
+    platformNote: string = sandboxPlatformNote) {
+    const { sandboxUnavailable } = require('./sandbox-refusal');
+    let reason: string;
+    let failure: string | null = null;
+    if (mech === 'landlock') {
+        failure = linux.shimFailure;
+        reason = failure
+            ? `The Linux kernel sandbox (Landlock + seccomp) is '${state}' on this server: its launcher refused to start the probe child, so confinement could not be certified.`
+            : `The Linux kernel sandbox (Landlock + seccomp) is '${state}' on this server: ${linux.note}.`;
+    } else if (mech === 'appcontainer') {
+        reason = `The Windows AppContainer sandbox is '${state}' on this server: ${platformNote}.`;
+    } else if (mech === 'seatbelt') {
+        reason = `The macOS Seatbelt sandbox is '${state}' on this server: ${platformNote}.`;
+    } else {
+        reason = `This platform has no native plugin sandbox (state '${state}').`;
+    }
+    return sandboxUnavailable(slug, { mechanism: mech, state, reason, failure });
+}
+
 function platformLaunchDecision(o: { platform: string; state: ConfinementState; netGranted: boolean; tsNode: boolean }): { mechanism: ConfinementMechanism; use: boolean; reason: string } {
     const mechanism = platformKernelMechanism(o.platform);
     if (mechanism === 'none') return { mechanism, use: false, reason: 'no kernel confinement mechanism exists for this platform' };
@@ -1305,6 +1426,7 @@ function probePlatformConfinement(): Promise<ConfinementState> {
                 const linux = require('./sandbox-linux');
                 linuxZeroConfState = await linux.probeLinuxZeroConf();
                 linuxZeroConfNote = String(linux.getLinuxZeroConfNote());
+                linuxZeroConfShimFailure = typeof linux.getLinuxZeroConfShimFailure === 'function' ? linux.getLinuxZeroConfShimFailure() : null;
                 sandboxPlatformState = linuxZeroConfState;
             } catch (e: any) {
                 sandboxPlatformState = linuxZeroConfState = 'degraded';
@@ -1490,7 +1612,12 @@ function loadIsolatedPlugin(slug: string, entryFile: string, opts: { supervised?
             // Different entry file for a slug already loading: let that load finish (its failure is its
             // own caller's business) so the two children can never overlap, then start ours.
             if (pending) { try { await pending.promise; } catch { /* not our load, not our error */ } }
-            return startIsolate(slug, entryFile, opts);
+            try {
+                return await startIsolate(slug, entryFile, opts);
+            } catch (e: any) {
+                recordLaunchRefusal(slug, e);
+                throw e;
+            }
         })(),
     };
     loading.set(slug, rec);
@@ -1527,7 +1654,12 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 : mech === 'appcontainer' ? 'Enable sandbox.useAppContainer on this Windows host (and check the [Sandbox] AppContainer warning in the log for the check that failed)'
                 : mech === 'seatbelt' ? 'Enable sandbox.useSeatbelt on this macOS host (and check the [Sandbox] Seatbelt warning in the log for the check that failed)'
                 : `No kernel confinement mechanism exists for platform '${logSafe(process.platform)}'`;
-            throw new Error(`[Sandbox] refusing to launch isolated plugin '${slug}': sandbox.requireHardening is ON but this host's kernel confinement (${mech}) is '${sandboxPlatformState}' (not ACTIVE). ${fix}, or explicitly set sandbox.requireHardening=false to permit an unsafe compatibility fallback.`);
+            // The operator's log keeps the full sentence, escape hatch included. What is THROWN is the
+            // structured refusal (core/sandbox-refusal.ts): POST /plugins/:slug/activate answers it as
+            // 409 `sandbox_unavailable` with the reason and the action, instead of a bare 500 that
+            // left the administrator with "failed" and nothing to act on.
+            console.warn(`[Sandbox] refusing to launch isolated plugin '${logSafe(slug)}': sandbox.requireHardening is ON but this host's kernel confinement (${mech}) is '${sandboxPlatformState}' (not ACTIVE). ${fix}, or explicitly set sandbox.requireHardening=false to permit an unsafe compatibility fallback.`);
+            throw nativeGateRefusal(slug, mech, sandboxPlatformState);
         }
     }
     const jobCapOk = await probeJobObjectCap();     // preventive memory cap on Windows (Job Object); false elsewhere
@@ -1760,7 +1892,12 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             })];
         } catch (e: any) {
             if (requireNativeSandbox) {
-                throw new Error(`[Sandbox] refusing to launch isolated plugin '${slug}': the certified Linux sandbox argv could not be built (${logSafe(e && e.message)}).`, { cause: e });
+                console.warn(`[Sandbox] refusing to launch isolated plugin '${logSafe(slug)}': the certified Linux sandbox argv could not be built (${logSafe(e && e.message)}).`);
+                throw require('./sandbox-refusal').sandboxUnavailable(slug, {
+                    mechanism: 'landlock', state: linuxZeroConfState,
+                    reason: 'The Linux kernel sandbox is certified on this server, but the confinement for this plugin could not be built.',
+                    failure: e && e.message, cause: e,
+                });
             }
             zeroConfPre = [];
             console.warn(`[Sandbox] Linux sandbox construction failed for '${logSafe(slug)}' (${logSafe(e && e.message)}); sandbox.requireHardening=false permits the unsafe compatibility fallback.`);
@@ -1811,7 +1948,12 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             seatbeltPre = [mac.SEATBELT_BIN, ...mac.seatbeltArgs(profile, [])];
         } catch (e: any) {
             if (requireNativeSandbox) {
-                throw new Error(`[Sandbox] refusing to launch isolated plugin '${slug}': the certified Seatbelt profile could not be built (${logSafe(e && e.message)}).`, { cause: e });
+                console.warn(`[Sandbox] refusing to launch isolated plugin '${logSafe(slug)}': the certified Seatbelt profile could not be built (${logSafe(e && e.message)}).`);
+                throw require('./sandbox-refusal').sandboxUnavailable(slug, {
+                    mechanism: 'seatbelt', state: sandboxPlatformState,
+                    reason: 'The macOS Seatbelt sandbox is certified on this server, but the profile for this plugin could not be built.',
+                    failure: e && e.message, cause: e,
+                });
             }
             seatbeltPre = [];
             console.warn(`[Sandbox] Seatbelt profile construction failed for '${logSafe(slug)}' (${logSafe(e && e.message)}); sandbox.requireHardening=false permits the unsafe compatibility fallback.`);
@@ -1836,7 +1978,12 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             });
         } catch (e: any) {
             if (requireNativeSandbox) {
-                throw new Error(`[Sandbox] refusing to launch isolated plugin '${slug}': the certified AppContainer launch failed (${logSafe(e && e.message)}).`, { cause: e });
+                console.warn(`[Sandbox] refusing to launch isolated plugin '${logSafe(slug)}': the certified AppContainer launch failed (${logSafe(e && e.message)}).`);
+                throw require('./sandbox-refusal').sandboxUnavailable(slug, {
+                    mechanism: 'appcontainer', state: sandboxPlatformState,
+                    reason: 'The Windows AppContainer sandbox is certified on this server, but the container for this plugin could not be created.',
+                    failure: e && e.message, cause: e,
+                });
             }
             acLaunch = null;
             console.warn(`[Sandbox] AppContainer launch failed for '${logSafe(slug)}' (${logSafe(e && e.message)}); sandbox.requireHardening=false permits the unsafe compatibility fallback.`);
@@ -1971,6 +2118,20 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         }
         // Forward + rate-limit the child's piped stdout/stderr (see IPC_STDIO above).
         attachLogLimiter(slug, child);
+        // THE SHIM'S LAST WORDS, KEPT FOR THE LOAD VERDICT. When the Linux shim fronts this launch and
+        // refuses before exec (exit 79 `SHIM-FAIL: …`, exit 78 `SHIM-UNSUPPORTED: …`), that line is the
+        // reason the plugin did not start, and the activation must be able to say so instead of "exited
+        // during startup (code 79)". A second, bounded listener beside the log limiter, startup only;
+        // what may be ATTRIBUTED from it is decided by sandbox-linux's classifyShimLaunchFailure, which
+        // refuses everything printed after the confinement was applied (plugin output can say anything).
+        let startupStderr = '';
+        if (zeroConfPre.length && child.stderr) {
+            try {
+                child.stderr.on('data', (d: any) => {
+                    if (!settled && startupStderr.length < 8192) startupStderr += String(d);
+                });
+            } catch { /* no stderr to read ⇒ nothing is attributed; the load fails generically */ }
+        }
         // Worker-like adapter so the rest of this module stays transport-agnostic (postMessage/on/terminate).
         const worker: any = {
             // Reports whether the message could be handed to a LIVE child. This used to swallow the
@@ -2901,7 +3062,31 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             // failLoad so this path clears the same state as every other failure (alreadyExited: the
             // process is gone, so there is nothing left to terminate).
             if (!settled) {
-                failLoad(new Error(`Isolated plugin '${slug}' exited during startup (code ${code})`), { alreadyExited: true });
+                const startupFailure = () => new Error(`Isolated plugin '${slug}' exited during startup (code ${code})`);
+                if (zeroConfPre.length && (code === 78 || code === 79 || code === 127)) {
+                    // A shim exit code: the verdict waits (bounded) for stderr to drain, because 'exit'
+                    // can fire before the `SHIM-FAIL:` line has been read - and decides from that line
+                    // whether the SANDBOX refused (409 sandbox_unavailable) or this is an ordinary failed
+                    // start. failLoad is idempotent, so the ready timer firing meanwhile is harmless.
+                    const lz = require('./sandbox-linux');
+                    lz.afterStreamDrained(child.stderr, 1000, () => {
+                        const refusal = lz.classifyShimLaunchFailure(code, startupStderr);
+                        if (!refusal) { failLoad(startupFailure(), { alreadyExited: true }); return; }
+                        console.warn(`[Sandbox] the Linux shim refused to launch isolated plugin '${logSafe(slug)}' (exit ${logSafe(code)}): ${logSafe(refusal.line)}`);
+                        failLoad(require('./sandbox-refusal').sandboxUnavailable(slug, {
+                            mechanism: 'landlock',
+                            state: linuxZeroConfState,
+                            reason: refusal.kind === 'launcher'
+                                ? 'The Linux sandbox launcher (/usr/bin/perl and the Landlock/seccomp shim) could not be executed for this plugin.'
+                                : refusal.kind === 'unsupported'
+                                    ? 'The Landlock/seccomp shim reported that this kernel cannot provide the sandbox, so the plugin was not started.'
+                                    : 'The Landlock/seccomp shim refused to confine this plugin, so it was not started.',
+                            failure: refusal.line,
+                        }), { alreadyExited: true });
+                    });
+                    return;
+                }
+                failLoad(startupFailure(), { alreadyExited: true });
                 return;
             }
 
@@ -2945,6 +3130,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         // their plugin. This is the same pid the resident poll reads (see `pollPid`), so the health row
         // and the memory telemetry always describe the same process.
         h.state = 'running'; h.pid = containedPid || (child && child.pid) || null; h.startedAt = Date.now();
+        h.sandbox = null; // a refusal recorded by an earlier launch no longer describes this child
         // A clean MANUAL (re)start (activate / grants-reload / dev-reload / admin restart) resets the
         // crash accounting; a supervised auto-restart keeps counting toward the crash-loop cap.
         if (!opts.supervised) { h.crashWindow = []; h.restarts = 0; stopping.delete(slug); }
@@ -3041,6 +3227,14 @@ module.exports = {
     attachLogLimiter,
     // Linux-specific diagnostic aliases.
     getLinuxZeroConfState, linuxFloorInForce,
+    // The probe's own shim refusal line, read by the host-privilege diagnosis (core/host-privilege.ts)
+    // before it may call a capability "the cause" of a degraded sandbox.
+    getLinuxZeroConfShimFailure,
+    // The fail-closed gate's refusal, exported as a function of its inputs so the 409 an administrator
+    // sees is pinned by backend/src/tests/sandbox-unavailable-activation.test.ts on every host.
+    __nativeGateRefusal: nativeGateRefusal,
+    // The boot banner, from the launch posture (index.ts prints it; its test pins the wording per posture).
+    sandboxBootBanner,
     // Derived: TRUE only in the dangerous "the operator turned this layer ON and it is not there" state.
     // 'unsupported' (no such mechanism) and 'disabled' (not asked for) are chosen postures, not failures.
     isSandboxPlatformConfinementDegraded: () => sandboxPlatformState === 'degraded',

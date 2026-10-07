@@ -57,7 +57,7 @@ function stripHtml(s) {
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '2.2.4',
+    version: '2.2.5',
     description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
 };
@@ -1095,15 +1095,49 @@ function smtpError(code, message) {
 }
 
 /**
+ * Why port 25 could not be bound, as the operator reads it in the admin UI (`inbound_reason`).
+ *
+ * Each answer names the cause the errno actually identifies, because the old EACCES text sent operators
+ * to give node CAP_NET_BIND_SERVICE with `setcap` — advice that is withdrawn: a capability on node or on
+ * the service (AmbientCapabilities=) is exactly what the plugin sandbox has to strip before it confines a
+ * plugin, and a file capability on node extends to every node script on the machine.
+ *   EACCES      on Linux a non-root process may not bind below net.ipv4.ip_unprivileged_port_start
+ *               (1024 by default). The 2525 fallback is bindable, so a firewall redirect 25 -> 2525 works,
+ *               and so does lowering the sysctl to 25 — at the cost of letting every unprivileged process
+ *               bind 25-1023, which the text says.
+ *   EPERM       the operating system refused a listening socket outright. On Linux that is the plugin
+ *               sandbox's seccomp filter, which denies bind/listen to every isolated plugin on every port.
+ *               Measured on Linux 7.0 under the shim with the network grant: EPERM on 25 and on 2525 alike.
+ *               No port setting can help there, and "grant port 25" would send the operator the wrong way.
+ *   EADDRINUSE  another MTA already holds 25.
+ */
+function inboundPortReason(code) {
+    if (code === 'EACCES') {
+        return 'binding port 25 was denied (EACCES): on Linux a non-root process may not bind a port below ' +
+            'net.ipv4.ip_unprivileged_port_start (1024 by default). Inbound falls back to 2525: redirect ' +
+            '25 to it in the firewall (nftables/iptables REDIRECT 25 → 2525), or set the sysctl ' +
+            'net.ipv4.ip_unprivileged_port_start=25, which lets EVERY unprivileged process on the host bind 25-1023, ' +
+            'not only WordJS. Do not setcap the node binary or give the service capabilities (documentation/deployment.md).';
+    }
+    if (code === 'EPERM') {
+        return 'the operating system refused this plugin a listening socket (EPERM). On Linux this is the plugin ' +
+            'sandbox: its seccomp filter does not let an isolated plugin bind or listen on any port, so inbound SMTP ' +
+            'cannot run on this host while that confinement is active, and no port, sysctl or capability setting ' +
+            'changes it. Sending and local mail are unaffected.';
+    }
+    if (code === 'EADDRINUSE') return 'port 25 is already in use by another mail server — stop it, or map 25 → 2525';
+    return `could not bind port 25 (${code || 'unknown error'})`;
+}
+
+/**
  * Initialize the Inbound SMTP Server
  */
 async function initSMTPServer() {
     // The domain we ACCEPT mail for — the same one we sign/send as and publish MX on (see getMailDomain).
     const mailDomain = await getMailDomain();
     // Default to 25 — the ONLY port the world delivers mail to (the MX record implies :25). This makes
-    // inbound work with zero config wherever the process may bind it (Windows; Linux once node has
-    // CAP_NET_BIND_SERVICE via create-wordjs/setcap; any host running privileged). Where it CAN'T bind
-    // 25 we fall back to 2525 below and report it — never a silent no-inbound.
+    // inbound work with zero config wherever the process may bind it. Where it CAN'T bind 25 we fall back
+    // to 2525 below and report WHY, naming the real cause (inboundPortReason) — never a silent no-inbound.
     let port = parseInt(await getOption('smtp_listen_port', '25'), 10);
     const catchAllRaw = await getOption('smtp_catch_all', '0');
 
@@ -1383,10 +1417,9 @@ async function initSMTPServer() {
 
     // Probe-then-bind. Rebinding a net.Server after a listen error is unreliable, so instead of trying
     // to recover from a failed bind we TEST whether the standard port 25 is bindable first, with a
-    // throwaway socket. If it isn't (EACCES = no CAP_NET_BIND_SERVICE/root on Linux; EADDRINUSE = another
-    // MTA already on 25), fall back to the unprivileged 2525 and record WHY — the listener still comes up
-    // (local + relay mail keep working) and the admin UI can tell the operator inbound-from-internet
-    // needs the port-25 bind granted or 25 mapped to 2525. A non-25 operator override is respected as-is.
+    // throwaway socket. If it isn't, fall back to the unprivileged 2525 and record WHY (inboundPortReason)
+    // so the admin UI can tell the operator what actually stands between the internet and this listener.
+    // A non-25 operator override is respected as-is.
     if (port === 25) {
         const probe = await new Promise((resolve) => {
             let net;
@@ -1398,11 +1431,7 @@ async function initSMTPServer() {
         });
         if (!probe.ok) {
             inboundStatus.degraded = true;
-            inboundStatus.reason = probe.code === 'EACCES'
-                ? 'binding port 25 was denied — on Linux node needs CAP_NET_BIND_SERVICE (run create-wordjs, or: sudo setcap cap_net_bind_service=+ep $(readlink -f $(which node))) or run privileged'
-                : (probe.code === 'EADDRINUSE'
-                    ? 'port 25 is already in use by another mail server — stop it, or map 25 → 2525'
-                    : `could not bind port 25 (${probe.code || 'unknown error'})`);
+            inboundStatus.reason = inboundPortReason(probe.code);
             port = 2525;
         }
     }
@@ -1414,7 +1443,7 @@ async function initSMTPServer() {
     smtpServer.listen(port, () => {
         inboundStatus.boundPort = port;
         if (inboundStatus.degraded) {
-            console.warn(`   ⚠️  Inbound SMTP: could not bind port 25 (${inboundStatus.reason}). Fell back to ${port}. Internet mail is delivered to port 25, so EXTERNAL inbound will NOT arrive until you grant the port-25 bind or map 25 → ${port}. Local + relay mail are unaffected.`);
+            console.warn(`   ⚠️  Inbound SMTP: could not bind port 25 (${inboundStatus.reason}). Fell back to ${port}. Internet mail is delivered to port 25, so EXTERNAL inbound will NOT arrive until port 25 reaches this listener (see the reason above). Local + relay mail are unaffected.`);
         } else {
             const note = port === 25 ? '' : ` — NON-STANDARD: internet mail expects port 25, so map 25 → ${port}`;
             console.log(`   ✓ Inbound SMTP Server listening on port ${port} (Domain: ${mailDomain})${note}`);

@@ -373,7 +373,10 @@ export interface Plugin {
 }
 
 export interface PluginRuntime {
-    state: 'running' | 'restarting' | 'crashed' | 'crash-looping' | 'stopped';
+    // 'refused': the server's plugin sandbox would not start it (at boot, on a supervised restart or on
+    // another node). lastError is the refusal; `sandbox` is the same object a 409 sandbox_unavailable
+    // carries in details.sandbox.
+    state: 'running' | 'restarting' | 'crashed' | 'crash-looping' | 'stopped' | 'refused';
     pid?: number | null;
     startedAt?: number;
     uptimeMs?: number;
@@ -381,6 +384,7 @@ export interface PluginRuntime {
     lastExitCode?: number | null;
     lastError?: string | null;
     rssBytes?: number | null;
+    sandbox?: { mechanism?: string; state?: string; reason?: string; failure?: string | null; action?: string } | null;
 }
 
 // A manifest-claimed port and who (if anyone) is squatting it. `canFree` = WordJS can permanently

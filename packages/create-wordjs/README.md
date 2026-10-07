@@ -53,6 +53,9 @@ in CI — plus a pure-JS *SQLite (legacy / WASM)* fallback for hosts where the n
 | `--yes`, `-y` | Skip the confirmation prompt (required when `upgrade` runs non-interactively). |
 | `--force` | (`upgrade`) Re-apply even if the site is already on the target version. |
 | `--no-install` | (`upgrade`) Swap the code only; skip `npm run release:install`. |
+| `--systemd` | (create, `upgrade`; Linux) Also write a systemd unit, `wordjs.service`, to a private staging directory outside the site and print how to install it. The unit runs WordJS as a dedicated non-root account with **no Linux capabilities**. With create it implies `--no-start`. See [Run it as a service](#run-it-as-a-service-linux). |
+| `--port <n>` | (with `--systemd`) Public port written into the unit (`PORT=<n>`); default: the site's configured port, else `3000`. Below 1024 it also stages `60-wordjs-ports.conf`. |
+| `--service-user <name>` | (with `--systemd`) The account the service runs as (default `wordjs`; `root` is refused). |
 | `-h`, `--help` | Show usage. |
 
 Separate-mode options:
@@ -77,6 +80,38 @@ directory (`backend/data`), `backend/uploads/`, `wordjs-config.json`, `.env`, ga
 (`gateway/gateway-config.json`) and any user-installed plugins survive. It asks for confirmation
 before touching an existing install — on a non-interactive shell it refuses unless you pass `--yes`.
 Restart the server afterwards (schema migrations run automatically on the next start).
+
+## Run it as a service (Linux)
+
+```bash
+npx create-wordjs@latest /srv/wordjs --systemd --port 443          # new site
+npx create-wordjs@latest upgrade /srv/wordjs --systemd              # existing site, even if already up to date
+```
+
+`--systemd` writes `wordjs.service` — `User=wordjs`, `NoNewPrivileges=yes`, an **empty**
+`CapabilityBoundingSet=`, `ProtectSystem=strict` with the site directory as the only writable path,
+`PrivateTmp=yes`, `ProtectHome=yes`, `Restart=on-failure`, `ExecStart` pointing at the node that ran the
+command — to a fresh private staging directory (mode `0700`, **outside** the site, which the service
+account will own: a file root installs into `/etc` must not be one the service can rewrite first), and
+prints the steps to install it (create the account, `chown` the site to it, `install -o root -g root -m
+0644` the unit into `/etc/systemd/system/`, `systemctl enable --now wordjs`, read
+`backend/data/install-token`; on `upgrade`, `enable` plus `restart`, after stopping whatever served the
+site before). It does not run anything as root itself, refuses to run as the service account, checks the
+site and node paths before downloading anything, and with create it does not start the server: the first
+boot must run as the service account so that account owns the database and certificates it creates.
+
+**Ports below 1024 (80/443).** The unit never grants `CAP_NET_BIND_SERVICE`. For a port below 1024,
+`--systemd` also stages `60-wordjs-ports.conf`, a `sysctl.d` drop-in that sets
+`net.ipv4.ip_unprivileged_port_start` to that port. Read its trade-off before installing it: it lets
+**every** unprivileged process on the host bind ports from that value up to 1023, not just WordJS. On a
+shared host, prefer a reverse proxy (nginx, Caddy) on 80/443 forwarding to WordJS on a high port.
+
+**Do not `setcap` node or add `AmbientCapabilities=`.** Earlier versions of this tool printed a `setcap`
+command for port 25; it is withdrawn. An ambient capability is inherited by the plugin sandbox, which has to
+strip it (a non-root service with `AmbientCapabilities=CAP_NET_BIND_SERVICE` once left every plugin
+refused); a file capability on node applies to every node script on the machine, runs node in
+secure-execution mode, and disappears silently on the next node upgrade. Details, measurements and how to
+remove an existing grant: [documentation/deployment.md](https://github.com/jaimemartinez/wordjs/blob/main/documentation/deployment.md#-running-as-a-service-systemd-non-root).
 
 ## Separate mode (multi-machine)
 
