@@ -146,9 +146,16 @@ const nextConfig: NextConfig = {
     ];
   },
   async rewrites() {
+    // RELEASE BUILD: the rewrite is baked into the shipped .next/routes-manifest.json, so it must be
+    // the compiled-in default a clean CI build produces — never this machine's gatewayPort,
+    // WORDJS_BACKEND_URL or WORDJS_MODE. Operators repoint a release at runtime (server.js honours
+    // WORDJS_BACKEND_URL), not by inheriting the packager's setup. See hermetic-build.js.
+    const { isHermeticBuild } = require(localConfigModule('hermetic-build.js'));
+    const hermetic = isHermeticBuild();
+
     // Monolith mode: the single-process server dispatches /api and /uploads to the backend in-process
     // before Next sees them, so no proxy rewrite is needed (and there's no gateway port to target).
-    if (process.env.WORDJS_MODE === 'mono') return [];
+    if (process.env.WORDJS_MODE === 'mono' && !hermetic) return [];
 
     // WHERE /api AND /uploads GO. Resolution + precedence + validation live in one shared module
     // (./backend-proxy-target.js) because `server.js` has to reach the same answer: Next bakes these
@@ -167,7 +174,7 @@ const nextConfig: NextConfig = {
         configPath = path.resolve(__dirname, '../backend/wordjs-config.json');
       }
 
-      if (fs.existsSync(configPath)) {
+      if (!hermetic && fs.existsSync(configPath)) {
         const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
         gatewayPort = config.gatewayPort;
       }
@@ -178,11 +185,13 @@ const nextConfig: NextConfig = {
     // A malformed WORDJS_BACKEND_URL throws here on purpose — building a frontend whose API proxy
     // silently points somewhere else is worse than not building it.
     const { target: backendUrl, source } = resolveBackendProxyTarget({
-      env: process.env[BACKEND_URL_ENV],
+      env: hermetic ? undefined : process.env[BACKEND_URL_ENV],
       gatewayPort,
     });
     if (source === 'env') {
       console.log(`[NextConfig] backend prefixes → ${backendUrl} (from ${BACKEND_URL_ENV})`);
+    } else if (hermetic) {
+      console.log(`[NextConfig] hermetic release build — backend prefixes → ${backendUrl} (compiled-in default)`);
     }
 
     // Every prefix the backend owns, not just /api and /uploads — see PROXIED_PREFIXES. The list is

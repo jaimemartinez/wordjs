@@ -145,13 +145,17 @@ async function run() {
         }
         fs.mkdirSync(TEMP_DIST, { recursive: true });
 
-        // 2. Build Frontend
+        // 2. Build Frontend — hermetically, then prove it (see buildFrontendForRelease).
         console.log('\n⚛️ Building Frontend (frontend)...');
         console.log('   (This may take a few minutes)');
-        execSync('npm run build', {
-            cwd: path.join(ROOT_DIR, 'frontend'),
-            stdio: 'inherit'
-        });
+        const prerender = buildFrontendForRelease();
+        console.log(`   ✅ ${prerender.prerendered} prerendered routes carry no data from a live backend.`);
+        if (prerender.pluginModules === null) {
+            console.log('   ⚠️  git unavailable — the plugins compiled into the frontend could NOT be checked against git.');
+            console.log('      Review the build before publishing: a local plugin may be compiled into .next.');
+        } else {
+            console.log(`   ✅ ${prerender.pluginModules} plugin module(s) compiled into the frontend, all tracked by git.`);
+        }
 
         // 2b. Compile Backend (TypeScript -> dist) so the release runs WITHOUT compiling on the
         //     user's machine. backend/server.js prefers dist/index.js when present.
@@ -205,6 +209,92 @@ async function run() {
         console.error('\n❌ Release failed:', error.message);
         process.exit(1);
     }
+}
+
+/**
+ * THE FRONTEND BUILD, MADE HERMETIC — and checked, because the artifact is what gets published.
+ *
+ * `next build` prerenders pages, and its server-side reads go to whatever backend the machine
+ * offers: the packager's wordjs-config.json, or `http://localhost:4000` without one. CI has nothing
+ * listening, so its pages carry the defaults; a developer machine with a dev backend running shipped
+ * private content from that running dev backend instead. Two inputs made that possible, and both are
+ * closed here:
+ *   - `WORDJS_HERMETIC_BUILD=1` points every server-side read at a backend fetch() refuses and bakes
+ *     the default API rewrite (frontend/hermetic-build.js);
+ *   - `.next/cache` is deleted first: Next keeps successful build-time fetches in
+ *     `.next/cache/fetch-cache` and a later build reuses them, so an older build's backend answers
+ *     could come back without any backend running. (`.next/cache` never ships — see IGNORE_PATTERNS.)
+ *     With retries: on Windows, or in a synced folder, a file the indexer or sync client holds open
+ *     for a moment fails the delete with EBUSY/EPERM, and `force` only forgives ENOENT.
+ * The same flag makes the prebuild plugin registries list only the plugins git tracks, and ask no
+ * running backend which are active (frontend/scripts/hermetic-plugins.js).
+ *
+ * Two more inputs of the packaging machine are values Next INLINES into the shipped bundles: the
+ * shell's NEXT_PUBLIC_* variables, which are dropped from the build's environment, and the frontend
+ * .env files a production build loads (`.env`, `.env.local`, `.env.production`,
+ * `.env.production.local` — all gitignored, so CI never has them). Next reads those itself, so a
+ * NEXT_PUBLIC_* value in one cannot be overridden from here; the build refuses to start instead.
+ *
+ * Then assertHermeticFrontendBuild throws, aborting the release, on any trace of a live backend or of
+ * a plugin git does not track.
+ *
+ * `exec`, `env` and `trackedFiles` are injectable so the test suite can drive this without a real
+ * `next build`.
+ */
+function buildFrontendForRelease({
+    frontendDir = path.join(ROOT_DIR, 'frontend'),
+    exec = execSync,
+    env = process.env,
+    trackedFiles = loadTrackedFiles() || null,   // null: git unavailable (loadTrackedFiles warns)
+} = {}) {
+    const { HERMETIC_BUILD_ENV } = require(path.join(ROOT_DIR, 'frontend', 'hermetic-build.js'));
+    const { assertHermeticFrontendBuild } = require('./release-hermetic-check.js');
+
+    const fromEnvFiles = publicValuesInEnvFiles(frontendDir);
+    if (fromEnvFiles.length) {
+        throw new Error(
+            'frontend .env file(s) set NEXT_PUBLIC_* values, which `next build` would inline into the release:\n' +
+                fromEnvFiles.map((f) => `      - ${f}`).join('\n') +
+                '\n   A CI build has none of them. Move those values out (or rename the file) while packaging.',
+        );
+    }
+    const buildEnv = {};
+    const dropped = [];
+    for (const [key, value] of Object.entries(env)) {
+        if (key.startsWith('NEXT_PUBLIC_')) dropped.push(key);
+        else buildEnv[key] = value;
+    }
+    if (dropped.length) console.log(`   (building without the shell's ${dropped.join(', ')} — a release gets CI's defaults)`);
+    buildEnv[HERMETIC_BUILD_ENV] = '1';
+
+    fs.rmSync(path.join(frontendDir, '.next', 'cache'), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    exec('npm run build', {
+        cwd: frontendDir,
+        stdio: 'inherit',
+        env: buildEnv,
+    });
+    // Throws, aborting the release, on any leak.
+    return assertHermeticFrontendBuild(frontendDir, { trackedFiles });
+}
+
+/** The .env files `next build` loads for a production build — @next/env's list for mode "production". */
+const PRODUCTION_ENV_FILES = ['.env.production.local', '.env.local', '.env.production', '.env'];
+
+/** `frontend/<file>: NEXT_PUBLIC_X` for every NEXT_PUBLIC_* key those files assign. Names only, never values. */
+function publicValuesInEnvFiles(frontendDir) {
+    const out = [];
+    for (const file of PRODUCTION_ENV_FILES) {
+        let text;
+        try {
+            text = fs.readFileSync(path.join(frontendDir, file), 'utf8');
+        } catch {
+            continue;   // absent: the normal case
+        }
+        for (const m of text.matchAll(/^[ \t]*(?:export[ \t]+)?(NEXT_PUBLIC_[A-Za-z0-9_]+)[ \t]*=/gm)) {
+            out.push(`frontend/${file}: ${m[1]}`);
+        }
+    }
+    return out;
 }
 
 /**
@@ -387,5 +477,5 @@ async function createZip(sourceDir, outPath) {
 if (require.main === module) {
     run();
 } else {
-    module.exports = { shouldIgnore, IGNORE_PATTERNS, ROOT_DIR };
+    module.exports = { shouldIgnore, IGNORE_PATTERNS, ROOT_DIR, buildFrontendForRelease };
 }

@@ -26,6 +26,28 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **A release bundle packaged on a developer machine no longer ships that machine's site.** `npm run
+  bundle-release` runs `next build`, which prerenders pages, and its server-side reads went to whatever
+  backend the machine offered — `wordjs-config.json`, or `http://localhost:4000` without one. CI builds
+  from a clean checkout with nothing listening, so published releases were unaffected; a local build with
+  a dev backend running prerendered private content from that running dev backend into the bundle (its
+  site title on every prerendered page, its posts as prerendered paths) and baked that machine's gateway
+  into the `/api` rewrite. `.next/cache/fetch-cache` also carried an earlier build's backend answers into
+  the next build. The packager now deletes `frontend/.next/cache` and builds with
+  `WORDJS_HERMETIC_BUILD=1` (`frontend/hermetic-build.js`): server-side reads go to a base `fetch()`
+  refuses outright (port 1 is on the Fetch standard's bad-port list) — still issued, so every page keeps
+  the same ISR window a CI build gives it — and the rewrite is the compiled-in default whatever the
+  config or `WORDJS_BACKEND_URL`/`WORDJS_MODE` say. The same flag closes the prebuild plugin registries:
+  they used to ask the running backend which plugins are active and otherwise list every folder under
+  `backend/plugins`, untracked private ones included, so `next build` compiled that machine's local
+  plugins into the shipped `.next`; now they list only the plugins git tracks and ask nothing
+  (`frontend/scripts/hermetic-plugins.js`). The shell's `NEXT_PUBLIC_*` variables are dropped from the
+  build, and a `frontend/.env*` file that sets one stops it, since Next inlines those values. A post-build
+  check (`scripts/release-hermetic-check.js`) then fails the bundle on any trace of a live backend — a
+  fetch-cache entry, a path prerendered from `generateStaticParams`, a prerendered title other than the
+  default `WordJS`, a non-default API rewrite — or on a plugin module git does not track in the generated
+  registries; a check that cannot look (a missing registry, a page whose HTML is not where it reads it)
+  fails instead of passing.
 - **Conference Manager 2.2.0 — the plugin can be activated again, and 23 defects from a functional audit are
   closed.** Activation had failed since the 2026-08-15 hardening (a `DEFAULT '{}'` column definition was
   refused by the column-definition allowlist — fixed in core, see above). In the plugin: the portal's bulk
