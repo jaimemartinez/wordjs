@@ -511,7 +511,9 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
                 summary.authors.matched++;
             } else {
                 const created = await User.create({
-                    username: login,
+                    // WordPress allows spaces and '@' in a login; the WordJS username rule does not
+                    // (models/User.ts). The author map below stays keyed on the source login.
+                    username: User.importableUsername(login),
                     email,
                     // WP never exports password hashes; imported users must reset to log in.
                     password: require('crypto').randomBytes(24).toString('hex'),

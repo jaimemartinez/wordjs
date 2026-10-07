@@ -324,12 +324,16 @@ session.
 > **A fresh container boots UNINSTALLED, and that is deliberate.** `core/configManager.isInstalled()`
 > keys off `installedAt || dbDriver`, so *any* config written before first boot marks the instance
 > installed — and `POST /api/v1/setup/install` then answers `400 Already installed` forever, leaving a
-> site with no administrator (the CMS bootstrap seeds none by design). So the entrypoint writes nothing
+> site whose administrator nobody chose (on an empty database the backend creates a bootstrap `admin`
+> with a random password in `backend/data/initial-admin-password`). So the entrypoint writes nothing
 > by default: the container enters **setup mode**, mints an install token and serves `/install`.
 > Set **`WORDJS_PRESEED_CONFIG=1`** to opt into the opposite — a container that comes up already
 > installed, wired from the environment variables in [`docker/README.md`](../docker/README.md), with the
 > wizard skipped. That is for an external database or for a replica joining a site another node already
-> installed; it creates no administrator.
+> installed. It **requires `WORDJS_JWT_SECRET`** (≥ 64 characters, the same on every replica; generate
+> it with `openssl rand -hex 64`): there is no default, because the written config is an installed one and
+> a published default would let anyone sign an administrator session. The backend likewise refuses to
+> start on an installed config whose `jwtSecret` is a placeholder printed in this repository.
 
 ### One-click: Docker Compose
 
@@ -379,8 +383,10 @@ Then `GET /api/v1/setup/status` reports `"installed":true` and `/readyz` turns 2
 
 > The compose file at the **repository root** is a different thing: Postgres + Redis + **two** app
 > replicas demonstrating cross-node coherence. Because a second replica can only join a site that is
-> already installed, it sets `WORDJS_PRESEED_CONFIG=1` and therefore has **no administrator** — it is
-> browsable, not loggable-into. See [`docker/README.md`](../docker/README.md).
+> already installed, it sets `WORDJS_PRESEED_CONFIG=1` and skips the wizard: the administrator is the
+> bootstrap `admin`, whose random password is written into the seeding replica's data volume
+> (`/app/backend/data/initial-admin-password`). It refuses to render without `WORDJS_JWT_SECRET`. See
+> [`docker/README.md`](../docker/README.md).
 
 ### Kubernetes
 

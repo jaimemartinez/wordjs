@@ -648,7 +648,8 @@ jobs:
         # Cheap wiring check that the compose file is well-formed and references a buildable image — no
         # image build or container boot here (that is intentionally out of the per-PR budget). `config -q`
         # renders and validates the merged compose model, catching env/anchor/service-graph mistakes.
-        run: docker compose config -q
+        # The root compose file REQUIRES WORDJS_JWT_SECRET (no published default), so hand it a throwaway one.
+        run: WORDJS_JWT_SECRET="$(openssl rand -hex 64)" docker compose config -q
 
   gateway:
     name: Gateway (test)
@@ -1009,7 +1010,12 @@ jobs:
         # a twenty-minute image build if an anchor or a service graph is malformed.
         run: |
           set -euo pipefail
-          docker compose -f docker-compose.yml config -q
+          # The root stack REQUIRES WORDJS_JWT_SECRET (no published default); render it with a throwaway one,
+          # and prove the requirement holds: rendering WITHOUT it must fail.
+          if env -u WORDJS_JWT_SECRET docker compose -f docker-compose.yml config -q 2>/dev/null; then
+            echo "::error::docker-compose.yml rendered without WORDJS_JWT_SECRET — it must not fall back to a published secret"; exit 1
+          fi
+          WORDJS_JWT_SECRET="$(openssl rand -hex 64)" docker compose -f docker-compose.yml config -q
           docker compose -f deploy/compose/docker-compose.yml config -q
           echo "both compose files render"
 
