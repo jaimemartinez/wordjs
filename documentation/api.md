@@ -578,6 +578,14 @@ Base path: `/api/v1/widgets` (`backend/src/routes/widgets.ts`; core `backend/src
 | `DELETE` | `/sidebars/:sidebarId/:instanceKey` | Admin | Remove one instance from a sidebar                              |
 | `PUT`    | `/:widgetId/instances/:instanceId`  | Admin | Update one instance's settings. Body `{ settings }`              |
 
+`/sidebars/:id/render` escapes every value the built-in widgets interpolate (term names, post titles and
+slugs, widget titles); only the `text` and `custom_html` widgets, which are admin-configured, emit their
+setting as markup. The response carries `Content-Security-Policy: default-src 'none'; style-src
+'unsafe-inline'; sandbox` and `X-Content-Type-Options: nosniff`, so opening the URL directly runs no
+script; the public frontend fetches it as text and sanitizes it before inserting it. Plugins cannot
+filter it (`dynamic_sidebar` is a denied raw-HTML hook). Instance keys are `<widgetId>-<instanceId>`
+and are resolved against the registered widget ids, so UUID instance ids and hyphenated widget ids work.
+
 ### 6.14 Post Types 🗂️
 Base path: `/api/v1/types` (`backend/src/routes/post-types.ts`). Reads are public; mutations are `authenticate` + `isAdmin`.
 
@@ -739,6 +747,11 @@ addShortcode('youtube', (attrs, content) => {
 });
 ```
 Usage in Editor: `[youtube id="dQw4w9WgXcQ"]`
+
+Matching is a single linear pass over the content (it runs on every post serialization, for the content
+and the excerpt), and at most `MAX_SHORTCODES_PER_DOCUMENT` (2000) shortcodes are expanded or stripped
+per document; any beyond that are left as written. Inner content cannot contain `[`, so shortcodes do not
+nest: in `[a][b]x[/b][/a]`, `[a]` renders with empty content.
 
 ---
 
