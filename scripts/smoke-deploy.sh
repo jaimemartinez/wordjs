@@ -19,6 +19,7 @@
 #             all three services must end up holding their certificates
 #             the public site must render REAL settings (SSR must reach the backend)
 #             and it must still do so after a restart, when the backend switches to HTTPS + mTLS
+#             the session the installer auto-issues must still authenticate after that restart
 #             admin/admin123 must not log in
 #   enroll  a node carrying an enrollment-shaped config must ask for the wizard,
 #             not come up installed and seed an administrator
@@ -176,7 +177,9 @@ echo "   ✓ /install is 200 and the instance reports uninstalled"
 token="$(cat "$APP/backend/data/install-token" 2>/dev/null)"
 [ -n "$token" ] || fail "no install token was minted" "$LOGS/split.log"
 
-install_out="$(curl -sS --max-time 180 -X POST "$GW/api/v1/setup/install" \
+# The cookie jar keeps the session the installer auto-issues, so the restart below can prove it survives.
+SESSION_JAR="$LOGS/install-session.jar"
+install_out="$(curl -sS --max-time 180 -X POST "$GW/api/v1/setup/install" -c "$SESSION_JAR" \
     -H 'Content-Type: application/json' -H "Origin: $GW" -H "x-install-token: $token" \
     -d "{\"siteName\":\"$SITE_NAME\",\"adminUser\":\"$ADMIN_USER\",\"adminEmail\":\"smoke@example.test\",\"adminPassword\":\"$ADMIN_PASS\",\"dbDriver\":\"sqlite-native\",\"siteUrl\":\"$GW\"}" 2>&1)"
 case "$install_out" in
@@ -227,6 +230,13 @@ assert_serving() { # assert_serving <label> <logfile>
 
 assert_serving "fresh install" "$LOGS/split.log"
 
+# Probed once the cluster has settled (above), so a transient 502 cannot be mistaken for a rejection.
+session_me() { curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -H "Origin: $GW" -b "$SESSION_JAR" "$GW/api/v1/auth/me" 2>/dev/null; }
+me="$(session_me)"
+[ "$me" = 200 ] \
+    || fail "the installer's auto-login session is not accepted (GET /auth/me answered $me) — the wizard cannot land in /admin" "$LOGS/split.log"
+echo "   ✓ the installer's auto-login session authenticates"
+
 # A restarted backend finds its certificates and switches to HTTPS + mTLS. SSR used to be hardwired to
 # http://localhost:4000, which that listener refuses — so the site silently reverted to defaults.
 echo "   restarting so the backend comes up on HTTPS + mTLS"
@@ -237,6 +247,14 @@ assert_role gateway "$LOGS/split-restart.log"
 wait_for_log "$LOGS/split-restart.log" 'running via HTTPS' 30 >/dev/null \
     || echo "   note: the backend did not report HTTPS within 60s of the restart; the mTLS leg of this check is weaker than intended"
 assert_serving "after restart" "$LOGS/split-restart.log"
+
+# The session minted at install time must outlive the restart. It did not while the installer persisted a
+# freshly generated jwtSecret and the live process kept signing with its boot-time one: the restart loaded
+# the persisted secret and answered 401 rest_token_invalid to everyone who had logged in since the install.
+me="$(session_me)"
+[ "$me" = 200 ] \
+    || fail "the session issued by the install was rejected after a restart (GET /auth/me answered $me) — the persisted JWT secret is not the one the installer signed with" "$LOGS/split-restart.log"
+echo "   ✓ the install-time session survives the restart"
 
 # The credential the CMS bootstrap used to seed. It must not exist on an installed site.
 login="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -X POST "$GW/api/v1/auth/login" \
