@@ -18,7 +18,10 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const BUILD_PLUGIN = path.resolve(__dirname, '../../scripts/build-plugin.js');
-const { UTILITIES_MARKER, withPackagedStylesheet, extractCandidates } = require('../../scripts/plugin-stylesheet');
+const {
+    UTILITIES_MARKER, PLUGIN_SUBLAYER, withPackagedStylesheet, extractCandidates, compileUtilities, nestInPluginLayer,
+    handWritten, loadTailwind, hostThemeBlocks,
+} = require('../../scripts/plugin-stylesheet');
 
 /** The selector Tailwind emits for a class (`bg-black/80` → `.bg-black\/80`). */
 const sel = (cls: string) => `.${cls.replace(/[^A-Za-z0-9_-]/g, (c) => `\\${c}`)}`;
@@ -192,4 +195,157 @@ test('candidate extraction keeps arbitrary values whole and finds classes inside
     for (const c of ['shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]', 'bg-black/80', 'pt-[max(env(safe-area-inset-top),12px)]', 'flex', 'hidden']) {
         assert.ok(found.has(c), `must extract ${c}`);
     }
+});
+
+// ── The cascade: a plugin sheet never restyles the host ────────────────────────────────────────────
+
+/**
+ * The top-level blocks of a stylesheet: `{ head, body }` per `head { body }`, skipping comments and
+ * strings. Written here, not imported, so the assertion does not check the emitter with itself.
+ */
+function topLevelBlocks(css: string): { head: string; body: string }[] {
+    const out: { head: string; body: string }[] = [];
+    let depth = 0, start = 0, open = -1;
+    for (let i = 0; i < css.length; i++) {
+        const c = css[i];
+        if (c === '\\') { i++; continue; }
+        if (c === '/' && css[i + 1] === '*') { i = css.indexOf('*/', i + 2) + 1; if (!i) break; if (depth === 0) start = i + 1; continue; }
+        if (c === '"' || c === "'") { for (i++; i < css.length && css[i] !== c; i++) if (css[i] === '\\') i++; continue; }
+        if (c === ';' && depth === 0) { start = i + 1; continue; }
+        if (c === '{') { if (depth === 0) open = i; depth++; continue; }
+        if (c === '}') {
+            depth--;
+            if (depth === 0) { out.push({ head: css.slice(start, open).trim(), body: css.slice(open + 1, i).trim() }); start = i + 1; }
+        }
+    }
+    return out;
+}
+
+/** Every `@layer x { … }` in the compiled part of `css` holds ONE block: `@layer wjs-plugin { … }`. */
+function assertOneSubLayerBelowTheHost(css: string, label: string) {
+    const compiled = css.slice(css.indexOf(UTILITIES_MARKER));
+    const layers = topLevelBlocks(compiled).filter((b) => /^@layer\s+[\w-]+$/.test(b.head));
+    assert.ok(layers.some((b) => b.head === '@layer utilities'), `${label}: has a utilities block`);
+    for (const b of layers) {
+        const inner = topLevelBlocks(b.body);
+        assert.equal(inner.length, 1, `${label}: ${b.head} must hold exactly one block, got ${inner.map((x) => x.head).join(', ')}`);
+        assert.equal(inner[0].head, `@layer ${PLUGIN_SUBLAYER}`, `${label}: ${b.head} must nest its rules in @layer ${PLUGIN_SUBLAYER}`);
+    }
+    // Nothing else at the top level may carry a style rule (only @property / @keyframes registrations).
+    for (const b of topLevelBlocks(compiled)) {
+        assert.ok(b.head.startsWith('@'), `${label}: style rule outside any layer: ${b.head}`);
+    }
+}
+
+test('every compiled rule sits one cascade sub-layer below the host\'s own (admin, block and hooks sheets)', () => {
+    // THE DESKTOP REGRESSION THIS PINS: a plugin sheet is a SECOND sheet, linked after the host's. With its
+    // `.flex`/`.hidden`/`.fixed` directly in `@layer utilities` (same layer, same specificity, later) it beat
+    // the host's `.md\:hidden`/`.md\:relative` on the host's OWN elements: on a 1280 px desktop the
+    // conference-manager page showed the mobile header, a position:fixed sidebar over the content and no
+    // collapse toggle; mail-server's hooks sheet did the same on every admin page. Rules of a sub-layer
+    // always lose to the parent layer's own rules (CSS Cascade 5), so the host keeps its order.
+    withRoot((root) => {
+        const dir = adminPlugin(root, 'fixture-layer');
+        write(dir, 'client/verso/Block.tsx', `
+            export const versoComponentDef = { label: 'B', category: 'c', fields: {}, defaultProps: {} };
+            export default function Block() { return <section className="hidden md:flex bg-amber-500/40" />; }
+        `);
+        write(dir, 'client/Ext.tsx', `
+            import { pluginHooks } from '@/lib/plugin-hooks';
+            const Ext = () => <label className="flex md:hidden bg-black/70" />;
+            export const registerExt = () => pluginHooks.addAction('user_form_before_email', () => <Ext />, 10, 'x');
+        `);
+        const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
+        manifest.frontend.versoComponents = { entry: './client/verso/Block.tsx' };
+        manifest.frontend.hooks = './client/Ext.tsx';
+        fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest));
+        const r = build(root, 'fixture-layer');
+        assert.equal(r.status, 0, `build failed: ${r.out}`);
+        for (const f of ['dist/admin.css', 'dist/component.bundle.css', 'dist/hooks.bundle.css']) {
+            const css = fs.readFileSync(path.join(dir, f), 'utf8');
+            assertOneSubLayerBelowTheHost(css, f);
+            // The classes are still there — only their rank changed.
+            assert.ok(hasRule(css, f === 'dist/admin.css' ? 'bg-black/80' : f.includes('component') ? 'bg-amber-500/40' : 'bg-black/70'), `${f}: classes compiled`);
+        }
+        // The plugin's own (unlayered) stylesheet is untouched and still first.
+        assert.ok(fs.readFileSync(path.join(dir, 'dist/admin.css'), 'utf8').startsWith('.plugin-admin-fixture-layer .own'));
+    });
+});
+
+test('nestInPluginLayer: only top-level @layer blocks, braces inside strings and escapes are not blocks', () => {
+    const input = [
+        '@layer properties;',
+        '@layer theme, base, components, utilities;',
+        '@layer utilities {',
+        '  .content-\\[\\\'\\{\\\'\\] { --tw-content: \'{\'; content: var(--tw-content); }',
+        '  @media (width >= 40rem) { .sm\\:flex { display: flex; } }',
+        '}',
+        '@property --tw-x { syntax: "*"; inherits: false; }',
+        '@keyframes spin { to { transform: rotate(360deg); } }',
+    ].join('\n');
+    const out = nestInPluginLayer(input);
+    const blocks = topLevelBlocks(out);
+    assert.deepStrictEqual(blocks.map((b) => b.head), ['@layer utilities', '@property --tw-x', '@keyframes spin']);
+    assert.equal(topLevelBlocks(blocks[0].body)[0].head, `@layer ${PLUGIN_SUBLAYER}`);
+    assert.ok(topLevelBlocks(blocks[0].body)[0].body.includes("content: var(--tw-content)"));
+    assert.ok(out.startsWith('@layer properties;\n@layer theme, base, components, utilities;\n'), 'layer order statements kept');
+    assert.ok(out.includes('@keyframes spin { to { transform: rotate(360deg); } }'), 'keyframes untouched');
+});
+
+test('rebuilding an INSTALLED package (own CSS + compiled block) keeps exactly one compiled block', () => {
+    // pack:plugin on backend/plugins and the dev "Build & download ZIP" build the installed folder, whose
+    // client/admin/admin.css is the PACKAGED stylesheet. Treating it as hand-written stacked one more
+    // compiled block per cycle (1 → 2 → 3 → 4), each keeping classes the UI no longer uses.
+    withRoot((root) => {
+        const dir = adminPlugin(root, 'fixture-repack');
+        const own = fs.readFileSync(path.join(dir, 'client/admin/admin.css'), 'utf8');
+        for (let cycle = 1; cycle <= 3; cycle++) {
+            assert.equal(build(root, 'fixture-repack').status, 0);
+            const built = fs.readFileSync(path.join(dir, 'dist', 'admin.css'), 'utf8');
+            assert.equal(built.split(UTILITIES_MARKER).length - 1, 1, `cycle ${cycle}: exactly one compiled block`);
+            assert.ok(built.startsWith(own.trimEnd()), `cycle ${cycle}: the hand-written part, once`);
+            // What the installer puts on disk: the packaged sheet at client/admin/admin.css.
+            fs.writeFileSync(path.join(dir, 'client/admin/admin.css'), built);
+        }
+        assert.equal(handWritten(`${own}\n/*! ${UTILITIES_MARKER} x */\n.a{}\n`), own.trimEnd());
+        assert.equal(handWritten(null), '');
+    });
+});
+
+test('candidate extraction keeps arbitrary values that contain quotes', async () => {
+    const found: Set<string> = extractCandidates(`
+        <p className={cn("after:content-['']", on && "font-['Inter']")} />
+        <div className="bg-[url('/a.png')] before:content-['x'] grid-cols-[repeat(auto-fill,minmax(10rem,1fr))]" />
+    `);
+    for (const c of ["after:content-['']", "font-['Inter']", "bg-[url('/a.png')]", "before:content-['x']", 'grid-cols-[repeat(auto-fill,minmax(10rem,1fr))]']) {
+        assert.ok(found.has(c), `must extract ${c}`);
+    }
+    const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-quoted-')), 'Q.tsx');
+    try {
+        fs.writeFileSync(f, `export const Q = () => <p className="after:content-[''] font-['Inter'] bg-[url('/a.png')]" />;\n`);
+        const css: string = await compileUtilities([f], 'quoted');
+        assert.match(css, /content: var\(--tw-content\)/, 'content-[\'\'] compiled');
+        assert.match(css, /font-family: 'Inter'/, 'font-[\'Inter\'] compiled');
+        assert.match(css, /background-image: url\('\/a\.png'\)/, 'bg-[url(…)] compiled');
+    } finally { fs.rmSync(path.dirname(f), { recursive: true, force: true }); }
+});
+
+// ── Parity with the host's Tailwind ─────────────────────────────────────────────────────────────────
+
+test('plugin sheets and the host compile with the same Tailwind, against the host\'s theme', () => {
+    // A class must mean the same thing in both sheets. Two lockfiles decide it (backend/ compiles the
+    // plugins, frontend/ the host); a drift gives different bytes with no error, and a different Tailwind
+    // re-declares the theme variables with different values.
+    const lockVersion = (rel: string) => {
+        const lock = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../..', rel), 'utf8'));
+        return lock.packages?.['node_modules/tailwindcss']?.version;
+    };
+    const backendTw = lockVersion('backend/package-lock.json');
+    const frontendTw = lockVersion('frontend/package-lock.json');
+    assert.ok(backendTw && frontendTw, 'both lockfiles resolve tailwindcss');
+    assert.equal(backendTw, frontendTw, 'backend (plugin sheets) and frontend (host CSS) resolve the same tailwindcss');
+    assert.equal(loadTailwind().version, frontendTw, 'the compiler the build loads is that version (the banner says so)');
+    // The host's @theme tokens are part of the input; a missing host stylesheet is an error, not ''.
+    assert.match(hostThemeBlocks(), /--color-brand-blue/);
+    assert.throws(() => hostThemeBlocks(path.join(os.tmpdir(), 'wjs-no-such-globals.css')), /cannot read the host stylesheet/);
 });

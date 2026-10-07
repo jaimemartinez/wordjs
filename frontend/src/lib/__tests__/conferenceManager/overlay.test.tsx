@@ -89,6 +89,28 @@ describe('Overlay', () => {
     });
 });
 
+describe('cards capped at 92vh are capped by the DYNAMIC viewport', () => {
+    // iOS Safari / Chrome Android resolve vh to the LARGE viewport (toolbar hidden). The admin document never
+    // scrolls, so the toolbar never hides: a `max-h-[92vh]` card was taller than the 100dvh overlay and its
+    // footer (Guardar) started below the screen.
+    const rules = [...OVERLAY_CSS.matchAll(/([^{}@]+)\{([^{}]*)\}/g)].map((m) => ({ selector: m[1].trim(), body: m[2] }));
+    const unescape = (s: string) => s.replace(/\\(.)/g, '$1');
+    it('an unlayered rule outside any media query re-caps them with dvh', () => {
+        const at = OVERLAY_CSS.indexOf('@media');
+        for (const [cls, cap] of [['max-h-[92vh]', /max-height:\s*calc\(92dvh - env\(safe-area-inset-top, 0px\)\)/], ['max-h-[90vh]', /max-height:\s*90dvh/]] as const) {
+            const rule = rules.find((r) => unescape(r.selector) === `[data-cm-overlay] .${cls}`);
+            expect(rule, `no [data-cm-overlay] rule for .${cls}`).toBeTruthy();
+            expect(rule!.body).toMatch(cap);
+            expect(OVERLAY_CSS.indexOf(rule!.selector)).toBeLessThan(at); // every width, not only phones
+        }
+    });
+    it('the rule is not dead: the plugin\'s dialogs do use the class', () => {
+        const uses = fs.readdirSync(ADMIN).filter((f) => f.endsWith('.tsx'))
+            .filter((f) => fs.readFileSync(path.join(ADMIN, f), 'utf8').includes('max-h-[92vh]'));
+        expect(uses.length).toBeGreaterThanOrEqual(5);
+    });
+});
+
 describe('lockBodyScroll: the page behind stays put on iOS', () => {
     function fakePage(scrollY: number) {
         const body = { style: { position: '', top: '', left: '', right: '', width: '', overflow: 'auto', overscrollBehavior: '' } as Record<string, string> };

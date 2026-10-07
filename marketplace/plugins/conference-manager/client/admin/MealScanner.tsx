@@ -31,7 +31,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom";
 import { useI18n } from "../../../../../frontend/src/contexts/I18nContext";
 import { conferenceApi } from "../lib/conference";
-import { createReadRouter, createScanMeter, normalizeCode, sortServices, stampTime, verdictTone, groupByDay } from "../lib/meals";
+import { createReadRouter, createScanMeter, normalizeCode, scanLoopDelay, sortServices, stampTime, verdictTone, groupByDay } from "../lib/meals";
 import { aimCrop, decodeVideoRegion, formatLabel } from "../lib/barcodeScan";
 import { lockBodyScroll } from "../lib/overlay";
 import { fillVars } from "../lib/lodgingView";
@@ -373,9 +373,14 @@ export function decodeCameraFrame(video: any, canvas: any, frameEl: any) {
 }
 
 // ── Scanner pieces (inline styles: they must exist even where the plugin's Tailwind classes do not) ──
-/** Keyframes of the scan line and the heartbeat dot (no motion with prefers-reduced-motion). */
+/**
+ * Keyframes of the scan line and the heartbeat dot (no motion with prefers-reduced-motion). The sweep
+ * moves a frame-sized layer with `transform` — composited, so the line keeps moving while the built-in
+ * reader holds the main thread (animating `top` re-ran layout on the main thread and stuttered exactly
+ * while a frame was being decoded). translateY(%) is relative to the layer's own height, the frame's.
+ */
 export const SCANNER_CSS = `
-@keyframes cm-scan-sweep { 0%, 100% { top: 14%; } 50% { top: 86%; } }
+@keyframes cm-scan-sweep { 0%, 100% { transform: translateY(14%); } 50% { transform: translateY(86%); } }
 @keyframes cm-scan-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
 @media (prefers-reduced-motion: reduce) { [data-scan-line], [data-scan-dot] { animation: none !important; } }
 `;
@@ -384,6 +389,13 @@ export const SCANNER_ROOT_STYLE: React.CSSProperties = {
     background: '#000', color: '#fff', display: 'flex', flexDirection: 'column', overscrollBehavior: 'none',
 };
 export const SCANNER_BAR_STYLE: React.CSSProperties = { background: 'rgba(0,0,0,0.8)', flexShrink: 0 };
+/**
+ * Side margins of everything laid across the scanner's full width (bars, cards, the side buttons): 12 px,
+ * or the notch / rounded corner in landscape — the admin viewport is `viewport-fit=cover`, so a fixed
+ * full-width element now reaches under them (env() is 0 everywhere else).
+ */
+export const SAFE_LEFT = 'max(12px, env(safe-area-inset-left))';
+export const SAFE_RIGHT = 'max(12px, env(safe-area-inset-right))';
 const pill: React.CSSProperties = {
     display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderRadius: 999,
     background: 'rgba(0,0,0,0.6)', color: '#fff', fontSize: 12, fontWeight: 800, lineHeight: 1.2,
@@ -397,10 +409,12 @@ export function AimFrame({ frameRef, scanning }: any) {
             border: '4px solid rgba(255,255,255,0.9)', boxShadow: '0 0 0 9999px rgba(0,0,0,0.35)',
         }}>
             <div data-scan-line="" style={{
-                position: 'absolute', left: 12, right: 12, top: '50%', height: 3, borderRadius: 2,
-                background: 'rgba(244,63,94,0.95)', boxShadow: '0 0 10px rgba(244,63,94,0.9)',
+                position: 'absolute', left: 12, right: 12, top: 0, height: '100%', pointerEvents: 'none',
+                transform: 'translateY(50%)', willChange: 'transform',
                 opacity: scanning ? 1 : 0.35, animation: scanning ? 'cm-scan-sweep 1.8s ease-in-out infinite' : 'none',
-            }} />
+            }}>
+                <div style={{ height: 3, borderRadius: 2, background: 'rgba(244,63,94,0.95)', boxShadow: '0 0 10px rgba(244,63,94,0.9)' }} />
+            </div>
         </div>
     );
 }
@@ -408,7 +422,9 @@ export function AimFrame({ frameRef, scanning }: any) {
 /**
  * The heartbeat under the aiming frame, driven by the decode loop: «Escaneando · N cuadros/s» with a
  * pulsing dot, «En pausa» while a sheet / a verdict / a request holds the loop. Nothing when stalled
- * (CameraNotice covers the camera then).
+ * (CameraNotice covers the camera then). «Escaneando…» without a number while no frame has been analysed
+ * in the last second (the camera just turned on, a slow first native detect()): «0 cuadros/s» on the
+ * screen meant to reassure the operator read like a fault.
  */
 export function ScanPill({ health, tx }: any) {
     if (!health || health.state === 'stalled') return null;
@@ -419,9 +435,9 @@ export function ScanPill({ health, tx }: any) {
                 width: 8, height: 8, borderRadius: 999, background: scanning ? '#34d399' : '#fbbf24',
                 animation: scanning ? 'cm-scan-pulse 1s ease-in-out infinite' : 'none',
             }} />
-            {scanning
-                ? tx('meals.scanner.scanning', 'Escaneando · {n} cuadros/s', { n: health.fps })
-                : tx('meals.scanner.paused', 'En pausa')}
+            {!scanning ? tx('meals.scanner.paused', 'En pausa')
+                : health.fps > 0 ? tx('meals.scanner.scanning', 'Escaneando · {n} cuadros/s', { n: health.fps })
+                    : tx('meals.scanner.scanning.start', 'Escaneando…')}
         </div>
     );
 }
@@ -611,28 +627,34 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
     // Every turn either analyses a frame (meter.frame), skips one on purpose (meter.pause: a sheet, a
     // verdict awaiting a decision, a request in flight) or finds no playable frame (nothing recorded):
     // the heartbeat and the «no image» notice are read from what the loop really did.
+    // The built-in reader runs on the main thread (~20 ms on a blank frame, ~100 ms on printed packaging):
+    // the pause before the next frame grows with it (scanLoopDelay), so taps and sheets stay responsive.
     const scanLoop = useCallback(async () => {
         const video = videoRef.current;
         const stream = streamRef.current;
         if (!video || !stream) return;
+        let spent = 0;
         try {
             if (inFlight.current || sheetRef.current || armedRef.current) meter.current.pause();
             else if (video.readyState >= 2 && video.videoWidth > 0 && !video.paused) {
                 const native = await getNativeDetector();
                 if (native) {
+                    meter.current.busy();   // a slow first detect() (model loading) is not "no image"
                     const codes = await native.detect(video);
                     if (streamRef.current !== stream || !aliveRef.current) return;   // stopped meanwhile
                     meter.current.frame();
                     for (const c of codes || []) onCodeRef.current(String(c.rawValue || ''), String(c.format || ''));
                 } else {
                     const canvas = canvasRef.current || (canvasRef.current = document.createElement('canvas'));
+                    const t0 = performance.now();
                     const hit = decodeCameraFrame(video, canvas, aimRef.current);
                     meter.current.frame();
                     if (hit) onCodeRef.current(hit.text, hit.format);
+                    spent = performance.now() - t0;
                 }
             }
-        } catch { /* a bad frame: try the next one */ }
-        if (streamRef.current === stream && aliveRef.current) loopRef.current = window.setTimeout(scanLoop, 80);
+        } catch { meter.current.idle(); /* a bad frame: try the next one */ }
+        if (streamRef.current === stream && aliveRef.current) loopRef.current = window.setTimeout(scanLoop, scanLoopDelay(spent));
     }, []);
 
     const startCamera = useCallback(async (wanted?: string) => {
@@ -808,7 +830,7 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
             onPointerDown={() => feedback.current.prime()}>
             <style>{SCANNER_CSS}</style>
             {/* Top: service + exit */}
-            <div className="flex items-center gap-2 px-3 pt-[max(env(safe-area-inset-top),0.75rem)] pb-2 bg-black/80" style={{ ...SCANNER_BAR_STYLE, display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 12, paddingRight: 12, paddingBottom: 8, paddingTop: 'max(env(safe-area-inset-top), 12px)' }}>
+            <div className="flex items-center gap-2 px-3 pt-[max(env(safe-area-inset-top),0.75rem)] pb-2 bg-black/80" style={{ ...SCANNER_BAR_STYLE, display: 'flex', alignItems: 'center', gap: 8, paddingLeft: SAFE_LEFT, paddingRight: SAFE_RIGHT, paddingBottom: 8, paddingTop: 'max(env(safe-area-inset-top), 12px)' }}>
                 <button type="button" onClick={() => setSheet('service')} className="flex-1 min-w-0 text-left px-4 py-3 rounded-2xl bg-white/10 active:bg-white/20" style={{ flex: '1 1 0%', minWidth: 0 }} aria-label={tx('meals.scanner.change.service', 'Cambiar servicio')}>
                     <span className="block text-[10px] font-black uppercase tracking-widest text-white/60" style={{ display: 'block' }}>{tx('meals.scanner.service', 'Servicio')}</span>
                     <span className="block text-base font-black truncate" style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{service ? serviceName(tx, service, language) : tx('meals.scanner.pick', 'Elige un servicio')}</span>
@@ -819,7 +841,7 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
             </div>
 
             {/* Counters */}
-            <div className="grid grid-cols-3 gap-2 px-3 pb-2 text-center bg-black/80" style={{ ...SCANNER_BAR_STYLE, display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8, paddingLeft: 12, paddingRight: 12, paddingBottom: 8, textAlign: 'center' }}>
+            <div className="grid grid-cols-3 gap-2 px-3 pb-2 text-center bg-black/80" style={{ ...SCANNER_BAR_STYLE, display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8, paddingLeft: SAFE_LEFT, paddingRight: SAFE_RIGHT, paddingBottom: 8, textAlign: 'center' }}>
                 {[[tx('meals.count.delivered', 'Entregados'), stats?.delivered], [tx('meals.count.entitled', 'Con derecho'), stats?.entitled], [tx('meals.count.pending', 'Pendientes'), stats?.pending]].map(([label, n]: any) => (
                     <div key={label} className="rounded-xl bg-white/10 py-1.5">
                         <div className="text-xl font-black tabular-nums">{n ?? '—'}</div>
@@ -847,7 +869,7 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
                     <div style={{ position: 'absolute', top: 12, left: 0, right: 0, textAlign: 'center', fontSize: 12, fontWeight: 700, color: 'rgba(255,255,255,0.85)', pointerEvents: 'none', textShadow: '0 1px 2px #000' }}>{tx('meals.scanner.aim', 'Apunta al código de barras del participante')}</div>
                 )}
                 {cam === 'on' && read && (
-                    <div style={{ position: 'absolute', top: 40, left: 12, right: 72, zIndex: 1 }}>
+                    <div style={{ position: 'absolute', top: 40, left: SAFE_LEFT, right: `calc(60px + ${SAFE_RIGHT})`, zIndex: 1 }}>
                         <ReadCard read={read} tx={tx} onDismiss={() => setRead(null)} />
                     </div>
                 )}
@@ -865,7 +887,7 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
                     <CameraNotice health={health} playBlocked={playBlocked} tx={tx} onActivate={activateVideo} onRetry={() => startCamera(deviceId || undefined)} />
                 )}
                 {cam === 'on' && (
-                    <div className="absolute right-3 top-10 flex flex-col gap-2" style={{ position: 'absolute', right: 12, top: 40, zIndex: 3, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div className="absolute right-3 top-10 flex flex-col gap-2" style={{ position: 'absolute', right: SAFE_RIGHT, top: 40, zIndex: 3, display: 'flex', flexDirection: 'column', gap: 8 }}>
                         {torch.supported && (
                             <button type="button" onClick={toggleTorch} className={`w-12 h-12 rounded-full flex items-center justify-center ${torch.on ? 'bg-yellow-300 text-black' : 'bg-black/60 text-white'}`} style={{ width: 48, height: 48, borderRadius: 999, background: torch.on ? '#fde047' : 'rgba(0,0,0,0.6)', color: torch.on ? '#000' : '#fff' }} aria-pressed={torch.on} aria-label={tx('meals.camera.torch', 'Linterna')}>
                                 <i className="fa-solid fa-bolt" aria-hidden="true"></i>
@@ -881,7 +903,7 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
 
                 {/* Verdict over the bottom third */}
                 {outcome && (
-                    <div className="absolute left-3 right-3 bottom-3" style={{ position: 'absolute', left: 12, right: 12, bottom: 12, zIndex: 4 }}>
+                    <div className="absolute left-3 right-3 bottom-3" style={{ position: 'absolute', left: SAFE_LEFT, right: SAFE_RIGHT, bottom: 12, zIndex: 4 }}>
                         <VerdictCard outcome={outcome} service={service} large busy={busy} language={language}
                             onForce={outcome.result === 'not_entitled' ? force : undefined}
                             onArmedChange={(a) => { armedRef.current = !!a; }}
@@ -892,7 +914,7 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
             </div>
 
             {/* Bottom actions */}
-            <div className="grid grid-cols-2 gap-2 px-3 pt-2 pb-[max(env(safe-area-inset-bottom),0.75rem)] bg-black/80" style={{ ...SCANNER_BAR_STYLE, display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8, paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 'max(env(safe-area-inset-bottom), 12px)' }}>
+            <div className="grid grid-cols-2 gap-2 px-3 pt-2 pb-[max(env(safe-area-inset-bottom),0.75rem)] bg-black/80" style={{ ...SCANNER_BAR_STYLE, display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8, paddingLeft: SAFE_LEFT, paddingRight: SAFE_RIGHT, paddingTop: 8, paddingBottom: 'max(env(safe-area-inset-bottom), 12px)' }}>
                 <button type="button" onClick={() => { setTyped(''); setSheet('code'); }} className="py-4 rounded-2xl bg-white/10 active:bg-white/20 font-black text-sm">
                     <i className="fa-solid fa-keyboard mr-2" aria-hidden="true"></i>{tx('meals.scanner.type', 'Escribir código')}
                 </button>
@@ -904,7 +926,7 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
             {/* Sheets */}
             {sheet && (
                 <div className="absolute inset-0 z-10 bg-black/70 flex items-end" style={{ ...fill, zIndex: 10, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end' }} onClick={() => setSheet(null)}>
-                    <div className="w-full max-h-[85%] overflow-y-auto rounded-t-3xl bg-gray-900 p-4 pb-[max(env(safe-area-inset-bottom),1rem)] space-y-3" style={{ width: '100%', maxHeight: '85%', overflowY: 'auto', overscrollBehavior: 'contain', borderRadius: '24px 24px 0 0', background: '#111827', paddingLeft: 16, paddingRight: 16, paddingTop: 16, paddingBottom: 'max(env(safe-area-inset-bottom), 16px)' }} onClick={(e) => e.stopPropagation()}>
+                    <div className="w-full max-h-[85%] overflow-y-auto rounded-t-3xl bg-gray-900 p-4 pb-[max(env(safe-area-inset-bottom),1rem)] space-y-3" style={{ width: '100%', maxHeight: '85%', overflowY: 'auto', overscrollBehavior: 'contain', borderRadius: '24px 24px 0 0', background: '#111827', paddingLeft: 'max(16px, env(safe-area-inset-left))', paddingRight: 'max(16px, env(safe-area-inset-right))', paddingTop: 16, paddingBottom: 'max(env(safe-area-inset-bottom), 16px)' }} onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-between">
                             <h2 className="text-lg font-black">
                                 {sheet === 'service' ? tx('meals.scanner.pick', 'Elige un servicio') : sheet === 'code' ? tx('meals.scanner.type', 'Escribir código') : tx('meals.scanner.search', 'Buscar por nombre')}

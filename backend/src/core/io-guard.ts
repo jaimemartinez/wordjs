@@ -1295,6 +1295,9 @@ module.exports = {
     isPluginServedRelPath,
     PLUGIN_PUBLIC_DIR,
     PLUGIN_PUBLIC_EXT,
+    // The fixed, host-known files: index.ts serves them with ETag revalidation (no-cache) because their
+    // URLs carry no version while a plugin update rewrites them.
+    PLUGIN_PUBLIC_FILES,
     // The bundle sink's half of the same declaration: routes/plugin-bundles.ts serves EXACTLY these
     // names out of plugins/<folder>/dist/, and isPathSafe() denies the plugin writing any of them.
     isPluginBundleRelPath,

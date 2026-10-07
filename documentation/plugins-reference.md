@@ -197,7 +197,7 @@ Complex business logic for managing church conferences.
         payments as read-only income) and **meals** (`/meals*`: services, a location × service plan, per-person
         overrides, and deliveries recorded by scanning the attendee's barcode — on a phone, «Modo escáner» reads
         with `BarcodeDetector` where the browser has it and with the plugin's own reader otherwise (Code 128,
-        EAN-13/8, UPC-A/E, Code 39), and shows whatever it reads that is not a registration code).
+        EAN-13/8, UPC-A, UPC-E number system 0, Code 39), and shows whatever it reads that is not a registration code).
     *   **Team & per-section permissions** (`/staff/*`, administrators only): roles give each section
         (dashboard, inscriptions, payments, locations, lodging, transport, accounting, meals, meal delivery,
         reports, settings) `none`, `view` or `manage`; members are WordJS users (found via `users:read`).

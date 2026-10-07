@@ -27,14 +27,28 @@
  *   hooks       → appended to dist/hooks.bundle.css, which pluginBundleLoader links once the hooks
  *                 bundle registers (hooks render inside OTHER admin screens, e.g. the user form).
  *
- * UNSCOPED ON PURPOSE. The utilities are emitted exactly as the host emits its own — same layers
- * (`@layer theme, base, components, utilities`), same theme (Tailwind's defaults plus the host's
- * `@theme` blocks from globals.css), no preflight (the host has it). Prefixing them with
- * `.plugin-admin-<slug>` would miss every portalled overlay (a modal or scanner mounted on <body> lives
- * outside that wrapper), which is precisely the UI that broke. Because they sit in the same cascade
- * layers as the host's utilities, they behave in production exactly as they did in development: a
- * plugin's own unlayered, scoped admin.css still wins over them, and they never outrank the host's
- * unlayered CSS.
+ * UNSCOPED, BUT ONE SUB-LAYER BELOW THE HOST. The utilities are compiled the way the host compiles its
+ * own — same theme (Tailwind's defaults plus the host's `@theme` blocks from globals.css), no preflight
+ * (the host has it). Prefixing them with `.plugin-admin-<slug>` would miss every portalled overlay (a
+ * modal or scanner mounted on <body> lives outside that wrapper), which is precisely the UI that broke.
+ *
+ * What they must NOT do is compete with the host's own utilities. In development there is ONE sheet, in
+ * Tailwind's order: `.flex` comes before `.md\:hidden`, so `flex md:hidden` hides the mobile header on a
+ * desktop. A plugin sheet is a SECOND sheet, linked after the host's: a plain `.flex` in it — same layer,
+ * same specificity, later in the document — beat the host's `.md\:hidden`, and the admin shell came out
+ * as the phone layout on a desktop (mobile header shown, sidebar fixed over the page, collapse toggle
+ * gone; a hooks or block sheet did the same on every admin / public page). So every rule a compiled
+ * sheet emits is nested in a sub-layer of the layer it belongs to — `@layer utilities { @layer wjs-plugin
+ * { … } }`, likewise theme/properties. A layer's own rules always win over its sub-layers' (CSS Cascade
+ * 5), so:
+ *   - any class the host also generated keeps the host's rule and the host's order — host chrome is never
+ *     restyled by a plugin sheet;
+ *   - a class only the plugin uses still applies (no host rule to lose to): the scanner is black, its frame
+ *     82% wide, on hosts that never compiled those classes;
+ *   - the price, on a host that did not compile the plugin's classes: a plugin-only VARIANT (`sm:p-10`)
+ *     loses to a host BASE class (`p-6`) on the same element. A newer host compiles the catalog plugins'
+ *     classes itself (globals.css `@source`), in its own order, so there it does not arise.
+ * A plugin's own hand-written (unlayered) admin.css still wins over all of it.
  *
  * DETERMINISTIC. The output is a pure function of the plugin's sources, the host theme and the Tailwind
  * version: files are read in sorted order, candidates are sorted, Tailwind sorts its own output, and no
@@ -61,6 +75,8 @@ const PACKAGED_STYLESHEET = 'client/admin/admin.css';
 const BUILT_STYLESHEET = 'dist/admin.css';
 /** Opens every compiled block; verify-marketplace.js looks for it to prove the step ran. */
 const UTILITIES_MARKER = 'wordjs:plugin-utilities';
+/** The sub-layer every compiled rule sits in, below the host's own rules of the same layer. */
+const PLUGIN_SUBLAYER = 'wjs-plugin';
 
 // The sources a plugin's UI is written in. CSS files are not scanned (Tailwind does not either).
 const SOURCE_EXT_RE = /\.(?:[cm]?[jt]sx?)$/i;
@@ -93,13 +109,21 @@ function loadTailwind() {
     );
 }
 
-/** The host's `@theme { … }` blocks, verbatim (comments stripped, LF line endings); '' when absent. */
-function hostThemeBlocks() {
+/**
+ * The host's `@theme { … }` blocks, verbatim (comments stripped, LF line endings); '' when it has none.
+ * Throws when the host stylesheet cannot be read: compiling without it would silently drop every class
+ * built on a host token (`bg-brand-blue`, `text-editor-ink`, `font-oswald`) from the plugin's sheet.
+ */
+function hostThemeBlocks(file = HOST_GLOBALS_CSS) {
     let css;
     try {
-        css = fs.readFileSync(HOST_GLOBALS_CSS, 'utf8');
-    } catch {
-        return '';
+        css = fs.readFileSync(file, 'utf8');
+    } catch (e) {
+        throw new Error(
+            `plugin stylesheet: cannot read the host stylesheet ${path.relative(REPO_ROOT, file) || file} (${e.code || e.message}). `
+            + 'Its @theme tokens define classes the plugin may use; build from a complete WordJS checkout or install.',
+            { cause: e },
+        );
     }
     css = css.replace(/\r\n?/g, '\n').replace(/\/\*[\s\S]*?\*\//g, '');
     const blocks = [];
@@ -151,8 +175,12 @@ function sourceFilesUnder(dir) {
  * costs nothing but a missed candidate is an unstyled screen. Each whitespace/quote-delimited token is
  * kept whole (arbitrary values such as `shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]` contain `(`, `,`, `=`)
  * AND split on the JSX/JS punctuation that can surround a class name (`className={x}`, `cn(a,b)`),
- * each piece also with its leading/trailing punctuation trimmed.
+ * each piece also with its leading/trailing punctuation trimmed. Arbitrary values that contain QUOTES
+ * (`content-['']`, `font-['Inter']`, `bg-[url('/a.png')]`) would be cut by that quote split, so they are
+ * also collected whole: a token whose `[…]` holds quotes but no whitespace (bounded, so a long
+ * whitespace-free run such as an inlined data: URI cannot make the scan quadratic).
  */
+const QUOTED_ARBITRARY_RE = /[^\s"'`{}<>;,=()]{0,200}\[[^\]\s]{0,200}['"][^\]\s]{0,200}\][^\s"'`{}<>;,=()]{0,64}/g;
 function extractCandidates(text, into = new Set()) {
     const add = (tok) => {
         if (!tok || tok.length > 512) return;
@@ -167,7 +195,79 @@ function extractCandidates(text, into = new Set()) {
             for (const piece of raw.split(/[{}<>;,=()]+/)) add(piece);
         }
     }
+    for (const m of text.match(QUOTED_ARBITRARY_RE) || []) add(m);
     return into;
+}
+
+/**
+ * Index just past the `}` that closes the block opened at `open`, or -1 when it is unbalanced. Comments,
+ * strings and escaped characters are skipped: the `{` of `content: "{"` or of `.a\{b` opens nothing.
+ */
+function blockEnd(css, open) {
+    let depth = 0;
+    for (let i = open; i < css.length; i++) {
+        const c = css[i];
+        if (c === '\\') { i++; continue; }
+        if (c === '/' && css[i + 1] === '*') {
+            const e = css.indexOf('*/', i + 2);
+            if (e === -1) return -1;
+            i = e + 1;
+            continue;
+        }
+        if (c === '"' || c === '\'') {
+            for (i++; i < css.length && css[i] !== c; i++) if (css[i] === '\\') i++;
+            continue;
+        }
+        if (c === '{') depth++;
+        else if (c === '}' && --depth === 0) return i + 1;
+    }
+    return -1;
+}
+
+/** The first `{` at or after `from` that is not inside a comment, a string or an escape; -1 if none. */
+function nextBrace(css, from) {
+    for (let i = from; i < css.length; i++) {
+        const c = css[i];
+        if (c === '\\') { i++; continue; }
+        if (c === '/' && css[i + 1] === '*') {
+            const e = css.indexOf('*/', i + 2);
+            if (e === -1) return -1;
+            i = e + 1;
+            continue;
+        }
+        if (c === '"' || c === '\'') {
+            for (i++; i < css.length && css[i] !== c; i++) if (css[i] === '\\') i++;
+            continue;
+        }
+        if (c === '{') return i;
+    }
+    return -1;
+}
+
+/**
+ * Nest the body of every top-level `@layer <name> { … }` block in the PLUGIN_SUBLAYER sub-layer, so each
+ * rule of a plugin sheet ranks BELOW the host's own rules of the same layer (see the header). Layer
+ * statements (`@layer a, b;`), `@property` and `@keyframes` are left as they are.
+ */
+function nestInPluginLayer(css) {
+    let out = '';
+    let i = 0;
+    for (;;) {
+        const open = nextBrace(css, i);
+        if (open === -1) return out + css.slice(i);
+        const end = blockEnd(css, open);
+        if (end === -1) throw new Error('plugin stylesheet: unbalanced braces in the compiled CSS');
+        const head = css.slice(i, open);
+        out += head;
+        if (/@layer\s+[A-Za-z_-][\w-]*\s*$/.test(head)) {
+            const body = css.slice(open + 1, end - 1).replace(/^\s*\n/, '').replace(/\s+$/, '');
+            const indented = body.split('\n').map((l) => (l ? `  ${l}` : l)).join('\n');
+            out += `{\n  @layer ${PLUGIN_SUBLAYER} {\n${indented}\n  }\n}`;
+        } else {
+            out += css.slice(open, end);
+        }
+        i = end;
+    }
 }
 
 /**
@@ -208,10 +308,23 @@ async function compileUtilities(files, label) {
             throw new Error(`plugin stylesheet: @plugin/@config "${id}" is not supported`);
         },
     });
-    const css = compiler.build([...candidates].sort()).replace(/\r\n?/g, '\n').trimEnd();
+    const css = nestInPluginLayer(compiler.build([...candidates].sort()).replace(/\r\n?/g, '\n').trimEnd());
     return `/*! ${UTILITIES_MARKER} ${label} — the Tailwind CSS v${tailwind.version} utilities this plugin's `
-        + 'UI uses, compiled by backend/scripts/build-plugin.js from its sources. Generated: do not edit. */\n'
+        + 'UI uses, compiled by backend/scripts/build-plugin.js from its sources, one cascade sub-layer '
+        + `(${PLUGIN_SUBLAYER}) below the host's own. Generated: do not edit. */\n`
         + `${css}\n`;
+}
+
+/**
+ * The hand-written part of a plugin stylesheet: everything before the first compiled block. An INSTALLED
+ * package's client/admin/admin.css is already "own CSS + compiled utilities"; rebuilding or re-packing
+ * that folder (pack:plugin on backend/plugins, the dev "Build & download ZIP") must not stack a second,
+ * third… compiled block onto it — each one keeping classes the UI no longer uses.
+ */
+function handWritten(css) {
+    const text = String(css || '').replace(/\r\n?/g, '\n');
+    const at = text.indexOf(`/*! ${UTILITIES_MARKER}`);
+    return (at === -1 ? text : text.slice(0, at)).replace(/\s+$/, '');
 }
 
 /** Absolute source paths of an esbuild metafile's inputs that belong to the plugin (no dependencies). */
@@ -265,9 +378,9 @@ async function writePluginStylesheets(pluginDir, slug, metafiles) {
     if (metafiles.admin) {
         const files = [...sourceFilesUnder(path.join(pluginDir, 'client')), ...metafileSources(metafiles.admin, pluginDir)];
         const utilities = await compileUtilities(files, `${slug}/admin`);
-        const own = readIfExists(path.join(pluginDir, PACKAGED_STYLESHEET));
+        const own = handWritten(readIfExists(path.join(pluginDir, PACKAGED_STYLESHEET)));
         fs.mkdirSync(distDir, { recursive: true });
-        fs.writeFileSync(builtAdmin, joinCss(own ? own.replace(/\r\n?/g, '\n') : '', utilities));
+        fs.writeFileSync(builtAdmin, joinCss(own, utilities));
         written.push(BUILT_STYLESHEET);
     } else {
         fs.rmSync(builtAdmin, { force: true }); // a previous build's, for an admin page that is gone
@@ -280,8 +393,9 @@ async function writePluginStylesheets(pluginDir, slug, metafiles) {
         if (!utilities) continue;
         const file = path.join(distDir, `${name}.bundle.css`);
         // build-plugin.js deletes this file before esbuild runs, so what is here now is esbuild's own
-        // extracted CSS for this build (or nothing) — appending is therefore idempotent.
-        fs.writeFileSync(file, joinCss(readIfExists(file) || '', utilities));
+        // extracted CSS for this build (or nothing) — appending is therefore idempotent. handWritten()
+        // keeps it so even if a compiled block got here some other way.
+        fs.writeFileSync(file, joinCss(handWritten(readIfExists(file)), utilities));
         written.push(`dist/${name}.bundle.css`);
     }
     return written;
@@ -332,8 +446,12 @@ module.exports = {
     PACKAGED_STYLESHEET,
     BUILT_STYLESHEET,
     UTILITIES_MARKER,
+    PLUGIN_SUBLAYER,
     extractCandidates,
     compileUtilities,
+    nestInPluginLayer,
+    handWritten,
+    loadTailwind,
     hostThemeBlocks,
     sourceFilesUnder,
     writePluginStylesheets,

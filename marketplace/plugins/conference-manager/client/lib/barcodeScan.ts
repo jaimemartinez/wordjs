@@ -16,7 +16,7 @@
  * 2.15.1: the scanner shows WHATEVER it reads — a product box held under the camera must say «Código
  * leído: …» instead of nothing. `decodeBarcodeRow()` / `decodeBarcodeImage()` read, on the same
  * binarised scanlines, Code 128 plus the retail symbologies EAN-13, EAN-8, UPC-A (an EAN-13 whose first
- * digit is 0), UPC-E and Code 39, and return the text WITH its symbology. EAN/UPC digits are matched
+ * digit is 0), UPC-E (number system 0) and Code 39, and return the text WITH its symbology. EAN/UPC digits are matched
  * like the Code 128 symbols (edge-to-similar-edge distances, ink spread measured on the guard bars to
  * tell 1/7 and 2/8 apart) and verified by guard patterns, quiet zones and the check digit; Code 39 by its
  * three-wide-of-nine patterns, the `*` start/stop and the quiet zones. `decodeVideoRegion()` decodes the
@@ -276,7 +276,7 @@ EAN_L.forEach((s, digit) => {
 });
 /** EAN-13: the parity (L = odd, G = even) of the six left digits encodes the first digit. */
 const EAN13_FIRST = ['LLLLLL', 'LLGLGG', 'LLGGLG', 'LLGGGL', 'LGLLGG', 'LGGLLG', 'LGGGLL', 'LGLGLG', 'LGLGGL', 'LGGLGL'];
-/** UPC-E, number system 0: the parity of the six digits encodes the check digit (system 1: inverted). */
+/** UPC-E, number system 0: the parity of the six digits encodes the check digit (system 1 is not read: see readUpcE). */
 const UPCE_NS0 = ['GGGLLL', 'GGLGLL', 'GGLLGL', 'GGLLLG', 'GLGGLL', 'GLLGGL', 'GLLLGG', 'GLGLGL', 'GLGLLG', 'GLLGLG'];
 /** Light modules required before and after an EAN/UPC symbol (the specification asks for 7-11). */
 const EAN_QUIET = 4;
@@ -419,7 +419,15 @@ function upcEToUpcA(ns: number, d: number[], check: number): number[] {
     return [ns, ...body, check];
 }
 
-/** UPC-E whose start guard is the dark run `i` (the 8-digit text BarcodeDetector reports). */
+/**
+ * UPC-E whose start guard is the dark run `i` (the 8-digit text BarcodeDetector reports). Number system 0
+ * ONLY. A number-system-1 UPC-E is, bar for bar, the LEFT HALF of an EAN-13 whose first digit is its
+ * check digit (its parities are the EAN-13 first-digit table: they start with L, number system 0's start
+ * with G), and the EAN-13 centre guard plus the first bar of the right half is its end guard. An EAN-13
+ * whose right half is lost — cut by the aiming band, washed out by glare — then read as a WRONG UPC-E
+ * whenever the 1-in-10 check happened to pass (3043959823297 → 10439593). On the screen that shows
+ * whatever was read, a wrong number is worse than none; number system 1 is practically unused.
+ */
 function readUpcE(r: Float64Array, count: number, i: number): BarcodeRead | null {
     if (i + UPCE_RUNS >= count) return null;
     const m = moduleOf(r, i, UPCE_RUNS, 51);
@@ -428,16 +436,10 @@ function readUpcE(r: Float64Array, count: number, i: number): BarcodeRead | null
     const digits: number[] = [];
     const parity: string[] = [];
     if (!readDigits(r, i + 3, 6, LEFT_DIGITS, m, guardSpread(r, i, 3, true, m), digits, parity)) return null;
-    const pat = parity.join('');
-    let ns = 0;
-    let check = UPCE_NS0.indexOf(pat);
-    if (check < 0) {
-        ns = 1;
-        check = UPCE_NS0.indexOf(pat.replace(/[GL]/g, (c) => (c === 'G' ? 'L' : 'G')));
-        if (check < 0) return null;
-    }
-    if (!checkDigitOk(upcEToUpcA(ns, digits, check))) return null;
-    return { text: `${ns}${digits.join('')}${check}`, format: 'upc_e' };
+    const check = UPCE_NS0.indexOf(parity.join(''));
+    if (check < 0) return null;
+    if (!checkDigitOk(upcEToUpcA(0, digits, check))) return null;
+    return { text: `0${digits.join('')}${check}`, format: 'upc_e' };
 }
 
 /** Any enabled EAN/UPC symbol starting at a dark run preceded by a quiet zone. */

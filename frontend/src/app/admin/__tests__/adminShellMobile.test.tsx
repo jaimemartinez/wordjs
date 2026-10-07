@@ -106,6 +106,21 @@ describe("the fullscreen editor under viewport-fit=cover", () => {
     });
 });
 
+describe("fixed admin UI outside the shell under viewport-fit=cover", () => {
+    // Fixed elements are placed against the viewport, not the padded shell: the toast stack keeps itself
+    // clear of the home indicator and, in landscape, of the notch (env() is 0 where nothing is covered).
+    it("keeps the toast stack 1rem from the edges or clear of the safe area, whichever is larger", async () => {
+        const { ToastProvider } = await import("@/contexts/ToastContext");
+        const stack = classesOf(renderToStaticMarkup(<ToastProvider><p>page</p></ToastProvider>), /<div[^>]*data-wjs-toasts[^>]*>/);
+        expect(stack).toContain("fixed");
+        expect(stack).toContain("bottom-[max(1rem,env(safe-area-inset-bottom))]");
+        expect(stack).toContain("left-[max(1rem,env(safe-area-inset-left))]");
+        expect(stack).toContain("right-[max(1rem,env(safe-area-inset-right))]");
+        expect(stack).toContain("sm:left-auto");
+        expect(stack).not.toContain("bottom-4");
+    });
+});
+
 describe("admin document and viewport", () => {
     it("exports viewport-fit=cover from the admin layout, so env(safe-area-inset-*) is not 0 on iOS", async () => {
         const { viewport } = await import("@/app/admin/layout");

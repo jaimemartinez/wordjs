@@ -199,14 +199,33 @@ describe('product barcodes: EAN-13, EAN-8, UPC-A, UPC-E', () => {
         const img = render(ean8('96385074'), { module: 3, spread: 0.4, blur: 1, noise: 6 });
         expect(decodeBarcodeImage(img)).toEqual({ text: '96385074', format: 'ean_8' });
     });
-    it('UPC-E, number systems 0 and 1', () => {
+    it('UPC-E, number system 0', () => {
         for (const code of ['04252614', '01234565']) {
             const img = render(upcE(code), { module: 3, spread: 0.4, blur: 1, noise: 6 });
             expect(decodeBarcodeImage(img), code).toEqual({ text: code, format: 'upc_e' });
         }
+    });
+    it('an EAN-13 whose right half is lost is NOT read as a (wrong) UPC-E', () => {
+        // A number-system-1 UPC-E is bar for bar the left half of an EAN-13 (+ its centre guard and the first
+        // bar of the right half), check digit = the EAN-13's first digit. Before, a box held half out of the
+        // aiming band, or with glare over its right half, showed a WRONG number roughly once in ten.
+        const glare = (bits: string, from: number) => bits.slice(0, from) + '0'.repeat(bits.length - from);
+        const cut = (img: ReturnType<typeof render>, modules: number, quiet = 12, px = 3) => {
+            const width = (quiet + modules) * px;
+            const data = new Uint8ClampedArray(width * img.height);
+            for (let y = 0; y < img.height; y++) data.set(img.data.subarray(y * img.width, y * img.width + width), y * width);
+            return { ...img, data, width };
+        };
+        // Glare from module 51 (the right half washed out): was read as upc_e 10439593.
+        expect(decodeBarcodeImage(render(glare(ean13('3043959823297'), 51), { module: 3, spread: 0.3 }))).toBeNull();
+        // Cut by the edge of the aiming band at module 55: was read as upc_e 14547441.
+        expect(decodeBarcodeImage(cut(render(ean13('1454744300305'), { module: 3, spread: 0.3 }), 55))).toBeNull();
+        // The symbol itself: number system 1 reads as nothing (a native BarcodeDetector still reports it).
         const ns1 = `1123456${gs1Check('11234500006')}`; // UPC-E 1·123456·c expands to 1 12345 0000 6
-        const img = render(upcE(ns1), { module: 3, spread: 0.3 });
-        expect(decodeBarcodeImage(img)).toEqual({ text: ns1, format: 'upc_e' });
+        expect(decodeBarcodeImage(render(upcE(ns1), { module: 3, spread: 0.3 }))).toBeNull();
+        // The whole EAN-13 still reads, of course.
+        expect(decodeBarcodeImage(render(ean13('3043959823297'), { module: 3, spread: 0.3 }))).toEqual({ text: '3043959823297', format: 'ean_13' });
+        expect(decodeBarcodeImage(render(ean13('1454744300305'), { module: 3, spread: 0.3 }))).toEqual({ text: '1454744300305', format: 'ean_13' });
     });
     it('tells 1 from 7 and 2 from 8 (same edge distances) under heavy ink spread', () => {
         const body = '717282817271';

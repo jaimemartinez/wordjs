@@ -31,10 +31,10 @@ vi.mock('react-dom', async (importOriginal) => {
 
 import { I18nProvider } from '@/contexts/I18nContext';
 import {
-    AimFrame, CameraNotice, MealScanner, ReadCard, ScanPill, SCANNER_ROOT_STYLE, createFeedback, decodeCameraFrame,
-    makeTx, pickNativeFormats, primeScannerAudio,
+    AimFrame, CameraNotice, MealScanner, ReadCard, SAFE_LEFT, SAFE_RIGHT, SCANNER_CSS, ScanPill, SCANNER_ROOT_STYLE, createFeedback,
+    decodeCameraFrame, makeTx, pickNativeFormats, primeScannerAudio,
 } from '../../../../../marketplace/plugins/conference-manager/client/admin/MealScanner';
-import { classifyRead, createReadRouter, createScanMeter, isRegCode, normalizeCode } from '../../../../../marketplace/plugins/conference-manager/client/lib/meals';
+import { classifyRead, createReadRouter, createScanMeter, isRegCode, normalizeCode, scanLoopDelay } from '../../../../../marketplace/plugins/conference-manager/client/lib/meals';
 import { translations } from '../../../../../marketplace/plugins/conference-manager/client/lib/i18n';
 
 const es = makeTx((k: string) => translations.es[k] ?? k);
@@ -106,6 +106,40 @@ describe('createScanMeter: the heartbeat comes from the decode loop', () => {
         m.start(10_000);
         expect(m.health(11_900).state).toBe('scanning');
         expect(m.health(12_100).state).toBe('stalled');
+    });
+    it('a slow native detect() in flight is NOT "no image" (the first one loads a model on a low-end Android)', () => {
+        const m = createScanMeter(2000, 10_000);
+        m.start(0);
+        m.busy(150);                                  // detect() awaiting on a playable frame
+        expect(m.health(2600)).toEqual({ state: 'scanning', fps: 0 }); // 2.45 s in flight: still scanning
+        m.frame(2650);                                // it resolved
+        expect(m.health(2700)).toEqual({ state: 'scanning', fps: 1 });
+        // A detect that never settles is a dead loop after busyMs.
+        m.busy(3000);
+        expect(m.health(12_900).state).toBe('scanning');
+        expect(m.health(13_100).state).toBe('stalled');
+    });
+    it('a detector that throws on every frame is still reported: idle() runs the 2 s clock from the last real frame', () => {
+        const m = createScanMeter(2000);
+        m.start(0);
+        m.frame(100);
+        for (let t = 200; t <= 2400; t += 100) { m.busy(t); m.idle(); } // every detect() threw
+        expect(m.health(2200).state).toBe('stalled');
+        // pause() also ends an in-flight mark.
+        m.busy(5000); m.pause(5100);
+        expect(m.health(7200).state).toBe('stalled');
+    });
+});
+
+describe('scanLoopDelay: the built-in reader leaves the main thread free at least half of the time', () => {
+    it('80 ms after a cheap frame, as long as the decode after an expensive one (capped at 1 s)', () => {
+        expect(scanLoopDelay(0)).toBe(80);
+        expect(scanLoopDelay(20)).toBe(80);
+        expect(scanLoopDelay(80)).toBe(80);
+        expect(scanLoopDelay(119.4)).toBe(119);
+        expect(scanLoopDelay(5000)).toBe(1000);
+        expect(scanLoopDelay(Number.NaN)).toBe(80);
+        expect(scanLoopDelay(-5)).toBe(80);
     });
 });
 
@@ -203,11 +237,31 @@ describe('the scanner pieces render with inline structure', () => {
         expect(on).toMatch(/data-scan-line=""[^>]*animation:cm-scan-sweep/);
         expect(renderToStaticMarkup(<AimFrame scanning={false} />)).toMatch(/data-scan-line=""[^>]*animation:none/);
     });
+    it('the scan line moves with transform (composited), not top: it keeps moving while a frame is decoded', () => {
+        // The built-in reader holds the main thread ~100 ms per frame on printed packaging; a `top` animation
+        // re-runs layout there and stuttered exactly then. The swept layer is frame-sized, so translateY(%)
+        // is a share of the frame's height.
+        const sweep = /@keyframes cm-scan-sweep\s*\{([^@]*)\}\s*@/.exec(SCANNER_CSS)?.[1] || '';
+        expect(sweep).toMatch(/transform:\s*translateY\(14%\)/);
+        expect(sweep).toMatch(/transform:\s*translateY\(86%\)/);
+        expect(sweep).not.toMatch(/\btop\s*:/);
+        const line = renderToStaticMarkup(<AimFrame scanning />).match(/<div data-scan-line=""[^>]*>/)?.[0] || '';
+        expect(line).toContain('height:100%');
+        expect(line).toContain('top:0');
+        expect(line).toContain('will-change:transform');
+    });
     it('the heartbeat: «Escaneando · N cuadros/s», «En pausa», nothing when stalled', () => {
         expect(flat(renderToStaticMarkup(<ScanPill health={{ state: 'scanning', fps: 7 }} tx={es} />))).toContain('Escaneando · 7 cuadros/s');
         expect(renderToStaticMarkup(<ScanPill health={{ state: 'scanning', fps: 7 }} tx={es} />)).toContain('data-scan-state="scanning"');
         expect(flat(renderToStaticMarkup(<ScanPill health={{ state: 'paused', fps: 0 }} tx={es} />))).toContain('En pausa');
         expect(renderToStaticMarkup(<ScanPill health={{ state: 'stalled', fps: 0 }} tx={es} />)).toBe('');
+    });
+    it('no frame analysed yet → «Escaneando…», never «0 cuadros/s» (it read like a fault)', () => {
+        const starting = flat(renderToStaticMarkup(<ScanPill health={{ state: 'scanning', fps: 0 }} tx={es} />));
+        expect(starting).toContain('Escaneando…');
+        expect(starting).not.toContain('0 cuadros/s');
+        expect(starting).toContain('data-scan-state="scanning"');
+        for (const lang of ['es', 'en', 'pt'] as const) expect(translations[lang]['meals.scanner.scanning.start'], lang).toBeTruthy();
     });
     it('no image for 2 s → «La cámara no entrega imagen» + Reintentar; a refused play() → «Toca para activar la cámara»', () => {
         const stalled = flat(renderToStaticMarkup(<CameraNotice health={{ state: 'stalled', fps: 0 }} playBlocked={false} tx={es} onRetry={() => { }} onActivate={() => { }} />));
@@ -253,6 +307,13 @@ describe('wiring (source): the tested pieces are the ones the scanner runs', () 
         expect(body).toMatch(/if \(inFlight\.current \|\| sheetRef\.current \|\| armedRef\.current\) meter\.current\.pause\(\);/);
         expect(body).toMatch(/const hit = decodeCameraFrame\(video, canvas, aimRef\.current\);\s+meter\.current\.frame\(\);\s+if \(hit\) onCodeRef\.current\(hit\.text, hit\.format\);/);
         expect(body).toMatch(/meter\.current\.frame\(\);\s+for \(const c of codes \|\| \[\]\) onCodeRef\.current\(String\(c\.rawValue \|\| ''\), String\(c\.format \|\| ''\)\);/);
+        // A native detect() in flight keeps the heartbeat alive; a throwing one does not.
+        expect(body).toMatch(/meter\.current\.busy\(\);[^\n]*\n\s+const codes = await native\.detect\(video\);/);
+        expect(body).toMatch(/catch \{ meter\.current\.idle\(\);/);
+        // The pause before the next frame follows the decode's cost.
+        expect(body).toMatch(/const t0 = performance\.now\(\);\s+const hit = decodeCameraFrame/);
+        expect(body).toMatch(/spent = performance\.now\(\) - t0;/);
+        expect(body).toMatch(/window\.setTimeout\(scanLoop, scanLoopDelay\(spent\)\)/);
         expect(body).toMatch(/setCam\('on'\);\s+meter\.current\.start\(\);/);
         expect(body).toMatch(/<AimFrame frameRef=\{aimRef\}/);
     });
@@ -296,6 +357,11 @@ describe('MealScanner: the overlay is black, full screen and above the admin chr
         // The bars are opaque (they used to be transparent over the admin header) and clear the notch / home bar.
         expect(html).toContain('padding-top:max(env(safe-area-inset-top), 12px)');
         expect(html).toContain('padding-bottom:max(env(safe-area-inset-bottom), 12px)');
+        // …and, in landscape on a notched iPhone (viewport-fit=cover), the notch and the rounded corners.
+        expect(SAFE_LEFT).toBe('max(12px, env(safe-area-inset-left))');
+        expect(SAFE_RIGHT).toBe('max(12px, env(safe-area-inset-right))');
+        expect((html.match(/padding-left:max\(12px, env\(safe-area-inset-left\)\);padding-right:max\(12px, env\(safe-area-inset-right\)\)/g) || []).length).toBe(3);
+        expect(html).not.toMatch(/padding-left:12px/);
         expect((html.match(/background:rgba\(0,0,0,0.8\)/g) || []).length).toBeGreaterThanOrEqual(3);
         // The camera area takes the rest and swallows touch gestures (no page panning behind it).
         expect(html).toMatch(/data-camera-area=""[^>]*touch-action:none/);

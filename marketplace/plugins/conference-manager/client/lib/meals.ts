@@ -255,20 +255,42 @@ export function createReadRouter(ms = 3000) {
  * flight), `start()` when the camera turns on. `health()` reports the frames analysed in the last second
  * and STALLED when the loop has neither analysed nor deliberately skipped a frame for `stallMs` — the
  * camera delivers no image (iOS Low Power Mode, a frozen track) or the loop died.
+ *
+ * `busy()` marks a decode IN FLIGHT on a playable frame (the native BarcodeDetector is asynchronous, and
+ * its first detect() can take seconds on a low-end Android while the model loads): frames are arriving,
+ * so it is not "no image" — for up to `busyMs`, after which a detect that never settles counts as a dead
+ * loop. `idle()` ends a decode that produced nothing (it threw): the 2 s clock runs from the last real
+ * frame again, so a detector that fails on every frame is still reported.
  */
 export type ScanHealth = { state: 'scanning' | 'paused' | 'stalled'; fps: number };
-export function createScanMeter(stallMs = 2000) {
+
+/**
+ * The pause before the scanner's next frame, given how long the last decode held the main thread (ms):
+ * at least 80 ms, and never shorter than the decode itself — so the built-in reader (synchronous, ~100 ms
+ * on printed packaging on a phone) keeps the main thread free at least half of the time for taps and the
+ * sheets. A blank frame (~20 ms) keeps the full rate.
+ */
+export function scanLoopDelay(decodeMs: number): number {
+    const ms = Number(decodeMs);
+    return Number.isFinite(ms) && ms > 80 ? Math.min(Math.round(ms), 1000) : 80;
+}
+
+export function createScanMeter(stallMs = 2000, busyMs = 10_000) {
     let frames: number[] = [];
     let since = 0;
     let paused = false;
+    let busySince: number | null = null;
     const trim = (at: number) => { while (frames.length && at - frames[0] >= 1000) frames.shift(); };
     return {
-        start(at: number = Date.now()) { frames = []; since = at; paused = false; },
-        frame(at: number = Date.now()) { frames.push(at); trim(at); since = at; paused = false; },
-        pause(at: number = Date.now()) { since = at; paused = true; },
+        start(at: number = Date.now()) { frames = []; since = at; paused = false; busySince = null; },
+        busy(at: number = Date.now()) { busySince = at; paused = false; },
+        idle() { busySince = null; },
+        frame(at: number = Date.now()) { frames.push(at); trim(at); since = at; paused = false; busySince = null; },
+        pause(at: number = Date.now()) { since = at; paused = true; busySince = null; },
         health(at: number = Date.now()): ScanHealth {
             trim(at);
-            if (at - since > stallMs) return { state: 'stalled', fps: 0 };
+            const decoding = busySince !== null && at - busySince <= busyMs;
+            if (!decoding && at - since > stallMs) return { state: 'stalled', fps: 0 };
             if (paused) return { state: 'paused', fps: 0 };
             return { state: 'scanning', fps: frames.length };
         },

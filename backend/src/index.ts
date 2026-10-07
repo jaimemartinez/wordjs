@@ -728,7 +728,7 @@ app.use('/plugins', (req: any, _res: any, next: any) => {
 // segments are decoded ONCE, proved with safe-path.resolveWithin, and the RESOLVED absolute path is
 // what res.sendFile receives.
 // (resolveWithin is required above, with the /themes twin that uses the same containment proof.)
-const { isPluginServedRelPath } = require('./core/io-guard');
+const { isPluginServedRelPath, PLUGIN_PUBLIC_FILES } = require('./core/io-guard');
 // The /uploads denylist minus JS: a plugin asset .js is admin-installed, AST-scanned code that the
 // structured enqueue bridge (core/plugin-assets.ts) exists to emit as <script src>, and with nosniff
 // an octet-stream would simply refuse to load. Uploads are visitor-controlled bytes, so they keep the
@@ -748,7 +748,8 @@ app.use('/plugins', (req: Request, res: Response, next: NextFunction) => {
     if (segs.length < 2) return res.status(404).end();
     const folder = segs[0];
     if (!/^[a-zA-Z0-9_-]+$/.test(folder)) return res.status(404).end();
-    if (!isPluginServedRelPath(segs.slice(1).join('/'))) return res.status(404).end();
+    const rel = segs.slice(1).join('/');
+    if (!isPluginServedRelPath(rel)) return res.status(404).end();
     const abs = resolveWithin(PLUGINS_ROOT, ...segs);
     if (!abs) return res.status(404).end();
 
@@ -759,6 +760,13 @@ app.use('/plugins', (req: Request, res: Response, next: NextFunction) => {
         headers['Content-Disposition'] = 'attachment';
     }
     // Plugin assets can change in place on update → 1h + ETag revalidation (same policy as before).
+    // EXCEPT the fixed, host-known files (manifest.json, client/admin/admin.css, dist/component.bundle.css):
+    // their URLs carry no version, and the stylesheets are generated from the same UI sources as the
+    // bundles, which are already `no-cache`. An hour of a cached stylesheet next to a fresh bundle is a
+    // screen without its new classes after every plugin update — the failure the stylesheets exist to
+    // fix. So `no-cache` + the ETag: always revalidated, a cheap 304 when unchanged.
+    const fixedFile = PLUGIN_PUBLIC_FILES.indexOf(rel) !== -1;
+    if (fixedFile) headers['Cache-Control'] = 'no-cache';
     //
     // REGRESSION FIXED: this passed the ABSOLUTE path with no `root`. In that mode `send` splits the
     // WHOLE absolute path and `dotfiles: 'deny'` rejects the request if ANY component starts with a
@@ -768,7 +776,7 @@ app.use('/plugins', (req: Request, res: Response, next: NextFunction) => {
     // RELATIVE to the mount root. Giving `send` the root back restores that: dotfiles is judged on
     // the served subtree, which is the only place a dot segment could ever be attacker-influenced —
     // and `isPluginServedRelPath` already rejects every dot segment before we get here.
-    res.sendFile(path.relative(PLUGINS_ROOT, abs), { root: PLUGINS_ROOT, dotfiles: 'deny', maxAge: '1h', headers }, (err: any) => {
+    res.sendFile(path.relative(PLUGINS_ROOT, abs), { root: PLUGINS_ROOT, dotfiles: 'deny', maxAge: fixedFile ? 0 : '1h', cacheControl: !fixedFile, headers }, (err: any) => {
         if (!err) return;
         if (res.headersSent) { try { res.end(); } catch { /* client gone */ } return; }
         const missing = err.status === 403 || err.status === 404

@@ -85,8 +85,16 @@ export function canAutoFocus(): boolean {
  * smaller field on focus); date/time inputs may shrink (iOS gives them an intrinsic width that pushed
  * the create-conference dates out of the card); the big desktop paddings are compacted. From 640px the
  * card is centred with a margin.
+ *
+ * At every width, a card capped at `max-h-[92vh]` (the receipt at `max-h-[90vh]`) is capped by the
+ * DYNAMIC viewport instead: on iOS Safari and Chrome Android `vh` is the LARGE viewport (toolbar hidden),
+ * the admin document never scrolls so the toolbar never hides, and a 92vh card came out taller than the
+ * 100dvh overlay — its footer, Guardar included, started below the screen. On a desktop dvh == vh; a
+ * browser without dvh drops the declaration and keeps the class's vh.
  */
 export const OVERLAY_CSS = `
+[data-cm-overlay] .max-h-\\[92vh\\] { max-height: calc(92dvh - env(safe-area-inset-top, 0px)); }
+[data-cm-overlay] .max-h-\\[90vh\\] { max-height: 90dvh; }
 @media (min-width: 640px) {
   [data-cm-overlay-inner] { align-items: center !important; padding: 1rem !important; }
 }
