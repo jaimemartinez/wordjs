@@ -4,6 +4,17 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [Unreleased]
+
+### Changed
+
+- **`create-wordjs` is published to npm with trusted publishing, not a stored token.** npm restricted the
+  long-lived tokens that bypass two-factor authentication, and the release workflow's `NPM_TOKEN` stopped
+  being accepted (the 2.3.0 publish failed with E404). The `npm-publish` job in `release.yml` now
+  exchanges its GitHub OIDC token for a one-time publish credential (`id-token: write`, npm ≥ 11.5.1), so
+  no npm credential is stored in the repository and each version carries provenance. It needs a trusted
+  publisher configured once on npmjs.com for `jaimemartinez/wordjs`, workflow `release.yml`.
+
 ## [2.3.0] - 2026-10-07
 
 ### Security

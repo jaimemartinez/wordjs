@@ -348,46 +348,44 @@ jobs:
     # GitHub's default job timeout is SIX HOURS: a hung step would look like a slow one
     # forever. See the long note in ci.yml.
     timeout-minutes: 20
+    # TRUSTED PUBLISHING (OIDC), NO STORED TOKEN. npm restricted the long-lived tokens that bypass
+    # two-factor authentication, and the NPM_TOKEN secret this job used to read stopped being accepted
+    # (E404 on publish, v2.3.0). npm now exchanges this job's short-lived GitHub OIDC token for a
+    # one-time publish credential, which needs `id-token: write` here and a trusted publisher on
+    # npmjs.com: package create-wordjs → Settings → Trusted publishing → GitHub Actions, owner
+    # `jaimemartinez`, repository `wordjs`, workflow filename `release.yml`. Provenance is attached
+    # automatically. Nothing secret is stored in the repository.
     permissions:
       contents: read
-    env:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      id-token: write
     steps:
       - name: Checkout
-        if: env.NPM_TOKEN != ''
         uses: actions/checkout@v7
 
+      # No `registry-url`: that writes an .npmrc whose `_authToken` placeholder would compete with the
+      # OIDC exchange. npm's default registry is the public one.
       - name: Setup Node
-        if: env.NPM_TOKEN != ''
         uses: actions/setup-node@v7
         with:
           node-version: '22'
-          registry-url: 'https://registry.npmjs.org'
+
+      # Trusted publishing needs npm >= 11.5.1; Node 22 ships npm 10.
+      - name: npm with trusted publishing support
+        run: npm install -g npm@^11.5.1 && npm --version
 
       # Keep the published version in lockstep with the release tag (v1.2.3 -> 1.2.3), so every
       # tag publishes a fresh version and `npx create-wordjs` matches the ZIP it downloads.
       - name: Sync package version to the tag
-        if: env.NPM_TOKEN != ''
         working-directory: packages/create-wordjs
         run: npm pkg set version="${GITHUB_REF_NAME#v}"
 
+      # On a TAG, the install channel is part of the release: a failure here fails the release, because
+      # a green run means "vX.Y.Z is released", and it is not if `npx create-wordjs@latest` still fetches
+      # the previous version.
       - name: Publish to npm
-        if: env.NPM_TOKEN != ''
         working-directory: packages/create-wordjs
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      # On a TAG, the install channel is part of the release. Fail loudly: a green run here means
-      # "v2.1.0 is released", and it is not released if `npx create-wordjs@latest` still fetches 2.0.0.
-      - name: Missing NPM_TOKEN on a version tag (fail the release)
-        if: env.NPM_TOKEN == '' && startsWith(github.ref, 'refs/tags/')
         run: |
-          echo "::error::NPM_TOKEN is not configured, so create-wordjs was NOT published for ${GITHUB_REF_NAME}. The GitHub Release exists but the install channel is stale: 'npx create-wordjs@latest' still installs the PREVIOUS version. Add an npm automation token as the NPM_TOKEN repository secret and re-run this job."
-          exit 1
-
-      # On a manual run nothing is being released — the workflow is packaging for inspection — so a
-      # missing token is a note, not a failure.
-      - name: Skipped (NPM_TOKEN not configured, manual run)
-        if: env.NPM_TOKEN == '' && github.event_name == 'workflow_dispatch'
-        run: echo "::notice::NPM_TOKEN secret is not configured — skipping the create-wordjs npm publish. This is a manual run, so nothing is being released. Add an npm automation token as the NPM_TOKEN repo secret to enable publishing."
+          if ! npm publish --access public; then
+            echo "::error::create-wordjs was NOT published for ${GITHUB_REF_NAME}. The GitHub Release exists but 'npx create-wordjs@latest' still installs the PREVIOUS version. Check the trusted publisher on npmjs.com (create-wordjs → Settings → Trusted publishing: GitHub Actions, jaimemartinez/wordjs, workflow release.yml), then re-run this job."
+            exit 1
+          fi
