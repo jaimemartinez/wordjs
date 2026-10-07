@@ -362,6 +362,15 @@ including `REDIS_PASSWORD`.
 > value that was ever committed or shared, and set a strong `gatewaySecret`. The installer generates
 > fresh secrets, but if you cloned/seeded a config you must rotate them yourself.
 
+### Content visibility and editorial gates
+
+The REST content surface keeps four rules in one place (`backend/src/core/post-capabilities.ts`), so the routes cannot drift apart:
+
+- **Published family.** `publish`, `future` (approved and scheduled) and `private` all require `edit_published_<type>s` / `delete_published_<type>s` to edit or delete, on every write surface (`PUT /posts/:id`, meta, translations, revisions, collaboration, presence, `DELETE`). Moving a post into `private` requires the publish capability, and `status` is limited to `draft`, `pending`, `publish`, `future` and `private` on `POST`/`PUT /posts`.
+- **Comments inherit the entry.** Comments are listed, fetched or accepted only for entries the caller may read (published, unprotected, publicly readable non-internal type, unless the caller may read the entry in full); every refusal looks like a missing id. Comment search matches the commenter email only for moderators.
+- **Internal meta stays internal.** Callers who cannot manage an entry receive only unprefixed meta keys plus `_puck_data`, `_wjs_template` and `_thumbnail_id`; the editorial review thread and other `_` keys are withheld.
+- **Password-protected entries** (imported from WordPress) are served with `protected: true` and no body, excerpt or page-builder tree to callers who cannot manage them, are not matched by their searches, show a placeholder in feeds and are left out of the sitemap. There is no password form yet, so visitors cannot unlock them.
+
 ### XSS Protection (isomorphic)
 
 User-generated HTML is sanitized via a single `sanitizeHTML()` that works on **both** sides of the render (`frontend/src/lib/sanitize.ts`):

@@ -46,7 +46,20 @@ export default function PostContent({ post, settings, category, showComments }: 
     // was lifted out of the classic branch.
     const isFramedPost = post.type === 'post';
 
+    // PASSWORD-PROTECTED ENTRIES (WordPress "password protected" visibility, carried over by the WXR
+    // importer). The API withholds the body, excerpt and `_puck_data` of such an entry from anyone
+    // who cannot edit it and flags it `protected: true`; render WordPress's notice in place of the
+    // empty body instead of a blank page. Entering the password to unlock the entry is not
+    // implemented — the notice is the whole public rendering for now.
+    const isLocked = post.protected === true && !post.content && !versoData;
+    const protectedNotice = (
+        <div className="wjs-post-body wjs-post-protected max-w-3xl mx-auto px-4 py-8 text-center text-[var(--wjs-color-text-muted,#6b7280)]">
+            <p>This content is password protected.</p>
+        </div>
+    );
+
     const commentsAllowed =
+        !isLocked &&
         showComments &&
         post.type === 'post' &&
         settings?.comments_enabled !== "0" &&
@@ -60,7 +73,12 @@ export default function PostContent({ post, settings, category, showComments }: 
                 page's id and a form submission was stamped against the wrong page. See PageId.tsx. */}
             <PageId id={post.id} />
             {!isFramedPost ? (
-                versoData ? (
+                isLocked ? (
+                    <div className="w-full">
+                        <h1 className="text-4xl font-bold mt-8 mb-4 text-center">{post.title}</h1>
+                        {protectedNotice}
+                    </div>
+                ) : versoData ? (
                     <div className="wjs-post-body puck-content">
                         <ContentRenderer data={versoData} ixPresets={settings?.wjs_ix_presets} motion={settings?.wjs_motion} />
                     </div>
@@ -125,7 +143,7 @@ export default function PostContent({ post, settings, category, showComments }: 
                         framework-STYLED in ui.css (heading margins, image radii, table and field
                         rules), so putting it on Puck output would restyle every block. The Puck body
                         keeps `.puck-content`, which is what ui.css already treats as its twin. */}
-                    {versoData ? (
+                    {isLocked ? protectedNotice : versoData ? (
                         <div className="wjs-post-body puck-content">
                             <ContentRenderer data={versoData} ixPresets={settings?.wjs_ix_presets} motion={settings?.wjs_motion} />
                         </div>

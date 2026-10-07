@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { Post } from "@/lib/api";
 import { pageHref, postDateLabel, type Paginated } from "@/lib/public/archives";
+import { postCardExcerpt } from "@/lib/postExcerpt";
 
 /**
  * The listing every archive route renders — category, tag, author, date, custom taxonomy.
@@ -177,7 +178,7 @@ export default function ArchiveContent({
                                 </Link>
 
                                 <p className="wjs-post-card-excerpt text-[var(--wjs-color-text-muted,#4b5563)] mb-6 line-clamp-3 leading-relaxed">
-                                    {post.excerpt || (post.content || "").substring(0, 200).replace(/<[^>]*>?/gm, "") + "..."}
+                                    {postCardExcerpt(post)}
                                 </p>
 
                                 <Link

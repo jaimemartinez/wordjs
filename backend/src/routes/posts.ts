@@ -68,6 +68,8 @@ const {
 const {
     capsFor, capsForType, canEditPostRecord, canDeletePostRecord,
     canReadPostRecord, isRestExposedPostType,
+    canManagePostRecord, canReadPostContent, isPasswordProtected, publicPostMeta,
+    isInternalPostType,
 } = require('../core/post-capabilities');
 const { contentContractForType } = require('../core/content-contract');
 const { runContentMutation, recordContentEvent } = require('../core/content-outbox');
@@ -111,6 +113,19 @@ function isPublicStatus(status: any): boolean {
 }
 
 /**
+ * THE STATUSES A REQUEST MAY WRITE through POST/PUT /posts.
+ *
+ * Post.create/Post.update store whatever string arrives (the F1 contract's enum is the column's
+ * vocabulary, which also lists the lifecycle-internal 'trash', 'inherit' and 'auto-draft'), so the
+ * route used to be the only gate and it gated just two values: 'publish'/'future' were downgraded for
+ * a caller without the publish capability, and EVERYTHING ELSE went through. A contributor could
+ * therefore mark their own draft 'private' (a published state, out of every review queue) or move it
+ * to 'trash' through the EDIT gate instead of the delete one. The writable set is now explicit;
+ * 'trash' stays reachable through DELETE /posts/:id, which carries the delete capability family.
+ */
+const WRITABLE_POST_STATUSES: ReadonlySet<string> = new Set(['draft', 'pending', 'publish', 'future', 'private']);
+
+/**
  * THE DOWNGRADED EDIT GATE — type family + ownership, WITHOUT edit_published_<type>s.
  *
  * It exists for exactly ONE thing: the explicit allowlist of NON-CONTENT meta keys below. Everything
@@ -124,8 +139,8 @@ function isPublicStatus(status: any): boolean {
  * Anything reached through this function must be justified in NON_CONTENT_META_KEYS.
  */
 function canEditPostIgnoringPublished(user: any, p: any): boolean {
-    const caps = capsForType(p.type || p.postType || 'post') || capsFor('post');
-    return p.authorId === user.id ? user.can(caps.edit) : user.can(caps.editOthers);
+    // Same rule as the READ side's "may see the full record" (core/post-capabilities); one definition.
+    return canManagePostRecord(user, p);
 }
 
 /**
@@ -139,7 +154,9 @@ function canEditPostIgnoringPublished(user: any, p: any): boolean {
  *    ReviewComments.tsx is its only writer). Applying the published-post rule to it made a contributor
  *    unable to answer a reviewer on their own entry the moment an editor published it, which is
  *    precisely when the conversation matters. It renders nowhere on the public site, so a write to it
- *    cannot alter what the site serves.
+ *    cannot alter what the site serves — and it is not READABLE there either: serializeVisibleContent
+ *    and GET /posts/:id/meta hand it only to callers who manage the entry (it used to be served to
+ *    anyone who could read a published entry, editors' internal remarks included).
  *
  * A key belongs here only if writing it changes NOTHING a visitor can see. `_puck_data`,
  * `_wjs_template`, `_thumbnail_id` and the SEO keys are public output and must never be listed.
@@ -188,38 +205,9 @@ function rejectOverComplexMeta(res: Response, error: any): boolean {
     return true;
 }
 
-/**
- * Is this post type INTERNAL — registered, but marked `showInRest: false`?
- *
- * "Unregistered" and "internal" are NOT the same answer, and conflating them was a regression:
- * isRestExposedPostType() says false to both, so a post whose custom type an admin later removed
- * (DELETE /types/:name is one click) became unreachable through EVERY route in this file — 404 on
- * read, 404 on update, 404 on delete, 400 on the list — with no way left to read, migrate or delete
- * the orphaned content, not even for an administrator. The explicit `|| capsFor('post')` fallback
- * that routes/posts.ts and routes/revisions.ts keep for "a post whose registered type was since
- * removed" became dead code the day that happened.
- *
- * The security argument only ever concerned INTERNAL types: nav_menu_item and revision are registered
- * (core/post-types registers them at boot, before any request), carry no capability_type, and so fall
- * into the plain `post` family — which is how an editor rewrote `_menu_item_url`. Those stay refused.
- * An unknown type falls back to the `post` family exactly as it did before the remediation, which is
- * a capability the caller must still hold.
- */
-const ALWAYS_INTERNAL_POST_TYPES: Set<string> = new Set(['nav_menu_item', 'revision']);
-
-function isInternalPostType(type: unknown): boolean {
-    const name = String(type || 'post');
-    // FAIL CLOSED ON THE CORE INTERNALS, whatever the registry currently says. initPostTypes() is where
-    // `nav_menu_item` and `revision` get registered, and it is ASYNC (it awaits getOption for the custom
-    // types), so between "the server accepts requests" and "initPostTypes resolved" getPostType() answers
-    // null for both — a window in which asking the registry alone would let a menu item through. Those two
-    // names are also the ones core/post-types refuses to unregister, so hard-coding them here states a
-    // fact rather than duplicating a policy.
-    if (ALWAYS_INTERNAL_POST_TYPES.has(name)) return true;
-    const { getPostType } = require('../core/post-types');
-    const pt = getPostType(name);
-    return !!(pt && pt.showInRest === false);
-}
+// isInternalPostType — "registered, but marked showInRest: false", which is NOT the same answer as
+// "unregistered" — lives in core/post-capabilities so routes/comments.ts applies the SAME rule to
+// the entry a comment belongs to.
 
 /**
  * Is this loaded post INVISIBLE to the generic /posts routes?
@@ -484,12 +472,34 @@ async function visibleTranslationRefs(
     return decisions.filter((translation) => translation !== null);
 }
 
-/** Prevent private REST types from leaking sibling slugs through Post.toJSON().translations. */
+/**
+ * THE READ PROJECTION of one entry for one caller. Every /posts read and write response goes through
+ * here, so what a caller may see is decided once:
+ *
+ *  · translations — a private REST type must not leak sibling slugs through Post.toJSON().translations;
+ *  · meta — the full map only for a caller who manages the entry (its author, editors). Everyone else
+ *    gets publicPostMeta(): unprefixed keys plus the `_` keys the public site renders. The editorial
+ *    review thread (`_wjs_review_comments`) and internal/plugin `_` keys used to be public on every
+ *    published entry;
+ *  · password protection — `protected` is always present (WordPress REST's content.protected). For a
+ *    protected entry the body, the excerpt (which is derived from the body when empty) and the page-
+ *    builder tree are withheld from every caller who does not manage it. The title, date and author
+ *    stay, as they do in WordPress, so a theme can render "this content is password protected".
+ */
 async function serializeVisibleContent(post: any, user?: ContentRouteUser) {
     const json = await post.toJSON();
     const policy = capsForType(post.type || post.postType || 'post') || capsFor('post');
     if (!policy.publiclyReadable && Array.isArray(json.translations) && json.translations.length) {
         json.translations = await visibleTranslationRefs(json.translations, user);
+    }
+    json.protected = isPasswordProtected(post);
+    if (!canManagePostRecord(user, post)) {
+        json.meta = publicPostMeta(json.meta);
+        if (json.protected) {
+            json.content = '';
+            json.excerpt = '';
+            delete json.meta._puck_data;
+        }
     }
     return json;
 }
@@ -531,6 +541,13 @@ async function serializeVisibleContent(post: any, user?: ContentRouteUser) {
  *               type: string
  *         authorId:
  *           type: integer
+ *         protected:
+ *           type: boolean
+ *           description: The entry is password protected. For a caller who cannot edit it, content, excerpt and meta._puck_data are returned empty.
+ *         meta:
+ *           type: object
+ *           additionalProperties: true
+ *           description: The full meta map for a caller who can edit the entry; otherwise only unprefixed keys plus _puck_data, _wjs_template and _thumbnail_id.
  *
  * /posts:
  *   get:
@@ -735,6 +752,13 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
         effectiveStatus = 'publish';
     }
 
+    // A search must not match on the hidden body of a password-protected entry (see Post.buildWhere):
+    // only a caller who may edit others' entries of this type searches them all; anyone else matches
+    // their OWN protected entries at most.
+    const searchProtectedVisibleTo = search && !(req.user && req.user.can(listPolicy.editOthers))
+        ? (req.user ? req.user.id : -1)
+        : undefined;
+
     // Use findAllWithRelations to batch-load post meta (avoids N+1 in the list path).
     const posts = await Post.findAllWithRelations({
         // resolvedType, NOT the raw query value — see the guard above.
@@ -745,6 +769,7 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
         categories: categoriesFilter,
         tags: tagsFilter,
         search,
+        searchProtectedVisibleTo,
         limit,
         offset,
         orderBy: orderByMap[orderby] || 'post_date',
@@ -761,7 +786,8 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
         author: authorFilter,
         categories: categoriesFilter,
         tags: tagsFilter,
-        search
+        search,
+        searchProtectedVisibleTo
     });
     const totalPages = Math.ceil(total / limit);
 
@@ -1073,7 +1099,14 @@ router.post('/', authenticate, asyncHandler(async (req: AuthenticatedRequest<Rec
     // Check if user can publish THIS type; if not, downgrade to pending (needs review). 'future' IS
     // deferred publishing (the model stores a future-dated 'publish' as 'future' and auto-flips it
     // live), so it must clear the same bar — otherwise scheduling would be a side door around the gate.
+    if (status !== null && !WRITABLE_POST_STATUSES.has(status)) return invalidParamValue(res, 'status', 'Unknown or non-writable status.');
     const mayPublish = req.user.can(caps.publish);
+    // 'private' is a PUBLISHED state (restricted audience, never in a review queue), so it takes the
+    // publish capability too. It is refused rather than downgraded: "pending" is not what a caller
+    // asking for a private entry meant, and WordPress answers the same request with a 403.
+    if (status === 'private' && !mayPublish) {
+        return res.status(403).json({ code: 'rest_cannot_publish', message: 'You are not allowed to create private content of this type.', data: { status: 403 } });
+    }
     let postStatus = status;
     if ((status === 'publish' || status === 'future') && !mayPublish) {
         postStatus = 'pending';
@@ -1270,7 +1303,18 @@ router.put('/:id', authenticate, asyncHandler(async (req: AuthenticatedRequest<I
     }
 
     // Check if user can publish THIS type ('future' = deferred publish, same bar — see POST /).
+    // The writable set (see WRITABLE_POST_STATUSES). Re-sending the status the row already has is not a
+    // transition and stays accepted, so a client that echoes a trashed entry's status back is not
+    // broken by a rule about changing it.
+    const statusProvided = status !== undefined && status !== null;
+    if (statusProvided && status !== post.postStatus && !WRITABLE_POST_STATUSES.has(status)) {
+        return invalidParamValue(res, 'status', 'Unknown or non-writable status.');
+    }
     const mayPublish = req.user.can(pcaps.publish);
+    // Moving an entry INTO 'private' is publishing it to a restricted audience — same bar as POST /.
+    if (status === 'private' && post.postStatus !== 'private' && !mayPublish) {
+        return res.status(403).json({ code: 'rest_cannot_publish', message: 'You are not allowed to make this content private.', data: { status: 403 } });
+    }
     let postStatus = status;
     if ((status === 'publish' || status === 'future') && !mayPublish) {
         postStatus = post.postStatus === 'publish' ? 'publish' : 'pending';
@@ -1726,7 +1770,15 @@ router.get('/:id/meta', optionalAuth, asyncHandler(async (req: MaybeAuthenticate
         });
     }
 
-    res.json(await Post.getAllMeta(postId));
+    // The full map is for the people who work on the entry (its author, editors). Everyone else gets
+    // the PUBLIC projection — the same one GET /posts/:id carries, see serializeVisibleContent — so the
+    // editorial review thread and internal `_`-prefixed keys never reach an anonymous reader, and the
+    // page-builder tree of a password-protected entry is withheld with its body.
+    const allMeta = await Post.getAllMeta(postId);
+    if (canManagePostRecord(req.user, post)) return res.json(allMeta);
+    const visibleMeta = publicPostMeta(allMeta);
+    if (!canReadPostContent(req.user, post)) delete visibleMeta._puck_data;
+    res.json(visibleMeta);
 }));
 
 // ---------------------------------------------------------------------------
