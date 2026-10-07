@@ -57,6 +57,7 @@ const Post = require('../models/Post');
 const config = require('../config/app');
 const egress = require('./egress-guard');
 const { runContentMutation } = require('./content-outbox');
+const { fileTypeFromBuffer } = require('./file-type-detect');
 // isPlainSegment is the FORM gate a path segment must pass before it can become a path, and
 // resolveWithin is the containment proof at the sink — the two halves core/safe-path keeps together.
 const { isPlainSegment, resolveWithin } = require('./safe-path');
@@ -304,11 +305,10 @@ async function fetchAttachment(
 async function detectHeadMime(head: Buffer): Promise<string | null> {
     let timer: NodeJS.Timeout | undefined;
     try {
-        const fileType = require('file-type');
         const timeout = new Promise<null>((_resolve, reject) => {
             timer = setTimeout(() => reject(new Error('detect timeout')), 3000);
         });
-        const result: any = await Promise.race([fileType.fromBuffer(head), timeout]);
+        const result: any = await Promise.race([fileTypeFromBuffer(head), timeout]);
         return result && typeof result.mime === 'string' ? result.mime : null;
     } catch {
         return null;

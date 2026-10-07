@@ -125,6 +125,30 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   core fires a hook missing from the table. No first-party plugin subscribes to a gated hook, so no
   manifest changes were needed; a third-party plugin that relied on one must declare the new permission.
   Documented in `documentation/security.md` §5 and §8.1 and `documentation/plugins.md` §10.5.
+- **Backend: file-type 21.3.4 (GHSA-5v7r-6r5c-r473, moderate).** Releases before 21.3.1 can loop forever
+  on a malformed ASF header, which would hang the event loop from a media upload or a WordPress (WXR)
+  attachment import. The 2.3.0 notes said the fixed line requires Node 22; only file-type 22+ does, and
+  21.3.1–21.3.4 support Node 20, so the backend moves from 16.5.4 to 21.3.4 without changing the engines
+  floor (Node >= 20.9.0). file-type is ESM-only since 17 and the backend compiles to CommonJS, so the new
+  `core/file-type-detect.ts` loads its `file-type/core` entry with a real dynamic `import()` (a `require()`
+  of an ES module needs Node 20.19). The upload route and the WXR importer keep their existing bounds
+  (header-only buffer, ASF skipped, 3 s timeout) as defence in depth. Detection results for the upload
+  allowlist are unchanged except two: WAV is now reported as `audio/wav` (16.x said `audio/vnd.wave`, which
+  the allowlist refused, so WAV uploads now pass the content check), and a DOCX/XLSX/PPTX head is reported as
+  `application/zip` (allowed, and these types do not require a matching signature, so they are still
+  accepted). Dependabot keeps file-type on the 21.x line.
+- **Accepted, with no fixed release anywhere:**
+  - `node-forge` 1.4.0 (GHSA-86w9-cpqp-85rv, high) in the backend, gateway and setup. Every release is
+    affected and acme-client 5.4.0 (latest) depends on it. The flaw is in RSA PKCS#1 v1.5 signature
+    verification, and WordJS never verifies a signature with node-forge: the cluster CSR check uses Node's
+    crypto, and the remaining uses (acme-client's key and CSR helpers, the gateway cluster CA, setup,
+    certManager, system-health) only generate keys, sign and parse PEM. It stays under its dated exception
+    in `scripts/audit-exceptions.json` (expires 2026-11-05).
+  - `braces` 3.0.3 (GHSA-vfj7-8cjw-p6xm, high) in the frontend, reached only through `eslint-config-next` →
+    `@next/eslint-plugin-next` → `fast-glob` → `micromatch`. It is a development dependency (lint), not
+    shipped or run by the server, and the glob patterns it expands come from the repository's own lint
+    configuration, not from input. The latest `@next/eslint-plugin-next` (16.4.0 and canary) still pins
+    `fast-glob` 3.3.1, so there is no upgrade or override that removes it.
 - **Plugin `dependencies` accept only plain npm registry version ranges.** The host installs a plugin's
   manifest `dependencies` with `npm install` in its own root at activation, and npm runs the `prepare`
   script of a `git+…`/`github:` or `file:` directory dependency even with `--ignore-scripts` — so a
