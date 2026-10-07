@@ -266,10 +266,10 @@ class User {
         // account's login in any letter case ("Boss" beside "boss") or another account's email, and a new
         // email may not equal an existing (legacy) login — see THE USERNAME RULE above for why the
         // namespaces have to stay apart. The rule's charset is ASCII, so the SQL LOWER() folds it fully.
-        if (await User.loginOrEmailTaken(username)) throw identityTaken('Username already exists', 'username_taken');
+        if (await User.identifierInUse(username)) throw identityTaken('Username already exists', 'username_taken');
 
         const existingEmail = await User.findByEmail(normalizedEmail);
-        if (existingEmail || await User.loginOrEmailTaken(normalizedEmail)) throw identityTaken('Email already exists', 'email_taken');
+        if (existingEmail || await User.identifierInUse(normalizedEmail)) throw identityTaken('Email already exists', 'email_taken');
 
         // Hash password
         const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
@@ -382,7 +382,7 @@ class User {
      * Is `value` (case-folded) already some account's login or email? `exceptId` skips one account, for
      * an update that keeps its own value.
      */
-    static async loginOrEmailTaken(value: string, exceptId?: number | string): Promise<boolean> {
+    static async identifierInUse(value: string, exceptId?: number | string): Promise<boolean> {
         const folded = String(value).toLowerCase();
         const row = await dbAsync.get(
             'SELECT id FROM users WHERE (LOWER(user_login) = ? OR LOWER(user_email) = ?) AND id <> ? LIMIT 1',
@@ -449,7 +449,7 @@ class User {
             const existing = await User.findByEmail(normalizedEmail);
             if (existing && String(existing.id) !== String(id)) throw new Error('Email already in use');
             // Nor may it equal ANOTHER account's (legacy) login — see THE USERNAME RULE.
-            if (await User.loginOrEmailTaken(normalizedEmail, id)) throw new Error('Email already in use');
+            if (await User.identifierInUse(normalizedEmail, id)) throw new Error('Email already in use');
             updates.push('user_email = ?'); values.push(normalizedEmail);
         }
         if (data.displayName) { updates.push('display_name = ?'); values.push(data.displayName); }
