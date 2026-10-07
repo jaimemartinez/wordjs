@@ -146,6 +146,11 @@ function checkManifest(slug, dir, manifest, core, { firstParty = false } = {}) {
     // Permissions: known vocabulary (asked of core, not of a copy of core's list) ...
     const permissions = Array.isArray(manifest.permissions) ? manifest.permissions : [];
     for (const p of core.validateManifestPermissions(manifest.permissions)) add(p);
+    // ... a plugin that ships browser code declares browser:script (the installer refuses it otherwise) ...
+    for (const p of core.validateBrowserCapability(dir, manifest)) add(p);
+    // ... and only plain registry version ranges as dependencies (no git/file/alias/URL specs: the
+    // installer refuses them, see core/plugins.ts dependencySpecProblem).
+    for (const p of core.validateManifestDependencies(manifest.dependencies)) add(p);
 
     // ... and a justification for every one of them. Either inline `reason` (the shape every existing
     // manifest uses) or an entry in `permissions_rationale` keyed by grant token.

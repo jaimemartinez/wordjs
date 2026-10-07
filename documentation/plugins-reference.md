@@ -316,7 +316,7 @@ Test Schema are bundled with core):
 | `analytics-tag` | Site-wide analytics tag (GA4, Plausible or Matomo) with optional cookie-consent gating | `settings` r/w, routes, admin menu, `assets:write` |
 | `auctions` | Auction listings with bidding, anti-snipe extension, live polling, winner reporting | `database` r/w, routes, admin menu, `email:admin` |
 | `bookings` | Appointment booking: services, weekly availability, race-safe slot reservations, email confirmations, admin agenda | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
-| `breadcrumbs` | Breadcrumbs Verso block with optional BreadcrumbList JSON-LD | — (frontend-only) |
+| `breadcrumbs` | Breadcrumbs Verso block with optional BreadcrumbList JSON-LD | `browser:script` only (frontend-only) |
 | `card-gallery` | Event/promo cards as an alternating-alignment ("zigzag") stack via the `CardGalleryVerso` block | `settings` r/w, `database` write, routes, admin menu |
 | `conference-manager` | Conference inscriptions/registration with per-location capacity and forms of payment, hotel & room auto-assignment plus per-location lodging, registration barcodes, payments, transport, accounting, meals, team roles, coordinator portal, reports + CSV/Excel export | `database` r/w, routes, admin menu, `users` read |
 | `contact-forms` | Form builder with a Verso embed block, submissions inbox, CSV export, email notification | `database` r/w, routes, admin menu, `email:admin` |
@@ -336,14 +336,19 @@ Test Schema are bundled with core):
 | `photo-carousel` | Image carousels for Hero sections / content sliders via the `PhotoCarouselVerso` block + `[carousel]` shortcode | `settings` r/w, `database` write, routes, admin menu |
 | `polls` | WP-Polls-style polls with a voting + animated-results Verso block | `database` r/w, routes, admin menu |
 | `popup-builder` | Site-wide popups with triggers (delay/scroll/exit intent), frequency capping, view/click stats | `database` r/w, routes, admin menu, `assets:write` |
-| `related-posts` | Automatic per-post related articles via the core public REST API (YARPP parity) | — (frontend-only) |
+| `related-posts` | Automatic per-post related articles via the core public REST API (YARPP parity) | `browser:script` only (frontend-only) |
 | `restaurant-menu` | Menu sections/dishes with photos, diet tags and EU-14 allergens; priced modifier groups; opening-hours gating; cart with WhatsApp hand-off, cash, or Stripe Checkout; QR table ordering, table reservations, a live kitchen board and sales reports | `database` r/w, `settings` r/w, routes, admin menu, `email:admin`, `notifications:send`, `network` |
 | `social-share` | Share buttons Verso block (Facebook, X, WhatsApp, LinkedIn, Telegram, Email, copy link) — the sharing itself is entirely client-side (share intents via `window.open`, copy via the Clipboard API) | admin menu only (its `init` just registers the sidebar item) |
-| `table-of-contents` | Automatic nested TOC from page H2/H3 with anchors, smooth scroll, active highlighting | — (frontend-only) |
+| `table-of-contents` | Automatic nested TOC from page H2/H3 with anchors, smooth scroll, active highlighting | `browser:script` only (frontend-only) |
 | `testimonials` | Database-backed testimonials with moderation and optional public submission form; carousel/grid Verso block | `database` r/w, `settings` r/w, routes, admin menu |
 | `vendor-marketplace` | Multi-vendor directory: vendor applications, admin approval, self-service listings, per-product inquiries | `database` r/w, routes, admin menu, `email:admin` |
 | `video-gallery` | YouTube video carousels via the `VideoGalleryVerso` block + `[vgallery]` shortcode | `settings` r/w, `database` write, routes, admin menu |
 | `youtube-videos` | Pulls a YouTube channel's videos (keyless RSS or Data API v3) into a filterable, count-limited Verso carousel block | `settings` r/w, `database` r/w, `network`, routes, admin menu |
+
+*Every catalog plugin also requests **`browser:script`** — each ships an admin page, a Verso block or
+both, i.e. compiled code that runs in the browser with the viewer's session; it is not repeated per row.
+The host serves those bundles only while the plugin is active and the capability is granted
+(`documentation/security.md` §1.3b).*
 
 *(“routes” = `express:register_route`; “admin menu” = `admin_menu:register`. Every capability is
 manifest-requested and admin-granted, default-deny, exactly like the bundled plugins. Both of these are

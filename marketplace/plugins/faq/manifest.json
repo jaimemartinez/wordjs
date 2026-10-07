@@ -1,7 +1,7 @@
 {
     "id": "faq",
     "name": "FAQ",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Database-managed FAQ with categories, publish toggles and drag-free reordering, rendered by the Verso block \"Faq\" as an accordion. Unlike the core static Accordion block, it emits Google FAQPage structured data (JSON-LD) so your questions qualify for rich results in search.",
     "author": "WordJS",
     "isolated": true,
@@ -50,6 +50,11 @@
         "order": 63
     },
     "permissions": [
+        {
+            "scope": "browser",
+            "access": "script",
+            "reason": "Run the plugin's own compiled interface in the browser: its admin page and its Verso block (in the editor and on public pages). Without it the host does not serve these bundles and that interface does not load."
+        },
         {
             "scope": "database",
             "access": "read",

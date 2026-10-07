@@ -238,7 +238,24 @@ describe('#3 — /plugins publishes an allowlist, not the plugin tree', () => {
     });
 
     it('serves the bundle routes from the same declaration, and 404s anything else', async () => {
-        const css = await request(app).get(`${API}/plugins/${PROBE}/bundle/css?type=admin`);
+        // The bundle routes serve a plugin's files only while it is ACTIVE and granted browser:script
+        // (routes/plugin-bundles.ts; covered in plugin-supply-chain.test.ts). This file boots no
+        // database, so state both facts for the probe in memory: the route reads isPluginActive through
+        // the module object at request time, and the grant through the in-memory mirror.
+        const corePlugins = require('../core/plugins');
+        const perms = require('../core/plugin-permissions');
+        const realIsActive = corePlugins.isPluginActive;
+        const inactive = await request(app).get(`${API}/plugins/${PROBE}/bundle/css?type=admin`);
+        assert.strictEqual(inactive.status, 404, 'an inactive, ungranted plugin\'s bundle is not served');
+        corePlugins.isPluginActive = async (slug: string) => slug === PROBE || realIsActive(slug);
+        perms._setGrantsInMemory(PROBE, ['browser:script']);
+        let css: any;
+        try {
+            css = await request(app).get(`${API}/plugins/${PROBE}/bundle/css?type=admin`);
+        } finally {
+            corePlugins.isPluginActive = realIsActive;
+            perms._setGrantsInMemory(PROBE, []);
+        }
         assert.strictEqual(css.status, 200, 'the real bundle must still be served');
         assert.strictEqual(css.text, '.a{}');
         // A type outside the declared set can never become a path segment.

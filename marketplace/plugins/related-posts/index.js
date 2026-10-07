@@ -18,7 +18,7 @@
 
 exports.metadata = {
     name: 'Related Posts',
-    version: '1.0.0',
+    version: '1.0.1',
     description: 'Automatic per-post related-article cards via the Verso block "RelatedPosts"',
     author: 'WordJS',
 };

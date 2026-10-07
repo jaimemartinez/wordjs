@@ -14,7 +14,7 @@
 
 exports.metadata = {
     name: 'Cookie Consent',
-    version: '1.0.0',
+    version: '1.0.1',
     description: 'GDPR cookie banner on every public page + anonymous consent stats',
     author: 'WordJS',
 };

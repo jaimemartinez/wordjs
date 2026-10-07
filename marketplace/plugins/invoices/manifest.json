@@ -1,7 +1,7 @@
 {
     "id": "invoices",
     "name": "Invoices",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Build and manage invoices (client, line items, tax, discount) with statuses draft/sent/paid/overdue/void, dashboard totals and CSV export. Each invoice gets a public token URL rendered by the Invoices Verso block as a print-friendly view, and can be emailed to the client.",
     "author": "WordJS",
     "isolated": true,
@@ -24,6 +24,11 @@
         "order": 74
     },
     "permissions": [
+        {
+            "scope": "browser",
+            "access": "script",
+            "reason": "Run the plugin's own compiled interface in the browser: its admin page and its Verso block (in the editor and on public pages). Without it the host does not serve these bundles and that interface does not load."
+        },
         {
             "scope": "database",
             "access": "read",

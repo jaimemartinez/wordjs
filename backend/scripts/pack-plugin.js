@@ -9,7 +9,8 @@
  *
  *   1. checks the manifest the installer will check (valid JSON, id == folder, a name, "isolated": true);
  *   2. compiles the frontend entries with build-plugin.js (skipped for a backend-only plugin);
- *   3. copies the plugin into a staging folder with the catalog's rules — never the top-level runtime
+ *   3. copies the plugin into a staging folder with the catalog's rules (core/plugin-package-files.ts,
+ *      shared with the admin Download route) — never the top-level runtime
  *      data/ (keys, attachments), never OS junk, .git or symlinks, never the working node_modules/;
  *   4. settles the npm dependencies on its own (see resolveDependencies below), so the ZIP either lets
  *      the host install them at activation or carries exactly the production ones;
@@ -45,7 +46,6 @@ const MAX_ENTRIES = 5000;
 const MAX_UNPACKED_BYTES = 200 * 1024 * 1024;
 
 const SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/; // the installer's slug rule (routes/plugins.ts)
-const SKIP_NAME_RE = /^(\.DS_Store|Thumbs\.db|desktop\.ini|__MACOSX|\.git|node_modules)$/i;
 // Backend files whose require()s say nothing about runtime: tests, compiled/front-end code, fixtures.
 const NOT_RUNTIME_DIR_RE = /(?:^|\/)(?:tests?|__tests__|dist|client|data|node_modules)\//;
 const TEST_FILE_RE = /\.(?:test|spec)\.[cm]?js$/;
@@ -72,19 +72,18 @@ function parseArgs(argv) {
     return opts;
 }
 
-/** Copy the plugin's own files (no node_modules, data/, junk or symlinks) into `dest`. */
-function stageFiles(src, dest, rel = '') {
-    for (const e of fs.readdirSync(path.join(src, rel), { withFileTypes: true })) {
-        const r = rel ? `${rel}/${e.name}` : e.name;
-        if (SKIP_NAME_RE.test(e.name)) continue;
-        if (r === 'data') continue; // a plugin's top-level data/ is runtime state (encryption keys, attachments)
-        if (e.isSymbolicLink()) continue; // never follow a link out of the plugin folder
-        if (e.isDirectory()) {
-            fs.mkdirSync(path.join(dest, r), { recursive: true });
-            stageFiles(src, dest, r);
-        } else if (e.isFile()) {
-            fs.copyFileSync(path.join(src, r), path.join(dest, r));
-        }
+/**
+ * Copy the plugin's own files (no node_modules, data/, .git, junk or symlinks) into `dest`. WHICH files
+ * is not decided here: core/plugin-package-files.ts holds the rule, shared with the admin Download route
+ * (GET /plugins/:slug/download), so the two ways of turning a plugin folder into a ZIP cannot drift apart
+ * again — the route used to archive data/ (mail-server's encryption key) while this skipped it.
+ */
+function stageFiles(src, dest) {
+    const { listPluginPackageFiles } = loadCore('plugin-package-files');
+    for (const rel of listPluginPackageFiles(src)) {
+        const to = path.join(dest, ...rel.split('/'));
+        fs.mkdirSync(path.dirname(to), { recursive: true });
+        fs.copyFileSync(path.join(src, ...rel.split('/')), to);
     }
 }
 
@@ -210,14 +209,37 @@ function resolveDependencies(stageDir, manifest, installer) {
     return { bundled: true };
 }
 
-/** The installer module (permission + code scan, dependency rules), compiled when present, else from source. */
-function loadInstaller() {
-    const compiled = path.resolve(__dirname, '../dist/core/plugins.js');
+/** A host core module, compiled when present, else from source through ts-node. */
+function loadCore(name) {
+    const compiled = path.resolve(__dirname, `../dist/core/${name}.js`);
     if (fs.existsSync(compiled)) return require(compiled);
     try { require('ts-node/register/transpile-only'); } catch {
         fail('cannot load the WordJS installer checks: run `npm install` (or `npm run build`) in backend/ first.');
     }
-    return require(path.resolve(__dirname, '../src/core/plugins.ts'));
+    return require(path.resolve(__dirname, `../src/core/${name}.ts`));
+}
+
+/** The installer module (permission + code scan, dependency rules). */
+function loadInstaller() {
+    return loadCore('plugins');
+}
+
+/**
+ * Refuse a plugin whose dependencies the INSTALLER would refuse: anything that is not a plain registry
+ * version range (core/plugins.ts validateManifestDependencies — the same function the installer calls).
+ * The host installs a manifest's `dependencies` with npm at activation, and npm builds a `git+…`,
+ * `github:` or `file:<dir>` dependency by running its `prepare` script even under --ignore-scripts; an
+ * `npm:` alias or a tarball URL installs unscanned code under another name.
+ *
+ * Checked twice: the manifest as written, here, before anything else runs; and the PACKED manifest after
+ * resolveDependencies, which is where package.json `dependencies` are folded in for a shared (non-bundled)
+ * plugin — i.e. every spec the server would ever be asked to install. A BUNDLED plugin's package.json
+ * dependencies never reach the server's npm: the packer installs them into the package on the author's
+ * machine and they ship as files, which the installer's scan then reads like the rest of the plugin.
+ */
+function checkDependencySpecs(manifest, installer, where) {
+    const problems = installer.validateManifestDependencies(manifest.dependencies);
+    if (problems.length) fail(`the installer would refuse this plugin's ${where} dependencies:\n   - ${problems.join('\n   - ')}`);
 }
 
 function pack(opts) {
@@ -236,6 +258,7 @@ function pack(opts) {
     if (!/^[0-9A-Za-z.+-]{1,32}$/.test(version)) fail(`manifest version "${version}" is not usable in a file name.`);
 
     const installer = loadInstaller();
+    checkDependencySpecs(manifest, installer, 'manifest.json');
 
     if (manifest.frontend) {
         console.log('🛠️  Compiling the frontend entries…');
@@ -261,6 +284,12 @@ function pack(opts) {
         console.log(`🔎 Checking ${slug} ${version} the way the installer does…`);
         try { installer.validatePluginPermissions(slug, stageDir, packed, { mode: 'grant' }); } catch (e) {
             fail(`the installer would refuse this plugin: ${e.message}`);
+        }
+        // The merged dependency set (package.json folded into the manifest above) and the browser:script
+        // declaration the installer requires of a plugin that ships browser code.
+        checkDependencySpecs(packed, installer, 'package.json/manifest.json');
+        for (const p of installer.validateBrowserCapability(stageDir, packed)) {
+            fail(`the installer would refuse this plugin: ${p}`);
         }
 
         const zip = new AdmZip();
