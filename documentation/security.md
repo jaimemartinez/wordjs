@@ -216,8 +216,11 @@ These are the valid scopes and access levels you can declare in `manifest.json`.
 | **`network`**       | (grant) | Outbound HTTP/sockets to **public destinations only**. **Blocked by default** (raw `net`/`http`/… and `fetch`/`WebSocket` are trapped); opened only when an admin **grants** the `network` capability (with an exfiltration warning). Even when granted, the egress guard (§1.2) blocks loopback/metadata/private/CGNAT/ULA targets and unix sockets, validated at connect time. |
 | **`email`**         | `admin` | Allows `wordjs.mail(...)` (send via the registered provider) and admin mail operations. Still sandboxed — raw SMTP requires the `network` grant. |
 |                     | `provider` | Allows registering the host-wide mail provider (`wordjs.provideMail`). |
-| **`notifications`** | `send` / `provider` | `send` allows dispatching alerts via `wordjs.notify`; the `notifications:provider` grant allows registering a notification transport. |
+| **`notifications`** | `send` / `provider` / `read` | `send` allows dispatching alerts via `wordjs.notify`; the `notifications:provider` grant allows registering a notification transport (it receives the full content of what it delivers); `read` allows subscribing to the `notification_sent` hook (every user's notifications, with tokens, codes and reset/verification text redacted). |
 | **`users`**         | `read`  | Allows the safe-projection user bridges (`wordjs.users.findByEmail/findByLogin/findById/search`). Never exposes `user_pass` or core tables. |
+| **`posts`**         | `read`  | Allows subscribing to the post hooks (`wp_insert_post`, `post_updated`, `deleted_post`), which carry every post **including drafts, private and scheduled content**. Post passwords are never delivered. |
+| **`comments`**      | `read`  | Allows subscribing to the comment hooks (`wp_insert_comment`, `deleted_comment`, and the anti-spam filter `comments:pre_insert`), including unapproved comments — **without** the commenter's email, IP address or user agent. |
+|                     | `pii`   | Additionally delivers the commenter's email, IP address and user agent with those hooks (what an anti-spam service needs). Explicit only — never implied by any other grant. |
 | **`express`**       | `register_route` | Register HTTP routes (mounted host-side under `/api/v1/plugin/<slug>`). |
 | **`admin_menu`**    | `register` | Add an item to the admin sidebar via `wordjs.adminMenu.add`. |
 | **`browser`**       | `script` | Serve and run the plugin's compiled frontend bundles (admin page, admin hooks, Verso blocks) in the browser. **Not sandboxed:** that code runs in the admin app's origin with the viewer's session — an administrator's on the admin screens — and is not AST-scanned. **Required** for any plugin that ships frontend entries or `dist/*.bundle.js` (install/activation refuse it otherwise); the bundles are served only while the plugin is active and this is granted (§1.3b). |
@@ -456,12 +459,43 @@ There is **one** plugin model: every plugin is sandboxed, and each capability is
 | Options | non-secret keys only; secret-named options are never exposed. |
 | Routes | always namespaced under `/api/v1/plugin/<slug>`. Absolute paths were removed. |
 | Route I/O | host auth cookie `wordjs_token` (+ csrf/session) stripped from the forwarded request; `Set-Cookie`/`Set-Cookie2`/`CSP`/`HSTS`/`Location`/`Content-Type`/`Refresh` stripped from the reply; plugin-set cookies namespaced + path-confined + lifetime-clamped (max 20 per reply). Verbatim header control was removed. |
-| Raw-HTML hooks | `wordjs_head`/`wordjs_footer` (SSR-injected, unescaped) **denied** for everyone (stored-XSS). |
+| Raw-HTML hooks | `wordjs_head`/`wordjs_footer`/`wp_head`/`wp_footer` (SSR-injected, unescaped) and `dynamic_sidebar` (served as `text/html`) **denied** for everyone (stored-XSS). |
+| Hook subscriptions | A subscription is a **read** of what the hook carries, so core hooks are classified in one table (`backend/src/core/hook-access.ts`, see §8.1): public hooks are open to every plugin; hooks carrying other parties' data need the matching data grant (`comments:read`, `posts:read`, `notifications:read`, `settings:read`) and their payload is minimized; raw-HTML and host-maintenance hooks are denied. Enforced host-side at registration **and** on every delivery. |
 | Outbound network | **blocked** unless the `network` capability is granted (admin opt-in, exfiltration warning). The denial is kernel-backed by seccomp/Landlock, AppContainer or Seatbelt; a grant changes only that egress rule. |
 | Mail / notifications | `wordjs.mail` / `wordjs.notify` via grants; registering a host-wide provider needs `email:provider` / `notifications:provider`. Still sandboxed. |
 | Shell / native | `child_process` and native addons (`dlopen`) are **blocked for all plugins** — removed, not gated. |
 | Browser code | the compiled frontend bundles are served only while the plugin is active and **`browser:script`** is granted; once granted they run **unsandboxed in the admin origin with the viewer's session** (§1.3b) — isolation in separate-origin iframes is planned. |
 | npm dependencies | manifest `dependencies` are installed by the host only as plain registry semver ranges; git/`file:`/alias/URL specs are refused (§1.3c). |
+
+### 8.1 Hook access policy (what a hook subscription can see)
+
+`wordjs.hooks.addAction/addFilter` installs a host shim that serializes the hook's arguments into the
+plugin's child process, so subscribing to a core hook is a read of everything that hook carries. Until
+this policy existed, registration was gated only by count caps and the raw-HTML denylist, and a plugin
+with **zero** grants could subscribe to `wp_insert_comment` (every commenter's email and IP),
+`notification_sent` (every notification, including reset codes) or `wp_insert_post` / `post_updated`
+(draft and private post bodies). `backend/src/core/hook-access.ts` now holds one table classifying
+**every** hook core fires:
+
+| Class | Hooks | Rule |
+| :-- | :-- | :-- |
+| Public | `init`, `activated_plugin`, `deactivated_plugin`, `switch_theme`, `registered_content_type_schema`, `registered_post_type`, `registered_taxonomy` | Any plugin. |
+| Comments | `wp_insert_comment`, `deleted_comment`, `comments:pre_insert` | `comments:read`. Email, IP and user agent removed unless `comments:pii` is also granted. |
+| Posts | `wp_insert_post`, `post_updated`, `deleted_post` | `posts:read`. The post password is never delivered. |
+| Notifications | `notification_sent` | `notifications:read`. Secret-named `data` keys and secret link parameters redacted; for reset / verification / OTP / magic-link types the message and link are withheld. Redacted at the source too (`core/notifications.ts`), like `updated_option` (audit F-02). |
+| Options | `updated_option` | `settings:read`. Secret-named values are redacted at the source; protected options (grants, roles, active plugins, site address, …) are redacted at the plugin boundary. |
+| Denied | `wordjs_head`, `wordjs_footer`, `wp_head`, `wp_footer`, `dynamic_sidebar` (raw HTML); `admin_menu_items` (host-only sync filter); core cron hooks (`publish_future_post`, `wordjs_scheduled_backup`, `wordjs_version_check`, `wordjs_db_maintenance`, `wordjs_cert_renewal`, `wordjs_collab_sweep`, `wordjs_audit_prune`, `wordjs_analytics_prune`) | No plugin, whatever its grants. |
+
+Any other name is the plugin's **own** hook (fired by its own `wordjs.hooks.doAction`, which reaches only
+its own callbacks, or its own cron events) and needs no grant — **except** an unclassified name in a core
+namespace (`wp_*`, `wordjs_*`, `core:*`, `comments:*`, `posts:*`, `users:*`, `options:*`,
+`notifications:*`, …), which is denied: default-deny for a core hook added before anyone classified it.
+`backend/src/tests/plugin-hook-privacy.test.ts` scans every `doAction` / `applyFilters` /
+`doActionSync` / `applyFiltersSync` and core cron call site in `backend/src` and fails when core fires a
+hook missing from the table. The check runs host-side in the isolate's `register` IPC handler (a refused
+subscription is dropped with a warning naming the missing permission), in the in-process bridge, and
+again on every delivery — so revoking a grant stops the flow immediately and the payload is always
+minimized for the receiving plugin's current grants.
 
 **Hot-reload semantics:** changing a plugin's grants **reloads its isolated child process** so the host-capability gates re-evaluate and a `network` change takes effect — no server restart needed. Unload/reload performs a full teardown.
 

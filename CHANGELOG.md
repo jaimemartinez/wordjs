@@ -103,6 +103,28 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   the same 201 as a new one (the owner is notified instead; the body no longer carries `user`); otherwise
   both duplicates get one generic `400 rest_user_exists`. A username's availability, and an email's when
   verification is off, remain observable — see `documentation/security.md`.
+- **A sandboxed plugin's hook subscriptions are now gated by the data they expose.** Subscribing to a
+  hook makes the host serialize the hook's arguments into the plugin's process, but the isolate
+  `register` handler (and the bridge's `hooks.addAction`/`addFilter`) checked only count caps and the
+  raw-HTML denylist. A plugin with **zero** grants could therefore subscribe to `wp_insert_comment` and
+  receive every commenter's email and IP address, to `notification_sent` and receive every user's
+  notifications including reset codes and tokens, and to `wp_insert_post` / `post_updated` and receive
+  draft, private and password-protected post bodies. Every hook core fires is now classified in one
+  table (`backend/src/core/hook-access.ts`): public hooks (`init`, `activated_plugin`, `switch_theme`,
+  `registered_*`) stay open; data hooks require the matching grant — new **`comments:read`**,
+  **`comments:pii`**, **`posts:read`** and **`notifications:read`** permissions, and `settings:read`
+  for `updated_option`; raw-HTML hooks (now including `dynamic_sidebar`, whose result is served as
+  `text/html`), the host-only `admin_menu_items` filter and core cron hooks are denied to every plugin;
+  unclassified names in a core namespace (`wp_*`, `wordjs_*`, `core:*`, `comments:*`, …) are refused,
+  while a plugin's own hook names keep working. The decision is made host-side at registration and
+  again on every delivery, so a revoked grant stops the flow at once. Payloads are minimized at the
+  boundary whatever the grants: commenter email, IP and user agent only with `comments:pii`; never a
+  post password; protected option values redacted; and `notification_sent` is redacted at the source
+  (secret-named `data` keys and link parameters, and the message and link of reset / verification /
+  OTP notifications), as `updated_option` already was (audit F-02). A new completeness test fails when
+  core fires a hook missing from the table. No first-party plugin subscribes to a gated hook, so no
+  manifest changes were needed; a third-party plugin that relied on one must declare the new permission.
+  Documented in `documentation/security.md` §5 and §8.1 and `documentation/plugins.md` §10.5.
 - **Plugin `dependencies` accept only plain npm registry version ranges.** The host installs a plugin's
   manifest `dependencies` with `npm install` in its own root at activation, and npm runs the `prepare`
   script of a `git+…`/`github:` or `file:` directory dependency even with `--ignore-scripts` — so a

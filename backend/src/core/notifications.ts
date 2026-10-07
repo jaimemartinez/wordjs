@@ -190,8 +190,12 @@ class NotificationService {
 
         await Promise.allSettled(promises);
 
-        // Execute Hooks (for other plugins to intercept)
-        hooks.doAction('notification_sent', notification);
+        // Execute Hooks (for other plugins to intercept). The hook payload is REDACTED at the source,
+        // like options.ts does for `updated_option` (audit F-02): it fans out to sandboxed plugins, and a
+        // notification may carry a reset / verification code, a token in `data`, or a signed link. The
+        // delivery transports above received the real notification; listeners get the redacted copy
+        // (and plugins additionally need the notifications:read grant — see core/hook-access).
+        hooks.doAction('notification_sent', require('./hook-access').redactNotificationForHook(notification));
 
         return notification;
     }
