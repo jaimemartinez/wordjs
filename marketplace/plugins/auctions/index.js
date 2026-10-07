@@ -24,7 +24,7 @@
 
 exports.metadata = {
     name: 'Auctions',
-    version: '1.0.0',
+    version: '1.0.1',
     description: 'Auction listings with public bidding, minimum increments, anti-snipe extension and winner reporting.',
     author: 'WordJS',
 };
@@ -45,9 +45,11 @@ exports.init = async function (wordjs) {
     // ---- limits & constants ----------------------------------------------------------------------
     const MAX_MONEY_CENTS = 1000000000000;      // 10^12 cents sanity cap (10 billion units)
     const BID_WINDOW_MS = 60 * 1000;            // rolling rate window
-    const BID_MAX_PER_AUCTION = 20;             // spec: 20 INSERTED bids/min per auction
+    const BID_MAX_PER_AUCTION = 60;             // INSERTED bids/min per auction (all clients)
+    const BID_MAX_PER_CLIENT_AUCTION = 10;      // INSERTED bids/min per client on one auction
     const BID_MAX_PER_EMAIL = 10;               // secondary cap: inserted bids/min per bidder email
-    const BID_MAX_GLOBAL = 120;                 // safety net across all auctions (counts attempts)
+    const BID_MAX_CLIENT_ATTEMPTS = 30;         // ALL attempts/min per client (only throttles that client)
+    const BID_MAX_GLOBAL = 300;                 // safety net across all auctions (INSERTED bids only)
     const MIN_FORM_ELAPSED_MS = 3000;           // anti-bot: form must be open at least this long
     const PUBLIC_LIST_DEFAULT = 12;
     const PUBLIC_LIST_MAX = 50;
@@ -248,9 +250,10 @@ exports.init = async function (wordjs) {
     }
 
     // ---- in-memory rate limiting (single sandbox child — a Map is sufficient; no req.ip exists) ----
-    const bidHits = new Map(); // key ('a:<id>' | 'e:<email>' | 'all') -> { count, first }
+    // key ('c:<clientKey>' attempts | 'ca:<id>:<clientKey>' | 'a:<id>' | 'e:<email>' | 'all') -> { count, first }
+    const bidHits = new Map();
 
-    /** Count a hit AND report whether the key exceeded its cap (global flood guard only). */
+    /** Count a hit AND report whether the key exceeded its cap (per-client attempt guard only). */
     function rateLimited(key, max) {
         const now = Date.now();
         const rec = bidHits.get(key);
@@ -281,6 +284,12 @@ exports.init = async function (wordjs) {
         const now = Date.now();
         for (const entry of bidHits) {
             if (now - entry[1].first >= BID_WINDOW_MS) bidHits.delete(entry[0]);
+        }
+        // Per-client keys make the map grow with distinct callers; bound it even when every
+        // entry is still fresh (Map iterates in insertion order, so the oldest go first).
+        if (bidHits.size > 20000) {
+            let excess = bidHits.size - 20000;
+            for (const k of bidHits.keys()) { bidHits.delete(k); if (--excess <= 0) break; }
         }
     }
 
@@ -377,15 +386,19 @@ exports.init = async function (wordjs) {
                 return res.status(400).json({ error: 'Subasta inválida.' });
             }
 
-            // --- rate caps: the global counter counts EVERY attempt (cheap flood guard), but the
-            //     per-auction/per-bidder caps only count bids that actually INSERT (recordHit after
-            //     the insert below). Otherwise the current top bidder could fire 20 cheap malformed
-            //     requests per minute, 429-lock every legitimate outbid and win at the current price. ---
+            // --- rate caps. The ONLY counter that sees every attempt is keyed on the caller's
+            //     clientKey (an HMAC of the IP forwarded by the host), so a flood of malformed
+            //     requests only throttles the client sending it. Every shared bucket (per auction,
+            //     per bidder email, site-wide) counts bids that actually INSERTED (recordHit after
+            //     the insert below) and is only CHECKED here — otherwise one client could fire cheap
+            //     invalid requests, 429-lock every legitimate outbid and win at its own price. ---
             pruneRate();
-            if (rateLimited('all', BID_MAX_GLOBAL)) {
+            const clientKey = String(req.clientKey || '').slice(0, 64);
+            if (clientKey && rateLimited('c:' + clientKey, BID_MAX_CLIENT_ATTEMPTS)) {
                 return res.status(429).json({ error: 'Demasiadas pujas en este momento. Espera un minuto e inténtalo de nuevo.' });
             }
-            if (atLimit('a:' + auctionId, BID_MAX_PER_AUCTION)) {
+            if (atLimit('all', BID_MAX_GLOBAL) || atLimit('a:' + auctionId, BID_MAX_PER_AUCTION)
+                || (clientKey && atLimit('ca:' + auctionId + ':' + clientKey, BID_MAX_PER_CLIENT_AUCTION))) {
                 return res.status(429).json({ error: 'Demasiadas pujas en este momento. Espera un minuto e inténtalo de nuevo.' });
             }
 
@@ -453,8 +466,10 @@ exports.init = async function (wordjs) {
                 return res.status(409).json({ error: 'La subasta ya finalizó.' });
             }
             // Count toward the per-auction/per-bidder caps ONLY now that a real bid inserted.
+            recordHit('all');
             recordHit('a:' + a.id);
             recordHit('e:' + email);
+            if (clientKey) recordHit('ca:' + a.id + ':' + clientKey);
             const newTop = await topBid(a.id);
             const isTop = !!(newTop && result && newTop.id === result.lastID);
             const newPriceCents = Math.max(startPrice, newTop ? Number(newTop.amount_cents) || 0 : 0);

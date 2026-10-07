@@ -31,6 +31,45 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   no npm credential is stored in the repository and each version carries provenance. It needs a trusted
   publisher configured once on npmjs.com for `jaimemartinez/wordjs`, workflow `release.yml`.
 
+### Security
+
+- **Marketplace plugins: abuse limits that one visitor could exhaust for everyone are now per client.**
+  Each fix has a regression test that boots the real plugin (`backend/src/tests/marketplace-plugin-abuse.test.ts`,
+  `mail-server-vacation.test.ts`, new cases in `mail-server-spf.test.ts`).
+  - **auctions 1.0.1** — the bid throttle counted every attempt, valid or not, in one site-wide 60 s window,
+    so about 121 malformed bids a minute blocked all bidding and the flooder won at its own price. Attempts
+    are now counted only per client (`req.clientKey`); the per-auction, per-client-per-auction, per-email
+    and site-wide caps count bids that actually inserted.
+  - **online-store 2.0.1** — unpaid orders reserved stock and consumed coupon uses forever, so one
+    anonymous checkout could empty the shop or burn a limited coupon. Orders still `new` + `pending`
+    past a reservation TTL (card: `cardPendingTtlMinutes`, default 60, and the Stripe Checkout Session gets
+    a matching `expires_at`; manual: `manualPendingTtlHours`, default 72, `0` disables) are cancelled by a
+    compare-and-set sweep that returns their stock and coupon use; card orders are re-verified with Stripe
+    first. Orders are capped per line (`maxLineQty`, default 99) and in total (`maxOrderQty`, default 100),
+    and the site-wide checkout cap (20/min) is replaced by per-client buckets (6/min, 30/h).
+  - **bookings 1.0.1** — public bookings were `confirmed` instantly under global limiters, so one client
+    could fill the calendar or lock everyone out of lookups. Bookings now start `pending`, hold the slot for
+    1 h and are confirmed through a link mailed to the customer (the token is no longer returned to the
+    requester; without a mail transport they degrade to confirmed as before). Active future bookings are
+    capped per email (3) and per client (5), and the booking/lookup limiters are per client. The owner is
+    notified only once a booking is confirmed.
+  - **invoices 1.0.1** — the failed-token throttle was global, so 60 wrong tokens in 10 min made every
+    customer's invoice link answer 429. It is now keyed per client.
+  - **vendor-marketplace 1.0.1** — a vendor's product update set `is_published = 1`, undoing an admin's
+    "hide". Hiding now sets an `admin_hidden` moderation flag the vendor portal cannot clear. Image and
+    logo URLs that are protocol-relative (`//evil.host/x.png`), contain a backslash or whitespace, or use
+    any scheme other than http(s) are refused.
+  - **newsletter 1.0.1** — when the confirmation mail could not be sent the subscriber was confirmed
+    without opt-in. It now stays `pending` and the admin dashboard shows the mail failure.
+  - **event-tickets 1.0.1** — free tickets were limited only per email, so rotating addresses claimed all
+    capacity. Free seats are capped per order (4) and per buyer per event (4, counted by email and by
+    client), and orders are rate-limited per client.
+  - **mail-server 2.2.4** — the vacation auto-responder replied to any claimed sender, which made a
+    vacationing mailbox a reflector for forged mail. Inbound mail now gets a reply only when SPF passed for
+    the envelope domain and that domain is the header From domain, replies are capped at 50 distinct
+    recipients per mailbox per 24 h, and a second transaction in the same SMTP session no longer inherits
+    the previous transaction's SPF verdict.
+
 ## [2.3.0] - 2026-10-07
 
 ### Security

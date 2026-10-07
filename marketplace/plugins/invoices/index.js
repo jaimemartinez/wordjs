@@ -16,7 +16,7 @@
 
 exports.metadata = {
     name: 'Invoices',
-    version: '1.0.0',
+    version: '1.0.1',
     description: 'Invoice builder with public print-friendly token URLs, statuses and dashboard totals.',
     author: 'WordJS',
 };
@@ -437,12 +437,15 @@ exports.init = async function (wordjs) {
 
     // =================================== PUBLIC ROUTE ===============================================
 
-    // Failed-lookup throttle: no req.ip exists in the sandbox, so this is a GLOBAL rolling window
-    // over WRONG tokens only (valid links are never throttled). It makes token brute-force
-    // pointless on top of the 62^32 space.
+    // Failed-lookup throttle, keyed PER CLIENT (req.clientKey — the host's HMAC of the caller IP)
+    // over WRONG tokens only. A site-wide window would let anyone 429 every customer's invoice
+    // link with 60 bad guesses; per client, the failures only ever lock out the client making
+    // them. On top of the 62^32 token space it makes brute force pointless.
     const FAIL_MAX = 60;
     const FAIL_WINDOW_MS = 10 * 60 * 1000;
-    let viewFails = { count: 0, first: 0 };
+    const FAIL_MAX_CLIENTS = 10000;
+    const viewFails = new Map(); // clientKey -> { count, first }
+    const failKey = (req) => String((req && req.clientKey) || 'anon').slice(0, 64);
 
     // Full invoice data + business identity for the Puck block. Safe: whoever holds the token is
     // the invoice's recipient (the link is only ever mailed to them / copied by the admin).
@@ -452,15 +455,23 @@ exports.init = async function (wordjs) {
             if (!/^[A-Za-z0-9]{32}$/.test(token)) return res.status(400).json({ error: 'Enlace inválido.' });
 
             const now = Date.now();
-            const inWindow = now - viewFails.first < FAIL_WINDOW_MS;
-            if (inWindow && viewFails.count >= FAIL_MAX) {
+            const key = failKey(req);
+            const rec = viewFails.get(key);
+            const inWindow = !!rec && now - rec.first < FAIL_WINDOW_MS;
+            if (inWindow && rec.count >= FAIL_MAX) {
                 return res.status(429).json({ error: 'Demasiados intentos. Intenta de nuevo más tarde.' });
             }
 
             const row = await db.get(`SELECT * FROM ${T.invoices} WHERE token = ?`, [token]);
             if (!row) {
-                if (inWindow) viewFails.count++;
-                else viewFails = { count: 1, first: now };
+                if (inWindow) rec.count++;
+                else {
+                    if (viewFails.size >= FAIL_MAX_CLIENTS) {
+                        for (const [k, v] of viewFails) if (now - v.first >= FAIL_WINDOW_MS) viewFails.delete(k);
+                        if (viewFails.size >= FAIL_MAX_CLIENTS) viewFails.delete(viewFails.keys().next().value);
+                    }
+                    viewFails.set(key, { count: 1, first: now });
+                }
                 return res.status(404).json({ error: 'Factura no encontrada.' });
             }
 

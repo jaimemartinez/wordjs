@@ -1,7 +1,7 @@
 {
     "id": "bookings",
     "name": "Bookings",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Appointment booking system: services with weekly availability, a public slot picker with race-safe reservations, email confirmations, and an admin agenda. WordPress parity: Amelia / Bookly (v1 scope).",
     "author": "WordJS",
     "isolated": true,

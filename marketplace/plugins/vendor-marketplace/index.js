@@ -11,7 +11,8 @@
  *
  * Sandbox notes:
  *  - All tables live under the plugin prefix (db.tablePrefix) so they pass the host's default-deny
- *    SQL scoping. Schema is created idempotently with the FULL column set (ALTER is blocked).
+ *    SQL scoping. Schema is created idempotently with the FULL column set; columns added after 1.0.0
+ *    are migrated with ALTER ... ADD COLUMN on the plugin's own tables.
  *  - Access codes come from the host CSPRNG (wordjs.crypto.randomInt), NOT Math.random; the per-vendor
  *    login throttle below (bounded attempts per rolling window) is defense-in-depth for the short code.
  *  - Money is stored as INTEGER CENTS (price_cents); clients render cents/100 with the configured
@@ -22,7 +23,7 @@
 
 exports.metadata = {
     name: 'Marketplace',
-    version: '1.0.0',
+    version: '1.0.1',
     description: 'Multi-vendor directory: vendor applications, code-protected vendor portal, product listings and buyer inquiries (lead generation).',
     author: 'WordJS',
 };
@@ -50,7 +51,7 @@ exports.init = async function (wordjs) {
     const VENDOR_STATUSES = ['pending', 'approved', 'suspended'];
     const INQUIRY_STATUSES = ['new', 'replied', 'closed'];
 
-    // ---- schema (idempotent; full column set from day 1 — ALTER is blocked in the sandbox) -------
+    // ---- schema (idempotent; full column set on CREATE, later columns via ALTER ADD COLUMN) -------
     async function initSchema() {
         await db.createTable(T.vendors, [
             'id INT_PK',
@@ -75,8 +76,17 @@ exports.init = async function (wordjs) {
             'category TEXT DEFAULT \'\'',
             'is_published INT DEFAULT 1',
             'created_at DATETIME DEFAULT CURRENT_TIMESTAMP',
+            'admin_hidden INT DEFAULT 0',
             `FOREIGN KEY (vendor_id) REFERENCES ${T.vendors}(id) ON DELETE CASCADE`,
         ]);
+        // 1.0.0 -> 1.0.1: admin_hidden (moderation flag the vendor cannot override). Probe, then
+        // ALTER ... ADD COLUMN on our own table (the host guard admits it; RENAME is what it denies).
+        let hasAdminHidden = true;
+        try { await db.get(`SELECT admin_hidden FROM ${T.products} LIMIT 1`); } catch (e) { hasAdminHidden = false; }
+        if (!hasAdminHidden) {
+            try { await db.run(`ALTER TABLE ${T.products} ADD COLUMN admin_hidden INTEGER DEFAULT 0`); }
+            catch (e) { console.error('[vendor-marketplace] could not add admin_hidden column:', e.message); }
+        }
         await db.createTable(T.inquiries, [
             'id INT_PK',
             'product_id INT',
@@ -124,8 +134,15 @@ exports.init = async function (wordjs) {
     // ---- shared validation helpers ---------------------------------------------------------------
     const cleanStr = (v, max) => String(v == null ? '' : v).trim().slice(0, max);
     const isEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(v || ''));
-    // Accept only http(s) or origin-relative URLs for images/logos; '' means "none".
-    const badUrl = (v) => v !== '' && !/^https?:\/\//i.test(v) && v.charAt(0) !== '/';
+    // Accept only absolute http(s) URLs or origin-relative PATHS for images/logos; '' means "none".
+    // A protocol-relative '//evil.host/x.png' (or the '/\\evil.host' spelling browsers normalise to
+    // it) starts with '/' but points off-site, so it is refused; so is any whitespace/control char.
+    const badUrl = (v) => {
+        if (v === '') return false;
+        if (/[\s\\\u0000-\u001f\u007f]/.test(v)) return true;
+        if (/^https?:\/\/[^/?#]+/i.test(v)) return false;
+        return !(v.charAt(0) === '/' && v.charAt(1) !== '/');
+    };
     const escapeHtml = (s) => String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -509,8 +526,12 @@ exports.init = async function (wordjs) {
                 const id = parseId(body.id);
                 if (!id) return res.status(400).json({ error: 'Producto inválido.' });
                 // Ownership is enforced IN the statement (id AND vendor_id) — no read-then-write gap.
+                // A product the admin hid (admin_hidden = 1) stays unpublished whatever the vendor
+                // sends: the vendor's flag can only ever narrow visibility, never undo moderation.
                 const result = await db.run(
-                    `UPDATE ${T.products} SET name = ?, description = ?, price_cents = ?, image_url = ?, category = ?, is_published = ? WHERE id = ? AND vendor_id = ?`,
+                    `UPDATE ${T.products} SET name = ?, description = ?, price_cents = ?, image_url = ?, category = ?,
+                        is_published = CASE WHEN admin_hidden = 1 THEN 0 ELSE ? END
+                     WHERE id = ? AND vendor_id = ?`,
                     [name, description, priceCents, imageUrl, category, isPublished, id, vendor.id]
                 );
                 if (!result || result.changes !== 1) return res.status(404).json({ error: 'Producto no encontrado.' });
@@ -742,7 +763,8 @@ exports.init = async function (wordjs) {
             const id = parseId(req.params.id);
             if (!id) return res.status(400).json({ error: 'Producto inválido.' });
             const flag = req.body && (req.body.is_published === 1 || req.body.is_published === true || req.body.is_published === '1') ? 1 : 0;
-            const result = await db.run(`UPDATE ${T.products} SET is_published = ? WHERE id = ?`, [flag, id]);
+            // Hiding sets the moderation flag the vendor portal cannot clear; publishing clears it.
+            const result = await db.run(`UPDATE ${T.products} SET is_published = ?, admin_hidden = ? WHERE id = ?`, [flag, flag ? 0 : 1, id]);
             if (!result || result.changes !== 1) return res.status(404).json({ error: 'Producto no encontrado.' });
             res.json({ success: true, is_published: flag });
         } catch (e) { res.status(500).json({ error: e.message }); }

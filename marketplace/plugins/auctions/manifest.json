@@ -1,7 +1,7 @@
 {
     "id": "auctions",
     "name": "Auctions",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Auction listings with starting price, minimum increment and end time; public bidding with validation, anti-snipe extension, live polling updates and winner reporting. WordPress parity: YITH Auctions / Ultimate Auction.",
     "author": "WordJS",
     "isolated": true,

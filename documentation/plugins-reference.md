@@ -330,7 +330,7 @@ Test Schema are bundled with core):
 | `invoices` | Invoices with statuses, dashboard totals, CSV export, public token URL + print view, email to client | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
 | `job-board` | Job listings with anti-spam public application form, applications inbox, filterable Verso block | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
 | `mail-server` | Full SMTP server: inbound listener + direct-MX outbound delivery, DKIM signing, host-wide mail sender + email notification transport | `settings` r/w, `database` r/w, `email:admin`+provider, `notifications`, `filesystem` r/w, `users` read, `network`, routes, admin menu |
-| `newsletter` | Subscriptions (double opt-in when mail is configured), subscriber CSV, HTML campaigns with unsubscribe links | `database` r/w, routes, admin menu, `email:admin` |
+| `newsletter` | Subscriptions (double opt-in; subscribers stay pending until they confirm), subscriber CSV, HTML campaigns with unsubscribe links | `database` r/w, routes, admin menu, `email:admin` |
 | `notification-bar` | Slim site-wide announcement bar with CTA, dismissal versioning, schedule window | `settings` r/w, routes, admin menu, `assets:write` |
 | `online-store` | Product catalog (variants, galleries, categories) + cart + checkout with server-side price validation, coupons, shipping zones and taxes, orders admin with refunds and transactional emails, sales reports + CSV, optional Stripe Checkout | `database` r/w, `settings` r/w, routes, admin menu, `email:admin`, `network` |
 | `photo-carousel` | Image carousels for Hero sections / content sliders via the `PhotoCarouselVerso` block + `[carousel]` shortcode | `settings` r/w, `database` write, routes, admin menu |

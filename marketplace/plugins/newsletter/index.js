@@ -3,9 +3,9 @@
  *
  * WordPress parity: Mailchimp for WP / The Newsletter Plugin.
  * Visitors subscribe through the Puck "Newsletter" block; the plugin tries double opt-in
- * (confirmation email with a tokenized link back to the subscribing page). When mail is not
- * available (no provider configured / no email:admin grant) it degrades to single opt-in:
- * the subscriber is confirmed immediately and the visitor is told so.
+ * (confirmation email with a tokenized link back to the site's confirm route). A subscriber is
+ * confirmed ONLY by following that link: when mail is not available the row stays pending and
+ * the failure is surfaced on the admin dashboard (there is no single opt-in fallback).
  *
  * Admins manage subscribers (filter/search/delete/CSV export) and compose HTML campaigns that
  * are sent sequentially to every CONFIRMED subscriber with a per-subscriber unsubscribe footer.
@@ -22,7 +22,7 @@
 
 exports.metadata = {
     name: 'Newsletter',
-    version: '1.0.0',
+    version: '1.0.1',
     description: 'Newsletter subscriptions (double opt-in) + HTML campaigns with unsubscribe links',
     author: 'WordJS',
 };
@@ -146,6 +146,9 @@ exports.init = async function (wordjs) {
         return { html, text };
     }
 
+    // Most recent failure to send a double opt-in mail (process-local; shown on the admin dashboard).
+    let lastConfirmMailError = null;
+
     // ── PUBLIC routes (consumed by the Puck block; no auth) ──────────────────────────────────────
 
     // Subscribe (upsert by email) + double opt-in attempt with single opt-in fallback.
@@ -186,23 +189,20 @@ exports.init = async function (wordjs) {
             // Double opt-in. SECURITY (audit LOW): the confirm link MUST point to our backend confirm
             // route on the SITE's own origin. Building it from the client-supplied page_url let an
             // attacker relay a DKIM-signed mail whose "Confirmar" button pointed at their phishing site.
-            let needsConfirm = false;
+            // The subscriber is NEVER confirmed without the link being followed: when the mail cannot be
+            // sent the row stays 'pending' (a later subscribe attempt retries with a fresh token) and
+            // the failure is logged and surfaced on the admin dashboard. Auto-confirming here let
+            // anyone add arbitrary addresses to the confirmed list whenever mail was misconfigured.
             try {
                 const siteBase = String((await wordjs.site.url()) || '').replace(/\/+$/, '');
                 if (!siteBase) throw new Error('no site url');
                 const confirmUrl = `${siteBase}/api/v1/plugin/newsletter/public/confirm?token=${token}`;
                 const msg = buildConfirmEmail(name, confirmUrl);
                 await mail({ to: email, subject: 'Confirma tu suscripción al boletín', html: msg.html, text: msg.text });
-                needsConfirm = true;
             } catch (e) {
-                // No provider / no grant / no site url / transient failure -> single opt-in fallback below.
-                needsConfirm = false;
-            }
-            if (!needsConfirm) {
-                await db.run(
-                    'UPDATE ' + T.subscribers + " SET status = 'confirmed', confirmed_at = datetime('now') WHERE email = ?",
-                    [email]
-                );
+                const reason = String((e && e.message) || e || 'unknown error').slice(0, 300);
+                lastConfirmMailError = { at: new Date().toISOString(), message: reason };
+                console.warn('[newsletter] confirmation email not sent; subscriber left pending:', reason);
             }
             // Uniform response — IDENTICAL shape to the already-confirmed branch (no membership-revealing
             // field like `already`/`needsConfirm`), so the reply can't be used to enumerate subscribers.
@@ -284,6 +284,7 @@ exports.init = async function (wordjs) {
                     pending: (stats && stats.pending) || 0,
                     unsubscribed: (stats && stats.unsubscribed) || 0,
                 },
+                confirmMailError: lastConfirmMailError,
             });
         } catch (e) {
             res.status(500).json({ error: e.message });

@@ -23,7 +23,7 @@
 
 exports.metadata = {
     name: 'Event Tickets',
-    version: '1.0.0',
+    version: '1.0.1',
     description: 'Ticket types with capacity caps, unique ticket codes by email, attendee list and check-in.',
     author: 'WordJS',
 };
@@ -35,7 +35,13 @@ const MAX_TICKETS_PER_ORDER = 20;
 const MIN_FORM_ELAPSED_MS = 2500; // anti-bot: a human takes longer than this to fill the form
 const ORDER_WINDOW_MS = 10 * 60 * 1000;
 const ORDER_MAX_PER_EMAIL = 5;  // orders per email per window
-const ORDER_MAX_GLOBAL = 60;    // orders overall per window (no req.ip in the sandbox)
+const ORDER_MAX_PER_CLIENT = 5; // orders per client (host clientKey = HMAC of the IP) per window
+const ORDER_MAX_GLOBAL = 60;    // orders overall per window (counts created orders only)
+// Free tickets cost nothing to claim, so the per-email window alone let one visitor rotate
+// addresses and take the whole capacity. Free seats are capped per order AND per buyer per event,
+// where "buyer" is both the email and the client.
+const MAX_FREE_TICKETS_PER_ORDER = 4;
+const MAX_FREE_SEATS_PER_BUYER = 4;
 
 const TOKEN_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789';
 // Readable code alphabet: no O/0/I/1 confusables — these get read out loud at the door.
@@ -55,7 +61,7 @@ exports.init = async function (wordjs) {
         tickets: `${P}tickets`,
     };
 
-    // ── schema (idempotent; full column set from day 1 — no ALTER in the sandbox) ────────────────
+    // ── schema (idempotent; full column set on CREATE, later columns via ALTER ADD COLUMN) ────────
     async function initSchema() {
         await db.createTable(T.events, [
             'id INT_PK',
@@ -86,7 +92,16 @@ exports.init = async function (wordjs) {
             'total_cents INT',
             "payment_status TEXT DEFAULT 'pending'",
             'created_at TEXT',
+            'client_key TEXT',
         ]);
+        // 1.0.0 -> 1.0.1: client_key on orders (per-client free-seat cap). Probe, then ALTER ADD
+        // COLUMN on our own table (VARCHAR so a literal DEFAULT is valid on MySQL too).
+        let hasClientKey = true;
+        try { await db.get(`SELECT client_key FROM ${T.orders} LIMIT 1`); } catch (e) { hasClientKey = false; }
+        if (!hasClientKey) {
+            try { await db.run(`ALTER TABLE ${T.orders} ADD COLUMN client_key VARCHAR(64) DEFAULT ''`); }
+            catch (e) { console.error('[event-tickets] could not add client_key column:', e.message); }
+        }
         await db.createTable(T.tickets, [
             'id INT_PK',
             'order_id INT NOT NULL',
@@ -239,19 +254,25 @@ exports.init = async function (wordjs) {
     const orderByEmail = new Map(); // email -> { count, first }
     let orderGlobal = { count: 0, first: 0 };
 
-    function orderRateLimited(email) {
+    function orderRateLimited(email, clientKey) {
         const now = Date.now();
         if (now - orderGlobal.first >= ORDER_WINDOW_MS) orderGlobal = { count: 0, first: now };
         if (orderGlobal.count >= ORDER_MAX_GLOBAL) return true;
         const rec = orderByEmail.get(email);
-        return !!(rec && now - rec.first < ORDER_WINDOW_MS && rec.count >= ORDER_MAX_PER_EMAIL);
+        if (rec && now - rec.first < ORDER_WINDOW_MS && rec.count >= ORDER_MAX_PER_EMAIL) return true;
+        const crec = clientKey ? orderByEmail.get('c:' + clientKey) : null;
+        return !!(crec && now - crec.first < ORDER_WINDOW_MS && crec.count >= ORDER_MAX_PER_CLIENT);
     }
-    function noteOrder(email) {
+    function noteOrder(email, clientKey) {
         const now = Date.now();
         orderGlobal.count++;
-        const rec = orderByEmail.get(email);
-        if (!rec || now - rec.first >= ORDER_WINDOW_MS) orderByEmail.set(email, { count: 1, first: now });
-        else rec.count++;
+        // Email and client buckets share one bounded map: an email key always contains '@' and a
+        // 'c:<clientKey>' key (hex) never does, so the two can never collide.
+        for (const k of clientKey ? [email, 'c:' + clientKey] : [email]) {
+            const r = orderByEmail.get(k);
+            if (!r || now - r.first >= ORDER_WINDOW_MS) orderByEmail.set(k, { count: 1, first: now });
+            else r.count++;
+        }
         // Bound the map so a code-diverse attack can't grow memory forever.
         if (orderByEmail.size > 1000) {
             for (const [k, v] of orderByEmail) {
@@ -335,7 +356,8 @@ exports.init = async function (wordjs) {
             if (!buyerName) return res.status(400).json({ error: 'El nombre es obligatorio.' });
             if (!EMAIL_RE.test(buyerEmail)) return res.status(400).json({ error: 'El correo no es válido.' });
 
-            if (orderRateLimited(buyerEmail)) {
+            const clientKey = String(req.clientKey || '').slice(0, 64);
+            if (orderRateLimited(buyerEmail, clientKey)) {
                 return res.status(429).json({ error: 'Demasiados pedidos en poco tiempo. Espera unos minutos e inténtalo de nuevo.' });
             }
 
@@ -377,6 +399,29 @@ exports.init = async function (wordjs) {
                 items.push({ ticket_type_id: t.id, name: t.name, price_cents: Number(t.price_cents) || 0, qty: w.qty });
             }
 
+            // Free tickets: per-order cap, then per-buyer cap for this event counted from the DB
+            // (email AND client, so rotating addresses from one client does not reset it).
+            const wouldBeFree = items.every((it) => it.price_cents === 0);
+            if (wouldBeFree) {
+                if (totalSeats > MAX_FREE_TICKETS_PER_ORDER) {
+                    return res.status(400).json({ error: `Máximo ${MAX_FREE_TICKETS_PER_ORDER} entradas gratuitas por pedido.` });
+                }
+                const freeRows = await db.all(
+                    `SELECT buyer_email, client_key, items FROM ${T.orders}
+                     WHERE event_id = ? AND total_cents = 0 AND payment_status = 'paid' AND (buyer_email = ? OR client_key = ?)`,
+                    [eventId, buyerEmail, clientKey || '\u0000']
+                );
+                let byEmail = 0, byClient = 0;
+                for (const o of freeRows) {
+                    const seats = parseItems(o.items).reduce((n, it) => n + (Number(it && it.qty) || 0), 0);
+                    if (o.buyer_email === buyerEmail) byEmail += seats;
+                    if (clientKey && o.client_key === clientKey) byClient += seats;
+                }
+                if (byEmail + totalSeats > MAX_FREE_SEATS_PER_BUYER || byClient + totalSeats > MAX_FREE_SEATS_PER_BUYER) {
+                    return res.status(429).json({ error: `Máximo ${MAX_FREE_SEATS_PER_BUYER} entradas gratuitas por persona para este evento.` });
+                }
+            }
+
             // Free up seats held by long-unpaid pending orders before claiming (bounds inventory DoS).
             try { await releaseStalePending(eventId); } catch (e) { /* best effort */ }
 
@@ -409,9 +454,9 @@ exports.init = async function (wordjs) {
             let orderId;
             try {
                 const result = await db.run(
-                    `INSERT INTO ${T.orders} (token, event_id, buyer_name, buyer_email, items, total_cents, payment_status, created_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-                    [token, eventId, buyerName, buyerEmail, JSON.stringify(items), totalCents, isFree ? 'paid' : 'pending', nowIso()]
+                    `INSERT INTO ${T.orders} (token, event_id, buyer_name, buyer_email, items, total_cents, payment_status, created_at, client_key)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [token, eventId, buyerName, buyerEmail, JSON.stringify(items), totalCents, isFree ? 'paid' : 'pending', nowIso(), clientKey]
                 );
                 orderId = result.lastID;
             } catch (e) {
@@ -419,7 +464,7 @@ exports.init = async function (wordjs) {
                 return res.status(500).json({ error: 'No se pudo crear el pedido, inténtalo de nuevo.' });
             }
 
-            noteOrder(buyerEmail);
+            noteOrder(buyerEmail, clientKey);
 
             // Notify the site owner (best effort).
             if (cfg.notifyEmail && EMAIL_RE.test(cfg.notifyEmail)) {
