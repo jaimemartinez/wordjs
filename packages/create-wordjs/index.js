@@ -66,9 +66,6 @@ Options:
   --token <join-token>  (join) A single-use token minted on the gateway (cluster token <role>).
   --ca-hash <sha256>    (join) REQUIRED. The cluster CA fingerprint the gateway prints; the gateway's
                         TLS certificate must chain to it before the token is sent (MITM guard).
-  --insecure-skip-ca-verify
-                        (join) Enroll WITHOUT --ca-hash (trust on first use). Anyone on the network
-                        path can then steal the token, the cluster secret and a signed cert. Avoid.
   --advertise <ip/dns>  (join) This node's routable address the gateway will proxy to.
   --enroll-port <port>  (join) Gateway token-enrollment port (default 3101).
   -h, --help            Show this help.
@@ -105,7 +102,7 @@ function parseArgs(argv) {
     const opts = {
         mode: 'create', dir: null, zip: null, version: null, http: false, start: true, yes: false, force: false, install: true,
         role: null, gateway: null, token: null, caHash: null, advertise: null, enrollPort: null, host: null,
-        sha256: null, insecureSkipCaVerify: false,
+        sha256: null,
     };
     // A leading subcommand selects the mode (default is the monolith create flow).
     if (['upgrade', 'gateway', 'join'].includes(argv[0])) { opts.mode = argv[0]; argv = argv.slice(1); }
@@ -115,8 +112,11 @@ function parseArgs(argv) {
         if (a === '-h' || a === '--help') { console.log(HELP); process.exit(0); }
         else if (a === '--zip') { opts.zip = argv[++i] || fail('--zip needs a value (path or URL to a wordjs-*.zip).'); }
         else if (a === '--sha256') {
-            const v = argv[++i] || fail('--sha256 needs a value (the 64-character hex SHA-256 of the ZIP).');
-            opts.sha256 = normalizeSha256(v) || fail(`--sha256 must be a 64-character hex SHA-256, got "${v}".`);
+            const v = argv[++i];
+            if (!v) fail('--sha256 needs a value (the 64-character hex SHA-256 of the ZIP).');
+            const hex = normalizeSha256(v);
+            if (!hex) fail(`--sha256 must be a 64-character hex SHA-256, got "${v}".`);
+            opts.sha256 = hex;
         }
         else if (a === '--version') { opts.version = argv[++i] || fail('--version needs a value (a release tag, e.g. v2.1.0).'); }
         else if (a === '--http') opts.http = true;
@@ -128,7 +128,6 @@ function parseArgs(argv) {
         else if (a === '--gateway') opts.gateway = argv[++i] || fail('--gateway needs the gateway host/ip.');
         else if (a === '--token') opts.token = argv[++i] || fail('--token needs the join token.');
         else if (a === '--ca-hash') opts.caHash = argv[++i] || fail('--ca-hash needs the CA fingerprint.');
-        else if (a === '--insecure-skip-ca-verify') opts.insecureSkipCaVerify = true;
         else if (a === '--advertise') opts.advertise = argv[++i] || fail('--advertise needs this node\'s ip/dns.');
         else if (a === '--enroll-port') opts.enrollPort = argv[++i] || fail('--enroll-port needs a port.');
         else if (a === '--host') opts.host = argv[++i] || fail('--host needs the gateway ip/dns.');
@@ -204,11 +203,14 @@ function normalizeSha256(value) {
  */
 function parseChecksumFile(text, expectedName) {
     for (const raw of String(text || '').split(/\r?\n/)) {
-        const m = raw.trim().match(/^([0-9a-fA-F]{64})(?:\s+\*?(.+))?$/);
-        if (!m) continue;
-        const name = m[2] ? m[2].trim() : '';
+        // Split instead of one regex with `\s+…(.+)`: linear on any input (CodeQL js/polynomial-redos).
+        const line = raw.trim();
+        const sep = line.search(/\s/);
+        const digest = sep === -1 ? line : line.slice(0, sep);
+        if (!/^[0-9a-fA-F]{64}$/.test(digest)) continue;
+        const name = sep === -1 ? '' : line.slice(sep).trim().replace(/^\*/, '');
         if (name && expectedName && path.basename(name).toLowerCase() !== String(expectedName).toLowerCase()) continue;
-        return m[1].toLowerCase();
+        return digest.toLowerCase();
     }
     return null;
 }
@@ -811,16 +813,11 @@ async function join(opts) {
     if (!opts.token) fail('--token <join-token> is required for join.', `Mint one on the gateway: node scripts/cluster.js token ${opts.role}`);
     // The CA pin is what stops an on-path attacker from receiving the token, the cluster secret and a
     // CA-signed cert during enrollment, so it is required. Checked HERE, before the download + install.
-    if (opts.caHash) {
-        if (!normalizeSha256(opts.caHash)) fail(`--ca-hash must be the 64-character hex CA fingerprint, got "${opts.caHash}".`);
-    } else if (opts.insecureSkipCaVerify) {
-        console.warn('  ⚠️  --insecure-skip-ca-verify: enrolling WITHOUT verifying the gateway (trust on first use).');
-        console.warn('     Anyone on the network path can impersonate the gateway and steal the token, the cluster');
-        console.warn('     secret and a CA-signed certificate. Use --ca-hash <fp> from the gateway instead.');
-    } else {
+    if (!opts.caHash) {
         fail('--ca-hash <sha256> is required for join.',
-            'Use the fingerprint the gateway printed (node scripts/cluster.js info on the gateway). Enrolling without it is\n  trust-on-first-use; only on a network you fully trust, pass --insecure-skip-ca-verify to accept that.');
+            'Use the fingerprint the gateway printed (node scripts/cluster.js info on the gateway). Enrolling without it\n  would be trust-on-first-use, which is not supported.');
     }
+    if (!normalizeSha256(opts.caHash)) fail(`--ca-hash must be the 64-character hex CA fingerprint, got "${opts.caHash}".`);
 
     const targetDir = path.resolve(process.cwd(), opts.dir);
     console.log(`\n🚀 create-wordjs · join ${opts.role} (separate mode)\n`);
@@ -829,8 +826,7 @@ async function join(opts) {
     const advertise = opts.advertise || firstLanIp();
     const args = ['--role', opts.role, '--gateway', opts.gateway, '--enroll-port', String(opts.enrollPort || 3101),
         '--token', opts.token, '--advertise', advertise];
-    if (opts.caHash) args.push('--ca-hash', opts.caHash);
-    else if (opts.insecureSkipCaVerify) args.push('--insecure-skip-ca-verify');
+    args.push('--ca-hash', opts.caHash);
     if (opts.start) args.push('--start');
 
     console.log(`\n🎟️  Enrolling ${opts.role} with gateway ${opts.gateway} (advertise ${advertise})…\n`);

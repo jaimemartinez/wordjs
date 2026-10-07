@@ -88,9 +88,7 @@ without starting; `[dir]` after the subcommand to pick the target directory.
 > `CN=gateway-internal` identity). A wrong fingerprint, or anything intercepting the connection, stops
 > the join **before** the token is sent. Without the pin an on-path attacker could answer the enroll
 > call and receive the token, the cluster's gateway secret and a CA-signed certificate — so `join`
-> (and `scripts/node-join.js`) refuse to run without it. The explicit opt-out,
-> `--insecure-skip-ca-verify`, restores the old trust-on-first-use behaviour with a warning; use it
-> only on a network you fully trust.
+> (and `scripts/node-join.js`) refuse to run without it. There is no trust-on-first-use opt-out.
 >
 > This needs a gateway from a release that serves the CA in its enroll-listener chain. A gateway from
 > an older release makes a pinned join fail with *"the gateway did not present a cluster CA matching

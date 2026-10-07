@@ -9,8 +9,8 @@
  *
  * --ca-hash (the cluster CA fingerprint `cluster.js token`/`info` prints on the gateway) is REQUIRED:
  * the gateway's TLS certificate must chain to that exact CA before the token is sent. Enrolling without
- * it is trust-on-first-use — an on-path attacker would receive the token, the cluster's gateway secret
- * and a CA-signed cert — and needs the explicit opt-out `--insecure-skip-ca-verify`.
+ * it would be trust-on-first-use — an on-path attacker would receive the token, the cluster's gateway
+ * secret and a CA-signed cert — so there is deliberately no way to enroll without it.
  *
  * It performs the ONE tokened call to the gateway's /enroll endpoint: generates a keypair + CSR with
  * openssl, sends {role, token, advertiseHost, csr}, and receives a signed CN=<role> mTLS cert + the
@@ -97,21 +97,18 @@ function fetchPinnedCa(host, port, caHash, { timeoutMs = 15000 } = {}) {
  * exactly that CA (full OpenSSL verification, rejectUnauthorized) and carry CN=gateway-internal — so
  * the token and the secrets in the response can only reach the real gateway. The host name is not
  * matched against the cert's SANs: operators dial the gateway by whatever address routes, and the
- * pinned CA + gateway-only CN already identify it. Without `ca` (--insecure-skip-ca-verify) the call is
- * trust-on-first-use.
+ * pinned CA + gateway-only CN already identify it. There is no unverified variant.
  */
-function post(host, port, pathname, body, { ca = null, insecure = false } = {}) {
-    if (!ca && !insecure) return Promise.reject(new Error('refusing to enroll without a pinned cluster CA'));
+function post(host, port, pathname, body, { ca = null } = {}) {
+    if (!ca) return Promise.reject(new Error('refusing to enroll without a pinned cluster CA'));
     return new Promise((resolve, reject) => {
         const payload = Buffer.from(JSON.stringify(body));
-        const tlsOpts = ca
-            ? {
-                ca, rejectUnauthorized: true,
-                checkServerIdentity: (_host, cert) => (cert && cert.subject && cert.subject.CN === GATEWAY_CN
-                    ? undefined
-                    : new Error(`enroll server certificate is not the gateway's (CN=${cert && cert.subject ? cert.subject.CN : '?'}, expected ${GATEWAY_CN})`)),
-            }
-            : { rejectUnauthorized: false };
+        const tlsOpts = {
+            ca, rejectUnauthorized: true,
+            checkServerIdentity: (_host, cert) => (cert && cert.subject && cert.subject.CN === GATEWAY_CN
+                ? undefined
+                : new Error(`enroll server certificate is not the gateway's (CN=${cert && cert.subject ? cert.subject.CN : '?'}, expected ${GATEWAY_CN})`)),
+        };
         const req = https.request({
             host, port, path: pathname, method: 'POST', agent: false, ...tlsOpts,
             headers: { 'Content-Type': 'application/json', 'Content-Length': payload.length }
@@ -140,22 +137,16 @@ async function main() {
     const role = args.role;
     if (!['backend', 'frontend'].includes(role)) { console.error('✖ --role must be backend or frontend'); process.exit(1); }
     if (!args.gateway || !args.token) { console.error('✖ --gateway and --token are required'); process.exit(1); }
-    const insecure = args['insecure-skip-ca-verify'] === true;
     const caHash = args['ca-hash'] === undefined ? null : normalizeCaHash(args['ca-hash']);
     if (args['ca-hash'] !== undefined && !caHash) {
         console.error(`✖ --ca-hash must be the 64-character hex CA fingerprint (got "${args['ca-hash'] === true ? '' : args['ca-hash']}")`);
         process.exit(1);
     }
-    if (!caHash && !insecure) {
+    if (!caHash) {
         console.error('✖ --ca-hash <sha256> is required: the cluster CA fingerprint printed on the gateway by');
         console.error('  `node scripts/cluster.js token <role>` (or `node scripts/cluster.js info`).');
         console.error('  Without it the gateway cannot be authenticated and an on-path attacker would receive the token,');
-        console.error('  the cluster secret and a signed cert. Only on a network you fully trust, pass');
-        console.error('  --insecure-skip-ca-verify to enroll trust-on-first-use instead.');
-        process.exit(1);
-    }
-    if (caHash && insecure) {
-        console.error('✖ --ca-hash and --insecure-skip-ca-verify contradict each other — drop the opt-out.');
+        console.error('  the cluster secret and a signed cert.');
         process.exit(1);
     }
 
@@ -183,21 +174,14 @@ async function main() {
 
     // 2) Authenticate the gateway BEFORE the token leaves this machine: fetch the CA from its TLS chain,
     //    keep it only if it hashes to --ca-hash, then make the tokened call verified against it.
-    let pinnedCa = null;
-    if (caHash) {
-        console.log(`🔒 Verifying gateway ${gateway}:${enrollPort} against the pinned cluster CA...`);
-        pinnedCa = await fetchPinnedCa(gateway, enrollPort, caHash);
-        console.log('   ✓ gateway presents the pinned cluster CA');
-    } else {
-        console.warn('⚠️  --insecure-skip-ca-verify: enrolling WITHOUT authenticating the gateway (trust on first use).');
-        console.warn('   Anyone on the network path can impersonate it and receive the token, the cluster secret and a');
-        console.warn('   signed cert. Re-run with --ca-hash <fingerprint from the gateway> unless this network is trusted.');
-    }
+    console.log(`🔒 Verifying gateway ${gateway}:${enrollPort} against the pinned cluster CA...`);
+    const pinnedCa = await fetchPinnedCa(gateway, enrollPort, caHash);
+    console.log('   ✓ gateway presents the pinned cluster CA');
 
     // 3) The single tokened call: enroll.
     console.log(`🎟️  Enrolling with gateway ${gateway}:${enrollPort} (role=${role}, advertise=${advertise})...`);
     const resp = await post(gateway, enrollPort, '/enroll', { role, token: args.token, advertiseHost: advertise, csr: csrPem },
-        { ca: pinnedCa, insecure });
+        { ca: pinnedCa });
     const { cert, ca, config: boot } = resp;
     if (!cert || !ca) { console.error('✖ enroll response missing cert/ca'); process.exit(1); }
 

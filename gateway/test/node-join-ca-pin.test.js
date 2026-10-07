@@ -111,13 +111,12 @@ test("a node's own CA-signed identity (CN=backend) cannot pose as the gateway", 
     } finally { await mitm.close(); }
 });
 
-test('post() refuses to send anything without a pinned CA unless insecure is explicit', async () => {
+test('post() refuses to send anything without a pinned CA (there is no unverified mode)', async () => {
     const gw = await serve(gwIdentity.keyPem, chain(gwIdentity.certPem, real.caCertPem));
     try {
         await assert.rejects(post('127.0.0.1', gw.port, '/enroll', BODY), /without a pinned cluster CA/);
+        await assert.rejects(post('127.0.0.1', gw.port, '/enroll', BODY, { insecure: true }), /without a pinned cluster CA/);
         assert.strictEqual(gw.seen.length, 0);
-        assert.deepStrictEqual(await post('127.0.0.1', gw.port, '/enroll', BODY, { insecure: true }), { ok: true });
-        assert.strictEqual(gw.seen.length, 1);
     } finally { await gw.close(); }
 });
 
@@ -132,18 +131,17 @@ test('normalizeCaHash accepts the printed fingerprint (and the colon form) only'
 const cli = (...extra) => spawnSync(process.execPath, [NODE_JOIN, '--role', 'backend', '--gateway', '127.0.0.1', '--token', 't', ...extra],
     { encoding: 'utf8', timeout: 30000 });
 
-test('the CLI refuses to enroll without --ca-hash, naming the opt-out', () => {
-    const r = cli();
+test('the CLI refuses to enroll without --ca-hash, even with the removed opt-out flag', () => {
+    let r = cli();
     assert.strictEqual(r.status, 1);
     assert.match(r.stderr, /--ca-hash <sha256> is required/);
-    assert.match(r.stderr, /--insecure-skip-ca-verify/);
+    r = cli('--insecure-skip-ca-verify');
+    assert.strictEqual(r.status, 1);
+    assert.match(r.stderr, /--ca-hash <sha256> is required/);
 });
 
-test('the CLI rejects a malformed --ca-hash and a contradictory opt-out', () => {
-    let r = cli('--ca-hash', 'abc');
+test('the CLI rejects a malformed --ca-hash', () => {
+    const r = cli('--ca-hash', 'abc');
     assert.strictEqual(r.status, 1);
     assert.match(r.stderr, /--ca-hash must be the 64-character hex CA fingerprint/);
-    r = cli('--ca-hash', realHash, '--insecure-skip-ca-verify');
-    assert.strictEqual(r.status, 1);
-    assert.match(r.stderr, /contradict each other/);
 });

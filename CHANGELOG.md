@@ -26,8 +26,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   `CN=gateway-internal` server-identity check. Previously the request ran with TLS verification off and
   the fingerprint, when given at all, was compared only after the gateway's response (token, cluster
   secret and signed cert) had already been received — so an on-path attacker relaying the call was not
-  stopped even with `--ca-hash`. The old behaviour is available only through the explicit
-  `--insecure-skip-ca-verify` opt-out, which prints a warning. **Upgrade the gateway before joining new
+  stopped even with `--ca-hash`. There is no opt-out: enrolling without a pinned CA is no longer
+  possible. **Upgrade the gateway before joining new
   nodes:** a gateway from an earlier release sends no CA in its chain, so a pinned join against it fails
   closed. `create-wordjs gateway` now fails instead of printing join commands with a placeholder
   fingerprint.

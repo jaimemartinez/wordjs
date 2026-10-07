@@ -128,7 +128,6 @@ test('join refuses to run without --ca-hash (before downloading anything)', () =
     const r = run(['join', 'backend', 'node-a', '--gateway', '127.0.0.1', '--token', 'wjc.backend.x']);
     assert.strictEqual(r.status, 1);
     assert.match(r.stderr, /--ca-hash <sha256> is required for join/);
-    assert.match(r.stderr, /--insecure-skip-ca-verify/);
     assert.ok(!fs.existsSync(path.join(scratch, 'node-a')), 'join must stop before scaffolding');
 });
 
@@ -138,11 +137,8 @@ test('join rejects a malformed --ca-hash', () => {
     assert.match(r.stderr, /--ca-hash must be the 64-character hex CA fingerprint/);
 });
 
-test('join --insecure-skip-ca-verify is accepted, with a loud warning', () => {
-    // Pointed at a local file that does not exist, so it stops right after the CA decision.
-    const r = run(['join', 'backend', 'node-c', '--gateway', '127.0.0.1', '--token', 't',
-        '--insecure-skip-ca-verify', '--zip', path.join(scratch, 'missing.zip')]);
+test('the removed --insecure-skip-ca-verify flag is an unknown option', () => {
+    const r = run(['join', 'backend', 'node-c', '--gateway', '127.0.0.1', '--token', 't', '--insecure-skip-ca-verify']);
     assert.strictEqual(r.status, 1);
-    assert.match(r.stderr, /--insecure-skip-ca-verify: enrolling WITHOUT verifying the gateway/);
-    assert.match(r.stderr, /ZIP not found/);
+    assert.ok(!fs.existsSync(path.join(scratch, 'node-c')), 'join must stop before scaffolding');
 });

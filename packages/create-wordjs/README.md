@@ -66,7 +66,6 @@ Separate-mode options:
 | `--gateway <ip/dns>` | (`join`) The gateway's address. |
 | `--token <join-token>` | (`join`) A single-use token minted on the gateway. |
 | `--ca-hash <sha256>` | (`join`) **Required.** The cluster-CA fingerprint the gateway printed. The gateway's TLS certificate must chain to exactly that CA before the join token is sent (MITM guard). |
-| `--insecure-skip-ca-verify` | (`join`) Enroll **without** `--ca-hash` (trust on first use). Anyone on the network path can then impersonate the gateway and receive the token, the cluster secret and a CA-signed certificate. Only for a network you fully trust. |
 | `--advertise <ip/dns>` | (`join`) This node's routable address the gateway will proxy to. |
 | `--enroll-port <port>` | (`join`) Gateway token-enrollment port (default `3101`). |
 
@@ -104,8 +103,8 @@ npx create-wordjs@latest join backend  --gateway 10.0.0.1 --token <t> --ca-hash 
 npx create-wordjs@latest join frontend --gateway 10.0.0.1 --token <t> --ca-hash <fp> --advertise 10.0.0.3
 ```
 
-`--ca-hash` is required: `join` refuses to enroll without it (the `--insecure-skip-ca-verify` opt-out
-exists, but it makes enrollment trust-on-first-use). Each `join` downloads the release, enrolls against the gateway (the token authorizes exactly one
+`--ca-hash` is required: `join` refuses to enroll without it, and there is no trust-on-first-use
+opt-out. Each `join` downloads the release, enrolls against the gateway (the token authorizes exactly one
 certificate signing; it is burned afterwards, and the ones `gateway` printed also expire after 120
 minutes — mint more on the gateway with `node scripts/cluster.js token <backend|frontend>`, which
 defaults to a 60-minute TTL and takes `--ttl <minutes>`), then starts the service, which registers
