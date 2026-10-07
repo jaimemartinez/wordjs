@@ -262,8 +262,17 @@ export interface WordJS {
 
     /**
      * Actions & filters. Your callback runs in THIS child process; the host installs an RPC
-     * shim. Raw-HTML hooks (`wordjs_head` / `wordjs_footer`) are denied to every plugin.
-     * No permission required to register; `doAction` can only fire your OWN hooks.
+     * shim. Subscribing is a READ of what the hook carries, so core hooks follow the host's hook
+     * access policy (core/hook-access): public hooks (`init`, `activated_plugin`, `switch_theme`,
+     * `registered_*`) need no permission; data hooks need the matching grant — `comments:read`
+     * (`wp_insert_comment`, `deleted_comment`, `comments:pre_insert`; commenter email/IP/agent only
+     * with `comments:pii`), `posts:read` (`wp_insert_post`, `post_updated`, `deleted_post`),
+     * `notifications:read` (`notification_sent`, secrets redacted), `settings:read`
+     * (`updated_option`, secret/protected values redacted). Raw-HTML hooks (`wordjs_head` /
+     * `wordjs_footer` / `wp_head` / `wp_footer` / `dynamic_sidebar`), host maintenance hooks and
+     * unclassified names in a core namespace (`wp_*`, `wordjs_*`, `core:*`, `comments:*`, …) are
+     * denied; a refused subscription is dropped with a host-side warning. Your own hook names need
+     * no permission; `doAction` can only fire your OWN hooks.
      */
     hooks: {
         addAction(hook: string, cb: (...args: any[]) => any, priority?: number): void;

@@ -740,14 +740,27 @@ function createPluginApi(slug: string) {
             },
         },
 
+        // Subscribing to a hook is a READ of what it carries, so it goes through the same hook-access
+        // policy as the isolate's `register` IPC handler (core/hook-access): data hooks need the matching
+        // grant, raw-HTML / host-only hooks are refused, and every delivery is minimized for this plugin.
         hooks: {
             addAction(hook: string, cb: (...a: any[]) => any, priority?: number) {
+                const hookAccess = require('./hook-access');
+                hookAccess.assertHookSubscribable(slug, hook);
                 const { addAction } = require('./hooks');
-                return addAction(hook, cb, priority);
+                return addAction(hook, (...args: any[]) => {
+                    const safe = hookAccess.argsForPlugin(slug, hook, args);
+                    return safe ? cb(...safe) : undefined;
+                }, priority);
             },
             addFilter(hook: string, cb: (...a: any[]) => any, priority?: number) {
+                const hookAccess = require('./hook-access');
+                hookAccess.assertHookSubscribable(slug, hook);
                 const { addFilter } = require('./hooks');
-                return addFilter(hook, cb, priority);
+                return addFilter(hook, (...args: any[]) => {
+                    const safe = hookAccess.argsForPlugin(slug, hook, args);
+                    return safe ? cb(...safe) : args[0];
+                }, priority);
             },
             doAction(hook: string, ...args: any[]) {
                 const hooksMod = require('./hooks');

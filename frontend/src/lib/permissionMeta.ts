@@ -69,6 +69,24 @@ export const PERMISSION_META: Record<string, PermissionMeta> = {
         risk: 'med',
         icon: 'fa-users',
     },
+    'posts:read': {
+        label: 'Read all posts',
+        description: 'Receive every post and page as it is created, updated or deleted — including drafts, private and scheduled content (never post passwords).',
+        risk: 'med',
+        icon: 'fa-file-alt',
+    },
+    'comments:read': {
+        label: 'Read comments',
+        description: 'Receive every comment as it is submitted or deleted, including unapproved ones, and veto comments before they are saved (anti-spam). The commenter\'s email, IP address and browser are withheld.',
+        risk: 'med',
+        icon: 'fa-comments',
+    },
+    'comments:pii': {
+        label: 'See commenters\' personal data',
+        description: 'Also receive each commenter\'s email address, IP address and browser user agent with comment events. Needed by anti-spam services; this is personal data of your visitors.',
+        risk: 'high',
+        icon: 'fa-user-secret',
+    },
     'email:admin': {
         label: 'Manage email',
         description: 'Configure and administer the email/mail-server subsystem.',
@@ -87,9 +105,15 @@ export const PERMISSION_META: Record<string, PermissionMeta> = {
         risk: 'med',
         icon: 'fa-bell',
     },
+    'notifications:read': {
+        label: 'Read notifications',
+        description: 'Receive a copy of every in-app notification sent to any user. Reset codes, tokens and verification links are redacted.',
+        risk: 'med',
+        icon: 'fa-bell',
+    },
     'notifications:provider': {
         label: 'Notifications provider',
-        description: 'Act as the site\'s notification delivery backend.',
+        description: 'Act as the site\'s notification delivery backend. It receives the full content of every notification it delivers.',
         risk: 'high',
         icon: 'fa-bell',
     },
