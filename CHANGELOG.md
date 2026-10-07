@@ -6,6 +6,14 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+
+- **`npm run pack:plugin -- <slug> [--dir <folder>]` packages a plugin into an installable ZIP.** It
+  checks the manifest, runs the installer's permission check and AST scan, builds the frontend bundles
+  and writes `release/plugins/<slug>-<version>.zip` without `data/`, `node_modules/` or OS junk,
+  refusing anything the upload would reject. `--dir` (and `WORDJS_PLUGINS_DIR` for `build-plugin.js`)
+  lets a private plugin live outside `backend/plugins/`. Documented in `documentation/plugins.md` §4–5.
+
 ### Changed
 
 - **`create-wordjs` is published to npm with trusted publishing, not a stored token.** npm restricted the

@@ -222,6 +222,16 @@ From the `backend` directory, run:
 node scripts/build-plugin.js hello-world
 ```
 
+The builder looks for the plugin in `backend/plugins/` by default. A plugin kept elsewhere — a
+private plugin in its own repository, for instance — is built by pointing `WORDJS_PLUGINS_DIR` at
+the folder that **contains** it:
+```bash
+WORDJS_PLUGINS_DIR=~/src/my-plugins node scripts/build-plugin.js my-plugin
+```
+
+To build **and** package in one step, use `npm run pack:plugin` (see
+[§5 The Distribution Workflow](#the-distribution-workflow-standard)).
+
 ### Step 2: Verification
 This script uses **esbuild** to create a `dist/` folder in your plugin with one bundle per declared
 frontend entry:
@@ -273,10 +283,32 @@ Submit by opening a pull request that adds `marketplace/plugins/<slug>/`, using 
 `review.status: "first-party"`, never `"reviewed"` — see §8 on why.
 
 ### The Distribution Workflow (Standard)
-1.  **Build:** Run `node scripts/build-plugin.js my-plugin`.
-2.  **Zip:** Compress your plugin folder (including the new `dist/` folder).
-3.  **Upload:** Go to **Plugins** -> **Add New** in the Admin panel.
-4.  **Activate:** Plugin works instantly using the pre-compiled bundle.
+This is also the way to ship a **private** plugin that never goes through the Marketplace.
+
+1.  **Pack:** from the `backend` directory, run
+    ```bash
+    npm run pack:plugin -- my-plugin                          # plugin in backend/plugins/
+    npm run pack:plugin -- my-plugin --dir ~/src/my-plugins   # plugin kept anywhere else
+    ```
+    The script (`backend/scripts/pack-plugin.js`) does what you would otherwise do by hand, and
+    refuses early with the same reason the installer would give:
+    - checks `manifest.json` (valid JSON, a `name`, `"isolated": true`, and an `id` — if present —
+      equal to the folder name);
+    - runs the installer's own permission check and AST scan on the backend code;
+    - builds the frontend bundles with `build-plugin.js` (only when the manifest declares a
+      `frontend` block);
+    - writes `release/plugins/<slug>-<version>.zip` (change it with `--out <folder>`) with a single
+      `<slug>/` root folder, leaving out the top-level `data/` folder, `node_modules/` (unless
+      `--include-node-modules`), `.git`, OS junk files and symlinks; timestamps are fixed, so the
+      same sources give the same ZIP;
+    - refuses a ZIP the upload would reject (over 10 MB, more than 5000 entries, or more than
+      200 MB unpacked) and prints its sha256.
+2.  **Upload:** Go to **Plugins** -> **Add New** in the Admin panel and pick the ZIP. Deactivate or
+    uninstall an installed copy first.
+3.  **Activate:** Plugin works instantly using the pre-compiled bundle.
+
+Zipping by hand still works: compress the plugin folder (including `dist/`) so that it is either
+the ZIP's single root folder or, with the files at the root, the ZIP is named `<slug>.zip`.
 
 ### The Local Development Workflow (Fast)
 1.  Scaffold with `node backend/cli/wordjs.js create plugin my-plugin` (or create the folder by hand in `backend/plugins/`), then restart the backend **once** so the new folder is discovered.
