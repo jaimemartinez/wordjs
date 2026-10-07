@@ -375,9 +375,10 @@ jobs:
     # to gate the SAME suite this job certifies, and a second job would install and boot everything again
     # to measure the identical thing.
     #
-    # 2026-10-07: the twice-run suite reached this wall (a run adding no tests took 31m24s, and one adding
-    # 13 suites was cut off while still passing). The fix was to run the unit suite ONCE, under c8, in the
-    # Test step below — not a higher wall — which takes the duplicate run (~10 min) off the critical path.
+    # 2026-10-07: the suite ran twice in this job (plainly, then under c8 for the coverage ratchet) and
+    # reached this wall — a run adding no tests took 31m24s, and one adding 13 suites was cut off while
+    # still passing. The c8 run moved to the parallel `backend-coverage` job below, which takes ~10
+    # minutes off this one without dropping either signal.
     timeout-minutes: 32
     services:
       postgres:
@@ -460,32 +461,16 @@ jobs:
         # binary and makes no network round-trip. Do NOT restore `--yes`: it existed only to auto-confirm
         # a live download, which is exactly the ~7-min registry spike this step used to inflict.
         run: npx license-checker --production --failOn 'AGPL;SSPL'
-      - name: Test (under the c8 coverage ratchet)
+      - name: Test
         # WORDJS_CI_DB=1 turns the driver-conformance suite's postgres+mysql blocks from graceful skips
         # into hard failures: the service containers above are wired precisely so those drivers ARE
         # exercised, so a container that never came up must fail the job, not slip through green. This is
         # the only CI coverage of the SQLite→MySQL translation layer (translateCreateTable/translateSql).
-        #
-        # ONE RUN OF THE UNIT SUITE, NOT TWO. `test:coverage:check` is `c8 … npm test`: the suite is the
-        # canonical `npm test`, unchanged, and c8 only wraps it. c8 exports NODE_V8_COVERAGE, which npm, the
-        # flake-retry wrapper, `node --test` and its per-file children all inherit, and `--test-force-exit`
-        # does not truncate the profile (V8 flushes it on the process-exit path). This step used to run
-        # `npm test` and a later step ran the same suite again under c8, which roughly doubled the job and
-        # took it past its 32-minute wall on 2026-10-07. The one thing that changes is timing: the F6
-        # performance-ratio test does not compare ratios under coverage instrumentation (#391), and that
-        # comparison is made where timing is honest — the F6 certification workflow and `perf:f0` below.
-        #
-        # THE COVERAGE FLOOR IS A RATCHET, NOT A TARGET. `--lines` in backend/package.json sits two points
-        # under the number measured when it was introduced (82.65 % of lines, one clean pass), so it fails
-        # a run that DROPS coverage and says nothing about any percentage being good. Raise it when the
-        # measured number rises; never lower it to turn a red run green. `--all` counts a source file no
-        # test loads as uncovered instead of leaving it out of the denominator. A test failure and a
-        # coverage drop read differently in the log: node:test's own `# fail N` summary, versus c8's
-        # "ERROR: Coverage for lines (…) does not meet global threshold".
+        # The coverage ratchet runs the same suite under c8 in the parallel `backend-coverage` job.
         working-directory: backend
         env:
           WORDJS_CI_DB: '1'
-        run: npm run test:coverage:check
+        run: npm test
       - name: F0 content performance budgets
         working-directory: backend
         run: npm run perf:f0
@@ -529,6 +514,77 @@ jobs:
           node backend/scripts/verify-marketplace.js --rebuild
 
 
+
+
+  backend-coverage:
+    # THE COVERAGE RATCHET, IN PARALLEL WITH THE BACKEND JOB. It used to be the backend job's last step,
+    # running the whole unit suite a second time under c8 — serially, which roughly doubled that job and
+    # took it past its 32-minute wall on 2026-10-07. Here it runs at the same time instead: the wall clock
+    # of the CI is the slower of the two jobs, not their sum. The price is a second install and a second
+    # set of service containers, paid in runner minutes rather than in waiting.
+    #
+    # THE SAME SUITE, NOT A COPY. `test:coverage:check` is `c8 … npm test`: c8 wraps the canonical
+    # script, and exports NODE_V8_COVERAGE, which npm, the flake-retry wrapper, `node --test` and its
+    # per-file children all inherit; `--test-force-exit` does not truncate the profile (V8 flushes it on
+    # the process-exit path). The same services and WORDJS_CI_DB=1 as the backend job: without them the
+    # postgres/mysql conformance blocks would skip, and fewer covered lines would read as a coverage drop.
+    #
+    # THIS IS A RATCHET, NOT A TARGET. `--lines` in backend/package.json sits two points under the number
+    # measured when the gate was introduced (82.65 % of lines, one clean pass), so it fails a run that
+    # DROPS coverage and says nothing about any percentage being good. Raise the floor when the measured
+    # number rises; never lower it to turn a red run green. `--all` counts a source file no test loads as
+    # uncovered rather than leaving it out of the denominator.
+    #
+    # Timeout: install ~3.5 min warm, up to ~9 on a cold-cache day (see the backend job), build seconds,
+    # then the instrumented suite, ~15 min on 2026-10-07. 30 covers that with margin and still turns a
+    # hang red.
+    name: Backend coverage (c8 ratchet)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: wordjs
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: password
+          MYSQL_DATABASE: wordjs
+          MYSQL_ROOT_HOST: '%' # allow root over TCP from the runner host (not just the container)
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -ppassword" --health-interval 10s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci || npm install
+      - name: Build (the suite's dist/ checks see the same tree as in the backend job)
+        working-directory: backend
+        run: npm run build
+      - name: Coverage ratchet (c8 over npm test)
+        working-directory: backend
+        env:
+          WORDJS_CI_DB: '1'
+        run: npm run test:coverage:check
       - name: Upload backend coverage (lcov)
         if: always()
         uses: actions/upload-artifact@v7
@@ -537,7 +593,6 @@ jobs:
           path: backend/coverage/lcov.info
           retention-days: 7
           if-no-files-found: warn
-
   multinode:
     # Multi-node coherence leg. Boots TWO backend cores as SEPARATE OS PROCESSES against ONE shared
     # Postgres 16 + Redis 7 and asserts the property that only holds across nodes: an option/role change
