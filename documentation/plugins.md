@@ -36,6 +36,7 @@ Create a folder named `hello-world` inside `backend/plugins/`. Inside it, create
       "uuid": "^10.0.0" 
   },
   "permissions": [
+      { "scope": "browser", "access": "script", "reason": "To run the admin page and the hooks bundle" },
       { "scope": "settings", "access": "read", "reason": "To display the site title" },
       { "scope": "express", "access": "register_route", "reason": "To serve the /message API route" },
       { "scope": "admin_menu", "access": "register", "reason": "To add the sidebar link" }
@@ -56,6 +57,24 @@ Create a folder named `hello-world` inside `backend/plugins/`. Inside it, create
 
 > **🔥 Auto-Dependency Management:** 
 > WordJS reads the `dependencies` object. When you activate the plugin, the system **automatically installs** missing packages (`npm install`). When you deactivate it, if no other plugin needs them, it **garbage collects** them (`npm uninstall`). Zero manual work.
+
+> [!IMPORTANT]
+> **Registry version ranges only.** Each `dependencies` entry must be an npm package name mapped to a
+> semver **range** (`"^1.2.3"`, `"~1.0"`, `"1.x"`, `">=1 <2"`, `"*"`). Git/GitHub specs, `file:`,
+> `link:`, `workspace:`, `npm:` aliases, paths, tarball URLs and dist-tags such as `latest` are
+> **refused** at upload, at activation and by `npm run pack:plugin`: npm runs the `prepare` script of a
+> git or `file:` dependency on the server even with `--ignore-scripts`, and an alias or URL installs code
+> no one scanned under another name. A package that is not on the registry must ship inside the plugin
+> (`"bundled": true`).
+
+> [!IMPORTANT]
+> **Browser code needs `browser:script`.** A plugin with any frontend entry (`frontend.adminPage`,
+> `frontend.hooks`, `frontend.versoComponents` / legacy `puckComponents`, `frontend.components`, the
+> `client/verso/<Pascal>Verso.tsx` convention) or a prebuilt `dist/*.bundle.js` must declare
+> `{ "scope": "browser", "access": "script", "reason": "…" }`. That code is **not sandboxed**: it runs in
+> the admin app's origin with the viewer's session, so the administrator is asked about it explicitly,
+> and the host serves the bundles only while the plugin is active and the capability is granted. Install
+> and activation refuse an undeclared plugin. See `documentation/security.md` §1.3b.
 
 > [!IMPORTANT]
 > **Hard Lock Protection:** If your plugin requires a version of a package that conflicts with another active plugin (e.g., `lodash@^3.0.0` vs `lodash@^4.0.0`), activation will be **blocked** with a clear error message. You must either deactivate the conflicting plugin or update your dependency.
@@ -784,7 +803,8 @@ the capability is BOTH declared in the manifest AND granted.
 non-secret options), `filesystem` (read/write — own dir), `users:read` (the safe user projection),
 `assets:write` (enqueue own scripts/styles on public pages), `email:admin` (send through the active mail
 provider) / `email:provider` (*become* the provider), `notifications:send` / `notifications:provider`,
-`express:register_route`, `admin_menu:register`, and **`network`** (outbound access to **public IPs only**
+`express:register_route`, `admin_menu:register`, `browser:script` (serve and run the plugin's compiled
+frontend bundles in the browser — **not sandboxed**, see `security.md` §1.3b), and **`network`** (outbound access to **public IPs only**
 — the egress guard blocks loopback/link-local/`169.254.169.254` metadata/RFC1918/CGNAT/ULA and validates
 the resolved IP at connect time; opt-in, with an exfiltration warning — declare `scope: "network"`).
 An admin may narrow a `network` plugin further with a per-plugin **egress host allowlist**

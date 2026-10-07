@@ -770,6 +770,8 @@ export const translations: Record<Language, Record<string, string>> = {
         'plugins.safe.to.activate': 'Seguro para activar',
         'plugins.no.permissions': 'Este plugin no solicita permisos especiales del sistema.',
         'plugins.requests.permissions': 'El plugin solicita los siguientes permisos para funcionar:',
+        'plugins.browserScript.title': 'Este plugin ejecuta código en tu navegador',
+        'plugins.browserScript.warning': 'Ejecuta código en tu navegador con tu sesión de administrador. Su página de administración, sus extensiones y sus bloques se cargan dentro de este mismo panel, sin aislamiento ni análisis: ese código puede hacer todo lo que tú puedes hacer aquí (crear usuarios, cambiar roles, instalar plugins). Concédelo solo si confías en este plugin tanto como en una cuenta de administrador.',
         'plugins.installing': 'Instalando...',
         'fonts.loading': 'Cargando fuentes…',
         'plugins.tab.installed': 'Instalados',
@@ -1390,6 +1392,8 @@ export const translations: Record<Language, Record<string, string>> = {
         'plugins.safe.to.activate': 'Safe to Activate',
         'plugins.no.permissions': 'This plugin requests no special system-level permissions.',
         'plugins.requests.permissions': 'The plugin requests the following permissions to function:',
+        'plugins.browserScript.title': 'This plugin runs code in your browser',
+        'plugins.browserScript.warning': 'It runs code in your browser with your administrator session. Its admin page, extensions and blocks are loaded into this admin panel itself, without isolation or scanning: that code can do anything you can do here (create users, change roles, install plugins). Grant it only if you trust this plugin as much as an administrator account.',
         'plugins.installing': 'Installing...',
 
         // Common
@@ -3093,6 +3097,8 @@ export const translations: Record<Language, Record<string, string>> = {
         'plugins.safe.to.activate': 'Seguro para ativar',
         'plugins.no.permissions': 'Este plugin não solicita permissões especiais do sistema.',
         'plugins.requests.permissions': 'O plugin solicita as seguintes permissões para funcionar:',
+        'plugins.browserScript.title': 'Este plugin executa código no seu navegador',
+        'plugins.browserScript.warning': 'Ele executa código no seu navegador com a sua sessão de administrador. A página de administração, as extensões e os blocos são carregados dentro deste mesmo painel, sem isolamento nem análise: esse código pode fazer tudo o que você pode fazer aqui (criar usuários, mudar funções, instalar plugins). Conceda apenas se confiar neste plugin tanto quanto em uma conta de administrador.',
         'plugins.installing': 'Instalando...',
         'fonts.loading': 'A carregar fontes…',
         'plugins.tab.installed': 'Instalados',

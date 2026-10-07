@@ -144,6 +144,45 @@ test('pack:plugin refuses what the installer would refuse, and writes nothing', 
     }
 });
 
+test('pack:plugin refuses non-registry dependency specs the server would have to npm-install', () => {
+    // C1: npm runs the `prepare` script of a git/file dependency even under --ignore-scripts, and an
+    // npm: alias or a tarball URL installs unscanned code under another name. The installer refuses
+    // all of them; the packer must not produce a ZIP that the installer would refuse.
+    const cases: Array<[string, object, object | undefined]> = [
+        ['dep-file', { ...MANIFEST, dependencies: { x: 'file:../evil' } }, undefined],
+        ['dep-alias', { ...MANIFEST, dependencies: { lodash: 'npm:evil@1' } }, undefined],
+        // A shared plugin's package.json dependencies are folded into the manifest the server installs.
+        ['dep-git-pkg', MANIFEST, { name: 'dep-git-pkg', dependencies: { x: 'git+https://example.com/x.git' } }],
+        ['dep-tgz-pkg', MANIFEST, { name: 'dep-tgz-pkg', dependencies: { x: 'https://example.com/x.tgz' } }],
+    ];
+    for (const [slug, manifest, pkg] of cases) {
+        const f = fixture(slug, manifest, "require('x'); module.exports = { init() {} };\n", pkg);
+        const r = run([slug, '--dir', f.plugins, '--out', f.out]);
+        assert.notStrictEqual(r.status, 0, `${slug} must be refused`);
+        assert.match(r.stderr, /not a registry version range/, slug);
+        assert.ok(!fs.existsSync(f.out), `${slug}: nothing written`);
+    }
+});
+
+test('pack:plugin refuses browser code that does not declare browser:script', () => {
+    // A prebuilt bundle is browser code even with no manifest entry that would build it.
+    const f = fixture('undeclared-ui', MANIFEST, OK_INDEX);
+    const dir = path.join(f.plugins, 'undeclared-ui');
+    fs.mkdirSync(path.join(dir, 'dist'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'dist', 'hooks.bundle.js'), 'export function registerX() {}\n');
+    const r = run(['undeclared-ui', '--dir', f.plugins, '--out', f.out]);
+    assert.notStrictEqual(r.status, 0);
+    assert.match(r.stderr, /browser:script/);
+    assert.ok(!fs.existsSync(f.out), 'nothing written');
+
+    const ok = fixture('declared-ui', { ...MANIFEST, permissions: [{ scope: 'browser', access: 'script', reason: 'Registers the admin user-form extension.' }] }, OK_INDEX);
+    const okDir = path.join(ok.plugins, 'declared-ui');
+    fs.mkdirSync(path.join(okDir, 'dist'), { recursive: true });
+    fs.writeFileSync(path.join(okDir, 'dist', 'hooks.bundle.js'), 'export function registerX() {}\n');
+    const { names } = packOk('declared-ui', ok);
+    assert.ok(names.includes('declared-ui/dist/hooks.bundle.js'), names.join('\n'));
+});
+
 test('pack:plugin rejects a slug that could escape the plugins folder', () => {
     const r = run(['../etc', '--out', path.join(os.tmpdir(), 'pack-plugin-never')]);
     assert.notStrictEqual(r.status, 0);

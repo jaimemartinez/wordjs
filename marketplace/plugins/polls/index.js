@@ -17,7 +17,7 @@
 
 exports.metadata = {
     name: 'Polls',
-    version: '1.0.0',
+    version: '1.0.1',
     description: 'Encuestas con bloque de votación Verso y barras de resultados',
     author: 'WordJS',
 };

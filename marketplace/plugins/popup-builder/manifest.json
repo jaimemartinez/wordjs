@@ -1,7 +1,7 @@
 {
     "id": "popup-builder",
     "name": "Popup Builder",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Site-wide promotional and announcement popups injected on every public page. Triggers (delay, scroll depth, exit intent), frequency capping (always / session / visitor / daily), optional scheduling window, and view/click statistics with CTR.",
     "author": "WordJS",
     "isolated": true,
@@ -21,6 +21,11 @@
         "order": 64
     },
     "permissions": [
+        {
+            "scope": "browser",
+            "access": "script",
+            "reason": "Run the plugin's own compiled interface in the browser: its admin page. Without it the host does not serve these bundles and that interface does not load."
+        },
         {
             "scope": "database",
             "access": "read",

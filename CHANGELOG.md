@@ -6,31 +6,6 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
-### Added
-
-- **`npm run pack:plugin -- <slug> [--dir <folder>]` packages a plugin into an installable ZIP.** It
-  checks the manifest, builds the frontend bundles, runs the installer's permission check and AST scan
-  on exactly what is packed, and writes `release/plugins/<slug>-<version>.zip` without `data/`, the
-  working `node_modules/` or OS junk, refusing anything the upload would reject. npm dependencies are
-  handled without flags: the plugin's `package.json` dependencies are declared in the packed manifest
-  for the server to install, or — for `"bundled": true` and for packages the server will not install
-  itself, such as native builds — a fresh production-only `node_modules/` ships in the ZIP; a required
-  package declared nowhere stops the pack.
-- **Dev-mode "Build & download ZIP" in `/admin/plugins`.** With `NODE_ENV=development`, each plugin card
-  offers a button that runs the same packer on the installed plugin (`POST /api/v1/plugins/:slug/pack`,
-  admin-only) and saves `<slug>-<version>.zip`, or shows the packer's refusal reason. Outside development
-  the route answers 404 and `GET /plugins` reports `packable: false`, so the button is hidden. `--dir` (and `WORDJS_PLUGINS_DIR` for `build-plugin.js`)
-  lets a private plugin live outside `backend/plugins/`. Documented in `documentation/plugins.md` §4–5.
-
-### Changed
-
-- **`create-wordjs` is published to npm with trusted publishing, not a stored token.** npm restricted the
-  long-lived tokens that bypass two-factor authentication, and the release workflow's `NPM_TOKEN` stopped
-  being accepted (the 2.3.0 publish failed with E404). The `npm-publish` job in `release.yml` now
-  exchanges its GitHub OIDC token for a one-time publish credential (`id-token: write`, npm ≥ 11.5.1), so
-  no npm credential is stored in the repository and each version carries provenance. It needs a trusted
-  publisher configured once on npmjs.com for `jaimemartinez/wordjs`, workflow `release.yml`.
-
 ### Security
 
 - **A sandboxed plugin's hook subscriptions are now gated by the data they expose.** Subscribing to a
@@ -55,6 +30,66 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   core fires a hook missing from the table. No first-party plugin subscribes to a gated hook, so no
   manifest changes were needed; a third-party plugin that relied on one must declare the new permission.
   Documented in `documentation/security.md` §5 and §8.1 and `documentation/plugins.md` §10.5.
+- **Plugin `dependencies` accept only plain npm registry version ranges.** The host installs a plugin's
+  manifest `dependencies` with `npm install` in its own root at activation, and npm runs the `prepare`
+  script of a `git+…`/`github:` or `file:` directory dependency even with `--ignore-scripts` — so a
+  manifest entry such as `"x": "file:../evil"` was code execution on the server. `npm:` aliases and
+  tarball URLs installed unscanned code under a benign name. A dependency must now be an npm package name
+  mapped to a semver range (`^1.2.3`, `~1.0`, `1.x`, `>=1 <2`, `*`); git, GitHub, `file:`, `link:`,
+  `workspace:`, `npm:` aliases, paths, URLs and dist-tags are refused at upload and marketplace install,
+  again inside the dependency installer before npm runs (including at boot), by `npm run pack:plugin` and
+  by the marketplace submission gate. The install also sets `npm_config_ignore_scripts=true`.
+- **Running plugin code in the browser is now an explicit, default-deny capability: `browser:script`.**
+  A plugin's compiled frontend bundles (admin page, admin hooks, Verso blocks) run unsandboxed and
+  unscanned in the admin app's origin with the viewer's session, and were served unauthenticated for any
+  installed plugin, active or not — so a plugin granted only `settings:read` could act as every
+  administrator who opened the admin. Now a plugin that ships browser code must declare `browser:script`
+  (upload, activation and packing refuse it otherwise); the activation and permissions dialogs show it
+  as high risk with the warning "runs code in your browser with your administrator session"; and
+  `GET /api/v1/plugins/:slug/bundle` (and `/bundle/css`, `/bundle/manifest`) serve a plugin's files only
+  while it is **active and the capability is granted**, otherwise 404. This is a mitigation: granted code
+  still runs in the admin origin, and separate-origin sandboxed iframes are planned
+  (`documentation/security.md` §1.3b).
+  **Upgrade:** the first boot after upgrading grants `browser:script` once to every plugin that was
+  already active and already shipped browser code, so working sites keep their plugin pages, hooks and
+  blocks; it is logged and recorded in the `plugin_browser_capability_migrated` option, and never runs
+  again. A plugin installed before this release that does not declare the permission keeps running while
+  active and shows a flagged `browser:script` row in Admin → Plugins, but must be updated before it can
+  be activated again. Every catalog plugin and the `wordjs` CLI plugin template now declare it; the
+  catalog plugins get a patch version bump so installed copies are offered the update.
+- **`GET /api/v1/plugins/registry` no longer publishes plugin manifests.** The unauthenticated registry
+  returned every active plugin's name, exact version, author, requested permissions and dependencies — a
+  ready-made fingerprint of the install. It now returns only `{ id, path, browser, frontend: { hooks } }`,
+  which is what the admin's hooks loader reads.
+- **Plugin downloads no longer include runtime data.** `GET /api/v1/plugins/:slug/download` zipped the
+  whole plugin folder, including its top-level `data/` (mail-server's `data/.mailenc` encryption key and
+  attachments), `node_modules/` and `.git`. It now uses the same file rule as the plugin packer: no
+  top-level `data/`, no `node_modules/` or `.git`, no OS junk and no symbolic links.
+
+### Added
+
+- **`npm run pack:plugin -- <slug> [--dir <folder>]` packages a plugin into an installable ZIP.** It
+  checks the manifest, builds the frontend bundles, runs the installer's permission check and AST scan
+  on exactly what is packed, and writes `release/plugins/<slug>-<version>.zip` without `data/`, the
+  working `node_modules/` or OS junk, refusing anything the upload would reject. npm dependencies are
+  handled without flags: the plugin's `package.json` dependencies are declared in the packed manifest
+  for the server to install, or — for `"bundled": true` and for packages the server will not install
+  itself, such as native builds — a fresh production-only `node_modules/` ships in the ZIP; a required
+  package declared nowhere stops the pack.
+- **Dev-mode "Build & download ZIP" in `/admin/plugins`.** With `NODE_ENV=development`, each plugin card
+  offers a button that runs the same packer on the installed plugin (`POST /api/v1/plugins/:slug/pack`,
+  admin-only) and saves `<slug>-<version>.zip`, or shows the packer's refusal reason. Outside development
+  the route answers 404 and `GET /plugins` reports `packable: false`, so the button is hidden. `--dir` (and `WORDJS_PLUGINS_DIR` for `build-plugin.js`)
+  lets a private plugin live outside `backend/plugins/`. Documented in `documentation/plugins.md` §4–5.
+
+### Changed
+
+- **`create-wordjs` is published to npm with trusted publishing, not a stored token.** npm restricted the
+  long-lived tokens that bypass two-factor authentication, and the release workflow's `NPM_TOKEN` stopped
+  being accepted (the 2.3.0 publish failed with E404). The `npm-publish` job in `release.yml` now
+  exchanges its GitHub OIDC token for a one-time publish credential (`id-token: write`, npm ≥ 11.5.1), so
+  no npm credential is stored in the repository and each version carries provenance. It needs a trusted
+  publisher configured once on npmjs.com for `jaimemartinez/wordjs`, workflow `release.yml`.
 
 ## [2.3.0] - 2026-10-07
 

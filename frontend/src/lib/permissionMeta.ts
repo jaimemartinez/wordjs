@@ -135,6 +135,16 @@ export const PERMISSION_META: Record<string, PermissionMeta> = {
         risk: 'high',
         icon: 'fa-file-code',
     },
+    // The one capability that is NOT sandboxed at all: the plugin's compiled UI (admin page, admin hooks,
+    // Verso blocks) is imported into this admin app's own origin, so it runs with the session of whoever
+    // is looking — an administrator's here. Isolation (separate-origin iframes) is planned; until then
+    // this grant is the whole control, and the copy has to say so plainly.
+    'browser:script': {
+        label: 'Run code in your browser',
+        description: 'Runs code in your browser with your administrator session. Its admin page, admin extensions and editor blocks are loaded into this admin app itself, so that code can do anything you can do here — create users, change roles, install plugins. It is not sandboxed and not scanned. Grant only if you trust this plugin as much as an administrator account.',
+        risk: 'high',
+        icon: 'fa-code',
+    },
     'network': {
         label: 'Outbound network',
         description: 'Make outbound network calls (fetch / raw sockets). This is an exfiltration risk — data can leave your server. Grant only if you trust this plugin.',
