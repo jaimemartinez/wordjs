@@ -4,7 +4,7 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
-## [Unreleased]
+## [2.3.0] - 2026-10-07
 
 ### Security
 

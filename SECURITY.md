@@ -97,7 +97,7 @@ WordJS is pre-production; only the latest `main` and the current `2.x` release l
 | Version   | Supported | Notes                                              |
 | :-------- | :-------- | :------------------------------------------------- |
 | `main`    | ✅         | Latest development line (the only one patched)     |
-| `2.x`     | ✅         | Current release line (latest tag and latest GitHub Release: `v2.2.0`) |
+| `2.x`     | ✅         | Current release line (latest tag and latest GitHub Release: `v2.3.0`) |
 | < `2.0`   | ⚠️        | Best-effort; upgrade to `2.x` or latest `main`     |
 
 > **There is no maintenance branch and there are no backports.** `2.x` is a tag line, not a branch —
