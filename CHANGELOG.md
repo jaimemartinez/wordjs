@@ -9,9 +9,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 ### Added
 
 - **`npm run pack:plugin -- <slug> [--dir <folder>]` packages a plugin into an installable ZIP.** It
-  checks the manifest, runs the installer's permission check and AST scan, builds the frontend bundles
-  and writes `release/plugins/<slug>-<version>.zip` without `data/`, `node_modules/` or OS junk,
-  refusing anything the upload would reject. `--dir` (and `WORDJS_PLUGINS_DIR` for `build-plugin.js`)
+  checks the manifest, builds the frontend bundles, runs the installer's permission check and AST scan
+  on exactly what is packed, and writes `release/plugins/<slug>-<version>.zip` without `data/`, the
+  working `node_modules/` or OS junk, refusing anything the upload would reject. npm dependencies are
+  handled without flags: the plugin's `package.json` dependencies are declared in the packed manifest
+  for the server to install, or — for `"bundled": true` and for packages the server will not install
+  itself, such as native builds — a fresh production-only `node_modules/` ships in the ZIP; a required
+  package declared nowhere stops the pack. `--dir` (and `WORDJS_PLUGINS_DIR` for `build-plugin.js`)
   lets a private plugin live outside `backend/plugins/`. Documented in `documentation/plugins.md` §4–5.
 
 ### Changed

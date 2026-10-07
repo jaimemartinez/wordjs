@@ -66,6 +66,17 @@ function isBundledPlugin(pluginPath: string, manifest: any = {}) {
 }
 
 /**
+ * Packages the host never auto-installs from a manifest's `dependencies`: they ship native builds or
+ * spawn servers, which execute outside the plugin sandbox and would turn a manifest entry into host-level
+ * code execution. A plugin that needs one must ship it (`"bundled": true` + its own node_modules/).
+ * Exported so the plugin packer (scripts/pack-plugin.js) bundles exactly these, not a copy of the list.
+ */
+const BLOCKED_RUNTIME_DEPS = new Set([
+    'embedded-postgres', 'better-sqlite3', 'sqlite3', 'node-gyp', 'node-pre-gyp',
+    'node-sass', 'sharp', 'puppeteer', 'playwright', 'canvas', 'windows-build-tools'
+]);
+
+/**
  * Check for dependency conflicts between a plugin and active plugins
  * Uses SemVer to determine if version ranges are compatible
  * 
@@ -235,13 +246,8 @@ async function installPluginDependencies(slug: string, manifest: any, pluginPath
         return;
     }
 
-    // SECURITY: never auto-install packages that ship native builds or spawn servers — they execute
-    // outside the plugin sandbox, turning a manifest entry into host-level code execution. (Bundled
-    // plugins skipped above are operator-trusted and exempt.) Bundle these or install as an operator.
-    const BLOCKED_RUNTIME_DEPS = new Set([
-        'embedded-postgres', 'better-sqlite3', 'sqlite3', 'node-gyp', 'node-pre-gyp',
-        'node-sass', 'sharp', 'puppeteer', 'playwright', 'canvas', 'windows-build-tools'
-    ]);
+    // SECURITY: never auto-install packages that ship native builds or spawn servers (BLOCKED_RUNTIME_DEPS).
+    // (Bundled plugins skipped above are operator-trusted and exempt.) Bundle these or install as an operator.
     for (const dep of Object.keys(manifest.dependencies)) {
         if (BLOCKED_RUNTIME_DEPS.has(dep)) {
             throw new Error(`Plugin '${slug}' declares dependency '${dep}', which cannot be auto-installed at runtime (native build / server process). Bundle it with the plugin or install it as an operator.`);
@@ -2565,5 +2571,6 @@ module.exports = {
     // Hard Lock + Bundling utilities
     isBundledPlugin,
     checkDependencyConflicts,
+    BLOCKED_RUNTIME_DEPS,
     PLUGINS_DIR
 };
