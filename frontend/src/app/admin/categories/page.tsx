@@ -153,7 +153,7 @@ export default function CategoriesPage() {
                                                 <td className="px-8 py-6 text-right">
                                                     <button
                                                         onClick={() => handleDelete(cat.id)}
-                                                        className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all shadow-sm hover:shadow-red-200 opacity-0 group-hover:opacity-100"
+                                                        className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all shadow-sm hover:shadow-red-200 opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
                                                     >
                                                         <i className="fa-solid fa-trash text-xs"></i>
                                                     </button>

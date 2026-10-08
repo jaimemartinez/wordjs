@@ -1180,7 +1180,7 @@ export default function PluginsPage() {
                                     <div className={`p-3.5 rounded-2xl transition-all duration-300 ${plugin.active ? 'bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-[0_8px_16px_rgba(37,99,235,0.25)]' : 'bg-slate-100 text-slate-400 group-hover:bg-slate-200/80 group-hover:text-slate-500'}`}>
                                         <FaPlug className="text-lg" />
                                     </div>
-                                    <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-all duration-300 translate-y-1 group-hover:translate-y-0">
+                                    <div className="flex gap-1.5 opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-all duration-300 translate-y-0 [@media(hover:hover)]:translate-y-1 group-hover:translate-y-0 focus-within:translate-y-0">
                                         <button
                                             onClick={() => setDetailPlugin(plugin)}
                                             className="p-2 rounded-xl bg-slate-50 border border-slate-200/60 text-slate-600 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 hover:scale-105 active:scale-95 transition-all shadow-sm"

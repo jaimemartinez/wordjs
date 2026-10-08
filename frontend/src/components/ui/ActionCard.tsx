@@ -43,7 +43,7 @@ export function ActionCard({ icon, title, description, onClick, href, color = "b
             </div>
 
             {/* Arrow on hover */}
-            <div className="opacity-0 group-hover:opacity-100 transition-opacity -translate-x-4 group-hover:translate-x-0 duration-300">
+            <div className="opacity-0 group-hover:opacity-100 transition-opacity -translate-x-4 group-hover:translate-x-0 duration-300 pointer-events-none">
                 <i className="fa-solid fa-arrow-right text-blue-400"></i>
             </div>
         </>

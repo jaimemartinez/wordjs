@@ -505,17 +505,17 @@ export default function MediaPage() {
                                     )}
 
                                     {/* Quick Actions Overlay */}
-                                    <div className="absolute inset-0 flex items-center justify-center opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity duration-300 gap-3">
+                                    <div className="absolute inset-0 flex items-center justify-center opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-300 gap-3">
                                         <button
                                             onClick={(e) => confirmDelete(e, item.id)}
-                                            className="w-12 h-12 bg-white text-red-500 rounded-2xl shadow-xl flex items-center justify-center transform translate-y-0 md:translate-y-4 md:group-hover:translate-y-0 md:group-focus-within:translate-y-0 transition-all duration-300 hover:scale-110 hover:bg-red-50"
+                                            className="w-12 h-12 bg-white text-red-500 rounded-2xl shadow-xl flex items-center justify-center transform translate-y-0 [@media(hover:hover)]:translate-y-4 group-hover:translate-y-0 group-focus-within:translate-y-0 transition-all duration-300 hover:scale-110 hover:bg-red-50"
                                             title={t('common.delete')}
                                             aria-label={t('common.delete')}
                                         >
                                             <i className="fa-solid fa-trash-can"></i>
                                         </button>
                                         <button
-                                            className="w-12 h-12 bg-white text-blue-600 rounded-2xl shadow-xl flex items-center justify-center transform translate-y-0 md:translate-y-4 md:group-hover:translate-y-0 md:group-focus-within:translate-y-0 transition-all duration-300 delay-75 hover:scale-110 hover:bg-blue-50"
+                                            className="w-12 h-12 bg-white text-blue-600 rounded-2xl shadow-xl flex items-center justify-center transform translate-y-0 [@media(hover:hover)]:translate-y-4 group-hover:translate-y-0 group-focus-within:translate-y-0 transition-all duration-300 delay-75 hover:scale-110 hover:bg-blue-50"
                                             title={t('common.edit')}
                                             aria-label={t('common.edit')}
                                         >
@@ -588,7 +588,7 @@ export default function MediaPage() {
                                                     onClick={(e) => confirmDelete(e, item.id)}
                                                     aria-label={t('common.delete')}
                                                     title={t('common.delete')}
-                                                    className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all shadow-sm hover:shadow-red-200 ml-auto opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 translate-x-0 md:translate-x-2 md:group-hover:translate-x-0 duration-300"
+                                                    className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all shadow-sm hover:shadow-red-200 ml-auto opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 translate-x-0 [@media(hover:hover)]:translate-x-2 group-hover:translate-x-0 group-focus-within:translate-x-0 duration-300"
                                                 >
                                                     <i className="fa-solid fa-trash-can text-sm"></i>
                                                 </button>
