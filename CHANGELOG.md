@@ -166,6 +166,16 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **Admin row actions are visible on phones and tablets.** Several admin screens hid their row actions
+  with `opacity-0 group-hover:opacity-100`, and Tailwind v4 only applies `group-hover:` where the device
+  can hover. On touch screens those buttons therefore stayed invisible but still tappable, including the
+  delete buttons on Users, Categories and Menus, and the revoke button on Tokens. Media, Backups and the
+  posts table used a width-based variant that failed the same way on tablets. These controls are now
+  visible by default and hidden only where hover exists. Hovering or keyboard focus still reveals them on
+  desktop. Also covered: Roles, Plugins, the Settings logo/favicon remove buttons, the notification
+  centre (whose delete button sits in the card's bottom-right corner on touch screens) and the Verso
+  saved-pattern delete. Purely decorative hover layers stay hover-only and no longer intercept taps. A
+  test now fails on any admin or shared-component class list that reveals a control only on hover.
 - **The F6 performance budget no longer fails the Linux CI on unchanged code.** Its ratio ceilings were
   measured on one Windows host and judged on the Linux runners too, where the reference workload
   (autocommit inserts) is cheaper and the mostly-CPU operations read up to ~2.5x their Windows ratios —

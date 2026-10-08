@@ -289,7 +289,7 @@ export default function DbMigrationPage() {
                             {/* Option: Native SQLite */}
                             {status.currentDriver !== 'sqlite-native' && status.availableDrivers?.includes('sqlite-native') && (
                                 <div className="group bg-white p-6 md:p-8 rounded-2xl border border-gray-100 shadow-lg hover:shadow-2xl hover:-translate-y-1 transition-all duration-300 relative overflow-hidden">
-                                    <div className="absolute inset-0 bg-gradient-to-r from-blue-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+                                    <div className="absolute inset-0 bg-gradient-to-r from-blue-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none"></div>
                                     <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
                                         <div className="flex items-start gap-6">
                                             <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-2xl flex-shrink-0 flex items-center justify-center text-3xl shadow-blue-100 group-hover:scale-110 group-hover:rotate-3 transition-all duration-300">
@@ -318,7 +318,7 @@ export default function DbMigrationPage() {
                             {/* Option: Postgres */}
                             {status.currentDriver !== 'postgres' && status.availableDrivers?.includes('postgres') && (
                                 <div className="group bg-white p-6 md:p-8 rounded-[40px] border border-gray-100 shadow-lg hover:shadow-2xl hover:-translate-y-1 transition-all duration-300 relative overflow-hidden">
-                                    <div className="absolute inset-0 bg-gradient-to-r from-indigo-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+                                    <div className="absolute inset-0 bg-gradient-to-r from-indigo-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none"></div>
                                     <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
                                         <div className="flex items-start gap-6">
                                             <div className="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-2xl flex-shrink-0 flex items-center justify-center text-3xl shadow-indigo-100 group-hover:scale-110 group-hover:-rotate-3 transition-all duration-300">
@@ -347,7 +347,7 @@ export default function DbMigrationPage() {
                             {/* Option: MySQL / MariaDB */}
                             {status.currentDriver !== 'mysql' && status.availableDrivers?.includes('mysql') && (
                                 <div className="group bg-white p-6 md:p-8 rounded-[40px] border border-gray-100 shadow-lg hover:shadow-2xl hover:-translate-y-1 transition-all duration-300 relative overflow-hidden">
-                                    <div className="absolute inset-0 bg-gradient-to-r from-teal-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+                                    <div className="absolute inset-0 bg-gradient-to-r from-teal-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none"></div>
                                     <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
                                         <div className="flex items-start gap-6">
                                             <div className="w-16 h-16 bg-teal-100 text-teal-600 rounded-2xl flex-shrink-0 flex items-center justify-center text-3xl shadow-teal-100 group-hover:scale-110 group-hover:rotate-3 transition-all duration-300">

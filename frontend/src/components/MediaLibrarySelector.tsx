@@ -291,7 +291,7 @@ export default function MediaLibrarySelector({ onSelect, selectedId }: MediaLibr
                                     </div>
                                 )}
 
-                                <div aria-hidden="true" className="absolute inset-0 bg-black/55 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity flex items-center justify-center">
+                                <div aria-hidden="true" className="absolute inset-0 bg-black/55 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
                                     <span className="text-white font-medium text-sm px-2 py-1 bg-black/50 rounded">{t('media.select')}</span>
                                 </div>
 

@@ -160,7 +160,7 @@ export default function RolesPage() {
                                     <h3 className="font-bold text-gray-900 capitalize">{role.name}</h3>
                                     <p className="text-xs text-gray-400 mt-1 uppercase tracking-widest font-black leading-none">{slug}</p>
                                 </div>
-                                <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <div className="flex gap-2 opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity" data-role-actions={slug}>
                                     <button
                                         onClick={(e) => { e.stopPropagation(); handleDelete(slug); }}
                                         className="text-gray-400 hover:text-red-500 p-1"
