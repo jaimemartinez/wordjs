@@ -34,6 +34,14 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   no capabilities, `NoNewPrivileges=yes` and `NODE_ENV=production` into a private temporary directory and
   prints the root-owned install steps. mail-server 2.2.5 explains a port-25 bind failure accurately
   (permission vs. the sandbox) instead of suggesting `setcap`.
+- **`create-wordjs` no longer installs world-writable files.** Extraction went through adm-zip's
+  `extractAllTo`, which ends each file with `chmod(path, attr || 0o666)` — and `chmod` ignores the umask —
+  so every installed file, code that may later run as root, was writable by any local user, and
+  `upgrade` turned an existing `0644` install into `0666` as well. Files are now written one by one as
+  `0644` (`0755` when the archive marks them executable), an upgrade tightens an existing file before
+  writing into it, and it refuses to write through a symbolic link planted in the existing install.
+  Installs made by earlier versions keep their `0666` files until the next `create-wordjs upgrade`, or
+  `find <site> -type f -perm -o+w -exec chmod go-w {} +`.
 - **`create-wordjs` verifies the release ZIP before extracting it.** The release workflow now publishes
   `wordjs-<tag>.zip.sha256` (`sha256sum` format) next to every tag-named bundle, and `create-wordjs` —
   create, `upgrade`, `gateway` and `join` — downloads it and refuses a ZIP whose SHA-256 differs.
