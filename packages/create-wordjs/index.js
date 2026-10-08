@@ -444,16 +444,52 @@ function isSymlinkEntry(entry) {
     return ((attr >>> 16) & S_IFMT) === S_IFLNK;
 }
 
+/**
+ * The mode an installed file gets: 0755 when the archive marked it executable for anyone, else 0644.
+ * Never group- or world-writable, whatever the archive says — and an archive built on Windows carries
+ * no Unix mode at all, which must not be read as "anything goes".
+ */
+function installedFileMode(entry) {
+    const unix = ((Number(entry && entry.header && entry.header.attr) >>> 0) >>> 16) & 0o777;
+    return (unix & 0o111) ? 0o755 : 0o644;
+}
+
 function extractZip(zipPath, targetDir) {
     const AdmZip = require('adm-zip'); // lazy so --help works even before deps are installed
     const zip = new AdmZip(zipPath);
     // Vet EVERY entry before writing ANY: a refused archive leaves nothing half-extracted behind.
     const root = path.resolve(targetDir);
-    for (const entry of zip.getEntries()) {
-        containedEntryPath(root, entry.entryName);
+    const entries = zip.getEntries();
+    const planned = entries.map((entry) => {
+        const dest = containedEntryPath(root, entry.entryName);
         if (isSymlinkEntry(entry)) throw new Error(`Refusing ZIP entry that is a symbolic link: ${entry.entryName}`);
+        return { entry, dest };
+    });
+    // Written entry by entry, NOT with adm-zip's extractAllTo: its writeFileTo does chmod(path, attr ||
+    // 0o666), and chmod ignores the umask, so every installed file — code that may later run as root —
+    // came out world-writable, and an upgrade over an existing 0644 install turned it into 0666 as well.
+    for (const { entry, dest } of planned) {
+        if (entry.isDirectory) {
+            fs.mkdirSync(dest, { recursive: true, mode: 0o755 });
+            continue;
+        }
+        fs.mkdirSync(path.dirname(dest), { recursive: true, mode: 0o755 });
+        const mode = installedFileMode(entry);
+        let existing = null;
+        try { existing = fs.lstatSync(dest); } catch { /* new file */ }
+        if (existing) {
+            // An upgrade writes over an existing tree: never through a link someone placed there, and
+            // tighten a file left writable by an older installer BEFORE putting new code into it.
+            if (existing.isSymbolicLink() || !existing.isFile()) {
+                throw new Error(`Refusing to overwrite ${path.relative(root, dest)}: it is not a regular file in the existing install`);
+            }
+            fs.chmodSync(dest, mode);
+        }
+        fs.writeFileSync(dest, entry.getData(), { mode });
+        // `mode` only applies on creation and is narrowed by the umask; restate it so the result is the
+        // same for every caller and every existing file.
+        fs.chmodSync(dest, mode);
     }
-    zip.extractAllTo(targetDir, true);
     // Official bundles put files at the ZIP root; tolerate a single wrapper folder too.
     if (!fs.existsSync(path.join(targetDir, 'package.json'))) {
         const entries = fs.readdirSync(targetDir);
@@ -1388,5 +1424,5 @@ if (require.main === module) {
 module.exports = {
     pickBundleAsset, pickChecksumAsset, extractZip, normalizeSha256, parseChecksumFile, classifyZipSource, sha256File,
     parseArgs, buildSystemdFiles, systemdInstallSteps, writeSystemdFiles,
-    sysctlDropIn, serviceUserProblem, systemdPreflight, createSystemdStagingDir, LOW_PORT_ADVICE, HELP,
+    sysctlDropIn, serviceUserProblem, systemdPreflight, createSystemdStagingDir, LOW_PORT_ADVICE, HELP, installedFileMode,
 };
