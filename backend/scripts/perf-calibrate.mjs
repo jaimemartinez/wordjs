@@ -232,7 +232,16 @@ export function evaluate(run, budget, platform = process.platform) {
  * platform, when it was measured with a different methodology (sample counts, warmups, trim), or when
  * its operation set is not exactly the committed one. Mixing any of those into a calibration would mint
  * a ceiling from a measurement the enforcing harness no longer makes.
+ *
+ * Two producers are accepted, both the SAME harness: perf-calibrate.mjs artifacts (the isolated perf job),
+ * and rounds lifted verbatim from the `measured:` line the harness prints when it fails inside an
+ * enforcing job (Backend `npm test`, the F6 phase suites), wrapped with
+ * `generatedBy: 'backend/src/tests/f6-performance-budget.test.ts'`. The isolated job alone under-states
+ * the tail: the budget is enforced in busier jobs, and a ceiling minted only from the quiet one failed
+ * there on unchanged code (contentUpdate 10.742x against a 10.662x ceiling).
  */
+const RECORDED_PRODUCERS = new Set(['backend/scripts/perf-calibrate.mjs', 'backend/src/tests/f6-performance-budget.test.ts']);
+
 export function collectRecordedRounds(sources, budget, platform) {
     const files = [];
     const walk = (entry) => {
@@ -256,8 +265,8 @@ export function collectRecordedRounds(sources, budget, platform) {
             refused.push(`${file}: not JSON (${error.message})`);
             continue;
         }
-        if (!artifact || artifact.generatedBy !== 'backend/scripts/perf-calibrate.mjs' || !Array.isArray(artifact.rounds)) {
-            refused.push(`${file}: not a perf-calibrate.mjs artifact`);
+        if (!artifact || !RECORDED_PRODUCERS.has(artifact.generatedBy) || !Array.isArray(artifact.rounds)) {
+            refused.push(`${file}: not a perf-calibrate.mjs artifact nor a recorded F6 harness round`);
             continue;
         }
         const host = artifact.host || {};

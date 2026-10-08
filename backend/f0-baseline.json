@@ -108,31 +108,32 @@
           "arch": "x64",
           "node": "22.x",
           "driver": "sqlite-native",
-          "date": "2026-10-07",
-          "runs": 104,
-          "source": "104 one-round perf-calibration.json artifacts recorded by CI in measure mode, reduced with perf-calibrate.mjs --calibrate --from",
+          "date": "2026-10-08",
+          "runs": 145,
+          "source": "145 rounds: 142 one-round perf-calibration.json artifacts from the isolated CI perf job, plus 3 rounds lifted from the measured: line of the harness failing inside ENFORCING jobs (the Backend job's npm test twice, the F6 phase suites once), reduced with perf-calibrate.mjs --calibrate --from",
           "ceilingFactor": 1.5,
-          "worstObservedRunToRunRatioSpread": 2.769,
-          "sensitivityNote": "Ceilings are 1.5x the worst of the 104 calibration rounds, and the worst run-to-run ratio spread across those rounds was 2.769x. The gate therefore trips somewhere between a 1.5x regression (measured on a bad run) and a 4.154x one (measured on a good run). That is the honest sensitivity: it catches the N+1 query, the lost index, the second sanitisation pass and the synchronous flush. It does not catch a 20% slowdown, and chasing 20% on a shared runner buys false failures rather than information."
+          "worstObservedRunToRunRatioSpread": 3.175,
+          "sensitivityNote": "Ceilings are 1.5x the worst of the 145 calibration rounds, and the worst run-to-run ratio spread across those rounds was 3.175x. The gate therefore trips somewhere between a 1.5x regression (measured on a bad run) and a 4.762x one (measured on a good run). That is the honest sensitivity: it catches the N+1 query, the lost index, the second sanitisation pass and the synchronous flush. It does not catch a 20% slowdown, and chasing 20% on a shared runner buys false failures rather than information.",
+          "enforcingJobsNote": "The first linux calibration (2026-10-07) used the isolated perf job only and failed the F6 phase suites on unchanged code (contentUpdate 10.742x against 10.662x, with a 0.1539 ms reference). The budget is enforced in busier jobs, so their tails belong in the calibration; the looser ceilings are that, not a slower content path."
         },
         "reference": {
           "observedMillisecondsTrimmedMean": 0.356
         },
         "operations": {
           "contentCreate": {
-            "observedRatioToReference": 8.334,
-            "maximumRatioToReference": 12.501,
-            "observedMillisecondsP95": 2.7442
+            "observedRatioToReference": 10.958,
+            "maximumRatioToReference": 16.437,
+            "observedMillisecondsP95": 3.0241
           },
           "contentUpdate": {
-            "observedRatioToReference": 7.108,
-            "maximumRatioToReference": 10.662,
+            "observedRatioToReference": 10.742,
+            "maximumRatioToReference": 16.113,
             "observedMillisecondsP95": 3.3197
           },
           "contentQuery": {
-            "observedRatioToReference": 1.605,
-            "maximumRatioToReference": 2.407,
-            "observedMillisecondsP95": 0.5355
+            "observedRatioToReference": 1.768,
+            "maximumRatioToReference": 2.652,
+            "observedMillisecondsP95": 0.5486
           },
           "contentRender": {
             "observedRatioToReference": 0.216,
