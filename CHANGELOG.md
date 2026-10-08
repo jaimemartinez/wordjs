@@ -218,7 +218,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   `verify:f0` requires a `linux` calibration. `perf-calibrate.mjs` mints one platform's calibration,
   can reduce already-recorded CI artifacts with `--from`, and reports a re-mint looser than the committed
   ceiling as an error. The CI `Performance budgets` job now enforces the `linux` calibration on every
-  push and pull request (it is still not a required check).
+  push and pull request (it is still not a required check). The `linux` calibration covers the tails of
+  the jobs that enforce it, not only the isolated perf job: a first version minted from that job alone
+  failed the F6 phase suites on unchanged code (`contentUpdate` 10.742x against 10.662x), so it was
+  re-minted from 145 rounds including the measurements of failing enforcing jobs (`--from` now also
+  accepts the harness's own `measured:` rounds).
 
 ## [2.3.0] - 2026-10-07
 
