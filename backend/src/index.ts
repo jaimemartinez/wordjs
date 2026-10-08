@@ -1760,22 +1760,14 @@ async function initialize() {
         try {
             const iso = require('./core/plugin-isolate');
             iso.probeKernelHardening().then(() => {
-                const state = iso.getSandboxHardeningState();
-                if (state === 'degraded') {
-                    console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-                    console.warn('⚠️  Plugin sandbox DEGRADED: the native OS confinement probe FAILED');
-                    console.warn('   on this host — isolated plugins run WITHOUT the native OS backstop.');
-                    console.warn('   Inspect GET /health/details for the failed property, or set');
-                    console.warn('   sandbox.requireHardening=true to fail closed. Visible to admins on GET /api/v1/settings/all');
-                    console.warn('   (sandbox_hardening_degraded) and GET /health/details.');
-                    console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-                } else if (state === 'active') {
-                    console.log('🛡️  Plugin sandbox: native kernel confinement ACTIVE.');
-                } else if (state === 'unsupported') {
-                    console.log('🛡️  Plugin sandbox: native kernel confinement UNAVAILABLE — isolated plugins use process separation + JS guards + Node permission model.');
-                } else if (state === 'disabled') {
-                    console.log('🛡️  Plugin sandbox: kernel hardening DISABLED via config (sandbox.useKernelHardening=false).');
-                }
+                // What the banner may say about plugins depends on the launch posture: REFUSED under the
+                // default fail-closed policy, unconfined only when that policy is off or exempt.
+                const banner = iso.sandboxBootBanner(iso.getSandboxHardeningState(), iso.isolatedLaunchPosture());
+                for (const l of banner.lines) (banner.level === 'warn' ? console.warn : console.log)(l);
+                // The privilege the backend ITSELF was started with (root, AmbientCapabilities=). Logged
+                // after the probe settles, because what the warning may truthfully say about
+                // plugins depends on whether the sandbox is active. No-op off Linux and when nothing is held.
+                try { require('./core/host-privilege').warnHostPrivilegeAtBoot(); } catch { /* diagnostic only */ }
             }).catch(() => { /* the probe never throws; guard anyway so boot is unaffected */ });
         } catch (e: any) {
             console.warn('[boot] sandbox hardening probe skipped:', e && e.message);

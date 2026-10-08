@@ -23,6 +23,7 @@ const { authenticate, authenticateAllowQuery } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler, publicErrorText } = require('../middleware/errorHandler');
 const { recordAudit } = require('../core/audit');
+const { findSandboxUnavailable, sandboxRefusalBody } = require('../core/sandbox-refusal');
 const { execFile } = require('child_process');
 const { resolveWithin } = require('../core/safe-path');
 
@@ -710,11 +711,15 @@ async function runPluginUpdate(
     };
     // Put the previous version back exactly: partial new code out (data/ kept), stashed code in, grants
     // restored, reactivated if it had been running. Best-effort — a rollback must never itself throw.
-    const rollback = async () => {
+    // Resolves to whether the plugin is RUNNING again (true when it did not need to be), because "rolled
+    // back" without that is the claim an admin acts on: when the reactivation fails too, the previous
+    // version is on disk but switched off, and the answer has to say so.
+    const rollback = async (): Promise<boolean> => {
         try { removePluginDirPreservingData(installedDir); } catch { /* */ }
         if (stashDir) { try { moveEntriesInto(stashDir, installedDir); fs.rmSync(stashDir, { recursive: true, force: true }); } catch { /* */ } stashDir = null; }
         await restoreGrants();
-        if (wasActive) { try { await core.activatePlugin(slug); } catch (e: any) { console.warn('[plugin-update %s] rollback reactivate failed: %s', logSafe(slug), logSafe(e && e.message)); } }
+        if (!wasActive) return true;
+        try { await core.activatePlugin(slug); return true; } catch (e: any) { console.warn('[plugin-update %s] rollback reactivate failed: %s', logSafe(slug), logSafe(e && e.message)); return false; }
     };
 
     try {
@@ -765,8 +770,20 @@ async function runPluginUpdate(
                 await core.activatePlugin(slug);
             } catch (actErr: any) {
                 try { require('../core/plugin-isolate').unloadIsolatedPlugin(slug); } catch { /* */ }
-                await rollback();
-                return { ok: false, status: 500, body: { error: `Update installed but reactivation failed and was rolled back: ${actErr && actErr.message}`, rolledBack: true, restoredVersion: fromVersion } };
+                const reactivated = await rollback();
+                const stillOff = reactivated ? '' : ` The previous version${fromVersion ? ` (v${fromVersion})` : ''} is back on disk but is NOT running: it could not be started again either, so it is now inactive. Activate it once the cause is fixed.`;
+                // THE SANDBOX REFUSED the new version (and, on a host whose sandbox is down, the old one
+                // too): the same 409 `sandbox_unavailable` the activation route answers, so the stable
+                // code, the failure line and the operator action reach this caller as well, instead of a
+                // generic 500 whose only trace of the cause was the wrapped message.
+                const refusal = findSandboxUnavailable(actErr);
+                if (refusal) {
+                    return { ok: false, status: 409, body: sandboxRefusalBody(refusal, {
+                        message: `Update of '${slug}' installed, but the plugin sandbox refused to start it, so the update was rolled back.${stillOff} ${refusal.message}`,
+                        rolledBack: true, restoredVersion: fromVersion, reactivated,
+                    }) };
+                }
+                return { ok: false, status: 500, body: { error: `Update installed but reactivation failed and was rolled back: ${actErr && actErr.message}.${stillOff}`, rolledBack: true, restoredVersion: fromVersion, reactivated } };
             }
         }
 
@@ -1128,7 +1145,10 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
  *               properties:
  *                 state:
  *                   type: string
- *                   description: running, crashed, crash-looping or restarting.
+ *                   description: >-
+ *                     running, crashed, crash-looping, restarting, stopped, or refused — the plugin sandbox
+ *                     would not start it (at boot, on a supervised restart or on another node); lastError is
+ *                     the refusal and `sandbox` its details.
  *                 pid:
  *                   type: integer
  *                 startedAt:
@@ -1146,6 +1166,21 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
  *                   nullable: true
  *                 rssBytes:
  *                   type: integer
+ *                 sandbox:
+ *                   type: object
+ *                   description: Only with state `refused` — the same object as `details.sandbox` of a 409 sandbox_unavailable.
+ *                   properties:
+ *                     mechanism:
+ *                       type: string
+ *                     state:
+ *                       type: string
+ *                     reason:
+ *                       type: string
+ *                     failure:
+ *                       type: string
+ *                       nullable: true
+ *                     action:
+ *                       type: string
  *       400:
  *         description: The slug is not a well-formed plugin slug (rejected before any path is built).
  *       401:
@@ -1188,6 +1223,46 @@ router.get('/:slug/status', authenticate, isAdmin, asyncHandler(async (req: Requ
  *     responses:
  *       200:
  *         description: Plugin activated
+ *       400:
+ *         description: >
+ *           The plugin was rejected before it started: an undeclared browser capability
+ *           (`plugin_browser_capability_undeclared`) or a failed static validation, whose `details`
+ *           split missing permissions from forbidden calls.
+ *       409:
+ *         description: >
+ *           `sandbox_unavailable` — the plugin sandbox refused to start the plugin, either because the
+ *           native sandbox is not active on this server under the fail-closed policy
+ *           (`sandbox.requireHardening`) or because its launcher refused this launch. `message` is the
+ *           human reason; `details.sandbox` names the mechanism, its state, the launcher's own failure
+ *           line when there is one, and the operator action. Paths are never included.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 code:
+ *                   type: string
+ *                   enum: [sandbox_unavailable]
+ *                 message:
+ *                   type: string
+ *                 details:
+ *                   type: object
+ *                   properties:
+ *                     sandbox:
+ *                       type: object
+ *                       properties:
+ *                         mechanism:
+ *                           type: string
+ *                           enum: [landlock, appcontainer, seatbelt, none]
+ *                         state:
+ *                           type: string
+ *                         reason:
+ *                           type: string
+ *                         failure:
+ *                           type: string
+ *                           nullable: true
+ *                         action:
+ *                           type: string
  */
 router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     // SECURITY: Validate slug to prevent path traversal
@@ -1255,6 +1330,15 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
                 },
             });
         }
+        // THE SANDBOX REFUSED TO START IT. core/plugins.ts wraps every activation failure, so the
+        // refusal is found in the cause chain, not by matching words. A 409 with the stable code
+        // `sandbox_unavailable`: the request was fine, this SERVER cannot confine plugins right now,
+        // and the body says which sandbox, what failed and what the operator can do. It used to fall
+        // through to the generic 500 below - "The server encountered an internal error" - on the exact
+        // host where every activation was being refused and the administrator needed to know why.
+        // The text is path-free by construction (core/sandbox-refusal.ts); the log keeps the rest.
+        const refusal = findSandboxUnavailable(e);
+        if (refusal) return res.status(409).json(sandboxRefusalBody(refusal));
         throw e;
     }
 
@@ -1343,6 +1427,12 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
  *           Authenticated but not an administrator (rest_forbidden); an API token whose scope does not grant
  *           write access here (rest_token_scope_insufficient); or a cookie-authenticated request that failed
  *           the same-origin / double-submit CSRF gate (rest_csrf_invalid, rest_csrf_token).
+ *       409:
+ *         description: >-
+ *           `sandbox_unavailable` — the grants WERE saved (`saved: true`), but the plugin sandbox refused to
+ *           restart the plugin, which is now stopped (`stopped: true`). Same body as POST
+ *           /plugins/{slug}/activate's 409: `details.sandbox` names the mechanism, state, failure line and
+ *           operator action.
  *       429:
  *         description: Global per-IP API rate limit exceeded.
  */
@@ -1393,16 +1483,28 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
     // Gate on the REASON, not on `deactivated`: if the scan condemned the plugin but the deactivation
     // itself failed, restarting the isolate would put the condemned code straight back to work.
     let reloaded = false;
+    let reloadRefusal: any = null;
     if (!deactivationReason) {
         try {
             const { reloadIsolatedPlugin, isIsolated } = require('../core/plugin-isolate');
             if (isIsolated(slug)) { await reloadIsolatedPlugin(slug); reloaded = true; }
         } catch (e: any) {
             console.warn("[Permissions] reload of '%s' after grant change failed:", logSafe(slug), e && e.message);
+            reloadRefusal = findSandboxUnavailable(e);
         }
     }
 
     const granted = getGrants(slug);
+    // THE SANDBOX REFUSED THE RESTART. reloadIsolatedPlugin stops the running child BEFORE it loads the
+    // new one, so the plugin is now STOPPED - and "permissions updated, reactivate to fully apply" with a
+    // 200 told the admin the opposite. The grants ARE saved (they were persisted above); the answer is
+    // the refusal contract plus exactly that.
+    if (reloadRefusal) {
+        return res.status(409).json(sandboxRefusalBody(reloadRefusal, {
+            message: `Permissions for '${slug}' were saved (${granted.length} granted), but the plugin is now STOPPED: the plugin sandbox refused to restart it. ${reloadRefusal.message}`,
+            slug, granted, network: granted.includes('network'), saved: true, reloaded: false, stopped: true,
+        }));
+    }
     const tail = deactivationReason
         ? (deactivated
             ? ` Plugin DEACTIVATED — its code requires a capability you denied: ${deactivationReason}`
@@ -1518,6 +1620,11 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
  *           Authenticated but not an administrator (rest_forbidden); an API token whose scope does not grant
  *           write access here (rest_token_scope_insufficient); or a cookie-authenticated request that failed
  *           the same-origin / double-submit CSRF gate (rest_csrf_invalid, rest_csrf_token).
+ *       409:
+ *         description: >-
+ *           `sandbox_unavailable` — the allowlist WAS saved (`saved: true`), but the plugin sandbox refused to
+ *           restart the plugin, which is now stopped (`stopped: true`). Same body as POST
+ *           /plugins/{slug}/activate's 409.
  *       429:
  *         description: Global per-IP API rate limit exceeded.
  */
@@ -1540,14 +1647,24 @@ router.post('/:slug/egress-hosts', authenticate, isAdmin, asyncHandler(async (re
 
     // Re-spawn the isolate so the child re-installs the new allowlist (pushed in cfg → egress-guard.setAllowedHosts).
     let reloaded = false;
+    let reloadRefusal: any = null;
     try {
         const { reloadIsolatedPlugin, isIsolated } = require('../core/plugin-isolate');
         if (isIsolated(slug)) { await reloadIsolatedPlugin(slug); reloaded = true; }
     } catch (e: any) {
         console.warn("[EgressHosts] reload of '%s' after egress change failed:", logSafe(slug), e && e.message);
+        reloadRefusal = findSandboxUnavailable(e);
     }
 
     const saved = getEgressAllowlist(slug);
+    // Same as the grants route: the child was stopped before the refused load, so say so - with the
+    // refusal contract - instead of "reactivate the plugin to apply".
+    if (reloadRefusal) {
+        return res.status(409).json(sandboxRefusalBody(reloadRefusal, {
+            message: `The egress allowlist for '${slug}' was saved (${saved.length} host(s)), but the plugin is now STOPPED: the plugin sandbox refused to restart it. ${reloadRefusal.message}`,
+            slug, hosts: saved, saved: true, reloaded: false, stopped: true,
+        }));
+    }
     res.json({
         success: true,
         slug,
@@ -1577,6 +1694,11 @@ router.post('/:slug/egress-hosts', authenticate, isAdmin, asyncHandler(async (re
  *         description: Isolate re-spawned (the reload re-runs the full load pipeline, AST scan included)
  *       404:
  *         description: Plugin is not a loaded isolated plugin
+ *       409:
+ *         description: >-
+ *           `sandbox_unavailable` — the plugin sandbox refused to start the new child; the old one was
+ *           already stopped, so the plugin is now stopped (`stopped: true`). Same body as POST
+ *           /plugins/{slug}/activate's 409.
  */
 router.post('/:slug/reload', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     // SECURITY: Validate slug to prevent path traversal
@@ -1592,7 +1714,19 @@ router.post('/:slug/reload', authenticate, isAdmin, asyncHandler(async (req: Req
     if (!isIsolated(slug)) {
         return res.status(404).json({ error: `Plugin '${slug}' is not a loaded isolated plugin (is it active?)` });
     }
-    await reloadIsolatedPlugin(slug);
+    try {
+        await reloadIsolatedPlugin(slug);
+    } catch (e: any) {
+        // The same 409 body as the activation route (the old child is already stopped at this point).
+        const refusal = findSandboxUnavailable(e);
+        if (refusal) {
+            return res.status(409).json(sandboxRefusalBody(refusal, {
+                message: `Plugin '${slug}' is now STOPPED: the plugin sandbox refused to restart it. ${refusal.message}`,
+                slug, stopped: true,
+            }));
+        }
+        throw e;
+    }
     res.json({ success: true, slug, message: `Isolate for '${slug}' reloaded.` });
 }));
 
@@ -1994,7 +2128,20 @@ router.post('/:slug/free-port', authenticate, isAdmin, asyncHandler(async (req: 
         // Reload the (running) plugin so its own bind logic can take the freed port right away.
         let reloaded = false;
         if (isIsolated(slug)) {
-            await reloadIsolatedPlugin(slug);
+            try {
+                await reloadIsolatedPlugin(slug);
+            } catch (reloadErr: any) {
+                // The port WAS freed; the restart is what the sandbox refused, and the plugin is stopped.
+                const refusal = findSandboxUnavailable(reloadErr);
+                if (refusal) {
+                    return res.status(409).json(sandboxRefusalBody(refusal, {
+                        ...result,
+                        message: `Port ${port} was freed, but plugin '${slug}' is now STOPPED: the plugin sandbox refused to restart it. ${refusal.message}`,
+                        reloaded: false, stopped: true,
+                    }));
+                }
+                throw reloadErr;
+            }
             reloaded = true;
         }
         res.json({ success: true, ...result, reloaded });

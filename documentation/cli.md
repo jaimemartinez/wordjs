@@ -51,7 +51,7 @@ It (1) looks up the **latest pre-compiled release ZIP** from GitHub (`jaimemarti
 
 The token is passed to the backend via the `WORDJS_INSTALL_TOKEN` env var (24 random bytes = 48 hex chars; the backend accepts it because it is ≥ 16 chars — see § 1). A fresh release bundle ships **without** `gateway/gateway-config.json` (secrets are never bundled), so the CLI seeds a minimal `{ "ssl": true }` there to enable **self-signed HTTPS** on `:3000` (never overwriting an existing config); pass `--http` to serve plain HTTP (`WORDJS_HTTP=1`) instead. Plain Node, no TypeScript — the only runtime dependency is `adm-zip`. Requires **Node ≥ 20.9** and refuses to run into a non-empty target directory. The version published to npm is set from the release tag at publish time (`npm pkg set version` in `.github/workflows/release.yml`), so the version committed in `packages/create-wordjs/package.json` is not the authoritative one.
 
-An unknown `-`/`--` option is a hard error (`Unknown option: …`), as is an extra positional argument.
+An unknown `-`/`--` option is a hard error (`Unknown option: …`), as is an extra positional argument. So are `--port`/`--service-user` without `--systemd`, `--systemd` with `gateway`/`join`, and `--systemd` on a machine that is not Linux (checked before anything is downloaded).
 
 **Integrity.** Every path that installs code (create, `upgrade`, `gateway`, `join`) obtains the ZIP through one function and checks it **before extracting anything**:
 
@@ -71,7 +71,67 @@ An unknown `-`/`--` option is a hard error (`Unknown option: …`), as is an ext
 | `--yes`, `-y` | Skip the confirmation prompt — required when upgrading non-interactively. |
 | `--force` | (`upgrade`) Re-apply even if the install is already on the target version. |
 | `--no-install` | (`upgrade`) Swap the code only; skip `npm run release:install`. |
+| `--systemd` | (create, `upgrade`; **Linux only**) Also write `wordjs.service` — a systemd unit that runs WordJS as a dedicated **non-root account holding no Linux capabilities** — to a private staging directory outside the site, and print how to install it. With create it implies `--no-start` (the first boot must run as the service account so it owns the files it creates). With `upgrade` the unit is written even when the site is already on the target version, which is how an existing install replaces a hand-written unit. The site path, the node path and the account running the CLI are checked before anything is downloaded. See [below](#running-as-a-systemd-service---systemd). |
+| `--port <n>` | (with `--systemd`) Public port, written into the unit as `Environment=PORT=<n>`. Without it the unit sets no `PORT`, so the site's configured `gatewayPort` (else `3000`) applies. A port below 1024 also produces `60-wordjs-ports.conf` — never a capability. |
+| `--service-user <name>` | (with `--systemd`) The account the unit runs as (default `wordjs`). `root` is refused. |
 | `-h`, `--help` | Show usage (exit 0). |
+
+### Running as a systemd service (`--systemd`)
+
+```bash
+npx create-wordjs@latest /srv/wordjs --systemd --port 443          # new site
+npx create-wordjs@latest upgrade /srv/wordjs --systemd              # existing site (keeps its configured port)
+```
+
+The CLI stages two files in a fresh private directory (`mkdtemp` under the temporary directory: `/tmp/wordjs-systemd-XXXXXX`, mode `0700`, owned by whoever ran it) and prints the steps to install them; it never installs anything as root itself. **Not in the site directory**, on purpose: the next printed step hands the site to the service account, and a file root then installs into `/etc` — the unit decides which account the service runs as, the drop-in is applied with `sysctl --system` — must not be one the service (or a plugin that escaped its sandbox) could rewrite, or swap for a symlink, first. For the same reason each file is created exclusively (`O_EXCL`), root installs it with `install -o root -g root -m 0644`, and the CLI refuses to run as the service account itself.
+
+- **`wordjs.service`** — built from the real install path and the `node` that ran the CLI (`process.execPath`). For the first command above, on a host with `/usr/bin/node`, it is exactly:
+
+  ```ini
+  [Unit]
+  Description=WordJS (monolith)
+  Documentation=https://github.com/jaimemartinez/wordjs/blob/main/documentation/deployment.md
+  After=network-online.target
+  Wants=network-online.target
+
+  [Service]
+  Type=simple
+  User=wordjs
+  WorkingDirectory=/srv/wordjs
+  ExecStart=/usr/bin/node /srv/wordjs/monolith.js prod
+  Environment=NODE_ENV=production
+  Environment=PORT=443
+  Environment=HOME=/srv/wordjs
+  Restart=on-failure
+  RestartSec=5
+
+  NoNewPrivileges=yes
+  CapabilityBoundingSet=
+  PrivateTmp=yes
+  ProtectSystem=strict
+  ReadWritePaths=/srv/wordjs
+  ProtectHome=yes
+
+  [Install]
+  WantedBy=multi-user.target
+  ```
+
+  (The generated file also carries comments explaining each choice; they are left out here.) There is no `AmbientCapabilities=` and the bounding set is **empty**: the service cannot hold a capability, and nothing it runs can gain one. `HOME` is pinned to the site directory because npm keeps its cache under `$HOME` when WordJS installs a plugin's declared dependencies, and `ProtectHome=` hides `/home`. When `node` is not in systemd's default `PATH` (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin`) the unit adds an `Environment=PATH=` that puts node's directory first, since WordJS runs `npm` by name. `--http` adds `Environment=WORDJS_HTTP=1`.
+- **`60-wordjs-ports.conf`** — only when a port the process binds is below 1024 (the public port, plus `acme.http01Port` from the config when HTTPS is on). It sets `net.ipv4.ip_unprivileged_port_start` to the lowest such port and states its trade-off in the file: the setting lowers the privileged-port floor for **every** unprivileged process in that network namespace, not for WordJS alone. The file also says how to withdraw it.
+
+The printed steps, for the example above (`<stage>` is the staging directory the CLI printed):
+
+```bash
+sudo useradd --system --home-dir /srv/wordjs --shell /usr/sbin/nologin wordjs   # skip if it exists
+sudo chown -R wordjs: /srv/wordjs
+sudo install -o root -g root -m 0644 <stage>/60-wordjs-ports.conf /etc/sysctl.d/60-wordjs-ports.conf && sudo sysctl --system   # only for a port below 1024
+sudo install -o root -g root -m 0644 <stage>/wordjs.service /etc/systemd/system/wordjs.service
+sudo systemctl daemon-reload && sudo systemctl enable --now wordjs
+sudo cat /srv/wordjs/backend/data/install-token        # then open https://<your-host>/install#token=<that token>
+rm -r <stage>                                           # the staged copies are not needed afterwards
+```
+
+With `upgrade` the start line becomes `sudo systemctl daemon-reload && sudo systemctl enable wordjs && sudo systemctl restart wordjs` — `enable` included, because a site that ran under `npm run start:mono`, pm2 or a unit of another name has no enabled `wordjs.service`, and a restart alone would not bring it back after a reboot. The steps also say to stop and disable whatever served the site until now (`systemctl disable --now <name>`, `pm2 delete <name> && pm2 save`, or a foreground `npm run start:mono`) — otherwise both fight over the port; a unit that was also named `wordjs.service` is simply replaced — and how to remove a capability the old setup may have granted (`getcap <node>`, `sudo setcap -r <node>`). When the port no longer needs the drop-in, an `upgrade` prints how to withdraw one an earlier run installed (`sudo rm -f /etc/sysctl.d/60-wordjs-ports.conf && sudo sysctl -w net.ipv4.ip_unprivileged_port_start=1024 && sudo sysctl --system`). Two directives depend on where things live, and are left out with a warning rather than shipped in a shape that cannot start: `ProtectHome=yes` when the site or `node` is under `/home`, `/root` or `/run/user` (an nvm/fnm/asdf node, for instance — the service account usually cannot run it there anyway), and `PrivateTmp=yes` when the site is under `/tmp` or `/var/tmp`. A site or node path containing spaces, quotes, backslashes, `%` or `$` is refused — before anything is downloaded — because a unit file would interpret them. Why there is no capability, what the hardening was verified against, and the reverse-proxy alternative are in [deployment.md](deployment.md#-running-as-a-service-systemd-non-root).
 
 ### Subcommands (beyond the default scaffold)
 

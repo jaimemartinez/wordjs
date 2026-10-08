@@ -110,7 +110,7 @@ The workflow then publishes a **GitHub Release** with the versioned `wordjs-<tag
 > ```bash
 > npx create-wordjs@latest my-site
 > ```
-> It verifies the ZIP's SHA-256 against the release's `wordjs-<tag>.zip.sha256` asset before extracting it (an older release without that asset installs with a warning that it was not verified; `--zip` URLs must be `https://`, and `--sha256 <hex>` pins a checksum for a `--zip` source — see [cli.md § 2](cli.md#2-one-command-site-bootstrap-npx-create-wordjs)). It then installs the runtime dependencies for you (`npm run release:install` — no build step), seeds self-signed HTTPS (pass `--http` for plain HTTP) and starts the server (`npm run start:mono`) with a one-time install token, printing a ready-to-click `https://localhost:3000/install#token=…` URL. Pass `--no-start` to scaffold + install only; start it later with `cd my-site && npm run start:mono` (or `npm start` for the 3-service split). The manual download below is the equivalent, step-by-step alternative.
+> It verifies the ZIP's SHA-256 against the release's `wordjs-<tag>.zip.sha256` asset before extracting it (an older release without that asset installs with a warning that it was not verified; `--zip` URLs must be `https://`, and `--sha256 <hex>` pins a checksum for a `--zip` source — see [cli.md § 2](cli.md#2-one-command-site-bootstrap-npx-create-wordjs)). It then installs the runtime dependencies for you (`npm run release:install` — no build step), seeds self-signed HTTPS (pass `--http` for plain HTTP) and starts the server (`npm run start:mono`) with a one-time install token, printing a ready-to-click `https://localhost:3000/install#token=…` URL. Pass `--no-start` to scaffold + install only; start it later with `cd my-site && npm run start:mono` (or `npm start` for the 3-service split). On a Linux server, `--systemd` (e.g. `npx create-wordjs@latest /srv/wordjs --systemd --port 443`) writes a systemd unit that runs the site as a dedicated non-root account with no capabilities instead of starting it — see **[Running as a service](#-running-as-a-service-systemd-non-root)**. The manual download below is the equivalent, step-by-step alternative.
 
 1. Download `wordjs-<tag>.zip` **and** `wordjs-<tag>.zip.sha256` from the GitHub Release, verify the download with `sha256sum -c wordjs-<tag>.zip.sha256` (releases published before the checksum asset was introduced do not have one), and unzip it.
 2. Install **runtime deps only** (no build/compile step — prebuilt native binaries are downloaded):
@@ -269,6 +269,68 @@ pm2 start npm --name "wordjs-frontend" -- start
 ```
 
 > Make sure `cd backend && npm run build` has run first, otherwise the backend falls back to slower `ts-node`.
+
+---
+
+## 🔧 Running as a service (systemd, non-root)
+
+On a Linux server, run WordJS as a **dedicated, unprivileged account that holds no Linux capabilities**. `create-wordjs` writes a unit that does exactly that:
+
+```bash
+npx create-wordjs@latest /srv/wordjs --systemd --port 443        # a new site
+npx create-wordjs@latest upgrade /srv/wordjs --systemd            # an existing one (also when already up to date)
+```
+
+It stages `wordjs.service` (and, for a port below 1024, `60-wordjs-ports.conf`) in a fresh private directory (`/tmp/wordjs-systemd-XXXXXX`, mode `0700`) and prints the install steps: create the account (`useradd --system --home-dir /srv/wordjs --shell /usr/sbin/nologin wordjs`), `chown -R wordjs: /srv/wordjs`, `install -o root -g root -m 0644` the drop-in into `/etc/sysctl.d/` and the unit into `/etc/systemd/system/`, `systemctl enable --now wordjs` (with `upgrade`: `enable` and `restart`, after stopping whatever served the site before), then read `backend/data/install-token` to finish the wizard. The files are staged **outside the site on purpose**: the site directory is handed to the service account, and a file root later installs into `/etc` must not be one the service can rewrite (or replace with a symlink) first. Run the command as your own account or with `sudo`, not as the service account — it refuses to. The full unit, option by option, is in [cli.md](cli.md#running-as-a-systemd-service---systemd). The lines that matter here:
+
+```ini
+User=wordjs
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+# and nowhere: AmbientCapabilities=
+```
+
+### Why not `setcap` or `AmbientCapabilities=`
+
+The usual way to let a non-root Node service bind 80/443 is to give it `CAP_NET_BIND_SERVICE`, either as a file capability on the node binary (`setcap`; `create-wordjs` itself used to print that command) or as `AmbientCapabilities=CAP_NET_BIND_SERVICE` in the unit. Neither is recommended, and neither is needed:
+
+- **`AmbientCapabilities=`** is inherited across `execve` by every child the service starts, including the Linux plugin sandbox (`backend/scripts/landlock-seccomp-shim.pl`), which has to shed every capability before it confines a plugin. A production site running as a non-root user with this directive had its sandbox degrade and **every plugin refused**: the shim treated the capability as root, tried a privilege drop that needs `CAP_SETGID`/`CAP_SETPCAP`, and failed closed (`SHIM-FAIL: setgroups(clear): Operation not permitted`, exit 79; reproduced on Linux 7.0 by starting the shim as an unprivileged user with an ambient `cap_net_bind_service`). The shim now sheds it without that authority (see `documentation/security.md` §1.0a), but a service that needs no capability should hold none.
+- **`setcap cap_net_bind_service=+ep` on node** fails differently. Measured on Linux 7.0 with node 22, running a capped copy of node as an unprivileged user:
+  - it does **not** reach the sandbox: the shim (perl) carries no file capability, so it starts with an empty permitted set, and the plugin's node — exec'd under `no_new_privs` — gets none either;
+  - it reaches **every** script that binary runs, for **every** user on the machine: any `node -e` could bind port 81, not only WordJS;
+  - it puts node in **secure-execution mode** (`AT_SECURE=1`): glibc strips `TMPDIR` and the `LD_*` variables from its environment (`os.tmpdir()` fell back to `/tmp` with `TMPDIR=/var/tmp` set). Node itself tolerates a process holding only `CAP_NET_BIND_SERVICE` (it still honoured `NODE_OPTIONS` and `NODE_EXTRA_CA_CERTS`), but the confined plugin child, exec'd from the same binary, inherits `AT_SECURE` **without** the capability, so there `NODE_OPTIONS` was ignored and a `TMPDIR` passed to it was removed (the sandbox forwards `TMPDIR` to plugins);
+  - it lives in an extended attribute on the binary's inode, so **a node upgrade silently removes it** (a replaced file, or one rewritten in place, came back with no capability) and the next restart cannot bind its port;
+  - under `NoNewPrivileges=yes` — which the generated unit sets — the kernel does not grant it at all (the capped node got `EACCES` binding :81).
+
+**If a capability is present anyway** (a hand-written unit, an old `setcap`), what reaches plugins depends on the sandbox. When the kernel sandbox is active (`sandbox.hardening: "active"` on `GET /api/v1/health/details`), plugins start with every capability set empty — its probe verifies exactly that. When it is not, and `sandbox.requireHardening` is off, plugins start without it as plain children of the core and **inherit** an ambient capability (a capped node grants its file capability to them afresh); with `requireHardening` on (the default) they are refused instead. Either way the core logs a warning at boot and reports it in `GET /api/v1/health/details` as `sandbox.hostPrivilege` (status `EXCESS`, with the `source` — `ambient`, `file-capabilities`, `root` or `real-uid-root` — and the `fix`). To find and remove it:
+
+```bash
+grep -E '^Cap(Prm|Eff|Amb)' /proc/$(systemctl show -p MainPID --value wordjs)/status   # all zeros is right
+systemctl cat wordjs | grep -i capabilit            # remove any AmbientCapabilities= line
+getcap "$(readlink -f "$(command -v node)")"        # if it prints cap_net_bind_service:
+sudo setcap -r "$(readlink -f "$(command -v node)")"
+```
+
+### Ports below 1024, without a capability
+
+1. **A reverse proxy** (nginx, Caddy) on 80/443, forwarding to WordJS on a high port (`3000`, or `WORDJS_HTTP=1` behind a TLS-terminating proxy — see the **LAN / remote access & TLS** note above for the `Host` and `X-CSRF-Token` headers it must pass through). Nothing about WordJS's privileges changes, and nothing else on the host can take the port. This is the choice for a host you share.
+2. **`net.ipv4.ip_unprivileged_port_start`**, the kernel's own setting for unprivileged services — what `--systemd` writes for a port below 1024:
+
+   ```bash
+   echo 'net.ipv4.ip_unprivileged_port_start = 443' | sudo tee /etc/sysctl.d/60-wordjs-ports.conf
+   sudo sysctl --system
+   ```
+
+   **The trade-off:** this is not a grant to WordJS. It lowers the privileged-port floor for **every** unprivileged process in that network namespace, so any local user or service may then bind every port from that value to 1023 — and could take WordJS's port while it is stopped. Use it on a machine you do not share with untrusted users. Set it to the lowest port WordJS binds: Let's Encrypt HTTP-01 (`acme.http01Port: 80`) needs `80`. It covers IPv6 too, despite the name, and it is **per network namespace**: a fresh namespace starts at 1024 rather than inheriting the host's value, so a container (or an LXC guest) has its own setting, made inside it. Measured in a throwaway namespace with the value set to 80: an unprivileged account with `no_new_privs` and an empty bounding set bound 80 and 443 on `127.0.0.1` and `::1`, and was refused 79 and 25.
+
+### What the unit's hardening was verified against
+
+`NoNewPrivileges=yes`, an empty `CapabilityBoundingSet=`, `PrivateTmp=yes`, `ProtectSystem=strict` with `ReadWritePaths=<site>`, and `ProtectHome=yes` were checked on Debian 13 (Linux 7.0, Landlock ABI 8) by running a WordJS 2.3.0 monolith under the unit `create-wordjs --systemd` generated (unprivileged account, node outside the default `PATH`): the main process ran with all capability sets empty, `NoNewPrivs: 1`, `/` read-only and the site writable; the install wizard, sign-in, a media upload and the public pages (including the Next.js cache writes) worked; an isolated plugin activated through the Landlock/seccomp shim (`landlock=abi8 … seccomp=on`, the child at `CapBnd 0`, `NoNewPrivs 1`, `Seccomp 2`) and `GET /api/v1/health/details` reported `sandbox.hardening: "active"`; and `npm install` under the same settings (what plugin dependency installs run) succeeded with its cache under the site directory. The same install without the hardening block behaved identically. `systemd-analyze verify` passes on the generated unit (on a host without `/usr/bin/node` it reports only that the `ExecStart=` binary is missing). The sandbox needs none of what the unit removes: it sets `no_new_privs` itself, and `landlock_restrict_self` and seccomp need no capability once it is set.
+
+Two things to know:
+
+- WordJS writes inside its own directory (database, uploads, backups, plugins, themes, `.next` cache, generated certificates, and npm's cache through the pinned `HOME`) and in the temporary directory (upload staging, theme builds, the sandbox probe), which `PrivateTmp=yes` keeps private and writable. That is why `ReadWritePaths=` names just the site directory; if you point any WordJS path elsewhere, add it there.
+- The opt-in preventive memory cap (`sandbox.useCgroupMemoryCap`, below) is **not available under this unit**. It runs `systemd-run --user`, which talks to the account's own user manager over its session bus, and a system service has none: WordJS passes `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` to `systemd-run` only when its own environment has them, which a system unit's does not, and a `--system` account has no user manager at all unless lingering is enabled for it. Measured as the service account in a transient unit *without* `ProtectHome=`: `systemd-run --user --scope -p MemoryMax=100M true` failed with "`$DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined`". So with the unit as generated that probe fails and WordJS keeps the default `RLIMIT_AS` cap, as on any host where the probe fails. Making it work would take at least `loginctl enable-linger <account>`, `Environment=XDG_RUNTIME_DIR=/run/user/<uid>` and `Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/<uid>/bus` in the unit, and removing `ProtectHome=yes` (which hides `/run/user`); that combination is not part of what was verified above.
 
 ---
 
@@ -581,6 +643,7 @@ The value is floored at 6144 MB and validated by a boot probe (using the same `e
 5.  **Metrics:** The Prometheus `/metrics` endpoint is **disabled (returns 404) by default** — it only serves once a scrape token is set via `config.metrics.token` (`wordjs-config.json`) or the `METRICS_TOKEN` env var. Once set, scrape with `Authorization: Bearer <token>` (header only — `?token=` is not accepted); a wrong token returns 401. So metrics are never exposed publicly unless you opt in.
 6.  **CORS:** No extra config is needed — in production CORS allows the configured origins (`siteUrl`, `frontendUrl`) **plus any same-origin request** (`Origin` scheme, host and port matching the gateway-pinned `X-Forwarded-Host` from a trusted hop, or `Host` when there is no proxy), which covers the monolith and a reverse proxy that forwards `Host`; only an explicit `nodeEnv: "development"` additionally reflects `localhost`/`127.0.0.1`/`::1`.
 7.  **Private keys 0600:** Auto-generated private keys (`ssl-auto.key`, `gateway-internal.key`, ACME `privkey.pem`) are written owner-only (`0600`) on POSIX (`chmod` is a no-op on Windows), so the self-signed/auto keys are not world-readable.
+8.  **No root, no capabilities:** On Linux run WordJS as a dedicated unprivileged account with no capabilities — no `AmbientCapabilities=`, no `setcap` on node — and reach ports below 1024 through a reverse proxy or `net.ipv4.ip_unprivileged_port_start`. `npx create-wordjs@latest … --systemd` writes such a unit. See **[Running as a service](#-running-as-a-service-systemd-non-root)**.
 
 ### Production Checklist
 

@@ -16,6 +16,10 @@
  *      With --no-start there is no token from here: the server mints its own on its first boot and
  *      prints it in its banner only when ITS stdout is a TTY (or WORDJS_PRINT_INSTALL_TOKEN=1);
  *      otherwise it writes it to <dir>/backend/data/install-token (mode 0600) and prints the path.
+ *   With --systemd (Linux) it does not start anything: it stages wordjs.service, a unit that runs the
+ *   site as a dedicated non-root account with no Linux capabilities (plus a sysctl.d drop-in when the
+ *   port is below 1024), in a private directory OUTSIDE the site, and prints how to install it. See
+ *   buildSystemdFiles for why no capability, and createSystemdStagingDir for why not in the site.
  *
  * Plain Node, no TypeScript. Only runtime dependency: adm-zip (ZIP extraction).
  */
@@ -68,6 +72,15 @@ Options:
                         TLS certificate must chain to it before the token is sent (MITM guard).
   --advertise <ip/dns>  (join) This node's routable address the gateway will proxy to.
   --enroll-port <port>  (join) Gateway token-enrollment port (default 3101).
+  --systemd             (create, upgrade; Linux) Also write a systemd unit, wordjs.service, to a
+                        private staging directory (never the site, which the service will own) and
+                        print how to install it. The unit runs WordJS as a dedicated non-root
+                        account holding NO Linux capabilities. With create it implies --no-start:
+                        the first boot must run as that account.
+  --port <n>            (with --systemd) Public port, written into the unit as PORT=<n> (default:
+                        the site's configured port, else 3000). Below 1024 it also stages
+                        60-wordjs-ports.conf (net.ipv4.ip_unprivileged_port_start), never a capability.
+  --service-user <name> (with --systemd) The account the service runs as (default: wordjs). Not root.
   -h, --help            Show this help.
 
 Examples:
@@ -75,6 +88,11 @@ Examples:
   npx create-wordjs@latest my-site --version v2.1.0
   npx create-wordjs@latest upgrade                     # from inside your site directory
   npx create-wordjs@latest upgrade ./my-site --yes
+  npx create-wordjs@latest /srv/wordjs --systemd --port 443
+
+Ports below 1024 (80/443) on Linux: put a reverse proxy (nginx, Caddy) in front of WordJS on a high
+port, or lower net.ipv4.ip_unprivileged_port_start (--systemd writes that drop-in for you). Do not
+give node a capability with setcap or AmbientCapabilities=. See documentation/deployment.md.
 
 Separate mode (three machines) — run one command per machine:
   # on the gateway machine (prints ready-to-paste join commands with fresh tokens):
@@ -102,6 +120,7 @@ function parseArgs(argv) {
     const opts = {
         mode: 'create', dir: null, zip: null, version: null, http: false, start: true, yes: false, force: false, install: true,
         role: null, gateway: null, token: null, caHash: null, advertise: null, enrollPort: null, host: null,
+        systemd: false, port: null, serviceUser: null,
         sha256: null,
     };
     // A leading subcommand selects the mode (default is the monolith create flow).
@@ -131,8 +150,27 @@ function parseArgs(argv) {
         else if (a === '--advertise') opts.advertise = argv[++i] || fail('--advertise needs this node\'s ip/dns.');
         else if (a === '--enroll-port') opts.enrollPort = argv[++i] || fail('--enroll-port needs a port.');
         else if (a === '--host') opts.host = argv[++i] || fail('--host needs the gateway ip/dns.');
+        else if (a === '--systemd') opts.systemd = true;
+        else if (a === '--port') opts.port = argv[++i] || fail('--port needs a value (1-65535).');
+        else if (a === '--service-user') opts.serviceUser = argv[++i] || fail('--service-user needs an account name.');
         else if (a.startsWith('-')) fail(`Unknown option: ${a}`, 'Run with --help to see the available options.');
         else positionals.push(a);
+    }
+    if ((opts.port !== null || opts.serviceUser !== null) && !opts.systemd) {
+        fail('--port and --service-user only apply together with --systemd.',
+            'Without a unit, the port comes from the PORT environment variable or the site config (default 3000).');
+    }
+    if (opts.systemd) {
+        if (opts.mode !== 'create' && opts.mode !== 'upgrade') {
+            fail(`--systemd is not available for "${opts.mode}".`, 'Use it when creating or upgrading a single-machine site.');
+        }
+        if (opts.port !== null) {
+            const n = /^\d{1,5}$/.test(opts.port) ? Number(opts.port) : NaN;
+            if (!(n >= 1 && n <= 65535)) fail(`--port must be a whole number from 1 to 65535 (got "${opts.port}").`);
+            opts.port = n;
+        }
+        const problem = serviceUserProblem(opts.serviceUser === null ? DEFAULT_SERVICE_USER : opts.serviceUser);
+        if (problem) fail(problem.message, problem.hint);
     }
     // Positionals: `join <role> [dir]` takes the role first; every other mode takes just [dir].
     if (opts.mode === 'join' && !opts.role) opts.role = positionals.shift() || null;
@@ -406,16 +444,52 @@ function isSymlinkEntry(entry) {
     return ((attr >>> 16) & S_IFMT) === S_IFLNK;
 }
 
+/**
+ * The mode an installed file gets: 0755 when the archive marked it executable for anyone, else 0644.
+ * Never group- or world-writable, whatever the archive says — and an archive built on Windows carries
+ * no Unix mode at all, which must not be read as "anything goes".
+ */
+function installedFileMode(entry) {
+    const unix = ((Number(entry && entry.header && entry.header.attr) >>> 0) >>> 16) & 0o777;
+    return (unix & 0o111) ? 0o755 : 0o644;
+}
+
 function extractZip(zipPath, targetDir) {
     const AdmZip = require('adm-zip'); // lazy so --help works even before deps are installed
     const zip = new AdmZip(zipPath);
     // Vet EVERY entry before writing ANY: a refused archive leaves nothing half-extracted behind.
     const root = path.resolve(targetDir);
-    for (const entry of zip.getEntries()) {
-        containedEntryPath(root, entry.entryName);
+    const entries = zip.getEntries();
+    const planned = entries.map((entry) => {
+        const dest = containedEntryPath(root, entry.entryName);
         if (isSymlinkEntry(entry)) throw new Error(`Refusing ZIP entry that is a symbolic link: ${entry.entryName}`);
+        return { entry, dest };
+    });
+    // Written entry by entry, NOT with adm-zip's extractAllTo: its writeFileTo does chmod(path, attr ||
+    // 0o666), and chmod ignores the umask, so every installed file — code that may later run as root —
+    // came out world-writable, and an upgrade over an existing 0644 install turned it into 0666 as well.
+    for (const { entry, dest } of planned) {
+        if (entry.isDirectory) {
+            fs.mkdirSync(dest, { recursive: true, mode: 0o755 });
+            continue;
+        }
+        fs.mkdirSync(path.dirname(dest), { recursive: true, mode: 0o755 });
+        const mode = installedFileMode(entry);
+        let existing = null;
+        try { existing = fs.lstatSync(dest); } catch { /* new file */ }
+        if (existing) {
+            // An upgrade writes over an existing tree: never through a link someone placed there, and
+            // tighten a file left writable by an older installer BEFORE putting new code into it.
+            if (existing.isSymbolicLink() || !existing.isFile()) {
+                throw new Error(`Refusing to overwrite ${path.relative(root, dest)}: it is not a regular file in the existing install`);
+            }
+            fs.chmodSync(dest, mode);
+        }
+        fs.writeFileSync(dest, entry.getData(), { mode });
+        // `mode` only applies on creation and is narrowed by the umask; restate it so the result is the
+        // same for every caller and every existing file.
+        fs.chmodSync(dest, mode);
     }
-    zip.extractAllTo(targetDir, true);
     // Official bundles put files at the ZIP root; tolerate a single wrapper folder too.
     if (!fs.existsSync(path.join(targetDir, 'package.json'))) {
         const entries = fs.readdirSync(targetDir);
@@ -557,6 +631,360 @@ function ensureHttpsConfig(targetDir) {
     }
 }
 
+// --- systemd service (--systemd) ---------------------------------------------------------------
+//
+// WHY THE UNIT GRANTS NOTHING, AND WHY THIS INSTALLER STOPPED PRINTING `setcap`.
+//
+// The familiar way to let a non-root Node service bind 80/443 (or 25) is CAP_NET_BIND_SERVICE: either a
+// file capability set on the node binary with `setcap`, which this installer used to recommend, or
+// `AmbientCapabilities=CAP_NET_BIND_SERVICE` in the unit. Both collide with the plugin sandbox. On Linux
+// every isolated plugin starts through backend/scripts/landlock-seccomp-shim.pl, which must shed every
+// capability it inherited before it confines the plugin. An AMBIENT capability is inherited by the shim
+// across execve; the shim took it for root, ran a root-only drop (setgroups, securebits, the bounding set
+// need CAP_SETGID/CAP_SETPCAP, which a non-root service does not hold), failed with EPERM and every plugin
+// was refused: the production failure behind this option. (The shim now sheds a non-root service's
+// capabilities on its own, but a service that needs none should hold none, and the core reports one that
+// does.) A FILE capability on node fails differently, and it is worth
+// being exact about how, because it does NOT reproduce that failure. Measured on Linux 7.0 / node 22
+// (a capped copy of node, run as an unprivileged user):
+//   . it reaches no further than the binary: perl carries no file capability, so the shim it spawns
+//     starts with an empty permitted set, and the plugin's node, exec'd under no_new_privs, gets none;
+//   . it reaches EVERY script that binary runs, for every user on the machine: any `node -e` could
+//     bind port 81, not only WordJS;
+//   . it puts node in secure-execution mode (AT_SECURE=1): glibc strips TMPDIR and the LD_* family from
+//     its environment, and the confined plugin child, exec'd from the same binary, inherits AT_SECURE
+//     without the capability, so there Node also ignores NODE_OPTIONS and TMPDIR is gone;
+//   . it lives in an xattr on the binary's inode, so a node upgrade (a new file renamed over the old
+//     one) or any rewrite of the file silently removes it, and the next restart cannot bind its port.
+//
+// So the unit holds no capability at all, and a port below 1024 is reached the way the kernel offers an
+// unprivileged service: net.ipv4.ip_unprivileged_port_start, written as a sysctl.d drop-in beside the
+// unit. That has a cost the drop-in spells out (it lowers the floor for every unprivileged process in the
+// network namespace, not for WordJS alone), which is why a reverse proxy on 80/443 in front of a high
+// port is offered as the alternative everywhere this advice appears.
+const DEFAULT_SERVICE_USER = 'wordjs';
+const SYSTEMD_UNIT_FILE = 'wordjs.service';
+const SYSCTL_DROPIN_FILE = '60-wordjs-ports.conf';
+// The kernel default of net.ipv4.ip_unprivileged_port_start: binding a port below it needs privilege.
+const PRIVILEGED_PORT_LIMIT = 1024;
+// systemd's PATH for system services. WordJS runs `npm` BY NAME to install a plugin's declared
+// dependencies at activation, and npm's own shebang finds node through PATH, so when node lives anywhere
+// else its directory is prepended in the unit; otherwise activation would fail with ENOENT.
+const SYSTEMD_DEFAULT_PATH = ['/usr/local/sbin', '/usr/local/bin', '/usr/sbin', '/usr/bin'];
+
+/** Why `name` cannot be the service account, or null when it can. */
+function serviceUserProblem(name) {
+    if (!/^[a-z_][a-z0-9_-]{0,31}$/.test(String(name))) {
+        return {
+            message: `"${name}" is not a usable account name for --service-user.`,
+            hint: 'Use lowercase letters, digits, "_" or "-", starting with a letter or "_" (for example: wordjs).',
+        };
+    }
+    if (name === 'root') {
+        return {
+            message: 'WordJS must not run as root.',
+            hint: 'Use a dedicated account (the default is wordjs); the steps printed with the unit create it.',
+        };
+    }
+    return null;
+}
+
+// A unit file is not a shell, but it is not inert either: `%` starts a specifier, `$` an environment
+// expansion in ExecStart=, whitespace separates ExecStart= arguments and ReadWritePaths= entries, and
+// quotes and backslashes are parsed. Rather than escape a path for three different parsers, accept only
+// paths that need no escaping in any of them and ask for a plain one otherwise.
+function unitSafePath(p) {
+    return typeof p === 'string' && /^\/[A-Za-z0-9._@+,/-]*$/.test(p) && !p.split('/').includes('..');
+}
+
+function underAny(p, roots) {
+    return roots.some((r) => p === r || p.startsWith(r + '/'));
+}
+
+/**
+ * The sysctl.d drop-in that lets an unprivileged service bind from `start` up, with its trade-off
+ * written into the file itself: whoever later finds it in /etc/sysctl.d/ should not have to guess why
+ * it is there or what it costs.
+ */
+function sysctlDropIn(start, { http = false } = {}) {
+    const lines = [
+        `# WordJS: allow unprivileged processes to bind ports from ${start} up (written by create-wordjs --systemd).`,
+        '#',
+        '# This is NOT a grant to WordJS alone. It lowers the privileged-port floor for EVERY unprivileged',
+        `# process in this network namespace, so any local user or service may bind ports ${start}-1023 too, and`,
+        '# could take the port first while WordJS is stopped. Use it on a host you do not share with untrusted',
+        '# users; otherwise put a reverse proxy (nginx, Caddy) on 80/443 and keep WordJS on a high port.',
+        '# It covers IPv6 as well, despite its name. A container has its own network namespace and value.',
+    ];
+    if (!http && start > 80) {
+        lines.push(`# Let's Encrypt HTTP-01 (acme.http01Port: 80 in wordjs-config.json) needs this lowered to 80.`);
+    }
+    lines.push(
+        '#',
+        `# Install: sudo install -o root -g root -m 0644 ${SYSCTL_DROPIN_FILE} /etc/sysctl.d/ && sudo sysctl --system`,
+        `# Withdraw: sudo rm /etc/sysctl.d/${SYSCTL_DROPIN_FILE} && sudo sysctl -w net.ipv4.ip_unprivileged_port_start=1024 && sudo sysctl --system`,
+        `net.ipv4.ip_unprivileged_port_start = ${start}`,
+        '',
+    );
+    return lines.join('\n');
+}
+
+/**
+ * Everything --systemd writes, as text: the unit, the sysctl drop-in when a bound port is below 1024, and
+ * the warnings worth printing. Pure (POSIX paths in, strings out) so it can be exercised directly.
+ *
+ *   port            the explicit --port, or null. Only an explicit port is written into the unit: an
+ *                   inherited value would silently override a port changed in the config later.
+ *   configuredPort  the port the site's config already sets (gatewayPort), or null.
+ *   acmeHttp01Port  acme.http01Port from the config, or null: monolith.js binds it beside an HTTPS
+ *                   listener, so it counts toward the privileged-port floor.
+ */
+function buildSystemdFiles({ installDir, nodePath, user = DEFAULT_SERVICE_USER, port = null, configuredPort = null, acmeHttp01Port = null, http = false }) {
+    for (const [what, p] of [['site directory', installDir], ['node binary', nodePath]]) {
+        if (!unitSafePath(p)) {
+            const err = new Error(`The ${what} path "${p}" cannot go into a systemd unit as is: it must be absolute, without spaces, quotes, backslashes, "%" or "$".`);
+            err.hint = what === 'site directory'
+                ? 'Install the site under a plain path such as /srv/wordjs.'
+                : 'Install Node.js under a plain path such as /usr/bin/node or /usr/local/bin/node.';
+            throw err;
+        }
+    }
+    const problem = serviceUserProblem(user);
+    if (problem) { const err = new Error(problem.message); err.hint = problem.hint; throw err; }
+
+    const publicPort = port || configuredPort || 3000;
+    const bound = [publicPort];
+    if (!http && acmeHttp01Port) bound.push(acmeHttp01Port);
+    const privileged = bound.filter((p) => p < PRIVILEGED_PORT_LIMIT);
+    const sysctlStart = privileged.length ? Math.min(...privileged) : null;
+
+    // Two hardening directives depend on WHERE things are, and each is dropped (with a warning) rather
+    // than shipped in a shape that cannot start: ProtectHome= hides /home, /root and /run/user, which
+    // breaks a site or a node (nvm, fnm, asdf) living there; PrivateTmp= gives the service an empty
+    // /tmp and /var/tmp, which would hide a site installed there.
+    const homeRoots = ['/home', '/root', '/run/user'];
+    const tmpRoots = ['/tmp', '/var/tmp'];
+    const warnings = [];
+    if (underAny(installDir, homeRoots)) {
+        warnings.push(`The site is inside a home directory (${installDir}). A service account usually cannot reach it there, and the unit leaves out ProtectHome=. Prefer /srv/<name> or /opt/<name>.`);
+    }
+    if (underAny(nodePath, homeRoots)) {
+        warnings.push(`node runs from ${nodePath}, inside a home directory (nvm, fnm, asdf…). The service account usually cannot execute it there: install Node.js system-wide and point ExecStart= at it, or re-run this with that node.`);
+    }
+    if (underAny(installDir, tmpRoots)) {
+        warnings.push(`The site is under a temporary directory (${installDir}), which the system may clean. The unit leaves out PrivateTmp= because it would hide the site; move it to /srv or /opt.`);
+    }
+
+    const nodeDir = path.posix.dirname(nodePath);
+    const env = ['NODE_ENV=production'];
+    if (port) env.push(`PORT=${port}`);
+    if (http) env.push('WORDJS_HTTP=1');
+    // HOME pinned inside the one writable tree: npm keeps its cache and reads its config under $HOME
+    // when it installs plugin dependencies, and ProtectHome= would hide a home under /home.
+    env.push(`HOME=${installDir}`);
+    if (!SYSTEMD_DEFAULT_PATH.includes(nodeDir)) env.push(`PATH=${[nodeDir, ...SYSTEMD_DEFAULT_PATH].join(':')}`);
+
+    const unit = [
+        '# WordJS - generated by create-wordjs --systemd.',
+        '#',
+        `# Runs the site as the unprivileged account "${user}" and grants it NO Linux capabilities. Keep it`,
+        '# that way: do not add AmbientCapabilities=, widen CapabilityBoundingSet= or setcap the node binary',
+        '# to reach a port below 1024. On Linux every isolated plugin runs under a Landlock/seccomp sandbox',
+        '# that has to shed any capability the service holds before it can confine the plugin.',
+        sysctlStart
+            ? `# Port ${publicPort} is below 1024: install ${SYSCTL_DROPIN_FILE} (next to this file) or use a reverse proxy.`
+            : '# Ports below 1024: lower net.ipv4.ip_unprivileged_port_start, or use a reverse proxy.',
+        '# See documentation/deployment.md, "Running as a service".',
+        '',
+        '[Unit]',
+        'Description=WordJS (monolith)',
+        'Documentation=https://github.com/jaimemartinez/wordjs/blob/main/documentation/deployment.md',
+        'After=network-online.target',
+        'Wants=network-online.target',
+        '',
+        '[Service]',
+        'Type=simple',
+        `User=${user}`,
+        `WorkingDirectory=${installDir}`,
+        `ExecStart=${nodePath} ${installDir}/monolith.js prod`,
+        ...env.map((e) => `Environment=${e}`),
+        'Restart=on-failure',
+        'RestartSec=5',
+        '',
+        '# Hardening. Each line takes something away; none grants anything.',
+        '#   NoNewPrivileges, empty CapabilityBoundingSet: nothing the service runs can gain privileges',
+        '#     (no setuid binary, no file capability). The plugin sandbox sets no_new_privs itself and',
+        '#     needs no capability, so it is unaffected.',
+        '#   ProtectSystem=strict + ReadWritePaths: the filesystem is read-only except the site directory,',
+        '#     where WordJS writes its database, uploads, backups, plugins, themes and build caches.',
+        '#   PrivateTmp, ProtectHome: a private /tmp, and no view of /home, /root or /run/user.',
+        'NoNewPrivileges=yes',
+        'CapabilityBoundingSet=',
+        ...(underAny(installDir, tmpRoots) ? [] : ['PrivateTmp=yes']),
+        'ProtectSystem=strict',
+        `ReadWritePaths=${installDir}`,
+        ...((underAny(installDir, homeRoots) || underAny(nodePath, homeRoots)) ? [] : ['ProtectHome=yes']),
+        '',
+        '[Install]',
+        'WantedBy=multi-user.target',
+        '',
+    ].join('\n');
+
+    return {
+        unit,
+        sysctl: sysctlStart ? { start: sysctlStart, content: sysctlDropIn(sysctlStart, { http }) } : null,
+        publicPort,
+        warnings,
+    };
+}
+
+/**
+ * The steps to install what buildSystemdFiles produced, as printable lines (pure, for the same reason).
+ * `stageDir` is where writeSystemdFiles put the two files - never the site directory (see there).
+ */
+function systemdInstallSteps({ installDir, user = DEFAULT_SERVICE_USER, built, http = false, upgrade = false, nodePath = process.execPath, stageDir }) {
+    const staged = (f) => path.posix.join(stageDir, f);
+    const lines = [];
+    let n = 0;
+    const step = (title, ...cmds) => { lines.push(`  ${++n}. ${title}`); for (const c of cmds) lines.push(`       ${c}`); };
+    lines.push('To run it as a service (as root):');
+    step('Create the service account (skip if it exists):',
+        `sudo useradd --system --home-dir ${installDir} --shell /usr/sbin/nologin ${user}`);
+    step('Give it the site directory:', `sudo chown -R ${user}: ${installDir}`);
+    // `install -o root -g root -m 0644` and not `cp`: root takes the staged file's CONTENT into a file it
+    // creates itself, root-owned and not writable by anyone else, whatever the staged copy's mode was.
+    if (built.sysctl) {
+        step(`Let it bind port ${built.publicPort} without a capability (read the trade-off in the file first):`,
+            `sudo install -o root -g root -m 0644 ${staged(SYSCTL_DROPIN_FILE)} /etc/sysctl.d/${SYSCTL_DROPIN_FILE} && sudo sysctl --system`);
+    } else if (upgrade) {
+        // A site that moved to a high port (behind a proxy, say) no longer needs the floor lowered, and an
+        // installed drop-in would go on letting every unprivileged process bind below 1024 for no reason.
+        // Setting 1024 first and re-applying the rest leaves any OTHER drop-in's value in force.
+        step(`Port ${built.publicPort} needs no lowered port floor. If an earlier run installed /etc/sysctl.d/${SYSCTL_DROPIN_FILE}, withdraw it:`,
+            `sudo rm -f /etc/sysctl.d/${SYSCTL_DROPIN_FILE} && sudo sysctl -w net.ipv4.ip_unprivileged_port_start=1024 && sudo sysctl --system`);
+    }
+    step('Install the unit and start it:',
+        `sudo install -o root -g root -m 0644 ${staged(SYSTEMD_UNIT_FILE)} /etc/systemd/system/${SYSTEMD_UNIT_FILE}`,
+        // enable on upgrade too: a site started with `npm run start:mono`, pm2 or a unit of another name
+        // has no enabled wordjs.service, and a restart alone does not bring it back after a reboot.
+        upgrade ? 'sudo systemctl daemon-reload && sudo systemctl enable wordjs && sudo systemctl restart wordjs'
+            : 'sudo systemctl daemon-reload && sudo systemctl enable --now wordjs');
+    if (!upgrade) {
+        const proto = http ? 'http' : 'https';
+        const defaultPort = http ? 80 : 443;
+        const hostPort = built.publicPort === defaultPort ? '<your-host>' : `<your-host>:${built.publicPort}`;
+        step('Finish setup in the browser with the one-time install token the first boot writes:',
+            `sudo cat ${path.posix.join(installDir, 'backend', 'data', 'install-token')}`,
+            `then open ${proto}://${hostPort}/install#token=<that token>`);
+    } else {
+        lines.push('  Before step ' + n + ', stop and disable whatever served this site until now, or it and wordjs.service',
+            '  will fight over the port: a unit with another name (sudo systemctl disable --now <name>), pm2',
+            '  (pm2 delete <name> && pm2 save), or a foreground `npm run start:mono`. A unit that was also named',
+            '  wordjs.service is replaced by step ' + n + ' - including an AmbientCapabilities= or capability-carrying',
+            `  CapabilityBoundingSet= in it. If node carries a file capability (check with getcap ${nodePath}),`,
+            `  remove it: sudo setcap -r ${nodePath}`);
+    }
+    lines.push(`  The staged copies in ${stageDir} are not needed afterwards: rm -r ${stageDir}`);
+    lines.push('  Logs: journalctl -u wordjs -f');
+    return lines;
+}
+
+/**
+ * A fresh, private directory to stage the files root will install.
+ *
+ * NEVER THE SITE DIRECTORY. These two files are read by root and installed into /etc - the unit decides
+ * which account the service runs as and what it may do; the drop-in is applied with `sysctl --system`.
+ * The site directory is handed to the service account by the very next printed step (`chown -R`), so a
+ * compromised WordJS process - or a plugin that got out of its sandbox - could rewrite either file
+ * between that step and root's copy (`User=root`, an ExecStartPre=; `kernel.modprobe = …`), or put a
+ * symlink in its place so this CLI, run with sudo, wrote through it into any file root can write.
+ * Measured: as the service account, a planted symlink made a root run of the old writer overwrite a
+ * root-only 0600 file, and a plain `mv` replaced the staged drop-in root was told to apply.
+ * mkdtemp creates a new directory, mode 0700, owned by whoever runs this CLI, under a name nobody could
+ * predict; the service account cannot enter it.
+ */
+function createSystemdStagingDir() {
+    return fs.mkdtempSync(path.join(os.tmpdir(), 'wordjs-systemd-'));
+}
+
+/**
+ * Write the unit (and the sysctl drop-in when one is needed) into `stageDir`, a directory from
+ * createSystemdStagingDir(). Each file is created EXCLUSIVELY (`wx` = O_CREAT|O_EXCL): an existing file -
+ * or a symlink planted under the name - makes the write fail rather than go through it.
+ */
+function writeSystemdFiles(stageDir, built) {
+    const unitPath = path.join(stageDir, SYSTEMD_UNIT_FILE);
+    const sysctlPath = path.join(stageDir, SYSCTL_DROPIN_FILE);
+    fs.writeFileSync(unitPath, built.unit, { flag: 'wx', mode: 0o644 });
+    if (built.sysctl) fs.writeFileSync(sysctlPath, built.sysctl.content, { flag: 'wx', mode: 0o644 });
+    return { unitPath, sysctlPath: built.sysctl ? sysctlPath : null };
+}
+
+/**
+ * Why --systemd cannot run for this site, with this node and as this account - or null. Checked before
+ * anything is downloaded, extracted or installed: a create used to fetch and install the whole release
+ * and only THEN refuse the path, leaving the populated directory behind, and an upgrade applied the new
+ * version and then exited 1.
+ */
+function systemdPreflight({ installDir, nodePath = process.execPath, user = DEFAULT_SERVICE_USER, runningAs = null }) {
+    for (const [what, p] of [['site directory', installDir], ['node binary', nodePath]]) {
+        if (!unitSafePath(p)) {
+            return {
+                message: `The ${what} path "${p}" cannot go into a systemd unit as is: it must be absolute, without spaces, quotes, backslashes, "%" or "$".`,
+                hint: what === 'site directory'
+                    ? 'Install the site under a plain path such as /srv/wordjs.'
+                    : 'Install Node.js under a plain path such as /usr/bin/node or /usr/local/bin/node.',
+            };
+        }
+    }
+    // The files root will install must not be writable by the service. Staged by the service account
+    // itself, they would be.
+    if (runningAs && runningAs === user) {
+        return {
+            message: `This is running as "${user}", the account the service will run as.`,
+            hint: 'Run create-wordjs --systemd as your own account or with sudo: the unit it stages for root must not be writable by the service.',
+        };
+    }
+    return null;
+}
+
+/** --systemd for a site on disk: read its config, stage the files, print the steps. Throws (with .hint) instead of exiting, so a caller's cleanup still runs. */
+function emitSystemd(installDir, opts) {
+    const readJson = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return {}; } };
+    // The same precedence monolith.js applies (minus the PORT env var, which is what --port writes).
+    const appConfig = readJson(path.join(installDir, 'backend', 'wordjs-config.json'));
+    const gwConfig = readJson(path.join(installDir, 'gateway', 'gateway-config.json'));
+    const user = opts.serviceUser || DEFAULT_SERVICE_USER;
+    const built = buildSystemdFiles({
+        installDir,
+        nodePath: process.execPath,
+        user,
+        port: opts.port,
+        configuredPort: Number(appConfig.gatewayPort || gwConfig.gatewayPort) || null,
+        acmeHttp01Port: Number(appConfig.acme && appConfig.acme.http01Port) || null,
+        http: opts.http,
+    });
+    const stageDir = createSystemdStagingDir();
+    const written = writeSystemdFiles(stageDir, built);
+    console.log('');
+    console.log(`   systemd unit staged: ${written.unitPath}`);
+    if (written.sysctlPath) console.log(`   sysctl drop-in for port ${built.publicPort}: ${written.sysctlPath}`);
+    console.log('   (staged outside the site on purpose: the service account will own the site, and must not be able to edit what root installs)');
+    for (const w of built.warnings) console.log(`   ⚠️  ${w}`);
+    console.log('');
+    for (const l of systemdInstallSteps({ installDir, user, built, http: opts.http, upgrade: opts.mode === 'upgrade', stageDir })) console.log(`   ${l}`);
+}
+
+// Printed on Linux after a plain (non --systemd) create, in place of the `setcap` line this installer
+// used to print. Why setcap is not the answer is explained above buildSystemdFiles.
+const LOW_PORT_ADVICE = [
+    '   • Serving on 80/443 later? A non-root process cannot bind a port below 1024 by default.',
+    '     Put a reverse proxy (nginx, Caddy) on 80/443 in front of this port, or lower',
+    '     net.ipv4.ip_unprivileged_port_start. Do not give node a capability (setcap): see',
+    '     documentation/deployment.md. A service unit that does this right: re-run with --systemd',
+    '     (for this site: npx create-wordjs@latest upgrade <dir> --systemd).',
+];
+
 // --- upgrade -----------------------------------------------------------------------------------
 
 function confirm(question) {
@@ -654,7 +1082,11 @@ async function upgrade(opts) {
         console.log(`  Target version:  v${newVersion}${tag ? ` (${tag})` : ''}`);
 
         if (curVersion === newVersion && !opts.force) {
-            console.log(`\n✅ Already on v${curVersion}. Nothing to upgrade.  (use --force to re-apply the same version)\n`);
+            console.log(`\n✅ Already on v${curVersion}. Nothing to upgrade.  (use --force to re-apply the same version)`);
+            // --systemd on an up-to-date site is still a request for the unit: it is how an existing
+            // install replaces a hand-written unit (one with AmbientCapabilities=, say) with this one.
+            if (opts.systemd) emitSystemd(installDir, opts);
+            console.log('');
             return;
         }
 
@@ -718,6 +1150,7 @@ async function upgrade(opts) {
         console.log(`      • otherwise: stop it, then  cd ${opts.dir === '.' ? installDir : opts.dir} && npm run start:mono`);
         console.log('');
         console.log('   Rollback: re-run with --version <old-tag> (your data stays intact).');
+        if (opts.systemd) emitSystemd(installDir, opts);
         console.log(line + '\n');
     } finally {
         cleanup();
@@ -845,6 +1278,26 @@ async function join(opts) {
 
 async function main() {
     const opts = parseArgs(process.argv.slice(2));
+    // Checked before anything is downloaded: the unit names this machine's node and site paths, so it
+    // can only be generated on the Linux host that will run it.
+    if (opts.systemd && process.platform !== 'linux') {
+        fail('--systemd writes a Linux systemd unit, and this machine is not running Linux.',
+            'Run create-wordjs with --systemd on the Linux host that will run the site.');
+    }
+    // ...and so is everything else the unit depends on: the site path, the node path and who is running
+    // this. Before, a path the unit cannot hold was found only after the whole release had been fetched
+    // and installed (create) or applied (upgrade), which then exited 1 with the work done.
+    if (opts.systemd) {
+        let runningAs = null;
+        try { runningAs = os.userInfo().username; } catch { /* unknown: the check below is skipped */ }
+        const problem = systemdPreflight({
+            installDir: path.resolve(process.cwd(), opts.dir),
+            nodePath: process.execPath,
+            user: opts.serviceUser || DEFAULT_SERVICE_USER,
+            runningAs,
+        });
+        if (problem) fail(problem.message, problem.hint);
+    }
     if (opts.mode === 'upgrade') return upgrade(opts);
     if (opts.mode === 'gateway') return gateway(opts);
     if (opts.mode === 'join') return join(opts);
@@ -890,6 +1343,17 @@ async function main() {
 
     const proto = opts.http ? 'http' : 'https';
     const line = '━'.repeat(64);
+
+    // --systemd implies --no-start: started from here, the first boot would run as whoever ran npx and
+    // leave the database, install token and certificates owned by that account instead of the service's.
+    if (opts.systemd) {
+        console.log(`\n${line}`);
+        console.log(`✅ WordJS scaffolded into ${targetDir} (dependencies installed). Not started: the first`);
+        console.log('   boot must run as the service account, so that it owns the files it creates.');
+        emitSystemd(targetDir, opts);
+        console.log(line + '\n');
+        return;
+    }
 
     if (!opts.start) {
         console.log(`\n${line}`);
@@ -938,11 +1402,7 @@ async function main() {
     console.log('      backend/data/install-token, mode 0600)');
     if (process.platform === 'linux') {
         console.log('');
-        console.log('   • RECEIVING email from the internet? WordJS listens on port 25 (the MX port).');
-        console.log('     Binding a port below 1024 as a non-root user needs a one-time grant — run once:');
-        console.log('        sudo setcap cap_net_bind_service=+ep "$(readlink -f "$(command -v node)")"');
-        console.log('     Without it, inbound falls back to port 2525 (sending + local mail still work);');
-        console.log('     the admin Email → Server Admin screen shows the live listener status either way.');
+        for (const l of LOW_PORT_ADVICE) console.log(l);
     }
     console.log(line + '\n');
 
@@ -958,7 +1418,11 @@ async function main() {
 
 // Run only when invoked as the CLI, so the pure helpers above can be required and exercised.
 if (require.main === module) {
-    main().catch((e) => fail(e && e.message ? e.message : String(e)));
+    main().catch((e) => fail(e && e.message ? e.message : String(e), e && e.hint));
 }
 
-module.exports = { pickBundleAsset, pickChecksumAsset, extractZip, normalizeSha256, parseChecksumFile, classifyZipSource, sha256File };
+module.exports = {
+    pickBundleAsset, pickChecksumAsset, extractZip, normalizeSha256, parseChecksumFile, classifyZipSource, sha256File,
+    parseArgs, buildSystemdFiles, systemdInstallSteps, writeSystemdFiles,
+    sysctlDropIn, serviceUserProblem, systemdPreflight, createSystemdStagingDir, LOW_PORT_ADVICE, HELP, installedFileMode,
+};

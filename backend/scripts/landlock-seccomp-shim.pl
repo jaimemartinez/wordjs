@@ -94,14 +94,17 @@ sub fail        { print STDERR "SHIM-FAIL: $_[0]\n";        exit $EX_FAIL; }
 # The three landlock_* numbers are identical on both (they were added in the shared asm-generic table
 # and x86_64 mirrors them): landlock_create_ruleset 444, landlock_add_rule 445, landlock_restrict_self
 # 446 - also confirmed in /usr/include/asm-generic/unistd.h.
+# setresuid (used only by the non-root privilege drop): x86_64 117 - confirmed by strace decoding
+# syscall(117) as setresuid on a 7.0 kernel - and aarch64 147 from the asm-generic table, the same number
+# this file's aarch64 identity-change denylist already carries.
 # Anything else refuses to run rather than guessing: a wrong syscall number would not fail loudly, it
 # would call SOMETHING ELSE.
 my $arch = `uname -m`; chomp $arch;
 my ($NR_prctl, $NR_seccomp, $NR_socket, $NR_socketpair, $NR_clone, $NR_clone3, $NR_capset, $NR_setgroups,
-    $AUDIT_ARCH, $X32_ABI, @BLOCKED);
+    $NR_setresuid, $AUDIT_ARCH, $X32_ABI, @BLOCKED);
 if ($arch eq 'x86_64') {
     ($NR_prctl, $NR_seccomp, $NR_socket, $NR_socketpair, $NR_clone, $NR_clone3, $NR_capset, $NR_setgroups,
-        $AUDIT_ARCH, $X32_ABI) = (157, 317, 41, 53, 56, 435, 126, 116, 0xc000003e, 1);
+        $NR_setresuid, $AUDIT_ARCH, $X32_ABI) = (157, 317, 41, 53, 56, 435, 126, 116, 117, 0xc000003e, 1);
     @BLOCKED = (
         # ptrace, kexec, modules, legacy kernel-control entry points, bpf/perf/userfaultfd,
         # cross-process memory, keyrings, mount/swap/reboot/setns/handle APIs.
@@ -125,7 +128,7 @@ if ($arch eq 'x86_64') {
 }
 elsif ($arch eq 'aarch64') {
     ($NR_prctl, $NR_seccomp, $NR_socket, $NR_socketpair, $NR_clone, $NR_clone3, $NR_capset, $NR_setgroups,
-        $AUDIT_ARCH, $X32_ABI) = (167, 277, 198, 199, 220, 435, 91, 159, 0xc00000b7, 0);
+        $NR_setresuid, $AUDIT_ARCH, $X32_ABI) = (167, 277, 198, 199, 220, 435, 91, 159, 147, 0xc00000b7, 0);
     @BLOCKED = (
         117, 104, 294, 105, 273, 106, 280, 241, 282, 270, 271, 272, 217, 218, 219,
         40, 39, 41, 224, 225, 142, 97, 268, 265, 264, 262, 263,
@@ -143,6 +146,7 @@ my $O_PATH    = 010000000;
 my $O_CLOEXEC = 02000000;
 my $PR_SET_NO_NEW_PRIVS = 38;
 my $PR_CAPBSET_DROP = 24;
+my $PR_GET_SECUREBITS = 27;
 my $PR_SET_SECUREBITS = 28;
 my $PR_CAP_AMBIENT = 47;
 my $PR_CAP_AMBIENT_CLEAR_ALL = 4;
@@ -225,10 +229,28 @@ for my $set (\@zones, \@read_roots, \@exec_roots) {
 # The application itself does not appear here at all: it arrives as --read-root / WORDJS_READ_ROOT,
 # which the CALLER must set, and a read root that will not grant is FATAL rather than skipped (an app
 # root the child cannot read is a child that cannot load its worker).
+#
+# TLS GETS THE TRUST STORE, NEVER THE KEYS. /etc/ssl used to be granted whole, and it holds
+# /etc/ssl/private - the host's private keys (0640 root:ssl-cert on Debian/Ubuntu, 0700 root elsewhere).
+# Landlock only bounds WHICH files are reachable; inside a grant the ordinary permission check still
+# decides, against the identity the plugin runs as. A root service keeps uid 0 (see the privilege block
+# below) and a service in the ssl-cert group keeps that group, so either one read the host's key
+# through the old grant - measured, not supposed. A TLS client needs the CA store and the OpenSSL
+# config: /etc/ssl/certs (ca-certificates.crt included), /etc/ssl/openssl.cnf, and the targets of the
+# per-CA symlinks in /etc/ssl/certs (/usr/share/ca-certificates, /usr/local/share/ca-certificates for
+# local CAs). /usr/lib/ssl/{certs,openssl.cnf,private} are symlinks into /etc/ssl, and Landlock checks
+# the object a path RESOLVES to, so the /usr/lib grant does not reopen /etc/ssl/private either.
+#
+# Several entries are FILES, and a file takes a smaller access set than a directory: READ_DIR is not a
+# valid right on a file, and landlock_add_rule() then refuses the whole rule with EINVAL instead of
+# dropping the bit. The loop below picks the set per entry. Before it did, every file entry in this
+# list (/etc/hosts, /etc/resolv.conf, /etc/nsswitch.conf, /etc/gai.conf) was silently skipped, and a
+# plugin could not read them.
 my @READ_TREES = qw(
     /usr/lib /usr/lib64 /lib /lib64 /lib32 /libx32
     /usr/share/zoneinfo /usr/share/locale /usr/share/icu
-    /etc/ssl /etc/ca-certificates /etc/localtime /etc/hosts /etc/nsswitch.conf /etc/resolv.conf /etc/gai.conf
+    /etc/ssl/certs /etc/ssl/openssl.cnf /usr/share/ca-certificates /usr/local/share/ca-certificates
+    /etc/ca-certificates /etc/localtime /etc/hosts /etc/nsswitch.conf /etc/resolv.conf /etc/gai.conf
     /proc/self /proc/thread-self /sys/devices/system/cpu /nix/store
 );
 my @EXEC_FILES = qw(
@@ -291,7 +313,9 @@ my $grant = sub {
     return defined($r) && $r == 0;
 };
 
-$grant->($_, $RO) for @READ_TREES;      # missing on this host => skipped, see the note above
+# Missing on this host => skipped, see the note above. `-d` follows a symlink exactly as O_PATH does, so
+# the access set is chosen for the object that is actually granted.
+$grant->($_, (-d $_ ? $RO : $FS_READ_FILE)) for @READ_TREES;
 $grant->($_, $RX_FILE) for @EXEC_FILES; # ELF PT_INTERP; without EXECUTE the kernel refuses the initial image
 
 # Literal boot devices only. Granting the /dev tree let a privileged caller reach raw disks, packet
@@ -325,35 +349,154 @@ for my $z (@zones) {
     $grant->($z, $ZONE_ACC) or fail("cannot grant the writable zone $z");
 }
 
-# A service launched as root must not hand that identity/capability set to an untrusted plugin. Keep the
-# UID (root-owned application trees must remain usable) but remove root semantics, supplementary groups,
-# every capability set and the bounding set. Locked securebits and no_new_privs make the reduction
-# irreversible across the exec into Node.
+# --- privilege: nothing the service was started with may reach the plugin --------------------------
+#
+# WHAT MUST HOLD WHEN THIS BLOCK IS DONE: the permitted, effective, inheritable and ambient sets are
+# empty, and no uid is 0 unless the EFFECTIVE uid is (a root service keeps its uid on purpose, below).
+# no_new_privs, set right after this block, then makes that irreversible: from then on execve can never
+# ADD a capability - not from file capabilities, not from a setuid-root binary, not from uid 0's own exec
+# rule - because the kernel intersects the new permitted set with the old one, which is now empty. That
+# much needs NO privilege: clearing the ambient set and a capset() that only LOWERS the three sets are
+# unconditionally allowed, so it is done whenever there is anything to shed.
+#
+# EVERYTHING ELSE IS DEFENCE IN DEPTH, AND EACH STEP RUNS ONLY WHEN THIS PROCESS CAN RUN IT. Which steps
+# run is decided by the capabilities the kernel says this process holds in its EFFECTIVE set, never by
+# its uid:
+#   . setgroups(0, 0) - supplementary groups still decide file access after every capability is gone.
+#     Needs CAP_SETGID, and is refused in a user namespace whose gid map was written without privilege
+#     (/proc/self/setgroups reads "deny": `unshare -r`, systemd PrivateUsers=).
+#   . SECBIT_NOROOT + SECBIT_NO_SETUID_FIXUP, locked - removes uid 0's special exec and setuid rules.
+#     Needs CAP_SETPCAP. Bits already set (systemd SecureBits=keep-caps-locked) are kept: a lock can
+#     never be cleared, and a request that tried would be refused as a whole.
+#   . emptying the bounding set (PR_CAPBSET_DROP), which limits what an exec could gain. CAP_SETPCAP.
+# Every step that runs is verified afterwards. A step that does not run is skipped because the process
+# lacks the authority for it, and then what it would have removed is either already absent or - for the
+# bounding set - meaningless under no_new_privs: it bounds a gain that can no longer happen. Requiring
+# CapBnd to be empty without CAP_SETPCAP would demand the impossible and bring the outage below back.
+#
+# WHY "BY CAPABILITY" AND NOT "BY UID". This block used to choose root's full sequence from the uid (and
+# before that from "holds any capability"). With the fail-closed launch policy, a step that cannot run
+# is EVERY plugin on the host refused, and two families of real deployments hit exactly that, exit 79:
+#   . a NON-ROOT service with systemd `AmbientCapabilities=CAP_NET_BIND_SERVICE`, so Node could listen
+#     on 443, was sent down root's path: "SHIM-FAIL: setgroups(clear): Operation not permitted";
+#   . ROOT WITHOUT CAP_SETGID or CAP_SETPCAP - a root unit hardened with CapabilityBoundingSet=, a
+#     container started with --cap-drop=ALL (plus NET_BIND_SERVICE), systemd PrivateUsers=, `unshare -r`,
+#     SecureBits=keep-caps-locked - failed the same way, on setgroups or on SECUREBITS.
+# In every one of them the capabilities the process held could be given up; only the defence-in-depth
+# steps it had no authority for were missing.
+#
+# THE SHAPES, as the SHIM: line names them (privdrop=...):
+#   root          euid 0 and every step ran. The uid is KEPT - root-owned application trees must stay
+#                 usable - so the plugin keeps uid 0's OWNER access to root-owned files inside the read
+#                 grants above, and the groups of the identity it runs as. What it loses is every
+#                 capability, i.e. every override of those permissions.
+#   root-partial  euid 0, and a step was skipped for lack of authority. The same guarantee on
+#                 capabilities; what is kept is the bounding set and/or the supplementary groups.
+#   caps          a non-root process holding capabilities, or one whose real, saved or filesystem uid is
+#                 still 0 - what a setuid-root wrapper (or a seteuid() from root) leaves behind. Those
+#                 ids are root identity the plugin would otherwise inherit: the filesystem uid decides
+#                 file-ownership checks outright, and the kernel still compares the REAL uid in
+#                 cross-process checks the seccomp denylist does not cover (prlimit() on another process,
+#                 F_SETOWN/SIGIO signal delivery). They are collapsed onto the effective uid with
+#                 setresuid(), which an unprivileged process may always do towards ids it already holds,
+#                 and the collapse is verified, not assumed. It runs AFTER the capability-driven steps:
+#                 leaving the last uid 0 makes the kernel clear the permitted set, and with it the
+#                 authority those steps use.
+#                 A FILE capability on the node binary (setcap) never arrives here: it lives on node's
+#                 inode, and the exec of the launcher and of perl - which carry none - drops it, so such
+#                 a service reaches this block as `none`.
+#   none          nothing to shed; the block does nothing, exactly as it always did.
+#
+# FAIL CLOSED: a process whose credentials cannot be read cannot tell which shape it is in, and
+# "assume the unprivileged one" is the guess an attacker would pick - so that stops here too.
 my $status = '';
 if (open(my $sf, '<', '/proc/self/status')) { local $/; $status = <$sf>; close $sf; }
-my ($cap_eff) = $status =~ /^CapEff:\s*([0-9a-fA-F]+)/m;
-my ($cap_prm) = $status =~ /^CapPrm:\s*([0-9a-fA-F]+)/m;
-my $privileged = ($> == 0 || hex($cap_eff || '0') != 0 || hex($cap_prm || '0') != 0);
-if ($privileged) {
-    syscall($NR_setgroups, 0, 0) == 0 or fail("setgroups(clear): $!");
-    # SECBIT_NOROOT|LOCKED + SECBIT_NO_SETUID_FIXUP|LOCKED.
-    syscall($NR_prctl, $PR_SET_SECUREBITS, 15, 0, 0, 0) == 0 or fail("prctl(SECUREBITS): $!");
-    for my $cap (0 .. 63) {
-        my $r = syscall($NR_prctl, $PR_CAPBSET_DROP, $cap, 0, 0, 0);
-        last if $r != 0 && $!{EINVAL};
-        fail("prctl(CAPBSET_DROP $cap): $!") if $r != 0;
+my %cap;
+for my $name (qw(CapInh CapPrm CapEff CapBnd CapAmb)) { ($cap{$name}) = $status =~ /^$name:\s*([0-9a-fA-F]+)/m; }
+my @uids = $status =~ /^Uid:\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*$/m;
+fail("cannot read this process's capability sets and uids from /proc/self/status")
+    unless defined $cap{CapInh} && defined $cap{CapPrm} && defined $cap{CapEff} && @uids == 4;
+# A set is held when ANY bit is set. Tested as text on purpose: hex() of a full 64-bit mask (root's
+# 000001ffffffffff) is "non-portable" to Perl and prints a warning onto the stderr the caller parses.
+my $held = sub { defined $_[0] && $_[0] =~ /[1-9a-fA-F]/ };
+# One bit of the EFFECTIVE set - the set the kernel checks when a step asks for a capability. Only the
+# low 16 bits are converted (CAP_SETGID is 6, CAP_SETPCAP is 8), for the same hex() reason.
+my $effective_has = sub { (hex(substr($cap{CapEff}, -4)) >> $_[0]) & 1 };
+my ($CAP_SETGID, $CAP_SETPCAP) = (6, 8);
+# CapAmb only exists on kernels with ambient capabilities (4.3+). Landlock needs 5.13, so an absent
+# line cannot occur past the ABI check above - but if it ever did there is no ambient set to clear or
+# verify, and asking prctl() for one would fail with EINVAL rather than prove anything.
+my $has_ambient = defined $cap{CapAmb};
+# "allow" outside user namespaces and on kernels without the file (before 3.19).
+my $setgroups_policy = 'allow';
+if (open(my $sgf, '<', '/proc/self/setgroups')) {
+    my $l = <$sgf>; close $sgf;
+    $setgroups_policy = $1 if defined $l && $l =~ /^(\w+)/;
+}
+my $is_root = $> == 0;
+my $privdrop = 'none';
+if ($is_root || (grep { $held->($cap{$_}) } qw(CapInh CapPrm CapEff CapAmb)) || (grep { $_ == 0 } @uids[0, 2, 3])) {
+    my @skipped;
+    my $groups_cleared = 0;
+    if ($effective_has->($CAP_SETGID) && $setgroups_policy ne 'deny') {
+        syscall($NR_setgroups, 0, 0) == 0 or fail("setgroups(clear): $!");
+        $groups_cleared = 1;
     }
-    syscall($NR_prctl, $PR_CAP_AMBIENT, $PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) == 0
-        or fail("prctl(AMBIENT_CLEAR_ALL): $!");
+    else { push @skipped, 'groups'; }
+    my $bounding_dropped = 0;
+    if ($effective_has->($CAP_SETPCAP)) {
+        my $cur = syscall($NR_prctl, $PR_GET_SECUREBITS, 0, 0, 0, 0);
+        fail("prctl(GET_SECUREBITS): $!") if $cur < 0;
+        # SECBIT_NOROOT|LOCKED + SECBIT_NO_SETUID_FIXUP|LOCKED, on top of whatever is already set. A base
+        # bit whose lock is already set the OTHER way cannot be turned on; it is left alone, not fought.
+        my $want = $cur | 15;
+        for my $bit (0, 2) { $want &= ~(1 << $bit) if ($cur & (2 << $bit)) && !($cur & (1 << $bit)); }
+        if ($want != $cur) {
+            syscall($NR_prctl, $PR_SET_SECUREBITS, $want, 0, 0, 0) == 0 or fail("prctl(SECUREBITS): $!");
+        }
+        my $now = syscall($NR_prctl, $PR_GET_SECUREBITS, 0, 0, 0, 0);
+        fail("securebits are $now after prctl(SECUREBITS), expected $want") if $now != $want;
+        push @skipped, 'securebits' if ($want & 5) != 5;
+        for my $cap (0 .. 63) {
+            my $r = syscall($NR_prctl, $PR_CAPBSET_DROP, $cap, 0, 0, 0);
+            last if $r != 0 && $!{EINVAL};
+            fail("prctl(CAPBSET_DROP $cap): $!") if $r != 0;
+        }
+        $bounding_dropped = 1;
+    }
+    else { push @skipped, 'securebits', 'bounding'; }
+    # `0 +` is load-bearing: syscall() passes an argument that is not NUMERIC as a POINTER to its string,
+    # and a regex capture is a string.
+    my $euid = 0 + $uids[1];
+    if (!$is_root && grep { $_ != $euid } @uids) {
+        syscall($NR_setresuid, $euid, $euid, $euid) == 0
+            or fail("privilege drop: setresuid($euid, $euid, $euid): $!");
+    }
+    if ($has_ambient) {
+        syscall($NR_prctl, $PR_CAP_AMBIENT, $PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) == 0
+            or fail("privilege drop: prctl(AMBIENT_CLEAR_ALL): $!");
+    }
     my $cap_header = pack('Ll', 0x20080522, 0); # _LINUX_CAPABILITY_VERSION_3, current pid
     my $cap_data = pack('LLLLLL', 0, 0, 0, 0, 0, 0);
-    syscall($NR_capset, $cap_header, $cap_data) == 0 or fail("capset(clear): $!");
+    syscall($NR_capset, $cap_header, $cap_data) == 0 or fail("privilege drop: capset(clear): $!");
+
     my $after = '';
     if (open(my $af, '<', '/proc/self/status')) { local $/; $after = <$af>; close $af; }
-    for my $name (qw(CapInh CapPrm CapEff CapBnd CapAmb)) {
+    # CapBnd only when it was emptied - see "EVERYTHING ELSE IS DEFENCE IN DEPTH" above.
+    for my $name (qw(CapInh CapPrm CapEff), ($has_ambient ? 'CapAmb' : ()), ($bounding_dropped ? 'CapBnd' : ())) {
         my ($v) = $after =~ /^$name:\s*([0-9a-fA-F]+)/m;
-        fail("$name survived privilege drop") if !defined($v) || hex($v) != 0;
+        fail("$name survived the privilege drop") if !defined($v) || $held->($v);
     }
+    if ($groups_cleared) {
+        my ($g) = $after =~ /^Groups:[ \t]*([^\n]*)$/m;
+        fail("supplementary groups survived the privilege drop") if !defined($g) || $g =~ /\d/;
+    }
+    if (!$is_root) {
+        my @now = $after =~ /^Uid:\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*$/m;
+        fail("the real/saved/filesystem uids did not collapse onto the effective uid $euid")
+            if @now != 4 || grep { $_ != $euid } @now;
+    }
+    $privdrop = $is_root ? (@skipped ? 'root-partial' : 'root') : 'caps';
 }
 
 # no_new_privs is a PRECONDITION for both landlock_restrict_self and seccomp for an unprivileged caller.
@@ -452,7 +595,7 @@ syscall($NR_seccomp, 1, 1, $prog) == 0 or fail("seccomp(SET_MODE_FILTER): $!");
 print STDERR "SHIM: landlock=abi$abi/$granted landlock-net=" . ($handle_net ? 'on' : 'off')
     . " scoped=" . ($scoped ? 'unix+signal' : 'legacy')
     . " seccomp=on/" . scalar(@BLOCKED) . " network=" . ($denyNet eq '1' ? 'deny' : 'allow')
-    . " arch=$arch zones=" . scalar(@zones) . "\n";
+    . " arch=$arch zones=" . scalar(@zones) . " privdrop=$privdrop\n";
 
 # The block form pins argv[0] as the FILE to execute. `exec @cmd` with a single-element list is checked
 # by Perl for shell metacharacters and handed to /bin/sh when it finds any - which would insert a shell

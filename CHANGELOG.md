@@ -8,6 +8,40 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Security
 
+- **The plugin sandbox works when WordJS runs as a non-root user that holds a capability.** A service
+  started with `AmbientCapabilities=CAP_NET_BIND_SERVICE` (to listen on 443 without root) ended with the
+  sandbox `degraded` and every plugin refused: the Landlock/seccomp shim treated any capability as root
+  and called `setgroups`, `PR_SET_SECUREBITS` and `PR_CAPBSET_DROP`, which need `CAP_SETGID`/`CAP_SETPCAP`
+  (`SHIM-FAIL: setgroups(clear): Operation not permitted`). Each privilege-drop step now runs only when the
+  process holds the capability it needs: the ambient set is cleared and the permitted, effective and
+  inheritable sets are emptied in every case, groups, securebits and the bounding set when they can be,
+  and a setuid-root wrapper's real/saved uids are collapsed. The result is verified (inheritable,
+  permitted, effective and ambient empty; the bounding set only when it was dropped — `no_new_privs`
+  means a plugin can gain nothing across `exec`). The same change fixes root services with a reduced
+  bounding set (`CapabilityBoundingSet=` in the unit). The shim's read grants no longer include
+  `/etc/ssl/private`.
+- **The cause is reported, not just the symptom.** When the node process itself holds capabilities or a
+  root uid, the boot log and `GET /api/v1/health/details` (`sandbox.hostPrivilege`) say where they come
+  from (root, an ambient capability, file capabilities on the node binary, a setuid-root wrapper) and how
+  to remove them. Activating, reloading or updating a plugin the sandbox refuses to launch now answers
+  `409 sandbox_unavailable` with the mechanism, its state, the failure line and the operator action
+  (paths redacted) instead of a generic 500, and the admin plugins screen shows it; a plugin refused at
+  boot is listed as `refused`.
+- **`create-wordjs` no longer recommends `setcap cap_net_bind_service=+ep` on node** (it hands that
+  capability to every node script on the machine and is lost on each node upgrade). For ports below 1024
+  it recommends `net.ipv4.ip_unprivileged_port_start` in `/etc/sysctl.d/` or a reverse proxy. The new
+  `--systemd` option (with `--port` and `--service-user`) writes a systemd unit for a dedicated user with
+  no capabilities, `NoNewPrivileges=yes` and `NODE_ENV=production` into a private temporary directory and
+  prints the root-owned install steps. mail-server 2.2.5 explains a port-25 bind failure accurately
+  (permission vs. the sandbox) instead of suggesting `setcap`.
+- **`create-wordjs` no longer installs world-writable files.** Extraction went through adm-zip's
+  `extractAllTo`, which ends each file with `chmod(path, attr || 0o666)` — and `chmod` ignores the umask —
+  so every installed file, code that may later run as root, was writable by any local user, and
+  `upgrade` turned an existing `0644` install into `0666` as well. Files are now written one by one as
+  `0644` (`0755` when the archive marks them executable), an upgrade tightens an existing file before
+  writing into it, and it refuses to write through a symbolic link planted in the existing install.
+  Installs made by earlier versions keep their `0666` files until the next `create-wordjs upgrade`, or
+  `find <site> -type f -perm -o+w -exec chmod go-w {} +`.
 - **Next.js 16.3.8 for the advisories published against 16.0.0–16.3.7.** The CI audit gate blocked every
   pull request on GHSA-cjq9-62q9-8jv4 (high: server-side request forgery in Image Optimization). The same
   release fixes cache poisoning of SSG/ISR pages in self-hosted applications (GHSA-4jqv-mc3x-m676,
@@ -15,7 +49,6 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   metadata image routes bypassing `dynamicParams` (GHSA-f87g-xv8r-7p7x) and the development server's MCP
   endpoint disclosing information (GHSA-39w2-rjm5-chcv). `next` and `eslint-config-next` are pinned to the
   16.3.8 patch in the lockfile, not the 16.4 minor that the range would also allow.
-
 - **`create-wordjs` verifies the release ZIP before extracting it.** The release workflow now publishes
   `wordjs-<tag>.zip.sha256` (`sha256sum` format) next to every tag-named bundle, and `create-wordjs` —
   create, `upgrade`, `gateway` and `join` — downloads it and refuses a ZIP whose SHA-256 differs.

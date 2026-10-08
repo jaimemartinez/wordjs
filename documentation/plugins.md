@@ -382,8 +382,9 @@ When you upload a plugin ZIP, WordJS validates it **before** reporting success, 
 
 Each active plugin runs in its own OS process, and WordJS now **supervises** it:
 
-- The admin **Plugins** screen shows each plugin's live state (Running / Restarting / Crashed / Crash-looping / Stopped), memory (RSS), restart count, last exit code, the last error, and the child's pid.
+- The admin **Plugins** screen shows each plugin's live state (Running / Restarting / Crashed / Crash-looping / Stopped / Refused by the sandbox), memory (RSS), restart count, last exit code, the last error, and the child's pid.
 - If a child crashes at runtime it is **auto-restarted** with exponential backoff (1s → 5s → 15s → 60s). After too many crashes in a short window it is marked **crash-looping** and left stopped (fix it and hit **Reload**).
+- If the **plugin sandbox** refuses to start it — at boot, on a supervised restart or on another node — it is marked **refused** with the refusal (`runtime.lastError`, and `runtime.sandbox`: mechanism, state, the launcher's failure line, the operator action), which the screen shows in the plugin's details; it is not retried, since nothing changes until the server's sandbox is fixed. See `documentation/security.md` §1.0a.
 - `GET /api/v1/plugins/:slug/status` returns that telemetry programmatically, plus the `uptimeMs` and `startedAt` the screen does not render.
 
 ### Uninstalling a plugin (and its data)
