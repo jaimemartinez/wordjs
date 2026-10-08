@@ -185,9 +185,11 @@ describe('the shim script, read as text — the arch table', () => {
     // Read out of REAL kernel headers on a Linux host, not from memory:
     //   x86_64  /usr/include/x86_64-linux-gnu/asm/unistd_64.h
     //   aarch64 /usr/include/asm-generic/unistd.h  (aarch64 uses the asm-generic table verbatim)
-    const VERIFIED: Record<string, { prctl: number; seccomp: number; socket: number; socketpair: number; clone: number; clone3: number; capset: number; setgroups: number; audit: number }> = {
-        x86_64: { prctl: 157, seccomp: 317, socket: 41, socketpair: 53, clone: 56, clone3: 435, capset: 126, setgroups: 116, audit: 0xc000003e },
-        aarch64: { prctl: 167, seccomp: 277, socket: 198, socketpair: 199, clone: 220, clone3: 435, capset: 91, setgroups: 159, audit: 0xc00000b7 },
+    // setresuid: x86_64 117 was confirmed by strace decoding syscall(117) as setresuid on a 7.0 kernel;
+    // aarch64 147 is the asm-generic number, the same one the aarch64 identity-change denylist carries.
+    const VERIFIED: Record<string, { prctl: number; seccomp: number; socket: number; socketpair: number; clone: number; clone3: number; capset: number; setgroups: number; setresuid: number; audit: number }> = {
+        x86_64: { prctl: 157, seccomp: 317, socket: 41, socketpair: 53, clone: 56, clone3: 435, capset: 126, setgroups: 116, setresuid: 117, audit: 0xc000003e },
+        aarch64: { prctl: 167, seccomp: 277, socket: 198, socketpair: 199, clone: 220, clone3: 435, capset: 91, setgroups: 159, setresuid: 147, audit: 0xc00000b7 },
     };
 
     test('exactly two architectures are supported, and ADDING one turns this red on purpose', () => {
@@ -202,7 +204,7 @@ describe('the shim script, read as text — the arch table', () => {
                 .exec(SHIM_SRC)?.[1];
             assert.ok(arm, `no arm for ${arch}`);
             const flat = arm!.replace(/\s+/g, ' ');
-            assert.ok(flat.includes(`(${n.prctl}, ${n.seccomp}, ${n.socket}, ${n.socketpair}, ${n.clone}, ${n.clone3}, ${n.capset}, ${n.setgroups}, 0x${n.audit.toString(16)},`),
+            assert.ok(flat.includes(`(${n.prctl}, ${n.seccomp}, ${n.socket}, ${n.socketpair}, ${n.clone}, ${n.clone3}, ${n.capset}, ${n.setgroups}, ${n.setresuid}, 0x${n.audit.toString(16)},`),
                 `${arch} must carry the verified setup, socket and capability syscall numbers`);
             assert.match(flat, /@BLOCKED = \(/, `${arch} must carry its dangerous-syscall table`);
         }
@@ -294,11 +296,13 @@ describe('the shim script, read as text — what the child may READ', () => {
     const EXPECTED_READ_TREES = [
         '/usr/lib', '/usr/lib64', '/lib', '/lib64', '/lib32', '/libx32',
         '/usr/share/zoneinfo', '/usr/share/locale', '/usr/share/icu',
-        '/etc/ssl', '/etc/ca-certificates', '/etc/localtime', '/etc/hosts', '/etc/nsswitch.conf', '/etc/resolv.conf', '/etc/gai.conf',
+        '/etc/ssl/certs', '/etc/ssl/openssl.cnf', '/usr/share/ca-certificates', '/usr/local/share/ca-certificates',
+        '/etc/ca-certificates', '/etc/localtime', '/etc/hosts', '/etc/nsswitch.conf', '/etc/resolv.conf', '/etc/gai.conf',
         '/proc/self', '/proc/thread-self', '/sys/devices/system/cpu', '/nix/store',
     ];
-    // Absent BY DECISION. Each of these is the operator's data, not the OS.
-    const MUST_NOT_BE_READABLE = ['/home', '/root', '/srv', '/media', '/mnt', '/tmp', '/var/tmp', '/var/www', '/var/backups'];
+    // Absent BY DECISION. Each of these is the operator's data, not the OS - or, for /etc/ssl and
+    // /etc/ssl/private, the host's private keys.
+    const MUST_NOT_BE_READABLE = ['/home', '/root', '/srv', '/media', '/mnt', '/tmp', '/var/tmp', '/var/www', '/var/backups', '/etc/ssl', '/etc/ssl/private', '/etc/pki', '/etc'];
 
     function readTrees(): string[] {
         const m = /my @READ_TREES = qw\(([\s\S]*?)\);/.exec(SHIM_SRC);
@@ -316,6 +320,26 @@ describe('the shim script, read as text — what the child may READ', () => {
             assert.ok(!trees.includes(forbidden),
                 `${forbidden} is the operator's data, not the OS — granting it would give a plugin their home directory, ssh keys or another site's document root`);
         }
+    });
+
+    test('TLS gets the trust store, never the keys: no entry is /etc/ssl itself or contains /etc/ssl/private', () => {
+        // /etc/ssl used to be granted whole. Landlock bounds what is REACHABLE; inside a grant the normal
+        // permission check decides against the plugin's identity - and a root service's plugins keep uid 0,
+        // a service in group ssl-cert keeps that group. Both read /etc/ssl/private/*.key through the old
+        // grant (measured on Linux 7.0, LXC with WordJS running as root: READ-OK on the snakeoil key).
+        for (const t of readTrees()) {
+            assert.ok(!('/etc/ssl/private/'.startsWith(`${t}/`) || t === '/etc/ssl/private' || t.startsWith('/etc/ssl/private/')),
+                `${t} would make /etc/ssl/private reachable`);
+        }
+        assert.ok(readTrees().includes('/etc/ssl/certs') && readTrees().includes('/etc/ssl/openssl.cnf'),
+            'TLS clients still need the CA store and the OpenSSL config');
+    });
+
+    test('a FILE in the read list is granted with READ_FILE only — READ_DIR on a file makes landlock_add_rule refuse the whole rule', () => {
+        // Before this, every file entry (/etc/hosts, /etc/resolv.conf, /etc/nsswitch.conf, /etc/gai.conf)
+        // was rejected with EINVAL and silently skipped: measured unreadable to a confined child on 7.0.
+        assert.match(SHIM_SRC, /\n\$grant->\(\$_, \(-d \$_ \? \$RO : \$FS_READ_FILE\)\) for @READ_TREES;\n/);
+        assert.ok(!/\$grant->\(\$_, \$RO\) for @READ_TREES/.test(SHIM_CODE));
     });
 
     test('/dev is never granted as a tree; only four harmless literal devices are exposed', () => {
@@ -412,17 +436,161 @@ describe('the shim script, read as text — the network denial', () => {
     });
 
     test('privileged service launches irreversibly shed every Linux capability before exec', () => {
+        // WHICH of these steps run is decided by capability - see "the privilege drop is chosen by
+        // capability" below. Here: that each one is still there.
         assert.match(SHIM_SRC, /syscall\(\$NR_setgroups, 0, 0\)/);
-        assert.match(SHIM_SRC, /PR_SET_SECUREBITS, 15/);
+        assert.match(SHIM_SRC, /my \$want = \$cur \| 15;[\s\S]*?\$PR_SET_SECUREBITS, \$want/);
         assert.match(SHIM_SRC, /for my \$cap \(0 \.\. 63\)/);
         assert.match(SHIM_SRC, /syscall\(\$NR_capset, \$cap_header, \$cap_data\)/);
-        assert.match(SHIM_SRC, /qw\(CapInh CapPrm CapEff CapBnd CapAmb\)/,
-            'all capability sets, including bounding and ambient, must be verified empty');
+        assert.match(SHIM_SRC, /qw\(CapInh CapPrm CapEff\), \(\$has_ambient \? 'CapAmb' : \(\)\), \(\$bounding_dropped \? 'CapBnd' : \(\)\)/,
+            'every capability set must be verified empty - the bounding set whenever it was dropped');
     });
 
     test('Landlock ABI 6 scopes abstract Unix sockets and cross-process signals', () => {
         assert.match(SHIM_SRC, /my \$scoped = \$abi >= 6 \? 3 : 0/);
         assert.match(SHIM_SRC, /pack\("QQQ", \$HANDLED,[\s\S]*?\$scoped\)/);
+    });
+});
+
+/**
+ * THE PRIVILEGE DROP IS CHOSEN BY CAPABILITY, NOT BY UID - and the shapes that took sites down are
+ * pinned here.
+ *
+ * Every step of the drop that needs authority (setgroups: CAP_SETGID; securebits and the bounding set:
+ * CAP_SETPCAP) used to run because of WHO the process was: first "holds any capability", then "euid 0".
+ * Each version died with exit 79 - and with the fail-closed policy, every plugin refused - on a real
+ * deployment that lacked the authority:
+ *   . a NON-ROOT service with systemd `AmbientCapabilities=CAP_NET_BIND_SERVICE`
+ *     (`SHIM-FAIL: setgroups(clear): Operation not permitted`);
+ *   . ROOT without CAP_SETGID or CAP_SETPCAP: systemd CapabilityBoundingSet=, Docker --cap-drop=ALL,
+ *     Kubernetes drop ALL + add NET_BIND_SERVICE, PrivateUsers=, `unshare -r`, SecureBits=keep-caps-locked.
+ * Reproduced on a 7.0 kernel with setpriv/systemd-run; the kernel-level proof is the Linux leg at the
+ * bottom of this file and backend/scripts/verify-shim-nonroot-caps.mjs, which CI runs with sudo
+ * (sandbox-parity.yml). These structural assertions are what a Windows or macOS checkout can still hold
+ * the script to.
+ */
+describe('the shim script, read as text — the privilege drop is chosen by capability', () => {
+    function privilegeBlock(): string {
+        const m = /\nif \(\$is_root \|\| \(grep \{ \$held->\(\$cap\{\$_\}\) \} qw\(CapInh CapPrm CapEff CapAmb\)\) \|\| \(grep \{ \$_ == 0 \} @uids\[0, 2, 3\]\)\) \{\n([\s\S]*?)\n\}\n/.exec(SHIM_SRC);
+        assert.ok(m, 'the privilege block was not found');
+        return m![1];
+    }
+    /** The statements guarded by `if (<cond>) {`, up to its matching `}` at the same indentation. */
+    function guarded(cond: RegExp, what: string): string {
+        const re = new RegExp(`\\n( {4})if \\(${cond.source}\\) \\{\\n([\\s\\S]*?)\\n\\1\\}`);
+        const m = re.exec(privilegeBlock());
+        assert.ok(m, `the ${what} guard was not found`);
+        return m![2];
+    }
+
+    test('nothing is chosen from the uid alone — the defect, in both of its spellings', () => {
+        assert.ok(!/\$privileged\s*=\s*\(\$> == 0 \|\|/.test(SHIM_CODE), '"any capability means root" sent a non-root service down root\'s path');
+        assert.ok(!/\nif \(\$> == 0\) \{/.test(SHIM_CODE), '"euid 0 means run every root step" broke root without CAP_SETGID/CAP_SETPCAP');
+    });
+
+    test('the block runs for root, for any held capability, and for a uid 0 left in the real/saved/filesystem slot', () => {
+        privilegeBlock();
+        assert.match(SHIM_SRC, /my \$is_root = \$> == 0;/);
+    });
+
+    test('setgroups() runs only with CAP_SETGID in the EFFECTIVE set and outside a "deny" user namespace — and is verified', () => {
+        const body = guarded(/\$effective_has->\(\$CAP_SETGID\) && \$setgroups_policy ne 'deny'/, 'setgroups');
+        assert.match(body, /syscall\(\$NR_setgroups, 0, 0\) == 0 or fail\("setgroups\(clear\)/);
+        assert.match(SHIM_SRC, /open\(my \$sgf, '<', '\/proc\/self\/setgroups'\)/);
+        assert.match(privilegeBlock(), /if \(\$groups_cleared\) \{[\s\S]*?fail\("supplementary groups survived the privilege drop"\)/);
+        // Exactly one setgroups call in the whole script, and it is the guarded one.
+        assert.strictEqual(SHIM_CODE.split('$NR_setgroups, 0, 0').length - 1, 1);
+    });
+
+    test('securebits and the bounding set run only with CAP_SETPCAP — and keep bits that are already locked', () => {
+        const body = guarded(/\$effective_has->\(\$CAP_SETPCAP\)/, 'CAP_SETPCAP');
+        assert.match(body, /\$PR_GET_SECUREBITS/);
+        assert.match(body, /my \$want = \$cur \| 15;/, 'NOROOT|LOCKED + NO_SETUID_FIXUP|LOCKED on top of what is set: a lock can never be cleared');
+        assert.match(body, /\$PR_SET_SECUREBITS, \$want/);
+        assert.match(body, /for my \$cap \(0 \.\. 63\)[\s\S]*?PR_CAPBSET_DROP/);
+        assert.match(body, /\$bounding_dropped = 1;/);
+        for (const code of [SHIM_CODE]) {
+            assert.strictEqual(code.split('$PR_SET_SECUREBITS,').length - 1, 1, 'SECUREBITS is set only under the CAP_SETPCAP guard');
+            assert.strictEqual(code.split('$PR_CAPBSET_DROP,').length - 1, 1, 'CAPBSET_DROP runs only under the CAP_SETPCAP guard');
+        }
+        assert.match(SHIM_SRC, /my \(\$CAP_SETGID, \$CAP_SETPCAP\) = \(6, 8\);/);
+        assert.match(SHIM_SRC, /my \$PR_GET_SECUREBITS = 27;/);
+    });
+
+    test('the capability bits are read from the low hex digits only — hex() of a 64-bit mask prints a warning onto the stderr the caller parses', () => {
+        assert.match(SHIM_SRC, /my \$effective_has = sub \{ \(hex\(substr\(\$cap\{CapEff\}, -4\)\) >> \$_\[0\]\) & 1 \};/);
+        assert.ok(!/hex\(\$cap_(eff|prm)/.test(SHIM_CODE));
+        assert.match(SHIM_SRC, /my \$held = sub \{ defined \$_\[0\] && \$_\[0\] =~ \/\[1-9a-fA-F\]\/ \};/);
+    });
+
+    test('what needs NO authority always runs: ambient cleared, permitted/effective/inheritable capset to zero', () => {
+        const block = privilegeBlock();
+        assert.match(block, /if \(\$has_ambient\) \{\n\s+syscall\(\$NR_prctl, \$PR_CAP_AMBIENT, \$PR_CAP_AMBIENT_CLEAR_ALL/);
+        assert.match(block, /my \$cap_data = pack\('LLLLLL', 0, 0, 0, 0, 0, 0\);\n\s+syscall\(\$NR_capset, \$cap_header, \$cap_data\) == 0 or fail\("privilege drop: capset\(clear\)/);
+        assert.match(SHIM_SRC, /my \$has_ambient = defined \$cap\{CapAmb\};/);
+    });
+
+    test('Inh/Prm/Eff/Amb are always verified empty; CapBnd exactly when the bounding set was dropped', () => {
+        assert.match(privilegeBlock(), /for my \$name \(qw\(CapInh CapPrm CapEff\), \(\$has_ambient \? 'CapAmb' : \(\)\), \(\$bounding_dropped \? 'CapBnd' : \(\)\)\) \{/);
+        // no_new_privs is what makes an unemptied bounding set harmless, so it must come AFTER the block.
+        assert.ok(SHIM_SRC.indexOf('$privdrop = $is_root ?') < SHIM_SRC.indexOf('syscall($NR_prctl, $PR_SET_NO_NEW_PRIVS, 1'));
+    });
+
+    test('a uid 0 left behind is collapsed onto the effective uid AFTER the capability-driven steps, and the collapse is verified', () => {
+        const block = privilegeBlock();
+        assert.match(block, /my \$euid = 0 \+ \$uids\[1\];/, 'a regex capture passed to syscall() unconverted is a POINTER to a string');
+        assert.match(block, /if \(!\$is_root && grep \{ \$_ != \$euid \} @uids\) \{\n\s+syscall\(\$NR_setresuid, \$euid, \$euid, \$euid\) == 0/);
+        assert.match(block, /did not collapse onto the effective uid/);
+        // Leaving the last uid 0 clears the permitted set - and with it the authority the steps above use.
+        assert.ok(block.indexOf('$NR_setresuid') > block.indexOf('$PR_CAPBSET_DROP'));
+        assert.ok(block.indexOf('$NR_setresuid') > block.indexOf('$NR_setgroups'));
+    });
+
+    test('credentials that cannot be read FAIL CLOSED rather than being taken for "unprivileged"', () => {
+        assert.match(SHIM_SRC, /fail\("cannot read this process's capability sets and uids from \/proc\/self\/status"\)\n\s+unless defined \$cap\{CapInh\} && defined \$cap\{CapPrm\} && defined \$cap\{CapEff\} && @uids == 4;/);
+    });
+
+    test('the SHIM: line names which privilege path ran — the probe reads it to know whether CapBnd must be empty', () => {
+        assert.match(SHIM_SRC, / privdrop=\$privdrop\\n";/);
+        assert.match(SHIM_SRC, /my \$privdrop = 'none';/);
+        assert.match(SHIM_SRC, /\$privdrop = \$is_root \? \(@skipped \? 'root-partial' : 'root'\) : 'caps';/);
+    });
+});
+
+describe('capabilitiesShed — the probe\'s capability verdict', () => {
+    const { capabilitiesShed } = require('../core/sandbox-linux');
+    const shim = (privdrop: string | null) => `SHIM: landlock=abi8/27 landlock-net=on scoped=unix+signal seccomp=on/88 network=deny arch=x86_64 zones=1${privdrop ? ` privdrop=${privdrop}` : ''}\n`;
+    const child = (o: Record<string, any> = {}) => ({ capsCode: 'ZERO', bndCode: 'ZERO', euid: 0, ...o });
+
+    test('Inh/Prm/Eff/Amb must be empty on every path', () => {
+        for (const p of ['root', 'root-partial', 'caps', 'none', null]) {
+            assert.strictEqual(capabilitiesShed(child({ capsCode: 'OPEN:CapPrm' }), shim(p)), false, String(p));
+        }
+        assert.strictEqual(capabilitiesShed(null, shim('root')), false);
+    });
+
+    test('ROOT WITHOUT CAP_SETPCAP (privdrop=root-partial) is certified with its bounding set intact', () => {
+        // The shape that left the probe 'degraded' - and every plugin refused - on a root unit with
+        // CapabilityBoundingSet=CAP_NET_BIND_SERVICE: the confined child held nothing, CapBnd was 0x400.
+        assert.strictEqual(capabilitiesShed(child({ bndCode: 'SET' }), shim('root-partial')), true);
+        assert.strictEqual(capabilitiesShed(child({ bndCode: 'SET', euid: 999 }), shim('caps')), true);
+        assert.strictEqual(capabilitiesShed(child({ bndCode: 'SET', euid: 999 }), shim('none')), true);
+    });
+
+    test('privdrop=root claims an empty bounding set, so the child must see one', () => {
+        assert.strictEqual(capabilitiesShed(child({ bndCode: 'SET' }), shim('root')), false);
+        assert.strictEqual(capabilitiesShed(child(), shim('root')), true);
+    });
+
+    test('no privdrop field keeps the old, stricter rule for a uid 0 child', () => {
+        assert.strictEqual(capabilitiesShed(child({ bndCode: 'SET' }), shim(null)), false);
+        assert.strictEqual(capabilitiesShed(child({ bndCode: 'SET' }), ''), false);
+        assert.strictEqual(capabilitiesShed(child({ bndCode: 'SET', euid: 999 }), shim(null)), true);
+    });
+
+    test('only the shim\'s own SHIM: line counts — the field is matched at its end, on the first such line', () => {
+        const forged = `${shim('root')}SHIM: privdrop=root-partial\n`;
+        assert.strictEqual(capabilitiesShed(child({ bndCode: 'SET' }), forged), false);
     });
 });
 
@@ -476,5 +644,66 @@ describe('the shim, actually run (Linux + perl only)', () => {
             assert.strictEqual(r.status, SHIM_EXIT.FAIL, `expected exit ${SHIM_EXIT.FAIL} for ${JSON.stringify(args)}; got ${r.status} / ${r.stderr}`);
             assert.ok(!String(r.stdout).includes(marker), `the command RAN despite a failed confinement: ${JSON.stringify(args)}`);
         }
+    });
+
+    /**
+     * THE READ GRANTS, MEASURED. The shell child uses builtins only (process creation is refused), so the
+     * one executable it needs is granted with --exec-root. /etc/hosts is world-readable, so only Landlock
+     * can refuse it: before the per-entry access set, its READ_DIR right made landlock_add_rule() reject the
+     * rule and the file was unreadable. /etc/ssl/private is opened as a DIRECTORY, which DAC allows root -
+     * so as root a refusal can only be Landlock's (it was reachable through the old /etc/ssl grant).
+     */
+    test('/etc/hosts and the CA store are readable; /etc/ssl/private is not reachable', (t: any) => {
+        if (!canRun) { t.skip('needs Linux + /usr/bin/perl'); return; }
+        const zone = fs.mkdtempSync(path.join(require('os').tmpdir(), 'wjs-shim-reads-'));
+        try {
+            const child = 'for f in /etc/hosts /etc/ssl/certs/ca-certificates.crt; do [ -e "$f" ] || continue; if read -r l < "$f"; then echo "READ-OK $f"; else echo "READ-DENIED $f"; fi; done; '
+                + '[ -d /etc/ssl/private ] && { read -r l < /etc/ssl/private; echo "PRIVATE-TRIED"; }';
+            const r = spawnSync(PERL_BIN, [SHIM_PATH, `--exec-root=${fs.realpathSync('/bin/sh')}`, zone, '1', '--', '/bin/sh', '-c', child], { encoding: 'utf8', timeout: 20000 });
+            if (r.status === SHIM_EXIT.UNSUPPORTED) { t.skip(`this kernel has no usable Landlock: ${String(r.stderr).trim()}`); return; }
+            assert.strictEqual(r.status, 0, String(r.stderr));
+            if (fs.existsSync('/etc/hosts')) assert.match(String(r.stdout), /^READ-OK \/etc\/hosts$/m, `${r.stdout}\n${r.stderr}`);
+            assert.ok(!/READ-DENIED/.test(String(r.stdout)), `${r.stdout}\n${r.stderr}`);
+            if (fs.existsSync('/etc/ssl/private') && typeof process.geteuid === 'function' && process.geteuid() === 0) {
+                assert.match(String(r.stdout), /PRIVATE-TRIED/);
+                assert.match(String(r.stderr), /cannot open \/etc\/ssl\/private: Permission denied/, 'root opened /etc/ssl/private: the read grant reaches the host\'s private keys');
+            }
+        } finally {
+            fs.rmSync(zone, { recursive: true, force: true });
+        }
+    });
+
+    /**
+     * THE INCIDENT, ON A REAL KERNEL. A non-root process holding an ambient CAP_NET_BIND_SERVICE, a
+     * setuid-root-wrapper shape, and ROOT without CAP_SETGID/CAP_SETPCAP (a cut bounding set, a locked
+     * securebit) are launched through the shim; each must be CONFINED with every capability set empty -
+     * not refused with exit 79 as before the fix - and a non-root service that does hold CAP_SETGID and
+     * CAP_SETPCAP must still lose its groups and bounding set. Each case is checked against a control that
+     * must really show the shape, so a setpriv that silently built nothing cannot pass it.
+     *
+     * Building that credential shape needs root. As root this runs unconditionally; otherwise it needs
+     * passwordless sudo, which it only uses under CI (GitHub runners) or with WORDJS_SANDBOX_SUDO_TESTS=1
+     * - a unit test does not reach for sudo on a developer's machine uninvited. Anything else SKIPS with
+     * the reason, because a test that pretends to have measured a kernel is worse than no test.
+     */
+    test('a NON-ROOT service holding CAP_NET_BIND_SERVICE is confined with empty capability sets, not refused', (t: any) => {
+        if (!canRun) { t.skip('needs Linux + /usr/bin/perl'); return; }
+        const isRoot = typeof process.geteuid === 'function' && process.geteuid() === 0;
+        const sudoAllowed = !!process.env.CI || process.env.WORDJS_SANDBOX_SUDO_TESTS === '1';
+        if (!isRoot && !sudoAllowed) {
+            t.skip('building a capability-holding non-root process needs root, or passwordless sudo with CI=true or WORDJS_SANDBOX_SUDO_TESTS=1');
+            return;
+        }
+        const script = path.join(__dirname, '..', '..', 'scripts', 'verify-shim-nonroot-caps.mjs');
+        const r = spawnSync(process.execPath, [script, ...(isRoot ? [] : ['--sudo'])], { encoding: 'utf8', timeout: 90000 });
+        if (r.status === 2) { t.skip(String(r.stdout || '').trim() || 'the certifier cannot run on this host'); return; }
+        assert.strictEqual(r.status, 0, `the shim did not confine a capability-holding non-root process:\n${r.stdout}\n${r.stderr}`);
+        assert.match(String(r.stdout), /^OK {3}non-root \+ ambient CAP_NET_BIND_SERVICE/m);
+        assert.match(String(r.stdout), /^OK {3}setuid-root wrapper/m);
+        assert.match(String(r.stdout), /^OK {3}root with the bounding set cut to CAP_NET_BIND_SERVICE/m);
+        assert.match(String(r.stdout), /^OK {3}root without CAP_SETPCAP only/m);
+        assert.match(String(r.stdout), /^OK {3}root with SecureBits=keep-caps-locked/m);
+        assert.match(String(r.stdout), /^OK {3}non-root holding CAP_SETGID \+ CAP_SETPCAP/m);
+        assert.ok(!/^FAIL/m.test(String(r.stdout)));
     });
 });

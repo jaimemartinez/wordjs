@@ -16,7 +16,7 @@ const os = require('node:os');
 const path = require('node:path');
 const AdmZip = require('adm-zip');
 
-const { extractZip } = require('../index.js');
+const { extractZip, installedFileMode } = require('../index.js');
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'create-wordjs-extract-'));
 after(() => fs.rmSync(scratch, { recursive: true, force: true }));
@@ -164,4 +164,63 @@ test('an archive that names the same entry twice is refused (adm-zip >= 0.6.1)',
     const zipPath = path.join(freshDir('zip'), 'dup.zip');
     fs.writeFileSync(zipPath, buf);
     assert.throws(() => extractZip(zipPath, freshDir('site')), /duplicate|DUPLICATE/i);
+});
+
+// --- installed file modes ------------------------------------------------------------------------
+//
+// adm-zip's extractAllTo ends every file with chmod(path, attr || 0o666), and chmod ignores the umask:
+// every installed file — code that may run as root — was world-writable, and an upgrade over an existing
+// 0644 install made it 0666 too. The installer now sets the mode itself.
+
+test('installed files are 0644, or 0755 when the archive marked them executable — never group/world-writable', () => {
+    const entry = (mode) => ({ header: { attr: (((0o100000 | mode) << 16) >>> 0) } });
+    assert.strictEqual(installedFileMode(entry(0o644)), 0o644);
+    assert.strictEqual(installedFileMode(entry(0o666)), 0o644, 'a world-writable mode in the archive is not honoured');
+    assert.strictEqual(installedFileMode(entry(0o755)), 0o755);
+    assert.strictEqual(installedFileMode(entry(0o777)), 0o755, 'executable, but not writable by others');
+    assert.strictEqual(installedFileMode({ header: { attr: 0 } }), 0o644, 'an archive built on Windows has no Unix mode');
+});
+
+const posixOnly = process.platform === 'win32' ? 'file modes are POSIX-only (Windows has no group/other write bits)' : false;
+
+test('extraction writes 0644/0755 files and an upgrade tightens an existing 0666 install', { skip: posixOnly }, () => {
+    const zip = new AdmZip();
+    zip.addFile('package.json', Buffer.from('{}'), '', 0o644);
+    zip.addFile('bin/run.sh', Buffer.from('#!/bin/sh\n'), '', 0o755);
+    zip.addFile('loose.txt', Buffer.from('x'), '', 0o666);
+    const windowsBuilt = zip.addFile('backend/dist/index.js', Buffer.from('module.exports = 1;\n'));
+    windowsBuilt.attr = 0;
+    const zipPath = path.join(scratch, `modes-${++seq}.zip`);
+    zip.writeZip(zipPath);
+
+    const dir = freshDir('modes');
+    fs.writeFileSync(path.join(dir, 'package.json'), 'old');
+    fs.chmodSync(path.join(dir, 'package.json'), 0o666);    // left by the old installer
+    extractZip(zipPath, dir);
+
+    const mode = (rel) => fs.statSync(path.join(dir, rel)).mode & 0o777;
+    assert.strictEqual(mode('package.json'), 0o644, 'an upgrade left an existing file world-writable');
+    assert.strictEqual(mode('bin/run.sh'), 0o755);
+    assert.strictEqual(mode('loose.txt'), 0o644);
+    assert.strictEqual(mode('backend/dist/index.js'), 0o644);
+    for (const rel of ['package.json', 'bin/run.sh', 'loose.txt', 'backend/dist/index.js']) {
+        assert.strictEqual(mode(rel) & 0o022, 0, `${rel} is group- or world-writable`);
+    }
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'), '{}');
+});
+
+test('an upgrade refuses to write through a symbolic link planted in the existing install', { skip: posixOnly }, () => {
+    const zip = new AdmZip();
+    zip.addFile('package.json', Buffer.from('{}'), '', 0o644);
+    zip.addFile('backend/dist/index.js', Buffer.from('new code'), '', 0o644);
+    const zipPath = path.join(scratch, `link-${++seq}.zip`);
+    zip.writeZip(zipPath);
+
+    const dir = freshDir('link');
+    const victim = path.join(scratch, `victim-${seq}.txt`);
+    fs.writeFileSync(victim, 'untouched');
+    fs.mkdirSync(path.join(dir, 'backend/dist'), { recursive: true });
+    fs.symlinkSync(victim, path.join(dir, 'backend/dist/index.js'));
+    assert.throws(() => extractZip(zipPath, dir), /not a regular file/);
+    assert.strictEqual(fs.readFileSync(victim, 'utf8'), 'untouched', 'the write followed the link');
 });

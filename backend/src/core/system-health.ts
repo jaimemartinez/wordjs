@@ -165,6 +165,10 @@ class SystemHealth {
             out.network = kernel.network && kernel.network.state;
             out.kernelDegraded = kernel.state === 'degraded';
         }
+        // The privilege the BACKEND itself holds (Linux capabilities / root), with what the sandbox does
+        // about it right now and how to remove it. NOT_APPLICABLE off Linux. See core/host-privilege.ts
+        // for why this sits beside the sandbox: the sandbox is the only thing keeping it from plugins.
+        try { out.hostPrivilege = require('./host-privilege').readHostPrivilege(); } catch { out.hostPrivilege = { status: 'UNKNOWN' }; }
         if (permission === 'unsupported') out.permissionNote = 'this Node does not enforce a permission model — isolated plugins rely on process separation + the JS guards for capability confinement (upgrade Node to add an OS-enforced floor)';
         else if (permission === 'disabled') out.permissionNote = 'capability confinement is OFF (sandbox.usePermissionModel=false)';
         if (hardening === 'degraded') out.note = `the native ${kernel && kernel.mechanism || 'sandbox'} probe did not certify this host; isolated plugins run without that OS backstop${requireHardening ? ' and are refused' : ''}`;

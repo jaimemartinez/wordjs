@@ -59,12 +59,105 @@ WordJS implements a "Defense in Depth" security model for its plugin ecosystem, 
 > additional C++ capability floor — filesystem access scoped, `child_process`, `worker_threads`, native
 > addons and WASI never granted, no network policy — and the JavaScript guards of §1.2 remain
 > defense-in-depth on top. Live state is reported as
-> `sandbox.kernel`, `sandbox.network` and `sandbox.permission` on admin `GET /health/details`; verify the
+> `sandbox.kernel`, `sandbox.network`, `sandbox.permission` and (Linux) `sandbox.hostPrivilege` on admin
+> `GET /health/details`; verify the
 > compiled implementation with `backend/scripts/verify-sandbox-parity.mjs`
 > (`.github/workflows/sandbox-parity.yml` runs it on current **and older** Linux runners
 > (`ubuntu-latest`, `ubuntu-22.04`) plus one macOS (`macos-14`) and one Windows (`windows-latest`)
 > runner, importing the same compiled modules WordJS launches so a duplicate probe cannot certify a
 > primitive the product never uses). **Host requirements, and the one exemption, are in §4.**
+
+### 1.0a The service's own privilege on Linux: root, capabilities, and what the sandbox drops
+
+Before the Landlock/seccomp shim (`backend/scripts/landlock-seccomp-shim.pl`) sets `no_new_privs` and
+confines itself, it reads the kernel's account of its own credentials (`/proc/self/status`) and sheds what
+the WordJS service was started with.
+
+**What always happens, and needs no privilege.** Whenever the process is root, holds any capability, or
+keeps a uid 0 in its real/saved/filesystem slot, the shim clears the ambient set
+(`PR_CAP_AMBIENT_CLEAR_ALL`) and `capset()`s permitted, effective and inheritable to zero. Lowering one's
+own capabilities is always allowed, and it is what matters: `no_new_privs`, set right after, makes the
+kernel intersect every later permitted set with the empty one, so no `execve` can add a capability again
+— not from file capabilities, not from a setuid-root binary, not from uid 0's own exec rule.
+
+**What happens when the process has the authority for it.** Three defence-in-depth steps need a capability
+of their own, and each runs exactly when the process holds that capability in its effective set — never
+because of its uid:
+
+| Step | Needs | Skipped when |
+|---|---|---|
+| `setgroups(0, 0)` — clear supplementary groups | `CAP_SETGID` | not held, or the user namespace denies it (`/proc/self/setgroups` = `deny`: `unshare -r`, systemd `PrivateUsers=`) |
+| set and lock `SECBIT_NOROOT` / `SECBIT_NO_SETUID_FIXUP` (bits already set, e.g. `SecureBits=keep-caps-locked`, are kept) | `CAP_SETPCAP` | not held |
+| empty the bounding set (`PR_CAPBSET_DROP`) | `CAP_SETPCAP` | not held |
+
+A non-root service whose real, saved or filesystem uid is still 0 (a setuid-root wrapper, or a start as
+root that lowered only the effective uid) has those ids collapsed onto the effective uid with `setresuid()`,
+after the steps above. Every step that runs is verified afterwards — the four sets empty, the bounding set
+empty when it was dropped, the groups empty when they were cleared, every uid equal to the effective one
+on the non-root path — and anything that did not take effect, or credentials the shim cannot read, ends in
+`SHIM-FAIL` (exit 79) with nothing executed. The `SHIM:` status line names the path that ran:
+
+| `privdrop=` | Service | What the plugin keeps |
+|---|---|---|
+| `root` | root (euid 0) with `CAP_SETGID` and `CAP_SETPCAP` | **uid 0**, and with it the owner's access to root-owned files inside the read grants. No capability, no supplementary group, empty bounding set |
+| `root-partial` | root without `CAP_SETGID` and/or `CAP_SETPCAP` — a unit with `CapabilityBoundingSet=`, a container started with `--cap-drop=ALL` (plus `NET_BIND_SERVICE`), `PrivateUsers=`, `unshare -r` | uid 0 as above, no capability; the supplementary groups and/or the bounding set it had no authority to clear |
+| `caps` | a non-root user holding capabilities (systemd `AmbientCapabilities=`) or a uid 0 left in the real/saved/filesystem slot | its own uid and nothing else; groups and bounding set too, if it held `CAP_SETGID`/`CAP_SETPCAP` |
+| `none` | a non-root user without capabilities | its own uid — there was nothing to shed |
+
+A **file capability on the node binary** (`setcap`) never reaches the shim: it lives on node's inode, and
+the exec of the launcher and of perl — which carry none — drops it, so such a service takes `privdrop=none`.
+It still matters for the core process (and for plugin children started without the sandbox, below), and the
+confined plugin node, exec'd from the same capped binary, runs in secure-execution mode (`AT_SECURE`): glibc
+strips `TMPDIR` and the `LD_*` variables and Node ignores `NODE_OPTIONS` there.
+
+**Why the bounding set is not required on the paths without `CAP_SETPCAP`.** It only limits what an exec
+could *gain*, and with `no_new_privs` nothing can be gained; emptying it takes the very capability those
+processes lack. The probe (`probeLinuxZeroConf`) applies the same rule: its confined child must see every
+other capability set empty, and an empty bounding set only when the shim reports `privdrop=root`.
+
+**Root keeps uid 0, so the read grants decide what a root service's plugins can read.** Landlock bounds
+which files are reachable; inside a grant the ordinary permission check still runs against the plugin's
+identity, and uid 0 owns root's files. That is why the read grants are the operating system's runtime
+trees and nothing more — and why TLS gets the CA store (`/etc/ssl/certs`, `/etc/ssl/openssl.cnf`,
+`/usr/share/ca-certificates`, `/usr/local/share/ca-certificates`, `/etc/ca-certificates`) and **not**
+`/etc/ssl`: the whole of `/etc/ssl` used to be granted, and a root service's plugins (or those of a service
+in the `ssl-cert` group) could read `/etc/ssl/private/*.key` through it. Running WordJS as an unprivileged
+user remains the configuration to use; root is contained, not equivalent.
+
+**What this fixed.** The shim used to pick its steps by identity: first "holds any capability means root",
+then "euid 0 means every root step". A service running as an ordinary user with
+`AmbientCapabilities=CAP_NET_BIND_SERVICE` (to listen on 443) ran root's sequence without the privilege to
+do it, died on `SHIM-FAIL: setgroups(clear): Operation not permitted`, the probe reported `degraded`, and
+the fail-closed policy refused every plugin; a root service without `CAP_SETGID`/`CAP_SETPCAP` failed the
+same way. Every shape above is checked on a real kernel by `backend/scripts/verify-shim-nonroot-caps.mjs`
+against a control that must really show it, and the production probe is run inside a Node process that
+holds the ambient capability; both are steps of `.github/workflows/sandbox-parity.yml` on the Ubuntu 22.04
+(kernel 6.8) and current Ubuntu runners.
+
+**The core still runs with more privilege than it needs.** The sandbox keeps capabilities away from
+plugins — its probe will not report `active` unless a confined child sees them empty — but it cannot take
+them from the WordJS process itself, and when the kernel sandbox is *not* active and
+`sandbox.requireHardening` is off, an isolated plugin is a plain child of that process and inherits them
+(ambient capabilities survive the exec; file capabilities on `node` are granted afresh). So at boot the
+server logs a warning naming the privilege and its likely source, and admin `GET /health/details` reports
+it as `sandbox.hostPrivilege` (`status: EXCESS`, `source: root | real-uid-root | ambient |
+file-capabilities`, plus what the sandbox does about it in its current state — for root, that plugins keep
+uid 0 — and how to remove it). Nothing in WordJS needs a capability. To serve ports 80/443 without one,
+lower `net.ipv4.ip_unprivileged_port_start` in a file under `/etc/sysctl.d/`, or keep WordJS on a high
+port behind a reverse proxy (see `documentation/deployment.md`).
+
+**When the sandbox refuses a launch, the administrator is told why.** `POST /api/v1/plugins/:slug/activate`
+answers **409** with the stable code `sandbox_unavailable` (never a generic 500) when the fail-closed policy
+refuses the launch or the shim refuses this particular launch before exec — and so do the routes that
+restart a plugin (`/reload`, `/permissions`, `/egress-hosts`, `/free-port`, which also say that the plugin
+is now stopped and what was saved) and a marketplace update whose reactivation is refused (which says
+whether the rolled-back version is running). A refusal outside a request — at boot, on a supervised restart,
+on another node — is recorded on the plugin's runtime (`GET /plugins` → `runtime.state: "refused"`, with the
+same details), and the supervisor does not retry it. `details.sandbox` names the mechanism, its state, the
+launcher's own failure line and the operator action; filesystem paths are redacted. Only output produced
+**before** the plugin could have run is attributed to the sandbox — anything printed after the shim's
+`SHIM:` line, including a `SHIM-FAIL:` line, could have been written by the plugin itself, so a plugin
+cannot make its own failure read as "the sandbox is broken".
 
 ### 1.1 AST Static Analysis (Pre-Activation)
 Before a plugin is activated, its entire source code is parsed into an **Abstract Syntax Tree (AST)** using Acorn (`backend/src/core/plugins.ts → validatePluginPermissions`).

@@ -55,6 +55,52 @@ jobs:
       - name: Certify the native confinement used by WordJS
         run: node backend/scripts/verify-sandbox-parity.mjs --json=sandbox-parity-report.json
 
+      # THE NON-ROOT + CAPABILITY SHAPE, ON BOTH KERNELS - the configuration that took a site down.
+      #
+      # WordJS ran as an unprivileged user with systemd `AmbientCapabilities=CAP_NET_BIND_SERVICE` so
+      # Node could listen on 443. The shim took "holds a capability" for "is root" and ran root's
+      # privilege drop without the privilege to do it: `SHIM-FAIL: setgroups(clear): Operation not
+      # permitted`, the probe went 'degraded', and the fail-closed policy refused every plugin. The step
+      # above runs as the runner's plain uid, which never holds a capability, so it could not see this.
+      #
+      # The same failure from the other side: ROOT without CAP_SETGID/CAP_SETPCAP (a unit with
+      # CapabilityBoundingSet=, a container started with --cap-drop=ALL + NET_BIND_SERVICE) died on the same
+      # steps while the shim chose them from the uid; the shim now runs each one only with the capability
+      # it needs, and the probe requires an empty bounding set only when the shim says it emptied it.
+      #
+      # The legs build those credential shapes with sudo + setpriv (runners have passwordless sudo) - the
+      # non-root ones drop straight back to the runner's own uid; nothing persistent changes on the runner:
+      #   . verify-shim-nonroot-caps.mjs runs the shim itself: the ambient capability, a setuid-root
+      #     wrapper, root with a cut bounding set, root without CAP_SETPCAP, root with a locked securebit,
+      #     and a non-root service that does hold CAP_SETGID/CAP_SETPCAP - each against a control that must
+      #     really show the shape. Before the fix every one of them but the last exits 79.
+      #   . verify-sandbox-parity.mjs then runs the PRODUCTION probe from dist/ inside a Node process that
+      #     holds the ambient capability, exactly as the incident's service did, and again as root with the
+      #     bounding set cut to CAP_NET_BIND_SERVICE. Each must certify 'active', and the host-privilege
+      #     diagnosis (GET /health/details `sandbox.hostPrivilege`) must describe the shape truthfully.
+      #     --expect-capability / --expect-root-without refuse to certify if setpriv did not produce it.
+      # ubuntu-22.04 is kernel 6.8 - the incident host's kernel.
+      - name: Certify the shim and the probe for services holding privilege they cannot fully shed (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node backend/scripts/verify-shim-nonroot-caps.mjs --sudo --json=shim-nonroot-caps-report.json
+          sudo -n setpriv --reuid="$(id -u)" --regid="$(id -g)" --init-groups \
+            --inh-caps=+net_bind_service --ambient-caps=+net_bind_service \
+            -- /usr/bin/env HOME="$HOME" PATH="$PATH" "$(command -v node)" \
+            backend/scripts/verify-sandbox-parity.mjs --expect-capability=CAP_NET_BIND_SERVICE --json=sandbox-parity-ambient-cap-report.json
+          # Root WITHOUT CAP_DAC_OVERRIDE/CAP_DAC_READ_SEARCH is bound by ordinary file permissions:
+          # /home/runner is 0750, so it gets the runner's group to read the checkout, and it writes its
+          # report to /tmp (the checkout is not writable by it) — the same shape as a systemd service
+          # with CapabilityBoundingSet= cut down, which is exactly what this certifies.
+          ROOT_REPORT="/tmp/sandbox-parity-root-cut-bounding-$$.json"   # created by that root in /tmp (1777), not pre-created by the runner
+          sudo -n setpriv --bounding-set=-all,+net_bind_service --groups "$(id -g)" \
+            -- /usr/bin/env HOME="$HOME" PATH="$PATH" "$(command -v node)" \
+            backend/scripts/verify-sandbox-parity.mjs --expect-root-without=CAP_SETPCAP --json="$ROOT_REPORT"
+          sudo -n chown "$(id -u):$(id -g)" "$ROOT_REPORT"
+          mv "$ROOT_REPORT" sandbox-parity-root-cut-bounding-report.json
+
       # THE JS GUARD LAYER, ON EVERY PLATFORM — the half this matrix was not covering.
       #
       # The step above certifies the KERNEL floor: each platform's probe spawns a confined child beside
@@ -175,6 +221,10 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: sandbox-parity-${{ matrix.os }}
-          path: sandbox-parity-report.json
+          path: |
+            sandbox-parity-report.json
+            shim-nonroot-caps-report.json
+            sandbox-parity-ambient-cap-report.json
+            sandbox-parity-root-cut-bounding-report.json
           retention-days: 14
           if-no-files-found: ignore
