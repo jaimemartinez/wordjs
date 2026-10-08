@@ -92,7 +92,7 @@ elegant Puck block; simple online ordering with client cart; WhatsApp handoff; o
 One plugin per cycle: freeze spec → build workflow (one builder per module → adversarial reviewer →
 fixer) → **real E2E on a running site** (a real order, a real test-mode payment) → gates (backend
 tests, tsc, AST scan, catalog rebuild) → ship to catalog. Progress: online-store and restaurant-menu
-are done (both v2.0.0); conference-manager is complete at v2.1.0 (now 2.15.0). Next: bookings →
+are done (both v2.0.0); conference-manager is complete at v2.1.0 (now 2.15.1). Next: bookings →
 event-tickets → newsletter → T2 sweep.
 
 Sandbox cookbook every builder must respect: SQL guard (`ON CONFLICT … DO UPDATE SET` / `DO NOTHING`

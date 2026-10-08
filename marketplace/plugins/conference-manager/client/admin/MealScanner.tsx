@@ -12,16 +12,28 @@
  *   card itself): the shared useModal dialog sits at z-50, under any overlay, and it would take the focus
  *   away from a USB scanner's input.
  * - `MealScanner` is the full-screen «Modo escáner» for phones (the primary scanner): live camera with an
- *   aiming frame, BarcodeDetector when the browser has it and the plugin's own Code 128 decoder otherwise
+ *   aiming frame, BarcodeDetector when the browser has it and the plugin's own decoder otherwise
  *   (iPhone Safari, Firefox), continuous scanning with a sliding per-code gate, wake lock, torch, camera
  *   switch, beep + vibration, manual code entry and search by name.
+ *
+ * 2.15.1 (an iPhone in production showed a band of camera over the page, a white dot for a frame and never
+ * reacted to anything): the overlay's structural styles are INLINE (black, full screen, above the admin
+ * chrome, bars with safe-area padding, the aiming frame) because the plugin's Tailwind classes did not
+ * exist on the live site; the page behind is pinned (iOS ignores overflow:hidden); the scanner shows
+ * WHATEVER it reads — a value that is not a registration code (a product box: EAN/UPC, Code 39, a QR on
+ * Android…) gets a «Código leído: …» card with its symbology instead of silence; a heartbeat driven by the
+ * decode loop says it is scanning («Escaneando · N cuadros/s») and says so when the camera delivers no
+ * image; a rejected video.play() (iOS Low Power Mode) offers «Toca para activar la cámara»; the audio is
+ * unlocked inside the tap that opens the scanner; the band under the aiming frame is decoded at full
+ * resolution from a 1920×1080 stream.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "../../../../../frontend/src/contexts/I18nContext";
 import { conferenceApi } from "../lib/conference";
-import { createScanGate, isRegCode, normalizeCode, sortServices, stampTime, verdictTone, groupByDay } from "../lib/meals";
-import { decodeCode128Image } from "../lib/barcodeScan";
+import { createReadRouter, createScanMeter, normalizeCode, scanLoopDelay, sortServices, stampTime, verdictTone, groupByDay } from "../lib/meals";
+import { aimCrop, decodeVideoRegion, formatLabel } from "../lib/barcodeScan";
+import { lockBodyScroll } from "../lib/overlay";
 import { fillVars } from "../lib/lodgingView";
 
 // ── i18n ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -105,18 +117,42 @@ export function useMealDelivery() {
 }
 
 // ── Feedback: beep + vibration ───────────────────────────────────────────────────────────────────────
+const audioCtor = () => (typeof window === 'undefined' ? null : ((window as any).AudioContext || (window as any).webkitAudioContext || null));
+/** Resume a context and play one silent sample: inside a user gesture, that unlocks Web Audio on iOS. */
+const unlockAudio = (c: any) => {
+    try { if (c.state === 'suspended') c.resume().catch(() => { }); } catch { /* ignore */ }
+    try { const b = c.createBuffer(1, 1, 22050); const s = c.createBufferSource(); s.buffer = b; s.connect(c.destination); s.start(0); } catch { /* ignore */ }
+};
+let primedAudio: AudioContext | null = null;
 /**
- * Web Audio beeps; the context is created on the first user gesture (opening the scanner / a scan).
+ * iOS only lets a page sound from an AudioContext created or resumed INSIDE a user gesture; 2.15.0
+ * created it in an effect after the scanner opened, outside the tap, and the iPhone stayed silent.
+ * Call this synchronously in the click that opens the scanner: the scanner's feedback ADOPTS the
+ * unlocked context (and closes it when the scanner closes).
+ */
+export function primeScannerAudio() {
+    try {
+        if (!primedAudio || (primedAudio as any).state === 'closed') { const C = audioCtor(); primedAudio = C ? new C() : null; }
+        if (primedAudio) unlockAudio(primedAudio);
+    } catch { primedAudio = null; }
+    return primedAudio;
+}
+
+/**
+ * Web Audio beeps; the context is created on the first user gesture (opening the scanner / a scan) —
+ * with `adopt`, the one `primeScannerAudio()` unlocked in the opening tap. `prime()` (called on every
+ * press inside the scanner) resumes and unlocks it again.
  * After close() nothing plays any more: a verdict that lands after the screen is gone must neither beep
  * nor create a new AudioContext that nobody closes.
  */
-export function createFeedback() {
+export function createFeedback({ adopt = false }: { adopt?: boolean } = {}) {
     let ctx: AudioContext | null = null;
     let closed = false;
     const audio = () => {
         if (closed) return null;
         try {
-            if (!ctx) { const C = (window as any).AudioContext || (window as any).webkitAudioContext; if (C) ctx = new C(); }
+            if (!ctx && adopt && primedAudio && (primedAudio as any).state !== 'closed') { ctx = primedAudio; primedAudio = null; }
+            if (!ctx) { const C = audioCtor(); if (C) ctx = new C(); }
             if (ctx && ctx.state === 'suspended') ctx.resume().catch(() => { });
         } catch { ctx = null; }
         return ctx;
@@ -134,9 +170,11 @@ export function createFeedback() {
     };
     const vibrate = (p: number | number[]) => { if (closed) return; try { (navigator as any).vibrate?.(p); } catch { /* not supported */ } };
     return {
-        prime: () => { audio(); },
+        prime: () => { const c = audio(); if (c) unlockAudio(c); },
         ok: () => { tone(1320, 0, 0.12); vibrate(60); },
         bad: () => { tone(330, 0, 0.14); tone(330, 0.2, 0.14); vibrate([80, 60, 80]); },
+        /** Something was read that is not a registration code: one short neutral blip. */
+        info: () => { tone(880, 0, 0.07); vibrate(25); },
         close: () => { closed = true; try { ctx?.close(); } catch { /* ignore */ } ctx = null; },
     };
 }
@@ -289,19 +327,175 @@ export function PersonSearch({ conferenceId, onPick, busy, autoFocus = true, dar
 }
 
 // ── Camera support ───────────────────────────────────────────────────────────────────────────────────
+/** What BarcodeDetector is asked for when it cannot list its formats: the badge's and the retail ones. */
+export const NATIVE_DEFAULT_FORMATS = ['code_128', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_39'];
+/**
+ * The formats to ask BarcodeDetector for: EVERY one it supports (the scanner shows whatever it reads —
+ * 2.15.0 asked for Code 128 only, so a product box was invisible), or null when it cannot read the
+ * badges' Code 128 (the built-in reader is used then).
+ */
+export function pickNativeFormats(supported: string[] | null | undefined): string[] | null {
+    if (!Array.isArray(supported)) return [...NATIVE_DEFAULT_FORMATS];
+    const list = supported.filter((f) => typeof f === 'string' && f && f !== 'unknown');
+    return list.includes('code_128') ? list : null;
+}
+
 let detectorPromise: Promise<any> | null = null;
-/** A BarcodeDetector for Code 128 when the browser has one (Chrome / Android), else null. */
+/** A BarcodeDetector (Chrome / Android) for every format it reads, Code 128 included; else null. */
 export function getNativeDetector(): Promise<any> {
     if (detectorPromise) return detectorPromise;
     detectorPromise = (async () => {
         try {
             const BD = (window as any).BarcodeDetector;
             if (!BD) return null;
-            const formats = typeof BD.getSupportedFormats === 'function' ? await BD.getSupportedFormats() : ['code_128'];
-            return formats.includes('code_128') ? new BD({ formats: ['code_128'] }) : null;
+            const formats = pickNativeFormats(typeof BD.getSupportedFormats === 'function' ? await BD.getSupportedFormats() : null);
+            return formats ? new BD({ formats }) : null;
         } catch { return null; }
     })();
     return detectorPromise;
+}
+
+/**
+ * One built-in decode of the current frame: the band under the aiming frame (`frameEl`), at the camera's
+ * full resolution, in every symbology the plugin reads, nothing filtered (`regCodeOnly: false` — the
+ * caller decides what is a registration code and shows the rest). Falls back to the whole frame when
+ * the aiming frame has no layout.
+ */
+export function decodeCameraFrame(video: any, canvas: any, frameEl: any) {
+    let band = null;
+    try {
+        if (frameEl && typeof video.getBoundingClientRect === 'function') {
+            const v = video.getBoundingClientRect(), f = frameEl.getBoundingClientRect();
+            band = aimCrop(video.videoWidth, video.videoHeight, { width: v.width, height: v.height }, { x: f.left - v.left, y: f.top - v.top, width: f.width, height: f.height });
+        }
+    } catch { band = null; }
+    return decodeVideoRegion(video, canvas, band, { regCodeOnly: false });
+}
+
+// ── Scanner pieces (inline styles: they must exist even where the plugin's Tailwind classes do not) ──
+/**
+ * Keyframes of the scan line and the heartbeat dot (no motion with prefers-reduced-motion). The sweep
+ * moves a frame-sized layer with `transform` — composited, so the line keeps moving while the built-in
+ * reader holds the main thread (animating `top` re-ran layout on the main thread and stuttered exactly
+ * while a frame was being decoded). translateY(%) is relative to the layer's own height, the frame's.
+ */
+export const SCANNER_CSS = `
+@keyframes cm-scan-sweep { 0%, 100% { transform: translateY(14%); } 50% { transform: translateY(86%); } }
+@keyframes cm-scan-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { [data-scan-line], [data-scan-dot] { animation: none !important; } }
+`;
+export const SCANNER_ROOT_STYLE: React.CSSProperties = {
+    position: 'fixed', top: 0, right: 0, bottom: 0, left: 0, height: '100dvh', zIndex: 6000,
+    background: '#000', color: '#fff', display: 'flex', flexDirection: 'column', overscrollBehavior: 'none',
+};
+export const SCANNER_BAR_STYLE: React.CSSProperties = { background: 'rgba(0,0,0,0.8)', flexShrink: 0 };
+/**
+ * Side margins of everything laid across the scanner's full width (bars, cards, the side buttons): 12 px,
+ * or the notch / rounded corner in landscape — the admin viewport is `viewport-fit=cover`, so a fixed
+ * full-width element now reaches under them (env() is 0 everywhere else).
+ */
+export const SAFE_LEFT = 'max(12px, env(safe-area-inset-left))';
+export const SAFE_RIGHT = 'max(12px, env(safe-area-inset-right))';
+const pill: React.CSSProperties = {
+    display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderRadius: 999,
+    background: 'rgba(0,0,0,0.6)', color: '#fff', fontSize: 12, fontWeight: 800, lineHeight: 1.2,
+};
+
+/** The aiming frame: 82% wide (≤ 448 px), 2.6:1, the camera dimmed around it, a sweeping red line while scanning. */
+export function AimFrame({ frameRef, scanning }: any) {
+    return (
+        <div ref={frameRef} data-aim-frame="" style={{
+            position: 'relative', width: '82%', maxWidth: 448, aspectRatio: '2.6 / 1', borderRadius: 16,
+            border: '4px solid rgba(255,255,255,0.9)', boxShadow: '0 0 0 9999px rgba(0,0,0,0.35)',
+        }}>
+            <div data-scan-line="" style={{
+                position: 'absolute', left: 12, right: 12, top: 0, height: '100%', pointerEvents: 'none',
+                transform: 'translateY(50%)', willChange: 'transform',
+                opacity: scanning ? 1 : 0.35, animation: scanning ? 'cm-scan-sweep 1.8s ease-in-out infinite' : 'none',
+            }}>
+                <div style={{ height: 3, borderRadius: 2, background: 'rgba(244,63,94,0.95)', boxShadow: '0 0 10px rgba(244,63,94,0.9)' }} />
+            </div>
+        </div>
+    );
+}
+
+/**
+ * The heartbeat under the aiming frame, driven by the decode loop: «Escaneando · N cuadros/s» with a
+ * pulsing dot, «En pausa» while a sheet / a verdict / a request holds the loop. Nothing when stalled
+ * (CameraNotice covers the camera then). «Escaneando…» without a number while no frame has been analysed
+ * in the last second (the camera just turned on, a slow first native detect()): «0 cuadros/s» on the
+ * screen meant to reassure the operator read like a fault.
+ */
+export function ScanPill({ health, tx }: any) {
+    if (!health || health.state === 'stalled') return null;
+    const scanning = health.state === 'scanning';
+    return (
+        <div data-scan-state={health.state} role="status" aria-live="off" style={pill}>
+            <span data-scan-dot="" aria-hidden="true" style={{
+                width: 8, height: 8, borderRadius: 999, background: scanning ? '#34d399' : '#fbbf24',
+                animation: scanning ? 'cm-scan-pulse 1s ease-in-out infinite' : 'none',
+            }} />
+            {!scanning ? tx('meals.scanner.paused', 'En pausa')
+                : health.fps > 0 ? tx('meals.scanner.scanning', 'Escaneando · {n} cuadros/s', { n: health.fps })
+                    : tx('meals.scanner.scanning.start', 'Escaneando…')}
+        </div>
+    );
+}
+
+/**
+ * Over the camera when it shows nothing useful: video.play() was refused (iOS Low Power Mode, autoplay
+ * rules) → a big «Toca para activar la cámara» button; no frame analysed for 2 s with the camera on →
+ * «La cámara no entrega imagen» + Reintentar.
+ */
+export function CameraNotice({ health, playBlocked, onActivate, onRetry, tx }: any) {
+    const box: React.CSSProperties = {
+        position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: 2, display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center', gap: 16, padding: 24, textAlign: 'center', background: 'rgba(0,0,0,0.75)', color: '#fff',
+    };
+    const btn: React.CSSProperties = { padding: '14px 22px', borderRadius: 16, background: '#fff', color: '#000', fontWeight: 900, fontSize: 15, border: 0 };
+    if (playBlocked) {
+        return (
+            <div data-camera-notice="blocked" style={box}>
+                <button type="button" onClick={onActivate} style={btn} data-camera-activate="">
+                    <i className="fa-solid fa-play mr-2" aria-hidden="true"></i>{tx('meals.camera.tap', 'Toca para activar la cámara')}
+                </button>
+            </div>
+        );
+    }
+    if (health?.state !== 'stalled') return null;
+    return (
+        <div data-camera-notice="stalled" role="alert" style={box}>
+            <i className="fa-solid fa-video-slash" aria-hidden="true" style={{ fontSize: 36, opacity: 0.7 }}></i>
+            <p style={{ fontSize: 16, fontWeight: 800, maxWidth: 360, margin: 0 }}>{tx('meals.camera.noframes', 'La cámara no entrega imagen')}</p>
+            <p style={{ fontSize: 13, fontWeight: 600, opacity: 0.75, maxWidth: 360, margin: 0 }}>{tx('meals.camera.noframes.hint', 'Cierra otras apps que usen la cámara y desactiva el modo de bajo consumo si está activo.')}</p>
+            <button type="button" onClick={onRetry} style={btn} data-camera-retry="">{tx('meals.camera.retry', 'Reintentar')}</button>
+        </div>
+    );
+}
+
+/** Longest value shown on the read card (a QR can carry a whole paragraph). */
+const READ_SHOWN_MAX = 120;
+/**
+ * What the camera read that is NOT a registration code — shown, never silence: «Código leído: <valor> —
+ * no es un código de inscripción», with its symbology. Tap to dismiss.
+ */
+export function ReadCard({ read, tx, onDismiss }: any) {
+    if (!read) return null;
+    const v = String(read.value || '');
+    const shown = v.length > READ_SHOWN_MAX ? `${v.slice(0, READ_SHOWN_MAX)}…` : v;
+    return (
+        <div data-scan-read={read.format || ''} role="status" aria-live="polite" onClick={onDismiss} style={{
+            background: 'rgba(17,24,39,0.94)', color: '#fff', border: '2px solid rgba(255,255,255,0.3)', borderRadius: 20,
+            padding: '12px 16px', boxShadow: '0 10px 30px rgba(0,0,0,0.45)',
+        }}>
+            <div style={{ fontSize: 10, fontWeight: 900, letterSpacing: '0.12em', textTransform: 'uppercase', opacity: 0.75 }}>
+                <i className="fa-solid fa-barcode mr-1.5" aria-hidden="true"></i>{read.format ? formatLabel(read.format) : tx('meals.scanner.read.symbology', 'Código de barras')}
+            </div>
+            <div style={{ fontSize: 16, fontWeight: 800, marginTop: 2, overflowWrap: 'anywhere' }}>
+                {tx('meals.scanner.read.other', 'Código leído: {value} — no es un código de inscripción', { value: shown })}
+            </div>
+        </div>
+    );
 }
 
 export const cameraAvailability = (): 'ok' | 'insecure' | 'unsupported' => {
@@ -329,8 +523,11 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
     const camGen = useRef(0);
     const aliveRef = useRef(true);
     const inFlight = useRef(false);
-    const gate = useRef(createScanGate(3000));
-    const feedback = useRef(createFeedback());
+    const router = useRef(createReadRouter(3000));
+    const meter = useRef(createScanMeter(2000));
+    const aimRef = useRef<HTMLDivElement | null>(null);
+    const lastReadAt = useRef(0);
+    const feedback = useRef(createFeedback({ adopt: true }));
     const wakeLock = useRef<any>(null);
     const serviceRef = useRef(serviceId);
     serviceRef.current = serviceId;
@@ -347,6 +544,10 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
     const [sheet, setSheet] = useState<null | 'service' | 'code' | 'search'>(null);
     const [typed, setTyped] = useState('');
     const [flash, setFlash] = useState<'' | 'ok' | 'bad'>('');
+    const [health, setHealth] = useState<{ state: string; fps: number } | null>(null);
+    const [playBlocked, setPlayBlocked] = useState(false);
+    /** The last value read that is not a registration code (shown while it stays in view + 2.5 s). */
+    const [read, setRead] = useState<{ value: string; format: string; seq: number } | null>(null);
     // Decoding pauses while a sheet covers the verdict or someone is confirming «Entregar de todas formas».
     const sheetRef = useRef(sheet);
     sheetRef.current = sheet;
@@ -393,16 +594,24 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
         } finally { inFlight.current = false; if (aliveRef.current) setBusy(false); }
     }, [deliver, show, onChanged]);
 
-    const onCode = useCallback((raw: string) => {
-        const code = normalizeCode(raw);
-        if (!isRegCode(code)) return;
-        if (inFlight.current) return;            // before the gate: a badge seen meanwhile is not marked as seen
-        if (!gate.current.accept(code)) return;   // sliding: a badge left in view is never posted twice
-        submit({ code: raw });
+    // A registration code is posted (once per sighting, never while a request is in flight); ANYTHING else
+    // the camera reads is shown on the read card — the operator sees the scanner works and what it saw.
+    const onCode = useCallback((raw: string, format = '') => {
+        const r = router.current.route(raw, format, inFlight.current);
+        if (!r) return;
+        if (r.action === 'submit') { submit({ code: r.code }); return; }
+        lastReadAt.current = Date.now();
+        if (r.fresh) { setRead({ value: r.value, format: r.format, seq: Date.now() }); feedback.current.info(); }
     }, [submit]);
     // The frame loop is started once per camera start: it reads the CURRENT handler through a ref.
     const onCodeRef = useRef(onCode);
     onCodeRef.current = onCode;
+    // The read card stays while the value stays in view, and 2.5 s after it left.
+    useEffect(() => {
+        if (!read) return;
+        const h = setInterval(() => { if (Date.now() - lastReadAt.current > 2500) setRead(null); }, 500);
+        return () => clearInterval(h);
+    }, [read]);
 
     // ── camera lifecycle ──
     const stopCamera = useCallback(() => {
@@ -415,34 +624,37 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
         if (aliveRef.current) setTorch({ supported: false, on: false });
     }, []);
 
+    // Every turn either analyses a frame (meter.frame), skips one on purpose (meter.pause: a sheet, a
+    // verdict awaiting a decision, a request in flight) or finds no playable frame (nothing recorded):
+    // the heartbeat and the «no image» notice are read from what the loop really did.
+    // The built-in reader runs on the main thread (~20 ms on a blank frame, ~100 ms on printed packaging):
+    // the pause before the next frame grows with it (scanLoopDelay), so taps and sheets stay responsive.
     const scanLoop = useCallback(async () => {
         const video = videoRef.current;
         const stream = streamRef.current;
         if (!video || !stream) return;
+        let spent = 0;
         try {
-            if (video.readyState >= 2 && video.videoWidth > 0 && !inFlight.current && !sheetRef.current && !armedRef.current) {
+            if (inFlight.current || sheetRef.current || armedRef.current) meter.current.pause();
+            else if (video.readyState >= 2 && video.videoWidth > 0 && !video.paused) {
                 const native = await getNativeDetector();
                 if (native) {
+                    meter.current.busy();   // a slow first detect() (model loading) is not "no image"
                     const codes = await native.detect(video);
                     if (streamRef.current !== stream || !aliveRef.current) return;   // stopped meanwhile
-                    for (const c of codes || []) onCodeRef.current(String(c.rawValue || ''));
+                    meter.current.frame();
+                    for (const c of codes || []) onCodeRef.current(String(c.rawValue || ''), String(c.format || ''));
                 } else {
                     const canvas = canvasRef.current || (canvasRef.current = document.createElement('canvas'));
-                    const scale = Math.min(1, 960 / video.videoWidth);
-                    const w = Math.max(1, Math.round(video.videoWidth * scale)), h = Math.max(1, Math.round(video.videoHeight * scale));
-                    if (canvas.width !== w) canvas.width = w;
-                    if (canvas.height !== h) canvas.height = h;
-                    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-                    if (ctx) {
-                        ctx.drawImage(video, 0, 0, w, h);
-                        const img = ctx.getImageData(0, 0, w, h);
-                        const value = decodeCode128Image({ data: img.data, width: w, height: h, channels: 4 });
-                        if (value) onCodeRef.current(value);
-                    }
+                    const t0 = performance.now();
+                    const hit = decodeCameraFrame(video, canvas, aimRef.current);
+                    meter.current.frame();
+                    if (hit) onCodeRef.current(hit.text, hit.format);
+                    spent = performance.now() - t0;
                 }
             }
-        } catch { /* a bad frame: try the next one */ }
-        if (streamRef.current === stream && aliveRef.current) loopRef.current = window.setTimeout(scanLoop, 100);
+        } catch { meter.current.idle(); /* a bad frame: try the next one */ }
+        if (streamRef.current === stream && aliveRef.current) loopRef.current = window.setTimeout(scanLoop, scanLoopDelay(spent));
     }, []);
 
     const startCamera = useCallback(async (wanted?: string) => {
@@ -451,17 +663,26 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
         stopCamera();
         const gen = camGen.current;
         const stale = () => gen !== camGen.current || !aliveRef.current;
-        setCam('starting'); setCamError('');
+        setCam('starting'); setCamError(''); setPlayBlocked(false);
         try {
+            // 1920×1080 ideal: the band under the aiming frame is decoded at the camera's resolution, and
+            // a product barcode's 1-module bars need it.
             const video: MediaTrackConstraints = wanted
-                ? { deviceId: { exact: wanted }, width: { ideal: 1280 }, height: { ideal: 720 } }
-                : { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } };
+                ? { deviceId: { exact: wanted }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+                : { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } };
             const stream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
             // Salir / page hidden / a newer start while the permission prompt or the camera was opening.
             if (stale()) { stream.getTracks().forEach((t) => { try { t.stop(); } catch { /* stopped */ } }); return; }
             streamRef.current = stream;
             const el = videoRef.current;
-            if (el) { el.srcObject = stream; el.setAttribute('playsinline', 'true'); el.muted = true; await el.play().catch(() => { }); }
+            if (el) {
+                el.srcObject = stream; el.setAttribute('playsinline', 'true'); el.muted = true;
+                // Not awaited (a play() that never settles must not hold the scanner): a REFUSED play
+                // (iOS Low Power Mode, autoplay rules) leaves a black video — ask for a tap instead of
+                // swallowing it. An AbortError only means a newer start replaced this stream.
+                const p = el.play();
+                if (p && typeof p.then === 'function') p.then(() => { if (!stale()) setPlayBlocked(false); }, (err: any) => { if (!stale() && err?.name !== 'AbortError') setPlayBlocked(true); });
+            }
             if (stale()) return;
             const track = stream.getVideoTracks()[0];
             // The camera can be taken away while the page stays visible (permission revoked, another app).
@@ -475,6 +696,7 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
             if (stale()) return;
             setEngine(native ? 'native' : 'builtin');
             setCam('on');
+            meter.current.start();
             loopRef.current = window.setTimeout(scanLoop, 150);
         } catch (e: any) {
             if (stale()) return;
@@ -501,8 +723,8 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
         };
         lock();
         startCamera();
-        const prevOverflow = document.body.style.overflow;
-        document.body.style.overflow = 'hidden';
+        // iOS ignores overflow:hidden on <body>: pin the page (position:fixed at -scrollY, restored on close).
+        const releaseScroll = lockBodyScroll();
         const onVis = () => {
             if (document.visibilityState === 'hidden') stopCamera();
             else { lock(); if (cameraAvailability() === 'ok') startCamera(deviceIdRef.current || undefined); }
@@ -515,7 +737,7 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
             try { wakeLock.current?.release?.(); } catch { /* released */ }
             wakeLock.current = null;
             feedback.current.close();
-            document.body.style.overflow = prevOverflow;
+            releaseScroll();
             try { prevFocus?.focus?.(); } catch { /* gone */ }
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -565,8 +787,27 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
         finally { if (aliveRef.current) setBusy(false); }
     };
     const pickService = (id: number) => {
-        if (id !== serviceId) { onServiceChange(id); gate.current.reset(); }
+        if (id !== serviceId) { onServiceChange(id); router.current.reset(); }
         setOutcome(null); setSheet(null);
+    };
+    // The heartbeat: twice a second while the camera is on, from what the decode loop really did.
+    useEffect(() => {
+        if (cam !== 'on') { setHealth(null); return; }
+        const tick = () => setHealth((h) => {
+            const n = meter.current.health();
+            return h && h.state === n.state && h.fps === n.fps ? h : n;
+        });
+        tick();
+        const h = setInterval(tick, 500);
+        return () => clearInterval(h);
+    }, [cam]);
+    // «Toca para activar la cámara»: play() again, now inside a tap (and unlock the audio with it).
+    const activateVideo = () => {
+        feedback.current.prime();
+        const el = videoRef.current;
+        if (!el) return;
+        const p = el.play();
+        if (p && typeof p.then === 'function') p.then(() => { if (aliveRef.current) { setPlayBlocked(false); meter.current.start(); } }, () => { /* still refused: the button stays */ });
     };
 
     const camMessage =
@@ -579,13 +820,20 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
 
     // Portalled to <body> above the admin chrome (header z-5000, sidebar z-5002, its toggle z-5003) and
     // below the toasts (z-9999): an ancestor with a transform / filter would otherwise crop a fixed overlay.
+    // Structural styles are INLINE: on the live site the plugin's Tailwind classes did not exist and this
+    // screen was a transparent band of camera over the page (see SCANNER_ROOT_STYLE).
+    const fill: React.CSSProperties = { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 };
+    const centred: React.CSSProperties = { ...fill, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16, padding: 24, textAlign: 'center' };
+    const scanning = cam === 'on' && !playBlocked && health?.state === 'scanning';
     return createPortal(
-        <div ref={rootRef} tabIndex={-1} className="fixed inset-0 z-[6000] bg-black text-white flex flex-col select-none outline-none" role="dialog" aria-modal="true" aria-label={tx('meals.scanner', 'Modo escáner')} data-meal-scanner="">
+        <div ref={rootRef} tabIndex={-1} className="fixed inset-0 z-[6000] bg-black text-white flex flex-col select-none outline-none" style={SCANNER_ROOT_STYLE} role="dialog" aria-modal="true" aria-label={tx('meals.scanner', 'Modo escáner')} data-meal-scanner="" data-engine={engine}
+            onPointerDown={() => feedback.current.prime()}>
+            <style>{SCANNER_CSS}</style>
             {/* Top: service + exit */}
-            <div className="flex items-center gap-2 px-3 pt-[max(env(safe-area-inset-top),0.75rem)] pb-2 bg-black/80">
-                <button type="button" onClick={() => setSheet('service')} className="flex-1 min-w-0 text-left px-4 py-3 rounded-2xl bg-white/10 active:bg-white/20" aria-label={tx('meals.scanner.change.service', 'Cambiar servicio')}>
-                    <span className="block text-[10px] font-black uppercase tracking-widest text-white/60">{tx('meals.scanner.service', 'Servicio')}</span>
-                    <span className="block text-base font-black truncate">{service ? serviceName(tx, service, language) : tx('meals.scanner.pick', 'Elige un servicio')}</span>
+            <div className="flex items-center gap-2 px-3 pt-[max(env(safe-area-inset-top),0.75rem)] pb-2 bg-black/80" style={{ ...SCANNER_BAR_STYLE, display: 'flex', alignItems: 'center', gap: 8, paddingLeft: SAFE_LEFT, paddingRight: SAFE_RIGHT, paddingBottom: 8, paddingTop: 'max(env(safe-area-inset-top), 12px)' }}>
+                <button type="button" onClick={() => setSheet('service')} className="flex-1 min-w-0 text-left px-4 py-3 rounded-2xl bg-white/10 active:bg-white/20" style={{ flex: '1 1 0%', minWidth: 0 }} aria-label={tx('meals.scanner.change.service', 'Cambiar servicio')}>
+                    <span className="block text-[10px] font-black uppercase tracking-widest text-white/60" style={{ display: 'block' }}>{tx('meals.scanner.service', 'Servicio')}</span>
+                    <span className="block text-base font-black truncate" style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{service ? serviceName(tx, service, language) : tx('meals.scanner.pick', 'Elige un servicio')}</span>
                 </button>
                 <button type="button" onClick={onClose} className="px-4 py-3 rounded-2xl bg-white/10 active:bg-white/20 font-black text-sm" aria-label={tx('meals.scanner.exit', 'Salir')}>
                     <i className="fa-solid fa-xmark mr-1.5" aria-hidden="true"></i>{tx('meals.scanner.exit', 'Salir')}
@@ -593,7 +841,7 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
             </div>
 
             {/* Counters */}
-            <div className="grid grid-cols-3 gap-2 px-3 pb-2 text-center bg-black/80">
+            <div className="grid grid-cols-3 gap-2 px-3 pb-2 text-center bg-black/80" style={{ ...SCANNER_BAR_STYLE, display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8, paddingLeft: SAFE_LEFT, paddingRight: SAFE_RIGHT, paddingBottom: 8, textAlign: 'center' }}>
                 {[[tx('meals.count.delivered', 'Entregados'), stats?.delivered], [tx('meals.count.entitled', 'Con derecho'), stats?.entitled], [tx('meals.count.pending', 'Pendientes'), stats?.pending]].map(([label, n]: any) => (
                     <div key={label} className="rounded-xl bg-white/10 py-1.5">
                         <div className="text-xl font-black tabular-nums">{n ?? '—'}</div>
@@ -602,48 +850,60 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
                 ))}
             </div>
 
-            {/* Camera */}
-            <div className={`relative flex-1 min-h-0 overflow-hidden ${flash === 'ok' ? 'ring-8 ring-inset ring-emerald-500' : flash === 'bad' ? 'ring-8 ring-inset ring-rose-500' : ''}`}>
-                <video ref={videoRef} className={`absolute inset-0 w-full h-full object-cover ${cam === 'on' ? '' : 'opacity-0'}`} playsInline muted aria-hidden="true" />
-                {cam === 'on' && (
-                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none" aria-hidden="true">
-                        <div className="w-[82%] max-w-md aspect-[2.6/1] rounded-2xl border-4 border-white/90 shadow-[0_0_0_9999px_rgba(0,0,0,0.35)] relative">
-                            <div className="absolute left-3 right-3 top-1/2 h-0.5 bg-rose-500/80 animate-pulse"></div>
+            {/* Camera — no page panning or pinch-zoom on it (touch-action), the bars and sheets keep theirs */}
+            <div className="relative flex-1 min-h-0 overflow-hidden" data-camera-area="" style={{
+                position: 'relative', flex: '1 1 0%', minHeight: 0, overflow: 'hidden', touchAction: 'none',
+                boxShadow: flash === 'ok' ? 'inset 0 0 0 8px #10b981' : flash === 'bad' ? 'inset 0 0 0 8px #f43f5e' : 'none',
+            }}>
+                <video ref={videoRef} className="absolute inset-0 w-full h-full object-cover" style={{ ...fill, width: '100%', height: '100%', objectFit: 'cover', opacity: cam === 'on' ? 1 : 0 }} playsInline muted aria-hidden="true" />
+                {cam === 'on' && !playBlocked && health?.state !== 'stalled' && (
+                    <div style={{ ...fill, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, pointerEvents: 'none' }}>
+                        <AimFrame frameRef={aimRef} scanning={scanning} />
+                        <ScanPill health={health} tx={tx} />
+                        <div style={{ maxWidth: 320, margin: '0 16px', padding: '4px 10px', borderRadius: 10, background: 'rgba(0,0,0,0.55)', textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'rgba(255,255,255,0.85)' }}>
+                            {tx('meals.scanner.focus.hint', 'Mantén el código recto a unos 15–20 cm: más cerca la cámara no enfoca.')}
                         </div>
                     </div>
                 )}
                 {cam === 'on' && (
-                    <div className="absolute top-3 left-0 right-0 text-center text-xs font-bold text-white/80 pointer-events-none">{tx('meals.scanner.aim', 'Apunta al código de barras del participante')}</div>
+                    <div style={{ position: 'absolute', top: 12, left: 0, right: 0, textAlign: 'center', fontSize: 12, fontWeight: 700, color: 'rgba(255,255,255,0.85)', pointerEvents: 'none', textShadow: '0 1px 2px #000' }}>{tx('meals.scanner.aim', 'Apunta al código de barras del participante')}</div>
                 )}
-                {cam === 'starting' && <div className="absolute inset-0 flex items-center justify-center text-white/70 font-bold"><i className="fa-solid fa-camera mr-2 animate-pulse" aria-hidden="true"></i>{tx('meals.camera.starting', 'Abriendo la cámara…')}</div>}
+                {cam === 'on' && read && (
+                    <div style={{ position: 'absolute', top: 40, left: SAFE_LEFT, right: `calc(60px + ${SAFE_RIGHT})`, zIndex: 1 }}>
+                        <ReadCard read={read} tx={tx} onDismiss={() => setRead(null)} />
+                    </div>
+                )}
+                {cam === 'starting' && <div style={{ ...centred, color: 'rgba(255,255,255,0.75)', fontWeight: 700 }}><span><i className="fa-solid fa-camera mr-2 animate-pulse" aria-hidden="true"></i>{tx('meals.camera.starting', 'Abriendo la cámara…')}</span></div>}
                 {camMessage && cam !== 'starting' && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-6 text-center">
-                        <i className="fa-solid fa-video-slash text-4xl text-white/60" aria-hidden="true"></i>
-                        <p className="text-base font-bold text-white/90 max-w-sm">{camMessage}</p>
+                    <div style={centred}>
+                        <i className="fa-solid fa-video-slash text-4xl text-white/60" aria-hidden="true" style={{ fontSize: 36, opacity: 0.7 }}></i>
+                        <p className="text-base font-bold text-white/90 max-w-sm" style={{ fontSize: 16, fontWeight: 700, maxWidth: 384, margin: 0 }}>{camMessage}</p>
                         {(cam === 'denied' || cam === 'error' || cam === 'off') && (
-                            <button type="button" onClick={() => startCamera(deviceId || undefined)} className="px-5 py-3 rounded-2xl bg-white text-black font-black text-sm">{tx('meals.camera.retry', 'Reintentar')}</button>
+                            <button type="button" onClick={() => startCamera(deviceId || undefined)} className="px-5 py-3 rounded-2xl bg-white text-black font-black text-sm" style={{ background: '#fff', color: '#000' }}>{tx('meals.camera.retry', 'Reintentar')}</button>
                         )}
                     </div>
                 )}
                 {cam === 'on' && (
-                    <div className="absolute right-3 top-10 flex flex-col gap-2">
+                    <CameraNotice health={health} playBlocked={playBlocked} tx={tx} onActivate={activateVideo} onRetry={() => startCamera(deviceId || undefined)} />
+                )}
+                {cam === 'on' && (
+                    <div className="absolute right-3 top-10 flex flex-col gap-2" style={{ position: 'absolute', right: SAFE_RIGHT, top: 40, zIndex: 3, display: 'flex', flexDirection: 'column', gap: 8 }}>
                         {torch.supported && (
-                            <button type="button" onClick={toggleTorch} className={`w-12 h-12 rounded-full flex items-center justify-center ${torch.on ? 'bg-yellow-300 text-black' : 'bg-black/60 text-white'}`} aria-pressed={torch.on} aria-label={tx('meals.camera.torch', 'Linterna')}>
+                            <button type="button" onClick={toggleTorch} className={`w-12 h-12 rounded-full flex items-center justify-center ${torch.on ? 'bg-yellow-300 text-black' : 'bg-black/60 text-white'}`} style={{ width: 48, height: 48, borderRadius: 999, background: torch.on ? '#fde047' : 'rgba(0,0,0,0.6)', color: torch.on ? '#000' : '#fff' }} aria-pressed={torch.on} aria-label={tx('meals.camera.torch', 'Linterna')}>
                                 <i className="fa-solid fa-bolt" aria-hidden="true"></i>
                             </button>
                         )}
                         {devices.length > 1 && (
-                            <button type="button" onClick={switchCamera} className="w-12 h-12 rounded-full bg-black/60 text-white flex items-center justify-center" aria-label={tx('meals.camera.switch', 'Cambiar de cámara')}>
+                            <button type="button" onClick={switchCamera} className="w-12 h-12 rounded-full bg-black/60 text-white flex items-center justify-center" style={{ width: 48, height: 48, borderRadius: 999, background: 'rgba(0,0,0,0.6)', color: '#fff' }} aria-label={tx('meals.camera.switch', 'Cambiar de cámara')}>
                                 <i className="fa-solid fa-camera-rotate" aria-hidden="true"></i>
                             </button>
                         )}
                     </div>
                 )}
-                {cam === 'on' && engine === 'builtin' && <div className="absolute bottom-2 left-0 right-0 text-center text-[10px] font-bold text-white/50 pointer-events-none">{tx('meals.camera.builtin', 'Lector integrado: acerca el código y mantenlo recto')}</div>}
 
                 {/* Verdict over the bottom third */}
                 {outcome && (
-                    <div className="absolute left-3 right-3 bottom-3">
+                    <div className="absolute left-3 right-3 bottom-3" style={{ position: 'absolute', left: SAFE_LEFT, right: SAFE_RIGHT, bottom: 12, zIndex: 4 }}>
                         <VerdictCard outcome={outcome} service={service} large busy={busy} language={language}
                             onForce={outcome.result === 'not_entitled' ? force : undefined}
                             onArmedChange={(a) => { armedRef.current = !!a; }}
@@ -654,7 +914,7 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
             </div>
 
             {/* Bottom actions */}
-            <div className="grid grid-cols-2 gap-2 px-3 pt-2 pb-[max(env(safe-area-inset-bottom),0.75rem)] bg-black/80">
+            <div className="grid grid-cols-2 gap-2 px-3 pt-2 pb-[max(env(safe-area-inset-bottom),0.75rem)] bg-black/80" style={{ ...SCANNER_BAR_STYLE, display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8, paddingLeft: SAFE_LEFT, paddingRight: SAFE_RIGHT, paddingTop: 8, paddingBottom: 'max(env(safe-area-inset-bottom), 12px)' }}>
                 <button type="button" onClick={() => { setTyped(''); setSheet('code'); }} className="py-4 rounded-2xl bg-white/10 active:bg-white/20 font-black text-sm">
                     <i className="fa-solid fa-keyboard mr-2" aria-hidden="true"></i>{tx('meals.scanner.type', 'Escribir código')}
                 </button>
@@ -665,8 +925,8 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
 
             {/* Sheets */}
             {sheet && (
-                <div className="absolute inset-0 z-10 bg-black/70 flex items-end" onClick={() => setSheet(null)}>
-                    <div className="w-full max-h-[85%] overflow-y-auto rounded-t-3xl bg-gray-900 p-4 pb-[max(env(safe-area-inset-bottom),1rem)] space-y-3" onClick={(e) => e.stopPropagation()}>
+                <div className="absolute inset-0 z-10 bg-black/70 flex items-end" style={{ ...fill, zIndex: 10, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end' }} onClick={() => setSheet(null)}>
+                    <div className="w-full max-h-[85%] overflow-y-auto rounded-t-3xl bg-gray-900 p-4 pb-[max(env(safe-area-inset-bottom),1rem)] space-y-3" style={{ width: '100%', maxHeight: '85%', overflowY: 'auto', overscrollBehavior: 'contain', borderRadius: '24px 24px 0 0', background: '#111827', paddingLeft: 'max(16px, env(safe-area-inset-left))', paddingRight: 'max(16px, env(safe-area-inset-right))', paddingTop: 16, paddingBottom: 'max(env(safe-area-inset-bottom), 16px)' }} onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-between">
                             <h2 className="text-lg font-black">
                                 {sheet === 'service' ? tx('meals.scanner.pick', 'Elige un servicio') : sheet === 'code' ? tx('meals.scanner.type', 'Escribir código') : tx('meals.scanner.search', 'Buscar por nombre')}

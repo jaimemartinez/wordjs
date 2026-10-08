@@ -20,6 +20,8 @@ import { buildXlsx, downloadXlsx } from "../lib/xlsx";
 import { displayName, exportFilename } from "../lib/exports";
 import { filterLedger, summarizeLedger, buildLedgerWorkbook } from "../lib/accounting";
 import { usePerms, ReadOnlyNotice } from "./perms";
+import { Overlay } from "./Overlay";
+import { canAutoFocus } from "../lib/overlay";
 
 const money = (n: unknown) => { const v = Number(n) || 0; return (v < 0 ? '-$' : '$') + fmtMoney(Math.abs(v)); };
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
@@ -229,7 +231,7 @@ export default function AccountingPage({ conferenceId, slug }: { conferenceId: n
 
             {/* Entry form */}
             {form && canManage && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 animate-in fade-in duration-200">
+                <Overlay layer={2}>
                     <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-lg border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200 max-h-[92vh] flex flex-col" role="dialog" aria-modal="true">
                         <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-start justify-between gap-4 shrink-0">
                             <div>
@@ -248,7 +250,7 @@ export default function AccountingPage({ conferenceId, slug }: { conferenceId: n
                                 </div>
                             )}
                             <div className="space-y-1.5"><label htmlFor="acc-desc" className={labelCls}>{t('accounting.description') || 'Descripción'} *</label>
-                                <input id="acc-desc" className={inputCls} value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} autoFocus /></div>
+                                <input id="acc-desc" className={inputCls} value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} autoFocus={canAutoFocus()} /></div>
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="space-y-1.5"><label htmlFor="acc-amount" className={labelCls}>{t('accounting.amount') || 'Monto'} *</label>
                                     <input id="acc-amount" type="number" min={0} step="0.01" className={inputCls} value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} /></div>
@@ -272,11 +274,11 @@ export default function AccountingPage({ conferenceId, slug }: { conferenceId: n
                             <button onClick={save} disabled={busy || !String(form.description).trim() || !(Number(form.amount) > 0) || !form.date} className={`px-8 py-3 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg disabled:opacity-50 ${form.kind === 'income' ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-500/30' : 'bg-rose-600 hover:bg-rose-700 shadow-rose-500/30'}`}>{t('save') || 'Guardar'}</button>
                         </div>
                     </div>
-                </div>
+                </Overlay>
             )}
 
             {confirmState && (
-                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[130] flex items-center justify-center p-4">
+                <Overlay layer={4} backdrop="rgba(0,0,0,0.5)" className="backdrop-blur-sm">
                     <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-6 space-y-5" role="alertdialog" aria-modal="true">
                         <p className="text-sm font-bold text-gray-800">{confirmState.text}</p>
                         <div className="flex justify-end gap-2">
@@ -284,7 +286,7 @@ export default function AccountingPage({ conferenceId, slug }: { conferenceId: n
                             <button onClick={() => { const f = confirmState.onOk; setConfirmState(null); f(); }} className="px-6 py-2.5 bg-rose-600 text-white rounded-xl hover:bg-rose-700 font-black text-[10px] uppercase tracking-widest">{t('confirm') || 'Confirmar'}</button>
                         </div>
                     </div>
-                </div>
+                </Overlay>
             )}
         </div>
     );

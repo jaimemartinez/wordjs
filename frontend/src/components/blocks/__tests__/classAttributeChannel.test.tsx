@@ -428,7 +428,12 @@ function shippedStylesheets(): string[] {
         for (const entry of readdirSync(dir, { withFileTypes: true })) {
             const abs = path.join(dir, entry.name);
             if (entry.isDirectory()) {
-                if (entry.name === 'node_modules') continue;
+                // dist/ is BUILD OUTPUT (gitignored): a plugin build leaves esbuild's copy of the plugin's
+                // own CSS — already read from its source above — plus the Tailwind utilities compiled from
+                // its classes (backend/scripts/plugin-stylesheet.js). Utilities are the second derivation's
+                // job (the token rule below), as they are for the host's own compiled CSS; parsing them
+                // here would make this population depend on whether someone ran a build on this machine.
+                if (entry.name === 'node_modules' || entry.name === 'dist') continue;
                 walk(abs);
             } else if (entry.name.endsWith('.css')) out.push(abs);
         }

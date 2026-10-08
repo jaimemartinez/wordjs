@@ -22,6 +22,9 @@ const { readDeclaredBlockEntry } = require('./plugin-block-contract');
 // derived from the tracked ledger marketplace/reviews.json — never invented here, and never defaulting
 // to anything more flattering than `unreviewed`.
 const { readLedger, reviewFor } = require('./marketplace-review');
+// The plugin's compiled stylesheet (dist/admin.css, written by build-plugin.js) ships at the path the
+// admin shell requests, client/admin/admin.css — the same substitution every packer makes.
+const { withPackagedStylesheet } = require('./plugin-stylesheet');
 
 // Repo root. WORDJS_MARKETPLACE_ROOT lets the catalog tests drive THIS script (the real producer)
 // over a small fixture tree instead of re-implementing the packing rules in the test — a test whose
@@ -109,6 +112,7 @@ function buildOne(slug, ledger) {
     // byte-identical zips (stable sha256 across CI runs).
     const files = walk(dir).sort();
     const FIXED_DATE = new Date('2026-01-01T00:00:00Z');
+    const rels = [];
     for (const abs of files) {
         const rel = path.relative(dir, abs).split(path.sep).join('/');
         // SECURITY: a plugin's top-level data/ is RUNTIME state (e.g. mail-server's AES root key
@@ -117,6 +121,12 @@ function buildOne(slug, ledger) {
         if (rel === 'data' || rel.startsWith('data/')) continue;
         // A top-level theme/ is the plugin's COMPANION THEME (plugin-completeness option B) and MUST
         // ship: POST /plugins/<slug>/install-theme copies it to themes/<slug>-theme after install.
+        rels.push(rel);
+    }
+    // client/admin/admin.css is the BUILT stylesheet (the plugin's own admin.css + the Tailwind classes
+    // its UI uses), not the source file: without it a runtime-installed plugin's screens lack every class
+    // the host does not happen to share. See plugin-stylesheet.js.
+    for (const { rel, abs } of withPackagedStylesheet(dir, rels)) {
         zip.addFile(`${slug}/${rel}`, fs.readFileSync(abs));
     }
     for (const entry of zip.getEntries()) entry.header.time = FIXED_DATE;

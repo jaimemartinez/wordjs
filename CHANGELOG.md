@@ -271,6 +271,95 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   ceiling as an error. The CI `Performance budgets` job now enforces the `linux` calibration on every
   push and pull request (it is still not a required check).
 
+- **Marketplace plugins render with all of their styles on a live site.** A plugin installed from the
+  marketplace is loaded at runtime from its own bundle, and a release build only compiled the Tailwind
+  classes of the plugins git tracks, so every class only a plugin used was missing in production while
+  development looked right. On an iPhone the conference-manager meal scanner was a transparent band over
+  the page with a white dot for a frame (`bg-black`, `bg-black/80`, `w-[82%]`, `aspect-[2.6/1]` did not
+  exist). `build-plugin.js` now compiles the classes a plugin's sources use with the Tailwind v4 already in
+  the repository (`backend/scripts/plugin-stylesheet.js`: the host's theme, no preflight, not scoped so
+  portalled overlays get them, byte-identical across rebuilds). Every compiled rule is nested ONE cascade
+  sub-layer below the host's own (`@layer utilities { @layer wjs-plugin { … } }`, likewise the theme), so a
+  plugin sheet can add the classes the host lacks but never restyle the host: a flat copy, linked after
+  the host CSS, made its `.flex`/`.hidden`/`.fixed` beat the host's `md:` variants, and a desktop showed
+  the phone layout of the admin (mobile header, sidebar fixed over the page, no collapse toggle) on a
+  plugin page, on every admin page with mail-server's hooks, on public pages with a plugin block. The
+  price on a core that did not compile the plugin's classes: a plugin-only variant (`sm:text-sm`) loses to
+  a host base class (`text-base`) on the same element. They ship where the host already
+  loads plugin CSS: the catalog, `pack:plugin` and `wordjs pack` put the plugin's own `admin.css` followed
+  by the compiled classes at `client/admin/admin.css` (the file every released admin shell links, so an
+  updated plugin is styled on an older core too), block and hooks bundles get them in
+  `dist/<name>.bundle.css`, and the runtime loader now links the hooks stylesheet. `verify-marketplace.js`
+  refuses a package without them. Rebuilding or re-packing an installed plugin keeps exactly one compiled
+  block (it used to stack one more per cycle); class names whose arbitrary value holds quotes
+  (`content-['']`, `font-['Inter']`, `bg-[url('…')]`) are found; a missing host stylesheet stops the build
+  instead of silently dropping the host's theme tokens, and a test pins that the plugins and the host
+  compile with the same Tailwind. `manifest.json`, `client/admin/admin.css` and `dist/component.bundle.css`
+  are served `no-cache` with their ETag (was `max-age=3600`): their URLs carry no version, and for up to
+  an hour after an update a browser ran the new bundle with the old classes. The host stylesheet also scans
+  the first-party catalog sources (`@source "../../../marketplace/plugins/**/*.{ts,tsx}"`, about +5 KB
+  gzipped), which puts the catalog's own variants in the host's order on a newer core and keeps an older
+  package styled there. Every catalog package now carries its compiled classes, and installed copies
+  receive them with the patch version this release offers each catalog plugin (the `browser:script`
+  bump above). `wordjs pack` honours `WORDJS_PLUGINS_DIR`, like `build-plugin.js`.
+- **The admin no longer slides and bounces as a whole on iOS.** The shell and the sidebar were `h-screen`
+  (100vh, the LARGE viewport on iOS), so the document was taller than the screen and a drag moved the
+  whole page, header included. They are `h-dvh` now; the admin document does not overscroll vertically
+  (`overscroll-behavior-y: none` on `html`/`body`, horizontal left alone so desktop swipe-back keeps
+  working); the generated plugin page wrapper contains its own overscroll; the mobile header drops a
+  `sticky` that never stuck. The admin exports `viewport-fit=cover`, so `env(safe-area-inset-*)` works for
+  full-screen plugin UI, and the shell, the header, the fullscreen editor and the toast stack keep
+  themselves clear of the insets, so nothing moves under the notch in landscape or under the home
+  indicator. Desktop is unchanged (the insets are 0 there).
+- **Chromium browsers can open the camera for the conference-manager meal scanner.** The site sent
+  `Permissions-Policy: camera=()`, which Chrome, Edge and every Android Chromium browser enforce: the
+  camera was refused before any prompt, and the scanner asked the operator for a permission no setting
+  could grant. Safari does not enforce the header, which is why iPhones still got a picture. The policy is
+  now `camera=(self)` on every route: the site's own pages may ask (the browser still prompts), embedded
+  third-party frames may not, and the microphone, geolocation and the Topics API stay denied. It is one
+  value for every route because a document keeps the policy it was loaded with, and the admin is usually
+  reached by a client-side navigation from `/login`.
+
+- **conference-manager 2.15.1: the phone scanner shows whatever it reads, and every plugin dialog works on
+  a phone.** On an iPhone in production the meal scanner reacted to nothing, a product box included, and
+  the «Nueva conferencia» form opened under the admin header.
+  - **Scanner.** Its structure is inline (black, full screen at z-6000, opaque bars padded by the
+    safe-area insets, the 82% × 2.6:1 aiming frame with a sweeping scan line), so it no longer depends on
+    compiled plugin classes; the page behind is pinned the way iOS honours (`position: fixed` at
+    `-scrollY`, restored on close) and the camera area takes no pan or pinch. The built-in reader (iPhone
+    Safari has no `BarcodeDetector`) reads EAN-13, EAN-8, UPC-A, UPC-E (number system 0: a number-system-1
+    UPC-E is bar for bar half an EAN-13, and a box half out of the aiming band or under glare read as a
+    wrong number) and Code 39 besides Code 128, and
+    decodes the band under the aiming frame at the camera's full resolution (1920×1080 requested) instead
+    of a downscaled whole frame. Nothing read is dropped any more: a value that is not a registration code
+    shows «Código leído: … — no es un código de inscripción» with its symbology and is never posted
+    (2.15.0 could turn an EAN-13 into a 10-character "code" by stripping its 0s and 1s); an unknown
+    registration code still gets «Código no encontrado». `BarcodeDetector` is asked for every format it
+    supports. A heartbeat driven by the decode loop shows «Escaneando…» until the first frame is analysed,
+    then «Escaneando · N cuadros/s», or «En pausa»; «La cámara no entrega imagen» with «Reintentar» after
+    2 seconds without an analysed frame (a slow native `detect()` in flight, such as the first one on a
+    low-end Android, does not count), and «Toca para activar la cámara» when `video.play()` is refused (Low
+    Power Mode). The scan line moves with `transform`, so it keeps moving while the built-in reader holds
+    the main thread, and the loop waits at least as long as the last decode took. Bars, cards and buttons
+    stay clear of the notch in landscape. The beep's audio context is
+    unlocked inside the tap that opens the scanner and on every press in it; a hint gives the focus
+    distance (15–20 cm).
+  - **Dialogs.** Every modal and sheet of the plugin renders through one `Overlay`: portalled to `<body>`
+    in the 6000 band (above the admin header and sidebar, below the toasts, the old stacking order kept),
+    scrolling itself at `100dvh`, anchored to the bottom on a phone and centred from 640px, with the page
+    behind pinned, 16px fields (no iOS zoom), date inputs that can shrink, compact paddings and the
+    home-indicator inset on a phone; it closes only on a press that starts and ends on the backdrop. Fields
+    autofocus only with a mouse, so the keyboard no longer covers a dialog as it opens. A card capped at
+    `92vh` is capped by the dynamic viewport instead (`vh` is the large viewport on iOS, and its Guardar
+    footer started below the screen). On a desktop the sidebar is now dimmed behind a plugin dialog too (it
+    used to stay clickable above the old z-100 backdrop).
+  - **Conference list.** It no longer asks a third-party host for a decorative texture: once the host
+    stylesheet compiled the catalog's classes, `bg-[url('https://grainy-gradients.vercel.app/noise.svg')]`
+    became a request to that host from every admin who opened the list (it answers 402, so it never even
+    painted).
+    `catalogClassAssets.test.ts` keeps every catalog source the host compiles free of `url()` to another
+    host.
+
 ## [2.3.0] - 2026-10-07
 
 ### Security

@@ -241,7 +241,16 @@ const nextConfig: NextConfig = {
           // and the browser leaves by TOP-LEVEL NAVIGATION to Stripe's own hosted page, which this header
           // does not govern. So nothing bundled depends on `payment` being unrestricted; the directive is
           // left as-is here on purpose (comment-only correction — changing it is a separate decision).
-          { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=(), browsing-topics=()' },
+          //
+          // camera=(self), not camera=(): the conference-manager meal scanner (a plugin admin screen) opens
+          // the phone camera. With camera=() every Chromium browser (Android Chrome, desktop Chrome/Edge)
+          // refused getUserMedia without asking, and the scanner told the operator to grant a permission
+          // no setting could grant. Safari does not enforce this header, which is why iPhones still got a
+          // picture. `self` keeps every embedded third-party frame out, and the browser still asks the
+          // user. ONE value for every route on purpose: a document keeps the policy it was LOADED with,
+          // and the admin is usually reached by a client-side navigation (/login → /admin), so an
+          // /admin-only value would not apply until the next full reload.
+          { key: 'Permissions-Policy', value: 'camera=(self), microphone=(), geolocation=(), browsing-topics=()' },
         ],
       },
       {

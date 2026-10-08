@@ -52,7 +52,7 @@ function mkRoot(): string {
         frontend: { adminPage: { entry: 'client/admin/page.tsx', slug: 'alpha' } },
     }, null, 2));
     fs.writeFileSync(path.join(alpha, 'client', 'admin', 'page.tsx'),
-        'export default function Admin() { return <div>alpha</div>; }\n');
+        'export default function Admin() { return <div className="bg-black/80 w-[82%]">alpha</div>; }\n');
     fs.writeFileSync(path.join(alpha, 'index.js'), 'module.exports = {};\n');
 
     const beta = path.join(plugins, 'fixture-beta');
@@ -188,6 +188,70 @@ test('a package that ships without the frontend bundle its manifest declares fai
         const r = run(VERIFY, root);
         assert.equal(r.status, 1, 'a package missing its declared bundle must fail');
         assert.match(r.out, /is missing fixture-alpha\/dist\/admin\.bundle\.js/, r.out);
+    });
+});
+
+/** Rewrite one entry of a published plugin zip and re-point the catalog at the new bytes. */
+function mutatePackage(root: string, file: string, id: string, mutate: (pkg: any) => void): void {
+    const zip = distFile(root, file);
+    const pkg = new AdmZip(fs.readFileSync(zip));
+    mutate(pkg);
+    const buf = pkg.toBuffer();
+    fs.writeFileSync(zip, buf);
+    // Re-point the catalog so the sha256 check passes and the defect under test is what fails.
+    const indexPath = distFile(root, 'marketplace-index.json');
+    const index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+    const entry = index.plugins.find((p: { id: string }) => p.id === id);
+    entry.sha256 = crypto.createHash('sha256').update(buf).digest('hex');
+    entry.size = buf.length;
+    fs.writeFileSync(indexPath, JSON.stringify(index, null, 2));
+}
+
+test('a catalog plugin ships its compiled Tailwind classes at client/admin/admin.css, after its own stylesheet', () => {
+    withRoot((root) => {
+        // A runtime-installed plugin gets NO Tailwind from the host build: its admin screen has exactly the
+        // classes its package carries. The admin shell links /plugins/<id>/client/admin/admin.css (on every
+        // host released so far), so that is where the compiled classes must be.
+        const own = '.plugin-admin-alpha .own { color: rebeccapurple; }\n';
+        const ownPath = path.join(root, 'marketplace', 'plugins', 'fixture-alpha', 'client', 'admin', 'admin.css');
+        fs.writeFileSync(ownPath, own);
+        const built = run(BUILD, root);
+        assert.equal(built.status, 0, `build failed: ${built.out}`);
+
+        const pkg = new AdmZip(fs.readFileSync(distFile(root, 'fixture-alpha-1.0.0.zip')));
+        const sheet = pkg.getEntry('fixture-alpha/client/admin/admin.css');
+        assert.ok(sheet, 'the package carries client/admin/admin.css');
+        const css = sheet.getData().toString('utf8');
+        assert.ok(css.startsWith(own), 'the plugin\'s own stylesheet comes first, verbatim');
+        assert.ok(css.includes('.bg-black\\/80') && css.includes('.w-\\[82\\%\\]'), 'the classes the admin page uses are compiled in');
+        assert.ok(!pkg.getEntry('fixture-alpha/dist/admin.css'), 'the build\'s intermediate copy is not shipped twice');
+        assert.equal(fs.readFileSync(ownPath, 'utf8'), own, 'the SOURCE tree is never written');
+
+        // ...and the shipped catalog verifies, reproducibly, with the stylesheet in it.
+        const det = run(VERIFY, root, ['--rebuild']);
+        assert.equal(det.status, 0, `verify --rebuild must pass: ${det.out}`);
+    });
+});
+
+test('a package whose admin stylesheet lacks the compiled classes fails the gate', () => {
+    withRoot((root) => {
+        assert.equal(run(BUILD, root).status, 0);
+
+        // The exact state of every catalog zip before this fix: the admin page installs and loads, and
+        // renders without the classes only it uses.
+        mutatePackage(root, 'fixture-alpha-1.0.0.zip', 'fixture-alpha', (pkg) => {
+            pkg.updateFile('fixture-alpha/client/admin/admin.css', Buffer.from('.plugin-admin-alpha {}\n'));
+        });
+        const stripped = run(VERIFY, root);
+        assert.equal(stripped.status, 1, 'an admin stylesheet with no compiled utilities must fail');
+        assert.match(stripped.out, /fixture-alpha\/client\/admin\/admin\.css inside fixture-alpha-1\.0\.0\.zip carries no compiled utilities/, stripped.out);
+
+        mutatePackage(root, 'fixture-alpha-1.0.0.zip', 'fixture-alpha', (pkg) => {
+            pkg.deleteFile('fixture-alpha/client/admin/admin.css');
+        });
+        const missing = run(VERIFY, root);
+        assert.equal(missing.status, 1, 'a package with no admin stylesheet at all must fail');
+        assert.match(missing.out, /is missing fixture-alpha\/client\/admin\/admin\.css/, missing.out);
     });
 });
 

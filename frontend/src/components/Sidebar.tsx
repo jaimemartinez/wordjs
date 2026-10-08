@@ -211,8 +211,10 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
                 />
             )}
 
+            {/* h-dvh, not h-screen: on iOS 100vh is the LARGE viewport, so the bottom of the menu sat
+                under Safari's toolbar (same reason as the shell in DashboardLayoutClient). */}
             <aside className={`
-                fixed inset-y-0 left-0 z-[5002] bg-[#0f172a] text-white h-screen flex flex-col transition-all duration-500 [transition-timing-function:cubic-bezier(0.4,0,0.2,1)] border-r border-white/5 shadow-2xl
+                fixed inset-y-0 left-0 z-[5002] bg-[#0f172a] text-white h-dvh flex flex-col transition-all duration-500 [transition-timing-function:cubic-bezier(0.4,0,0.2,1)] border-r border-white/5 shadow-2xl
                 md:relative md:translate-x-0
                 ${isCollapsed ? "md:w-28 w-80" : "md:w-80 w-80"}
                 ${isOpen ? "translate-x-0" : "-translate-x-full"}
