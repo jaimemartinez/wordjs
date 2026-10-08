@@ -220,6 +220,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **Cluster certificates are always loadable by OpenSSL.** The gateway's cluster CA drew certificate
+  serials as `'0'` + 15 random bytes and relied on node-forge stripping one leading zero byte; when the
+  first random byte was itself `0x00` (about 1 draw in 512) the certificate carried a non-minimal DER
+  INTEGER that OpenSSL 3 refuses (`illegal padding`), so that identity — or, if it was the CA itself,
+  every enrollment — failed. Serials are now 16 random bytes with a first byte of `0x01`–`0x7f`.
 - **The F6 performance budget no longer fails the Linux CI on unchanged code.** Its ratio ceilings were
   measured on one Windows host and judged on the Linux runners too, where the reference workload
   (autocommit inserts) is cheaper and the mostly-CPU operations read up to ~2.5x their Windows ratios —
