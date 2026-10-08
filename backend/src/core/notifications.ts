@@ -12,6 +12,16 @@ const { verifyPermission } = require('./plugin-context');
 // Unique per process — tags bus messages so a node skips re-broadcasting its OWN published echo.
 const NODE_ID = require('crypto').randomBytes(8).toString('hex');
 
+/**
+ * Every log line of this module goes to STDERR, never stdout. Transports register and notifications
+ * fan out from asynchronous callbacks, and under `node --test` a child's stdout is the runner's own
+ * report pipe: an asynchronous stdout write (Windows pipes are asynchronous) can land INSIDE one of the
+ * runner's serialized frames and kill the whole test file with "Unable to deserialize cloned data" —
+ * the same defect core/cache.ts fixed the same way. sandbox-escape-e2e failed exactly so on the Windows
+ * sandbox-parity runner, right after "Notification Transport Registered".
+ */
+const log = (...args: any[]): void => { process.stderr.write(`${require('util').format(...args)}\n`); };
+
 class NotificationService {
     transports: Map<string, { handler: (...args: any[]) => any; pluginSlug: string | null }>;
     clients: Set<any>;
@@ -43,7 +53,7 @@ class NotificationService {
                     ]
                 );
             } catch (e) {
-                console.error('❌ Notification DB Transport Error:', e.message);
+                log('❌ Notification DB Transport Error:', e.message);
             }
         });
 
@@ -80,7 +90,7 @@ class NotificationService {
                 const parsed = JSON.parse(msg);
                 if (parsed && parsed.o === NODE_ID) return; // our own echo — already delivered locally
                 this.broadcast(parsed && parsed.n ? parsed.n : parsed);
-            } catch (e: any) { console.warn('[SSE] cluster bus parse error:', e && e.message); }
+            } catch (e: any) { log('[SSE] cluster bus parse error:', e && e.message); }
         });
     }
 
@@ -94,7 +104,7 @@ class NotificationService {
         // when fired later by core's notify loop (otherwise it would run detached = trusted).
         const { getCurrentPlugin } = require('./plugin-context');
         this.transports.set(name, { handler, pluginSlug: getCurrentPlugin() });
-        console.log(`📦 Notification Transport Registered: ${name}`);
+        log(`📦 Notification Transport Registered: ${name}`);
     }
 
     /**
@@ -105,7 +115,7 @@ class NotificationService {
         for (const [name, t] of this.transports) {
             if (t.pluginSlug === slug) {
                 this.transports.delete(name);
-                console.log(`🗑️  Notification Transport Unregistered: ${name} (plugin ${slug})`);
+                log(`🗑️  Notification Transport Unregistered: ${name} (plugin ${slug})`);
             }
         }
     }
@@ -122,14 +132,14 @@ class NotificationService {
         let perUser = 0;
         for (const c of this.clients) { if (c._wordjs_user_id === userId) perUser++; }
         if (this.clients.size >= NotificationService.MAX_TOTAL_CLIENTS || perUser >= NotificationService.MAX_CLIENTS_PER_USER) {
-            console.warn(`[SSE] ⛔ Stream refused for user ${userId} (per-user ${perUser}/${NotificationService.MAX_CLIENTS_PER_USER}, total ${this.clients.size}/${NotificationService.MAX_TOTAL_CLIENTS})`);
+            log(`[SSE] ⛔ Stream refused for user ${userId} (per-user ${perUser}/${NotificationService.MAX_CLIENTS_PER_USER}, total ${this.clients.size}/${NotificationService.MAX_TOTAL_CLIENTS})`);
             try { res.write(`event: error\ndata: ${JSON.stringify({ error: 'too_many_streams' })}\n\n`); } catch { /* best-effort */ }
             try { res.end(); } catch { /* best-effort */ }
             return false;
         }
         res._wordjs_user_id = userId;
         this.clients.add(res);
-        console.log(`[SSE] 🔌 Client Connected. User: ${userId}. Total Active Clients: ${this.clients.size}`);
+        log(`[SSE] 🔌 Client Connected. User: ${userId}. Total Active Clients: ${this.clients.size}`);
 
         // Self-cleanup if not handled externally
         // We attach this just in case, but safe to call removeClient manually too
@@ -145,7 +155,7 @@ class NotificationService {
     removeClient(userId: any, res: any) {
         if (this.clients.has(res)) {
             this.clients.delete(res);
-            console.log(`[SSE] 🔌 Client Disconnected. User: ${userId}. Remaining Active Clients: ${this.clients.size}`);
+            log(`[SSE] 🔌 Client Disconnected. User: ${userId}. Remaining Active Clients: ${this.clients.size}`);
         }
     }
 
@@ -154,7 +164,7 @@ class NotificationService {
      * @param {Object} data - { user_id, type, title, message, data, icon, color, transports }
      */
     async send(data: any) {
-        console.log(`📡 Service.send() from current context. Target User: ${data.user_id}, Type: ${data.type}`);
+        log(`📡 Service.send() from current context. Target User: ${data.user_id}, Type: ${data.type}`);
         // Enforce plugin security
         verifyPermission('notifications', 'send');
 
@@ -201,7 +211,7 @@ class NotificationService {
     }
 
     broadcast(notification: any) {
-        console.log(`📢 Broadcasting: ID=${notification.uuid}, TargetUser=${notification.user_id}, ActiveClients=${this.clients.size}`);
+        log(`📢 Broadcasting: ID=${notification.uuid}, TargetUser=${notification.user_id}, ActiveClients=${this.clients.size}`);
         const payload = `data: ${JSON.stringify(notification)}\n\n`;
         let sentCount = 0;
         this.clients.forEach(client => {
@@ -209,10 +219,10 @@ class NotificationService {
             if (notification.user_id == 0 || client._wordjs_user_id == notification.user_id) {
                 client.write(payload);
                 sentCount++;
-                console.log(`   ✅ Sent to client (TargetUser Matches ClientUser ${client._wordjs_user_id})`);
+                log(`   ✅ Sent to client (TargetUser Matches ClientUser ${client._wordjs_user_id})`);
             }
         });
-        console.log(`✅ Broadcast finished. Sent to ${sentCount} matching clients.`);
+        log(`✅ Broadcast finished. Sent to ${sentCount} matching clients.`);
     }
 
     /**
