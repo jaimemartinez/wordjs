@@ -201,6 +201,102 @@ export function createScanGate(ms = 3000) {
     };
 }
 
+// ── Camera reads (2.15.1) ────────────────────────────────────────────────────────────────────────────
+/**
+ * What the camera read, before anything is posted. Only a registration code goes to the server, and it
+ * must BE one once spaces and dashes are dropped: normalizeCode() (made for USB scanners that add
+ * prefixes and CR) strips every 0 and 1, so a product barcode with exactly three of them would become a
+ * 10-character "code" the server answers «no encontrado» for — the operator would never see what was
+ * really read. Everything else is shown as read, with its symbology.
+ */
+export type ScanRead =
+    | { kind: 'reg'; code: string; format: string }
+    | { kind: 'other'; value: string; format: string };
+
+export function classifyRead(raw: unknown, format = ''): ScanRead | null {
+    // Control characters (a GS1 FNC1 separator, a trailing CR) are not shown and never part of a code.
+    const value = String(raw ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim();
+    if (!value) return null;
+    const compact = value.toUpperCase().replace(/[\s-]/g, '');
+    if (isRegCode(compact)) return { kind: 'reg', code: compact, format };
+    return { kind: 'other', value, format };
+}
+
+export type ReadRoute =
+    | { action: 'submit'; code: string }
+    | { action: 'show'; value: string; format: string; fresh: boolean };
+
+/**
+ * The scanner's `onCode`: a registration code is posted once per sighting (sliding gate, see
+ * createScanGate; nothing while a request is in flight — and the badge seen meanwhile is NOT marked as
+ * seen), anything else is SHOWN. `fresh` is true when that value just came into view (beep and replace
+ * the card); while it stays in view the card is only kept alive.
+ */
+export function createReadRouter(ms = 3000) {
+    const regGate = createScanGate(ms);
+    const otherGate = createScanGate(ms);
+    return {
+        route(raw: unknown, format: string, busy: boolean, at: number = Date.now()): ReadRoute | null {
+            const r = classifyRead(raw, format);
+            if (!r) return null;
+            if (r.kind === 'reg') {
+                if (busy || !regGate.accept(r.code, at)) return null;
+                return { action: 'submit', code: r.code };
+            }
+            return { action: 'show', value: r.value, format: r.format, fresh: otherGate.accept(`${r.format}\n${r.value}`, at) };
+        },
+        reset() { regGate.reset(); otherGate.reset(); },
+    };
+}
+
+/**
+ * The scanner's heartbeat, driven by the decode loop: `frame()` after every analysed frame, `pause()` on
+ * every turn the loop skips on purpose (a sheet is open, a verdict awaits a decision, a request is in
+ * flight), `start()` when the camera turns on. `health()` reports the frames analysed in the last second
+ * and STALLED when the loop has neither analysed nor deliberately skipped a frame for `stallMs` — the
+ * camera delivers no image (iOS Low Power Mode, a frozen track) or the loop died.
+ *
+ * `busy()` marks a decode IN FLIGHT on a playable frame (the native BarcodeDetector is asynchronous, and
+ * its first detect() can take seconds on a low-end Android while the model loads): frames are arriving,
+ * so it is not "no image" — for up to `busyMs`, after which a detect that never settles counts as a dead
+ * loop. `idle()` ends a decode that produced nothing (it threw): the 2 s clock runs from the last real
+ * frame again, so a detector that fails on every frame is still reported.
+ */
+export type ScanHealth = { state: 'scanning' | 'paused' | 'stalled'; fps: number };
+
+/**
+ * The pause before the scanner's next frame, given how long the last decode held the main thread (ms):
+ * at least 80 ms, and never shorter than the decode itself — so the built-in reader (synchronous, ~100 ms
+ * on printed packaging on a phone) keeps the main thread free at least half of the time for taps and the
+ * sheets. A blank frame (~20 ms) keeps the full rate.
+ */
+export function scanLoopDelay(decodeMs: number): number {
+    const ms = Number(decodeMs);
+    return Number.isFinite(ms) && ms > 80 ? Math.min(Math.round(ms), 1000) : 80;
+}
+
+export function createScanMeter(stallMs = 2000, busyMs = 10_000) {
+    let frames: number[] = [];
+    let since = 0;
+    let paused = false;
+    let busySince: number | null = null;
+    const trim = (at: number) => { while (frames.length && at - frames[0] >= 1000) frames.shift(); };
+    return {
+        start(at: number = Date.now()) { frames = []; since = at; paused = false; busySince = null; },
+        busy(at: number = Date.now()) { busySince = at; paused = false; },
+        idle() { busySince = null; },
+        frame(at: number = Date.now()) { frames.push(at); trim(at); since = at; paused = false; busySince = null; },
+        pause(at: number = Date.now()) { since = at; paused = true; busySince = null; },
+        health(at: number = Date.now()): ScanHealth {
+            trim(at);
+            const decoding = busySince !== null && at - busySince <= busyMs;
+            if (!decoding && at - since > stallMs) return { state: 'stalled', fps: 0 };
+            if (paused) return { state: 'paused', fps: 0 };
+            return { state: 'scanning', fps: frames.length };
+        },
+    };
+}
+
 // ── Verdicts ─────────────────────────────────────────────────────────────────────────────────────────
 export type VerdictResult = 'delivered' | 'already' | 'not_entitled' | 'cancelled' | 'unknown' | 'other_conference';
 /** Client-side outcomes that are not server verdicts. */

@@ -330,6 +330,24 @@ function injectBlockCss(pluginId: string): void {
 }
 
 /**
+ * Link the stylesheet that goes with a plugin's HOOKS bundle: dist/hooks.bundle.css, which carries the
+ * Tailwind classes the hooked UI uses (compiled by backend/scripts/build-plugin.js). A hooks extension
+ * renders inside ANOTHER admin screen — mail-server's toggle lives in the user form — where the plugin's
+ * own admin.css is never linked, and a runtime-installed plugin gets no classes from the host build. Served
+ * by GET /plugins/:slug/bundle/css, which answers 200 with an empty body when the plugin ships none, so
+ * linking it unconditionally costs one cached request and logs nothing. Once per document.
+ */
+function injectHooksCss(pluginId: string): void {
+    if (typeof document === 'undefined' || !document.head) return;
+    if (document.querySelector(`link[data-plugin-hooks-css="${pluginId}"]`)) return;
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = `/api/v1/plugins/${pluginId}/bundle/css?type=hooks`;
+    link.setAttribute('data-plugin-hooks-css', pluginId);
+    document.head.appendChild(link);
+}
+
+/**
  * Load a single plugin's block config(s) at runtime from its pre-compiled `component` bundle.
  * Returns a map keyed by BLOCK NAME (the `type` stored in the saved document), matching the
  * build-time registry:
@@ -668,6 +686,7 @@ async function fetchAndRegisterPluginHooks(pluginId: string): Promise<boolean> {
     const url = URL.createObjectURL(blob);
     try {
         const mod: any = await import(/* webpackIgnore: true */ url);
+        injectHooksCss(pluginId);
         // Once the module is EVALUATED the registration counts as done, even if an individual extension is
         // broken: invokeHookRegistrars contains each registrar's own throw, so this resolves `true` and the
         // memo is KEPT. Retrying a throwing register() on the next mount would only throw again, having

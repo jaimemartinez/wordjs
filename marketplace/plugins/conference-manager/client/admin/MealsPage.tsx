@@ -29,7 +29,8 @@ import {
     MEALS, DEFAULT_WINDOWS, buildMealReportWorkbook, chunk, columnState, dateRange, filterReportRows, groupByDay,
     normalizeCode, pickCurrentService, planKey, planSet, rowState, serviceWindow, sortServices, stampDayTime, stampTime,
 } from "../lib/meals";
-import { MealScanner, PersonSearch, VerdictCard, MEAL_ICON, dayLabel, mealName, serviceName, servedLine, isOffline, useMealDelivery, useTx, makeTxn, createFeedback } from "./MealScanner";
+import { MealScanner, PersonSearch, VerdictCard, MEAL_ICON, dayLabel, mealName, serviceName, servedLine, isOffline, useMealDelivery, useTx, makeTxn, createFeedback, primeScannerAudio } from "./MealScanner";
+import { Overlay } from "./Overlay";
 import { usePerms, ReadOnlyNotice } from "./perms";
 
 type Tab = 'plan' | 'people' | 'delivery' | 'report';
@@ -49,7 +50,7 @@ function Modal({ title, subtitle, onClose, children, footer, wide = false }: any
         return () => window.removeEventListener('keydown', onKey);
     }, [onClose]);
     return (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={onClose}>
+        <Overlay layer={2} onBackdrop={onClose}>
             <div className={`bg-white rounded-[32px] shadow-2xl w-full ${wide ? 'max-w-3xl' : 'max-w-lg'} border border-gray-100 overflow-hidden max-h-[92vh] flex flex-col`} role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
                 <div className="bg-gray-50/50 px-6 sm:px-8 py-5 border-b border-gray-100 flex items-start justify-between gap-4 shrink-0">
                     <div className="min-w-0">
@@ -61,7 +62,7 @@ function Modal({ title, subtitle, onClose, children, footer, wide = false }: any
                 <div className="p-6 sm:p-8 space-y-4 overflow-y-auto">{children}</div>
                 {footer && <div className="px-6 sm:px-8 py-4 border-t border-gray-50 bg-gray-50/30 flex flex-wrap justify-end gap-3 shrink-0">{footer}</div>}
             </div>
-        </div>
+        </Overlay>
     );
 }
 
@@ -97,6 +98,8 @@ export default function MealsPage({ conferenceId, slug, conference }: { conferen
     const [loadFailed, setLoadFailed] = useState(false);
     const [serviceId, setServiceId] = useState<number | null>(null);
     const [scanner, setScanner] = useState(false);
+    // Synchronously inside the tap: iOS only unlocks Web Audio within a user gesture (the scanner adopts it).
+    const openScanner = () => { primeScannerAudio(); setScanner(true); };
 
     const reload = useCallback(async () => {
         try { const d = await conferenceApi.getMeals(conferenceId); setData(d); setLoadFailed(false); return d; }
@@ -150,7 +153,7 @@ export default function MealsPage({ conferenceId, slug, conference }: { conferen
                         <h2 className="text-3xl font-black text-gray-900 italic tracking-tighter">{tx('meals.title', 'Comidas y entregas')}</h2>
                         <p className="text-xs text-gray-500 mt-1 max-w-xl">{tx('meals.subtitle', 'Define qué comidas recibe cada localidad, ajusta por persona y registra cada entrega con el código de barras del participante.')}</p>
                     </div>
-                    {canDeliver && <button type="button" onClick={() => setScanner(true)} disabled={!services.length}
+                    {canDeliver && <button type="button" onClick={openScanner} disabled={!services.length}
                         className="px-6 py-4 rounded-2xl bg-gray-900 text-white hover:bg-black font-black text-xs uppercase tracking-widest shadow-lg transition-all active:scale-95 disabled:opacity-50">
                         <i className="fa-solid fa-mobile-screen-button mr-2" aria-hidden="true"></i>{tx('meals.scanner.open', 'Modo escáner (celular)')}
                     </button>}
@@ -175,7 +178,7 @@ export default function MealsPage({ conferenceId, slug, conference }: { conferen
 
             {shownTab === 'plan' && canPlan && <PlanTab conferenceId={conferenceId} conference={conference} data={data} services={services} reload={reload} />}
             {shownTab === 'people' && canPlan && <PeopleTab conferenceId={conferenceId} data={data} services={services} reload={reload} />}
-            {shownTab === 'delivery' && canDeliver && <DeliveryTab conferenceId={conferenceId} services={services} locations={data.locations || []} serviceId={serviceId} setServiceId={chooseService} reload={reload} paused={scanner} onScanner={() => setScanner(true)} />}
+            {shownTab === 'delivery' && canDeliver && <DeliveryTab conferenceId={conferenceId} services={services} locations={data.locations || []} serviceId={serviceId} setServiceId={chooseService} reload={reload} paused={scanner} onScanner={openScanner} />}
             {shownTab === 'report' && canPlan && <ReportTab services={services} serviceId={serviceId} setServiceId={chooseService} slug={slug} />}
 
             {scanner && canDeliver && (

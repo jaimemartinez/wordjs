@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import DashboardLayoutClient from "./DashboardLayoutClient";
 import { getSettings } from "@/lib/server-api";
 import { inter } from "../fonts";
@@ -7,6 +7,15 @@ import "./admin-globals.css";
 // Admin is an authenticated, data-driven dashboard (Sidebar/pages use useSearchParams);
 // render it dynamically instead of static-prerendering, which would bail out on those hooks.
 export const dynamic = 'force-dynamic';
+
+// viewport-fit=cover: without it every env(safe-area-inset-*) is 0 on iOS, so full-screen admin UI (a
+// plugin's camera scanner, bottom sheets) could not keep its controls clear of the home indicator and
+// the notch. Next merges this key into the default `width=device-width, initial-scale=1`. The shell
+// (DashboardLayoutClient) and the fullscreen editor pad themselves by the insets, so ordinary screens
+// sit where they did before.
+export const viewport: Viewport = {
+    viewportFit: "cover",
+};
 
 export async function generateMetadata(): Promise<Metadata> {
     try {

@@ -20,6 +20,8 @@ import type { Bus, TransportTicket, TransportPayment, Inscription, ConferenceFie
 import { buildXlsx, downloadXlsx } from "../lib/xlsx";
 import { buildBusManifest, displayName, exportFilename, withoutColumn } from "../lib/exports";
 import { usePerms, ReadOnlyNotice } from "./perms";
+import { Overlay } from "./Overlay";
+import { canAutoFocus } from "../lib/overlay";
 
 const money = (n: unknown) => '$' + fmtMoney(Number(n) || 0);
 const fmtWhen = (v?: string | null) => {
@@ -42,7 +44,7 @@ const labelCls = 'block text-[10px] font-black text-gray-400 uppercase tracking-
 
 function Modal({ title, subtitle, onClose, children, footer, wide }: any) {
     return (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 animate-in fade-in duration-200">
+        <Overlay layer={2}>
             <div className={`bg-white rounded-[40px] shadow-2xl w-full ${wide ? 'max-w-3xl' : 'max-w-lg'} border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200 max-h-[92vh] flex flex-col`} role="dialog" aria-modal="true">
                 <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-start justify-between gap-4 shrink-0">
                     <div className="min-w-0">
@@ -56,7 +58,7 @@ function Modal({ title, subtitle, onClose, children, footer, wide }: any) {
                 <div className="p-6 sm:p-8 space-y-5 overflow-y-auto">{children}</div>
                 {footer && <div className="px-6 sm:px-8 py-5 border-t border-gray-50 bg-gray-50/30 flex flex-wrap justify-end gap-3 shrink-0">{footer}</div>}
             </div>
-        </div>
+        </Overlay>
     );
 }
 
@@ -322,7 +324,7 @@ export default function TransportPage({ conferenceId, slug }: { conferenceId: nu
                         <button onClick={saveBus} disabled={busy || !busForm.name.trim() || !busForm.capacity} className="px-8 py-3 bg-sky-600 text-white rounded-2xl hover:bg-sky-700 font-black text-[10px] uppercase tracking-widest shadow-lg shadow-sky-500/30 disabled:opacity-50">{t('save') || 'Guardar'}</button>
                     </>}>
                     <div className="space-y-1.5"><label htmlFor="bus-name" className={labelCls}>{t('transport.bus.name') || 'Nombre del bus'} *</label>
-                        <input id="bus-name" className={inputCls} value={busForm.name} onChange={e => setBusForm({ ...busForm, name: e.target.value })} placeholder="Ej. Bus 1 — Ida" autoFocus /></div>
+                        <input id="bus-name" className={inputCls} value={busForm.name} onChange={e => setBusForm({ ...busForm, name: e.target.value })} placeholder="Ej. Bus 1 — Ida" autoFocus={canAutoFocus()} /></div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div className="space-y-1.5"><label htmlFor="bus-origin" className={labelCls}>{t('transport.origin') || 'Origen'}</label>
                             <input id="bus-origin" className={inputCls} value={busForm.origin} onChange={e => setBusForm({ ...busForm, origin: e.target.value })} /></div>
@@ -449,7 +451,7 @@ export default function TransportPage({ conferenceId, slug }: { conferenceId: nu
 
             {/* Local confirm — above every modal of this page */}
             {confirmState && (
-                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[130] flex items-center justify-center p-4">
+                <Overlay layer={4} backdrop="rgba(0,0,0,0.5)" className="backdrop-blur-sm">
                     <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-6 space-y-5" role="alertdialog" aria-modal="true">
                         <p className="text-sm font-bold text-gray-800">{confirmState.text}</p>
                         <div className="flex justify-end gap-2">
@@ -457,7 +459,7 @@ export default function TransportPage({ conferenceId, slug }: { conferenceId: nu
                             <button onClick={() => { const f = confirmState.onOk; setConfirmState(null); f(); }} className="px-6 py-2.5 bg-rose-600 text-white rounded-xl hover:bg-rose-700 font-black text-[10px] uppercase tracking-widest">{t('confirm') || 'Confirmar'}</button>
                         </div>
                     </div>
-                </div>
+                </Overlay>
             )}
         </div>
     );

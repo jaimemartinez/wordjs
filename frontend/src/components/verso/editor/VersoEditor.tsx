@@ -935,7 +935,10 @@ export default function VersoEditor({
     const modalSurfaceOpen = cmdkOpen || mediaOpen || showRevisions || commentsOpen || a11yOpen;
 
     return (
-        <div className="verso-container fixed inset-0 z-50 bg-[var(--ed-surface)]">
+        // Safe-area padding: the admin viewport is `viewport-fit=cover` (app/admin/layout.tsx), so in
+        // landscape on a notched phone this fixed workspace would otherwise start under the notch. env()
+        // is 0 everywhere else — on desktop this is exactly the old box.
+        <div className="verso-container fixed inset-0 z-50 bg-[var(--ed-surface)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
             <a href="#verso-canvas" className="verso-skip-link">
                 {trStr("Saltar al lienzo", language)}
             </a>

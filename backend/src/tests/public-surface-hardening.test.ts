@@ -131,6 +131,25 @@ describe('#3 — /plugins publishes an allowlist, not the plugin tree', () => {
         assert.strictEqual(h.status, 200);
     });
 
+    it('the fixed files are revalidated on every load (no-cache + ETag); other assets keep 1 h', async () => {
+        // Their URLs carry no version, and the stylesheets are regenerated from the UI sources on every
+        // plugin update while the bundles they style are already no-cache: with max-age=3600 a browser
+        // ran the NEW bundle against the OLD classes for up to an hour after an update.
+        fs.mkdirSync(path.join(probeDir, 'client', 'admin'), { recursive: true });
+        fs.writeFileSync(path.join(probeDir, 'client', 'admin', 'admin.css'), '.x{color:red}');
+        fs.writeFileSync(path.join(probeDir, 'dist', 'component.bundle.css'), '.y{color:red}');
+        for (const p of ['manifest.json', 'client/admin/admin.css', 'dist/component.bundle.css']) {
+            const r = await request(app).get(`/plugins/${PROBE}/${p}`);
+            assert.strictEqual(r.status, 200, p);
+            assert.strictEqual(r.headers['cache-control'], 'no-cache', p);
+            assert.ok(r.headers.etag, `${p} carries an ETag`);
+            const again = await request(app).get(`/plugins/${PROBE}/${p}`).set('If-None-Match', r.headers.etag);
+            assert.strictEqual(again.status, 304, `${p}: unchanged → 304`);
+        }
+        const asset = await request(app).get(`/plugins/${PROBE}/public/probe.css`);
+        assert.strictEqual(asset.headers['cache-control'], 'public, max-age=3600');
+    });
+
     it('404s the plugin source, its data/ dir and anything it wrote at runtime', async () => {
         for (const p of [
             `/plugins/${PROBE}/index.js`,           // code

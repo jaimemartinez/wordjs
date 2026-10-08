@@ -2,6 +2,13 @@
 @import "tailwindcss";
 
 @source "../../../backend/plugins/**/*.{js,ts,jsx,tsx}";
+/* The first-party catalog plugins too. A release build only compiles the plugins git tracks under
+ * backend/plugins, and a plugin installed from the marketplace is loaded at runtime from its own bundle,
+ * so without this line every class only a catalog plugin uses (bg-black/80, w-[82%], aspect-[2.6/1]…)
+ * was missing on a live site. Their packages now carry their own compiled classes
+ * (backend/scripts/plugin-stylesheet.js); this keeps an older package installed on a newer core styled
+ * as well. Measured cost: about +44 KB minified, +5 KB gzipped. Sources only: dist/ holds .js bundles. */
+@source "../../../marketplace/plugins/**/*.{ts,tsx}";
 
 /* Tailwind CSS v4 Configuration */
 @theme {

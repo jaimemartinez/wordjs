@@ -21,6 +21,10 @@ const path = require('path');
 // both spellings, new first. Never re-derive it here: a local copy of exactly this logic already
 // drifted in build-marketplace.js and shipped bundle-less zips.
 const { resolveBlockEntry } = require('./plugin-block-contract');
+// Compiles the Tailwind classes the plugin's UI uses into the stylesheets the host already loads
+// (client/admin/admin.css in the package, dist/component.bundle.css, dist/hooks.bundle.css). Without it
+// a runtime-loaded plugin renders with only the classes the host happens to share — see the header there.
+const { writePluginStylesheets, BUILT_STYLESHEET } = require('./plugin-stylesheet');
 
 // Defaults to backend/plugins (the installed set). build-marketplace.js points this at
 // marketplace/plugins so catalog zips ship their pre-compiled dist/*.bundle.js — without that, a
@@ -125,6 +129,9 @@ async function buildPlugin(slug) {
     }
 
     if (entryPoints.length === 0) {
+        // A previous build's compiled admin stylesheet must not outlive the admin page it styled: the
+        // packers ship whatever dist/admin.css they find as the package's client/admin/admin.css.
+        fs.rmSync(path.join(pluginDir, BUILT_STYLESHEET), { force: true });
         console.log(`⚪ Plugin ${slug} has no frontend entries, skipping.`);
         return true;
     }
@@ -230,11 +237,18 @@ async function buildPlugin(slug) {
     };
 
     // Build each entry point
+    const metafiles = {};
     for (const entry of entryPoints) {
         const outfile = path.join(distDir, `${entry.name}.bundle.js`);
+        // esbuild writes <name>.bundle.css only when the entry imports CSS, and the stylesheet step
+        // below APPENDS the compiled utilities to it — so a previous build's file must not survive into
+        // this one, or every rebuild would append another copy.
+        for (const stale of [`${entry.name}.bundle.css`, `${entry.name}.bundle.css.map`]) {
+            fs.rmSync(path.join(distDir, stale), { force: true });
+        }
 
         try {
-            await esbuild.build({
+            const result = await esbuild.build({
                 entryPoints: [entry.path],
                 bundle: true,
                 format: 'esm',
@@ -249,6 +263,9 @@ async function buildPlugin(slug) {
 
                 // Minify for production
                 minify: true,
+
+                // The input graph tells the stylesheet step which source files this bundle contains.
+                metafile: true,
 
                 // Source maps for debugging
                 sourcemap: true,
@@ -285,6 +302,8 @@ async function buildPlugin(slug) {
                 },
             });
 
+            metafiles[entry.name] = result.metafile;
+
             // Get file size
             const stats = fs.statSync(outfile);
             const sizeKB = (stats.size / 1024).toFixed(1);
@@ -295,6 +314,18 @@ async function buildPlugin(slug) {
             console.error(`   ❌ Failed to build ${entry.name}:`, error.message);
             return false;
         }
+    }
+
+    // The Tailwind classes the plugin's UI uses, compiled into the stylesheets the host loads. A failure
+    // here fails the build: a package whose screens have no styles is not a package to ship.
+    try {
+        for (const file of await writePluginStylesheets(pluginDir, slug, metafiles)) {
+            const sizeKB = (fs.statSync(path.join(pluginDir, file)).size / 1024).toFixed(1);
+            console.log(`   🎨 ${file} (${sizeKB} KB)`);
+        }
+    } catch (error) {
+        console.error(`   ❌ Failed to compile the stylesheets of ${slug}:`, error.message);
+        return false;
     }
 
     // Update manifest with build info.

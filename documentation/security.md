@@ -608,7 +608,7 @@ The gateway **and** the backend both use **Helmet.js** for the API/proxy layer (
 - `X-Frame-Options: SAMEORIGIN`
 - `X-Content-Type-Options: nosniff`
 - `Referrer-Policy: strict-origin-when-cross-origin`
-- `Permissions-Policy: camera=(), microphone=(), geolocation=(), browsing-topics=()`
+- `Permissions-Policy: camera=(self), microphone=(), geolocation=(), browsing-topics=()` — the camera only for the site itself (the conference-manager meal scanner); no embedded third-party frame may request it, and the browser still asks the user
 
 `Strict-Transport-Security` is **not** set by `next.config.ts` — it comes from Helmet's defaults (`max-age=31536000; includeSubDomains`), which apply on **both** the gateway and the backend (neither overrides `hsts`). Terminate TLS in front of the gateway so the HSTS header is honored.
 
