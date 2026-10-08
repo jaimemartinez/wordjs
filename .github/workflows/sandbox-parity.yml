@@ -90,10 +90,16 @@ jobs:
             --inh-caps=+net_bind_service --ambient-caps=+net_bind_service \
             -- /usr/bin/env HOME="$HOME" PATH="$PATH" "$(command -v node)" \
             backend/scripts/verify-sandbox-parity.mjs --expect-capability=CAP_NET_BIND_SERVICE --json=sandbox-parity-ambient-cap-report.json
-          sudo -n setpriv --bounding-set=-all,+net_bind_service \
+          # Root WITHOUT CAP_DAC_OVERRIDE/CAP_DAC_READ_SEARCH is bound by ordinary file permissions:
+          # /home/runner is 0750, so it gets the runner's group to read the checkout, and it writes its
+          # report to /tmp (the checkout is not writable by it) — the same shape as a systemd service
+          # with CapabilityBoundingSet= cut down, which is exactly what this certifies.
+          ROOT_REPORT="/tmp/sandbox-parity-root-cut-bounding-$$.json"   # created by that root in /tmp (1777), not pre-created by the runner
+          sudo -n setpriv --bounding-set=-all,+net_bind_service --groups "$(id -g)" \
             -- /usr/bin/env HOME="$HOME" PATH="$PATH" "$(command -v node)" \
-            backend/scripts/verify-sandbox-parity.mjs --expect-root-without=CAP_SETPCAP --json=sandbox-parity-root-cut-bounding-report.json
-          sudo -n chown "$(id -u):$(id -g)" sandbox-parity-root-cut-bounding-report.json
+            backend/scripts/verify-sandbox-parity.mjs --expect-root-without=CAP_SETPCAP --json="$ROOT_REPORT"
+          sudo -n chown "$(id -u):$(id -g)" "$ROOT_REPORT"
+          mv "$ROOT_REPORT" sandbox-parity-root-cut-bounding-report.json
 
       # THE JS GUARD LAYER, ON EVERY PLATFORM — the half this matrix was not covering.
       #
