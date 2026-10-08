@@ -56,7 +56,7 @@
   },
   "devDependencies": {
     "autocannon": "^8.0.0",
-    "puppeteer-core": "^25.9.0"
+    "puppeteer-core": "^25.12.0"
   },
   "overrides": {
     "shell-quote": "^1.11.0",
