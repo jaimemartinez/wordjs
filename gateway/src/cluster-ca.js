@@ -32,9 +32,15 @@ function sanEntry(host) {
     return IP_RE.test(host) ? { type: 7, ip: host } : { type: 2, value: host };
 }
 
-// Unique, positive certificate serial number (hex string; leading 0 nibble keeps it positive in DER).
+// Unique certificate serial number: a positive, MINIMALLY encoded DER INTEGER — 16 random bytes whose
+// first byte is 0x01-0x7f. The old '0' + 15 random bytes relied on node-forge stripping ONE leading zero
+// byte; when the first random byte was itself 0x00 (and the next below 0x80) the certificate carried a
+// non-minimal INTEGER that OpenSSL 3 refuses ("illegal padding"): about 1 identity in 512 failed to load,
+// and a cluster CA drawn that way could never be loaded at all.
 function serial() {
-    return '0' + crypto.randomBytes(15).toString('hex');
+    const bytes = crypto.randomBytes(16);
+    bytes[0] = (bytes[0] & 0x7f) || 0x01;
+    return bytes.toString('hex');
 }
 
 /**
