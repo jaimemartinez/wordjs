@@ -621,9 +621,12 @@ function secureModuleFor(id: any) {
             // link-local / 169.254.169.254 metadata) so the grant isn't a full SSRF + exfil surface.
             // getGuardedModule returns the egress-guarded builtin (dns is now GUARDED too — its raw
             // resolver surface bypasses the connect-time filter), or undefined for a module it doesn't wrap.
-            // Fail CLOSED if the guard errors.
+            // 'dns/promises' resolves to the promises object directly, so guard it with that id rather than
+            // the 'dns' base (which would hand back the full dns facade, the wrong shape). Fail CLOSED if
+            // the guard errors.
             try {
-                const guarded = egressGuard.getGuardedModule(base);
+                const guardId = norm === 'dns/promises' ? 'dns/promises' : base;
+                const guarded = egressGuard.getGuardedModule(guardId);
                 return guarded !== undefined ? guarded : undefined;
             } catch { return createBlockedModuleProxy(pluginSlug, norm); }
         }

@@ -11,7 +11,8 @@
  *
  * Sandbox notes:
  *  - All tables live under the plugin prefix (db.tablePrefix) so they pass the host's default-deny
- *    SQL scoping. Schema is created idempotently with the FULL column set (ALTER is blocked).
+ *    SQL scoping. Schema is created idempotently with the FULL column set; columns added after 1.0.0
+ *    are migrated with ALTER ... ADD COLUMN on the plugin's own tables.
  *  - Access codes come from the host CSPRNG (wordjs.crypto.randomInt), NOT Math.random; the per-vendor
  *    login throttle below (bounded attempts per rolling window) is defense-in-depth for the short code.
  *  - Money is stored as INTEGER CENTS (price_cents); clients render cents/100 with the configured
@@ -49,8 +50,10 @@ exports.init = async function (wordjs) {
     };
     const VENDOR_STATUSES = ['pending', 'approved', 'suspended'];
     const INQUIRY_STATUSES = ['new', 'replied', 'closed'];
+    // A store's email as every route reads it (trimmed, capped, lower-cased): the email_claim value.
+    const normEmail = (v) => String(v == null ? '' : v).trim().slice(0, LIM.email).toLowerCase();
 
-    // ---- schema (idempotent; full column set from day 1 — ALTER is blocked in the sandbox) -------
+    // ---- schema (idempotent; full column set on CREATE, later columns via ALTER ADD COLUMN) -------
     async function initSchema() {
         await db.createTable(T.vendors, [
             'id INT_PK',
@@ -64,7 +67,27 @@ exports.init = async function (wordjs) {
             'status TEXT DEFAULT \'pending\'',
             'commission_pct INT DEFAULT 0',
             'created_at DATETIME DEFAULT CURRENT_TIMESTAMP',
+            'email_claim VARCHAR(255)',
         ]);
+        // 1.0.1: one store per email address, enforced by a unique index on email_claim (the address
+        // as every route normalises it; NULL = no claim, and a unique index admits any number of NULLs
+        // on SQLite, MySQL and Postgres), filled by the INSERT that creates the store (insertVendor).
+        // The duplicate-email check before that INSERT cannot see an INSERT racing it, so simultaneous
+        // applications for one address were all stored. Stores from before 1.0.1 hold no claim — so
+        // duplicates already stored do not stop the index from being created — and stay covered by
+        // that check, which sees every committed row. Probe, then ALTER ... ADD COLUMN on our own
+        // table for an existing install.
+        let hasEmailClaim = true;
+        try { await db.get(`SELECT email_claim FROM ${T.vendors} LIMIT 1`); } catch (e) { hasEmailClaim = false; }
+        if (!hasEmailClaim) {
+            try { await db.run(`ALTER TABLE ${T.vendors} ADD COLUMN email_claim VARCHAR(255)`); }
+            catch (e) { console.error('[vendor-marketplace] could not add email_claim column:', e.message); }
+        }
+        try {
+            await db.run(`CREATE UNIQUE INDEX IF NOT EXISTS ${P}uidx_vendors_email_claim ON ${T.vendors} (email_claim)`);
+        } catch (e) {
+            console.error('[vendor-marketplace] could not create the unique email_claim index — simultaneous applications for one address are not refused on every engine:', e.message);
+        }
         await db.createTable(T.products, [
             'id INT_PK',
             'vendor_id INT NOT NULL',
@@ -75,8 +98,17 @@ exports.init = async function (wordjs) {
             'category TEXT DEFAULT \'\'',
             'is_published INT DEFAULT 1',
             'created_at DATETIME DEFAULT CURRENT_TIMESTAMP',
+            'admin_hidden INT DEFAULT 0',
             `FOREIGN KEY (vendor_id) REFERENCES ${T.vendors}(id) ON DELETE CASCADE`,
         ]);
+        // 1.0.0 -> 1.0.1: admin_hidden (moderation flag the vendor cannot override). Probe, then
+        // ALTER ... ADD COLUMN on our own table (the host guard admits it; RENAME is what it denies).
+        let hasAdminHidden = true;
+        try { await db.get(`SELECT admin_hidden FROM ${T.products} LIMIT 1`); } catch (e) { hasAdminHidden = false; }
+        if (!hasAdminHidden) {
+            try { await db.run(`ALTER TABLE ${T.products} ADD COLUMN admin_hidden INTEGER DEFAULT 0`); }
+            catch (e) { console.error('[vendor-marketplace] could not add admin_hidden column:', e.message); }
+        }
         await db.createTable(T.inquiries, [
             'id INT_PK',
             'product_id INT',
@@ -124,8 +156,15 @@ exports.init = async function (wordjs) {
     // ---- shared validation helpers ---------------------------------------------------------------
     const cleanStr = (v, max) => String(v == null ? '' : v).trim().slice(0, max);
     const isEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(v || ''));
-    // Accept only http(s) or origin-relative URLs for images/logos; '' means "none".
-    const badUrl = (v) => v !== '' && !/^https?:\/\//i.test(v) && v.charAt(0) !== '/';
+    // Accept only absolute http(s) URLs or origin-relative PATHS for images/logos; '' means "none".
+    // A protocol-relative '//evil.host/x.png' (or the '/\\evil.host' spelling browsers normalise to
+    // it) starts with '/' but points off-site, so it is refused; so is any whitespace/control char.
+    const badUrl = (v) => {
+        if (v === '') return false;
+        if (/[\s\\\u0000-\u001f\u007f]/.test(v)) return true;
+        if (/^https?:\/\/[^/?#]+/i.test(v)) return false;
+        return !(v.charAt(0) === '/' && v.charAt(1) !== '/');
+    };
     const escapeHtml = (s) => String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -146,6 +185,39 @@ exports.init = async function (wordjs) {
             slug = `${base}-${Math.random().toString(36).slice(2, 6)}`;
         }
         return `${base}-${Date.now().toString(36)}`;
+    }
+
+    // Public and portal callers never see an error's text: a driver's message names tables, columns
+    // and constraints (a slug collision answered 'UNIQUE constraint failed: <table>.slug'). The
+    // details go to the server log.
+    const failQuietly = (res, e, what) => {
+        console.error(`[vendor-marketplace] ${what} failed:`, e && e.message ? e.message : e);
+        res.status(500).json({ error: 'No se pudo completar la operación. Inténtalo de nuevo.' });
+    };
+
+    /**
+     * Insert a store, at most one per email address: the INSERT fills email_claim, and the unique
+     * index refuses a second store for the address even when the requests run at the same time (the
+     * duplicate check before it cannot see a simultaneous INSERT). A slug taken meanwhile — two stores
+     * with the same name at once — gets a fresh one. Returns { id, slug }, or { duplicate: true }.
+     */
+    async function insertVendor(cols, values, name, email) {
+        for (let attempt = 1; attempt <= 5; attempt++) {
+            const slug = await uniqueSlug(name);
+            try {
+                const r = await db.run(
+                    `INSERT INTO ${T.vendors} (${cols.join(', ')}, slug, email_claim) VALUES (${cols.map(() => '?').join(', ')}, ?, ?)`,
+                    [...values, slug, email]
+                );
+                return { id: r ? r.lastID : null, slug };
+            } catch (e) {
+                // Which unique index refused it? Ask the table, not the driver's message.
+                if (await db.get(`SELECT id FROM ${T.vendors} WHERE email_claim = ?`, [email])) return { duplicate: true };
+                if (!(await db.get(`SELECT id FROM ${T.vendors} WHERE slug = ?`, [slug]))) throw e;
+                // The slug was taken meanwhile: derive another one.
+            }
+        }
+        throw new Error('no free store slug after 5 attempts');
     }
 
     /** Integer cents, 0..cap — the ONLY accepted money shape (never floats, never client totals). */
@@ -172,18 +244,31 @@ exports.init = async function (wordjs) {
         return String(await wordjs.crypto.randomInt(100000, 1000000)); // uniform 6-digit
     }
 
-    // ---- anti-abuse: global per-route rate caps (no req.ip in the sandbox → global windows) ------
+    // ---- anti-abuse: per-route rate caps PER CLIENT -------------------------------------------------
+    // Keyed by req.clientKey (an HMAC of the caller's IP forwarded by the host). They used to be
+    // site-wide windows, so one client could close vendor applications or buyer inquiries for
+    // everyone. Each call checks AND counts in one synchronous step. The map is bounded so key churn
+    // cannot grow it without limit.
     const makeLimiter = (max, windowMs) => {
-        let count = 0, windowStart = 0;
-        return () => {
+        const windows = new Map(); // clientKey -> { count, windowStart }
+        return (req) => {
+            const key = String((req && req.clientKey) || 'anon').slice(0, 64);
             const now = Date.now();
-            if (now - windowStart >= windowMs) { windowStart = now; count = 0; }
-            count++;
-            return count <= max;
+            let w = windows.get(key);
+            if (!w || now - w.windowStart >= windowMs) {
+                if (windows.size >= 10000) {
+                    for (const [k, v] of windows) if (now - v.windowStart >= windowMs) windows.delete(k);
+                    while (windows.size >= 10000) windows.delete(windows.keys().next().value);
+                }
+                w = { count: 0, windowStart: now };
+                windows.set(key, w);
+            }
+            w.count++;
+            return w.count <= max;
         };
     };
-    const applyAllowed = makeLimiter(5, 60 * 1000);    // 5 vendor applications / minute
-    const inquiryAllowed = makeLimiter(10, 60 * 1000); // 10 buyer inquiries / minute
+    const applyAllowed = makeLimiter(3, 60 * 1000);    // 3 vendor applications per client per minute
+    const inquiryAllowed = makeLimiter(5, 60 * 1000);  // 5 buyer inquiries per client per minute
 
     /** Honeypot + minimum fill time. Bots get a FAKE SUCCESS (no insert, no signal). */
     const looksLikeSpam = (body) => {
@@ -282,40 +367,37 @@ exports.init = async function (wordjs) {
     http.route('get', '/public/config', async (req, res) => {
         try {
             res.json({ currencySymbol: await getCurrencySymbol() });
-        } catch (e) { res.status(500).json({ error: e.message }); }
+        } catch (e) { failQuietly(res, e, 'public config'); }
     });
 
-    // Vendor application. Anti-spam: honeypot + minimum fill time (fake success) + global rate cap.
+    // Vendor application. Anti-spam: honeypot + minimum fill time (fake success) + per-client rate cap.
     // The access code is NOT generated here — it is created when the admin approves the store.
+    // Every accepted-looking outcome (stored, duplicate address, spam) answers the SAME body, so the
+    // reply cannot tell a probe whether an address already has a store.
+    const APPLY_RECEIVED = { success: true, message: 'Solicitud recibida. Te avisaremos por email cuando tu tienda sea aprobada.' };
     http.route('post', '/public/apply', async (req, res) => {
         try {
             const body = req.body || {};
-            if (looksLikeSpam(body)) {
-                return res.json({ success: true, message: 'Solicitud recibida. Te contactaremos pronto.' });
-            }
-            if (!applyAllowed()) {
+            if (looksLikeSpam(body)) return res.json(APPLY_RECEIVED);
+            if (!applyAllowed(req)) {
                 return res.status(429).json({ error: 'Demasiadas solicitudes en este momento. Inténtalo de nuevo en un minuto.' });
             }
             const name = cleanStr(body.name, LIM.name);
-            const email = cleanStr(body.email, LIM.email).toLowerCase();
+            const email = normEmail(body.email);
             const phone = cleanStr(body.phone, LIM.phone);
             const description = cleanStr(body.description, LIM.description);
             if (!name) return res.status(400).json({ error: 'El nombre de la tienda es obligatorio.' });
             if (!isEmail(email)) return res.status(400).json({ error: 'El email no es válido.' });
 
-            // Anti-enumeration: a duplicate email gets the SAME generic fake-success as the
-            // honeypot path (nothing inserted) — a public probe cannot learn whether an email is
-            // already registered. The authenticated admin POST /vendors keeps its explicit 409.
-            const dup = await db.get(`SELECT id FROM ${T.vendors} WHERE email = ?`, [email]);
-            if (dup) return res.json({ success: true, message: 'Solicitud recibida. Te contactaremos pronto.' });
-
-            const slug = await uniqueSlug(name);
-            await db.run(
-                `INSERT INTO ${T.vendors} (name, slug, email, phone, description, status) VALUES (?, ?, ?, ?, ?, 'pending')`,
-                [name, slug, email, phone, description]
-            );
-            res.json({ success: true, message: 'Solicitud recibida. Te avisaremos por email cuando tu tienda sea aprobada.' });
-        } catch (e) { res.status(500).json({ error: e.message }); }
+            // Anti-enumeration: a duplicate email stores nothing and gets the same reply. The check
+            // answers the sequential case (and stores from before 1.0.1 that hold no claim);
+            // insertVendor's unique email claim refuses a simultaneous duplicate. The authenticated
+            // admin POST /vendors keeps its explicit 409.
+            const dup = await db.get(`SELECT id FROM ${T.vendors} WHERE email = ? OR email_claim = ?`, [email, email]);
+            if (dup) return res.json(APPLY_RECEIVED);
+            await insertVendor(['name', 'email', 'phone', 'description', 'status'], [name, email, phone, description, 'pending'], name, email);
+            res.json(APPLY_RECEIVED);
+        } catch (e) { failQuietly(res, e, 'vendor application'); }
     });
 
     // Approved vendors with their published-product count (no emails/phones on public routes).
@@ -329,7 +411,7 @@ exports.init = async function (wordjs) {
                 ORDER BY v.name
             `);
             res.json(list);
-        } catch (e) { res.status(500).json({ error: e.message }); }
+        } catch (e) { failQuietly(res, e, 'vendor list'); }
     });
 
     // Published products of approved vendors. Filters: ?vendor= (id or slug), ?category=, ?search=, ?limit=.
@@ -366,7 +448,7 @@ exports.init = async function (wordjs) {
                 LIMIT ?
             `, params);
             res.json(list);
-        } catch (e) { res.status(500).json({ error: e.message }); }
+        } catch (e) { failQuietly(res, e, 'product list'); }
     });
 
     // Buyer inquiry on a product → recorded + best-effort email to the vendor (lead generation).
@@ -376,7 +458,7 @@ exports.init = async function (wordjs) {
             if (looksLikeSpam(body)) {
                 return res.json({ success: true, message: 'Consulta enviada. El vendedor te contactará pronto.' });
             }
-            if (!inquiryAllowed()) {
+            if (!inquiryAllowed(req)) {
                 return res.status(429).json({ error: 'Demasiadas consultas en este momento. Inténtalo de nuevo en un minuto.' });
             }
             const productId = parseId(body.product_id);
@@ -416,7 +498,7 @@ exports.init = async function (wordjs) {
                 console.warn('[marketplace] inquiry mail failed:', mailErr.message);
             }
             res.json({ success: true, message: 'Consulta enviada. El vendedor te contactará pronto.' });
-        } catch (e) { res.status(500).json({ error: e.message }); }
+        } catch (e) { failQuietly(res, e, 'buyer inquiry'); }
     });
 
     // ================================ VENDOR PORTAL ===============================================
@@ -460,7 +542,7 @@ exports.init = async function (wordjs) {
                 maxAge: PORTAL_TOKEN_TTL_MS,
             });
             res.json({ success: true, token, vendor: vendorSafe(vendor) });
-        } catch (e) { res.status(500).json({ error: e.message }); }
+        } catch (e) { failQuietly(res, e, 'portal login'); }
         finally { if (acquired) endLoginAttempt(vendorId); }
     });
 
@@ -486,7 +568,7 @@ exports.init = async function (wordjs) {
                 [vendor.id]
             );
             res.json(list);
-        } catch (e) { res.status(500).json({ error: e.message }); }
+        } catch (e) { failQuietly(res, e, 'portal product list'); }
     });
 
     // Create (no id) or update (id present) one of the vendor's OWN products.
@@ -509,8 +591,12 @@ exports.init = async function (wordjs) {
                 const id = parseId(body.id);
                 if (!id) return res.status(400).json({ error: 'Producto inválido.' });
                 // Ownership is enforced IN the statement (id AND vendor_id) — no read-then-write gap.
+                // A product the admin hid (admin_hidden = 1) stays unpublished whatever the vendor
+                // sends: the vendor's flag can only ever narrow visibility, never undo moderation.
                 const result = await db.run(
-                    `UPDATE ${T.products} SET name = ?, description = ?, price_cents = ?, image_url = ?, category = ?, is_published = ? WHERE id = ? AND vendor_id = ?`,
+                    `UPDATE ${T.products} SET name = ?, description = ?, price_cents = ?, image_url = ?, category = ?,
+                        is_published = CASE WHEN admin_hidden = 1 THEN 0 ELSE ? END
+                     WHERE id = ? AND vendor_id = ?`,
                     [name, description, priceCents, imageUrl, category, isPublished, id, vendor.id]
                 );
                 if (!result || result.changes !== 1) return res.status(404).json({ error: 'Producto no encontrado.' });
@@ -522,7 +608,7 @@ exports.init = async function (wordjs) {
                 [vendor.id, name, description, priceCents, imageUrl, category, isPublished]
             );
             res.json({ success: true, id: result.lastID });
-        } catch (e) { res.status(500).json({ error: e.message }); }
+        } catch (e) { failQuietly(res, e, 'portal product save'); }
     });
 
     http.route('delete', '/portal/products/:id', async (req, res) => {
@@ -534,7 +620,7 @@ exports.init = async function (wordjs) {
             const result = await db.run(`DELETE FROM ${T.products} WHERE id = ? AND vendor_id = ?`, [id, vendor.id]);
             if (!result || result.changes !== 1) return res.status(404).json({ error: 'Producto no encontrado.' });
             res.json({ success: true });
-        } catch (e) { res.status(500).json({ error: e.message }); }
+        } catch (e) { failQuietly(res, e, 'portal product delete'); }
     });
 
     http.route('get', '/portal/inquiries', async (req, res) => {
@@ -549,7 +635,7 @@ exports.init = async function (wordjs) {
                 ORDER BY i.created_at DESC, i.id DESC
             `, [vendor.id]);
             res.json(list);
-        } catch (e) { res.status(500).json({ error: e.message }); }
+        } catch (e) { failQuietly(res, e, 'portal inquiry list'); }
     });
 
     http.route('post', '/portal/inquiries/:id/status', async (req, res) => {
@@ -566,7 +652,7 @@ exports.init = async function (wordjs) {
             );
             if (!result || result.changes !== 1) return res.status(404).json({ error: 'Consulta no encontrada.' });
             res.json({ success: true });
-        } catch (e) { res.status(500).json({ error: e.message }); }
+        } catch (e) { failQuietly(res, e, 'portal inquiry status'); }
     });
 
     // ================================ ADMIN API ===================================================
@@ -593,7 +679,7 @@ exports.init = async function (wordjs) {
         try {
             const body = req.body || {};
             const name = cleanStr(body.name, LIM.name);
-            const email = cleanStr(body.email, LIM.email).toLowerCase();
+            const email = normEmail(body.email);
             const phone = cleanStr(body.phone, LIM.phone);
             const description = cleanStr(body.description, LIM.description);
             const logoUrl = cleanStr(body.logo_url, LIM.url);
@@ -603,16 +689,16 @@ exports.init = async function (wordjs) {
             const commission = body.commission_pct === undefined ? 0 : parseCommission(body.commission_pct);
             if (commission === null) return res.status(400).json({ error: 'La comisión debe ser un entero entre 0 y 100.' });
 
-            const dup = await db.get(`SELECT id FROM ${T.vendors} WHERE email = ?`, [email]);
-            if (dup) return res.status(409).json({ error: 'Ya existe una tienda con ese email.' });
+            const DUP_MSG = 'Ya existe una tienda con ese email.';
+            const dup = await db.get(`SELECT id FROM ${T.vendors} WHERE email = ? OR email_claim = ?`, [email, email]);
+            if (dup) return res.status(409).json({ error: DUP_MSG });
 
-            const slug = await uniqueSlug(name);
             const code = await genAccessCode();
-            const result = await db.run(
-                `INSERT INTO ${T.vendors} (name, slug, email, phone, description, logo_url, access_code, status, commission_pct) VALUES (?, ?, ?, ?, ?, ?, ?, 'approved', ?)`,
-                [name, slug, email, phone, description, logoUrl, code, commission]
-            );
-            res.json({ success: true, id: result.lastID, access_code: code, slug });
+            const stored = await insertVendor(
+                ['name', 'email', 'phone', 'description', 'logo_url', 'access_code', 'status', 'commission_pct'],
+                [name, email, phone, description, logoUrl, code, 'approved', commission], name, email);
+            if (stored.duplicate) return res.status(409).json({ error: DUP_MSG });
+            res.json({ success: true, id: stored.id, access_code: code, slug: stored.slug });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
@@ -621,13 +707,23 @@ exports.init = async function (wordjs) {
         try {
             const id = parseId(req.params.id);
             if (!id) return res.status(400).json({ error: 'Tienda inválida.' });
-            const vendor = await db.get(`SELECT * FROM ${T.vendors} WHERE id = ?`, [id]);
-            if (!vendor) return res.status(404).json({ error: 'Tienda no encontrada.' });
+            if (!await db.get(`SELECT id FROM ${T.vendors} WHERE id = ?`, [id])) return res.status(404).json({ error: 'Tienda no encontrada.' });
 
             // Keep an existing code on re-approval (suspend -> approve) so the vendor isn't locked out;
-            // the admin can rotate it explicitly if needed.
-            const code = vendor.access_code || await genAccessCode();
-            await db.run(`UPDATE ${T.vendors} SET status = 'approved', access_code = ? WHERE id = ?`, [code, id]);
+            // the admin can rotate it explicitly if needed. "Keep" is decided IN the statement: the code
+            // used to be read first and written back, so a rotation landing in between was undone and the
+            // code it retired (perhaps leaked — the reason to rotate) opened the portal again. The new
+            // code is written only when the row has none; the mail and the reply carry the stored one.
+            const fresh = await genAccessCode();
+            const result = await db.run(
+                `UPDATE ${T.vendors} SET status = 'approved',
+                    access_code = CASE WHEN access_code IS NULL OR access_code = '' THEN ? ELSE access_code END
+                 WHERE id = ?`,
+                [fresh, id]
+            );
+            const vendor = result && result.changes === 1 ? await db.get(`SELECT * FROM ${T.vendors} WHERE id = ?`, [id]) : null;
+            if (!vendor) return res.status(404).json({ error: 'Tienda no encontrada.' });
+            const code = vendor.access_code;
 
             let mailed = false;
             try {
@@ -684,12 +780,16 @@ exports.init = async function (wordjs) {
                 if (!v) return res.status(400).json({ error: 'El nombre es obligatorio.' });
                 sets.push('name = ?'); params.push(v);
             }
+            const EMAIL_IN_USE = 'Ese email ya está en uso por otra tienda.';
+            let newEmail = null;
             if (body.email !== undefined) {
-                const v = cleanStr(body.email, LIM.email).toLowerCase();
+                const v = normEmail(body.email);
                 if (!isEmail(v)) return res.status(400).json({ error: 'El email no es válido.' });
-                const clash = await db.get(`SELECT id FROM ${T.vendors} WHERE email = ? AND id != ?`, [v, id]);
-                if (clash) return res.status(409).json({ error: 'Ese email ya está en uso por otra tienda.' });
-                sets.push('email = ?'); params.push(v);
+                const clash = await db.get(`SELECT id FROM ${T.vendors} WHERE (email = ? OR email_claim = ?) AND id != ?`, [v, v, id]);
+                if (clash) return res.status(409).json({ error: EMAIL_IN_USE });
+                // The claim moves with the address, so two simultaneous edits cannot both take it.
+                sets.push('email = ?', 'email_claim = ?'); params.push(v, v);
+                newEmail = v;
             }
             if (body.phone !== undefined) { sets.push('phone = ?'); params.push(cleanStr(body.phone, LIM.phone)); }
             if (body.description !== undefined) { sets.push('description = ?'); params.push(cleanStr(body.description, LIM.description)); }
@@ -705,7 +805,14 @@ exports.init = async function (wordjs) {
             }
             if (!sets.length) return res.json({ success: true });
             params.push(id);
-            await db.run(`UPDATE ${T.vendors} SET ${sets.join(', ')} WHERE id = ?`, params);
+            try {
+                await db.run(`UPDATE ${T.vendors} SET ${sets.join(', ')} WHERE id = ?`, params);
+            } catch (e) {
+                if (newEmail && await db.get(`SELECT id FROM ${T.vendors} WHERE email_claim = ? AND id != ?`, [newEmail, id])) {
+                    return res.status(409).json({ error: EMAIL_IN_USE });
+                }
+                throw e;
+            }
             res.json({ success: true });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
@@ -742,7 +849,8 @@ exports.init = async function (wordjs) {
             const id = parseId(req.params.id);
             if (!id) return res.status(400).json({ error: 'Producto inválido.' });
             const flag = req.body && (req.body.is_published === 1 || req.body.is_published === true || req.body.is_published === '1') ? 1 : 0;
-            const result = await db.run(`UPDATE ${T.products} SET is_published = ? WHERE id = ?`, [flag, id]);
+            // Hiding sets the moderation flag the vendor portal cannot clear; publishing clears it.
+            const result = await db.run(`UPDATE ${T.products} SET is_published = ?, admin_hidden = ? WHERE id = ?`, [flag, flag ? 0 : 1, id]);
             if (!result || result.changes !== 1) return res.status(404).json({ error: 'Producto no encontrado.' });
             res.json({ success: true, is_published: flag });
         } catch (e) { res.status(500).json({ error: e.message }); }

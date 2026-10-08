@@ -17,6 +17,8 @@ const {
 } = require('../core/mailbox');
 
 const SALT_ROUNDS = 12;
+/** The shape bcrypt (bcryptjs) produces: `$2a$`/`$2b$`/`$2y$`, a two-digit cost, 53 base64 characters. */
+const BCRYPT_HASH_RE = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
 
 /**
  * Validate a role string against the known roles allow-list before it is written to user_meta.
@@ -237,17 +239,15 @@ class User {
 
     // Static Methods
 
-    static async create(data: any) {
-        const { username, email, password, displayName, role = 'subscriber' } = data;
-
-        // Validation
-        if (!username || !email || !password) {
-            throw new Error('Username, email, and password are required');
-        }
-
-        // Reject any role not in the known roles allow-list (prevents role mass-assignment / bogus role).
-        assertValidRole(role);
-
+    /**
+     * Could `username` + `email` become a NEW account right now? Resolves to the canonical email when they
+     * can; throws exactly what create() throws when they cannot — a plain Error for a malformed address or
+     * login, and identityTaken() (`code` username_taken / email_taken) for a collision, the username being
+     * checked FIRST. create() runs this very function, so a caller that has to decide before creating
+     * (POST /auth/register, which defers the account until the address is confirmed) answers by the same
+     * rule the eventual insert enforces.
+     */
+    static async assertNewIdentity(username: any, email: any): Promise<string> {
         // Canonicalize the email (full-Unicode lowercase + NFC) so confusable-case variants collide
         // and uniqueness holds even where the DB's ASCII-only LOWER() would not. Store the canonical form.
         const normalizedEmail = normalizeEmail(email);
@@ -270,9 +270,39 @@ class User {
 
         const existingEmail = await User.findByEmail(normalizedEmail);
         if (existingEmail || await User.identifierInUse(normalizedEmail)) throw identityTaken('Email already exists', 'email_taken');
+        return normalizedEmail;
+    }
+
+    /** The stored form of a password, at the cost every account uses (what create() and update() write). */
+    static async hashPassword(password: string): Promise<string> {
+        return bcrypt.hash(password, SALT_ROUNDS);
+    }
+
+    /**
+     * `password` is the plain password, hashed here. `passwordHash` is the alternative for ONE caller:
+     * POST /auth/verify-email creates an account whose password was hashed when the registration was
+     * submitted (the plain text was never stored). Only a well-formed bcrypt hash is accepted, and never
+     * together with `password`. Every caller builds this object field by field — no route forwards a
+     * request body here — so `passwordHash` cannot arrive from a client.
+     */
+    static async create(data: any) {
+        const { username, email, password, passwordHash, displayName, role = 'subscriber' } = data;
+
+        // Validation
+        if (!username || !email || (!password && passwordHash === undefined)) {
+            throw new Error('Username, email, and password are required');
+        }
+        if (passwordHash !== undefined && (password || typeof passwordHash !== 'string' || !BCRYPT_HASH_RE.test(passwordHash))) {
+            throw new Error('A pre-hashed password must be a bcrypt hash, given instead of a password');
+        }
+
+        // Reject any role not in the known roles allow-list (prevents role mass-assignment / bogus role).
+        assertValidRole(role);
+
+        const normalizedEmail = await User.assertNewIdentity(username, email);
 
         // Hash password
-        const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
+        const hashedPassword = passwordHash !== undefined ? passwordHash : await bcrypt.hash(password, SALT_ROUNDS);
 
         // The stored display name, resolved ONCE so the public slug below is derived from the very
         // value that lands in the column rather than from a second reading of the same rule.
@@ -700,6 +730,43 @@ class User {
         const won = !!(result && (result.changes > 0 || result.rowCount > 0));
         if (won) await require('../core/cache').del(`user:${userId}`);
         return won;
+    }
+
+    /** Every stored value of a meta key (normally one row; more only if a past race duplicated it). */
+    static async getMetaValues(userId: number, key: string): Promise<string[]> {
+        const rows = await dbAsync.all('SELECT meta_value FROM user_meta WHERE user_id = ? AND meta_key = ?', [userId, key]);
+        return (rows || []).map((r: any) => r.meta_value);
+    }
+
+    /**
+     * Insert `key = value` only if the user has NO row for `key` yet; returns true iff THIS call inserted
+     * it. user_meta carries no UNIQUE (user_id, meta_key) constraint, so a bare check-then-insert would let
+     * two concurrent callers both insert. Instead the check and the insert run in ONE transaction that
+     * first takes a write lock on the user's existing `lockKey` row (a no-op UPDATE — a row lock on
+     * Postgres/MySQL, the database write lock on SQLite): concurrent claimers queue on that lock, and each
+     * one's existence check runs only after the previous claimer committed, so exactly one inserts.
+     * Returns false without inserting when the `lockKey` row does not exist (nothing to serialize on).
+     */
+    static async insertMetaIfAbsent(userId: number, key: string, value: string, lockKey: string): Promise<boolean> {
+        let inserted: boolean;
+        try {
+            inserted = await dbAsync.transaction(async (tx: any) => {
+                await tx.run('UPDATE user_meta SET meta_value = meta_value WHERE user_id = ? AND meta_key = ?', [userId, lockKey]);
+                // Existence is read separately: MySQL reports 0 affected rows for a no-op UPDATE.
+                if (!(await tx.get('SELECT 1 AS present FROM user_meta WHERE user_id = ? AND meta_key = ?', [userId, lockKey]))) return false;
+                if (await tx.get('SELECT 1 AS present FROM user_meta WHERE user_id = ? AND meta_key = ?', [userId, key])) return false;
+                await tx.run('INSERT INTO user_meta (user_id, meta_key, meta_value) VALUES (?, ?, ?)', [userId, key, String(value)]);
+                return true;
+            });
+        } catch (e: any) {
+            // InnoDB may pick a concurrent claimer as a deadlock victim (gap locks on the scan) and roll
+            // it back; another claimer survives and inserts. The victim simply did not insert.
+            const code = e && (e.code || e.sqlState);
+            if (code === 'ER_LOCK_DEADLOCK' || code === '40001' || code === '40P01') return false;
+            throw e;
+        }
+        if (inserted) await require('../core/cache').del(`user:${userId}`);
+        return inserted;
     }
 
     toJSON() {

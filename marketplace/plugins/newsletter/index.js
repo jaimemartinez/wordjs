@@ -3,9 +3,9 @@
  *
  * WordPress parity: Mailchimp for WP / The Newsletter Plugin.
  * Visitors subscribe through the Puck "Newsletter" block; the plugin tries double opt-in
- * (confirmation email with a tokenized link back to the subscribing page). When mail is not
- * available (no provider configured / no email:admin grant) it degrades to single opt-in:
- * the subscriber is confirmed immediately and the visitor is told so.
+ * (confirmation email with a tokenized link back to the site's confirm route). A subscriber is
+ * confirmed ONLY by following that link: when mail is not available the row stays pending and
+ * the failure is surfaced on the admin dashboard (there is no single opt-in fallback).
  *
  * Admins manage subscribers (filter/search/delete/CSV export) and compose HTML campaigns that
  * are sent sequentially to every CONFIRMED subscriber with a per-subscriber unsubscribe footer.
@@ -113,17 +113,39 @@ exports.init = async function (wordjs) {
         }
     }
 
-    // Global in-memory rate limit for the public subscribe endpoint (handlers get no req.ip in the
-    // sandbox, so per-IP limiting is impossible — a global cap still stops bulk abuse).
-    const SUB_MAX = 20;                 // max subscribes...
-    const SUB_WINDOW_MS = 60 * 1000;    // ...per rolling minute
-    let subWindow = { count: 0, first: 0 };
-    function subscribeThrottled() {
-        const now = Date.now();
-        if (now - subWindow.first >= SUB_WINDOW_MS) subWindow = { count: 0, first: now };
-        subWindow.count++;
-        return subWindow.count > SUB_MAX;
-    }
+    // In-memory rolling-window limiters for the public subscribe endpoint. They used to be ONE
+    // site-wide window (20 a minute), on the belief that handlers get no client identity in the
+    // sandbox — but the host forwards req.clientKey, an HMAC of the caller's IP. A site-wide window let
+    // one script close the form for every visitor: twenty requests and the next real subscriber got a
+    // 429 for a minute. So the request limit is now PER CLIENT.
+    //
+    // A per-client limit cannot bound what one victim RECEIVES, though: clients rotating addresses (a
+    // botnet, or one host behind many IPs) could still point the double opt-in mail at the same inbox
+    // over and over — DKIM-signed mail from this site. The second limiter is therefore per RECIPIENT:
+    // past it the request is answered exactly like any other (no oracle), but no token is rotated and
+    // no mail is sent, so the link already in that inbox keeps working.
+    //
+    // Both maps are bounded so key churn cannot grow them without limit.
+    const makeLimiter = (max, windowMs) => {
+        const buckets = new Map(); // key -> { count, start }
+        return (rawKey) => {
+            const key = String(rawKey || 'anon').slice(0, 200);
+            const now = Date.now();
+            let b = buckets.get(key);
+            if (!b || now - b.start >= windowMs) {
+                if (buckets.size >= 10000) {
+                    for (const [k, v] of buckets) if (now - v.start >= windowMs) buckets.delete(k);
+                    if (buckets.size >= 10000) buckets.delete(buckets.keys().next().value);
+                }
+                b = { count: 0, start: now };
+                buckets.set(key, b);
+            }
+            b.count++;
+            return b.count <= max;
+        };
+    };
+    const allowSubscribeFrom = makeLimiter(10, 60 * 1000);           // subscribe requests per client per minute
+    const allowConfirmMailTo = makeLimiter(3, 60 * 60 * 1000);       // confirmation mails per address per hour
 
     /** Spec footer appended to every campaign email, personalized per subscriber. */
     function buildUnsubFooter(unsubUrl) {
@@ -146,12 +168,15 @@ exports.init = async function (wordjs) {
         return { html, text };
     }
 
+    // Most recent failure to send a double opt-in mail (process-local; shown on the admin dashboard).
+    let lastConfirmMailError = null;
+
     // ── PUBLIC routes (consumed by the Puck block; no auth) ──────────────────────────────────────
 
-    // Subscribe (upsert by email) + double opt-in attempt with single opt-in fallback.
+    // Subscribe (upsert by email) + double opt-in mail. Never confirms without the link being followed.
     http.route('post', '/public/subscribe', async (req, res) => {
         try {
-            if (subscribeThrottled()) {
+            if (!allowSubscribeFrom(req.clientKey)) {
                 return res.status(429).json({ error: 'Demasiadas solicitudes. Inténtalo de nuevo en un minuto.' });
             }
             const body = req.body || {};
@@ -168,41 +193,59 @@ exports.init = async function (wordjs) {
                 // response as any other subscribe so the reply can't enumerate who is subscribed (audit LOW).
                 return res.json({ success: true, message: 'Si el correo es válido, revisa tu bandeja para confirmar la suscripción.' });
             }
+            if (!allowConfirmMailTo(email)) {
+                // This address already got its share of confirmation mails this hour. Same reply as every
+                // other branch; nothing rotated, nothing sent (see the limiter comment above).
+                return res.json({ success: true, message: 'Si el correo es válido, revisa tu bandeja para confirmar la suscripción.' });
+            }
 
             const token = await genToken();
+            // The row read above may have changed during the awaits since: a simultaneous subscribe
+            // for the same address may have inserted it, or its confirmation link may have been
+            // followed. Each write re-checks its own condition, and a request that loses answers like
+            // every other branch without mailing (the request that won mails, or nothing is needed).
             if (existing) {
-                // Re-subscribe / retry: regenerate the token, go back to pending, refresh metadata.
-                await db.run(
-                    'UPDATE ' + T.subscribers + " SET token = ?, status = 'pending', name = ?, source_url = ? WHERE id = ?",
+                // Re-subscribe / retry: regenerate the token, go back to pending, refresh metadata —
+                // never for a subscriber confirmed meanwhile.
+                const r = await db.run(
+                    'UPDATE ' + T.subscribers + " SET token = ?, status = 'pending', name = ?, source_url = ? WHERE id = ? AND status != 'confirmed'",
                     [token, name || existing.name || '', pageUrl || existing.source_url || '', existing.id]
                 );
+                if (!r || !r.changes) {
+                    return res.json({ success: true, message: 'Si el correo es válido, revisa tu bandeja para confirmar la suscripción.' });
+                }
             } else {
-                await db.run(
-                    'INSERT INTO ' + T.subscribers + " (email, name, status, token, source_url) VALUES (?, ?, 'pending', ?, ?)",
-                    [email, name, token, pageUrl]
-                );
+                try {
+                    await db.run(
+                        'INSERT INTO ' + T.subscribers + " (email, name, status, token, source_url) VALUES (?, ?, 'pending', ?, ?)",
+                        [email, name, token, pageUrl]
+                    );
+                } catch (e) {
+                    // The UNIQUE email: a simultaneous subscribe for this address inserted it first.
+                    if (await db.get('SELECT id FROM ' + T.subscribers + ' WHERE email = ?', [email])) {
+                        return res.json({ success: true, message: 'Si el correo es válido, revisa tu bandeja para confirmar la suscripción.' });
+                    }
+                    throw e;
+                }
             }
 
             // Double opt-in. SECURITY (audit LOW): the confirm link MUST point to our backend confirm
             // route on the SITE's own origin. Building it from the client-supplied page_url let an
             // attacker relay a DKIM-signed mail whose "Confirmar" button pointed at their phishing site.
-            let needsConfirm = false;
+            // The subscriber is NEVER confirmed without the link being followed: when the mail cannot be
+            // sent the row stays 'pending' (a later subscribe attempt retries with a fresh token) and
+            // the failure is logged and surfaced on the admin dashboard. Auto-confirming here let
+            // anyone add arbitrary addresses to the confirmed list whenever mail was misconfigured.
             try {
                 const siteBase = String((await wordjs.site.url()) || '').replace(/\/+$/, '');
                 if (!siteBase) throw new Error('no site url');
                 const confirmUrl = `${siteBase}/api/v1/plugin/newsletter/public/confirm?token=${token}`;
                 const msg = buildConfirmEmail(name, confirmUrl);
                 await mail({ to: email, subject: 'Confirma tu suscripción al boletín', html: msg.html, text: msg.text });
-                needsConfirm = true;
             } catch (e) {
-                // No provider / no grant / no site url / transient failure -> single opt-in fallback below.
-                needsConfirm = false;
-            }
-            if (!needsConfirm) {
-                await db.run(
-                    'UPDATE ' + T.subscribers + " SET status = 'confirmed', confirmed_at = datetime('now') WHERE email = ?",
-                    [email]
-                );
+                const reason = String((e && e.message) || e || 'unknown error').slice(0, 300);
+                lastConfirmMailError = { at: new Date().toISOString(), message: reason };
+                console.warn('[newsletter] confirmation email not sent; subscriber left pending:', reason);
             }
             // Uniform response — IDENTICAL shape to the already-confirmed branch (no membership-revealing
             // field like `already`/`needsConfirm`), so the reply can't be used to enumerate subscribers.
@@ -284,6 +327,7 @@ exports.init = async function (wordjs) {
                     pending: (stats && stats.pending) || 0,
                     unsubscribed: (stats && stats.unsubscribed) || 0,
                 },
+                confirmMailError: lastConfirmMailError,
             });
         } catch (e) {
             res.status(500).json({ error: e.message });

@@ -203,10 +203,18 @@ class Comment {
      *    the email is private PII that the public projection never returns, and matching on it handed
      *    anonymous callers a LIKE oracle ("does any commenter's address start with bob.hidden@vic?",
      *    one character at a time).
-     *  · `publicOnlyExcludingTypes` — restrict to comments whose PARENT entry is public: published, not
-     *    password protected, and not of one of these (internal or non-public) types. The same filter
-     *    the comments RSS feed applies (routes/seo.ts); without it the list served the approved
-     *    comments of drafts, private entries, trash and protected entries to anyone.
+     *  · `publicOnlyTypes` — restrict to comments whose PARENT entry is public: published, not password
+     *    protected, and of one of these (publicly readable, non-internal) types. A POSITIVE list, as the
+     *    comments RSS feed's `post_type IN ('post', 'page')` is (routes/seo.ts): an exclusion list cannot
+     *    name a type the registry does not know, and such an entry is not public. Without the filter the
+     *    list served the approved comments of drafts, private entries, trash and protected entries to
+     *    anyone. An empty list matches nothing.
+     *  · `attachmentViewer: { user }` (user null = anonymous) — a comment whose post is an ATTACHMENT is
+     *    kept only when that caller may see the attachment (core/attachment-visibility
+     *    attachmentReferenceCondition: the attachment rule, the entry it hangs off included). The filter
+     *    above judges the commented row's OWN status, and an attachment row can be 'publish' (through
+     *    PUT /posts/:id) while the entry it hangs off is one the caller may not read; each such comment
+     *    carries that attachment's id. Applied here, in the clause the rows and the count share.
      */
     static _buildWhere(options: any = {}) {
         const {
@@ -217,7 +225,8 @@ class Comment {
             type = 'comment',
             search,
             searchAuthorEmail = false,
-            publicOnlyExcludingTypes,
+            publicOnlyTypes,
+            attachmentViewer,
         } = options;
 
         const conditions: string[] = [];
@@ -259,18 +268,28 @@ class Comment {
             }
         }
 
-        if (Array.isArray(publicOnlyExcludingTypes)) {
+        if (Array.isArray(publicOnlyTypes)) {
             // A correlated EXISTS rather than a JOIN keeps `SELECT *` / `COUNT(*)` over `comments`
             // alone, so no column of `posts` can shadow a comment column in the result rows.
-            const excluded = publicOnlyExcludingTypes.length
-                ? ` AND p.post_type NOT IN (${publicOnlyExcludingTypes.map(() => '?').join(',')})`
-                : '';
-            conditions.push(
-                'EXISTS (SELECT 1 FROM posts p WHERE p.id = comments.comment_post_id ' +
-                "AND p.post_status = 'publish' AND (p.post_password IS NULL OR p.post_password = '')" +
-                `${excluded})`
-            );
-            params.push(...publicOnlyExcludingTypes);
+            if (publicOnlyTypes.length === 0) {
+                conditions.push('1 = 0');
+            } else {
+                conditions.push(
+                    'EXISTS (SELECT 1 FROM posts p WHERE p.id = comments.comment_post_id ' +
+                    "AND p.post_status = 'publish' AND (p.post_password IS NULL OR p.post_password = '')" +
+                    ` AND p.post_type IN (${publicOnlyTypes.map(() => '?').join(',')}))`
+                );
+                params.push(...publicOnlyTypes);
+            }
+        }
+
+        if (attachmentViewer) {
+            // Required at use, like this model's other cross-model lookups (getAuthorUser): only the
+            // public list asks for it.
+            const { attachmentReferenceCondition } = require('../core/attachment-visibility');
+            const clause = attachmentReferenceCondition(attachmentViewer.user || null, 'comments.comment_post_id', attachmentViewer);
+            conditions.push(`(${clause.sql})`);
+            params.push(...clause.params);
         }
 
         return { conditions, params };

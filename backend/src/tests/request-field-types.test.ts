@@ -1125,15 +1125,21 @@ describe('REGRESSION: /posts/slug/:slug resolves among the rows the CALLER may s
         await cache.del(`post:slug:any:${slug}`);
     }
 
-    test('a published page and an unpublished post may share a slug', async () => {
+    test('a published page and an unpublished post that already share a slug', async () => {
+        // POST /posts no longer CREATES this pair (Post.generateUniqueSlug keeps every publicly routed type
+        // in one namespace — posts-slug-namespace.test.ts), but installs that predate the rule, and both
+        // importers, have such pairs. Seeded the way they exist: the post's slug written under the page's.
         const pg = await as('admin', 'post', '/posts').send({ title: 'About us', slug: 'about-x', status: 'publish', type: 'page' });
         assert.strictEqual(pg.status, 201);
         pageId = pg.body.id;
         const dr = await as('admin', 'post', '/posts').send({ title: 'About draft', slug: 'about-x', status: 'draft', type: 'post' });
         assert.strictEqual(dr.status, 201);
         draftId = dr.body.id;
+        assert.notStrictEqual(await nameOf(draftId), 'about-x', 'the API de-duplicates across types now');
+        await dbAsync.run('UPDATE posts SET post_name = ? WHERE id = ?', ['about-x', draftId]);
+        for (const key of [`post:id:${draftId}`, 'post:slug:post:about-x', 'post:slug:any:about-x']) await cache.del(key);
         assert.strictEqual(await nameOf(pageId), 'about-x');
-        assert.strictEqual(await nameOf(draftId), 'about-x', 'the collision must be real, not de-duplicated');
+        assert.strictEqual(await nameOf(draftId), 'about-x', 'the legacy collision is real');
     });
 
     test('THE JOURNEY: the anonymous visitor still gets the PUBLISHED page', async () => {
@@ -1154,16 +1160,21 @@ describe('REGRESSION: /posts/slug/:slug resolves among the rows the CALLER may s
         await setStatus(draftId, 'post', 'about-x', 'draft');
     });
 
-    test('a caller who MAY see the post still gets the post first (precedence preserved)', async () => {
+    test('the page comes first for every caller; the post of such a pair is addressed by its type', async () => {
+        // The precedence used to be post → page, so a caller who could see the post got it at the page's
+        // URL — and so did everyone once the post was PUBLISHED (the takeover the next test pins down).
         const res = await as('admin', 'get', '/posts/slug/about-x');
         assert.strictEqual(res.status, 200);
-        assert.strictEqual(res.body.id, draftId, 'the author/editor view must not lose its own draft');
+        assert.strictEqual(res.body.id, pageId, 'the bare URL is the page');
+        const typed = await as('admin', 'get', '/posts/slug/about-x').query({ type: 'post' });
+        assert.strictEqual(typed.body.id, draftId, 'the editor still reaches its own draft by type');
     });
 
-    test('?type= still decides identity, and a published post wins for the anonymous caller too', async () => {
+    test('?type= still decides identity, and a PUBLISHED post does not take the page\'s URL either', async () => {
         assert.strictEqual((await anon('get', '/posts/slug/about-x').query({ type: 'page' })).body.id, pageId);
         await setStatus(draftId, 'post', 'about-x', 'publish');
-        assert.strictEqual((await anon('get', '/posts/slug/about-x')).body.id, draftId, 'post keeps precedence when visible');
+        assert.strictEqual((await anon('get', '/posts/slug/about-x')).body.id, pageId, 'a published post shadowed the page');
+        assert.strictEqual((await anon('get', '/posts/slug/about-x').query({ type: 'post' })).body.id, draftId);
         await setStatus(draftId, 'post', 'about-x', 'draft');
     });
 

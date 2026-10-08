@@ -42,6 +42,14 @@ const TS_NODE_REGISTER = (() => {
     try { return require.resolve('ts-node/register'); } catch { return 'ts-node/register'; }
 })();
 const isolates = new Map<string, any>();
+// slug -> plugin-permissions.policyFingerprint() as it was when the CURRENT child was spawned (the grants
+// and egress policy baked into its cfg). core/coherence.ts compares it with the live value and respawns a
+// child whose policy changed underneath it — a grant/allowlist edit made on another node, or one whose
+// cross-node broadcast was lost. Written at every spawn, dropped when the child is unloaded.
+const spawnPolicies = new Map<string, string>();
+function policyFingerprintFor(slug: string): string | undefined {
+    try { return require('./plugin-permissions').policyFingerprint(slug); } catch { return undefined; }
+}
 
 // Reaper for plugin multipart temp uploads. The per-request cleanup in finalHandler unlinks the file on
 // the happy path; this sweeps files ORPHANED by a host crash/restart (or a handler that never responded)
@@ -1568,6 +1576,9 @@ const ALLOWED_BRIDGE_METHODS = new Set([
     'assets.enqueueScript', 'assets.enqueueStyle',
     'users.findByEmail', 'users.findByLogin', 'users.findById', 'users.search',
     'site.url', 'site.domain', 'site.adminEmail',
+    // Private media description (gated host-side on media:private_read). Streaming the BYTES is not a
+    // bridge call: it is a route reply (`res.sendPrivateMedia`), so file contents never cross the IPC.
+    'media.getPrivate',
     // Host-mediated DNS (network-gated + private-IP-filtered host-side; see api.dns in plugin-api.ts).
     // The raw dns.resolve* surface is denied inside the isolate, so an MTA reaches MX/TXT records here.
     'dns.resolveMx', 'dns.resolveTxt', 'dns.resolve4', 'dns.resolve6', 'dns.resolve',
@@ -1708,6 +1719,10 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
     // contained to the child and the host always survives. The network grant is resolved HERE at
     // spawn (re-resolved on reload) so the child's network policy matches the current admin grant;
     // config travels in argv[2] (no secrets); env is the same secret-free allowlist.
+    // Recorded from the SAME synchronous read of the grant/egress maps as the cfg below, so the
+    // fingerprint is exactly the policy this child is being born with (see spawnPolicies).
+    const spawnFp = policyFingerprintFor(slug);
+    if (spawnFp !== undefined) spawnPolicies.set(slug, spawnFp); else spawnPolicies.delete(slug);
     const netGranted = isNetworkGrantedFor(slug);
     // allowedHosts only matters for a network-granted plugin (a non-network plugin has no egress at all);
     // pushed into cfg so the child installs it as its egress-guard allowlist. Empty ⇒ allow-all-public.
@@ -2785,28 +2800,9 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                     // not needed. ALWAYS strip auth/session cookies before forwarding (no trust exemption).
                     const fwdCookies = Object.fromEntries(Object.entries(req.cookies || {}).filter(([k]) => !HOST_AUTH_COOKIE_RE.test(k)));
                     // A STABLE, privacy-preserving per-client key so a plugin can rate-limit / dedup by caller
-                    // WITHOUT ever seeing the raw IP. It MUST be an HMAC keyed with a per-install secret that
-                    // is never exposed to plugins — a plain sha256('wjck:'+ip) over the 32-bit IPv4 space is
-                    // trivially rainbow-tabled back to the raw visitor IP, and the table is reusable across
-                    // every install because the prefix is a global constant (#28/#30). Key it with the JWT
-                    // secret (per-install, persisted, plugin-invisible); fall back to a stable per-process key.
-                    const clientKey = (() => {
-                        try {
-                            const ip = String(req.ip || (req.socket && req.socket.remoteAddress) || '');
-                            if (!ip) return '';
-                            const crypto = require('crypto');
-                            let secret: string | undefined;
-                            try { secret = require('../config/app').jwtSecret; } catch { /* config unavailable */ }
-                            // The default placeholder (app.ts) is a GLOBAL constant present on env-var/Docker
-                            // deploys with no wordjs-config.json — using it would make clientKey reversible
-                            // across every install (#28). Treat it as absent → per-process random key.
-                            if (!secret || secret === 'wordjs-default-secret-change-me') {
-                                const g: any = globalThis as any;
-                                secret = g.__wjClientKeySecret || (g.__wjClientKeySecret = crypto.randomBytes(32).toString('hex'));
-                            }
-                            return crypto.createHmac('sha256', 'wjck-hmac:' + secret).update(ip).digest('hex').slice(0, 24);
-                        } catch { return ''; }
-                    })();
+                    // WITHOUT ever seeing the raw IP: an HMAC of the caller's rate-limit identity (an IPv6
+                    // client is its /64) under the install's secret — see core/client-ip pluginClientKey.
+                    const clientKey = require('./client-ip').pluginClientKey(req);
                     const reqData = {
                         method: req.method, path: req.path, query: req.query, params: req.params, body: req.body,
                         clientKey,
@@ -2826,6 +2822,22 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                     };
                     try {
                         const r = await invokeRoute(msg.routeId, reqData);
+                        // PRIVATE MEDIA DELIVERY (res.sendPrivateMedia in the isolate). The plugin names a
+                        // media id; the HOST checks the grant, refuses anything that is not a private
+                        // attachment and streams the file with its own download headers — plugin headers are
+                        // NOT applied to this response (no Content-Type/Encoding games on file bytes). Only
+                        // the clamped cookie path below still runs. Bytes never cross the IPC channel.
+                        if (r && r.media && typeof r.media === 'object') {
+                            const granted = runWithContext(slug, () => require('./plugin-context').hasPermission('media', 'private_read'));
+                            if (!granted) {
+                                console.warn(`[Isolate ${logSafe(slug)}] denied private media delivery: media:private_read not granted.`);
+                                res.status(403).json({ error: 'Plugin is not allowed to deliver private media (media:private_read not granted).' });
+                                return;
+                            }
+                            applyRouteCookies(r.cookies);
+                            await require('./private-media').streamPrivateMedia(res, r.media.id, { filename: r.media.filename });
+                            return;
+                        }
                         if (r.headers) {
                             // (#3) A plugin must not set response headers verbatim: Set-Cookie would
                             // re-inject a host cookie (e.g. wordjs_token), bypassing the clamped r.cookies
@@ -2845,8 +2857,22 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                             res.set(safe);
                         }
                         // Replay cookies the isolate set/cleared on the real response.
-                        if (Array.isArray(r.cookies)) {
-                            for (const c of r.cookies.slice(0, 20)) { // (#5) cap cookies per reply
+                        applyRouteCookies(r.cookies);
+                        res.status(r.status || 200);
+                        if (r.body === undefined) res.end(); else res.json(r.body);
+                    } catch (e: any) {
+                        // A request the host could not even hand to the (live) child — a body too deep to
+                        // structured-clone — is the CLIENT's fault: 400, not a 502 blaming the plugin.
+                        if (e && e.statusCode === 400) {
+                            res.status(400).json({ error: 'Bad request', detail: String(e.message) });
+                            return;
+                        }
+                        if (res.headersSent) { try { res.destroy(); } catch { /* already closed */ } return; }
+                        res.status(502).json({ error: 'Isolated plugin error', detail: String(e && e.message || e) });
+                    }
+                    function applyRouteCookies(cookies: any) {
+                        if (Array.isArray(cookies)) {
+                            for (const c of cookies.slice(0, 20)) { // (#5) cap cookies per reply
                                 let name = String(c.name || '');
                                 let options = c.options || {};
                                 // (#5) Plugins may set cookies ONLY in their own namespace and scope: never
@@ -2865,16 +2891,6 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                                 else res.cookie(name, c.value, options);
                             }
                         }
-                        res.status(r.status || 200);
-                        if (r.body === undefined) res.end(); else res.json(r.body);
-                    } catch (e: any) {
-                        // A request the host could not even hand to the (live) child — a body too deep to
-                        // structured-clone — is the CLIENT's fault: 400, not a 502 blaming the plugin.
-                        if (e && e.statusCode === 400) {
-                            res.status(400).json({ error: 'Bad request', detail: String(e.message) });
-                            return;
-                        }
-                        res.status(502).json({ error: 'Isolated plugin error', detail: String(e && e.message || e) });
                     }
                 };
                 const m = routeMethod; // validated against the HTTP-verb allowlist above
@@ -3198,6 +3214,7 @@ function unloadIsolatedPlugin(slug: string): void | Promise<void> {
     try { if (h.teardown) h.teardown(); } catch (e) { /* */ }
     try { h.worker.terminate(); } catch (e) { /* */ }
     isolates.delete(slug);
+    spawnPolicies.delete(slug);
 }
 
 // Tear the plugin down and start it again, reusing the entry file from the original load. Used when a
@@ -3225,6 +3242,8 @@ async function reloadIsolatedPlugin(slug: string): Promise<any> {
 module.exports = {
     loadIsolatedPlugin, unloadIsolatedPlugin, reloadIsolatedPlugin,
     isIsolated: (slug: string) => isolates.has(slug),
+    // The policy fingerprint the RUNNING child of `slug` was spawned with (undefined when none is running).
+    spawnPolicyFingerprint: (slug: string) => (isolates.has(slug) ? spawnPolicies.get(slug) : undefined),
     listIsolates,
     getLivePids, awaitIsolateStopped, awaitIsolateSettled,
     getIsolateStatus, getAllIsolateStatuses,

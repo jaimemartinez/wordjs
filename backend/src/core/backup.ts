@@ -16,6 +16,8 @@ const { captureDump, restoreDump, dumpEntryName, usesExternalDump } = require('.
 const { offloadBackup } = require('./s3-offload');
 
 const UPLOADS_DIR = path.resolve(config.uploads.dir);
+/** Top-level archive directory that carries config.uploads.privateDir (see createBackup step 4a). */
+const PRIVATE_UPLOADS_ARCHIVE_ROOT = 'private-uploads';
 
 const BACKUPS_DIR = path.resolve(__dirname, '../../backups');
 
@@ -131,6 +133,30 @@ async function createBackup() {
             continue; // content root doesn't exist on this install — skip
         }
         await addDirectoryToZip(zip, backendRoot, root);
+    }
+
+    // 4a. PRIVATE media (core/private-media.ts) lives outside uploads/ — by design nothing serves it —
+    //     so it is archived under its own top-level name and restored back into the configured
+    //     private root. A backup without it would restore rows pointing at files that are gone.
+    {
+        const privateRoot = require('./private-media').privateUploadsRoot();
+        let present = true;
+        try { await fs.promises.access(privateRoot); } catch { present = false; }
+        if (present) {
+            const walk = async (rel: string): Promise<void> => {
+                const dir = rel ? path.join(privateRoot, rel) : privateRoot;
+                for (const name of await fs.promises.readdir(dir)) {
+                    const childRel = rel ? path.join(rel, name) : name;
+                    const st = await fs.promises.lstat(path.join(privateRoot, childRel));
+                    if (st.isDirectory()) await walk(childRel);
+                    else if (st.isFile()) {
+                        const data = await fs.promises.readFile(path.join(privateRoot, childRel));
+                        zip.addFile(`${PRIVATE_UPLOADS_ARCHIVE_ROOT}/${childRel.replace(/\\/g, '/')}`, data);
+                    }
+                }
+            };
+            await walk('');
+        }
     }
 
     // 4b. Physical database snapshot — a COMPLETE copy of the live DB (every table, incl.
@@ -391,7 +417,7 @@ async function restoreBackup(filename: string) {
     //    SKIPPED and reported, while an entry that actually points somewhere else ('..', absolute,
     //    drive-relative) still aborts the whole restore before anything is written.
     const backendRoot = path.resolve(__dirname, '../../');
-    const RESTORABLE_ROOTS = ['uploads', 'plugins', 'themes'];
+    const RESTORABLE_ROOTS = ['uploads', 'plugins', 'themes', PRIVATE_UPLOADS_ARCHIVE_ROOT];
     /** A segment that names somewhere OTHER than a child of the current directory. */
     const escapesUpward = (seg: string) =>
         seg === '..' || seg.includes('\0') || path.isAbsolute(seg) || /^[A-Za-z]:/.test(seg);
@@ -408,8 +434,13 @@ async function restoreBackup(filename: string) {
         if (segments.some(escapesUpward)) {
             throw new Error(`Malicious backup entry (path traversal): ${entry.entryName}`);
         }
-        const contentRoot = path.resolve(backendRoot, top);
-        const dest = resolveWithin(backendRoot, ...segments);
+        // Private media restores into the CONFIGURED private root, not next to the code.
+        const isPrivateRoot = top === PRIVATE_UPLOADS_ARCHIVE_ROOT;
+        const privateBase = isPrivateRoot ? require('./private-media').privateUploadsRoot() : null;
+        const contentRoot = isPrivateRoot ? privateBase : path.resolve(backendRoot, top);
+        const dest = isPrivateRoot
+            ? (segments.length > 1 ? resolveWithin(privateBase, ...segments.slice(1)) : null)
+            : resolveWithin(backendRoot, ...segments);
         if (dest === null || !dest.startsWith(contentRoot + path.sep)) {
             // Not upward-pointing (checked above) — the name simply cannot be written here.
             skipped.push(entry.entryName);

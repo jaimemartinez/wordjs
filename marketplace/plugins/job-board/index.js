@@ -1,14 +1,19 @@
 /**
  * WordJS Plugin: Job Board — WordPress parity: WP Job Manager.
  *
- * Job listings + public applications with anti-spam (honeypot + fill-time + global rate cap)
+ * Job listings + public applications with anti-spam (honeypot + fill-time + per-client rate cap)
  * and an applications inbox (statuses, CSV export). Runs fully sandboxed:
  *  - Tables live under the plugin prefix (wjp_job_board_) built from wordjs.db.tablePrefix.
  *  - Schema is created idempotently up-front (no ALTER available to plugins).
  *  - Money is stored as INTEGER CENTS (salary_min_cents / salary_max_cents); the client renders
  *    (cents / 100) with the configured currency symbol.
- *  - No req.ip in the sandbox: the application rate cap is a global in-memory rolling window,
- *    plus a single-statement duplicate guard per (job_id, email).
+ *  - The application rate cap is an in-memory rolling window PER CLIENT (req.clientKey, an HMAC of
+ *    the caller's IP forwarded by the host), plus one application per (job_id, email): a guard in
+ *    the INSERT and a unique index (the guard alone is not atomic on Postgres, see initSchema).
+ *    A site-wide window let one client lock every applicant out. Route handlers
+ *    run concurrently, so the window is claimed in the same synchronous step as the check and
+ *    refunded when no application is stored: checking first and counting after the INSERT let a
+ *    burst of simultaneous requests from one client all pass the cap (each mailing apply_email).
  *  - CSV export returns { csv, filename } as JSON (the isolate JSON-encodes string bodies, which
  *    would corrupt a raw CSV response) — the admin client builds the Blob.
  */
@@ -34,8 +39,9 @@ const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_LIMIT = 200;
 
 // Anti-spam knobs for POST /public/apply.
-const APPLY_MAX_PER_WINDOW = 10;          // global cap: 10 applications per rolling minute
+const APPLY_MAX_PER_CLIENT = 10;          // applications per client (req.clientKey) per window
 const APPLY_WINDOW_MS = 60 * 1000;
+const APPLY_MAX_KEYS = 10000;             // bound on the in-memory window map
 const MIN_FILL_MS = 3000;                 // a human takes longer than 3s to fill the form
 
 exports.init = async function (wordjs) {
@@ -93,6 +99,16 @@ exports.init = async function (wordjs) {
         await createIndex(`${P}idx_applications_job`, T.applications, 'job_id');
         await createIndex(`${P}idx_applications_status`, T.applications, 'status');
         await createIndex(`${P}idx_jobs_published`, T.jobs, 'is_published');
+        // One application per (job, email), enforced by the database. The NOT EXISTS guard of the
+        // INSERT alone is not atomic on Postgres: each statement runs under READ COMMITTED on its own
+        // connection, so concurrent INSERTs read a snapshot without each other and all land. A unique
+        // index is checked against in-flight rows too, on every engine.
+        try {
+            await db.run(`CREATE UNIQUE INDEX IF NOT EXISTS ${P}uidx_applications_job_email ON ${T.applications} (job_id, email)`);
+        } catch (e) {
+            // Duplicates already stored keep the index from being created: the operator is told here.
+            console.error('[job-board] could not create the unique (job_id, email) index:', e.message);
+        }
     }
 
     await initSchema();
@@ -189,12 +205,30 @@ exports.init = async function (wordjs) {
         };
     }
 
-    // Global rolling-window rate cap for public applications (single child process → in-memory).
-    let applyTimes = [];
-    const applyThrottled = () => {
+    // Per-client rolling window for public applications (one isolate process → in-memory). The window
+    // is CLAIMED — checked and counted in one synchronous step, before the handler's first await — and
+    // the returned release() refunds it when no application is stored. Returns null when the window is
+    // full. The map is bounded so key churn cannot grow it without limit.
+    const applyWindows = new Map(); // clientKey -> { count, first }
+    const claimApply = (clientKey) => {
         const now = Date.now();
-        applyTimes = applyTimes.filter((t) => now - t < APPLY_WINDOW_MS);
-        return applyTimes.length >= APPLY_MAX_PER_WINDOW;
+        let w = applyWindows.get(clientKey);
+        if (!w || now - w.first >= APPLY_WINDOW_MS) {
+            if (applyWindows.size >= APPLY_MAX_KEYS) {
+                for (const [k, v] of applyWindows) if (now - v.first >= APPLY_WINDOW_MS) applyWindows.delete(k);
+                if (applyWindows.size >= APPLY_MAX_KEYS) applyWindows.delete(applyWindows.keys().next().value);
+            }
+            w = { count: 0, first: now };
+            applyWindows.set(clientKey, w);
+        }
+        if (w.count >= APPLY_MAX_PER_CLIENT) return null;
+        w.count++;
+        let released = false;
+        return () => {
+            if (released) return;
+            released = true;
+            w.count = Math.max(0, w.count - 1);
+        };
     };
 
     // Public projection: apply_email stays server-side (avoid harvesting) and so do admin-ish flags.
@@ -262,8 +296,11 @@ exports.init = async function (wordjs) {
     });
 
     // Public application. Anti-spam: honeypot (fake success so bots learn nothing), minimum
-    // fill-time, global rolling rate cap, and a single-statement duplicate guard per job+email.
+    // fill-time, per-client rolling rate cap, and one application per job+email (INSERT guard +
+    // unique index).
     http.route('post', '/public/apply', async (req, res) => {
+        let releaseApply = null; // refunds the claimed window unless the application is stored
+        let stored = false;
         try {
             const b = req.body || {};
 
@@ -275,8 +312,10 @@ exports.init = async function (wordjs) {
                 return res.status(400).json({ error: 'Por favor tómate un momento para completar el formulario antes de enviarlo.' });
             }
 
-            if (applyThrottled()) {
-                return res.status(429).json({ error: 'Estamos recibiendo muchas postulaciones. Intenta de nuevo en un minuto.' });
+            // Claimed before the first await, so concurrent requests from one client see each other.
+            releaseApply = claimApply(String(req.clientKey || 'anon').slice(0, 64));
+            if (!releaseApply) {
+                return res.status(429).json({ error: 'Has enviado muchas postulaciones seguidas. Intenta de nuevo en un minuto.' });
             }
 
             const job_id = parseInt(b.job_id, 10);
@@ -302,18 +341,27 @@ exports.init = async function (wordjs) {
             );
             if (!job) return res.status(404).json({ error: 'Esta vacante ya no está disponible.' });
 
-            // Single-statement duplicate guard: no transaction bridge, so the NOT EXISTS predicate
-            // rides inside the INSERT itself (changes === 0 → this email already applied).
-            const result = await db.run(
-                `INSERT INTO ${T.applications} (job_id, name, email, phone, cover_letter, cv_url, status)
-                 SELECT ?, ?, ?, ?, ?, ?, 'new'
-                 WHERE NOT EXISTS (SELECT 1 FROM ${T.applications} WHERE job_id = ? AND email = ?)`,
-                [job_id, name, email, phone, cover_letter, cv_url, job_id, email]
-            );
+            // Duplicate guard: no transaction bridge, so the NOT EXISTS predicate rides inside the
+            // INSERT itself (changes === 0 → this email already applied), and the unique
+            // (job_id, email) index refuses a concurrent duplicate the guard's snapshot missed.
+            let result;
+            try {
+                result = await db.run(
+                    `INSERT INTO ${T.applications} (job_id, name, email, phone, cover_letter, cv_url, status)
+                     SELECT ?, ?, ?, ?, ?, ?, 'new'
+                     WHERE NOT EXISTS (SELECT 1 FROM ${T.applications} WHERE job_id = ? AND email = ?)`,
+                    [job_id, name, email, phone, cover_letter, cv_url, job_id, email]
+                );
+            } catch (e) {
+                const dup = await db.get(`SELECT id FROM ${T.applications} WHERE job_id = ? AND email = ?`, [job_id, email]);
+                if (!dup) throw e;
+                result = { changes: 0 };
+            }
             if (!result || result.changes === 0) {
                 return res.status(409).json({ error: 'Ya enviaste una postulación para esta vacante con ese email.' });
             }
-            applyTimes.push(Date.now());
+            // The application exists: the claimed window unit stays spent.
+            stored = true;
 
             // Notification mail — best effort: the application is already saved, mail may degrade.
             let mailed = false;
@@ -345,6 +393,8 @@ exports.init = async function (wordjs) {
             res.json({ success: true, mailed });
         } catch (e) {
             res.status(500).json({ error: 'No se pudo enviar la postulación. Intenta de nuevo.' });
+        } finally {
+            if (!stored && releaseApply) releaseApply();
         }
     });
 

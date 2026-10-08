@@ -46,9 +46,18 @@ describe("parseVerifyLink — lista blanca sobre la query", () => {
     });
 
     it("rechaza todo lo que no sea un uid entero positivo", () => {
-        for (const uid of ["", "0", "-1", "1.5", "1e3", "abc", "12 34", "007a", null, undefined]) {
+        for (const uid of ["0", "-1", "1.5", "1e3", "abc", "12 34", "007a"]) {
             expect(parseVerifyLink(uid as string | null, HEX64), String(uid)).toBeNull();
         }
+    });
+
+    it("accepts the CURRENT link, which carries the token alone (no account exists before it is followed)", () => {
+        for (const uid of ["", "  ", null, undefined]) {
+            expect(parseVerifyLink(uid as string | null, HEX64), String(uid)).toEqual({ uid: null, token: HEX64 });
+        }
+        // The token alone still has to pass its whitelist.
+        expect(parseVerifyLink(null, "corto")).toBeNull();
+        expect(parseVerifyLink(null, `${HEX64}<script>`)).toBeNull();
     });
 
     it("acepta el 0 a la izquierda solo si sigue siendo un número (y nunca un uid cero)", () => {
@@ -73,6 +82,10 @@ describe("classifyVerifyFailure", () => {
         expect(classifyVerifyFailure(apiError({ code: "rest_invalid_verification", status: 400 }))).toBe("invalid");
         expect(classifyVerifyFailure(apiError({ status: 400 }))).toBe("invalid");
         expect(classifyVerifyFailure(apiError({ status: 404 }))).toBe("invalid");
+    });
+
+    it("a valid link whose username or address was taken since is its own state, not «invalid»", () => {
+        expect(classifyVerifyFailure(apiError({ code: "rest_registration_unavailable", status: 409 }))).toBe("unavailable");
     });
 
     it("el 429 del limitador de /auth se cuenta aparte", () => {
@@ -104,6 +117,20 @@ describe("la marca local de «ya confirmado aquí»", () => {
         expect(JSON.stringify(store.getItem(verifiedMarkerKey(7)))).not.toContain(HEX64);
     });
 
+    it("a token-only link gets a marker of its own that never contains the token", () => {
+        const store = fakeStore();
+        const link = { uid: null, token: HEX64 };
+        const other = { uid: null, token: "b".repeat(64) };
+        expect(wasVerifiedHere(link, store)).toBe(false);
+        markVerifiedHere(link, store);
+        expect(wasVerifiedHere(link, store)).toBe(true);
+        expect(wasVerifiedHere(other, store)).toBe(false);
+        expect(verifiedMarkerKey(link)).not.toContain(HEX64);
+        expect(verifiedMarkerKey(link)).toMatch(/^wjs_email_verified:t:[0-9a-f]{8}$/);
+        // A legacy link keeps the uid key it always had.
+        expect(verifiedMarkerKey({ uid: 7, token: HEX64 })).toBe("wjs_email_verified:7");
+    });
+
     it("sin almacenamiento, o con uno que lanza, la pantalla no se rompe", () => {
         const boom = {
             getItem: () => { throw new Error("SecurityError"); },
@@ -117,7 +144,7 @@ describe("la marca local de «ya confirmado aquí»", () => {
 });
 
 describe("VERIFY_COPY", () => {
-    const ALL: VerifyStatus[] = ["missing", "verifying", "success", "already", "invalid", "throttled", "error"];
+    const ALL: VerifyStatus[] = ["missing", "verifying", "success", "already", "invalid", "unavailable", "throttled", "error"];
 
     it("todos los estados tienen copia, así que la pantalla no puede quedarse en blanco", () => {
         for (const status of ALL) {

@@ -19,6 +19,11 @@ const {
     recordContentEvent,
     isContentMutationActive,
 } = require('../core/content-outbox');
+const privateMedia = require('../core/private-media');
+// core/attachment-visibility requires nothing that requires this model at load time (it reaches Post
+// lazily), so both functions are complete here — and buildWhere does not resolve the module per query.
+const { canViewAttachment, attachmentVisibilityCondition } = require('../core/attachment-visibility');
+const { canReadPostContent, isPasswordProtected } = require('../core/post-capabilities');
 
 /**
  * Marks a post whose stored post_date is a leftover from a schedule that was CANCELLED — i.e. a
@@ -31,6 +36,22 @@ const {
  * one row, only on a transition that already writes several.
  */
 const UNSCHEDULED_DATE_META = '_wjs_unscheduled_date';
+
+/**
+ * core/sql-exact-text, resolved ONCE per process. buildWhere and findBySlug run on every list, count and
+ * slug lookup, and a `require()` per call re-resolves the path each time — under ts-node that alone took
+ * buildWhere from about 1 µs to about 50 µs per call and pushed the F6 `contentQuery` ratio over its
+ * budget. Cached only once complete (a module still loading through a circular require exposes a partial
+ * `exports`), and as the module object rather than a function pulled off it, so a test that replaces one
+ * of its exports is obeyed.
+ */
+let sqlExactTextModule: any = null;
+function sqlExactText(): any {
+    if (sqlExactTextModule) return sqlExactTextModule;
+    const mod = require('../core/sql-exact-text');
+    if (mod && typeof mod.exactTextEquals === 'function') sqlExactTextModule = mod;
+    return mod;
+}
 
 /**
  * THE SINK'S OWN TYPE CHECK — the last member of the "guard and sink disagree" class.
@@ -94,6 +115,9 @@ function scalarString(value: unknown, field: string, fallback: string): string {
  * NOTHING ELSE FROM THE ROW. `users` also holds the e-mail and the password hash; an author byline is
  * not an account listing, and `/users` is authenticated precisely so a public post cannot become one.
  */
+/** Which entries a new slug must not collide with — see Post.generateUniqueSlug. */
+type SlugScope = 'public' | 'type';
+
 interface PostAuthorRef {
     id: number;
     displayName: string;
@@ -141,11 +165,13 @@ class Post {
     // When undefined, toJSON falls back to a per-post DB query (identical behavior).
     _metaCache?: { [key: string]: any };
     // Optional pre-loaded featured image (set by hydrateRelations to avoid the
-    // per-post findById + _wp_attached_file lookups in getFeaturedImage()/toJSON()).
-    // When undefined, those methods fall back to per-post queries (identical behavior).
-    // Shape: { post: Post|null, attachedFile: string|null } — null `post` means
-    // "resolved, no featured image".
-    _featuredImageCache?: { post: any; attachedFile: any } | undefined;
+    // per-post findById + _wp_attached_file + parent lookups in getFeaturedImage()/toJSON()).
+    // When undefined, loadFeaturedImage() resolves the same three things with per-post queries.
+    // Shape: { post: Post|null, attachedFile: string|null, parent: Post|null } — null `post` means
+    // "resolved, no featured image" (also when `_thumbnail_id` names a row that is not an attachment);
+    // `parent` is the row the attachment hangs off (null when unattached or dangling). WHO may see the
+    // attachment is decided per caller in toJSON, never here: this cache is viewer-independent.
+    _featuredImageCache?: { post: any; attachedFile: any; parent: any } | undefined;
     // Optional pre-loaded terms (set by hydrateRelations to avoid the per-post taxonomy query in
     // toJSON()). Same contract as _featuredImageCache: `undefined` means "not resolved yet" and
     // toJSON falls back to ONE per-post query; a post with no terms gets an empty-but-DEFINED bucket
@@ -360,29 +386,85 @@ class Post {
     }
 
     /**
-     * Get featured image
+     * The id a stored `_thumbnail_id` names, or null. The value is author-written meta (a string from
+     * the editor, a number from the API, anything from an import), so only a positive safe integer is
+     * an id; everything else is "no featured image" rather than a lookup on whatever it coerces to.
      */
-    async getFeaturedImage() {
-        // Prefer pre-loaded featured image (hydrateRelations) to avoid an extra per-post query.
-        if (this._featuredImageCache !== undefined) {
-            return this._featuredImageCache.post;
-        }
-        // Prefer pre-loaded meta (hydrateRelations) to avoid an extra per-post query.
-        const thumbnailId = (this._metaCache !== undefined && '_thumbnail_id' in this._metaCache)
-            ? this._metaCache['_thumbnail_id']
-            : await this.getMeta('_thumbnail_id');
-        if (!thumbnailId) return null;
-        return await Post.findById(thumbnailId);
+    static featuredImageId(value: unknown): number | null {
+        if (value === null || value === undefined) return null;
+        const text = typeof value === 'number' ? String(value) : (typeof value === 'string' ? value.trim() : '');
+        if (!/^[1-9][0-9]*$/.test(text)) return null;
+        const id = Number(text);
+        return Number.isSafeInteger(id) ? id : null;
     }
 
     /**
-     * Convert to JSON (for API responses)
+     * Resolve this post's featured image ONCE: the attachment row `_thumbnail_id` names (null unless it
+     * IS an attachment), its stored file, and the parent it inherits visibility from. Prefers the batch
+     * hydrateRelations() left on the instance; otherwise a few per-post queries, memoized the same way.
+     * Viewer-independent on purpose — see toJSON for who may see it.
      */
-    async toJSON(includeContent = true) {
+    async loadFeaturedImage(): Promise<{ post: any; attachedFile: any; parent: any }> {
+        if (this._featuredImageCache !== undefined) return this._featuredImageCache;
+        const none = { post: null, attachedFile: null, parent: null };
+        // Prefer pre-loaded meta (hydrateRelations) to avoid an extra per-post query.
+        const raw = (this._metaCache !== undefined && '_thumbnail_id' in this._metaCache)
+            ? this._metaCache['_thumbnail_id']
+            : await this.getMeta('_thumbnail_id');
+        const thumbnailId = Post.featuredImageId(raw);
+        const row = thumbnailId === null ? null : await Post.findById(thumbnailId);
+        if (!row || row.postType !== 'attachment') return (this._featuredImageCache = none);
+        const attachedFile = await Post.getMeta(row.id, '_wp_attached_file');
+        const parent = row.postParent ? await Post.findById(row.postParent) : null;
+        return (this._featuredImageCache = {
+            post: row,
+            attachedFile: attachedFile != null ? attachedFile : null,
+            parent: parent || null,
+        });
+    }
+
+    /**
+     * The featured-image ATTACHMENT row, or null. Viewer-independent: it answers what the meta points
+     * at, not whether anyone may see it — never serialize it without core/attachment-visibility.
+     */
+    async getFeaturedImage() {
+        return (await this.loadFeaturedImage()).post;
+    }
+
+    /**
+     * Convert to JSON (for API responses).
+     *
+     * `viewer` is the caller the JSON is for (the authenticated user, or undefined for an anonymous
+     * reader). It decides what is projected from OTHER rows — today the featured image — and whether
+     * this entry's featured image is shown at all (a password-protected entry's is withheld from a viewer
+     * who does not manage it). Omitting it is the anonymous answer, so a caller that forgets it can only
+     * show less.
+     */
+    async toJSON(includeContent = true, viewer: any = undefined) {
         // Use pre-loaded meta if hydrateRelations() ran; otherwise query per-post (identical result).
         // Either way, keep it on the instance: getFeaturedImage() and later toJSON() calls on the
         // same post re-consulted the DB for meta this call already fetched.
-        const meta = this._metaCache !== undefined ? this._metaCache : (this._metaCache = await Post.getAllMeta(this.id));
+        const cachedMeta = this._metaCache !== undefined ? this._metaCache : (this._metaCache = await Post.getAllMeta(this.id));
+
+        // A PASSWORD-PROTECTED ENTRY'S FEATURED IMAGE IS PART OF WHAT THE PASSWORD PROTECTS (WordPress's
+        // themes withhold it too while post_password_required()). The attachment rule below only covers
+        // files ATTACHED to this entry; an unattached library image set as its `_thumbnail_id` passed it and
+        // was projected to every reader. So for a viewer who may not read this entry's content
+        // (core/post-capabilities canReadPostContent: readable, and managed by them when protected) neither
+        // `featuredMedia` nor the `_thumbnail_id` naming it is emitted — the id alone resolves to the file
+        // through GET /media/:id.
+        //
+        // Asked only for a PROTECTED entry. The record half of canReadPostContent (may the viewer read this
+        // entry at all) is what every caller of toJSON has already decided before serializing it, and it
+        // resolves the type's policy from the registry — measurable on the render path (the F6 budget's
+        // contentRender went from ~0.06 ms to ~0.4 ms per post when it was asked unconditionally). For an
+        // unprotected entry the answer cannot withhold anything that caller has not already been granted.
+        const contentReadable = !isPasswordProtected(this) || canReadPostContent(viewer, this);
+        let meta = cachedMeta;
+        if (!contentReadable && meta && Object.prototype.hasOwnProperty.call(meta, '_thumbnail_id')) {
+            meta = { ...meta };
+            delete meta._thumbnail_id;
+        }
 
         const json: any = {
             id: this.id,
@@ -419,20 +501,23 @@ class Post {
             json.content = await doShortcodeAsync(this.postContent);
         }
 
-        // Add featured image
-        const featuredImage = await this.getFeaturedImage();
-        if (featuredImage) {
-            // Dynamic URL for featured image
-            // We need to fetch the file path meta to construct it safely
-            // Circular dependency risk if we require Media here, so we do it manually or assume standard path
-            // Prefer the pre-loaded attached file (hydrateRelations) to avoid a per-post query.
-            const attachedFile = (this._featuredImageCache !== undefined)
-                ? this._featuredImageCache.attachedFile
-                : await Post.getMeta(featuredImage.id, '_wp_attached_file');
+        // Add featured image — ONLY an attachment this viewer could read through GET /media/:id
+        // (core/attachment-visibility). `_thumbnail_id` is author-written and accepts any integer: projecting
+        // whatever it names published the title of any draft/private post, and the /uploads URL of any file
+        // hanging off an unpublished entry, to whoever could read THIS post. A PRIVATE attachment
+        // (core/private-media.ts) reaches only a viewer who may edit it, and then with its authenticated
+        // download route: it has no public URL, and its file is not under /uploads.
+        const featured = contentReadable ? await this.loadFeaturedImage() : { post: null, attachedFile: null, parent: null };
+        const featuredImage = featured.post;
+        if (featuredImage && canViewAttachment(viewer, featuredImage, featured.parent)) {
+            const attachedFile = featured.attachedFile;
             let dynamicUrl = featuredImage.guid;
             let sitePath: string | undefined;
 
-            if (attachedFile) {
+            if (featuredImage.postStatus === privateMedia.PRIVATE_ATTACHMENT_STATUS) {
+                sitePath = privateMedia.privateFileUrl(featuredImage.id);
+                dynamicUrl = `${config.site.url}${sitePath}`;
+            } else if (attachedFile) {
                 const safePath = attachedFile.replace(/\\/g, '/');
                 dynamicUrl = `${config.site.url}/uploads/${safePath}`;
                 // The same file as a SAME-ORIGIN path. `url` stays absolute on the main address (og:image
@@ -519,8 +604,11 @@ class Post {
         // routes/posts.ts runs the body's slug through sanitizeTitle before calling this.
         let postName = scalarString(slug, 'slug', '') || sanitizeTitle(title);
 
-        // Ensure unique slug
-        postName = await Post.generateUniqueSlug(postName, postType);
+        // Ensure unique slug — in the ONE public namespace (see generateUniqueSlug), unless an importer
+        // asked to keep a source site's permalinks unique per type (`slugScope: 'type'`). Only the two
+        // importers' own literal call sites set it; no route forwards a request body to this function.
+        const slugScope: SlugScope = data.slugScope === 'type' ? 'type' : 'public';
+        postName = await Post.generateUniqueSlug(postName, postType, null, slugScope);
 
         // Sanitize content
         const sanitizedContent = sanitizeContent(content);
@@ -626,17 +714,45 @@ class Post {
      * create), and it is also where the `-2`, `-3`, … suffix is appended — so this is the only place
      * that can promise the FINAL value fits. Bounding here, rather than at each caller, is what makes
      * "the checked representation and the written representation are the same" true by construction.
+     *
+     * ONE PUBLIC URL, ONE ENTRY. The uniqueness used to be per post TYPE, while the public site resolves
+     * a bare slug WITHOUT a type: /<slug>, /pages/<slug> and /<archive>/<slug> all ask
+     * GET /posts/slug/:slug, which walks the types in a fixed precedence and serves the first visible
+     * match. So the namespace a slug actually lives in is every publicly routed type at once, and a
+     * per-type check let anyone who could publish ANY type claim another type's URL: an Author (posts
+     * only, no page capability at all) published a post `contact` and the page `contact` — its URL, its
+     * menu entry, its sitemap line — served the Author's content instead. Every type that can be served
+     * at a slug URL now shares one namespace, so the second entry gets `contact-2` whichever side comes
+     * second. Types that are never served at a public slug URL (attachments, the internal types —
+     * revisions, menu items, any type registered showInRest:false — and the types that are not publicly
+     * readable) keep a namespace of their own, as before (see ownSlugNamespaceTypes).
+     *
+     * `scope: 'type'` is the old per-type rule, kept for the two IMPORTERS only (core/wxr-import,
+     * core/import-export). They recreate a source site whose post and page may legitimately share a
+     * slug (WordPress allows it, and resolves the bare URL to the page), and their idempotency looks a
+     * record up by (slug, type): renaming one side on the way in would break both the permalinks and a
+     * re-import. GET /posts/slug/:slug resolves such a pair to the page, so neither side can take the
+     * other's URL from a reader.
      */
-    static async generateUniqueSlug(slug: string, postType: string, excludeId: any = null) {
+    static async generateUniqueSlug(slug: string, postType: string, excludeId: any = null, scope: SlugScope = 'public') {
         // The BASE is bounded once, and every disambiguated variant is built from the bounded base —
         // not from the caller's original string, or the suffix would push the value back over.
         const base = boundSlug(slug);
         let uniqueSlug = base;
         let counter = 1;
+        const ownNamespace = Post.ownSlugNamespaceTypes();
+        const shared = scope === 'public' && !ownNamespace.includes(postType);
 
         while (true) {
-            let query = 'SELECT id FROM posts WHERE post_name = ? AND post_type = ?';
-            const params = [uniqueSlug, postType];
+            let query: string;
+            const params: any[] = [uniqueSlug];
+            if (shared) {
+                query = `SELECT id FROM posts WHERE post_name = ? AND post_type NOT IN (${ownNamespace.map(() => '?').join(', ')})`;
+                params.push(...ownNamespace);
+            } else {
+                query = 'SELECT id FROM posts WHERE post_name = ? AND post_type = ?';
+                params.push(postType);
+            }
 
             if (excludeId) {
                 query += ' AND id != ?';
@@ -651,6 +767,27 @@ class Post {
         }
 
         return uniqueSlug;
+    }
+
+    /**
+     * The post types that are never served at a public slug URL, each of which keeps a slug namespace of
+     * its own (see generateUniqueSlug): attachments, the internal types (revisions, menu items, anything
+     * registered showInRest:false) and every type that is not publicly readable — the public site fetches
+     * `/<slug>` anonymously, so a non-public type's entry is never what it serves there. Leaving those out
+     * also keeps a post's `-2` from telling its author that some private type holds that slug. Everything
+     * else (post, page, public custom types, and unregistered types) shares the one public namespace — an
+     * unregistered type is not publicly readable (post-capabilities readPolicyForType), but keeping it in
+     * the shared namespace means it cannot hold a public type's URL if it is registered again.
+     */
+    static ownSlugNamespaceTypes(): string[] {
+        const out = new Set<string>(['attachment', 'revision', 'nav_menu_item']);
+        try {
+            const { nonPublicPostTypes } = require('../core/post-capabilities');
+            for (const name of nonPublicPostTypes()) {
+                if (typeof name === 'string') out.add(name);
+            }
+        } catch { /* registry unavailable: the core set above still applies */ }
+        return Array.from(out);
     }
 
     /**
@@ -677,6 +814,20 @@ class Post {
         return post;
     }
 
+    /**
+     * Load several posts by id in ONE query. Returns a Map id → Post holding only the ids that exist
+     * (ids that are not positive safe integers are ignored). For pages that need many rows at once — the
+     * parents of a media page — instead of one findById per id.
+     */
+    static async findByIds(ids: any[]): Promise<Map<number, any>> {
+        const wanted = [...new Set((Array.isArray(ids) ? ids : []).map(Number).filter((n) => Number.isSafeInteger(n) && n > 0))];
+        const found = new Map<number, any>();
+        if (wanted.length === 0) return found;
+        const rows = await dbAsync.all(`SELECT * FROM posts WHERE id IN (${wanted.map(() => '?').join(',')})`, wanted);
+        for (const row of rows) found.set(Number(row.id), new Post(row));
+        return found;
+    }
+
     static async findBySlug(slug: string, type: any = null) {
         if (!slug) return null;
 
@@ -693,8 +844,11 @@ class Post {
         const params = [slug];
 
         if (type && type !== 'any') {
-            sql += ' AND post_type = ?';
-            params.push(type);
+            // Exact, like the list's type filter (core/sql-exact-text): on MySQL `post_type = 'ATTACHMENT'`
+            // would resolve an attachment under a name no policy is decided for.
+            const clause = sqlExactText().exactTextEquals('post_type', String(type));
+            sql += ` AND ${clause.sql}`;
+            params.push(...clause.params);
         }
 
         const row = await dbAsync.get(sql, params);
@@ -906,15 +1060,16 @@ class Post {
             }
         }
 
-        // Post type
+        // Post type — compared EXACTLY on every engine (core/sql-exact-text). Callers decide policy on the
+        // type NAME with JavaScript `===` (the list route applies the attachment rule only when the type IS
+        // `attachment`, and picks the read policy with capsForType(name)); MySQL's default collation made
+        // the plain `post_type = ?` also match 'ATTACHMENT', 'Attachment' and 'attachment ', so a folded
+        // spelling selected one type's rows under another name's policy. The exact comparison keeps the
+        // decision and the selection about the same rows.
         if (type) {
-            if (Array.isArray(type)) {
-                conditions.push(`${col}post_type IN (${type.map(() => '?').join(',')})`);
-                params.push(...type);
-            } else {
-                conditions.push(`${col}post_type = ?`);
-                params.push(type);
-            }
+            const clause = sqlExactText().exactTextEquals(`${col}post_type`, Array.isArray(type) ? type.map(String) : String(type));
+            conditions.push(clause.sql);
+            params.push(...clause.params);
         }
 
         // Post status.
@@ -980,6 +1135,18 @@ class Post {
         if (parent !== undefined) {
             conditions.push(`${col}post_parent = ?`);
             params.push(parent);
+        }
+
+        // ATTACHMENT VISIBILITY, IN THE QUERY. `attachmentViewer: { user }` (user null = anonymous) keeps
+        // only the attachment rows that caller may see — core/attachment-visibility's rule, parent entry
+        // included. It lives HERE, in the builder findAll() and count() share, so the rows, X-WP-Total and
+        // X-WP-TotalPages are computed over the same visible set: filtering after the query and subtracting
+        // what one page hid let every other page, every search and every page past the end count the
+        // hidden items. count() selects bare columns, so the attachment row is named `posts.` there.
+        if (options.attachmentViewer) {
+            const clause = attachmentVisibilityCondition(options.attachmentViewer.user || null, col || 'posts.', options.attachmentViewer);
+            conditions.push(clause.sql);
+            params.push(...clause.params);
         }
 
         // MIME type (lo usa la biblioteca de medios: los adjuntos guardan su tipo en post_mime_type).
@@ -1454,7 +1621,13 @@ class Post {
         }
 
         if (data.slug !== undefined) {
-            const uniqueSlug = await Post.generateUniqueSlug(sanitizeTitle(data.slug as string) as string, post.postType as string, id);
+            // Re-saving an entry under the slug it ALREADY has is not a claim on a URL: it keeps it. Without
+            // this, re-saving one side of a pair that predates the shared namespace (or came in through an
+            // importer) silently moved it to `-2`, because the editor re-sends the slug on every save.
+            const requestedSlug = sanitizeTitle(data.slug as string) as string;
+            const uniqueSlug = (requestedSlug && requestedSlug === post.postName)
+                ? requestedSlug
+                : await Post.generateUniqueSlug(requestedSlug, post.postType as string, id);
             updates.push('post_name = ?');
             values.push(uniqueSlug);
         }
@@ -1992,20 +2165,22 @@ class Post {
             post._metaCache = metaById[post.id] || {};
         }
 
-        // Batch-hydrate featured images to eliminate the per-post N+1 in
-        // getFeaturedImage()/toJSON() (Post.findById + _wp_attached_file lookup each).
-        // Collect every distinct _thumbnail_id, fetch those attachment posts and
-        // their _wp_attached_file in two IN-queries, then stash per-post.
+        // Batch-hydrate featured images to eliminate the per-post N+1 in loadFeaturedImage()
+        // (Post.findById + _wp_attached_file + parent lookup each). Collect every distinct
+        // _thumbnail_id, fetch those ATTACHMENT rows, their _wp_attached_file and their parents in
+        // three IN-queries, then stash per-post. The row is filtered to `attachment` here exactly as
+        // loadFeaturedImage() filters it: `_thumbnail_id` is author-written and may name any post, and
+        // a non-attachment row is never a featured image. Visibility is decided per viewer in toJSON.
         const thumbnailIds = [...new Set(
             posts
-                .map(p => p._metaCache && p._metaCache['_thumbnail_id'])
-                .filter(id => id != null && id !== '')
+                .map(p => Post.featuredImageId(p._metaCache && p._metaCache['_thumbnail_id']))
+                .filter((id): id is number => id !== null)
         )];
 
         if (thumbnailIds.length > 0) {
             const placeholders = thumbnailIds.map(() => '?').join(',');
             const attachmentRows = await dbAsync.all(
-                `SELECT * FROM posts WHERE id IN (${placeholders})`,
+                `SELECT * FROM posts WHERE id IN (${placeholders}) AND post_type = 'attachment'`,
                 thumbnailIds
             );
             const attachmentById: Record<string, any> = {};
@@ -2016,25 +2191,38 @@ class Post {
             const attachmentMetaById = await Post.getAllMetaForIds(
                 attachmentRows.map((row: any) => row.id)
             );
+            // One IN-query for the parents the attachments inherit their visibility from.
+            const parentIds = [...new Set(
+                attachmentRows.map((row: any) => row.post_parent).filter((id: any) => id != null && Number(id) > 0)
+            )];
+            const parentById: Record<string, any> = {};
+            if (parentIds.length > 0) {
+                const parentRows = await dbAsync.all(
+                    `SELECT * FROM posts WHERE id IN (${parentIds.map(() => '?').join(',')})`,
+                    parentIds
+                );
+                for (const row of parentRows) parentById[row.id] = new Post(row);
+            }
 
             for (const post of posts) {
-                const thumbnailId = post._metaCache && post._metaCache['_thumbnail_id'];
-                if (thumbnailId == null || thumbnailId === '') {
-                    // No featured image: cache the resolved "none" so getFeaturedImage skips DB.
-                    post._featuredImageCache = { post: null, attachedFile: null };
+                const thumbnailId = Post.featuredImageId(post._metaCache && post._metaCache['_thumbnail_id']);
+                const attachment = thumbnailId === null ? null : (attachmentById[thumbnailId] || null);
+                if (!attachment || attachment.postType !== 'attachment') {
+                    // No featured image: cache the resolved "none" so loadFeaturedImage skips DB.
+                    post._featuredImageCache = { post: null, attachedFile: null, parent: null };
                     continue;
                 }
-                const attachment = attachmentById[thumbnailId] || null;
-                const bucket = attachmentMetaById[thumbnailId] || {};
+                const bucket = attachmentMetaById[attachment.id] || {};
                 post._featuredImageCache = {
                     post: attachment,
-                    attachedFile: bucket['_wp_attached_file'] != null ? bucket['_wp_attached_file'] : null
+                    attachedFile: bucket['_wp_attached_file'] != null ? bucket['_wp_attached_file'] : null,
+                    parent: attachment.postParent ? (parentById[attachment.postParent] || null) : null,
                 };
             }
         } else {
             // No posts have a thumbnail: mark all as resolved-none to avoid per-post queries.
             for (const post of posts) {
-                post._featuredImageCache = { post: null, attachedFile: null };
+                post._featuredImageCache = { post: null, attachedFile: null, parent: null };
             }
         }
 

@@ -58,6 +58,35 @@ async function isEnabled(userId: number): Promise<boolean> {
 }
 
 /**
+ * Consume TOTP time-step `step` for `userId` exactly once. Tracks the last consumed step in
+ * `mfa_totp_last_step`; a step <= it is refused, and the counter is advanced ATOMICALLY so two
+ * concurrent submissions of the same step cannot both pass (the loser's compare-and-set finds a changed
+ * value).
+ *
+ * The counter row is created at enrollment, but it can still be missing (a partial restore, a
+ * hand-edited or imported database, an enrollment written by other tooling). A compare-and-set against a
+ * row that does not exist updates nothing, so without the branch below every TOTP code would be refused
+ * forever (fail-closed lockout). Instead, the FIRST use claims the counter with an atomic
+ * insert-if-absent carrying the consumed step itself, serialized on the user's secret row: exactly one
+ * caller inserts it, and every concurrent caller then finds the row and is refused by the step check.
+ */
+async function consumeTotpStep(userId: number, step: number): Promise<boolean> {
+    let values: string[] = await User.getMetaValues(userId, META.lastStep);
+    if (values.length === 0) {
+        if (await User.insertMetaIfAbsent(userId, META.lastStep, String(step), META.secret)) return true;
+        values = await User.getMetaValues(userId, META.lastStep);
+        if (values.length === 0) return false; // secret removed concurrently (MFA disabled) — refuse
+    }
+    // Normally a single row. Should a legacy race have left duplicates, the HIGHEST value is the truth
+    // (the counter is monotonic), so a replay can never pass by reading a stale lower duplicate.
+    const parsed = values.map((v) => parseInt(v, 10)).filter((n) => Number.isFinite(n));
+    if (parsed.length === 0) return false; // corrupt counter — refuse rather than guess
+    const last = Math.max(...parsed);
+    if (step <= last) return false;
+    return await User.compareAndSetMeta(userId, META.lastStep, String(last), String(step));
+}
+
+/**
  * Verify a login-time code: a valid TOTP (constant-time), OR a single-use backup code (consumed on
  * success). Returns true iff accepted.
  */
@@ -66,13 +95,8 @@ async function verifyLoginCode(userId: number, code: string): Promise<boolean> {
     if (secret) {
         const step = totp.verifyTotpStep(secret, String(code || '').replace(/\s+/g, ''));
         if (step >= 0) {
-            // Anti-replay (RFC 6238 §5.2): a code's time-step is one-time-use. Track the last consumed
-            // step; reject a step <= it, and advance it ATOMICALLY so two concurrent submissions of the
-            // same step cannot both pass (the loser's compare-and-set finds a changed value).
-            const lastRaw = await User.getMeta(userId, META.lastStep);
-            const last = lastRaw != null ? parseInt(lastRaw, 10) : -1;
-            if (step <= last) return false;
-            return await User.compareAndSetMeta(userId, META.lastStep, String(last), String(step));
+            // Anti-replay (RFC 6238 §5.2): a code's time-step is one-time-use.
+            return await consumeTotpStep(userId, step);
         }
     }
 
@@ -103,9 +127,11 @@ async function completeEnroll(userId: number, code: string): Promise<{ ok: boole
     const pending = await User.getMeta(userId, META.pending);
     if (!pending || !totp.verifyTotp(pending, String(code || '').replace(/\s+/g, ''))) return { ok: false };
     const { codes, hashes } = generateBackupCodes();
+    // The replay counter row must exist for the atomic compare-and-set; write it BEFORE the secret so no
+    // window exists in which a secret is verifiable without its counter.
+    await User.updateMeta(userId, META.lastStep, '-1');
     await User.updateMeta(userId, META.secret, pending);
     await User.updateMeta(userId, META.backup, JSON.stringify(hashes));
-    await User.updateMeta(userId, META.lastStep, '-1'); // replay counter row must exist for the atomic CAS
     await User.updateMeta(userId, META.enabled, '1');
     await User.deleteMeta(userId, META.pending);
     return { ok: true, backupCodes: codes };

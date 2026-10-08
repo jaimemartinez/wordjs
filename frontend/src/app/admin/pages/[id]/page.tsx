@@ -379,6 +379,7 @@ export default function PageEditorPage() {
                     onCancel={() => router.back()}
                     pageId={pageId || undefined}
                     previewSlug={slug || undefined}
+                    previewType="page"
                     rootFields={PAGE_ROOT_FIELDS}
                     // W30: el canvas envuelve en la plantilla `page` del tema (el pick _wjs_template
                     // lo lee VersoThemeTemplate EN VIVO del root del store — sin prop).

@@ -9,7 +9,15 @@
 
 const express = require('express');
 const migration = require('./migration');
-const { authenticate } = require('../../middleware/auth');
+// accountAuthorityOnly: a migration copies EVERY table (the password hashes, the two-factor seeds in
+// user_meta, the API token hashes, the plugins' secrets) to the database server the request names, then
+// rewrites the site's config so the site RUNS on that server — whoever controls it decides from then on
+// which accounts exist and with what password. That is the authority a backup restore needs and more, so
+// it is refused to an API token and to a session started at an address other than the main one, before
+// anything is read or connected (middleware/auth.ts refuseAccountAuthority). POST /cleanup deletes
+// database files from data/ — irreversible, and before migration.js belongsToActiveDatabase existed it
+// deleted the live one on request — so it takes the same gate: an interactive session at the main address.
+const { authenticate, accountAuthorityOnly } = require('../../middleware/auth');
 const { can } = require('../../middleware/permissions');
 
 /**
@@ -26,8 +34,8 @@ function register(app) {
 
     // Migration API
     router.get('/status', migration.getStatus);
-    router.post('/migrate', migration.runMigration);
-    router.post('/cleanup', migration.cleanup);
+    router.post('/migrate', accountAuthorityOnly, migration.runMigration);
+    router.post('/cleanup', accountAuthorityOnly, migration.cleanup);
 
     app.use('/api/v1/db-migration', router);
 

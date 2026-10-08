@@ -179,21 +179,206 @@ function upstreamPath(target, requestUrl) {
  * proxy imposes 30s, which its 15s keepalive stays under — here there is nothing to trip over at
  * all), and Nagle is disabled so a 40-byte event leaves immediately instead of waiting for company.
  */
+/**
+ * The forwarding headers a client may NOT speak for itself through this proxy. When
+ * `WORDJS_BACKEND_URL` is set this replica is the front door, and the backend believes forwarded
+ * headers from a loopback hop: a client-supplied `X-Forwarded-For` relayed verbatim chose the address
+ * the backend rate-limits, locks out and audits by; a client `Forwarded` / `X-Real-IP` /
+ * `X-Forwarded-Port` / `X-Forwarded-Server` reached host-policy as if this hop had said it. They are all
+ * dropped and the ones the backend needs are rebuilt from what this server observed: the socket's peer
+ * address, the Host it received and the scheme of its own listener.
+ */
+const FORWARDING_HEADERS = Object.freeze([
+    'x-forwarded-for',
+    'x-forwarded-host',
+    'x-forwarded-proto',
+    'x-forwarded-port',
+    'x-forwarded-server',
+    'x-real-ip',
+    'forwarded',
+]);
+
+/**
+ * Drop every FORWARDING_HEADERS entry from `headers` and state the ones the backend reads from what this
+ * server observed on `req`: the Host it received, the scheme of its own listener and the socket's peer.
+ * Idempotent, so a request pinned on arrival (pinForwardingHeaders) and then proxied yields the same
+ * values.
+ */
+function restateForwardingHeaders(headers, req) {
+    const host = req.headers.host || '';
+    for (const name of FORWARDING_HEADERS) delete headers[name];
+    headers['x-forwarded-host'] = host;
+    headers['x-forwarded-proto'] = req.socket && req.socket.encrypted ? 'https' : 'http';
+    const peer = req.socket && req.socket.remoteAddress;
+    if (peer) headers['x-forwarded-for'] = peer;
+}
+
+/**
+ * Restate the forwarding headers on the INBOUND request itself, before anything routes it.
+ *
+ * proxyToBackend is not the only way a request reaches the backend from this replica: Next's own
+ * `/api/:path*` (and `/uploads/…`, `/themes/…`) rewrite proxies too, and it relays the request's headers
+ * as they are — Next only fills `x-forwarded-*` when they are ABSENT (`??=` in base-server) and its
+ * proxy adds nothing but `x-forwarded-host`. The two dispatchers do not agree on what is the backend's:
+ * Next resolves dot segments with the WHATWG parser and matches rewrites without regard to case, so
+ * `/API/v1/auth/login`, `/x/../api/v1/auth/login` and `/x/%2e%2e/api/v1/auth/login` were not
+ * isProxiedPath() here and reached the backend through the rewrite carrying the client's own
+ * `X-Forwarded-For` (the address the limiters, the login gate and the audit log key on) and
+ * `X-Forwarded-Proto: https`. Agreeing on a pattern list cannot close that for good, so the headers are
+ * pinned for EVERY request, whichever dispatcher then takes it: Next's `??=` keeps the values stated here.
+ */
+function pinForwardingHeaders(req) {
+    restateForwardingHeaders(req.headers, req);
+}
+
+/**
+ * True when a path has a dot segment (`.`, `..`, or either spelled with `%2e`) or a backslash — a path
+ * some later parser reads as ANOTHER path. The same rule the gateway's and the monolith's edge apply
+ * (`hasDotSegments`, gateway/src/host-policy.js): a router that matches the raw path and a router that
+ * resolves it first disagree about where such a request goes. Browsers resolve both before sending.
+ */
+function hasDotSegments(pathname) {
+    const p = String(pathname || '');
+    if (p.includes('\\')) return true;
+    return p.split('/').some((segment) => /^(?:\.|%2e){1,2}$/i.test(segment.split(';')[0]));
+}
+
+const BAD_PATH_BODY = JSON.stringify({
+    code: 'rest_bad_path',
+    message: 'The request path contains a dot segment or a backslash.',
+    data: { status: 400 },
+});
+
+/**
+ * The certificate identities the GATEWAY presents as a client on the cluster's internal mTLS links — the
+ * set gateway/src/host-policy.js (GATEWAY_CNS) recognises. Node certificates cannot carry them: enrollment
+ * forces a node certificate's CN to its role, 'backend' or 'frontend' (gateway/src/index.js, /enroll),
+ * and setup/index.js issues 'gateway-internal' to the gateway alone.
+ */
+const GATEWAY_CNS = Object.freeze(['gateway', 'gateway-internal']);
+
+/**
+ * Did the GATEWAY deliver this request? True only for a TLS peer whose client certificate verified
+ * against the cluster CA (`authorized`) AND names a gateway identity. The mTLS listener accepts every
+ * cluster-CA certificate — backend nodes reach it for on-demand revalidation, and any enrolled frontend
+ * holds one — so "came in over mTLS" is not "came from the gateway".
+ */
+function isGatewayPeer(req) {
+    const sock = req && req.socket;
+    if (!sock || sock.authorized !== true || typeof sock.getPeerCertificate !== 'function') return false;
+    let cn;
+    try {
+        const cert = sock.getPeerCertificate();
+        cn = cert && cert.subject ? cert.subject.CN : undefined;
+    } catch {
+        return false;
+    }
+    return typeof cn === 'string' && GATEWAY_CNS.includes(cn);
+}
+
+/** Resolve a `trustForwardedHeaders` setting (boolean or per-request predicate) for one request. */
+function forwardedHeadersTrusted(setting, req) {
+    if (typeof setting === 'function') {
+        try { return setting(req) === true; } catch { return false; }
+    }
+    return setting === true;
+}
+
+/**
+ * The replica's request handler — the one server.js mounts. With no backend pinned
+ * (`WORDJS_BACKEND_URL` unset) it hands every request to Next exactly as before. With one, this replica
+ * is the front door, so for EVERY request, before either dispatcher sees it: a dot-segment path is
+ * refused (gateway parity), the forwarding headers are restated (pinForwardingHeaders), and then the
+ * backend's paths go to proxyToBackend and everything else to Next.
+ *
+ * `trustForwardedHeaders` — whether THIS request's X-Forwarded-* were stated by the gateway: a boolean,
+ * or a predicate on the request. server.js passes isGatewayPeer on the mTLS listener. The gateway has
+ * ALREADY stated the forwarding headers at its edge: X-Forwarded-Host is the SITE's canonical host it
+ * judged, X-Forwarded-For carries the real client, and the Host it set is this replica's own internal
+ * host (changeOrigin). Re-pinning would overwrite the gateway's X-Forwarded-Host with that internal host
+ * and replace the client's address with the gateway's — breaking the backend's host gate, CSRF origin
+ * check and audit / rate-limit keys. So a request from the gateway keeps its headers (dot-segment refusal
+ * still applies, and so does it for proxyToBackend). Every other request is pinned: a client on the HTTP
+ * fallback listener, and also any OTHER holder of a cluster-CA certificate on the mTLS listener (a backend
+ * or another frontend node) — mutual TLS proves cluster membership, not that the peer is the gateway.
+ *
+ * @param {{ backendTarget: string|null, handle: Function, proxy?: Function, trustForwardedHeaders?: boolean|((req: any) => boolean) }} deps
+ */
+function createReplicaDispatch({ backendTarget, handle, proxy, trustForwardedHeaders }) {
+    const forward = proxy || proxyToBackend;
+    return (req, res, parsedUrl) => {
+        if (backendTarget) {
+            if (hasDotSegments(String(req.url || '/').split('?')[0])) {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+                res.end(BAD_PATH_BODY);
+                return;
+            }
+            const trusted = forwardedHeadersTrusted(trustForwardedHeaders, req);
+            if (!trusted) pinForwardingHeaders(req);
+            if (isProxiedPath(parsedUrl.pathname)) {
+                forward(req, res, backendTarget, { trustForwarded: trusted });
+                return;
+            }
+        }
+        handle(req, res, parsedUrl);
+    };
+}
+
+/**
+ * The replica's WebSocket-upgrade handler. Upgrades never reach the request handler, and Next attaches
+ * its own 'upgrade' listener that runs them through the same rewrites — so `new WebSocket('/api/…')`
+ * reached the backend through Next's rewrite proxy with the client's forwarding headers too (a backend
+ * with no WebSocket of its own answers it as an ordinary GET). server.js gives Next `upgrades` (an
+ * emitter no socket reaches) as its `httpServer`, and this handler, the only 'upgrade' listener on the
+ * real server, applies the same rules as createReplicaDispatch before handing the upgrade on.
+ *
+ * `trustForwardedHeaders` — as in createReplicaDispatch: an upgrade the GATEWAY delivered keeps the
+ * X-Forwarded-* it already stated; any other upgrade has them pinned.
+ *
+ * @param {{ backendTarget: string|null, upgrades: import('events').EventEmitter, trustForwardedHeaders?: boolean|((req: any) => boolean) }} deps
+ */
+function createReplicaUpgradeHandler({ backendTarget, upgrades, trustForwardedHeaders }) {
+    return (req, socket, head) => {
+        if (backendTarget) {
+            if (hasDotSegments(String(req.url || '/').split('?')[0])) {
+                socket.end(
+                    'HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Type: application/json\r\n' +
+                        `Content-Length: ${Buffer.byteLength(BAD_PATH_BODY)}\r\n\r\n${BAD_PATH_BODY}`,
+                );
+                return;
+            }
+            if (!forwardedHeadersTrusted(trustForwardedHeaders, req)) pinForwardingHeaders(req);
+        }
+        // Next attaches its listener on its first request; before that nothing here serves an upgrade.
+        if (upgrades.listenerCount('upgrade') === 0) {
+            socket.destroy();
+            return;
+        }
+        upgrades.emit('upgrade', req, socket, head);
+    };
+}
+
 function proxyToBackend(req, res, target, options) {
     const base = new URL(target);
     const isHttps = base.protocol === 'https:';
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const transport = require(isHttps ? 'https' : 'http');
 
-    const headers = Object.assign({}, req.headers, {
-        host: base.host,
-        'x-forwarded-host': req.headers.host || '',
-        'x-forwarded-proto': req.socket && req.socket.encrypted ? 'https' : 'http',
-    });
+    const headers = Object.assign({}, req.headers);
     // Hop-by-hop headers belong to THIS connection and must not be relayed to the next one.
     delete headers.connection;
     delete headers['keep-alive'];
     delete headers['proxy-authorization'];
+    // Every forwarding header is stated by THIS hop, never relayed from the client (the gateway's
+    // pinForwardedHeaders, gateway/src/host-edge.js, does the same at its edge). See FORWARDING_HEADERS.
+    // EXCEPT when the caller trusts the inbound headers — server.js does so for a request on the mTLS
+    // listener whose client certificate is the GATEWAY's own (isGatewayPeer); that listener also admits
+    // every other cluster-CA certificate, whose headers are restated like a client's. The gateway has
+    // already stated them — its judged X-Forwarded-Host and the real client X-Forwarded-For — so restating
+    // from THIS hop would clobber them with the replica's internal Host and the gateway's own address. Pass
+    // them through untouched; only re-point Host at the backend (changeOrigin) and drop hop-by-hop.
+    if (!(options && options.trustForwarded)) restateForwardingHeaders(headers, req);
+    headers.host = base.host;
 
     const upstream = transport.request(
         {
@@ -348,4 +533,11 @@ module.exports = {
     isProxiedPath,
     rewriteSources,
     proxyToBackend,
+    FORWARDING_HEADERS,
+    pinForwardingHeaders,
+    hasDotSegments,
+    GATEWAY_CNS,
+    isGatewayPeer,
+    createReplicaDispatch,
+    createReplicaUpgradeHandler,
 };

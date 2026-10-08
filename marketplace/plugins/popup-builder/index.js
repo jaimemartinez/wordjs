@@ -10,8 +10,10 @@
  * Sandbox notes:
  *  - All data lives in the plugin's own prefixed table (db.tablePrefix, host-enforced).
  *  - Routes are namespaced under /api/v1/plugin/popup-builder/*.
- *  - The serialized request has NO req.ip, so the public event endpoint is capped with a GLOBAL
- *    in-memory rate limit (counters reset every minute) — the real defense against stat stuffing.
+ *  - The public event endpoint is capped PER CLIENT (req.clientKey, an HMAC of the caller's IP
+ *    forwarded by the host) with an in-memory window that resets every minute. It used to be one
+ *    site-wide window, so one client could fill it and keep every real view and click out of the
+ *    stats.
  *  - The frequency "re-show to everybody" mechanism is the `version` column: the public script
  *    keys its storage on id + version, so bumping the version invalidates every visitor's cap.
  */
@@ -25,7 +27,8 @@ exports.metadata = {
 
 const TRIGGER_TYPES = ['delay', 'scroll', 'exit'];
 const FREQUENCIES = ['always', 'session', 'visitor', 'daily'];
-const EVENT_RATE_LIMIT = 120;              // public events allowed per window (global)
+const EVENT_RATE_LIMIT = 30;               // public events allowed per client per window
+const EVENT_RATE_MAX_KEYS = 10000;         // bound on the in-memory limiter map
 const EVENT_RATE_WINDOW_MS = 60 * 1000;    // 1 minute window
 
 exports.init = async function (wordjs) {
@@ -74,23 +77,40 @@ exports.init = async function (wordjs) {
         return !Number.isNaN(Date.parse(s));
     };
 
-    // ---- global in-memory rate limit for the public event endpoint ---------------------------------
-    let eventWindowStart = 0;
-    let eventCount = 0;
-    const eventAllowed = () => {
+    // ---- per-client in-memory rate limit for the public event endpoint -----------------------------
+    const eventWindows = new Map(); // clientKey -> { start, count }
+    const eventAllowed = (req) => {
+        const key = String((req && req.clientKey) || 'anon').slice(0, 64);
         const now = Date.now();
-        if (now - eventWindowStart >= EVENT_RATE_WINDOW_MS) {
-            eventWindowStart = now;
-            eventCount = 0;
+        let w = eventWindows.get(key);
+        if (!w || now - w.start >= EVENT_RATE_WINDOW_MS) {
+            if (eventWindows.size >= EVENT_RATE_MAX_KEYS) {
+                for (const [k, v] of eventWindows) if (now - v.start >= EVENT_RATE_WINDOW_MS) eventWindows.delete(k);
+                while (eventWindows.size >= EVENT_RATE_MAX_KEYS) eventWindows.delete(eventWindows.keys().next().value);
+            }
+            w = { start: now, count: 0 };
+            eventWindows.set(key, w);
         }
-        eventCount += 1;
-        return eventCount <= EVENT_RATE_LIMIT;
+        w.count += 1;
+        return w.count <= EVENT_RATE_LIMIT;
     };
 
     // ---- PUBLIC routes (registered first so they never collide with /:id patterns) ------------------
 
+    // Public callers never see an error's text: a driver's message names tables, columns and
+    // constraints. The details go to the server log.
+    const failQuietly = (res, e, what) => {
+        console.error(`[popup-builder] ${what} failed:`, e && e.message ? e.message : e);
+        res.status(500).json({ error: 'No se pudo completar la operación. Inténtalo de nuevo.' });
+    };
+    // Public routes answer every failure themselves, through failQuietly: a public caller only ever
+    // gets a reply this plugin wrote.
+    const quietly = (what, handler) => async (req, res) => {
+        try { await handler(req, res); } catch (e) { failQuietly(res, e, what); }
+    };
+
     // The active popup within its date window, or {} when there is nothing to show.
-    http.route('get', '/public/active', async (req, res) => {
+    http.route('get', '/public/active', quietly('active popup', async (req, res) => {
         const row = await db.get(`SELECT * FROM ${T.popups} WHERE enabled = 1 ORDER BY id DESC LIMIT 1`);
         if (!row) return res.json({});
         const now = Date.now();
@@ -114,11 +134,11 @@ exports.init = async function (wordjs) {
             frequency: row.frequency || 'session',
             version: row.version || 1,
         });
-    });
+    }));
 
     // View/click counter. Single-statement UPDATE (no transactions in the sandbox bridge).
-    http.route('post', '/public/event', async (req, res) => {
-        if (!eventAllowed()) {
+    http.route('post', '/public/event', quietly('popup event', async (req, res) => {
+        if (!eventAllowed(req)) {
             return res.status(429).json({ error: 'Demasiadas peticiones. Inténtalo de nuevo más tarde.' });
         }
         const body = req.body || {};
@@ -131,7 +151,7 @@ exports.init = async function (wordjs) {
         const col = event === 'view' ? 'views' : 'clicks';
         await db.run(`UPDATE ${T.popups} SET ${col} = ${col} + 1 WHERE id = ?`, [id]);
         res.json({ ok: true });
-    });
+    }));
 
     // ---- ADMIN routes -------------------------------------------------------------------------------
 

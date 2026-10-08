@@ -21,6 +21,9 @@ const { asyncHandler } = require('../middleware/errorHandler');
 const {
     capsFor, capsForType, canEditPostRecord, canDeletePostRecord, isRestExposedPostType,
 } = require('../core/post-capabilities');
+// The history of an ATTACHMENT follows the attachment rule (core/attachment-visibility): hidden from who may
+// not read the entry it hangs off, and restored or purged only by who may edit that entry.
+const { attachmentReadable, attachmentWriteRefusal } = require('../core/attachment-visibility');
 const { requireRouteId, routeIdOrNull } = require('../core/query-params');
 
 // THE ROUTE-ID CONTRACT — see core/query-params.
@@ -89,6 +92,15 @@ async function authorizeForPost(req: Request, postId: number | null | undefined,
     // history belongs to a REST-exposed post; nobody restores a menu item's history through here.
     if (!isRestExposedPostType(post.type || post.postType || 'post')) {
         return { error: { code: 'rest_forbidden', status: 403 } };
+    }
+    // An attachment of an entry this caller may not read is "no such post" here too; one whose entry they
+    // may not edit cannot have its history restored or deleted.
+    if (action === 'edit' || action === 'delete') {
+        const refusal = await attachmentWriteRefusal(req.user, post);
+        if (refusal === 404) return { error: { code: 'rest_post_invalid_id', status: 404 } };
+        if (refusal === 403) return { error: { code: 'rest_forbidden', status: 403 } };
+    } else if (!(await attachmentReadable(req.user, post))) {
+        return { error: { code: 'rest_post_invalid_id', status: 404 } };
     }
     // Fall back to capsFor('post') for a post whose registered type was since removed (capsForType null).
     const caps = capsForType(post.type || post.postType || 'post') || capsFor('post');

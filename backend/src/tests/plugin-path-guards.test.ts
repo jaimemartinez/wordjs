@@ -67,9 +67,18 @@ require.cache[OPTIONS_PATH] = {
     loaded: true,
     exports: {
         getOption: async (k: string, d: any) => (optionStore.has(k) ? optionStore.get(k) : d),
+        // The policy loaders/writers read their blob uncached (readStoredOption: the value and the exact
+        // stored text a guarded write compares against); this store has no cache.
+        getOptionFresh: async (k: string, d: any) => (optionStore.has(k) ? optionStore.get(k) : d),
+        readStoredOption: async (k: string) => (optionStore.has(k)
+            ? { raw: JSON.stringify(optionStore.get(k)), value: optionStore.get(k) }
+            : { raw: null, value: null }),
         // Round-trips through JSON exactly like the real option store, which is what made the
         // __proto__ write disappear without a trace in the first place.
         updateOption: async (k: string, v: any) => { optionStore.set(k, JSON.parse(JSON.stringify(v))); },
+        // The policy writers persist through this half of updateOption (the hook fan-out is theirs to run).
+        // Nothing else writes this store, so the guard (`expectedRaw`) always holds.
+        persistOption: async (k: string, v: any) => { optionStore.set(k, JSON.parse(JSON.stringify(v))); return { written: true, announce: async () => { } }; },
         deleteOption: async (k: string) => { optionStore.delete(k); },
     },
 } as any;

@@ -56,6 +56,8 @@ const {
     createMediaImporter,
 } = require('./wxr-media');
 const { importMenus } = require('./wxr-menus');
+// The one spelling of a post-type name every engine compares identically (see the main loop below).
+const { isCanonicalPostTypeName, canonicalImportedPostStatus } = require('./post-capabilities');
 
 /**
  * Is this post type INTERNAL — registered, but marked `showInRest: false` (nav_menu_item, revision)?
@@ -685,8 +687,21 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
 
     for (const item of parsed.items) {
         const type = text(item['wp:post_type']) || 'post';
-        const status = text(item['wp:status']) || 'draft';
+        // FOLDED ONTO THE WRITABLE SET before anything reads it — the trash skips below included, so
+        // `Trash` is skipped like `trash` — because the row is later compared by the database under the
+        // column's collation and by the read checks exactly (post-capabilities canonicalImportedPostStatus).
+        const status = canonicalImportedPostStatus(text(item['wp:status']));
         const oldId = text(item['wp:post_id']);
+
+        // A TYPE THE DATABASE WOULD READ AS ANOTHER TYPE IS NOT IMPORTABLE. The two refusals below compare
+        // `type` in JavaScript, exactly; the rows are then read back by `post_type = ?` under the column's
+        // collation, which on MySQL/MariaDB ignores case, accents, zero-weight characters and trailing
+        // spaces. So `<wp:post_type>Revision</wp:post_type>` (or `NAV_MENU_ITEM`, `revisio`+U+0301`n`)
+        // passed both as "an unregistered type" and became, to every later query on MySQL, a revision
+        // hung off a real page or a menu item in the site's navigation — the two things this loop exists
+        // to refuse. WordPress itself only ever writes lowercase slug type names (sanitize_key), so a
+        // genuine export loses nothing; anything else is skipped like an internal type.
+        if (!isCanonicalPostTypeName(type)) { bumpSkip(summary, type); continue; }
 
         // A MENU ITEM IS NOT AN ITEM THIS LOOP CREATES. It is collected for the menu pass, which writes
         // it through models/Menu's own MenuItem.create() — the internal-type refusal below is untouched.
@@ -781,6 +796,10 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
                     status,
                     type,
                     slug,
+                    // The source site's permalinks are kept unique PER TYPE (Post.generateUniqueSlug): a
+                    // WordPress post and page may share a slug, and the idempotency lookup above is by
+                    // (slug, type). GET /posts/slug/:slug serves such a pair's bare URL to the page.
+                    slugScope: 'type',
                     parent: 0, // resolved in pass D
                     menuOrder: parseInt(text(item['wp:menu_order']) || '0', 10) || 0,
                     commentStatus: text(item['wp:comment_status']) || 'open',

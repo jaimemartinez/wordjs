@@ -462,7 +462,7 @@ function PortalPanel({ symbol, onBack }) {
                                 <td style={{ fontWeight: 700 }}>{p.name}</td>
                                 <td>{fmtMoney(p.price_cents, symbol)}</td>
                                 <td>{p.category || "—"}</td>
-                                <td><span className={`wjmk-badge ${p.is_published ? "wjmk-badge-on" : "wjmk-badge-off"}`}>{p.is_published ? "Publicado" : "Oculto"}</span></td>
+                                <td><span className={`wjmk-badge ${p.is_published ? "wjmk-badge-on" : "wjmk-badge-off"}`}>{p.is_published ? "Publicado" : p.admin_hidden ? "Oculto por el administrador" : "Oculto"}</span></td>
                                 <td>
                                     <div className="wjmk-actions">
                                         <button

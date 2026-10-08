@@ -26,8 +26,20 @@ exports.init = function (wordjs) {
 
     // === API ROUTES (host namespaces them under /api/v1/plugin/photo-carousel) ===
 
+    // Public callers never see an error's text: a driver's message names tables, columns and
+    // constraints. The details go to the server log.
+    const failQuietly = (res, e, what) => {
+        console.error(`[photo-carousel] ${what} failed:`, e && e.message ? e.message : e);
+        res.status(500).json({ error: 'No se pudo completar la operación. Inténtalo de nuevo.' });
+    };
+    // Public routes answer every failure themselves, through failQuietly: a public caller only ever
+    // gets a reply this plugin wrote.
+    const quietly = (what, handler) => async (req, res) => {
+        try { await handler(req, res); } catch (e) { failQuietly(res, e, what); }
+    };
+
     // GET / — list all carousels (public)
-    http.route('get', '/', async (req, res) => {
+    http.route('get', '/', quietly('carousel list', async (req, res) => {
         const list = await options.get('carousels_list', []);
 
         // Parallel fetch of all items
@@ -37,11 +49,11 @@ exports.init = function (wordjs) {
         }));
 
         res.json(carousels.filter(Boolean));
-    });
+    }));
 
     // GET /location/:location — get carousel by location (e.g. 'hero') (public)
     // NOTE: registered before /:id so it is not shadowed by the param route.
-    http.route('get', '/location/:location', async (req, res) => {
+    http.route('get', '/location/:location', quietly('carousels by location', async (req, res) => {
         const list = await options.get('carousels_list', []);
 
         // Find carousel with matching location
@@ -61,16 +73,16 @@ exports.init = function (wordjs) {
             return res.status(404).json({ error: 'No carousel found for this location' });
         }
         res.json({ id: foundId, ...found });
-    });
+    }));
 
     // GET /:id — get single carousel (public)
-    http.route('get', '/:id', async (req, res) => {
+    http.route('get', '/:id', quietly('carousel', async (req, res) => {
         const data = await options.get(`carousel_${req.params.id}`, null);
         if (!data) {
             return res.status(404).json({ error: 'Carousel not found' });
         }
         res.json({ id: req.params.id, ...data });
-    });
+    }));
 
     // POST / — create carousel (admin)
     http.route('post', '/', { auth: true, admin: true }, async (req, res) => {
