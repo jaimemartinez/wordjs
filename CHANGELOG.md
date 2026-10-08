@@ -42,6 +42,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   writing into it, and it refuses to write through a symbolic link planted in the existing install.
   Installs made by earlier versions keep their `0666` files until the next `create-wordjs upgrade`, or
   `find <site> -type f -perm -o+w -exec chmod go-w {} +`.
+- **Next.js 16.3.8 for the advisories published against 16.0.0–16.3.7.** The CI audit gate blocked every
+  pull request on GHSA-cjq9-62q9-8jv4 (high: server-side request forgery in Image Optimization). The same
+  release fixes cache poisoning of SSG/ISR pages in self-hosted applications (GHSA-4jqv-mc3x-m676,
+  GHSA-mcj8-r9mp-w47p), Draft Mode content leaking through a pending `use cache` fill (GHSA-3w37-wq28-93x7),
+  metadata image routes bypassing `dynamicParams` (GHSA-f87g-xv8r-7p7x) and the development server's MCP
+  endpoint disclosing information (GHSA-39w2-rjm5-chcv). `next` and `eslint-config-next` are pinned to the
+  16.3.8 patch in the lockfile, not the 16.4 minor that the range would also allow.
 - **`create-wordjs` verifies the release ZIP before extracting it.** The release workflow now publishes
   `wordjs-<tag>.zip.sha256` (`sha256sum` format) next to every tag-named bundle, and `create-wordjs` —
   create, `upgrade`, `gateway` and `join` — downloads it and refuses a ZIP whose SHA-256 differs.
