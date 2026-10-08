@@ -442,18 +442,30 @@ exports.init = async function (wordjs) {
         return isNaN(d.getTime()) ? new Date() : d;
     }
 
-    // Named rolling-window rate limits (no req.ip in the isolate — global caps per endpoint).
-    const rlBuckets = new Map();
-    function rateLimited(name, max, windowMs) {
+    // Rolling-window rate limits PER CLIENT and endpoint: the host forwards req.clientKey, an HMAC of
+    // the caller's IP. These used to be named site-wide buckets, so one client could exhaust
+    // 'reservation' or 'order' and every other guest got 429. Each call checks AND counts in one
+    // synchronous step. Guests ordering from tables on the restaurant's own Wi-Fi share one key, so
+    // the per-client order budget keeps the old site-wide size. The map is bounded so key churn cannot
+    // grow it without limit.
+    const RL_MAX_KEYS = 10000;
+    const rlBuckets = new Map(); // '<name>:<clientKey>' -> number[] timestamps
+    function rateLimited(req, name, max, windowMs) {
+        const key = `${name}:${String((req && req.clientKey) || 'anon').slice(0, 64)}`;
         const now = Date.now();
-        let arr = rlBuckets.get(name) || [];
+        if (!rlBuckets.has(key) && rlBuckets.size >= RL_MAX_KEYS) {
+            // Drop buckets with nothing recent (every window here is <= 1 h), then the oldest.
+            for (const [k, ts] of rlBuckets) if (!ts.length || now - ts[ts.length - 1] >= 60 * 60 * 1000) rlBuckets.delete(k);
+            while (rlBuckets.size >= RL_MAX_KEYS) rlBuckets.delete(rlBuckets.keys().next().value);
+        }
+        let arr = rlBuckets.get(key) || [];
         arr = arr.filter((t) => now - t < windowMs);
         if (arr.length >= max) {
-            rlBuckets.set(name, arr);
+            rlBuckets.set(key, arr);
             return true;
         }
         arr.push(now);
-        rlBuckets.set(name, arr);
+        rlBuckets.set(key, arr);
         return false;
     }
 
@@ -643,7 +655,7 @@ exports.init = async function (wordjs) {
     // Table lookup for QR mode — label only, valid active tokens only.
     http.route('get', '/public/table', async (req, res) => {
         try {
-            if (rateLimited('table-lookup', 60, 60 * 1000)) {
+            if (rateLimited(req, 'table-lookup', 60, 60 * 1000)) {
                 return res.status(429).json({ error: 'Demasiadas consultas.' });
             }
             const cfg = await getConfig();
@@ -832,9 +844,9 @@ exports.init = async function (wordjs) {
 
             const deliveryCents = deliveryType === 'delivery' ? (toCents(cfg.deliveryCents) || 0) : 0;
             const totalCents = subtotalCents + deliveryCents;
-            // Consume the (global — no req.ip in the isolate) rate budget only for orders that passed
-            // validation, so garbage POSTs can't starve real customers; sized for a busy lunch rush.
-            if (rateLimited('order', 30, 60 * 1000)) {
+            // Consume the client's rate budget only for orders that passed validation; sized like the
+            // old site-wide budget because table guests on the restaurant's Wi-Fi share one client key.
+            if (rateLimited(req, 'order', 30, 60 * 1000)) {
                 return res.status(429).json({ error: 'Demasiados pedidos en este momento. Intenta de nuevo en un minuto.' });
             }
 
@@ -947,7 +959,10 @@ exports.init = async function (wordjs) {
                     checkoutUrl = String(session.url);
                 } catch (e) {
                     method = defaultMethod;
-                    warning = `No se pudo iniciar el pago con tarjeta (${e.message || e}). Tu pedido quedó registrado para pagar ${tableRow ? 'en la mesa' : 'al recibir'}.`;
+                    // The reason stays in the log: Stripe's message can name the account's key
+                    // ("Invalid API Key provided: sk_live_****1234") and this reply goes to a guest.
+                    console.warn('[restaurant-menu] Stripe checkout session failed:', e && e.message ? e.message : e);
+                    warning = `No se pudo iniciar el pago con tarjeta. Tu pedido quedó registrado para pagar ${tableRow ? 'en la mesa' : 'al recibir'}.`;
                     try {
                         await db.run(
                             `UPDATE ${T.orderMeta} SET payment_method = ?, payment_status = 'none' WHERE order_id = ?`,
@@ -998,7 +1013,7 @@ exports.init = async function (wordjs) {
     // signatures can't be verified in the sandbox). Idempotent.
     http.route('get', '/public/confirm-stripe', async (req, res) => {
         try {
-            if (rateLimited('confirm-stripe', 30, 60 * 1000)) {
+            if (rateLimited(req, 'confirm-stripe', 30, 60 * 1000)) {
                 return res.status(429).json({ paid: false, error: 'Demasiadas solicitudes, intenta en un minuto.' });
             }
             const q = req.query || {};
@@ -1020,8 +1035,10 @@ exports.init = async function (wordjs) {
             });
             const session = await resp.json().catch(() => ({}));
             if (!resp.ok) {
+                // Stripe's message stays in the log: it can name the account's key, and this reply is public.
                 const msg = (session && session.error && session.error.message) ? session.error.message : `HTTP ${resp.status}`;
-                return res.status(502).json({ paid: false, error: `No se pudo verificar el pago: ${msg}` });
+                console.warn('[restaurant-menu] Stripe payment verification failed:', msg);
+                return res.status(502).json({ paid: false, error: 'No se pudo verificar el pago con Stripe. Inténtalo de nuevo en unos minutos.' });
             }
             const metaToken = session && session.metadata && session.metadata.rm_token;
             if (metaToken === token && session.payment_status === 'paid' && o.status !== 'cancelled') {
@@ -1034,14 +1051,15 @@ exports.init = async function (wordjs) {
             }
             return res.json({ paid: false });
         } catch (e) {
-            return res.status(502).json({ paid: false, error: `No se pudo verificar el pago con Stripe: ${e.message || e}` });
+            console.warn('[restaurant-menu] Stripe payment verification failed:', e && e.message ? e.message : e);
+            return res.status(502).json({ paid: false, error: 'No se pudo verificar el pago con Stripe. Inténtalo de nuevo en unos minutos.' });
         }
     });
 
     // Customer-facing order progress by random token (table mode shows live status).
     http.route('get', '/public/order-status', async (req, res) => {
         try {
-            if (rateLimited('order-status', 60, 60 * 1000)) {
+            if (rateLimited(req, 'order-status', 60, 60 * 1000)) {
                 return res.status(429).json({ error: 'Demasiadas consultas, intenta en un minuto.' });
             }
             const token = String((req.query && req.query.token) || '').trim();
@@ -1118,8 +1136,8 @@ exports.init = async function (wordjs) {
             if (!timeInsideHours(cfg, dateStr, timeStr)) {
                 return res.status(400).json({ error: 'Esa hora está fuera de nuestro horario de atención.' });
             }
-            // Consumed post-validation so invalid spam can't starve real bookings (global bucket).
-            if (rateLimited('reservation', 15, 60 * 1000)) {
+            // Consumed post-validation, per client (5/min, 20/h): one client cannot close reservations for others.
+            if (rateLimited(req, 'reservation', 5, 60 * 1000) || rateLimited(req, 'reservation-h', 20, 60 * 60 * 1000)) {
                 return res.status(429).json({ error: 'Demasiadas reservas en este momento. Intenta en un minuto.' });
             }
 
@@ -1161,7 +1179,7 @@ exports.init = async function (wordjs) {
     // Reservation status lookup by token.
     http.route('get', '/public/reservation', async (req, res) => {
         try {
-            if (rateLimited('reservation-lookup', 60, 60 * 1000)) {
+            if (rateLimited(req, 'reservation-lookup', 60, 60 * 1000)) {
                 return res.status(429).json({ error: 'Demasiadas consultas.' });
             }
             const token = String((req.query && req.query.token) || '').trim();

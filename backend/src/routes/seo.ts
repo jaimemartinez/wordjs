@@ -34,6 +34,9 @@ const { toLanguageTag } = require('../core/language-tag');
 const { authenticate } = require('../middleware/auth');
 const { can } = require('../middleware/permissions');
 const { requireRouteId, routeIdOrNull } = require('../core/query-params');
+// GET /seo/meta/:postId reads an entry by id: it takes the content API's read rule, not a copy of it.
+const { canReadRecordThroughRest } = require('../core/attachment-visibility');
+const { canReadPostContent } = require('../core/post-capabilities');
 
 // THE ROUTE-ID CONTRACT — see core/query-params. `GET /seo/meta/:postId` guarded its id with
 // `if (!postId)`, which catches NaN and 0 and nothing else: `/seo/meta/9999999999` sailed past it into
@@ -721,6 +724,7 @@ router.get('/comments/feed.xml', async (req: Request, res: Response) => {
  * /seo/meta/{postId}:
  *   get:
  *     summary: Get SEO metadata for a post (Admin Preview)
+ *     description: Requires edit_posts and the right to READ the entry exactly as GET /posts/{id} decides it - its type's read policy, and for an attachment the entry it is attached to. The description falls back to the excerpt only for a caller who may read a password-protected entry's content.
  *     tags: [SEO]
  *     security:
  *       - bearerAuth: []
@@ -733,6 +737,8 @@ router.get('/comments/feed.xml', async (req: Request, res: Response) => {
  *     responses:
  *       200:
  *         description: SEO metadata
+ *       404:
+ *         description: No such post, an internal post type, or one this caller may not read - the same body for every case
  */
 router.get('/meta/:postId', authenticate, can('edit_posts'), async (req: Request, res: Response) => {
     try {
@@ -744,24 +750,27 @@ router.get('/meta/:postId', authenticate, can('edit_posts'), async (req: Request
 
         const post = await Post.findById(postId);
 
-        if (!post) {
+        // SECURITY: this is an admin-preview contract (security: bearerAuth in the swagger). It was
+        // registered with NO middleware, leaking unpublished title/excerpt/keywords to anyone; auth +
+        // edit_posts above fixed that, and the rest of the gate is THE READ RULE GET /posts/:id applies
+        // (core/attachment-visibility canReadRecordThroughRest), so this route cannot hand back a field
+        // the content API withholds. It used to keep its own copy — "unpublished needs the author or
+        // edit_others_posts" — which knew nothing of the TYPE or of the entry an attachment hangs off:
+        // an editor read the title and slug of a hidden attachment (GET /media/:id → 404) and the
+        // unpublished entries of a type with its own capability family, and a contributor the title and
+        // excerpt of every PUBLISHED entry of a `public: false` type — or of a type the registry does not
+        // know, which the read rule treats as not public (core/post-capabilities readPolicyForType).
+        // Every refusal is the 404 of a missing post, so walking ids confirms nothing.
+        if (!post || !(await canReadRecordThroughRest(req.user, post))) {
             return res.status(404).json({ error: 'Post not found' });
         }
 
-        // SECURITY: this is an admin-preview contract (security: bearerAuth in the swagger). It was
-        // registered with NO middleware, leaking unpublished title/excerpt/keywords to anyone. Require
-        // auth + edit_posts above; additionally hide non-published posts authored by others from a
-        // non-privileged editor.
-        if (post.postStatus !== 'publish') {
-            const isOwner = post.authorId === req.user.id;
-            if (!isOwner && !req.user.can('edit_others_posts')) {
-                return res.status(404).json({ error: 'Post not found' });
-            }
-        }
-
+        // The excerpt is part of what a post password protects: a caller who may read the entry but does
+        // not manage it gets no excerpt-derived description (canReadPostContent), as on the content API.
+        const excerptReadable = canReadPostContent(req.user, post);
         res.json({
             title: post.seo_title || post.postTitle || post.title,
-            description: post.seo_description || post.postExcerpt || post.excerpt || '',
+            description: post.seo_description || (excerptReadable ? (post.postExcerpt || post.excerpt) : '') || '',
             keywords: post.seo_keywords || '',
             og_image: post.og_image || post.featured_image || '',
             noindex: post.noindex || false,

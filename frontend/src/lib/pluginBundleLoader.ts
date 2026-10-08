@@ -14,6 +14,7 @@ import * as ReactDOMClient from 'react-dom/client';
 import * as JSXRuntime from 'react/jsx-runtime';
 import dynamic from 'next/dynamic';
 import { ComponentType } from 'react';
+import PluginScriptNotGranted from '@/components/PluginScriptNotGranted';
 // Host modules exposed to plugin bundles. Plugins import these (as `@/…` or via a relative path into
 // frontend/src); build-plugin.js rewrites those specifiers to `window.WordJS.host['<key>']` so the
 // plugin uses the host's OWN module instance — shared session for api(), the host's providers for
@@ -88,9 +89,51 @@ const loadingPromises: Map<string, Promise<React.ComponentType<any>>> = new Map(
 // ============================================
 
 /**
+ * Why loadPluginBundle could not hand back a plugin's UI.
+ *  - 'not-granted' → the plugin is ACTIVE but the administrator has not granted it browser:script, so the
+ *                    host deliberately does not serve its browser code (routes/plugin-bundles.ts). Not an
+ *                    error: the gate working. The page says so and links to the switch.
+ *  - 'not-found'   → a 404 that is not that: no active plugin answers to the slug, or it was never built.
+ *  - 'failed'      → anything else: a non-404 status (a restarting gateway), a network failure, or bytes
+ *                    that would not evaluate as a module.
+ */
+export type PluginBundleFailure = 'not-granted' | 'not-found' | 'failed';
+
+export class PluginBundleError extends Error {
+    readonly slug: string;
+    readonly bundleType: string;
+    readonly reason: PluginBundleFailure;
+    /** The HTTP status of the bundle request, or null when no response arrived. */
+    readonly status: number | null;
+    /**
+     * The plugin's FOLDER id when the refusal could be tied to an active plugin — the slug in the URL may
+     * be its admin-page slug ("emails" for mail-server), and the permissions screen lists folders.
+     */
+    readonly pluginId: string | null;
+
+    constructor(init: { slug: string; bundleType: string; reason: PluginBundleFailure; status: number | null; pluginId?: string | null; message: string; cause?: unknown }) {
+        super(init.message);
+        this.name = 'PluginBundleError';
+        this.slug = init.slug;
+        this.bundleType = init.bundleType;
+        this.reason = init.reason;
+        this.status = init.status;
+        this.pluginId = init.pluginId ?? null;
+        if (init.cause !== undefined) (this as { cause?: unknown }).cause = init.cause;
+    }
+}
+
+/**
  * Load a pre-compiled plugin bundle from the API
- * 
- * @param slug - Plugin slug
+ *
+ * Resolves to the bundle's React component. REJECTS with a PluginBundleError when there is no component
+ * to render — it used to resolve an empty `() => null` component instead, so every consumer's fallback
+ * (createRemotePluginComponent's, and through it the generated /admin/plugin/<slug> page's
+ * "Plugin Not Found") was dead code: an active plugin whose browser:script grant is off rendered a
+ * completely blank admin page, with nothing to say why. A failure is not cached, so the next mount asks
+ * again (a grant given meanwhile takes effect without a reload).
+ *
+ * @param slug - Plugin slug (its folder, or the admin-page slug an active plugin declares)
  * @param bundleType - Type of bundle (admin, component, hooks)
  * @returns Promise resolving to a React component
  */
@@ -113,12 +156,30 @@ export async function loadPluginBundle(
     // Start loading
     const loadPromise = (async () => {
         try {
-            // Fetch the bundle
-            const response = await fetch(`/api/v1/plugins/${slug}/bundle?type=${bundleType}`);
+            const fail = (reason: PluginBundleFailure, status: number | null, message: string, extra: { pluginId?: string | null; cause?: unknown } = {}) =>
+                new PluginBundleError({ slug, bundleType, reason, status, message, ...extra });
+
+            let response: Response;
+            try {
+                response = await fetch(`/api/v1/plugins/${slug}/bundle?type=${bundleType}`);
+            } catch (fetchError) {
+                console.error(`[PluginLoader] Failed to fetch bundle for ${slug}:`, fetchError);
+                throw fail('failed', null, `bundle fetch for '${slug}' failed`, { cause: fetchError });
+            }
 
             if (!response.ok) {
-                console.warn(`[PluginLoader] Bundle not found for ${slug}/${bundleType}`);
-                return () => null; // Return empty component
+                // A 404 is every refusal the bundle route makes (not installed, inactive, not granted — one
+                // answer to every caller, deliberately). What an admin-panel user's browser can tell apart is
+                // whether it is the browser:script gate: GET /plugins/registry, asked with that user's
+                // session, says so per active plugin (it says it to no one else).
+                const refusal = response.status === 404 ? await classifyRefusedBundle(slug) : null;
+                const reason: PluginBundleFailure = refusal ? refusal.reason : 'failed';
+                if (reason === 'not-granted') {
+                    console.info(`[PluginLoader] '${slug}' is active, but its browser code is not served: browser:script is not granted.`);
+                } else {
+                    console.warn(`[PluginLoader] Bundle not available for ${slug}/${bundleType} (HTTP ${response.status})`);
+                }
+                throw fail(reason, response.status, `bundle for '${slug}' not served (HTTP ${response.status}, ${reason})`, { pluginId: refusal?.pluginId ?? null });
             }
 
             const bundleCode = await response.text();
@@ -131,9 +192,6 @@ export async function loadPluginBundle(
                 // Dynamic import the blob URL
                 const module = await import(/* webpackIgnore: true */ blobUrl);
 
-                // Clean up blob URL
-                URL.revokeObjectURL(blobUrl);
-
                 // Get the default export (the React component)
                 const Component = module.default || module;
 
@@ -143,13 +201,11 @@ export async function loadPluginBundle(
 
             } catch (evalError) {
                 console.error(`[PluginLoader] Failed to evaluate bundle for ${slug}:`, evalError);
+                throw fail('failed', response.status, `bundle for '${slug}' could not be evaluated`, { cause: evalError });
+            } finally {
+                // Clean up blob URL
                 URL.revokeObjectURL(blobUrl);
-                return () => null;
             }
-
-        } catch (fetchError) {
-            console.error(`[PluginLoader] Failed to fetch bundle for ${slug}:`, fetchError);
-            return () => null;
         } finally {
             // Clean up loading promise
             loadingPromises.delete(cacheKey);
@@ -158,6 +214,39 @@ export async function loadPluginBundle(
 
     loadingPromises.set(cacheKey, loadPromise);
     return loadPromise;
+}
+
+/**
+ * What a remote plugin component renders in place of a UI that could not be loaded: the browser:script
+ * notice when that grant is what withholds it, the caller's fallback for anything else. Exported so the
+ * choice is testable without next/dynamic (which renders nothing outside a browser).
+ */
+export function remotePluginFailureComponent(err: unknown, fallback: ComponentType<any>): ComponentType<any> {
+    if (err instanceof PluginBundleError && err.reason === 'not-granted') {
+        const pluginId = err.pluginId || err.slug;
+        const NotGranted = () => React.createElement(PluginScriptNotGranted, { pluginId });
+        NotGranted.displayName = 'PluginScriptNotGranted';
+        return NotGranted;
+    }
+    return fallback;
+}
+
+/**
+ * The module createRemotePluginComponent hands to next/dynamic: the bundle's component, or — when it
+ * could not be loaded — remotePluginFailureComponent's. Never rejects.
+ */
+export function loadRemotePluginModule(
+    slug: string,
+    bundleType: 'admin' | 'component' | 'hooks',
+    fallback: ComponentType<any>,
+): Promise<{ default: ComponentType<any> }> {
+    return loadPluginBundle(slug, bundleType).then(
+        (Component) => ({ default: Component }),
+        (err) => {
+            console.warn(`[PluginLoader] Error loading ${slug}:`, err);
+            return { default: remotePluginFailureComponent(err, fallback) };
+        },
+    );
 }
 
 /**
@@ -170,10 +259,7 @@ export function createRemotePluginComponent(
     fallback: ComponentType<any> = () => null
 ): ComponentType<any> {
     return dynamic(
-        () => loadPluginBundle(slug, bundleType).catch((err) => {
-            console.warn(`[PluginLoader] Error loading ${slug}:`, err);
-            return { default: fallback };
-        }),
+        () => loadRemotePluginModule(slug, bundleType, fallback),
         {
             loading: () => null,
             ssr: false, // Bundles are client-only
@@ -214,9 +300,15 @@ let activePromise: Promise<string[]> | null = null;
  * What it deliberately does NOT do: un-register anything. pluginHooks has no removal API, so a
  * DEACTIVATED plugin's already-registered UI extensions survive until the page is reloaded; invalidating
  * here is what stops the stale list from ALSO hiding the next activation.
+ *
+ * The plugin registry memo goes with it: GET /plugins/registry is one entry per ACTIVE plugin, i.e. a
+ * projection of the same list, and loadRuntimePluginHooks reads it to decide which plugins have a hooks
+ * bundle to ask for. Kept past an activation (or an update that adds hooks) it would describe the
+ * previous set of plugins.
  */
 export function invalidateActivePluginIds(): void {
     activePromise = null;
+    registryPromise = null;
 }
 
 /**
@@ -321,8 +413,10 @@ export function injectBlockCssInto(doc: Document, pluginId: string): void {
     doc.head.appendChild(link);
 }
 
-// Load the CSS esbuild extracted next to a plugin's block bundle (dist/component.bundle.css). Served via
-// the /plugins static route (which maps slug→folder), so the block's styles apply in editor + canvas.
+// Load the CSS esbuild extracted next to a plugin's block bundle (dist/component.bundle.css). Served by
+// the /plugins static route under the plugin's FOLDER id (the id every caller here passes — the active
+// list's ids) and behind the same gate as the bundle itself (active + browser:script), so the block's
+// styles apply in editor + canvas exactly when its code does.
 function injectBlockCss(pluginId: string): void {
     if (typeof document === 'undefined' || blockCssInjected.has(pluginId)) return;
     blockCssInjected.add(pluginId);
@@ -443,18 +537,22 @@ const hooksRegistration = new Map<string, Promise<boolean>>();
 // One warning per BROKEN plugin per session. loadRuntimePluginHooks() is retried on later mounts
 // (whenever ANY plugin failed), and a 404 is deliberately evicted from hooksRegistration rather than
 // memoized, so without this every retry would re-log the same line. It also has to survive CONCURRENT
-// 404s, hence the re-check after the await in warnIfHooksBundleShouldExist. Plugins that simply declare
-// no hooks never land here — they are not warned about at all.
+// 404s (see warnIfHooksBundleShouldExist). Plugins that simply declare no hooks never land here — they
+// are not warned about at all.
 const hooksAbsentWarned = new Set<string>();
 
 // The public plugin registry (GET /plugins/registry → one MINIMAL entry per ACTIVE plugin: id, path,
-// whether it declares `frontend.hooks`, and whether its browser:script capability is granted — never the
-// manifest, which an anonymous caller has no business reading). Fetched
-// LAZILY — only to classify a hooks-bundle 404 — so a healthy install pays nothing on the happy path.
-// Same discipline as activePromise: only a SUCCESSFUL fetch is memoized, so a session makes at most ONE
-// SUCCESSFUL registry request no matter how many 404s need classifying; a FAILED one — including one that
-// never ANSWERS, see REGISTRY_CLASSIFY_TIMEOUT_MS — is deliberately not cached, so a later mount retries
-// it (that retry is the only way a request count can exceed one).
+// whether it declares `frontend.hooks` and, for a signed-in caller with admin-panel access only, whether
+// its browser:script capability is granted — never the manifest, which an anonymous caller has no
+// business reading). Asked with the session (fetchPluginRegistry), so the admin shell gets the grant;
+// anywhere it is absent, a refusal is classified as "not found", never "not granted". Fetched ONCE per hook pass, next to the
+// active list: it is what tells loadRuntimePluginHooks which active plugins have a hooks bundle to ask
+// for at all (one request for the registry instead of one 404 per hook-less plugin on every admin
+// screen), and what classifies the 404s that remain.
+// Same discipline as activePromise: only a SUCCESSFUL fetch is memoized, so a session makes ONE
+// successful registry request until invalidateActivePluginIds() drops it with the active list; a FAILED
+// one — including one that never ANSWERS, see REGISTRY_CLASSIFY_TIMEOUT_MS — is deliberately not cached,
+// so a later mount retries it. classifyRefusedBundle (a refused admin page) asks for a FRESH copy.
 let registryPromise: Promise<PluginRegistryEntry[]> | null = null;
 
 // `frontend: null` is not "no frontend": routes/plugins.ts emits exactly that when it cannot READ the
@@ -462,6 +560,8 @@ let registryPromise: Promise<PluginRegistryEntry[]> | null = null;
 // the property absent instead — which is how the two 404 causes are told apart below.
 // `browser: false` means the administrator has not granted the plugin browser:script, so the host
 // deliberately does not serve its bundles (routes/plugin-bundles.ts) — a 404 that is the gate working.
+// `browser` ABSENT means the registry did not say (the caller is not signed in, or has no admin-panel
+// access): only an explicit `false` is ever read as "not granted".
 // `hooks` is `true` from the current backend; an older one sent the manifest's entry path (a string).
 type PluginRegistryEntry = { id?: string; path?: string; browser?: boolean; frontend?: { hooks?: string | boolean } | null };
 
@@ -511,53 +611,145 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
  * until the socket finally errored. Racing INSIDE the memo turns "never answered" into a real rejection,
  * which is the only thing that can evict it.
  */
-function fetchPluginRegistry(): Promise<PluginRegistryEntry[]> {
-    if (registryPromise) return registryPromise;
+function fetchPluginRegistry(opts: { fresh?: boolean } = {}): Promise<PluginRegistryEntry[]> {
+    if (registryPromise && !opts.fresh) return registryPromise;
     const attempt: Promise<PluginRegistryEntry[]> = withTimeout((async () => {
-        const res = await fetch('/api/v1/plugins/registry');
+        // WITH the session: the browser:script grant is in the answer only for a signed-in caller with
+        // admin-panel access, and the not-granted notice and warning are built from it.
+        const res = await fetch('/api/v1/plugins/registry', { credentials: 'same-origin' });
         if (!res.ok) throw new Error(`GET /api/v1/plugins/registry failed: HTTP ${res.status}`);
         return extractRegistryList(await res.json());
     })(), REGISTRY_CLASSIFY_TIMEOUT_MS, 'plugin registry classification');
+    // A fresh copy replaces the memo: it is the newer answer.
     registryPromise = attempt;
     attempt.catch(() => { if (registryPromise === attempt) registryPromise = null; });
     return attempt;
 }
 
+/** The registry entry of plugin FOLDER `pluginId`, or undefined when it is not (or no longer) active. */
+function registryEntryFor(registry: PluginRegistryEntry[], pluginId: string): PluginRegistryEntry | undefined {
+    return registry.find((e) => e && (e.id === pluginId || e.path === `/plugins/${pluginId}`));
+}
+
+/** Does this registry entry declare a hooks bundle? (`true` from the current backend, a path from an older one.) */
+function entryDeclaresHooks(entry: PluginRegistryEntry): boolean {
+    return entry.frontend?.hooks === true
+        || (typeof entry.frontend?.hooks === 'string' && entry.frontend.hooks.length > 0);
+}
+
+/**
+ * Should `pluginId`'s hooks bundle be requested? Not when the registry POSITIVELY says the plugin declares
+ * no `frontend.hooks` — the overwhelmingly common case (1 of the 31 catalog plugins declares hooks), which
+ * used to cost one silent 404 per plugin on every admin screen. Every case the
+ * registry cannot vouch for is still asked: no registry at all (unreachable — a hiccup there must never
+ * cost a plugin its hooks), a plugin it does not list (a memo older than the active list), and
+ * `frontend: null` (the backend could not read the manifest, so what it declares is unknown).
+ */
+function mayShipHooksBundle(registry: PluginRegistryEntry[] | null, pluginId: string): boolean {
+    if (!registry) return true;
+    const entry = registryEntryFor(registry, pluginId);
+    if (!entry || entry.frontend === null) return true;
+    return entryDeclaresHooks(entry);
+}
+
+// The admin menu entries a signed-in user can see (GET /plugins/menus): { href, plugin } among others.
+type AdminMenuEntry = { href?: unknown; plugin?: unknown };
+
+/**
+ * The plugin FOLDER behind an admin-page slug, read from the admin menu: the page /admin/plugin/<slug> is
+ * reached through the menu item its plugin registered, and that item names the plugin. Needed because the
+ * URL carries the manifest's adminPage.slug ("emails"), the registry lists folders ("mail-server"), and
+ * a plugin installed at runtime is not in the page's build-time slug → folder map. null when no item, or
+ * more than one plugin, claims the page (an href is plugin-controlled — never guess between two).
+ */
+async function pluginFolderForAdminSlug(slug: string): Promise<string | null> {
+    const items = await withTimeout((async () => {
+        const res = await fetch('/api/v1/plugins/menus', { credentials: 'same-origin' });
+        if (!res.ok) throw new Error(`GET /api/v1/plugins/menus failed: HTTP ${res.status}`);
+        return res.json() as Promise<unknown>;
+    })(), REGISTRY_CLASSIFY_TIMEOUT_MS, 'admin menu lookup');
+    if (!Array.isArray(items)) return null;
+    const page = `/admin/plugin/${slug}`;
+    const owners = new Set<string>();
+    for (const item of items as AdminMenuEntry[]) {
+        if (!item || typeof item.href !== 'string' || typeof item.plugin !== 'string' || item.plugin === 'core') continue;
+        if (item.href.split(/[?#]/)[0].replace(/\/+$/, '') === page) owners.add(item.plugin);
+    }
+    return owners.size === 1 ? [...owners][0] : null;
+}
+
+/**
+ * Why GET /plugins/<slug>/bundle answered 404 — told apart here because the route itself must not: it is
+ * anonymous, and "not installed", "inactive" and "not granted" are one answer to keep the install private.
+ * An admin-panel user's browser reads which ACTIVE plugins are not granted browser:script from the
+ * registry (GET /plugins/registry, asked with the session; it tells no one else). 'not-granted' when the
+ * plugin behind the slug (by folder, or by admin-page slug through the admin menu) is active and its
+ * entry says `browser: false`; 'not-found' otherwise — including an entry that does not say (a caller
+ * without admin-panel access) and a registry that cannot be read: the generic fallback is the safe answer
+ * to an unknown cause.
+ *
+ * Asks for a FRESH registry: this runs when a page is refused, and the grant may have changed since the
+ * session's memo was taken (the permissions screen does not invalidate it).
+ */
+async function classifyRefusedBundle(slug: string): Promise<{ reason: 'not-granted' | 'not-found'; pluginId: string | null }> {
+    try {
+        const registry = await fetchPluginRegistry({ fresh: true });
+        let entry = registryEntryFor(registry, slug);
+        let folder: string | null = entry ? slug : null;
+        if (!entry) {
+            folder = await pluginFolderForAdminSlug(slug).catch(() => null);
+            entry = folder ? registryEntryFor(registry, folder) : undefined;
+        }
+        if (!entry) return { reason: 'not-found', pluginId: null };
+        const pluginId = typeof entry.id === 'string' && entry.id ? entry.id : folder;
+        return { reason: entry.browser === false ? 'not-granted' : 'not-found', pluginId };
+    } catch {
+        return { reason: 'not-found', pluginId: null };
+    }
+}
+
 /**
  * Why an ACTIVE plugin's `?type=hooks` request came back 404.
- *  - 'none'       → it declares no `frontend.hooks`. The overwhelmingly common case (1 of the 31
- *                   catalog plugins declares hooks); it is NORMAL and must stay silent.
+ *  - 'none'       → it declares no `frontend.hooks`. NORMAL and silent — and since loadRuntimePluginHooks
+ *                   no longer asks such a plugin, reached only when the registry could not say so first.
  *  - 'not-built'  → it DOES declare `frontend.hooks`, so dist/hooks.bundle.js should exist: the install
  *                   was never built, or its dist/ was lost. Actionable.
  *  - 'unreadable' → the backend could not read its manifest.json at all. Broken install. Actionable.
  *  - 'not-granted'→ it declares hooks, but its browser:script capability is not granted, so the host
  *                   refuses to serve its browser code. The gate working — said once, as a pointer to
  *                   the switch, not as an error.
+ *  - 'unknown'    → it declares hooks, and the registry did not say whether browser:script is granted
+ *                   (it says so only to a signed-in caller with admin-panel access — a session that lapsed
+ *                   mid-visit gets the anonymous answer). 'not-built' and 'not-granted' both fit: silent,
+ *                   and not remembered, so a later pass with the session classifies it for real.
  */
-type HooksAbsence = 'none' | 'not-built' | 'unreadable' | 'not-granted';
+type HooksAbsence = 'none' | 'not-built' | 'unreadable' | 'not-granted' | 'unknown';
 
-async function classifyMissingHooksBundle(pluginId: string): Promise<HooksAbsence> {
-    const registry = await fetchPluginRegistry();
-    const entry = registry.find((e) => e && (e.id === pluginId || e.path === `/plugins/${pluginId}`));
+/**
+ * Classified from the registry the hook pass already fetched — never a second request in the same pass.
+ * Throws when that pass had none (unreachable, malformed, too slow): the caller stays silent.
+ */
+function classifyMissingHooksBundle(pluginId: string, registry: PluginRegistryEntry[] | null): HooksAbsence {
+    if (!registry) throw new Error('no plugin registry to classify with');
+    const entry = registryEntryFor(registry, pluginId);
     // Not in the registry at all: it is no longer active (deactivated between the two fetches). Nothing
     // to report — the hooks of an inactive plugin are supposed to be absent.
     if (!entry) return 'none';
     if (entry.frontend === null) return 'unreadable';
-    const declaresHooks = entry.frontend?.hooks === true
-        || (typeof entry.frontend?.hooks === 'string' && entry.frontend.hooks.length > 0);
-    if (!declaresHooks) return 'none';
-    return entry.browser === false ? 'not-granted' : 'not-built';
+    if (!entryDeclaresHooks(entry)) return 'none';
+    if (entry.browser === false) return 'not-granted';
+    return entry.browser === true ? 'not-built' : 'unknown';
 }
 
 /**
  * Warn — once per plugin per session — only when a hooks-bundle 404 is a REAL problem. Never throws:
  * a plugin without hooks is not an error, and neither is failing to classify one.
  */
-async function warnIfHooksBundleShouldExist(pluginId: string): Promise<void> {
+async function warnIfHooksBundleShouldExist(pluginId: string, registry: PluginRegistryEntry[] | null): Promise<void> {
     if (hooksAbsentWarned.has(pluginId)) return;
     let cause: HooksAbsence;
     try {
-        cause = await classifyMissingHooksBundle(pluginId);
+        cause = classifyMissingHooksBundle(pluginId, registry);
     } catch {
         // The registry is unreachable, malformed, or too slow to wait for (fetchPluginRegistry bounds
         // itself at REGISTRY_CLASSIFY_TIMEOUT_MS) — all transient conditions that say nothing about this
@@ -566,9 +758,9 @@ async function warnIfHooksBundleShouldExist(pluginId: string): Promise<void> {
         // timeout included, so a later mount re-fetches and classifies for real.
         return;
     }
-    if (cause === 'none') return;
-    // Re-check after the await: concurrent 404s for the same plugin must still log only once.
-    if (hooksAbsentWarned.has(pluginId)) return;
+    if (cause === 'none' || cause === 'unknown') return;
+    // No await between the check at the top and this add (classification reads the pass's registry
+    // synchronously), so concurrent 404s for the same plugin still log only once.
     hooksAbsentWarned.add(pluginId);
     if (cause === 'not-granted') {
         console.warn(
@@ -623,10 +815,10 @@ export function invokeHookRegistrars(pluginId: string, mod: Record<string, unkno
  *  - rejects        → transient by construction (5xx / network / unloadable bytes). Evicted so the next
  *                     mount retries; loadRuntimePluginHooks propagates it and initPlugins un-latches.
  */
-function loadPluginHooksBundle(pluginId: string): Promise<boolean> {
+function loadPluginHooksBundle(pluginId: string, registry: PluginRegistryEntry[] | null): Promise<boolean> {
     const inFlight = hooksRegistration.get(pluginId);
     if (inFlight) return inFlight;
-    const attempt = fetchAndRegisterPluginHooks(pluginId);
+    const attempt = fetchAndRegisterPluginHooks(pluginId, registry);
     hooksRegistration.set(pluginId, attempt);
     // Identity-guarded exactly like activePromise / blockConfigCache, so a newer attempt is never evicted
     // by an older one settling late. Attached to a DERIVED promise: `attempt` itself still settles for the
@@ -650,12 +842,13 @@ function loadPluginHooksBundle(pluginId: string): Promise<boolean> {
  * resolves `@/lib/plugin-hooks` to WordJS.host['lib/plugin-hooks'], so it registers into the HOST's
  * pluginHooks singleton — the same one <PluginHook> and applyFilters() read.
  *
- * Resolves false on 404 — normally "this plugin declares no `frontend.hooks`", which is silent; a broken
- * or unbuilt install 404s identically, and is told apart from it (and warned about) via the plugin's
- * manifest. REJECTS if the bundle exists but could not be fetched or evaluated, so the caller can retry;
- * an individual register() that throws is logged and does not fail the load.
+ * Resolves false on 404 — a broken or unbuilt install, an ungranted browser:script, or (when the registry
+ * could not say so up front) a plugin that declares no `frontend.hooks`; told apart, and warned about only
+ * when actionable, from `registry` (the copy this pass fetched). REJECTS if the bundle exists but could
+ * not be fetched or evaluated, so the caller can retry; an individual register() that throws is logged
+ * and does not fail the load.
  */
-async function fetchAndRegisterPluginHooks(pluginId: string): Promise<boolean> {
+async function fetchAndRegisterPluginHooks(pluginId: string, registry: PluginRegistryEntry[] | null): Promise<boolean> {
     const response = await fetch(`/api/v1/plugins/${pluginId}/bundle?type=hooks`);
     // 404 is the only status that can mean "no hooks bundle" — 400 is a bad slug/type and a restarting
     // gateway yields 502/503. Treating every non-ok status as "no bundle" made those transient failures
@@ -669,13 +862,14 @@ async function fetchAndRegisterPluginHooks(pluginId: string): Promise<boolean> {
     // well as for a genuinely absent dist/hooks.bundle.js, and for a plugin whose browser:script
     // capability is not granted (the host serves no browser code for it). Resolving that ambiguity needs
     // no new backend status codes: GET /plugins/registry says, per ACTIVE plugin, whether it declares
-    // `frontend.hooks` and whether browser:script is granted. So classify the 404
+    // `frontend.hooks` and — to a signed-in admin-panel user, which is who runs this pass — whether
+    // browser:script is granted. So classify the 404
     // and warn ONLY when something is actually wrong. Warning on every 404 instead — as this did — put
     // one scary "the install is broken" line per hook-less plugin in the console of a perfectly healthy
     // site (30 of the 31 catalog plugins declare no hooks), which teaches admins to ignore the one
     // breadcrumb that matters.
     if (response.status === 404) {
-        await warnIfHooksBundleShouldExist(pluginId);
+        await warnIfHooksBundleShouldExist(pluginId, registry);
         return false;
     }
     if (!response.ok) {
@@ -744,8 +938,17 @@ export async function loadRuntimePluginHooks(): Promise<void> {
     // list here.
     if (process.env.NODE_ENV === 'development') return;
 
-    const ids = await fetchActivePluginIds();
-    const results = await Promise.allSettled(ids.map((id) => loadPluginHooksBundle(id)));
+    // The registry rides along with the active list (in parallel, bounded by REGISTRY_CLASSIFY_TIMEOUT_MS)
+    // and decides which plugins are asked for a hooks bundle at all: only those that declare one, or that
+    // it cannot vouch for (see mayShipHooksBundle). Every other active plugin used to cost a silent 404 on
+    // every admin screen. Its failure is NOT this pass's failure — without it every plugin is asked, as
+    // before — while a failed active list still rejects, so initPlugins un-latches and retries.
+    const [ids, registry] = await Promise.all([
+        fetchActivePluginIds(),
+        fetchPluginRegistry().catch(() => null),
+    ]);
+    const wanted = ids.filter((id) => mayShipHooksBundle(registry, id));
+    const results = await Promise.allSettled(wanted.map((id) => loadPluginHooksBundle(id, registry)));
     const failed = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
     failed.forEach((f) => console.error('[PluginLoader] Plugin hooks bundle failed to load:', f.reason));
     if (failed.length) throw new Error(`${failed.length} plugin hooks bundle(s) failed to load`);

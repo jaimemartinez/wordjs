@@ -14,8 +14,13 @@ const Post = require('../models/Post');
 // an entry of a non-public type) must not read its comments either, nor post new ones onto it. The
 // read rules are the ones routes/posts.ts applies — one definition in core/post-capabilities.
 const {
-    canReadPostContent, isInternalPostType, nonPublicPostTypes,
+    canReadPostContent, isInternalPostType, publicPostTypes,
 } = require('../core/post-capabilities');
+// AN ATTACHMENT'S COMMENTS FOLLOW THE ATTACHMENT RULE (core/attachment-visibility): an attachment of an
+// entry the caller may not read — or someone else's private item — is "no such post" to the comment routes
+// too, as it is to GET /media/:id and GET /posts/:id. Without it, commenting on one by id (and reading its
+// comments) confirmed that the hidden item exists, and attached a comment to it.
+const { attachmentReadable } = require('../core/attachment-visibility');
 const { getOption } = require('../core/options');
 const { authenticate, optionalAuth } = require('../middleware/auth');
 const { can } = require('../middleware/permissions');
@@ -28,7 +33,7 @@ const { stripTags, escUrl, sanitizeContent, currentTime, currentTimeGMT } = requ
 // limiter constructor, the one honest per-request IP every limiter on this server keys on, and the
 // filter an anti-spam plugin hooks so it can veto an insert without a core change.
 const rateLimit = require('express-rate-limit');
-const { clientIp } = require('../core/client-ip');
+const { clientIpBucket } = require('../core/client-ip');
 const { applyFilters } = require('../core/hooks');
 // Two reads the model does not offer and that this router must not fake: the id a real insert would
 // take (so a discarded comment answers with a plausible one) and the CALLER'S OWN recent comments on
@@ -228,7 +233,8 @@ function createCommentLimiter(store?: unknown) {
         // decision. An identified caller is keyed by USER, so a logged-in author on a shared office
         // address cannot spend the strangers' budget behind that same address, and so the higher
         // allowance follows the account it was granted to rather than whoever shares its NAT.
-        keyGenerator: (req: Request) => (req.user ? `u:${req.user.id}` : `ip:${clientIp(req)}`),
+        // The address's rate-limit identity (core/client-ip clientIpBucket): an IPv6 caller is its /64.
+        keyGenerator: (req: Request) => (req.user ? `u:${req.user.id}` : `ip:${clientIpBucket(req)}`),
         store,
         passOnStoreError: true, // a Redis outage must slow comments down, not 500 the endpoint
         message: {
@@ -385,7 +391,7 @@ async function discardedComment(draft: any, storedContent: string) {
  * against went through — comparing the raw request body would be a guard asking about a value the
  * table never held. Same rule for the author: a logged-in one is their user id, a guest is
  * `req.ip`, which is the value the INSERT below writes into comment_author_ip — deliberately not
- * clientIp(), which is what the limiter keys on and which can differ from the stored column under a
+ * clientIpBucket(), which is what the limiter keys on and which can differ from the stored column under a
  * different trust-proxy setting.
  *
  * THE SCOPE IS THE CALLER, NOT THE POST. This used to read the post's newest DUPLICATE_SCAN_LIMIT
@@ -479,7 +485,10 @@ async function isDuplicateComment(draft: any, storedContent: string) {
  *           List of comments. Author email and IP are included only for a caller holding
  *           moderate_comments; everyone else gets the public projection, only for comments on entries
  *           they may read (published and unprotected, or the single ?post= entry they may read in
- *           full), and a search that does not match on the commenter's email.
+ *           full) and, for a comment on an attachment, only when they may see that attachment (the
+ *           entry it is attached to included), with totals counted over the same comments, and a search
+ *           that does not match on the commenter's email. A `post` naming an attachment they may not
+ *           see answers the empty list a nonexistent post id gets.
  *         headers:
  *           X-WP-Total:
  *             schema:
@@ -554,12 +563,32 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
     // may NOT read falls through to the public filter and therefore answers an empty list, exactly
     // like a nonexistent id.
     const postFilter = post ? parseInt(String(post), 10) : undefined;
-    let publicOnlyExcludingTypes: string[] | undefined;
+    // The public filter is a POSITIVE list of the types whose published entries anyone may read
+    // (publicPostTypes): written as "every type except the non-public registered ones", it served the
+    // comments of every entry whose type the registry does not know (core/post-capabilities
+    // readPolicyForType).
+    let publicOnlyTypes: string[] | undefined;
+    // THE ATTACHMENT RULE, IN THE QUERY, for everyone who is not a moderator: a comment on an attachment
+    // is listed — and counted in X-WP-Total — only when this caller may see that attachment, the entry it
+    // hangs off included (core/attachment-visibility, through Comment._buildWhere). The public filter
+    // above judges the commented row's own status, and an attachment row can be 'publish' (through
+    // PUT /posts/:id) under an entry this caller may not read; each of its comments names its id.
+    let attachmentViewer: { user: any } | undefined;
     if (!canModerate) {
+        attachmentViewer = { user: req.user || null };
         const target = postFilter ? await Post.findById(postFilter) : null;
+        // `?post=` naming an attachment this caller may not see (core/attachment-visibility) answers
+        // exactly what a post id that does not exist answers: an empty page and zero totals — decided by
+        // the attachment rule itself, whatever the attachment row's own status. (The site-wide list, and
+        // every other filter, apply the same rule through `attachmentViewer`.)
+        if (target && !(await attachmentReadable(req.user, target))) {
+            res.set('X-WP-Total', '0');
+            res.set('X-WP-TotalPages', '0');
+            return res.json([]);
+        }
         const readable = !!(target && !isInternalPostType(target.type || target.postType || 'post')
             && canReadPostContent(req.user, target));
-        if (!readable) publicOnlyExcludingTypes = nonPublicPostTypes();
+        if (!readable) publicOnlyTypes = publicPostTypes();
     }
 
     const comments = await Comment.findAll({
@@ -569,7 +598,8 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
         search,
         // The commenter's email is moderator-only PII; matching on it is reading it (see Comment._buildWhere).
         searchAuthorEmail: canModerate,
-        publicOnlyExcludingTypes,
+        publicOnlyTypes,
+        attachmentViewer,
         limit,
         offset,
         orderBy: orderByMap[String(orderby)] || 'comment_date',
@@ -583,7 +613,8 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
         parent: parent !== undefined ? parseInt(String(parent), 10) : undefined,
         search,
         searchAuthorEmail: canModerate,
-        publicOnlyExcludingTypes
+        publicOnlyTypes,
+        attachmentViewer,
     });
     const totalPages = Math.ceil(total / limit);
 
@@ -613,9 +644,10 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
  *       404:
  *         description: >-
  *           rest_comment_invalid_id — no such comment, a malformed route id, OR (for a caller without
- *           moderate_comments) a comment that is not approved or whose entry the caller may not read.
- *           The cases are deliberately indistinguishable, so this is never an existence oracle over
- *           pending or spam comments, or over unpublished entries.
+ *           moderate_comments) a comment that is not approved, whose entry the caller may not read, or
+ *           that sits on an attachment the caller may not see. The cases are deliberately
+ *           indistinguishable, so this is never an existence oracle over pending or spam comments,
+ *           over unpublished entries, or over hidden media.
  *         content:
  *           application/json:
  *             schema:
@@ -651,6 +683,9 @@ router.get('/:id', optionalAuth, asyncHandler(async (req: Request, res: Response
             || !canReadPostContent(req.user, parentPost)) {
             return notFound();
         }
+        // A comment on an attachment this caller may not see is "no such comment" too: the comment
+        // names the item's id.
+        if (!(await attachmentReadable(req.user, parentPost))) return notFound();
     }
 
     res.json(comment.toJSON(canModerate));
@@ -725,7 +760,7 @@ router.get('/:id', optionalAuth, asyncHandler(async (req: Request, res: Response
  *             schema:
  *               $ref: '#/components/schemas/RestError'
  *       404:
- *         description: "rest_post_invalid_id — no such post, or one the caller may not read or comment on (a draft, a trashed or password-protected entry, an internal or non-public type). The cases are indistinguishable on purpose."
+ *         description: "rest_post_invalid_id — no such post, or one the caller may not read or comment on (a draft, a trashed or password-protected entry, an internal or non-public type, an attachment the caller may not see — one of an entry they may not read, or someone else's private item). The cases are indistinguishable on purpose."
  *         content:
  *           application/json:
  *             schema:
@@ -794,6 +829,16 @@ router.post('/', optionalAuth, commentLimiter, asyncHandler(async (req: Request,
         && (post.postStatus === 'publish' || post.postStatus === 'private')
         && canReadPostContent(req.user, post));
     if (!commentable) {
+        return res.status(404).json({
+            code: 'rest_post_invalid_id',
+            message: 'Invalid post ID.',
+            data: { status: 404 }
+        });
+    }
+
+    // An attachment this caller may not see is the same "no such post" — asked before anything else about
+    // the row (comment status, parent comment), so no later answer can tell it apart from a missing id.
+    if (!(await attachmentReadable(req.user, post))) {
         return res.status(404).json({
             code: 'rest_post_invalid_id',
             message: 'Invalid post ID.',

@@ -140,7 +140,9 @@ function sessionBoundToSecondaryAddress(req: Request): boolean {
  *     importUsers, POST /import/wordpress);
  *   · change what accounts may do or who gets one: role definitions (POST/DELETE /roles), the two-factor
  *     policy (PUT /auth/mfa/policy) and the registration settings (core/registration-settings) in
- *     PUT /settings and in the site import.
+ *     PUT /settings and in the site import;
+ *   · replace the accounts wholesale: a backup restore (POST /backups/:filename/restore) and a database
+ *     engine migration (POST /db-migration/migrate, which runs the site on a server the request names).
  * Each would turn a revocable session into access the removal cannot reach: a fresh administrator, a
  * reset password, a stripped second factor, a role holding every capability, open registration into an
  * administrator role. Those need a session started at the main address or on loopback. It is not a
@@ -148,6 +150,9 @@ function sessionBoundToSecondaryAddress(req: Request): boolean {
  *
  * Returns true when it refused and already answered (the caller must return), false otherwise — the
  * "true means handled" convention of issueSessionCookie. `params` names the fields that were refused.
+ *
+ * Outside routes/users.ts (whose router applies it with its own-account exemption) the routes ask
+ * refuseAccountAuthority below, which applies this refusal and the API-token refusal together.
  */
 function refuseBoundSession(req: Request, res: Response, params?: string[]): boolean {
     if (!sessionBoundToSecondaryAddress(req)) return false;
@@ -162,6 +167,114 @@ function refuseBoundSession(req: Request, res: Response, params?: string[]): boo
 /** refuseBoundSession as route middleware, for a route a bound session may not use at all. */
 function unboundSessionOnly(req: Request, res: Response, next: NextFunction) {
     if (refuseBoundSession(req, res)) return;
+    next();
+}
+
+/**
+ * WHO MAY CHANGE WHO HAS AN ACCOUNT, AND WITH WHAT POWER — one gate for both credentials that may not.
+ *
+ * Two credentials must never decide what accounts exist or what they may do, for the same reason: what
+ * they create outlives them. A session bound to a secondary address ends when the address is retired
+ * (refuseBoundSession, above). An API token is revoked with one click, and the doctrine of routes/users.ts
+ * is that even an administrator's `wjt_` token must never mint a brand-new administrator — an account with
+ * a password and a reset link is an interactive session that revoking the token does not reach.
+ *
+ * THE CLASS. That doctrine was enforced on routes/users.ts only, while the writes it covers are the ones
+ * refuseBoundSession lists: the site import with `importUsers` (creates administrators, and with
+ * `updateExisting` moves an existing administrator's email to an address the caller reads, after which
+ * forgot-password hands over the account), the WordPress import (an account per unmatched author), role
+ * definitions (POST /roles can give `subscriber` every capability) and the registration settings
+ * (`users_can_register` + `default_role: administrator` turn the next anonymous POST /auth/register into
+ * an administrator with a session cookie). A token holding global `write` did all of that with a 200. So
+ * both refusals are asked by ONE predicate, and each of those routes calls it: a route cannot refuse a
+ * bound session and forget the token, or the other way round.
+ *
+ * The headless refusal answers like every other headless refusal (sessionOnly: 403
+ * rest_token_management_forbidden), with `params` naming what was refused when the route judged fields.
+ * Returns true when it refused and already answered (the caller must return), false otherwise.
+ */
+function refuseAccountAuthority(req: Request, res: Response, params?: string[]): boolean {
+    if (isHeadless(req)) {
+        res.status(403).json({
+            code: 'rest_token_management_forbidden',
+            message: 'API tokens cannot create accounts, change roles, or change who may register. Sign in interactively.',
+            data: { status: 403, ...(params && params.length ? { params } : {}) }
+        });
+        return true;
+    }
+    return refuseBoundSession(req, res, params);
+}
+
+/** refuseAccountAuthority as route middleware, for a route neither credential may use at all. */
+function accountAuthorityOnly(req: Request, res: Response, next: NextFunction) {
+    if (refuseAccountAuthority(req, res)) return;
+    next();
+}
+
+/**
+ * AN API TOKEN NEVER GIVES A PLUGIN MORE THAN AN ADMINISTRATOR APPROVED.
+ *
+ * A plugin's grants (core/plugin-permissions) and its egress allowlist are the sandbox's whole answer to
+ * "what may this code do": `database:write`, `email:provider`, `browser:script` (its code runs in the admin's
+ * pages with the viewer's session), `network`. Like an account, a grant outlives the credential that wrote
+ * it — revoking the token leaves the plugin holding it. So a token may TAKE capabilities away (revoke a
+ * grant, narrow the egress allowlist, which is what an incident runbook needs from a headless client), but
+ * every change that ADDS one is an interactive administrator's decision: widening the grants
+ * (POST /plugins/:slug/permissions), widening or clearing the egress allowlist (an empty list means every
+ * public host), and an activation that would seed the manifest's declared permissions — the grant-on-
+ * activate that stands for "the administrator read the activation dialog" (POST /plugins/:slug/activate).
+ *
+ * Answered like every other headless refusal (403 rest_token_management_forbidden), `params` naming what
+ * would have been added. Returns true when it refused and already answered (the caller must return).
+ */
+function refusePluginGrantByToken(req: Request, res: Response, params: string[]): boolean {
+    if (!isHeadless(req)) return false;
+    res.status(403).json({
+        code: 'rest_token_management_forbidden',
+        message: 'API tokens cannot give a plugin a permission or a network destination an administrator has not approved. Sign in interactively to approve it; a token may still revoke or narrow.',
+        data: { status: 403, ...(params.length ? { params } : {}) }
+    });
+    return true;
+}
+
+/**
+ * AN API TOKEN NEVER CARRIES AWAY WHAT AN INTERACTIVE LOGIN NEEDS.
+ *
+ * "A token never becomes a session" (issueSessionCookie) is enforced at the cookie door, but a copy of
+ * the credentials at rest is the same door from the outside: the users' bcrypt password hashes (an
+ * offline guess away from a password), the two-factor seeds `user_meta` keeps in clear (`mfa_totp_secret`,
+ * from which every future code follows), the API token hashes, and the secrets plugins keep in their own
+ * tables (a payment plugin's write-only Stripe key, a mail plugin's DKIM key together with the key file
+ * that decrypts it). Whoever holds them signs in, or acts as the site elsewhere, after the token that
+ * fetched them is revoked. So the routes that hand such a copy to the caller, or write one where the
+ * caller chooses, are for an interactive session:
+ *   · POST /backups and GET /backups/:filename/download — the archive holds the physical database
+ *     snapshot (every table) and the plugins/ tree with its data directories. Scheduled backups are run by
+ *     the server's own cron (core/cron `wordjs_scheduled_backup`), not through the API, so no documented
+ *     workflow needs a token here;
+ *   · GET /export — the JSON site archive carries every plugin's own tables verbatim: a payment plugin's
+ *     write-only Stripe key, a video plugin's API key, which the plugins themselves never echo back (its
+ *     account list carries no password hash). A token still has the content export, GET /export/wxr, which
+ *     carries no plugin table.
+ * (POST /db-migration/migrate, which copies every table to a database server the request names and then
+ * runs the site on it, is refused through accountAuthorityOnly: it also replaces where the accounts live.)
+ *
+ * Answered like every other headless refusal (403 rest_token_management_forbidden). Returns true when it
+ * refused and already answered (the caller must return), false otherwise.
+ */
+function refuseCredentialExportByToken(req: Request, res: Response, params?: string[]): boolean {
+    if (!isHeadless(req)) return false;
+    res.status(403).json({
+        code: 'rest_token_management_forbidden',
+        message: 'API tokens cannot copy the site\'s credentials (password hashes, two-factor secrets, API token hashes, plugin secrets). Sign in interactively.',
+        data: { status: 403, ...(params && params.length ? { params } : {}) }
+    });
+    return true;
+}
+
+/** refuseCredentialExportByToken as route middleware, for a route a token may not use at all. */
+function credentialExportSessionOnly(req: Request, res: Response, next: NextFunction) {
+    if (refuseCredentialExportByToken(req, res)) return;
     next();
 }
 
@@ -1438,6 +1551,16 @@ module.exports = {
     // ...and what such a session may not do to accounts, roles and registration (rest_account_bound_session).
     refuseBoundSession,
     unboundSessionOnly,
+    // ...and the same writes refused to an API token as well (rest_token_management_forbidden): one
+    // predicate for both credentials that may not decide what accounts exist or what they may do.
+    refuseAccountAuthority,
+    accountAuthorityOnly,
+    // ...and a plugin grant, egress host or activation seeding that an API token would ADD (it may still
+    // revoke and narrow): what a plugin may do is an interactive administrator's decision.
+    refusePluginGrantByToken,
+    // ...and a copy of the credentials at rest (backup archive, JSON site archive) for an API token.
+    refuseCredentialExportByToken,
+    credentialExportSessionOnly,
     // Double-submit CSRF token — the cookie's name/options and the header the client must echo, so
     // routes/auth.ts (logout) and the tests consume the same definitions the gate enforces.
     CSRF_COOKIE,

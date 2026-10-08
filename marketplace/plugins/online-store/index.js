@@ -20,8 +20,15 @@
  * the variant row when the product has variants, else on the product row), coupon consumption
  * `SET used_count = used_count + 1 WHERE used_count < max_uses`, the pending->paid flip
  * `SET payment_status = 'paid' WHERE payment_status = 'pending'` (its result.changes gates the
- * receipt email so it is sent exactly once), and the refund accumulator
+ * receipt email so it is sent exactly once; the admin's manual mark-paid flips the same way, and
+ * never on a cancelled order), and the refund accumulator
  * `SET refund_cents = refund_cents + ? WHERE refund_cents + ? <= total_cents`.
+ *
+ * Reservations: a pending order holds its stock and coupon use only for a TTL (cardPendingTtlMinutes
+ * for Stripe, manualPendingTtlHours for manual payment). releaseExpiredOrders() cancels still-'new'
+ * unpaid orders past it with a compare-and-set and returns both, so anonymous unpaid checkouts cannot
+ * empty the shop or exhaust a limited coupon. Orders are capped per line and in total, and checkout
+ * is rate-limited per client (req.clientKey), never site-wide.
  *
  * Schema migrations: the sandbox allows CREATE TABLE IF NOT EXISTS and ALTER TABLE ADD COLUMN on
  * the plugin's own tables. v1 -> v2 adds columns to `orders` via probe-then-ALTER (each ALTER in
@@ -232,6 +239,13 @@ exports.init = async function (wordjs) {
     };
 
     // ---- store configuration (non-secret — lives in options) ------------------------------------
+    const CARD_TTL_MIN = 30, CARD_TTL_MAX = 1440, CARD_TTL_DEFAULT = 60;     // minutes
+    const MANUAL_TTL_MAX = 720, MANUAL_TTL_DEFAULT = 72;                    // hours
+    const MAX_ORDER_QTY_DEFAULT = 100;
+    const intIn = (v, min, max, dflt) => {
+        const n = Number(v);
+        return (Number.isInteger(n) && n >= min && n <= max) ? n : dflt;
+    };
     const DEFAULT_INSTRUCTIONS = 'Transferencia bancaria: escríbenos para recibir los datos de la cuenta. Tu pedido se procesa al confirmar el pago.';
     const DEFAULT_PICKUP = 'Te avisaremos por correo cuando tu pedido esté listo para recoger.';
     const getConfig = async () => {
@@ -250,6 +264,17 @@ exports.init = async function (wordjs) {
                 ? raw.pickupInstructions.slice(0, 1000) : DEFAULT_PICKUP,
             taxRateBp: (Number.isInteger(taxBp) && taxBp >= 0 && taxBp <= 5000) ? taxBp : 0,
             taxLabel: (typeof raw.taxLabel === 'string' && raw.taxLabel.trim()) ? raw.taxLabel.trim().slice(0, 50) : 'Impuestos',
+            // Unpaid-order reservation windows. A pending order holds stock and a coupon use; once
+            // its window elapses (and it is still 'new' + 'pending') the sweeper cancels it and
+            // gives both back. Card orders get a short window (the Checkout Session is created
+            // with a matching expires_at); manual payments get a longer, configurable one.
+            // manualPendingTtlHours = 0 disables expiry for manual orders (admin's explicit choice).
+            cardPendingTtlMinutes: intIn(raw.cardPendingTtlMinutes, CARD_TTL_MIN, CARD_TTL_MAX, CARD_TTL_DEFAULT),
+            manualPendingTtlHours: intIn(raw.manualPendingTtlHours, 0, MANUAL_TTL_MAX, MANUAL_TTL_DEFAULT),
+            // Per-order quantity caps (a single anonymous checkout must not be able to reserve the
+            // whole inventory).
+            maxLineQty: intIn(raw.maxLineQty, 1, 99, 99),
+            maxOrderQty: intIn(raw.maxOrderQty, 1, 10000, MAX_ORDER_QTY_DEFAULT),
         };
     };
 
@@ -629,9 +654,21 @@ exports.init = async function (wordjs) {
 
     // ================================ PUBLIC ROUTES ================================
 
+    // Public callers never see an error's text: a driver's message names tables, columns and
+    // constraints. The details go to the server log.
+    const failQuietly = (res, e, what) => {
+        console.error(`[online-store] ${what} failed:`, e && e.message ? e.message : e);
+        res.status(500).json({ error: 'No se pudo completar la operación. Inténtalo de nuevo.' });
+    };
+    // Public routes answer every failure themselves, through failQuietly: a public caller only ever
+    // gets a reply this plugin wrote.
+    const quietly = (what, handler) => async (req, res) => {
+        try { await handler(req, res); } catch (e) { failQuietly(res, e, what); }
+    };
+
     // Catalog — the Puck block calls this from the editor iframe AND the public page.
     // v2: sort options + variant-aware price_from + cover fallback to the gallery.
-    http.route('get', '/public/products', async (req, res) => {
+    http.route('get', '/public/products', quietly('product list', async (req, res) => {
         const q = req.query || {};
         const category = String(q.category || '').trim().slice(0, 100);
         const search = String(q.search || '').trim().toLowerCase().slice(0, 100);
@@ -654,10 +691,10 @@ exports.init = async function (wordjs) {
         else if (sort === 'name') out.sort((a, b) => String(a.name).localeCompare(String(b.name)));
         else if (sort === 'newest') out.sort((a, b) => b.id - a.id);
         res.json({ products: out.slice(0, limit), total: out.length });
-    });
+    }));
 
     // Full product for the detail view: gallery + active variants with resolved prices.
-    http.route('get', '/public/product', async (req, res) => {
+    http.route('get', '/public/product', quietly('product', async (req, res) => {
         const slug = String((req.query && req.query.slug) || '').trim().slice(0, 120);
         if (!slug) return res.status(400).json({ error: 'Falta el parámetro slug.' });
         const row = await db.get(`SELECT * FROM ${T.products} WHERE slug = ? AND is_published = 1`, [slug]);
@@ -665,19 +702,19 @@ exports.init = async function (wordjs) {
         const variants = await db.all(`SELECT * FROM ${T.variants} WHERE product_id = ? ORDER BY sort_order ASC, id ASC`, [row.id]);
         const images = await db.all(`SELECT * FROM ${T.images} WHERE product_id = ? ORDER BY sort_order ASC, id ASC`, [row.id]);
         res.json({ product: publicProductFull(row, variants, images) });
-    });
+    }));
 
     // Category list for the catalog filter chips.
-    http.route('get', '/public/categories', async (req, res) => {
+    http.route('get', '/public/categories', quietly('category list', async (req, res) => {
         const rows = await db.all(
             `SELECT category, COUNT(*) AS n FROM ${T.products} WHERE is_published = 1 AND category != '' GROUP BY category ORDER BY category ASC`
         );
         res.json({ categories: rows.map((r) => ({ name: r.category, count: r.n })) });
-    });
+    }));
 
     // Non-secret store config the block needs to render (currency, taxes, pickup, whether the
     // Stripe option should be offered — only a boolean, never the key).
-    http.route('get', '/public/store-config', async (req, res) => {
+    http.route('get', '/public/store-config', quietly('store config', async (req, res) => {
         const cfg = await getConfig();
         const hasKey = !!(await getSetting('stripe_sk'));
         res.json({
@@ -690,10 +727,10 @@ exports.init = async function (wordjs) {
             taxRateBp: cfg.taxRateBp,
             taxLabel: cfg.taxLabel,
         });
-    });
+    }));
 
     // Shipping methods for the checkout step. Rates here are a PREVIEW — checkout recomputes.
-    http.route('get', '/public/shipping-options', async (req, res) => {
+    http.route('get', '/public/shipping-options', quietly('shipping options', async (req, res) => {
         const cfg = await getConfig();
         const zones = await db.all(`SELECT * FROM ${T.zones} WHERE is_active = 1 ORDER BY sort_order ASC, name ASC`);
         res.json({
@@ -710,10 +747,10 @@ exports.init = async function (wordjs) {
             })),
             flatCents: zones.length ? null : cfg.shippingCents,
         });
-    });
+    }));
 
     // Coupon preview for the cart drawer. Does NOT consume a use — checkout does that atomically.
-    http.route('post', '/public/validate-coupon', async (req, res) => {
+    http.route('post', '/public/validate-coupon', quietly('coupon check', async (req, res) => {
         if (rateLimited(clientBucket(req, 'validate-coupon'), 15, 60 * 1000) || rateLimited('validate-coupon', 60, 60 * 1000)) {
             return res.status(429).json({ valid: false, discount_cents: 0, message: 'Demasiadas solicitudes, intenta en un minuto.' });
         }
@@ -738,16 +775,20 @@ exports.init = async function (wordjs) {
             valid: true, discount_cents: discount,
             message: c.type === 'percent' ? `Cupón aplicado: ${c.value}% de descuento.` : `Cupón aplicado: ${fmtMoney(discount, cfg.currencySymbol)} de descuento.`,
         });
-    });
+    }));
 
     // ---- checkout (shared by the anonymous route and the logged-in route) ------------------------
     // The only prices/rates trusted are the ones re-read from the DB right here. `userCtx` is the
     // host-authenticated session user (or null): its id is stored so the account can list its own
     // orders later — a STRONG link captured at purchase time, never email matching.
     const handleCheckout = async (req, res, userCtx) => {
-        if (rateLimited(clientBucket(req, 'checkout'), 6, 60 * 1000) || rateLimited('checkout', 20, 60 * 1000)) {
+        // Per-client buckets only: a site-wide cap would let a handful of clients 429 every other
+        // shopper. The damage one client can do is bounded by these buckets, the per-order
+        // quantity caps below and the reservation TTL (unpaid orders release their stock/coupon).
+        if (rateLimited(clientBucket(req, 'checkout'), 6, 60 * 1000) || rateLimited(clientBucket(req, 'checkout-h'), 30, 60 * 60 * 1000)) {
             return res.status(429).json({ error: 'Demasiados pedidos en este momento. Intenta de nuevo en un minuto.' });
         }
+        await maybeReleaseExpiredOrders();
         const body = req.body || {};
         const customer = body.customer || {};
         const name = String(customer.name || '').trim().slice(0, 200);
@@ -761,8 +802,12 @@ exports.init = async function (wordjs) {
         if (rawItems.length < 1) return res.status(400).json({ error: 'El carrito está vacío.' });
         if (rawItems.length > 50) return res.status(400).json({ error: 'Demasiados artículos distintos en el carrito (máximo 50).' });
 
-        // Validate + merge duplicate lines (qty stays within 1..99 per product+variant).
+        // Validate + merge duplicate lines (qty stays within 1..maxLineQty per product+variant and
+        // the whole order within maxOrderQty units).
+        const limitsCfg = await getConfig();
+        const maxLine = limitsCfg.maxLineQty;
         const qtyByKey = new Map(); // 'pid:variantId' -> qty
+        let totalUnits = 0;
         for (const it of rawItems) {
             const pid = Number(it && it.product_id);
             const vid = Number((it && it.variant_id) || 0);
@@ -771,7 +816,13 @@ exports.init = async function (wordjs) {
             if (!Number.isInteger(vid) || vid < 0) return res.status(400).json({ error: 'Variante no válida en el carrito.' });
             if (!Number.isInteger(qty) || qty < 1 || qty > 99) return res.status(400).json({ error: 'Cantidad no válida (debe ser un entero entre 1 y 99).' });
             const key = `${pid}:${vid}`;
-            qtyByKey.set(key, Math.min(99, (qtyByKey.get(key) || 0) + qty));
+            const merged = (qtyByKey.get(key) || 0) + qty;
+            if (merged > maxLine) return res.status(400).json({ error: `Cantidad máxima por artículo: ${maxLine}.` });
+            qtyByKey.set(key, merged);
+            totalUnits += qty;
+        }
+        if (totalUnits > limitsCfg.maxOrderQty) {
+            return res.status(400).json({ error: `Un pedido puede tener como máximo ${limitsCfg.maxOrderQty} unidades.` });
         }
 
         // Re-read products + variants from the DB — price + availability come from HERE, never
@@ -978,6 +1029,8 @@ exports.init = async function (wordjs) {
                 form.set('success_url', `${pageUrl}${sep}session_id={CHECKOUT_SESSION_ID}&order=${token}`);
                 form.set('cancel_url', pageUrl);
                 form.set('metadata[order_token]', token);
+                // The session must not outlive the stock reservation (Stripe accepts 30 min..24 h).
+                form.set('expires_at', String(Math.floor(Date.now() / 1000) + Math.max(30, Math.min(1440, cfg.cardPendingTtlMinutes)) * 60));
                 form.set('customer_email', email);
                 const session = await stripeApi(stripeKey, 'POST', '/v1/checkout/sessions', form);
                 if (!session.url) throw new Error('Stripe no devolvió una URL de pago.');
@@ -985,14 +1038,17 @@ exports.init = async function (wordjs) {
                 await sendOrderEmails(orderForMail, cfg);
                 return res.json({ success: true, token, checkoutUrl: session.url });
             } catch (e) {
-                // Stripe failed — keep the order alive as a manual-payment order.
+                // Stripe failed — keep the order alive as a manual-payment order. The reason stays in
+                // the log: Stripe's message can name the account's key ("Invalid API Key provided:
+                // sk_live_****1234") and this reply goes to an anonymous visitor.
+                console.warn('[online-store] Stripe checkout session failed:', e && e.message ? e.message : e);
                 try { await db.run(`UPDATE ${T.orders} SET payment_method = 'manual' WHERE id = ?`, [orderId]); } catch (e2) { /* keep going */ }
                 orderForMail.payment_method = 'manual';
                 await sendOrderEmails(orderForMail, cfg);
                 return res.json({
                     success: true, token,
                     manualInstructions: cfg.manualPaymentInstructions,
-                    warning: `No se pudo iniciar el pago con tarjeta (${e.message || e}). Tu pedido quedó registrado con pago manual.`,
+                    warning: 'No se pudo iniciar el pago con tarjeta. Tu pedido quedó registrado con pago manual.',
                 });
             }
         }
@@ -1005,7 +1061,7 @@ exports.init = async function (wordjs) {
         });
     };
 
-    http.route('post', '/public/checkout', (req, res) => handleCheckout(req, res, null));
+    http.route('post', '/public/checkout', quietly('checkout', (req, res) => handleCheckout(req, res, null)));
     // Same body/flow, but the host authenticates the session first: the order gets a strong
     // user_id link so /my-orders can list it. Any logged-in role qualifies (no admin gate).
     http.route('post', '/checkout-user', { auth: true }, (req, res) => handleCheckout(req, res, req.user || null));
@@ -1020,7 +1076,7 @@ exports.init = async function (wordjs) {
     });
 
     // Public order status by random token (never sequential ids).
-    http.route('get', '/public/order', async (req, res) => {
+    http.route('get', '/public/order', quietly('order lookup', async (req, res) => {
         if (rateLimited(clientBucket(req, 'order-lookup'), 30, 60 * 1000) || rateLimited('order-lookup', 120, 60 * 1000)) {
             return res.status(429).json({ error: 'Demasiadas consultas, intenta en un minuto.' });
         }
@@ -1029,11 +1085,11 @@ exports.init = async function (wordjs) {
         const o = await db.get(`SELECT * FROM ${T.orders} WHERE token = ?`, [token]);
         if (!o) return res.status(404).json({ error: 'Pedido no encontrado.' });
         res.json({ order: publicOrder(o) });
-    });
+    }));
 
     // Stripe return leg: verify the session AGAINST STRIPE with the secret key. Idempotent —
     // shares the single pending->paid flip with the webhook and the reconciler.
-    http.route('get', '/public/confirm-stripe', async (req, res) => {
+    http.route('get', '/public/confirm-stripe', quietly('Stripe return', async (req, res) => {
         if (rateLimited(clientBucket(req, 'confirm-stripe'), 15, 60 * 1000) || rateLimited('confirm-stripe', 60, 60 * 1000)) {
             return res.status(429).json({ paid: false, error: 'Demasiadas solicitudes, intenta en un minuto.' });
         }
@@ -1054,14 +1110,16 @@ exports.init = async function (wordjs) {
             const result = await markPaidFromStripeSession(o, session);
             return res.json({ paid: !!result.paid });
         } catch (e) {
-            return res.status(502).json({ paid: false, error: `No se pudo verificar el pago con Stripe: ${e.message || e}` });
+            // Stripe's (or the database's) message stays in the log, never in a public reply.
+            console.warn('[online-store] Stripe payment verification failed:', e && e.message ? e.message : e);
+            return res.status(502).json({ paid: false, error: 'No se pudo verificar el pago con Stripe. Inténtalo de nuevo en unos minutos.' });
         }
-    });
+    }));
 
     // Stripe webhook — see the file header: the body is an UNTRUSTED HINT (no signature check is
     // possible in the sandbox). State only changes after re-fetching the session from Stripe with
     // the secret key, so a forged event is a no-op. Always answers fast so Stripe stops retrying.
-    http.route('post', '/public/stripe-webhook', async (req, res) => {
+    http.route('post', '/public/stripe-webhook', quietly('Stripe webhook', async (req, res) => {
         if (rateLimited('stripe-webhook', 120, 60 * 1000)) {
             return res.status(429).json({ received: false });
         }
@@ -1097,7 +1155,7 @@ exports.init = async function (wordjs) {
             console.warn('[online-store] webhook: verificación fallida:', e.message);
             return res.status(502).json({ received: false });
         }
-    });
+    }));
 
     // Reconciler: recent pending Stripe orders re-verified server-side every 5 minutes. Covers
     // customers who never return AND sites without a webhook configured.
@@ -1121,6 +1179,64 @@ exports.init = async function (wordjs) {
     };
     activeTimers.push(setInterval(reconcilePendingStripe, 5 * 60 * 1000));
     activeTimers.push(setTimeout(reconcilePendingStripe, 45 * 1000));
+
+    // Reservation expiry: an unpaid order that is still 'new' + 'pending' after its TTL
+    // (cardPendingTtlMinutes / manualPendingTtlHours) is cancelled and its stock and coupon use
+    // are returned — otherwise anonymous unpaid checkouts could empty the shop or burn a limited
+    // coupon forever. The cancel is a compare-and-set on (status, payment_status), so it never
+    // races an admin action or a Stripe payment flip: whichever statement lands first wins, and
+    // restock/coupon release run only under this call's win (same contract as cancelOrderOnce).
+    // An order the admin moved past 'new' (e.g. cash on delivery being processed) never expires.
+    const releaseExpiredOrders = async () => {
+        let released = 0;
+        try {
+            const cfg = await getConfig();
+            const now = Date.now();
+            const rows = await db.all(
+                `SELECT * FROM ${T.orders} WHERE payment_status = 'pending' AND status = 'new' ORDER BY id ASC LIMIT 200`
+            );
+            let stripeKey = null;
+            for (const o of rows) {
+                const created = parseDbDate(o.created_at);
+                if (created === null) continue;
+                const isCard = o.payment_method === 'stripe';
+                const ttlMs = isCard ? cfg.cardPendingTtlMinutes * 60 * 1000 : cfg.manualPendingTtlHours * 3600 * 1000;
+                if (ttlMs <= 0 || now - created < ttlMs) continue;
+                if (isCard && o.stripe_session_id) {
+                    // Never release an order Stripe already charged: verify, then expire the session.
+                    if (stripeKey === null) stripeKey = await getSetting('stripe_sk');
+                    if (stripeKey) {
+                        let session;
+                        try { session = await fetchStripeSession(stripeKey, o.stripe_session_id); }
+                        catch (e) { continue; } // Stripe unreachable — retry on the next sweep
+                        if (session && session.payment_status === 'paid') {
+                            await markPaidFromStripeSession(o, session);
+                            continue;
+                        }
+                        if (await expireStripeSession(o) === 'paid') continue;
+                    }
+                }
+                const r = await db.run(
+                    `UPDATE ${T.orders} SET status = 'cancelled', payment_status = 'cancelled' WHERE id = ? AND status = 'new' AND payment_status = 'pending'`,
+                    [o.id]
+                );
+                if (!r || r.changes !== 1) continue;
+                await restockOrderItems(o);
+                await releaseCouponUse(o);
+                released += 1;
+                await sendStatusEmail({ ...o, status: 'cancelled' }, cfg, 'cancelled');
+            }
+        } catch (e) { console.warn('[online-store] expiración de pedidos:', e.message); }
+        return released;
+    };
+    let lastExpirySweep = 0;
+    const maybeReleaseExpiredOrders = async () => {
+        if (Date.now() - lastExpirySweep < 60 * 1000) return;
+        lastExpirySweep = Date.now();
+        await releaseExpiredOrders();
+    };
+    activeTimers.push(setInterval(releaseExpiredOrders, 5 * 60 * 1000));
+    activeTimers.push(setTimeout(releaseExpiredOrders, 30 * 1000));
 
     // ================================ ADMIN ROUTES ================================
 
@@ -1433,7 +1549,21 @@ exports.init = async function (wordjs) {
             // Atomic: restock + coupon release happen exactly once, gated by the conditional flip.
             didCancel = await cancelOrderOnce(o);
         } else {
-            await db.run(`UPDATE ${T.orders} SET status = ? WHERE id = ?`, [status, id]);
+            // A cancelled order gave its stock and its coupon use back when it was cancelled (by the
+            // admin, a refund with restock, or the unpaid-order sweep). Moving it to any other status
+            // made it an order to fulfil again with nothing held for it, and the shop sold that stock
+            // twice. The flip is conditional on the order still being active — which also covers the
+            // sweep cancelling it between the read above and this write — and a cancelled order is
+            // not re-opened.
+            const flip = await db.run(`UPDATE ${T.orders} SET status = ? WHERE id = ? AND COALESCE(status, '') != 'cancelled'`, [status, id]);
+            if (!flip || flip.changes !== 1) {
+                const now = await db.get(`SELECT * FROM ${T.orders} WHERE id = ?`, [id]);
+                if (!now) return res.status(404).json({ error: 'Pedido no encontrado.' });
+                return res.status(409).json({
+                    error: 'Este pedido está cancelado: su stock y su cupón ya se liberaron, así que no se puede reabrir. El cliente debe hacer un pedido nuevo.',
+                    order: adminOrder(now),
+                });
+            }
         }
         const row = await db.get(`SELECT * FROM ${T.orders} WHERE id = ?`, [id]);
         // Transactional emails on the transitions customers care about (best effort).
@@ -1452,12 +1582,31 @@ exports.init = async function (wordjs) {
         if (!PAYMENT_STATUSES.includes(paymentStatus)) return res.status(400).json({ error: 'Estado de pago no válido.' });
         const before = await db.get(`SELECT * FROM ${T.orders} WHERE id = ?`, [id]);
         if (!before) return res.status(404).json({ error: 'Pedido no encontrado.' });
+        // A cancelled order gave its stock and its coupon use back: marking it paid (and mailing the
+        // customer a receipt) recorded a sale nobody fulfils, with nothing held for it. The flip into
+        // 'paid' is conditional on the order not being cancelled — which also covers the unpaid sweep
+        // cancelling it between the read above and this write — and on it not being paid already, so
+        // the best-effort receipt goes out once even when two admins mark it at the same time. The
+        // other payment statuses (pending, cancelled, refunded) are bookkeeping and stay free.
+        if (paymentStatus === 'paid') {
+            const flip = await db.run(
+                `UPDATE ${T.orders} SET payment_status = 'paid' WHERE id = ? AND COALESCE(payment_status, '') != 'paid' AND COALESCE(status, '') != 'cancelled'`,
+                [id]
+            );
+            const row = await db.get(`SELECT * FROM ${T.orders} WHERE id = ?`, [id]);
+            if (!row) return res.status(404).json({ error: 'Pedido no encontrado.' });
+            if (flip && flip.changes === 1) {
+                await sendPaymentReceipt(row, await getConfig());
+            } else if (row.payment_status !== 'paid') {
+                return res.status(409).json({
+                    error: 'Este pedido está cancelado: su stock y su cupón ya se liberaron, así que no se puede marcar como pagado. Si el cliente llegó a pagar, devuélvele el importe o pídele un pedido nuevo.',
+                    order: adminOrder(row),
+                });
+            }
+            return res.json({ success: true, order: adminOrder(row) });
+        }
         await db.run(`UPDATE ${T.orders} SET payment_status = ? WHERE id = ?`, [paymentStatus, id]);
         const row = await db.get(`SELECT * FROM ${T.orders} WHERE id = ?`, [id]);
-        // Best-effort payment receipt when transitioning into 'paid'.
-        if (paymentStatus === 'paid' && before.payment_status !== 'paid') {
-            await sendPaymentReceipt(row, await getConfig());
-        }
         res.json({ success: true, order: adminOrder(row) });
     });
 
@@ -1713,6 +1862,10 @@ exports.init = async function (wordjs) {
         const taxBp = Number(body.taxRateBp);
         if (Number.isInteger(taxBp) && taxBp >= 0 && taxBp <= 5000) next.taxRateBp = taxBp;
         if (typeof body.taxLabel === 'string' && body.taxLabel.trim()) next.taxLabel = body.taxLabel.trim().slice(0, 50);
+        if (body.cardPendingTtlMinutes !== undefined) next.cardPendingTtlMinutes = intIn(body.cardPendingTtlMinutes, CARD_TTL_MIN, CARD_TTL_MAX, current.cardPendingTtlMinutes);
+        if (body.manualPendingTtlHours !== undefined) next.manualPendingTtlHours = intIn(body.manualPendingTtlHours, 0, MANUAL_TTL_MAX, current.manualPendingTtlHours);
+        if (body.maxLineQty !== undefined) next.maxLineQty = intIn(body.maxLineQty, 1, 99, current.maxLineQty);
+        if (body.maxOrderQty !== undefined) next.maxOrderQty = intIn(body.maxOrderQty, 1, 10000, current.maxOrderQty);
         await options.set(OPT_CONFIG, next);
         res.json(await getConfig());
     });

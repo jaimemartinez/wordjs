@@ -45,8 +45,8 @@ memory caps outside systemd Linux and Windows, and the absence of an independent
   projection — never `user_pass`), **`email:provider`**, **`notifications:provider`**, and
   **`network`** (outbound access, opt-in with an exfiltration warning). The grant is an admin act:
   `POST /plugins/:slug/activate` shows the requested capabilities and grants exactly the declared set,
-  and only while the plugin holds no grant record — so a per-permission revoke survives a
-  re-activation. First-party plugins get no extra privilege — same sandbox, same grant checks. Shell/`child_process`, native addons,
+  and only while the plugin holds no grants an administrator decided — so a per-permission revoke, or
+  a revoke of every grant, survives a re-activation. First-party plugins get no extra privilege — same sandbox, same grant checks. Shell/`child_process`, native addons,
   AST-scan skip, raw cookie/header control, raw-HTML hooks, unscoped/core-table DB, and
   secret-named options were **removed** — no plugin can be granted them.
 - **Themes are contained too.** A theme's optional server-side `functions.js` now runs in the

@@ -1284,8 +1284,8 @@ and drop the whole archive out of the Full-Route Cache. `page/1`, a page past th
 and a malformed tail are all **404**, never a soft-200 empty listing.
 
 **`templates/archive.html`** — the Handlebars file the bundled `default` theme still ships — is *not* what these
-routes render. It belongs to the legacy backend renderer (`backend/src/routes/frontend.ts`); the Next
-public site reads `templates/archive.json` and the rest of this section's contract.
+routes render. It belonged to the legacy backend renderer, which was never mounted and has been removed;
+the Next public site reads `templates/archive.json` and the rest of this section's contract.
 
 ### Named template parts (`theme.json` `templateParts` + `chrome/<name>.json`)
 

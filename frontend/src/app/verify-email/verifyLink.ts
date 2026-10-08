@@ -1,50 +1,53 @@
 /**
- * Confirmación de correo (/verify-email) — la lógica pura de la pantalla.
+ * Email confirmation (/verify-email) — the screen's pure logic.
  *
- * ¿QUÉ ATERRIZA AQUÍ? El correo que `backend/src/routes/auth.ts` envía al registrarse (línea ~296)
- * lleva un enlace `${siteurl}/verify-email?uid=<id>&token=<raw>`. Esta pantalla es el único
- * consumidor de ese enlace: lee los dos parámetros, los manda a POST /auth/verify-email y cuenta
- * qué ha pasado. Hasta que existió, cada correo de verificación caía en un 404 y la cuenta se
- * quedaba para siempre sin poder entrar, porque el login rechaza las cuentas sin verificar.
+ * WHAT LANDS HERE. The mail `backend/src/routes/auth.ts` sends on registration carries
+ * `${siteurl}/verify-email?token=<raw>`: the registration has created nothing yet, and following the
+ * link is what creates the account (so there is no user id to put in it). Links sent by earlier versions,
+ * for accounts that were created unverified, carry `?uid=<id>&token=<raw>` and still work. This screen
+ * is the only consumer of either: it reads the parameters, sends them to POST /auth/verify-email and
+ * says what happened. Until it existed, every verification mail led to a 404 and the account could never
+ * sign in, because login refuses unverified accounts.
  *
- * SEGURIDAD — la query es dato hostil:
- *   · `uid` y `token` vienen de la URL, es decir, de quien quiera escribirla. Antes de tocar la red
- *     pasan por una LISTA BLANCA de forma (`parseVerifyLink`). No es que el POST vaya a hacer daño
- *     con basura — el backend contesta lo mismo —, es que así nada que venga de fuera decide qué
- *     mensaje se pinta: el estado siempre sale del conjunto cerrado `VerifyStatus`.
- *   · La copia de cada estado está en este fichero. NUNCA se pinta el `message` del servidor.
+ * SECURITY — the query string is hostile data:
+ *   · `uid` and `token` come from the URL, that is, from whoever chooses to write it. Before anything
+ *     touches the network they go through a shape WHITELIST (`parseVerifyLink`). Not because garbage in
+ *     the POST could do harm — the backend answers the same — but so that nothing from outside decides
+ *     which message is shown: the state always comes from the closed set `VerifyStatus`.
+ *   · The copy for every state lives in this file. The server's `message` is NEVER rendered.
  *
- * POR QUÉ EXISTE EL ESTADO 'already': el backend consume el token de un solo uso, así que un
- * segundo intento con el mismo enlace es indistinguible de uno caducado — los dos son un 400
- * `rest_invalid_verification`. Y el segundo intento es el caso COMÚN: React en modo estricto
- * dispara el efecto dos veces, el cliente de correo puede pre-cargar el enlace y la gente recarga.
- * Decirle «tu enlace no vale» a quien acaba de verificar con éxito sería mentir. Por eso la pantalla
- * deja una marca local por `uid` al verificar, y un regreso a ese mismo enlace se cuenta como
- * «ya estaba confirmada» sin volver a llamar. La marca es un booleano por id de usuario: no guarda
- * el token ni ningún otro secreto.
+ * WHY THE 'already' STATE EXISTS: the backend consumes the single-use token, so a second attempt with the
+ * same link cannot be told apart from an expired one — both are a 400 `rest_invalid_verification`. And
+ * the second attempt is the COMMON case: React's strict mode runs the effect twice, a mail client may
+ * prefetch the link, and people reload. Telling someone who has just verified that their link is not
+ * valid would be a lie. So the screen leaves a local marker when it verifies, and coming back to the same
+ * link counts as "already confirmed" without calling again. The marker is a boolean per user id (or per
+ * token fingerprint, for a current link): it never stores the token or any other secret.
  */
 
-/** El conjunto CERRADO de cosas que la pantalla puede decir. */
+/** The CLOSED set of things the screen can say. */
 export type VerifyStatus =
-    | "missing"    // el enlace no traía uid/token utilizables
-    | "verifying"  // POST en vuelo
-    | "success"    // confirmada ahora mismo
-    | "already"    // este navegador ya confirmó esta cuenta con este enlace
-    | "invalid"    // caducado, ya usado o inexistente (400 del backend)
-    | "throttled"  // 429 del limitador de /auth
-    | "error";     // red caída o 5xx
+    | "missing"    // the link carried no usable uid/token
+    | "verifying"  // POST in flight
+    | "success"    // confirmed just now
+    | "already"    // this browser already confirmed this account with this link
+    | "invalid"    // expired, already used or nonexistent (400 from the backend)
+    | "unavailable" // valid link, but the username or address was taken since (409 from the backend)
+    | "throttled"  // 429 from the /auth limiter
+    | "error";     // network down or 5xx
 
 export interface VerifyLink {
-    uid: number;
+    /** Only in links sent for accounts created unverified by earlier versions; null in current links. */
+    uid: number | null;
     token: string;
 }
 
 /**
- * Lista blanca de forma.
- *  · uid   → solo dígitos, sin signo, y dentro del entero seguro.
- *  · token → `crypto.randomBytes(32).toString('hex')` en el backend, o sea 64 hex. Se acepta el
- *            alfabeto base64url (superconjunto del hex) con un rango de longitud amplio para no
- *            romperse si algún día cambia el tamaño del token, pero jamás espacios ni signos.
+ * Shape whitelist.
+ *  · uid   → digits only, unsigned, and within the safe-integer range.
+ *  · token → `crypto.randomBytes(32).toString('hex')` on the backend, i.e. 64 hex characters. The
+ *            base64url alphabet (a superset of hex) is accepted with a wide length range so the screen
+ *            does not break if the token size ever changes, but never spaces or other signs.
  */
 const UID_RE = /^[0-9]{1,15}$/;
 const TOKEN_RE = /^[A-Za-z0-9_-]{16,256}$/;
@@ -52,69 +55,95 @@ const TOKEN_RE = /^[A-Za-z0-9_-]{16,256}$/;
 export function parseVerifyLink(uidRaw: string | null | undefined, tokenRaw: string | null | undefined): VerifyLink | null {
     const uidText = String(uidRaw ?? "").trim();
     const token = String(tokenRaw ?? "").trim();
-    if (!UID_RE.test(uidText) || !TOKEN_RE.test(token)) return null;
+    if (!TOKEN_RE.test(token)) return null;
+    // The current link carries the token alone. A uid, when present, must still pass its whitelist: a
+    // malformed one is a damaged link, not a token-only one.
+    if (uidText === "") return { uid: null, token };
+    if (!UID_RE.test(uidText)) return null;
     const uid = Number(uidText);
     if (!Number.isSafeInteger(uid) || uid <= 0) return null;
     return { uid, token };
 }
 
 /**
- * Traduce un fallo del POST a uno de los estados. Mira `status`/`code`, nunca el texto remoto.
- * Cualquier 4xx que no sea 429 se cuenta como enlace inválido: el backend contesta a propósito lo
- * mismo para token malo, caducado y ya consumido, y no hay más 4xx en esa ruta.
+ * Maps a failed POST to one of the states. It reads `status`/`code`, never the remote text. Any 4xx other
+ * than 429 counts as an invalid link: the backend deliberately answers the same for a bad, an expired and
+ * an already consumed token, and that route has no other 4xx.
  */
-export function classifyVerifyFailure(err: unknown): "invalid" | "throttled" | "error" {
+export function classifyVerifyFailure(err: unknown): "invalid" | "unavailable" | "throttled" | "error" {
     const e = (err ?? {}) as { code?: unknown; status?: unknown };
     if (e.code === "rest_invalid_verification") return "invalid";
+    // Only the holder of a VALID link gets this: nothing was reserved while the registration waited, and
+    // someone else took the username or the address before it was confirmed.
+    if (e.code === "rest_registration_unavailable") return "unavailable";
     const status = typeof e.status === "number" ? e.status : 0;
     if (status === 429) return "throttled";
     if (status >= 400 && status < 500) return "invalid";
     return "error";
 }
 
-/** Clave de la marca local. Solo el id: ni el token ni nada que sirva para volver a verificar. */
-export function verifiedMarkerKey(uid: number): string {
-    return `wjs_email_verified:${uid}`;
+/** What a marker is kept for: a legacy link's user id, or a current (token-only) link. */
+export type VerifyMarkerSubject = number | VerifyLink;
+
+/**
+ * A short, non-reversible fingerprint of a token (32-bit FNV-1a, hex). A current link has no user id to
+ * key the marker by; the marker must still never hold the token itself (and the token is spent anyway
+ * once the marker is written).
+ */
+function tokenFingerprint(token: string): string {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < token.length; i++) {
+        h ^= token.charCodeAt(i);
+        h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return h.toString(16).padStart(8, "0");
 }
 
-/** ¿Este navegador ya confirmó esta cuenta? Un `sessionStorage` inaccesible se cuenta como «no». */
-export function wasVerifiedHere(uid: number, store: Pick<Storage, "getItem"> | null | undefined): boolean {
+/** The local marker's key. Only the id (or a token fingerprint): never the token, nor anything that could verify again. */
+export function verifiedMarkerKey(subject: VerifyMarkerSubject): string {
+    if (typeof subject === "number") return `wjs_email_verified:${subject}`;
+    if (subject.uid !== null) return `wjs_email_verified:${subject.uid}`;
+    return `wjs_email_verified:t:${tokenFingerprint(subject.token)}`;
+}
+
+/** Has this browser already confirmed this account? An inaccessible `sessionStorage` counts as "no". */
+export function wasVerifiedHere(subject: VerifyMarkerSubject, store: Pick<Storage, "getItem"> | null | undefined): boolean {
     if (!store) return false;
     try {
-        return store.getItem(verifiedMarkerKey(uid)) === "1";
+        return store.getItem(verifiedMarkerKey(subject)) === "1";
     } catch {
-        return false; // Safari en privado, cookies de terceros bloqueadas… nunca romper la pantalla por esto.
+        return false; // Safari private mode, blocked third-party storage… never break the screen over this.
     }
 }
 
-/** Deja la marca. Si el almacenamiento falla no pasa nada: solo se pierde el estado 'already'. */
-export function markVerifiedHere(uid: number, store: Pick<Storage, "setItem"> | null | undefined): void {
+/** Leaves the marker. If storage fails nothing breaks: only the 'already' state is lost. */
+export function markVerifiedHere(subject: VerifyMarkerSubject, store: Pick<Storage, "setItem"> | null | undefined): void {
     if (!store) return;
     try {
-        store.setItem(verifiedMarkerKey(uid), "1");
+        store.setItem(verifiedMarkerKey(subject), "1");
     } catch {
-        /* almacenamiento no disponible — la verificación en el servidor ya está hecha igualmente */
+        /* storage unavailable — the verification on the server is done either way */
     }
 }
 
 export type VerifyTone = "busy" | "ok" | "warn" | "error";
 
 export interface VerifyCopy {
-    /** Icono de Font Awesome, igual que en /login y /reset-password. */
+    /** Font Awesome icon, as on /login and /reset-password. */
     icon: string;
     tone: VerifyTone;
     title: string;
     body: string;
-    /** Texto del botón que lleva al login, o `null` cuando ese paso no tiene sentido todavía. */
+    /** Label of the button that leads to login, or `null` when that step makes no sense yet. */
     action: string | null;
 }
 
 /**
- * La copia de cada estado, en un único sitio. El componente solo elige por clave, así que no hay
- * ninguna rama en la que se pueda colar texto de fuera.
+ * The copy for every state, in one place. The component only picks by key, so there is no branch through
+ * which outside text could slip in.
  *
- * 'invalid' nombra las TRES causas posibles (caducado / ya usado / inexistente) porque el backend
- * las funde a propósito en una sola respuesta y fingir que sabemos cuál es sería inventárselo.
+ * 'invalid' names all THREE possible causes (expired / already used / nonexistent) because the backend
+ * deliberately merges them into one answer, and pretending to know which one it is would be making it up.
  */
 export const VERIFY_COPY: Record<VerifyStatus, VerifyCopy> = {
     verifying: {
@@ -150,6 +179,13 @@ export const VERIFY_COPY: Record<VerifyStatus, VerifyCopy> = {
         tone: "warn",
         title: "Este enlace ya no sirve",
         body: "Puede haber caducado (dura 24 horas), haberse usado ya o no corresponder a ninguna cuenta. Si ya confirmaste tu correo antes, prueba a iniciar sesión; si no, pide a la administración del sitio un enlace nuevo.",
+        action: "Ir al inicio de sesión",
+    },
+    unavailable: {
+        icon: "fa-user-slash",
+        tone: "warn",
+        title: "Ese nombre o correo ya no está libre",
+        body: "El enlace era válido, pero mientras esperaba la confirmación otra cuenta ocupó ese nombre de usuario o esa dirección. No se ha creado nada: vuelve a registrarte con otro nombre de usuario.",
         action: "Ir al inicio de sesión",
     },
     throttled: {

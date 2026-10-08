@@ -145,10 +145,11 @@ async function generateAdminRegistry() {
         `    "${p.adminSlug}": () => import("../../../../../../backend/plugins/${p.folder}/${p.adminPath}"),`
     ).join('\n');
 
-    // Slug → plugin FOLDER id. The URL uses adminPage.slug, but a plugin's static assets
-    // (admin.css, manifest.json) are served from /plugins/<folder-id>/ — which frequently differs
-    // from the slug (e.g. slug "store" → folder "online-store", "youtube" → "youtube-videos").
-    // Without this map the admin-stylesheet feature silently 404s for every slug≠folder plugin.
+    // Slug → plugin FOLDER id. The URL uses adminPage.slug, which frequently differs from the folder
+    // (e.g. slug "store" → folder "online-store", "youtube" → "youtube-videos"). The admin-style API
+    // resolves either spelling among ACTIVE plugins, but asking by folder is an exact match instead of
+    // a scan of the active plugins' manifests. A plugin installed at runtime is not in the map and is
+    // asked for by its slug.
     const dirMap = availablePlugins.map(p => `    "${p.adminSlug}": "${p.folder}",`).join('\n');
 
     const content = `"use client";
@@ -170,11 +171,20 @@ const PLUGIN_ADMIN_PAGES: Record<string, () => Promise<any>> = {
 ${imports}
 };
 
-// Maps the URL admin-slug to the plugin's on-disk FOLDER id, so admin.css / manifest.json are
-// fetched from the correct /plugins/<folder>/ path (the slug and folder often differ).
+// Maps the URL admin-slug to the plugin's on-disk FOLDER id (the slug and folder often differ), so the
+// admin-style API is asked by folder — an exact match — whenever the plugin was known at build time.
 const PLUGIN_ADMIN_DIRS: Record<string, string> = {
 ${dirMap}
 };
+
+// Where this page's styling comes from: the AUTHENTICATED admin-style API, never the static /plugins
+// mount. GET <endpoint> answers { style, theme, stylesheet } for an ACTIVE plugin to a signed-in
+// session; <endpoint>/css is the plugin's client/admin/admin.css under the same rule. The page used to
+// fetch /plugins/<dir>/manifest.json and /plugins/<dir>/client/admin/admin.css instead — public URLs
+// that handed every INSTALLED plugin's whole manifest (exact version, author, permissions) to anyone.
+const adminStyleEndpoint = (id: string) => \`/api/v1/plugins/\${encodeURIComponent(id)}/admin-style\`;
+
+type AdminStyle = { style: string | null; theme: Record<string, string> | null; stylesheet: boolean };
 
 function LoadingFallback() {
     return (
@@ -205,37 +215,34 @@ function PluginNotFound({ slug }: { slug: string }) {
 export default function PluginAdminPage() {
     const params = useParams();
     const slug = params.slug as string;
-    const [hasCss, setHasCss] = useState(false);
+    const [cssUrl, setCssUrl] = useState<string | null>(null);
     const [themeStyle, setThemeStyle] = useState("");
 
-    // Static assets are served under the plugin's FOLDER id, which can differ from the URL slug.
-    const dir = PLUGIN_ADMIN_DIRS[slug] || slug;
-    const cssUrl = \`/plugins/\${dir}/client/admin/admin.css\`;
+    // Asked by the plugin's FOLDER id when it is known at build time, else by the URL slug (the API
+    // resolves an active plugin's admin slug too).
+    const endpoint = adminStyleEndpoint(PLUGIN_ADMIN_DIRS[slug] || slug);
 
     useEffect(() => {
         if (!slug) return;
-        setHasCss(false);
+        let alive = true;
+        setCssUrl(null);
         setThemeStyle("");
 
-        // Check for admin.css existence
-        fetch(cssUrl, { method: "HEAD" })
-            .then((res) => {
-                if (res.ok) setHasCss(true);
-            })
-            .catch(() => {});
-
-        // Fetch manifest.json to check for style/theme fields. The plugin admin page is already
-        // trusted first-party JS, but this string reaches a dangerouslySetInnerHTML sink, so strip
-        // characters that could break out of the injected <style> ('}' rule breakout, '<' tag
-        // breakout, '@'/';' extra rules) — defense in depth, not the sandbox boundary.
-        fetch(\`/plugins/\${dir}/manifest.json\`)
-            .then((res) => res.json())
-            .then((manifest) => {
+        // One same-origin request with the session cookie: the style/theme fields and whether there is
+        // an admin.css to link. The plugin admin page is already trusted first-party JS, but the style
+        // string reaches a dangerouslySetInnerHTML sink, so strip characters that could break out of the
+        // injected <style> ('}' rule breakout, '<' tag breakout, '@'/';' extra rules) — defense in
+        // depth, not the sandbox boundary (the API also drops malformed theme keys).
+        fetch(endpoint, { credentials: "same-origin" })
+            .then((res) => (res.ok ? (res.json() as Promise<AdminStyle>) : null))
+            .then((info) => {
+                if (!alive || !info) return;
+                if (info.stylesheet) setCssUrl(\`\${endpoint}/css\`);
                 const clean = (s: unknown) => String(s).replace(/[<>{}@;]/g, "");
-                if (typeof manifest.style === "string" && manifest.style) {
-                    setThemeStyle(manifest.style.replace(/</g, ""));
-                } else if (manifest.theme && typeof manifest.theme === "object") {
-                    const vars = Object.entries(manifest.theme)
+                if (typeof info.style === "string" && info.style) {
+                    setThemeStyle(info.style.replace(/</g, ""));
+                } else if (info.theme && typeof info.theme === "object") {
+                    const vars = Object.entries(info.theme)
                         .filter(([key]) => /^[a-zA-Z0-9-]+$/.test(key))
                         .map(([key, val]) => \`--plugin-\${key}: \${clean(val)};\`)
                         .join(" ");
@@ -243,7 +250,8 @@ export default function PluginAdminPage() {
                 }
             })
             .catch(() => {});
-    }, [slug, cssUrl, dir]);
+        return () => { alive = false; };
+    }, [slug, endpoint]);
 
     // Plugins present at BUILD time are compiled into the map above. Plugins installed at RUNTIME
     // (from the marketplace) can NEVER be in it: a production install ships a pre-built .next and has
@@ -267,7 +275,7 @@ export default function PluginAdminPage() {
     return (
         <div className={\`plugin-admin-wrapper plugin-admin-\${slug} h-full overflow-y-auto overscroll-y-contain custom-scrollbar\`}>
             {themeStyle && <style dangerouslySetInnerHTML={{ __html: themeStyle }} />}
-            {hasCss && <link rel="stylesheet" href={cssUrl} />}
+            {cssUrl && <link rel="stylesheet" href={cssUrl} />}
             <Suspense fallback={<LoadingFallback />}>
                 <PluginPage />
             </Suspense>

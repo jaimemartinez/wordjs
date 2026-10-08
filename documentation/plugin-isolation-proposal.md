@@ -153,7 +153,8 @@
 > **First-party plugins are not privileged:** `mail-server`, `conference-manager`, and the galleries run
 > in the same sandbox under the same default-deny checks as anything uploaded. Nothing is granted out of
 > the box: **activating** a plugin grants exactly the capabilities its manifest declares (the admin
-> approves them in the activation dialog, only when the plugin has no prior grant record), and the admin
+> approves them in the activation dialog, only while the plugin holds no grants an administrator
+> decided), and the admin
 > can refine or revoke any grant afterward. Changing grants (`POST /plugins/:slug/permissions`, admin-only)
 > **hot-reloads the worker**
 > (`reloadIsolatedPlugin`) so its network policy re-resolves and the host-capability gates re-evaluate —

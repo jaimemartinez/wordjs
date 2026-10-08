@@ -629,6 +629,15 @@ const SETTINGS_OPTIONS = new Set([
     'wjs_motion',
 ]);
 
+// THE OPTIONS GET /plugins/assets IS COMPUTED FROM (core/plugin-assets getActiveAssets): the enqueue
+// registry, the grant store (only plugins holding assets:write are emitted) and the active list. The
+// public layout caches that list under the 'plugin-assets' tag for 120 s (frontend/src/lib/server-api.ts
+// getPublicAssets), so without a purge a revoked grant, a deactivation or a removed entry kept the
+// plugin's <script> on already-rendered pages until the window ran out, while the permissions screen
+// said the change was in effect. Hooked on the option write, so every writer is covered (the permissions
+// route, activation, uninstall, the boot-time grant steps, the enqueue bridge).
+const PLUGIN_ASSET_OPTIONS = new Set(['plugin_assets', 'plugin_grants', 'active_plugins']);
+
 /** Wire the content hooks. Call ONCE from initialize() after the hook system is up. */
 function initFrontendPurge() {
     addAction('wp_insert_post', async (postId: any) => { await purgeForPost(postId); });
@@ -647,6 +656,7 @@ function initFrontendPurge() {
         // /menus routes also purge directly; this hook covers non-route writers (Menu.setLocation
         // from the importer, plugins) so the option can never change silently under a cached nav.
         if (String(name) === 'nav_menu_locations') purgeFrontend(['menus']);
+        if (PLUGIN_ASSET_OPTIONS.has(String(name))) purgeFrontend(['plugin-assets']);
     });
 }
 

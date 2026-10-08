@@ -23,15 +23,48 @@ const { routeIdOrNull } = require('../core/query-params');
 const Post = require('../models/Post');
 // THE gate, shared — not a second copy. See the SECURITY note on the route below.
 const { canEditPostRecord, isRestExposedPostType } = require('../core/post-capabilities');
+// An attachment's entry decides too, exactly as on the collaboration channel (routes/collab.ts gate).
+const { attachmentWriteRefusal } = require('../core/attachment-visibility');
 
 const TTL_MS = 25_000;
 
 /** postId -> Map<userId, { name: string, ts: number }> */
 const rooms: Map<string, Map<string, { name: string; ts: number }>> = new Map();
 
-function sweep(room: Map<string, { name: string; ts: number }>) {
-    const now = Date.now();
+/** Drop a room's expired editors; returns the room's remaining size. */
+function sweep(room: Map<string, { name: string; ts: number }>, now = Date.now()): number {
     for (const [uid, u] of room) if (now - u.ts > TTL_MS) room.delete(uid);
+    return room.size;
+}
+
+/**
+ * Reclaim every room whose editors have all expired. Without this an editor that closes the tab without
+ * a `leave` (crash, lost network, killed beacon) leaves its room in the map forever: the per-heartbeat
+ * sweep only visits a room someone is still heartbeating, so abandoned rooms — one per post ever opened —
+ * accumulate for the life of the process. Returns how many rooms were removed.
+ */
+function sweepAllRooms(now = Date.now()): number {
+    let removed = 0;
+    for (const [key, room] of rooms) {
+        if (sweep(room, now) === 0) { rooms.delete(key); removed++; }
+    }
+    if (rooms.size === 0) stopSweeper();
+    return removed;
+}
+
+// Periodic reclamation, per process (the rooms are per-process too). Started lazily with the first room
+// and stopped once the map is empty, unref'd so it never holds the process open.
+const SWEEP_INTERVAL_MS = 60_000;
+let sweeper: ReturnType<typeof setInterval> | null = null;
+function startSweeper() {
+    if (sweeper) return;
+    sweeper = setInterval(() => { sweepAllRooms(); }, SWEEP_INTERVAL_MS);
+    if (typeof (sweeper as any).unref === 'function') (sweeper as any).unref();
+}
+function stopSweeper() {
+    if (!sweeper) return;
+    clearInterval(sweeper);
+    sweeper = null;
 }
 
 // Heartbeat (default) or { action: "leave" }. Always answers with the OTHER active editors, so the
@@ -195,11 +228,13 @@ router.post('/:postId', authenticate, asyncHandler(async (req: Request, res: Res
     // routes/collab.ts the same way, which is the last place that still distinguishes.
     if (!post
         || !isRestExposedPostType(post.type || post.postType || 'post')
-        || !canEditPostRecord(req.user, post)) {
+        || !canEditPostRecord(req.user, post)
+        || (await attachmentWriteRefusal(req.user, post)) !== null) {
         return res.status(403).json({ code: 'rest_forbidden', error: 'You cannot edit this post.' });
     }
 
     if (!room) rooms.set(key, (room = new Map()));
+    startSweeper();
     room.set(uid, {
         name: String(req.user.display_name || req.user.displayName || req.user.username || `usuario ${uid}`).slice(0, 80),
         ts: Date.now(),
@@ -213,3 +248,6 @@ router.post('/:postId', authenticate, asyncHandler(async (req: Request, res: Res
 }));
 
 module.exports = router;
+// Test seams: the periodic reclamation and an introspection of the room map.
+module.exports.sweepAllRooms = sweepAllRooms;
+module.exports._presenceRooms = { size: () => rooms.size, has: (postId: number | string) => rooms.has(String(postId)), sweeperActive: () => sweeper !== null, TTL_MS };

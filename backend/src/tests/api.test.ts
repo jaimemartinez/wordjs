@@ -258,9 +258,12 @@ describe('API HTTP layer', () => {
             `INSERT INTO users (user_login, user_pass, user_email, display_name) VALUES (?, ?, ?, ?)`,
             ['enum-victim', 'x', 'enum-victim@example.com', 'Victim']
         );
+        // The claimer proves their password: an address change demands it, and since the lookup of other
+        // accounts now runs AFTER that proof, a caller without it learns nothing about the address at all
+        // (users-email-change-order.test.ts). This case is about the shape of the answer once it is given.
         await dbAsync.run(
             `INSERT INTO users (user_login, user_pass, user_email, display_name) VALUES (?, ?, ?, ?)`,
-            ['enum-claimer', 'x', 'enum-claimer@example.com', 'Claimer']
+            ['enum-claimer', require('bcryptjs').hashSync('Claimer-Pass-1', 10), 'enum-claimer@example.com', 'Claimer']
         );
         const row = await dbAsync.get(`SELECT * FROM users WHERE user_login = ?`, ['enum-claimer']);
         const claimerId = row.ID || row.id;
@@ -269,14 +272,14 @@ describe('API HTTP layer', () => {
         const taken = await request(app)
             .put('/api/v1/users/me')
             .set('Authorization', `Bearer ${token}`)
-            .send({ email: 'enum-victim@example.com' });
+            .send({ email: 'enum-victim@example.com', currentPassword: 'Claimer-Pass-1' });
         assert.strictEqual(taken.status, 400, `a taken email must be 400, got ${taken.status}`);
         assert.strictEqual(taken.body.code, 'rest_invalid_email');
 
         const malformed = await request(app)
             .put('/api/v1/users/me')
             .set('Authorization', `Bearer ${token}`)
-            .send({ email: 'not-an-email' });
+            .send({ email: 'not-an-email', currentPassword: 'Claimer-Pass-1' });
         assert.strictEqual(malformed.status, 400);
         assert.strictEqual(malformed.body.code, taken.body.code, 'taken vs malformed must share a code');
         assert.strictEqual(malformed.body.message, taken.body.message, 'taken vs malformed must share a message (no reason leak)');

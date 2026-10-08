@@ -152,6 +152,12 @@ you deploy to N nodes. So `frontend/server.js` applies the same resolution **at 
 what Next's own rewrite proxy sends (upstream `Host` = the target, caller's host preserved in
 `x-forwarded-host`, `x-forwarded-proto` pinned to the scheme the replica itself was reached on).
 Streaming is passed straight through, which is what keeps the collaboration SSE channel live.
+With the variable set the replica is the front door, so for **every** request and WebSocket upgrade —
+not only the ones it proxies itself, since Next's own rewrite also forwards to a backend — it drops the
+client's `X-Forwarded-*`, `X-Real-IP` and `Forwarded` headers and restates `X-Forwarded-For` (the
+socket's peer), `X-Forwarded-Host` (the Host it received) and `X-Forwarded-Proto` (its own listener's
+scheme). A path with a dot segment or a backslash (`/x/../api/…`, `/x/%2e%2e/api/…`) is answered
+`400 rest_bad_path`, as the gateway and the monolith do.
 
 Set it at **build** time as well if you build from source (`next build`) and want the baked rewrite to agree. `npm run bundle-release` is the exception: it builds with `WORDJS_HERMETIC_BUILD=1`, which ignores `WORDJS_BACKEND_URL`, `gatewayPort` and `WORDJS_MODE` and always bakes the compiled-in default, so a release never carries the packaging machine's setup. Pin release replicas at runtime, as above.
 
@@ -206,7 +212,9 @@ void; when Redis returns, the bus reconnects and fan-out resumes without restart
   (`wordjs:cron`), so a due job (backup, ACME renewal, plugin job) executes on exactly **one** node.
   This is what keeps Let's Encrypt renewal from firing N concurrent orders.
 - **Role/permission edits** — propagated across nodes over Redis (`wordjs:option-changed`), so a
-  capability change on one node is reflected everywhere without a restart.
+  capability change on one node is reflected everywhere without a restart. (A plugin's grants and
+  egress allowlist have their own propagation and re-sync — see "Plugin grant / egress-allowlist edits"
+  below.)
 - **In-process (L1) cache invalidation** — every node keeps a small in-process cache in front of
   Redis, so a write must drop it on the *peers* too: `cache.del()`/`cache.flush()` broadcast the key
   (or `'*'`) on `wordjs:cache-del` and each node evicts its own L1. When Redis is configured, L1
@@ -215,6 +223,29 @@ void; when Redis returns, the bus reconnects and fan-out resumes without restart
   `wordjs:active-plugins` lock and publishes `wordjs:plugin-changed`; every other node loads/unloads
   that one isolated plugin **live** (forked child + routes/hooks/menus) via `coherence.ts` →
   `plugins.loadOnePlugin`/`unloadOnePlugin`, skipping its own publish. No rolling restart needed.
+  A node that loads a plugin because another node activated it re-reads the grant/egress policy from
+  the database first, and grant-on-activate is persisted **before** the activation is published, so
+  the plugin starts on every node with the grants the admin approved. A lost `deactivate` is bounded
+  too: every node stops a plugin it still runs once the shared active set has not listed it on two
+  consecutive re-syncs (below). A lost `activate` is not replayed by a timer — that node picks the
+  plugin up on its next restart or activation.
+- **Plugin grant / egress-allowlist edits** — `POST /plugins/:slug/permissions` and `/egress-hosts`
+  persist the change and publish it (`wordjs:option-changed`, plus `wordjs:plugin-changed` `reload`).
+  Every other node re-reads `plugin_grants` / `plugin_egress_hosts` straight from the database (not
+  through the option cache) and respawns any running plugin child whose spawn-time policy — its grants,
+  its egress allowlist, the deny-all state — no longer matches. Because pub/sub can drop a message
+  silently, each node also re-syncs as soon as it has subscribed at boot, on every reconnect of its
+  Redis subscriber, and every **10 s** (`POLICY_RESYNC_MS` in `core/coherence.ts`), so a lost broadcast
+  is bounded by that period (plus the time the respawn itself takes) rather than lasting until a
+  restart. Each re-sync starts the respawns of all stale children at once, at most four at a time
+  (`MAX_CONCURRENT_RESPAWNS`), and does not wait for them: a child slow to come back (up to its 60 s
+  ready timeout) delays only its own respawn. A failed read keeps the policy last read successfully; at
+  boot, with none read yet, network-granted plugins start deny-all until a read succeeds. The
+  read-modify-write of each policy option runs under the `wordjs:plugin-policy` lock, reading the row
+  fresh and writing it only if it still holds what was read (see Known limitations); the writing node applies the change to its own gates as soon as the row is written, before the
+  `updated_option` hooks run (and outside the lock), and its permission / egress-hosts route respawns the
+  plugin's child — or deactivates the plugin, when its code needs a capability just revoked — before
+  waiting for those hooks.
 - **Realtime notifications (SSE)** — published over Redis (`wordjs:notify`) and re-broadcast by every
   node to its own connected clients, so a notification reaches a user regardless of which node holds
   their stream. Notifications are also persisted, so a brief Redis hiccup degrades to "appears on next
@@ -303,16 +334,43 @@ Health probes (added for orchestration):
 
 ## Known limitations
 
-- **No cross-node roles-coherence epoch yet (DATA-COH-01, deferred).** The Redis
-  `wordjs:option-changed` pub/sub *does* propagate role/capability edits live, and a same-node
-  local-write epoch stops a stale background TTL refresh from clobbering a just-applied local edit.
-  But there is no **cross-node** epoch: if Redis drops a publish, a lagging replica corrects itself
-  only via the in-process roles-cache TTL self-heal fallback — a missed cross-node revocation is
-  bounded by that TTL (`ROLES_CACHE_TTL_MS`, **10s**, in `core/roles.ts`), the fail-open direction,
-  not corrected instantly. Strengthening this into a cross-node coherence epoch is on the roadmap.
-- **Residual multi-node lost-update edges.** The `active_plugins` read-modify-write **is** serialized
-  across nodes (best-effort, under the `wordjs:active-plugins` distributed lock), but general
-  concurrent option/row writes across nodes are not yet fully guarded against lost updates.
+- **Role and capability edits reach the other nodes over Redis.** The `wordjs:option-changed`
+  pub/sub propagates role/capability edits live, and a same-node local-write epoch stops a stale
+  background TTL refresh from clobbering a just-applied local edit. A node that misses a publish picks
+  the change up when its roles cache refreshes: every `ROLES_CACHE_TTL_MS` (**10s**, in
+  `core/roles.ts`), through the option cache, whose in-process entries live at most **30s** when Redis
+  is configured. Make role and capability changes while the writing node can reach Redis: a change
+  saved while it cannot is published to no one, and with the object cache enabled the shared cache keeps
+  the previous value until its entry expires (option entries are stored with `cache.set`'s default
+  3600 s TTL), so save the change again once Redis is back. (Plugin grants and egress allowlists are
+  re-read from the database directly — see above.)
+- **A node's copy of the plugin grants and egress allowlists can be one re-sync behind.** Each node
+  keeps `plugin_grants` and `plugin_egress_hosts` in memory, and a change made through another node
+  reaches that copy with the peer's broadcast or, when the broadcast is lost, at the next policy re-sync
+  (every **10 s**, see "Plugin grant / egress-allowlist edits" above). Until then the decisions that
+  read the copy answer with the old policy: the per-call permission checks of the plugin bridge, the
+  network and filesystem grants and the egress allowlist a plugin's child process is started with (on
+  a reload, a crash restart or an interactive activation), and the grants and lists the admin screens show; a running child is
+  respawned once the re-sync sees its policy changed. The decisions that must not lag read the database
+  instead. Every policy WRITE — an administrator's or an API token's change to
+  `POST /plugins/:slug/permissions` or `POST /plugins/:slug/egress-hosts`, grant-on-activate, the boot
+  backfill, the one-time `browser:script` upgrade at boot, an uninstall — reads the stored record fresh
+  under the `wordjs:plugin-policy` lock, decides on it (a token's write is refused when it would add a
+  grant or a host to the STORED record; an activation seeds the declared grants only when the stored
+  record is missing, or empty with no administrator decision; the backfill fills only a missing record;
+  the upgrade adds `browser:script` to the stored record, keeping every other grant in it, and leaves a
+  record an administrator has decided as it is), and writes only if the record still holds what was read
+  (or, when there was none, only if there still is none). A boot that could not read `plugin_grants`
+  runs neither the backfill nor the upgrade; both run at the next boot that can. An activation by an API token adopts the stored grants and egress allowlist into the node's
+  copy before it starts the plugin, and an in-place update (`POST /marketplace/update`, or
+  `/marketplace/install` on an installed plugin) never rewrites either record — its one write, under the
+  same lock and only while there is still none, is an empty grant record for a plugin that has no record
+  — and adopts both before it reactivates the plugin.
+- **Concurrent writes across nodes.** The `active_plugins` read-modify-write **is** serialized
+  across nodes (best-effort, under the `wordjs:active-plugins` distributed lock), and so are the
+  plugin grant / egress-allowlist writes (`wordjs:plugin-policy`); both read the row from the database
+  inside the lock. Other option and row writes made at the same moment on different nodes are
+  last-writer-wins: make site configuration changes from one node at a time.
 - The **service registry and certificate live on the single gateway**; running multiple active-active
   gateway nodes would additionally require registry replication and cross-gateway cert distribution,
   which this topology intentionally avoids.

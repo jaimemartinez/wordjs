@@ -286,16 +286,90 @@ exports.listSourceTables = listSourceTables;
 exports.recreateTableOnTarget = recreateTableOnTarget;
 exports.CORE_TABLES = CORE_TABLES;
 
+// ── What belongs to the database the site is running on ─────────────────────────────────────────
+//
+// POST /cleanup deletes a leftover database from data/ after a migration, and it used to check only that
+// the name was one of three: `{file: 'wordjs-native.db'}` unlinked the LIVE default SQLite file and its
+// -wal/-shm while the site ran on it (getStatus never listed it, but nothing stopped the request). The
+// files of the active database are therefore worked out from what the site actually opened — the
+// configured path and the path the async driver holds — never from the driver's default file name, which
+// a pinned `dbPath` (the installer pins it; a failed migration swap leaves `<name>.tmp` active) makes
+// wrong. Every spelling is compared: the resolved path, its real path (a symlink or junction anywhere on
+// the way, data/ itself included), case-insensitively where the file system is, and the file's identity.
+
+const CLEANUP_FILES = ['wordjs.db', 'wordjs-native.db', 'postgres-embed'];
+// A SQLite database is its file and the journal files beside it; deleting any one of them corrupts it.
+const SQLITE_COMPANIONS = ['', '-wal', '-shm', '-journal'];
+const FOLDS_CASE = process.platform === 'win32' || process.platform === 'darwin';
+
+function spellingsOf(p) {
+    const abs = path.resolve(p);
+    const out = new Set([abs]);
+    try { out.add(fs.realpathSync.native(abs)); } catch (_) { /* absent */ }
+    // An absent companion file under a linked directory is still that directory's file.
+    try { out.add(path.join(fs.realpathSync.native(path.dirname(abs)), path.basename(abs))); } catch (_) { /* absent */ }
+    return [...out].map((k) => (FOLDS_CASE ? k.toLowerCase() : k));
+}
+
+function identityOf(p) {
+    try {
+        const st = fs.statSync(p, { bigint: true });
+        return st.ino ? `${st.dev}:${st.ino}` : null;
+    } catch (_) { return null; }
+}
+
+/** The paths of the database the site is running on (absolute; files that may not exist yet included). */
+function activeDatabaseFiles() {
+    const driver = String(dbManager.getDbType().driver || '');
+    const files = [];
+    if (/^sqlite/.test(driver)) {
+        const roots = [];
+        if (config.dbPath) roots.push(config.dbPath);
+        try { const a = dbManager.getDbAsync(); if (a && typeof a.dbPath === 'string') roots.push(a.dbPath); } catch (_) { /* not connected */ }
+        for (const root of roots) for (const suffix of SQLITE_COMPANIONS) files.push(path.resolve(root + suffix));
+    }
+    // The embedded Postgres data directory the status screen has always treated as live under 'postgres'.
+    if (driver === 'postgres') files.push(path.resolve('./data/postgres-embed'));
+    return files;
+}
+
+/**
+ * Does deleting `target` (and, for a file, its SQLite companions) touch the database the site is running
+ * on? A directory conflicts when an active file is that directory or lies inside it.
+ */
+function belongsToActiveDatabase(target) {
+    const active = activeDatabaseFiles();
+    const activeKeys = new Set(active.flatMap(spellingsOf));
+    const activeIds = new Set(active.map(identityOf).filter(Boolean));
+    for (const suffix of SQLITE_COMPANIONS) {
+        const candidate = path.resolve(target + suffix);
+        if (spellingsOf(candidate).some((k) => activeKeys.has(k))) return true;
+        const id = identityOf(candidate);
+        if (id && activeIds.has(id)) return true;
+    }
+    let isDir = false;
+    try { isDir = fs.statSync(target).isDirectory(); } catch (_) { /* absent */ }
+    if (isDir) {
+        const dirKeys = spellingsOf(target).map((d) => (d.endsWith(path.sep) ? d : d + path.sep));
+        for (const k of activeKeys) {
+            if (dirKeys.some((d) => k.startsWith(d))) return true;
+        }
+    }
+    return false;
+}
+exports.belongsToActiveDatabase = belongsToActiveDatabase;
+
 exports.getStatus = (req, res) => {
     // Check for legacy files to allow cleanup
     const legacyFiles = [];
     const dbType = dbManager.getDbType();
     const currentDriver = dbType.driver;
 
-    // Only allow cleanup if we are NOT using the file execution
-    if (currentDriver !== 'sqlite-legacy' && fs.existsSync(path.resolve('./data/wordjs.db'))) legacyFiles.push('wordjs.db');
-    if (currentDriver !== 'sqlite-native' && fs.existsSync(path.resolve('./data/wordjs-native.db'))) legacyFiles.push('wordjs-native.db');
-    if (currentDriver !== 'postgres' && fs.existsSync(path.resolve('./data/postgres-embed'))) legacyFiles.push('postgres-embed');
+    // Only offer what the site is NOT running on — judged the way POST /cleanup judges it.
+    for (const file of CLEANUP_FILES) {
+        const target = path.resolve('./data', file);
+        if (fs.existsSync(target) && !belongsToActiveDatabase(target)) legacyFiles.push(file);
+    }
 
     res.json({
         currentDriver,
@@ -306,13 +380,17 @@ exports.getStatus = (req, res) => {
 };
 
 exports.cleanup = (req, res) => {
-    const { file } = req.body;
+    const { file } = req.body || {};
     // Security: Only allow specific filenames to prevent arbitrary deletion
-    const ALLOWED = ['wordjs.db', 'wordjs-native.db', 'postgres-embed'];
-
-    if (!ALLOWED.includes(file)) return res.status(403).json({ error: 'Invalid file' });
+    if (!CLEANUP_FILES.includes(file)) return res.status(403).json({ error: 'Invalid file' });
 
     const target = path.resolve('./data', file);
+    if (belongsToActiveDatabase(target)) {
+        return res.status(409).json({
+            code: 'db_cleanup_active_database',
+            error: `'${file}' belongs to the database the site is running on; nothing was deleted.`
+        });
+    }
     if (fs.existsSync(target)) {
         try {
             const stat = fs.statSync(target);
@@ -321,9 +399,10 @@ exports.cleanup = (req, res) => {
             } else {
                 fs.unlinkSync(target);
 
-                // Also clean WAL/SHM if they exist
-                if (fs.existsSync(target + '-wal')) fs.unlinkSync(target + '-wal');
-                if (fs.existsSync(target + '-shm')) fs.unlinkSync(target + '-shm');
+                // Also clean WAL/SHM/journal if they exist
+                for (const suffix of ['-wal', '-shm', '-journal']) {
+                    if (fs.existsSync(target + suffix)) fs.unlinkSync(target + suffix);
+                }
             }
 
             res.json({ success: true, message: 'File deleted' });
@@ -349,6 +428,18 @@ exports.runMigration = async (req, res) => {
     if (targetDriver === currentDriver && targetDriver !== 'postgres' && targetDriver !== 'mysql') {
         // Allow re-migration to postgres/mysql for credential updates, but block file-to-file defaults
         return res.status(400).json({ error: 'Already using this driver' });
+    }
+    // A SQLite target is written to data/<its default name> (and .tmp beside it), deleting what is there
+    // at the swap. With a pinned dbPath that can be the file the site is running on: refused before
+    // anything is read, written or installed (the cleanup's own rule).
+    if (targetDriver === 'sqlite-native' || targetDriver === 'sqlite-legacy') {
+        const planned = path.resolve('./data', targetDriver === 'sqlite-native' ? 'wordjs-native.db' : 'wordjs.db');
+        if (belongsToActiveDatabase(planned) || belongsToActiveDatabase(planned + '.tmp')) {
+            return res.status(409).json({
+                code: 'db_migration_target_is_active',
+                error: `The ${targetDriver} target file '${path.basename(planned)}' belongs to the database the site is running on. Point dbPath at another file first.`
+            });
+        }
     }
 
     try {

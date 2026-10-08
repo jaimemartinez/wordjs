@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { postsApi, Post } from "@/lib/api";
+import { previewHref } from "@/lib/previewHref";
 import { useI18n } from "@/contexts/I18nContext";
 import { useModal } from "@/contexts/ModalContext";
 import { Button, EmptyState, StatusBadge } from "@/components/ui";
@@ -121,7 +122,8 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
         }
     };
 
-    const viewHref = (p: Post) => p.status === "publish" ? `/${p.slug || p.id}` : `/preview/${p.slug || p.id}`;
+    // A draft opens its preview AS ITS TYPE (lib/previewHref): a page sharing the slug must not answer for it.
+    const viewHref = (p: Post) => p.status === "publish" ? `/${p.slug || p.id}` : previewHref(p.slug || p.id, p.type);
 
     return (
         <div className="bg-white rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 overflow-hidden">

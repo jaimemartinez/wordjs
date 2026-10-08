@@ -19,7 +19,10 @@ const path = require('path');
 const crypto = require('crypto');
 const { getAllPlugins, activatePlugin, deactivatePlugin, createSamplePlugin, isPluginActive, validatePluginPermissions, validateManifestPermissions, validateManifestDependencies, validateBrowserCapability, browserCodeSources, BROWSER_SCRIPT_TOKEN, listOrphanedPlugins, reclaimOrphanedPlugin, clearOrphanNotice, PLUGINS_DIR } = require('../core/plugins');
 const { assertZipWithinBudget } = require('../core/zip-guard');
-const { authenticate, authenticateAllowQuery } = require('../middleware/auth');
+// refusePluginGrantByToken: an API token may revoke a plugin's grants or narrow its egress, never add to
+// them — nor activate a plugin whose activation would seed its declared permissions. isHeadless puts a
+// token's grant / egress write in `narrowOnly` mode, judged against what is STORED (core/plugin-permissions).
+const { authenticate, authenticateAllowQuery, optionalAuth, refusePluginGrantByToken, isHeadless } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler, publicErrorText } = require('../middleware/errorHandler');
 const { recordAudit } = require('../core/audit');
@@ -228,6 +231,17 @@ function createInstallTmp(): { dir: string; zipPath: string; dispose: () => void
  */
 function logSafe(v: any): string {
     return String(v == null ? '' : v).replace(/\n/g, '').replace(/\r/g, '');
+}
+
+/**
+ * Wait out a grant / egress-allowlist write's `updated_option` fan-out (core/plugin-permissions
+ * applyGrants / applyEgressAllowlist) once the route has acted on the change. By then the change is
+ * persisted, in force on this node and in the respawned child, so a subscriber that threw is logged — not
+ * reported to the administrator as a failure of a change that took effect.
+ */
+async function awaitPolicyAnnounced(announced: Promise<void>, tag: string, slug: string): Promise<void> {
+    try { await announced; }
+    catch (e: any) { console.warn("[%s] '%s': the change is in effect; an updated_option subscriber failed:", tag, logSafe(slug), e && e.message); }
 }
 
 // How long DELETE waits for the slug's child process to actually be gone before it refuses to remove
@@ -702,23 +716,33 @@ async function runPluginUpdate(
 
     let stashDir: string | null = null;
     let wasActive = false;
-    let grantsSnap: string[] = [];
-    let egressSnap: string[] = [];
 
-    const restoreGrants = async () => {
-        try { await perms.setGrants(slug, grantsSnap); } catch { /* */ }
-        try { await perms.setEgressAllowlist(slug, egressSnap); } catch { /* */ }
+    // AN UPDATE NEVER REWRITES THE GRANTS OR THE EGRESS LIST. The plugin stays installed, so what an
+    // administrator decided for it stays as it is stored (uninstallPluginData keepGrants). The update used
+    // to clear the record and write back a copy taken from this node's memory — which a revoke or a
+    // narrowed allowlist made through another node does not reach — so an update served by a stale node
+    // re-granted what had been revoked and widened the egress list (to every public host when the copy was
+    // empty). The one write it makes is to a plugin with NO grant record, which gets an empty one before
+    // anything moves (perms.ensureGrantRecord: insert-if-absent, no administrator decision): the boot
+    // backfill grants an active plugin without a record whatever its manifest declares, and the manifest
+    // is about to be the new version's. What this node RUNS the plugin with is its in-memory copy, so the
+    // stored record is adopted into it before every (re)activation here.
+    const adoptStoredPolicy = async (): Promise<boolean> => {
+        try { await perms.adoptStoredPolicy(slug); return true; }
+        catch (e: any) { console.warn('[plugin-update %s] the stored grants could not be read: %s', logSafe(slug), logSafe(e && e.message)); return false; }
     };
-    // Put the previous version back exactly: partial new code out (data/ kept), stashed code in, grants
-    // restored, reactivated if it had been running. Best-effort — a rollback must never itself throw.
+    // Put the previous version back exactly: partial new code out (data/ kept), stashed code in,
+    // reactivated if it had been running — with the stored grants, and not at all when they cannot be
+    // read. Best-effort — a rollback must never itself throw.
     // Resolves to whether the plugin is RUNNING again (true when it did not need to be), because "rolled
-    // back" without that is the claim an admin acts on: when the reactivation fails too, the previous
-    // version is on disk but switched off, and the answer has to say so.
+    // back" without that is the claim an admin acts on: when the reactivation fails too (or the stored
+    // grants cannot be read), the previous version is on disk but switched off, and the answer has to
+    // say so.
     const rollback = async (): Promise<boolean> => {
         try { removePluginDirPreservingData(installedDir); } catch { /* */ }
         if (stashDir) { try { moveEntriesInto(stashDir, installedDir); fs.rmSync(stashDir, { recursive: true, force: true }); } catch { /* */ } stashDir = null; }
-        await restoreGrants();
         if (!wasActive) return true;
+        if (!(await adoptStoredPolicy())) return false;
         try { await core.activatePlugin(slug); return true; } catch (e: any) { console.warn('[plugin-update %s] rollback reactivate failed: %s', logSafe(slug), logSafe(e && e.message)); return false; }
     };
 
@@ -726,10 +750,19 @@ async function runPluginUpdate(
         // ORIGIN GATE — before any destructive action (no rollback needed if this throws).
         await origins.assertUpdatableFrom(slug, origin);
 
-        // SNAPSHOT the state we must preserve/replay.
+        // A GRANT RECORD BEFORE ANYTHING MOVES, so neither the new version nor a crash half-way through
+        // the update finds the plugin without one. An ACTIVE plugin with no record is granted, at the next
+        // boot, everything its manifest declares (backfillActive), and from step 4 on that manifest is the
+        // new version's: without this, a plugin activated while declaring nothing (an API token may
+        // activate one) and then updated to a version that declares `network` or `database:write` would
+        // get them at the next restart, approved by nobody. Created empty and undecided, a plugin that was
+        // never activated is still seeded on its first activation (shouldSeedDeclaredGrants), and an
+        // existing record — or one another writer stores meanwhile — is never touched. A database error
+        // here fails the update before anything has moved.
+        await perms.ensureGrantRecord(slug);
+
+        // SNAPSHOT the state we must replay.
         wasActive = await core.isPluginActive(slug);
-        grantsSnap = perms.getGrants(slug);
-        egressSnap = perms.getEgressAllowlist(slug);
 
         // 1. Nothing runs while the files move (don't prune deps — the new version reinstalls them).
         if (wasActive) await core.deactivatePlugin(slug, { prune: false });
@@ -742,8 +775,9 @@ async function runPluginUpdate(
             fs.renameSync(path.join(installedDir, entry), path.join(stashDir, entry));
         }
 
-        // 3. Clear the old version's grants/strikes/enqueued assets — KEEP the wjp_<slug>_* tables.
-        await core.uninstallPluginData(slug, { dropTables: false });
+        // 3. Clear the old version's strikes/enqueued assets — KEEP the wjp_<slug>_* tables and the
+        //    stored grants and egress allowlist.
+        await core.uninstallPluginData(slug, { dropTables: false, keepGrants: true });
 
         // 4. Install the new version (adopts the preserved data/). installPluginFromZip consumes the zip.
         zipConsumed = true;
@@ -756,8 +790,9 @@ async function runPluginUpdate(
             return { ok: false, status: installRes.status, body: { ...installRes.body, rolledBack: true, restoredVersion: fromVersion } };
         }
 
-        // 5. Restore grants + egress BEFORE reactivating — they are baked into the isolate at spawn time.
-        await restoreGrants();
+        // 5. Adopt the STORED grants + egress BEFORE reactivating — they are baked into the isolate at
+        //    spawn time. A database error here is thrown (and rolls back): nothing starts on a guess.
+        await perms.adoptStoredPolicy(slug);
 
         // 6. Re-record the origin under the lease (so it can't land on a slug a concurrent op just removed).
         if (origin) { try { await origins.setPluginOrigin(slug, origin); } catch { /* */ } }
@@ -861,11 +896,16 @@ async function recoverInterruptedPluginUpdates(): Promise<void> {
  *   get:
  *     summary: Get public plugin registry (for frontend)
  *     description: >-
- *       Unauthenticated. One entry per ACTIVE plugin carrying only what the admin shell's hooks loader
+ *       No sign-in required. One entry per ACTIVE plugin carrying only what the admin shell's hooks loader
  *       needs to explain a missing hooks bundle — never the manifest (no name, version, author,
- *       permissions or dependencies), so the endpoint cannot be used to fingerprint the install.
+ *       permissions or dependencies), so the endpoint cannot be used to fingerprint the install. Whether a
+ *       plugin's browser:script capability is granted (`browser`) is included only for a signed-in caller
+ *       with admin-panel access (access_admin_panel); every other caller gets the entries without it.
+ *       Sent with Cache-Control private, no-cache.
  *     tags: [Plugins]
- *     security: []
+ *     security:
+ *       - bearerAuth: []
+ *       - {}
  *     responses:
  *       200:
  *         description: The active plugins
@@ -879,7 +919,7 @@ async function recoverInterruptedPluginUpdates(): Promise<void> {
  *                   type: array
  *                   items:
  *                     type: object
- *                     required: [id, path, browser]
+ *                     required: [id, path]
  *                     properties:
  *                       id:
  *                         type: string
@@ -887,7 +927,9 @@ async function recoverInterruptedPluginUpdates(): Promise<void> {
  *                         type: string
  *                       browser:
  *                         type: boolean
- *                         description: Whether the plugin's browser:script capability is granted (its bundles are served).
+ *                         description: >-
+ *                           Whether the plugin's browser:script capability is granted (its bundles are
+ *                           served). Present only for a signed-in caller with access_admin_panel.
  *                       frontend:
  *                         type: object
  *                         nullable: true
@@ -907,10 +949,11 @@ async function recoverInterruptedPluginUpdates(): Promise<void> {
  *     responses:
  *       200:
  *         description: >-
- *           Scripts and styles enqueued by the currently ACTIVE plugins. Every stored entry is re-checked
- *           against the published plugin surface on the way out, so an entry pointing at a path that is no
- *           longer served is omitted rather than emitted as a broken tag. Sent with
- *           Cache-Control public, max-age=60.
+ *           Scripts and styles enqueued by the currently ACTIVE plugins that currently hold the assets:write
+ *           grant (a revoked grant stops a plugin's entries at the next read). Every stored entry is
+ *           re-checked against the published plugin surface on the way out, so an entry pointing at a path
+ *           that is no longer served is omitted rather than emitted as a broken tag. Sent with
+ *           Cache-Control private, no-cache (no shared cache may hold it: the list changes on a revoke).
  *         content:
  *           application/json:
  *             schema:
@@ -948,11 +991,18 @@ async function recoverInterruptedPluginUpdates(): Promise<void> {
  */
 router.get('/assets', asyncHandler(async (req: Request, res: Response) => {
     const { getActiveAssets } = require('../core/plugin-assets');
-    res.set('Cache-Control', 'public, max-age=60');
+    // NOT shared-cacheable. The list changes the moment a plugin is deactivated or loses assets:write, and
+    // its one consumer, the public layout's server render (frontend/src/lib/server-api getPublicAssets),
+    // caches it in its own Data Cache under the `plugin-assets` tag, which those changes purge — it does
+    // not read this header. `public, max-age=60` let any shared cache in front of /api keep handing out a
+    // revoked plugin's <script src> for a minute that no purge reaches; `private, no-cache` keeps every
+    // copy revalidated (the weak ETag makes that a 304) and out of shared caches. Set here, the index.ts
+    // public-JSON default (which would add s-maxage + stale-while-revalidate) leaves it alone.
+    res.set('Cache-Control', 'private, no-cache');
     res.json(await getActiveAssets());
 }));
 
-router.get('/registry', asyncHandler(async (req: Request, res: Response) => {
+router.get('/registry', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
     // ANONYMOUS endpoint, so it answers only what its one consumer needs — never the manifest.
     //
     // This used to spread each active plugin's FULL manifest: name, exact version, author, every
@@ -960,12 +1010,19 @@ router.get('/registry', asyncHandler(async (req: Request, res: Response) => {
     // fingerprint of the install ("which plugins, which versions, which of them hold network or
     // database:write") — exactly the inventory an attacker needs to pick a known-vulnerable version.
     // The consumer is frontend/src/lib/pluginBundleLoader.ts, which reads it ONLY to explain a 404 on
-    // an active plugin's hooks bundle: it needs the id/path to find the entry, whether the plugin
-    // declares `frontend.hooks`, whether its manifest was readable at all (`frontend: null`), and
+    // an active plugin's hooks bundle or admin page: it needs the id/path to find the entry, whether the
+    // plugin declares `frontend.hooks`, whether its manifest was readable at all (`frontend: null`), and
     // whether its browser:script capability is granted (a 404 for an ungranted plugin is the gate
     // working, not a broken build). Nothing else is emitted. The slugs themselves are already public
     // through GET /plugins/active, which the public site needs to load blocks.
+    //
+    // THE REGISTRY STATES THE GRANT ONLY TO THE ADMIN SHELL. `browser` is one of the plugin's permissions,
+    // and the admin shell is the only place it is read — the loader runs in the admin layout, with the session cookie, for users who
+    // can open the admin panel. So it is emitted only for a signed-in caller holding access_admin_panel;
+    // everyone else gets the entries without it, and the loader then reads every 404 as "not found"
+    // rather than "not granted". The answer depends on who asks: no shared cache may hold it.
     const { isGranted } = require('../core/plugin-permissions');
+    const showsGrant = !!(req.user && typeof req.user.can === 'function' && req.user.can('access_admin_panel'));
     const plugins = await getAllPlugins();
     const activePlugins = plugins.filter((p: any) => p.active);
 
@@ -975,8 +1032,8 @@ router.get('/registry', asyncHandler(async (req: Request, res: Response) => {
         const entry: any = {
             id: plugin.slug,
             path: `/plugins/${plugin.slug}`,
-            browser: isGranted(plugin.slug, 'browser', 'script'),
         };
+        if (showsGrant) entry.browser = isGranted(plugin.slug, 'browser', 'script');
         // A directory name read back from disk is still a segment we did not write — resolve it through
         // the same allowlist + containment proof, and treat "cannot resolve" as "no manifest" (fail closed).
         const manifestPath = pluginFile(plugin.slug, 'manifest.json');
@@ -998,6 +1055,7 @@ router.get('/registry', asyncHandler(async (req: Request, res: Response) => {
         registry.push(entry);
     }
 
+    res.set('Cache-Control', 'private, no-cache');
     res.json({ plugins: registry });
 }));
 
@@ -1228,6 +1286,14 @@ router.get('/:slug/status', authenticate, isAdmin, asyncHandler(async (req: Requ
  *           The plugin was rejected before it started: an undeclared browser capability
  *           (`plugin_browser_capability_undeclared`) or a failed static validation, whose `details`
  *           split missing permissions from forbidden calls.
+ *       403:
+ *         description: >-
+ *           Not an administrator, or rest_token_management_forbidden: an API token asked to activate a
+ *           plugin whose activation would grant the permissions it declares — one with no grant record, or
+ *           with an empty one no administrator decided (data.params lists them). Nothing is activated or
+ *           granted; an administrator activates it once from an interactive session, after which a token
+ *           may deactivate and re-activate it. A plugin whose every grant an administrator revoked is
+ *           re-activated by a token with nothing granted.
  *       409:
  *         description: >
  *           `sandbox_unavailable` — the plugin sandbox refused to start the plugin, either because the
@@ -1290,35 +1356,59 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
     }
 
     // Default-deny grants: when an admin activates a plugin (having seen its requested permissions in the
-    // activation dialog), grant exactly what its manifest DECLARES — but ONLY if it has no grant record
-    // yet, so a later REVOKE via the per-permission switches survives a re-activation. The admin can
-    // refine grants anytime in /admin/plugins.
+    // activation dialog), grant exactly what its manifest DECLARES — but ONLY when the plugin holds no
+    // grants an administrator decided (shouldSeedDeclaredGrants: no record, or an empty one with no
+    // administrator decision recorded — what an older in-place update left behind). A partial REVOKE via
+    // the per-permission switches survives a re-activation, and so does a revoke of EVERY grant: the
+    // permissions route records it as the administrator's decision. The admin can refine grants anytime
+    // in /admin/plugins.
     //
-    // Resolve the declared set BEFORE activation (so we can spawn with the grants), but only PERSIST it
-    // AFTER activation SUCCEEDS — a plugin that fails its AST scan / test gate must not leave behind a
-    // persisted grant record. To make init see the grants, seed them in-memory first, then either
-    // persist-on-success or roll back the in-memory seed on failure.
-    const { getGrants, setGrants, _setGrantsInMemory } = require('../core/plugin-permissions');
+    // PERSIST the declared set BEFORE activating, and drop it again if the activation fails (a plugin that
+    // fails its AST scan / test gate must not leave a grant record behind). Persisting only after success
+    // was wrong on a cluster: activatePlugin() publishes 'activate' to the other nodes as it finishes, so
+    // they loaded the plugin before its grants existed anywhere but this node's memory — refusing it
+    // ("declared but not granted") or spawning it without its grants. An in-memory-only seed was also
+    // erased by any policy re-read landing mid-activation (a peer's change, the periodic re-sync).
+    //
+    // Whether to seed is decided by seedGrants() on the row it reads fresh under the policy lease (not on
+    // this node's map, which may be a re-sync behind), with the one rule in shouldSeedDeclaredGrants(), and
+    // the seed is recorded as the administrator's decision in the same write: they approved it in the
+    // activation dialog (core/plugin-permissions ADMIN_DECISIONS_MARKER).
+    //
+    // AN API TOKEN NEVER SEEDS. The grant-on-activate IS the administrator's approval of the activation
+    // dialog, and a token read no dialog: a token-driven activation that would seed permissions is refused,
+    // before anything runs, naming them. A plugin that declares nothing, or holds what an administrator
+    // decided (re-activating it after a deactivation or an update), seeds nothing, so a headless deploy may
+    // still activate it. For a token the question is asked of the STORED record, and the stored record —
+    // grants AND egress allowlist — is adopted into this node's copy before the plugin starts here
+    // (adoptStoredPolicy): an administrator's revoke or narrowed allowlist made on another node may not
+    // have reached this node's memory yet, and the token must not start the plugin with the stale copy
+    // (core/plugin-permissions "against what is stored").
+    const { seedGrants, clearGrants, adoptStoredPolicy } = require('../core/plugin-permissions');
+    let declared: string[] = [];
+    try {
+        const all = await getAllPlugins();
+        const p = all.find((x: any) => x.slug === slug);
+        declared = Array.from(new Set(((p && p.permissions) || [])
+            .map((perm: any) => (perm && perm.scope) ? (perm.scope === 'network' ? 'network' : `${perm.scope}:${perm.access || 'read'}`) : null)
+            .filter(Boolean))) as string[];
+    } catch (e: any) { console.warn("[Permissions] grant-on-activate (seed) for '%s' failed:", logSafe(slug), e && e.message); }
     let seededDeclared: string[] | null = null;
-    const hadNoGrants = getGrants(slug).length === 0;
-    if (hadNoGrants) {
-        try {
-            const all = await getAllPlugins();
-            const p = all.find((x: any) => x.slug === slug);
-            const declared = Array.from(new Set(((p && p.permissions) || [])
-                .map((perm: any) => (perm && perm.scope) ? (perm.scope === 'network' ? 'network' : `${perm.scope}:${perm.access || 'read'}`) : null)
-                .filter(Boolean))) as string[];
-            if (declared.length) { _setGrantsInMemory(slug, declared); seededDeclared = declared; }
-        } catch (e: any) { console.warn("[Permissions] grant-on-activate (seed) for '%s' failed:", logSafe(slug), e && e.message); }
+    if (isHeadless(req)) {
+        const stored = await adoptStoredPolicy(slug);
+        if (declared.length && stored.seedsDeclaredGrants && refusePluginGrantByToken(req, res, declared)) return;
+    } else if (declared.length) {
+        try { if (await seedGrants(slug, declared, { adminDecision: true })) seededDeclared = declared; }
+        catch (e: any) { console.warn("[Permissions] grant-on-activate (seed) for '%s' failed:", logSafe(slug), e && e.message); }
     }
 
     let result;
     try {
         result = await activatePlugin(slug);
     } catch (e: any) {
-        // Activation failed (scan/test/init) — undo the in-memory grant seed so nothing is persisted and
-        // a failed-activation plugin holds no grants.
-        if (seededDeclared) { try { _setGrantsInMemory(slug, []); } catch { /* */ } }
+        // Activation failed (scan/test/init) — drop the grant record seeded above, so a failed-activation
+        // plugin holds no grants (in memory or in the database).
+        if (seededDeclared) { try { await clearGrants(slug); } catch (ce: any) { console.warn("[Permissions] grant-on-activate (rollback) for '%s' failed:", logSafe(slug), ce && ce.message); } }
         // A STRUCTURED validation failure (AST scan) carries a fixable-vs-blocked split. Surface it as a
         // 400 with `details` so the admin UI can show a rejection panel instead of one mangled string.
         if (e && e.code === 'PLUGIN_VALIDATION_FAILED') {
@@ -1340,11 +1430,6 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
         const refusal = findSandboxUnavailable(e);
         if (refusal) return res.status(409).json(sandboxRefusalBody(refusal));
         throw e;
-    }
-
-    // Activation succeeded — NOW persist the grants we seeded (idempotent; only when it had none before).
-    if (seededDeclared && hadNoGrants && getGrants(slug).length > 0) {
-        try { await setGrants(slug, seededDeclared); } catch (e: any) { console.warn("[Permissions] grant-on-activate (persist) for '%s' failed:", logSafe(slug), e && e.message); }
     }
 
     // Trigger frontend registry regeneration
@@ -1425,8 +1510,10 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
  *       403:
  *         description: >-
  *           Authenticated but not an administrator (rest_forbidden); an API token whose scope does not grant
- *           write access here (rest_token_scope_insufficient); or a cookie-authenticated request that failed
- *           the same-origin / double-submit CSRF gate (rest_csrf_invalid, rest_csrf_token).
+ *           write access here (rest_token_scope_insufficient); an API token asking for a grant the plugin
+ *           does not hold now (rest_token_management_forbidden, data.params names it: a token may revoke,
+ *           never grant, and nothing is written); or a cookie-authenticated request that failed the
+ *           same-origin / double-submit CSRF gate (rest_csrf_invalid, rest_csrf_token).
  *       409:
  *         description: >-
  *           `sandbox_unavailable` — the grants WERE saved (`saved: true`), but the plugin sandbox refused to
@@ -1441,7 +1528,7 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
     if (!slug) {
         return res.status(400).json({ error: 'Invalid plugin slug' });
     }
-    const { setGrants, getGrants } = require('../core/plugin-permissions');
+    const { applyGrants, getGrants } = require('../core/plugin-permissions');
 
     // Body: { granted: ["scope:access", ...], network: boolean }. The admin's granted set is the source
     // of truth (default-deny). We don't constrain to the manifest here — hasPermission already requires
@@ -1449,7 +1536,23 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
     const body = req.body || {};
     const tokens: string[] = Array.isArray(body.granted) ? body.granted.map((t: any) => String(t)) : [];
     if (body.network) tokens.push('network');
-    await setGrants(slug, tokens);
+    // An administrator's decision (core/plugin-permissions ADMIN_DECISIONS_MARKER): no upgrade step may
+    // later add back a capability this request left out, and a revoke of EVERY grant survives the next
+    // activation instead of being re-seeded (shouldSeedDeclaredGrants).
+    //
+    // An API token may take grants away (a revoke from a runbook) but never add one: what it grants a
+    // plugin outlives the token (middleware/auth.ts refusePluginGrantByToken). `narrowOnly` judges the set
+    // as it would be stored against what the plugin holds in the DATABASE at the moment of the write — not
+    // this node's mirror, which may be a re-sync behind another node's revoke — and refuses it as a whole
+    // (`refused` names the additions; nothing is written).
+    //
+    // Persisted and in force on this node's gates — but NOT yet in the running child, which holds what it
+    // was spawned with (the network grant, the egress allowlist, the child-side fs gate). So the scan and
+    // the respawn below run NOW, and the `updated_option` fan-out (`announced`, every subscriber told in
+    // turn) is waited for only after them: waiting first kept a revoked grant in force in the child for
+    // as long as the subscribers took.
+    const { announced, refused } = await applyGrants(slug, tokens, { adminDecision: true, narrowOnly: isHeadless(req) });
+    if (refused.length && refusePluginGrantByToken(req, res, refused)) return;
 
     // A REVOKE has to take effect NOW, not at the next boot. Some capabilities the AST scan gates have no
     // per-call runtime gate to fall back on — filesystem writes inside the plugin's own directory are the
@@ -1493,6 +1596,14 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
             reloadRefusal = findSandboxUnavailable(e);
         }
     }
+    // Multi-node: this node applied the change locally (maps + isolate). Tell every OTHER node to reload
+    // its grant map and respawn its isolate — otherwise a node that did not serve this request keeps the
+    // OLD grants (and the OLD egress allowlist, including the wordjs.dns name check) until it restarts.
+    // No-op on single-node (Redis not configured); coherence skips this node's own publish (self-origin).
+    // A revoke that CONDEMNED the plugin propagates via deactivatePlugin's own 'deactivate' publish.
+    if (!deactivationReason) { try { require('../core/plugins').publishPluginChange(slug, 'reload'); } catch { /* best-effort */ } }
+
+    await awaitPolicyAnnounced(announced, 'Permissions', slug);
 
     const granted = getGrants(slug);
     // THE SANDBOX REFUSED THE RESTART. reloadIsolatedPlugin stops the running child BEFORE it loads the
@@ -1618,8 +1729,12 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
  *       403:
  *         description: >-
  *           Authenticated but not an administrator (rest_forbidden); an API token whose scope does not grant
- *           write access here (rest_token_scope_insufficient); or a cookie-authenticated request that failed
- *           the same-origin / double-submit CSRF gate (rest_csrf_invalid, rest_csrf_token).
+ *           write access here (rest_token_scope_insufficient); an API token whose list would let the plugin
+ *           reach a host it cannot reach now — a host outside the current list, or an empty list replacing
+ *           one, which means every public host (rest_token_management_forbidden, data.params names them,
+ *           "*" for every public host; a token may only narrow, and nothing is written); or a
+ *           cookie-authenticated request that failed the same-origin / double-submit CSRF gate
+ *           (rest_csrf_invalid, rest_csrf_token).
  *       409:
  *         description: >-
  *           `sandbox_unavailable` — the allowlist WAS saved (`saved: true`), but the plugin sandbox refused to
@@ -1638,12 +1753,19 @@ router.get('/:slug/egress-hosts', authenticate, isAdmin, asyncHandler(async (req
 router.post('/:slug/egress-hosts', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const slug = safeSlugParam(req.params.slug);
     if (!slug) return res.status(400).json({ error: 'Invalid plugin slug' });
-    const { setEgressAllowlist, getEgressAllowlist } = require('../core/plugin-permissions');
+    const { applyEgressAllowlist, getEgressAllowlist } = require('../core/plugin-permissions');
     // Body: { hosts: ["api.stripe.com", "*.example.com", ...] }. Invalid entries (schemes/paths/ports) are
-    // dropped by setEgressAllowlist. An empty array clears the list (back to allow-all-public).
+    // dropped by applyEgressAllowlist. An empty array clears the list (back to allow-all-public).
     const body = req.body || {};
     const hosts: string[] = Array.isArray(body.hosts) ? body.hosts.map((h: any) => String(h)) : [];
-    await setEgressAllowlist(slug, hosts);
+    // The grants route's rule for the network half: an API token may narrow the list, never let the plugin
+    // reach a host it cannot reach now — and clearing the list is the widest write there is ("*"). Judged,
+    // like the grants, against the list STORED at the moment of the write (`narrowOnly`).
+    //
+    // In memory now; the running child still enforces the allowlist it was spawned with. Respawn first,
+    // then wait for the `updated_option` fan-out (see POST /:slug/permissions).
+    const { announced, refused } = await applyEgressAllowlist(slug, hosts, { narrowOnly: isHeadless(req) });
+    if (refused.length && refusePluginGrantByToken(req, res, refused)) return;
 
     // Re-spawn the isolate so the child re-installs the new allowlist (pushed in cfg → egress-guard.setAllowedHosts).
     let reloaded = false;
@@ -1655,6 +1777,12 @@ router.post('/:slug/egress-hosts', authenticate, isAdmin, asyncHandler(async (re
         console.warn("[EgressHosts] reload of '%s' after egress change failed:", logSafe(slug), e && e.message);
         reloadRefusal = findSandboxUnavailable(e);
     }
+    // Multi-node: propagate so every OTHER node reloads its egress-allowlist map and respawns its isolate.
+    // Otherwise a node that did not serve this request keeps resolving/reaching the old host set — the
+    // host-side wordjs.dns name check reads getEgressAllowlist from memory. No-op on single-node.
+    try { require('../core/plugins').publishPluginChange(slug, 'reload'); } catch { /* best-effort */ }
+
+    await awaitPolicyAnnounced(announced, 'EgressHosts', slug);
 
     const saved = getEgressAllowlist(slug);
     // Same as the grants route: the child was stopped before the refused load, so say so - with the

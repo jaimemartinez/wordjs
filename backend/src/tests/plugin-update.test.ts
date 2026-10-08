@@ -2,9 +2,15 @@
  * WordJS — one-click in-place plugin UPDATE (runPluginUpdate) + boot recovery.
  *
  * Covers the security + data-safety core WITHOUT spawning a real isolate: every case uses an INACTIVE
- * plugin (wasActive=false), so runPluginUpdate exercises stash → uninstall-data → install → restore-grants
- * → success/rollback with no child_process. Verified invariants:
+ * plugin (wasActive=false), so runPluginUpdate exercises stash → uninstall-data → install → adopt the
+ * stored grants → success/rollback with no child_process. Verified invariants:
  *   - data/ dir + wjp_<slug>_* tables + admin grants survive an update;
+ *   - an update never rewrites the grants or the egress allowlist: on a node whose in-memory copy is stale
+ *     (another node revoked a grant or narrowed the list), the stored record stays what that node stored
+ *     and this node adopts it, on success and on rollback;
+ *   - the one grant write an update makes: a plugin with NO grant record gets an empty one nobody decided,
+ *     before anything moves — so the boot backfill cannot grant an active plugin what its NEW version
+ *     declares, while a plugin never activated is still seeded on its first activation;
  *   - the origin gate: no recorded origin → 409, a DIFFERENT source → 409 (the takeover block), same → ok;
  *   - a bad new zip rolls back to the previous code + data + grants (nothing half-applied);
  *   - a NEGATIVE CONTROL proving the gate is what stops a foreign source from taking the plugin over;
@@ -214,6 +220,43 @@ describe('plugin in-place update', () => {
         assert.strictEqual(fs.readdirSync(OS_TMP_DIR).some((n: string) => n.startsWith(`plugin-update-${SLUG}-`)), false, 'stash cleaned up on rollback');
     });
 
+    // An existing grant record is handed back exactly as it was found (an empty one stays empty). A plugin
+    // with NO record gets an empty one — the only grant write an update makes — and no administrator
+    // decision with it: "no record" on an ACTIVE plugin is what the boot backfill reads as "grant it what
+    // its manifest declares", and after an update that manifest is the new version's. Undecided, the empty
+    // record is still seeded at the plugin's first activation (shouldSeedDeclaredGrants).
+    const storedRecord = async () => {
+        const blob = await require('../core/options').getOptionFresh('plugin_grants', {});
+        return Object.prototype.hasOwnProperty.call(blob || {}, SLUG) ? blob[SLUG] : undefined;
+    };
+
+    it('a plugin with NO grant record gets an empty one nobody decided — from a successful update, and from one that rolled back', async () => {
+        await installExisting({ version: '1.0.0', permissions: ['database:write'], origin: { source: S1, catalogId: SLUG, version: '1.0.0' } });
+        assert.strictEqual(await storedRecord(), undefined, 'precondition: never activated, no grant record');
+
+        const r = await runPluginUpdate(SLUG, buildZip({ version: '2.0.0', permissions: ['database:write'] }), { source: S1, catalogId: SLUG, version: '2.0.0' });
+        assert.strictEqual(r.ok, true, r.body && r.body.error);
+        assert.deepStrictEqual(await storedRecord(), [], 'the update left the plugin with no grant record for the boot backfill to fill');
+        assert.strictEqual(perms.hasGrantRecord(SLUG), true, 'memory mirrors the stored record');
+        assert.strictEqual(await perms.hasAdminGrantDecision(SLUG), false, 'an update is not an administrator\'s decision');
+
+        // A failed update creates it too, before anything moved — what a crash half-way through leaves.
+        await updateOption('plugin_grants', {});
+        await perms.loadGrants();
+        const bad = await runPluginUpdate(SLUG, buildZip({ version: '3.0.0', corrupt: true }), { source: S1, catalogId: SLUG, version: '3.0.0' });
+        assert.strictEqual(bad.body.rolledBack, true);
+        assert.deepStrictEqual(await storedRecord(), [], 'a failed update left no grant record');
+        assert.strictEqual(await perms.hasAdminGrantDecision(SLUG), false);
+    });
+
+    it('control: an EMPTY grant record is still empty after an update', async () => {
+        await installExisting({ version: '1.0.0', permissions: ['database:write'], grants: [], origin: { source: S1, catalogId: SLUG, version: '1.0.0' } });
+        assert.deepStrictEqual(await storedRecord(), [], 'precondition');
+        const r = await runPluginUpdate(SLUG, buildZip({ version: '2.0.0', permissions: ['database:write'] }), { source: S1, catalogId: SLUG, version: '2.0.0' });
+        assert.strictEqual(r.ok, true, r.body && r.body.error);
+        assert.deepStrictEqual(await storedRecord(), [], 'the empty grant record was lost in the update');
+    });
+
     it('boot recovery: RESTORES an interrupted update (code only in the stash, no manifest on disk)', async () => {
         // Simulate a crash AFTER stash, BEFORE install: plugins/<slug> has only data/, code is in the stash.
         const dir = pluginDir();
@@ -294,6 +337,116 @@ describe('plugin in-place update', () => {
         assert.strictEqual(r.ok, false);
         assert.strictEqual(installedVersion(), '1.0.0', 'previous version still installed');
         assert.strictEqual(dataPreserved(), 'PRESERVE-ME', 'data/ survived');
+    });
+
+    // ── A NODE WHOSE COPY OF THE GRANTS IS STALE ────────────────────────────────────────────────
+    // Each node keeps the grants and egress allowlists in memory, and a revoke made through another node
+    // reaches the database, not that copy. The update cleared the stored record and wrote back THIS
+    // node's copy, so an update served by a stale node re-granted the revoked `database:write` and replaced
+    // a narrowed allowlist with an empty one — every public host.
+
+    /** An option's value as the DATABASE holds it (not the option cache, not the in-memory copy). */
+    async function dbStored(name: string): Promise<any> {
+        const row = await dbAsync.get('SELECT option_value FROM options WHERE option_name = ?', [name]);
+        return row ? JSON.parse(row.option_value) : {};
+    }
+    /** Another node's write: the row changes; this node's option cache and in-memory copy do not. */
+    async function otherNodeWrites(name: string, mutate: (value: any) => void): Promise<void> {
+        const value = await dbStored(name);
+        mutate(value);
+        await dbAsync.run('UPDATE options SET option_value = ? WHERE option_name = ?', [JSON.stringify(value), name]);
+    }
+    /** Installed with database:write + settings:read and no list; then another node revokes and narrows. */
+    async function staleNodeSetup() {
+        await installExisting({ version: '1.0.0', permissions: ['settings:read', 'database:write', 'network'], grants: ['settings:read', 'database:write', 'network'], origin: { source: S1, catalogId: SLUG, version: '1.0.0' } });
+        await getOption('plugin_grants', {}); // this node has read both since: its option cache holds them too
+        await getOption('plugin_egress_hosts', {});
+        await otherNodeWrites('plugin_grants', (v) => { v[SLUG] = ['settings:read', 'network']; });
+        await otherNodeWrites('plugin_egress_hosts', (v) => { v[SLUG] = ['api.example.com']; });
+        assert.deepStrictEqual(perms.getGrants(SLUG).sort(), ['database:write', 'network', 'settings:read'], 'precondition: this node\'s copy is stale');
+        assert.deepStrictEqual(perms.getEgressAllowlist(SLUG), [], 'precondition: this node\'s copy has no list (every public host)');
+    }
+
+    it('an update served by a stale node keeps the revoke and the narrowed egress list another node stored', async () => {
+        await staleNodeSetup();
+        const zip = buildZip({ version: '2.0.0', permissions: ['settings:read', 'database:write', 'network'] });
+
+        const r = await runPluginUpdate(SLUG, zip, { source: S1, catalogId: SLUG, version: '2.0.0' });
+
+        assert.strictEqual(r.ok, true, r.body && r.body.error);
+        assert.strictEqual(installedVersion(), '2.0.0');
+        assert.deepStrictEqual((await dbStored('plugin_grants'))[SLUG], ['settings:read', 'network'], 'the revoke of database:write stands');
+        assert.deepStrictEqual((await dbStored('plugin_egress_hosts'))[SLUG], ['api.example.com'], 'the narrowed egress list stands');
+        // What this node would start the plugin with is the stored record, not its stale copy.
+        assert.deepStrictEqual(perms.getGrants(SLUG).sort(), ['network', 'settings:read'], 'this node adopted the stored grants');
+        assert.deepStrictEqual(perms.getEgressAllowlist(SLUG), ['api.example.com'], 'this node adopted the stored egress list');
+        assert.strictEqual(perms.isGranted(SLUG, 'database', 'write'), false, 'the revoked grant is not usable here');
+        assert.deepStrictEqual(r.body.ungrantedPermissions, ['database:write'], 'reported as declared and not granted');
+    });
+
+    it('a rolled-back update on a stale node writes nothing back either', async () => {
+        await staleNodeSetup();
+        const badZip = buildZip({ version: '2.0.0', corrupt: true });
+
+        const r = await runPluginUpdate(SLUG, badZip, { source: S1, catalogId: SLUG, version: '2.0.0' });
+
+        assert.strictEqual(r.ok, false);
+        assert.strictEqual(r.body.rolledBack, true);
+        assert.strictEqual(installedVersion(), '1.0.0', 'old code restored');
+        assert.deepStrictEqual((await dbStored('plugin_grants'))[SLUG], ['settings:read', 'network'], 'the revoke of database:write stands');
+        assert.deepStrictEqual((await dbStored('plugin_egress_hosts'))[SLUG], ['api.example.com'], 'the narrowed egress list stands');
+    });
+
+    it('a missing grant record becomes an empty, undecided one that the first activation still seeds; no egress record is written', async () => {
+        // No grant or egress record at all (installed, never activated). The update stores an empty grant
+        // record with NO administrator decision, so it is not read as "an administrator revoked
+        // everything": the first activation still grants what the plugin declares. The egress allowlist
+        // is not written (no list and an empty list mean the same: every public host).
+        await installExisting({ version: '1.0.0', permissions: ['settings:read'], origin: { source: S1, catalogId: SLUG, version: '1.0.0' } });
+        const zip = buildZip({ version: '2.0.0', permissions: ['settings:read', 'database:write'] });
+
+        const r = await runPluginUpdate(SLUG, zip, { source: S1, catalogId: SLUG, version: '2.0.0' });
+
+        assert.strictEqual(r.ok, true, r.body && r.body.error);
+        assert.deepStrictEqual((await dbStored('plugin_grants'))[SLUG], [], 'an empty grant record was stored');
+        assert.strictEqual(await perms.hasAdminGrantDecision(SLUG), false, 'with no administrator decision');
+        assert.strictEqual(Object.hasOwn(await dbStored('plugin_egress_hosts'), SLUG), false, 'no egress record was written');
+        // The first activation (the activation route asks exactly these two) still seeds the new declared set.
+        assert.strictEqual((await perms.adoptStoredPolicy(SLUG)).seedsDeclaredGrants, true, 'the first activation would not seed the declared grants');
+        assert.strictEqual(await perms.seedGrants(SLUG, ['settings:read', 'database:write'], { adminDecision: true }), true);
+        assert.deepStrictEqual([...(await dbStored('plugin_grants'))[SLUG]].sort(), ['database:write', 'settings:read']);
+    });
+
+    it('restart after an update: the boot backfill grants an ACTIVE plugin nothing its new version declares', async () => {
+        // Activated while it declared nothing, so it holds no grant record (grant-on-activate persists only
+        // a non-empty seed); then updated to a version that declares network and database:write. Every
+        // boot runs loadGrants → backfillActive over the ACTIVE plugins, which grants a plugin with no
+        // record whatever its manifest on disk — the new version's — declares.
+        await installExisting({ version: '1.0.0', origin: { source: S1, catalogId: SLUG, version: '1.0.0' } });
+        assert.strictEqual(await storedRecord(), undefined, 'precondition: no grant record');
+        const r = await runPluginUpdate(SLUG, buildZip({ version: '2.0.0', permissions: ['network', 'database:write'] }), { source: S1, catalogId: SLUG, version: '2.0.0' });
+        assert.strictEqual(r.ok, true, r.body && r.body.error);
+        assert.deepStrictEqual([...r.body.ungrantedPermissions].sort(), ['database:write', 'network'], 'reported as declared and not granted');
+
+        // The plugin is active when the server restarts (the update reactivates a plugin that was running).
+        await updateOption('active_plugins', [SLUG]);
+        await perms.loadGrants();
+        const core = require('../core/plugins');
+        const all: any[] = await core.getAllPlugins();
+        const active: string[] = await core.getActivePlugins();
+        const entries = all.filter((p: any) => active.includes(p.slug)).map((p: any) => ({
+            slug: p.slug,
+            requested: Array.from(new Set((p.permissions || [])
+                .map((perm: any) => (perm && perm.scope) ? (perm.scope === 'network' ? 'network' : `${perm.scope}:${perm.access || 'read'}`) : null)
+                .filter(Boolean))) as string[],
+        }));
+        assert.deepStrictEqual(entries.find((e) => e.slug === SLUG)?.requested.sort(), ['database:write', 'network'], 'precondition: the boot reads the new manifest');
+        await perms.backfillActive(entries);
+
+        assert.deepStrictEqual((await dbStored('plugin_grants'))[SLUG], [], 'the restart granted what the new version declares');
+        assert.deepStrictEqual(perms.getGrants(SLUG), []);
+        assert.strictEqual(perms.isNetworkGranted(SLUG), false);
+        assert.strictEqual(perms.isGranted(SLUG, 'database', 'write'), false);
     });
 
     it('clearing a plugin origin lets the slug be re-bound to a different source', async () => {

@@ -140,6 +140,10 @@ export default function OnlineStoreAdminPage() {
                 shipping: centsToInput(c.shippingCents),
                 manualPaymentInstructions: c.manualPaymentInstructions || "",
                 storeEmail: c.storeEmail || "",
+                cardPendingTtlMinutes: String(c.cardPendingTtlMinutes ?? 60),
+                manualPendingTtlHours: String(c.manualPendingTtlHours ?? 72),
+                maxLineQty: String(c.maxLineQty ?? 99),
+                maxOrderQty: String(c.maxOrderQty ?? 100),
             });
             setShipCfgForm({
                 pickupEnabled: !!c.pickupEnabled,
@@ -480,6 +484,10 @@ export default function OnlineStoreAdminPage() {
                 shippingCents,
                 manualPaymentInstructions: f.manualPaymentInstructions,
                 storeEmail: f.storeEmail,
+                cardPendingTtlMinutes: String(f.cardPendingTtlMinutes ?? "").trim() === "" ? undefined : Number(f.cardPendingTtlMinutes),
+                manualPendingTtlHours: String(f.manualPendingTtlHours ?? "").trim() === "" ? undefined : Number(f.manualPendingTtlHours),
+                maxLineQty: String(f.maxLineQty ?? "").trim() === "" ? undefined : Number(f.maxLineQty),
+                maxOrderQty: String(f.maxOrderQty ?? "").trim() === "" ? undefined : Number(f.maxOrderQty),
             });
             setCfg(c);
             // Stripe key semantics: absent = keep, '' = clear, value = replace.
@@ -959,6 +967,25 @@ export default function OnlineStoreAdminPage() {
                     <div>
                         <label className={labelCls}>Correo de la tienda (notificaciones de pedidos)</label>
                         <input type="email" value={cfgForm.storeEmail} onChange={(e) => setCfgForm({ ...cfgForm, storeEmail: e.target.value })} placeholder="ventas@mitienda.com" className={inputCls} maxLength={200} />
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label className={labelCls}>Reserva de pedidos con tarjeta (minutos)</label>
+                            <input type="number" min={30} max={1440} value={cfgForm.cardPendingTtlMinutes} onChange={(e) => setCfgForm({ ...cfgForm, cardPendingTtlMinutes: e.target.value })} className={inputCls} />
+                        </div>
+                        <div>
+                            <label className={labelCls}>Reserva de pedidos con pago manual (horas)</label>
+                            <input type="number" min={0} max={720} value={cfgForm.manualPendingTtlHours} onChange={(e) => setCfgForm({ ...cfgForm, manualPendingTtlHours: e.target.value })} className={inputCls} />
+                            <p className="text-[11px] text-gray-400 mt-2">Los pedidos nuevos sin pagar se cancelan al vencer y devuelven el stock y el cupón. 0 = no vencen.</p>
+                        </div>
+                        <div>
+                            <label className={labelCls}>Máximo de unidades por artículo</label>
+                            <input type="number" min={1} max={99} value={cfgForm.maxLineQty} onChange={(e) => setCfgForm({ ...cfgForm, maxLineQty: e.target.value })} className={inputCls} />
+                        </div>
+                        <div>
+                            <label className={labelCls}>Máximo de unidades por pedido</label>
+                            <input type="number" min={1} max={10000} value={cfgForm.maxOrderQty} onChange={(e) => setCfgForm({ ...cfgForm, maxOrderQty: e.target.value })} className={inputCls} />
+                        </div>
                     </div>
                     <div className="pt-4 border-t border-gray-100">
                         <label className={labelCls}>

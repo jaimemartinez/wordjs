@@ -2,7 +2,7 @@
     "id": "newsletter",
     "name": "Newsletter",
     "version": "1.0.1",
-    "description": "Visitor newsletter subscriptions (double opt-in when mail is configured, single opt-in fallback otherwise), subscriber management with CSV export, and HTML campaign composing/sending with per-subscriber unsubscribe links. Ships a Verso 'Newsletter' subscribe block.",
+    "description": "Visitor newsletter subscriptions (double opt-in only; subscribers stay pending until they confirm by email), subscriber management with CSV export, and HTML campaign composing/sending with per-subscriber unsubscribe links. Ships a Verso 'Newsletter' subscribe block.",
     "author": "WordJS",
     "isolated": true,
     "backend": {

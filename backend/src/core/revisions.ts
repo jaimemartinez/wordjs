@@ -269,6 +269,18 @@ async function restoreRevision(revisionId: number) {
   // read-only failure, not an operation that grows history and then refuses to restore.
   const restorePlan = decodeRevisionSnapshot(revisionRow, rawSnapshotMeta, parentRow.post_type);
 
+  // A RESTORED SLUG IS A CLAIM ON A URL, LIKE ANY OTHER WRITE OF post_name. The snapshot's slug used to be
+  // written back raw, the one writer of the column that skipped Post.generateUniqueSlug: an Author whose
+  // post was once `contact` (saved, then renamed, so the slug was free when an editor created the page
+  // `contact`) restored that version and held the page's public URL again — the takeover the shared slug
+  // namespace closes for POST/PUT /posts. Same rule as Post.update: the slug the entry has NOW is kept,
+  // any other goes through generateUniqueSlug (public namespace, this entry excluded), so it comes back
+  // as `contact-2` when someone else holds `contact`. An empty slug claims nothing and is restored as is.
+  const slugField = restorePlan.columns.find((entry: any) => entry.column === 'post_name');
+  if (slugField && typeof slugField.value === 'string' && slugField.value !== '' && slugField.value !== parentRow.post_name) {
+    slugField.value = await Post.generateUniqueSlug(slugField.value, parentRow.post_type, parentRow.id);
+  }
+
   // Save current state inside the SAME F3 unit. If the safety snapshot or the restore fails, neither
   // becomes visible; a 200 can never mean "restored without a recovery point".
   await saveRevision(revisionRow.post_parent, restorePlan.frozenFields);

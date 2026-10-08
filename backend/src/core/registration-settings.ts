@@ -57,25 +57,45 @@ function asStored(value: unknown): unknown {
  * The registration settings that writing `values` (a key → value map, as PUT /settings or an import's
  * `settings` carry it) would CHANGE, in the order of REGISTRATION_SETTINGS, then mail_delivery_ready. Keys
  * it does not carry are not looked at.
+ *
+ * A key is matched by its CANONICAL name (core/option-names canonicalOptionName), never byte for byte: on
+ * MySQL/MariaDB the options table compares names case-insensitively, so a site import carrying
+ * `REQUIRE_EMAIL_VERIFICATION: "0"` or `Mail_Delivery_Ready: "0"` wrote the real row while an exact-name
+ * check saw neither. Every spelling a map carries is judged — any one of them may be the write that
+ * lands last — and the setting is reported under its canonical name. A name with no canonical form is
+ * written by nobody (the site import and the options bridge refuse it, PUT /settings writes only its own
+ * allowlist), so it is not looked at here.
  */
 async function changedRegistrationSettings(values: unknown): Promise<string[]> {
     if (!values || typeof values !== 'object' || Array.isArray(values)) return [];
-    const carried = (key: string) => Object.prototype.hasOwnProperty.call(values, key);
+    const { canonicalOptionName } = require('./option-names');
+    // canonical name → every value the map carries under a spelling of it.
+    const carried = new Map<string, unknown[]>();
+    for (const [key, value] of Object.entries(values as Record<string, unknown>)) {
+        const name = canonicalOptionName(key);
+        if (name === null || !(REGISTRATION_SETTINGS.has(name) || name === MAIL_DELIVERY_READY)) continue;
+        const list = carried.get(name) || [];
+        list.push(value);
+        carried.set(name, list);
+    }
     const changed: string[] = [];
     for (const [key, setting] of REGISTRATION_SETTINGS) {
-        if (!carried(key)) continue;
-        const next = (values as Record<string, unknown>)[key];
-        const current = await getOption(key, setting.fallback);
-        if (setting.effective(asStored(next)) !== setting.effective(current)) changed.push(key);
+        const nexts = carried.get(key);
+        if (!nexts) continue;
+        const current = setting.effective(await getOption(key, setting.fallback));
+        if (nexts.some((next) => setting.effective(asStored(next)) !== current)) changed.push(key);
     }
-    if (carried(MAIL_DELIVERY_READY)) {
+    const readiness = carried.get(MAIL_DELIVERY_READY);
+    if (readiness) {
         const ready = (v: unknown) => String(v) === '1';
         const verification = REGISTRATION_SETTINGS.get('require_email_verification')!;
-        const requiredNext = carried('require_email_verification')
-            ? verification.effective(asStored((values as Record<string, unknown>).require_email_verification))
-            : verification.effective(await getOption('require_email_verification', verification.fallback));
-        const flips = ready(asStored((values as Record<string, unknown>)[MAIL_DELIVERY_READY])) !== ready(await getOption(MAIL_DELIVERY_READY, '0'));
-        if (flips && requiredNext === 'on') changed.push(MAIL_DELIVERY_READY);
+        // Required after the write if it is now, or if any spelling the map carries turns it on.
+        const verificationNexts = carried.get('require_email_verification') || [];
+        const requiredNext = verification.effective(await getOption('require_email_verification', verification.fallback)) === 'on'
+            || verificationNexts.some((next) => verification.effective(asStored(next)) === 'on');
+        const readyNow = ready(await getOption(MAIL_DELIVERY_READY, '0'));
+        const flips = readiness.some((next) => ready(asStored(next)) !== readyNow);
+        if (flips && requiredNext) changed.push(MAIL_DELIVERY_READY);
     }
     return changed;
 }

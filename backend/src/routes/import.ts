@@ -14,9 +14,10 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const fs = require('fs');
-// unboundSessionOnly: a WXR import creates an account for every author it cannot match, so it is not for
-// a session started at an address other than the main one (middleware/auth.ts refuseBoundSession).
-const { authenticate, unboundSessionOnly } = require('../middleware/auth');
+// accountAuthorityOnly: a WXR import creates an account for every author it cannot match, so it is not for
+// an API token nor for a session started at an address other than the main one (middleware/auth.ts
+// refuseAccountAuthority).
+const { authenticate, accountAuthorityOnly } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { analyzeWxr, importWxr } = require('../core/wxr-import');
@@ -200,11 +201,12 @@ const MEDIA_MODES: ReadonlySet<string> = new Set(['download', 'link', 'skip']);
  *         description: Not logged in (rest_not_logged_in)
  *       403:
  *         description: >-
- *           Not an administrator, or rest_account_bound_session (a session started at an address other
- *           than the main one: the import creates accounts for the authors it cannot match).
+ *           Not an administrator, rest_token_management_forbidden (an API token), or
+ *           rest_account_bound_session (a session started at an address other than the main one): the
+ *           import creates accounts for the authors it cannot match.
  */
 // Refused BEFORE the upload is read, so a refused request leaves no temporary file behind.
-router.post('/wordpress', authenticate, isAdmin, unboundSessionOnly, upload.single('file'), asyncHandler(async (req: Request, res: Response) => {
+router.post('/wordpress', authenticate, isAdmin, accountAuthorityOnly, upload.single('file'), asyncHandler(async (req: Request, res: Response) => {
     if (!req.file) {
         return res.status(400).json({ code: 'no_file', message: 'No WXR file uploaded (field "file").' });
     }

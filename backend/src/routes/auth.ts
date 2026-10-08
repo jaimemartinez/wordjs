@@ -33,7 +33,7 @@ const mfa = require('../core/mfa');
 // the same public IP. Runs ALONGSIDE the account-wide lockout below (which is the AUTH-A3 backstop
 // against distributed attacks on a single account); a login is refused if either trips.
 const loginThrottle = require('../core/login-throttle');
-const { clientIp } = require('../core/client-ip');
+const { clientIp, clientIpBucket } = require('../core/client-ip');
 // The ONE self-service email-write rule (shared with routes/users.ts) — see core/mailbox.ts.
 const { refuseSelfServiceEmailChange, isValidAddress } = require('../core/mailbox');
 // Append-only audit trail. Every call here is best-effort by construction (recordAudit swallows its
@@ -41,6 +41,8 @@ const { refuseSelfServiceEmailChange, isValidAddress } = require('../core/mailbo
 const { recordAudit } = require('../core/audit');
 // The one HTML escaper for every transactional mail body this router builds.
 const { escHtml } = require('../core/formatting');
+// Self-registrations that wait for their address to be confirmed before any account exists.
+const { createPendingRegistration, consumePendingRegistration } = require('../core/pending-registrations');
 
 /**
  * A caller-supplied string, bounded, for an audit `detail`.
@@ -186,7 +188,7 @@ const isLockingKey = (key: string) => (LOCKING_PURPOSES as readonly string[]).in
  * inside its purpose.
  */
 function inflightBucket(purpose: LockPurpose, subject: string | number, req: Request): string {
-    return lockBucket(purpose, `${subject}|${clientIp(req)}`);
+    return lockBucket(purpose, `${subject}|${clientIpBucket(req)}`);
 }
 
 /**
@@ -534,10 +536,12 @@ function withSignInEligibility(req: Request, res: Response, next: () => void): v
 *     responses:
  *       201:
  *         description: >-
- *           Account created. A session cookie is issued unless email verification is required, in which
- *           case the account stays inactive until POST /auth/verify-email consumes the emailed token.
- *           With verification required the body is `{ verificationRequired, message }` (no `user`), and
- *           an email that already has an account gets that same answer (its owner is notified instead).
+ *           Account created and a session cookie issued — unless email verification is required, in which
+ *           case NOTHING is created yet: the registration waits until POST /auth/verify-email consumes the
+ *           emailed token, which creates the account (no username is taken and no account can log in
+ *           before that). With verification required the body is `{ verificationRequired, message }` (no
+ *           `user`), and an email that already has an account gets that same answer and leaves the same
+ *           state (its owner is notified instead).
  *         content:
  *           application/json:
  *             schema:
@@ -552,9 +556,10 @@ function withSignInEligibility(req: Request, res: Response, next: () => void): v
  *                   type: string
  *       400:
  *         description: >-
- *           rest_missing_param (username/email/password absent), rest_invalid_param (bad email format, a
- *           username outside letters/digits/. _ - or longer than 60 characters, password shorter than 8 or
- *           longer than 72 characters) or rest_user_exists (one generic message for a taken username or
+ *           rest_missing_param (username/email/password absent), rest_invalid_param (a username, email,
+ *           password or displayName that is not a string, bad email format, a username outside
+ *           letters/digits/. _ - or longer than 60 characters, password shorter than 8 or longer than 72
+ *           characters) or rest_user_exists (one generic message for a taken username or
  *           email; a taken email answers 201 instead when email verification is required).
  *         content:
  *           application/json:
@@ -611,6 +616,21 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
         });
     }
 
+    // THE TYPES, BEFORE ANY OF THEM IS READ. `{"password": true}` (or a number, or an 8-element array)
+    // passed both length checks below — `true.length` is undefined, and `undefined < 8` and
+    // `undefined > 72` are both false — and then split on the address: a taken one answered the
+    // anti-enumeration 201 before anything was hashed, a free one reached bcrypt with a non-string and
+    // answered 500 ("Illegal arguments"), creating nothing and using up nothing. One request, no side
+    // effect, a yes/no on any address. Every field is a string here, or the request is a 400.
+    if (typeof username !== 'string' || typeof email !== 'string' || typeof password !== 'string'
+        || (displayName !== undefined && displayName !== null && typeof displayName !== 'string')) {
+        return res.status(400).json({
+            code: 'rest_invalid_param',
+            message: 'Username, email, password and display name must be strings.',
+            data: { status: 400 }
+        });
+    }
+
     // Validate email format — shared, length-capped validator (ReDoS-safe on unbounded input)
     if (!isValidAddress(email)) {
         return res.status(400).json({
@@ -658,7 +678,7 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
     // /users/me answer uniformly. Now:
     //   · with email verification ON, an address that already has an account gets the SAME 201 as a new one
     //     (no cookie either way, no `user` in either body), and its owner gets a short notice instead of a
-    //     verification link — only the mailbox owner learns anything;
+    //     verification link — only the mailbox owner learns anything. The SAME STATE, too: see below;
     //   · otherwise, and for a taken USERNAME, one generic 400. A username's availability is inherently
     //     observable (it must be unique, and it is shown on public surfaces); an email's no longer is when
     //     verification is on. With verification off a fresh username + a taken email still fails — the
@@ -671,6 +691,77 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
         data: { status: 400 }
     });
 
+    if (verificationRequired) {
+        // NOTHING IS CREATED UNTIL THE LINK IS FOLLOWED (core/pending-registrations). The two 201s used to
+        // be identical while the state behind them was not: a free address got an unverified account named
+        // after the submitted username, a taken one got nothing. So the NEXT request told them apart —
+        // logging in as that username answered 403 rest_email_unverified (an account exists: the address was
+        // free) or 401 (nothing was created: the address has an account), and registering the same username
+        // again with a throwaway address answered 400 (taken) or 201 (free). Now neither branch creates a
+        // users row or takes a username; the registration waits, keyed by its link's token, and
+        // POST /auth/verify-email creates the account.
+        let canonicalEmail = '';
+        let emailTaken = false;
+        try {
+            canonicalEmail = await User.assertNewIdentity(username, email);
+        } catch (error) {
+            if (error && error.code === 'username_taken') {
+                await User.hashPassword(password); // the same cost as every other answer
+                return registrationFailed();
+            }
+            if (!(error && error.code === 'email_taken')) throw error;
+            emailTaken = true;
+        }
+
+        // FROM HERE ON, THE TWO BRANCHES MUST BE INDISTINGUISHABLE TO THE CALLER: the same hashing cost,
+        // the same 201, and nothing a later request can find. A failure past this point (storing the
+        // registration, the mail system) is logged and answered with that same 201 — letting the fresh
+        // path fail differently from the taken one is exactly the oracle the body equality was meant to
+        // remove (the account owner can register again; the caller learns nothing either way).
+        const passwordHash = await User.hashPassword(password);
+        try {
+            const siteName = await getOption('blogname', 'WordJS');
+            if (emailTaken) {
+                // assertNewIdentity checks the username first, so this username is free: the only thing that
+                // collided is the address. Tell its owner, not the caller.
+                const text = `Someone tried to create a new ${siteName} account with this email address. It already has an account, so nothing was created.\n\nIf this was you, sign in instead, or use "Forgot password" if you no longer know your password. If it was not you, you can ignore this message.`;
+                (global as any).wordjs_send_mail({
+                    to: String(email).trim().toLowerCase(),
+                    subject: `Sign-up attempt on ${siteName}`,
+                    text,
+                    html: `<p>${escHtml(text).replace(/\n\n/g, '</p><p>')}</p>`
+                });
+            } else {
+                const raw = await createPendingRegistration({
+                    username,
+                    email: canonicalEmail,
+                    passwordHash,
+                    displayName: displayName || username
+                }, VERIFY_TTL_MS);
+                // The site's link base (core/site-address) — never this request's Host: whoever calls this
+                // endpoint must not be able to choose which host receives the verification token.
+                const link = `${await linkBase()}/verify-email?token=${raw}`;
+                (global as any).wordjs_send_mail({
+                    to: String(email).trim().toLowerCase(),
+                    subject: `Verify your email for ${siteName}`,
+                    text: `Welcome to ${siteName}! Please confirm this email address to create your account (${username}).\n\nVerify your email (this link is valid for 24 hours):\n${link}\n\nIf you did not ask for this account, you can safely ignore this email: nothing is created until the link is followed.`,
+                    // Every interpolated value is escaped (core/formatting escHtml): the login is chosen by an
+                    // anonymous caller and the site name by an administrator, and raw they put markup — a
+                    // phishing link — into a message the site itself sends.
+                    html: `<p>Welcome to <strong>${escHtml(siteName)}</strong>! Please confirm this email address to create your account (<code>${escHtml(username)}</code>).</p>`
+                        + `<p><a href="${escHtml(link)}">Verify your email</a> — this link is valid for 24 hours.</p>`
+                        + `<p>If you did not ask for this account, you can safely ignore this email: nothing is created until the link is followed.</p>`
+                });
+            }
+        } catch (error) {
+            console.warn('[register] a registration past the identity checks did not complete:', error && error.message);
+        }
+
+        // No session cookie and no `user`: the body is the one an already-registered address gets.
+        return res.status(201).json({ verificationRequired: true, message: VERIFY_MESSAGE });
+    }
+
+    // Verification OFF: the account is created, active, and signed in at once.
     let user: any;
     try {
         const defaultRole = await getOption('default_role', 'subscriber');
@@ -685,59 +776,8 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
         if (!String(error && error.message).includes('already exists')) throw error;
         // A taken identity skips create()'s bcrypt hash; burn the same cost so the answer's timing does not
         // say which branch ran.
-        await require('bcryptjs').hash(String(password), 12);
-        if (verificationRequired && error.code === 'email_taken') {
-            // create() checks the username first, so this username is free: the only thing that collided is
-            // the address. Tell its owner, not the caller.
-            try {
-                const siteName = await getOption('blogname', 'WordJS');
-                const text = `Someone tried to create a new ${siteName} account with this email address. It already has an account, so nothing was created.\n\nIf this was you, sign in instead, or use "Forgot password" if you no longer know your password. If it was not you, you can ignore this message.`;
-                (global as any).wordjs_send_mail({
-                    to: String(email).trim().toLowerCase(),
-                    subject: `Sign-up attempt on ${siteName}`,
-                    text,
-                    html: `<p>${escHtml(text).replace(/\n\n/g, '</p><p>')}</p>`
-                });
-            } catch { /* swallow send errors — the answer must not depend on the mail system */ }
-            return res.status(201).json({ verificationRequired: true, message: VERIFY_MESSAGE });
-        }
+        await User.hashPassword(password);
         return registrationFailed();
-    }
-
-    // EMAIL VERIFICATION (opt-in, fail-closed). When required, the account is created UNVERIFIED and
-    // may NOT log in until it confirms via a tokenized link (the login route refuses on the
-    // `email_verification_pending` meta). We do NOT issue a session cookie here — verifying is the
-    // gate. The admin-creates-user path (routes/users.ts) never sets the pending flag, so those
-    // accounts stay pre-verified. Reuses the SAME single-use token machinery as password reset and
-    // the SAME email:provider capability (global.wordjs_send_mail).
-    if (verificationRequired) {
-        const { raw, hash } = mintSingleUseToken();
-        await User.updateMeta(user.id, 'email_verification_hash', hash);
-        await User.updateMeta(user.id, 'email_verification_expires', String(Date.now() + VERIFY_TTL_MS));
-        await User.updateMeta(user.id, 'email_verification_pending', '1');
-
-        // The site's link base (core/site-address) — never this request's Host: whoever calls this
-        // endpoint must not be able to choose which host receives the verification token.
-        const base = await linkBase();
-        const link = `${base}/verify-email?uid=${user.id}&token=${raw}`;
-        const siteName = await getOption('blogname', 'WordJS');
-        try {
-            (global as any).wordjs_send_mail({
-                to: String(email).trim().toLowerCase(),
-                subject: `Verify your email for ${siteName}`,
-                text: `Welcome to ${siteName}! Please confirm this email address to activate your account (${user.userLogin}).\n\nVerify your email (this link is valid for 24 hours):\n${link}\n\nIf you did not create this account, you can safely ignore this email.`,
-                // Every interpolated value is escaped (core/formatting escHtml): the login is chosen by an
-                // anonymous caller and the site name by an administrator, and raw they put markup — a
-                // phishing link — into a message the site itself sends.
-                html: `<p>Welcome to <strong>${escHtml(siteName)}</strong>! Please confirm this email address to activate your account (<code>${escHtml(user.userLogin)}</code>).</p>`
-                    + `<p><a href="${escHtml(link)}">Verify your email</a> — this link is valid for 24 hours.</p>`
-                    + `<p>If you did not create this account, you can safely ignore this email.</p>`
-            });
-        } catch { /* swallow send errors — the account still exists and can request a new link */ }
-
-        // No session cookie: the user must verify before logging in. No `user` either: the body must be
-        // the one an already-registered address gets (see ACCOUNT ENUMERATION above).
-        return res.status(201).json({ verificationRequired: true, message: VERIFY_MESSAGE });
     }
 
     const token = generateToken(user, req);
@@ -862,10 +902,13 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
     // per-(IP+account) throttle on req.ip let a monolith client rotate X-Forwarded-For to mint a fresh
     // bucket every attempt and evade this lockout entirely (audit 2026-08-08 P1).
     const ip = clientIp(req);
+    // ...and the throttle keys on that address's rate-limit identity (core/client-ip ipBucket): an IPv6
+    // client is its /64, or every address it owns would be a fresh ladder. The audit lines keep `ip`.
+    const throttleKey = clientIpBucket(req);
 
     // Per-(IP + account) escalating gate (5→10→30→60→60 min by default). Refuses THIS IP for THIS
     // account only, so other users on a shared IP are unaffected.
-    const gate = await loginThrottle.check(ip, lockId);
+    const gate = await loginThrottle.check(throttleKey, lockId);
     if (gate.blocked) {
         const mins = Math.ceil(gate.retryAfterMs / 60000);
         res.set('Retry-After', String(Math.ceil(gate.retryAfterMs / 1000)));
@@ -900,10 +943,12 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
         const user = await User.authenticate(username, password);
         await clearLoginFails(lockId);
         // Successful password → reset the escalation ladder for this IP+account.
-        await loginThrottle.succeed(ip, lockId);
+        await loginThrottle.succeed(throttleKey, lockId);
 
-        // EMAIL VERIFICATION gate: a self-registered account created while verification was required
-        // carries `email_verification_pending='1'` until it confirms its email. The password is correct
+        // EMAIL VERIFICATION gate: an account self-registered while verification was required, by a version
+        // that created the account BEFORE the address was confirmed, carries `email_verification_pending='1'`
+        // until it confirms its email. (Registrations no longer create an account until the link is
+        // followed — core/pending-registrations — so no new account gets the flag.) The password is correct
         // (so this is NOT a brute-force attempt — the throttle was already cleared above), but the
         // account is not yet active. Refuse with a distinct code the login UI can act on. Admin-created
         // and pre-feature accounts never carry this flag, so they are unaffected.
@@ -962,7 +1007,7 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
         );
         // Advance the per-(IP+account) escalation ladder; this attempt still answers 401 (a later
         // attempt gets the 429), matching the account-lockout flow above.
-        await loginThrottle.fail(ip, lockId);
+        await loginThrottle.fail(throttleKey, lockId);
         return res.status(401).json({
             code: 'rest_invalid_credentials',
             message: 'Invalid username or password.',
@@ -1527,8 +1572,9 @@ router.post('/reset-password', asyncHandler(async (req: Request, res: Response) 
 
 /**
  * POST /auth/verify-email
- * Body: { uid, token }. Consumes the single-use email-verification token minted at registration and
- * flips the account to verified (clears `email_verification_pending`), after which login works. Uniform
+ * Body: { token } (a registration made since accounts are created on confirmation) or { uid, token } (an
+ * account created unverified before that). Consumes the single-use token and, for a registration, creates
+ * the account; for a legacy account, clears `email_verification_pending`. Login works afterwards. Uniform
  * failure for a bad/expired/consumed token. Rate-limited by authLimiter in index.ts.
  */
 /**
@@ -1537,8 +1583,10 @@ router.post('/reset-password', asyncHandler(async (req: Request, res: Response) 
  *   post:
  *     summary: Confirm an email address after registration
  *     description: >-
- *       Consumes the single-use token minted at registration (valid for 24 hours) and clears the
- *       pending flag, after which the account can log in.
+ *       Consumes the single-use token from the registration mail (valid for 24 hours). A link that carries
+ *       only `token` belongs to a registration that has not created anything yet: confirming it creates the
+ *       account, after which it can log in. A link that also carries `uid` belongs to an account created
+ *       unverified by an earlier version; confirming it clears that account's pending flag.
  *     tags: [Auth]
  *     security: []
  *     requestBody:
@@ -1547,15 +1595,16 @@ router.post('/reset-password', asyncHandler(async (req: Request, res: Response) 
  *         application/json:
  *           schema:
  *             type: object
- *             required: [uid, token]
+ *             required: [token]
  *             properties:
  *               uid:
  *                 type: integer
+ *                 description: Only in links sent before accounts were created on confirmation.
  *               token:
  *                 type: string
  *     responses:
  *       200:
- *         description: Email verified
+ *         description: Email verified (and, for a registration, the account created)
  *         content:
  *           application/json:
  *             schema:
@@ -1579,15 +1628,55 @@ router.post('/reset-password', asyncHandler(async (req: Request, res: Response) 
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/RestError'
+ *       409:
+ *         description: >-
+ *           rest_registration_unavailable — the link was valid, but the username or the address it registers
+ *           was taken by another account since (pending registrations reserve nothing). The link is used up;
+ *           registering again is the way forward. Only the holder of the emailed token can get this answer.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
  *       429:
  *         description: Rate limited by the strict per-IP auth limiter.
  */
 router.post('/verify-email', asyncHandler(async (req: Request, res: Response) => {
-    const uid = parseInt((req.body && req.body.uid), 10);
     const token = String((req.body && req.body.token) || '');
 
     const bad = () => res.status(400).json({ code: 'rest_invalid_verification', message: 'This verification link is invalid or has expired. Please request a new one.', data: { status: 400 } });
-    if (!uid || !token) return bad();
+    if (!token) return bad();
+
+    // A REGISTRATION THAT IS NOT AN ACCOUNT YET (core/pending-registrations). It is consumed BEFORE the
+    // account is created, so a link works once whatever happens next, and two clicks cannot both create.
+    // The account is created with the role new accounts get NOW, exactly as if it registered today.
+    const pending = await consumePendingRegistration(token);
+    if (pending) {
+        try {
+            await User.create({
+                username: pending.username,
+                email: pending.email,
+                passwordHash: pending.passwordHash,
+                displayName: pending.displayName,
+                role: await getOption('default_role', 'subscriber')
+            });
+        } catch (error) {
+            const taken = error && (error.code === 'username_taken' || error.code === 'email_taken'
+                || String(error.message).includes('already exists'));
+            if (!taken) throw error;
+            // Nothing was reserved while the registration waited, so someone else may have taken the name or
+            // the address since. Only the holder of this mailed token can see this answer.
+            return res.status(409).json({
+                code: 'rest_registration_unavailable',
+                message: 'That username or email address has been taken since you registered. Please register again.',
+                data: { status: 409 }
+            });
+        }
+        return res.json({ ok: true, message: 'Your email has been verified. You can now log in.' });
+    }
+
+    // An account created UNVERIFIED by an earlier version (its link carries the user id): clear its flag.
+    const uid = parseInt((req.body && req.body.uid), 10);
+    if (!uid) return bad();
 
     let user: any;
     try { user = await User.findById(uid); } catch { user = null; }

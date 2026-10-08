@@ -14,7 +14,16 @@
  *
  * Race safety: the db bridge has no transactions, so capacity is claimed with a SINGLE-STATEMENT
  * conditional UPDATE (sold = sold + qty WHERE sold + qty <= capacity); a failed claim rolls back
- * the claims made earlier in the same order.
+ * the claims made earlier in the same order. The per-email free-seat quota is claimed the same way,
+ * on a counter row per (event, email). Route handlers run concurrently in the isolate, so no limit
+ * may be "check now, count after the INSERT": every in-memory window is claimed in one synchronous
+ * step and refunded if the order is not created.
+ *
+ * Abuse limits: per EMAIL, a durable quota of free seats per event; per CLIENT (req.clientKey, an
+ * HMAC of the caller's IP), only rolling in-memory windows. A clientKey is not a person: behind a
+ * shared NAT or a proxy that is not in trustProxy, many visitors share one key, so a durable
+ * per-client cap would become a permanent cap for all of them. One client takes at most
+ * MAX_FREE_SEATS_PER_CLIENT_WINDOW free seats per event per window, whatever mailboxes it uses.
  *
  * Randomness: tokens/codes come from the host CSPRNG (wordjs.crypto.randomToken), NOT Math.random —
  * order tokens are 32 chars and check-in codes are backed by rate-limited, admin-only verification;
@@ -35,7 +44,15 @@ const MAX_TICKETS_PER_ORDER = 20;
 const MIN_FORM_ELAPSED_MS = 2500; // anti-bot: a human takes longer than this to fill the form
 const ORDER_WINDOW_MS = 10 * 60 * 1000;
 const ORDER_MAX_PER_EMAIL = 5;  // orders per email per window
-const ORDER_MAX_GLOBAL = 60;    // orders overall per window (no req.ip in the sandbox)
+const ORDER_MAX_PER_CLIENT = 5; // orders per client (host clientKey = HMAC of the IP) per window
+const ORDER_MAX_GLOBAL = 60;    // orders overall per window (counts created orders only)
+// Free tickets cost nothing to claim, so the per-email window alone let one visitor rotate
+// addresses and take the whole capacity. Free seats are capped per order, per email per event
+// (durable quota), and per client per event per ORDER_WINDOW_MS (rolling window, see the header).
+const MAX_FREE_TICKETS_PER_ORDER = 4;
+const MAX_FREE_SEATS_PER_EMAIL = 4;
+const MAX_FREE_SEATS_PER_CLIENT_WINDOW = 4;
+const RATE_MAX_KEYS = 10000;    // bound on the in-memory window map
 
 const TOKEN_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789';
 // Readable code alphabet: no O/0/I/1 confusables — these get read out loud at the door.
@@ -53,9 +70,10 @@ exports.init = async function (wordjs) {
         types: `${P}ticket_types`,
         orders: `${P}orders`,
         tickets: `${P}tickets`,
+        freeSeats: `${P}free_seats`,
     };
 
-    // ── schema (idempotent; full column set from day 1 — no ALTER in the sandbox) ────────────────
+    // ── schema (idempotent; full column set on CREATE, later columns via ALTER ADD COLUMN) ────────
     async function initSchema() {
         await db.createTable(T.events, [
             'id INT_PK',
@@ -87,6 +105,18 @@ exports.init = async function (wordjs) {
             "payment_status TEXT DEFAULT 'pending'",
             'created_at TEXT',
         ]);
+        // Free seats claimed per (event, buyer email): one counter row each, so the quota is a
+        // single conditional UPDATE (seats + n <= cap) — atomic on every engine, unlike a
+        // count-then-insert. VARCHAR so the unique index below is valid on MySQL.
+        await db.createTable(T.freeSeats, [
+            'id INT_PK',
+            'event_id INT NOT NULL',
+            'buyer_email VARCHAR(200) NOT NULL',
+            'seats INT NOT NULL DEFAULT 0',
+        ]);
+        try {
+            await db.run(`CREATE UNIQUE INDEX IF NOT EXISTS ${P}uidx_free_seats_buyer ON ${T.freeSeats} (event_id, buyer_email)`);
+        } catch (e) { console.error('[event-tickets] could not create the free-seat index:', e.message); }
         await db.createTable(T.tickets, [
             'id INT_PK',
             'order_id INT NOT NULL',
@@ -188,16 +218,21 @@ exports.init = async function (wordjs) {
 
     // Lazy expiry: release seats held by UNPAID pending orders older than the TTL, so an attacker rotating
     // buyer_email to place pending orders they never pay can't hold a small venue's inventory hostage
-    // indefinitely (audit LOW). Runs opportunistically at order time; the admin's manual confirm still wins.
+    // indefinitely (audit LOW). Runs opportunistically at order time. Seats are released only by the
+    // request whose conditional pending -> expired flip wins: the admin's pending -> paid confirm and a
+    // cancellation flip the same row, so whichever lands first owns the seats. Releasing before the flip
+    // let two overlapping sweeps release one order twice, and released the seats of an order the admin
+    // had just confirmed: in both cases more tickets than the capacity could then be sold.
     const PENDING_TTL_MS = 30 * 60 * 1000;
     async function releaseStalePending(eventId) {
         const cutoff = new Date(Date.now() - PENDING_TTL_MS).toISOString();
         const stale = await db.all(`SELECT id, items FROM ${T.orders} WHERE event_id = ? AND payment_status = 'pending' AND created_at < ?`, [eventId, cutoff]);
         for (const o of stale) {
+            const flip = await db.run(`UPDATE ${T.orders} SET payment_status = 'expired' WHERE id = ? AND payment_status = 'pending'`, [o.id]);
+            if (!flip || flip.changes !== 1) continue; // paid, cancelled or expired meanwhile: not ours to release
             for (const it of parseItems(o.items)) {
                 await db.run(`UPDATE ${T.types} SET sold = sold - ? WHERE id = ? AND sold >= ?`, [it.qty, it.ticket_type_id, it.qty]);
             }
-            await db.run(`UPDATE ${T.orders} SET payment_status = 'expired' WHERE id = ? AND payment_status = 'pending'`, [o.id]);
         }
     }
 
@@ -235,30 +270,97 @@ exports.init = async function (wordjs) {
             </div>`;
     }
 
-    // ── anti-spam / rate limiting (in-memory; single child process; no req.ip in the sandbox) ─────
-    const orderByEmail = new Map(); // email -> { count, first }
-    let orderGlobal = { count: 0, first: 0 };
+    // ── anti-spam / rate limiting (in-memory rolling windows; one isolate process) ────────────────
+    // Keys: 'g' (site-wide orders), 'e:<email>' and 'c:<clientKey>' (orders), 'f:<clientKey>:<event>'
+    // (free seats). A window is CLAIMED — checked and counted in the same synchronous step — and
+    // refunded when the request ends without an order. The previous check-first, count-after-INSERT
+    // shape let a burst of concurrent requests from ONE client all pass the check before any of them
+    // was counted: every per-client and per-email cap was bypassed and the site-wide window filled.
+    const rateWindows = new Map(); // key -> { count, first }
 
-    function orderRateLimited(email) {
-        const now = Date.now();
-        if (now - orderGlobal.first >= ORDER_WINDOW_MS) orderGlobal = { count: 0, first: now };
-        if (orderGlobal.count >= ORDER_MAX_GLOBAL) return true;
-        const rec = orderByEmail.get(email);
-        return !!(rec && now - rec.first < ORDER_WINDOW_MS && rec.count >= ORDER_MAX_PER_EMAIL);
-    }
-    function noteOrder(email) {
-        const now = Date.now();
-        orderGlobal.count++;
-        const rec = orderByEmail.get(email);
-        if (!rec || now - rec.first >= ORDER_WINDOW_MS) orderByEmail.set(email, { count: 1, first: now });
-        else rec.count++;
-        // Bound the map so a code-diverse attack can't grow memory forever.
-        if (orderByEmail.size > 1000) {
-            for (const [k, v] of orderByEmail) {
-                if (now - v.first >= ORDER_WINDOW_MS) orderByEmail.delete(k);
-            }
-            if (orderByEmail.size > 1000) orderByEmail.clear();
+    function pruneWindows(now) {
+        if (rateWindows.size <= RATE_MAX_KEYS) return;
+        for (const [k, v] of rateWindows) if (now - v.first >= ORDER_WINDOW_MS) rateWindows.delete(k);
+        // Still over the bound with every window live: evict the oldest (Map keeps insertion order),
+        // never the site-wide window — key churn must not be a way to reset it.
+        let excess = rateWindows.size - RATE_MAX_KEYS;
+        for (const k of rateWindows.keys()) {
+            if (excess <= 0) break;
+            if (k === 'g') continue;
+            rateWindows.delete(k);
+            excess--;
         }
+    }
+
+    /**
+     * Claim `amount` units on every [key, max, amount] spec, all or nothing. Returns a release()
+     * that refunds the claim (idempotent), or null when any window is already full.
+     */
+    function claimWindows(specs) {
+        const now = Date.now();
+        const live = [];
+        for (const [key, max, amount] of specs) {
+            const r = rateWindows.get(key);
+            const cur = r && now - r.first < ORDER_WINDOW_MS ? r : null;
+            if ((cur ? cur.count : 0) + amount > max) return null;
+            live.push([key, cur, amount]);
+        }
+        const held = live.map(([key, cur, amount]) => {
+            const r = cur || { count: 0, first: now };
+            if (!cur) rateWindows.set(key, r);
+            r.count += amount;
+            return [r, amount];
+        });
+        pruneWindows(now);
+        let released = false;
+        return () => {
+            if (released) return;
+            released = true;
+            for (const [r, amount] of held) r.count = Math.max(0, r.count - amount);
+        };
+    }
+
+    /** Order budget for one request: site-wide, per email and per client windows. */
+    function claimOrderWindows(email, clientKey) {
+        const specs = [['g', ORDER_MAX_GLOBAL, 1], ['e:' + email, ORDER_MAX_PER_EMAIL, 1]];
+        if (clientKey) specs.push(['c:' + clientKey, ORDER_MAX_PER_CLIENT, 1]);
+        return claimWindows(specs);
+    }
+
+    // ── per-email free-seat quota (durable, one counter row per event + email) ──────────────────
+    const seatsOf = (items) => parseItems(items).reduce((n, it) => n + (Number(it && it.qty) || 0), 0);
+
+    /**
+     * Claim `n` free seats of `email`'s quota for `eventId`. The row is created on first use, seeded
+     * with the free seats the address already holds in orders placed before the counter existed (a
+     * concurrent first use loses the unique index and is ignored). The claim itself is ONE conditional
+     * UPDATE, so concurrent requests can never take more than the quota between them.
+     */
+    async function claimFreeSeats(eventId, email, n) {
+        const row = await db.get(`SELECT seats FROM ${T.freeSeats} WHERE event_id = ? AND buyer_email = ?`, [eventId, email]);
+        if (!row) {
+            const prior = await db.all(
+                `SELECT items FROM ${T.orders} WHERE event_id = ? AND buyer_email = ? AND total_cents = 0 AND payment_status = 'paid'`,
+                [eventId, email]
+            );
+            const seeded = prior.reduce((s, o) => s + seatsOf(o.items), 0);
+            try {
+                await db.run(`INSERT INTO ${T.freeSeats} (event_id, buyer_email, seats) VALUES (?, ?, ?)`, [eventId, email, seeded]);
+            } catch (e) { /* created concurrently — the UPDATE below decides */ }
+        }
+        const r = await db.run(
+            `UPDATE ${T.freeSeats} SET seats = seats + ? WHERE event_id = ? AND buyer_email = ? AND seats + ? <= ?`,
+            [n, eventId, email, n, MAX_FREE_SEATS_PER_EMAIL]
+        );
+        return !!(r && r.changes > 0);
+    }
+    async function refundFreeSeats(eventId, email, n) {
+        try {
+            await db.run(
+                `UPDATE ${T.freeSeats} SET seats = seats - ? WHERE event_id = ? AND buyer_email = ? AND seats >= ?`,
+                [n, eventId, email, n]
+            );
+        } catch (e) { /* best effort */ }
     }
 
     // ═══════════════════════════════ PUBLIC ROUTES ════════════════════════════════════════════════
@@ -320,6 +422,11 @@ exports.init = async function (wordjs) {
      */
     http.route('post', '/public/order', async (req, res) => {
         const body = req.body || {};
+        // Claimed limits are refunded in `finally` unless an order row was created.
+        let releaseWindows = null;
+        let releaseFreeWindow = null;
+        let freeClaim = null; // { eventId, email, n } once the durable quota is claimed
+        let created = false;
         try {
             // Anti-spam: honeypot must be empty and the form must have taken a human amount of time.
             if (String(body.hp || '').trim() !== '') {
@@ -335,7 +442,9 @@ exports.init = async function (wordjs) {
             if (!buyerName) return res.status(400).json({ error: 'El nombre es obligatorio.' });
             if (!EMAIL_RE.test(buyerEmail)) return res.status(400).json({ error: 'El correo no es válido.' });
 
-            if (orderRateLimited(buyerEmail)) {
+            const clientKey = String(req.clientKey || '').slice(0, 64);
+            releaseWindows = claimOrderWindows(buyerEmail, clientKey);
+            if (!releaseWindows) {
                 return res.status(429).json({ error: 'Demasiados pedidos en poco tiempo. Espera unos minutos e inténtalo de nuevo.' });
             }
 
@@ -375,6 +484,23 @@ exports.init = async function (wordjs) {
                 if (!t || !Number(t.is_active)) return res.status(400).json({ error: 'Una de las entradas ya no está disponible.' });
                 if (!salesOpen(t)) return res.status(400).json({ error: `La venta de "${t.name}" ya cerró.` });
                 items.push({ ticket_type_id: t.id, name: t.name, price_cents: Number(t.price_cents) || 0, qty: w.qty });
+            }
+
+            // Free tickets: per-order cap, then the client's rolling window for this event, then the
+            // email's durable quota for this event (rotating addresses from one client does not reset
+            // the window; rotating clients does not reset the quota).
+            const wouldBeFree = items.every((it) => it.price_cents === 0);
+            if (wouldBeFree) {
+                if (totalSeats > MAX_FREE_TICKETS_PER_ORDER) {
+                    return res.status(400).json({ error: `Máximo ${MAX_FREE_TICKETS_PER_ORDER} entradas gratuitas por pedido.` });
+                }
+                const freeLimited = () => res.status(429).json({ error: `Máximo ${MAX_FREE_SEATS_PER_EMAIL} entradas gratuitas por persona para este evento.` });
+                if (clientKey) {
+                    releaseFreeWindow = claimWindows([['f:' + clientKey + ':' + eventId, MAX_FREE_SEATS_PER_CLIENT_WINDOW, totalSeats]]);
+                    if (!releaseFreeWindow) return freeLimited();
+                }
+                if (!(await claimFreeSeats(eventId, buyerEmail, totalSeats))) return freeLimited();
+                freeClaim = { eventId, email: buyerEmail, n: totalSeats };
             }
 
             // Free up seats held by long-unpaid pending orders before claiming (bounds inventory DoS).
@@ -418,8 +544,8 @@ exports.init = async function (wordjs) {
                 await rollback();
                 return res.status(500).json({ error: 'No se pudo crear el pedido, inténtalo de nuevo.' });
             }
-
-            noteOrder(buyerEmail);
+            // The order exists: every claimed window and the free-seat quota stay spent.
+            created = true;
 
             // Notify the site owner (best effort).
             if (cfg.notifyEmail && EMAIL_RE.test(cfg.notifyEmail)) {
@@ -473,6 +599,12 @@ exports.init = async function (wordjs) {
             });
         } catch (e) {
             res.status(500).json({ error: 'Error al procesar el pedido.' });
+        } finally {
+            if (!created) {
+                if (releaseWindows) releaseWindows();
+                if (releaseFreeWindow) releaseFreeWindow();
+                if (freeClaim) await refundFreeSeats(freeClaim.eventId, freeClaim.email, freeClaim.n);
+            }
         }
     });
 
@@ -582,6 +714,7 @@ exports.init = async function (wordjs) {
             const id = req.params.id;
             await db.run(`DELETE FROM ${T.tickets} WHERE event_id = ?`, [id]);
             await db.run(`DELETE FROM ${T.orders} WHERE event_id = ?`, [id]);
+            await db.run(`DELETE FROM ${T.freeSeats} WHERE event_id = ?`, [id]);
             await db.run(`DELETE FROM ${T.types} WHERE event_id = ?`, [id]);
             await db.run(`DELETE FROM ${T.events} WHERE id = ?`, [id]);
             res.json({ success: true });
@@ -630,18 +763,30 @@ exports.init = async function (wordjs) {
                 if (!Number.isInteger(v) || v < 0) return res.status(400).json({ error: 'Precio inválido.' });
                 sets.push('price_cents = ?'); params.push(v);
             }
+            let capacity = null;
             if (body.capacity !== undefined) {
                 const v = Number(body.capacity);
                 if (!Number.isInteger(v) || v < 1) return res.status(400).json({ error: 'La capacidad debe ser al menos 1.' });
                 const sold = Number(row.sold) || 0;
                 if (v < sold) return res.status(400).json({ error: `La capacidad no puede ser menor que las entradas ya vendidas (${sold}).` });
                 sets.push('capacity = ?'); params.push(v);
+                capacity = v;
             }
             if (body.sales_end !== undefined) { sets.push('sales_end = ?'); params.push(normSalesEnd(body.sales_end)); }
             if (body.is_active !== undefined) { sets.push('is_active = ?'); params.push(body.is_active ? 1 : 0); }
             if (!sets.length) return res.json({ success: true });
             params.push(req.params.id);
-            await db.run(`UPDATE ${T.types} SET ${sets.join(', ')} WHERE id = ?`, params);
+            // A new capacity lands only while it still covers the seats sold: an order claims seats with
+            // `sold + n <= capacity`, so one landing between the check above and this write would
+            // otherwise leave more seats sold than the capacity just set.
+            let where = 'id = ?';
+            if (capacity !== null) { where += ' AND COALESCE(sold, 0) <= ?'; params.push(capacity); }
+            const result = await db.run(`UPDATE ${T.types} SET ${sets.join(', ')} WHERE ${where}`, params);
+            if (!result || result.changes !== 1) {
+                const now = await db.get(`SELECT sold FROM ${T.types} WHERE id = ?`, [req.params.id]);
+                if (!now) return res.status(404).json({ error: 'Tipo de entrada no encontrado.' });
+                return res.status(400).json({ error: `La capacidad no puede ser menor que las entradas ya vendidas (${Number(now.sold) || 0}).` });
+            }
             res.json({ success: true });
         } catch (e) {
             res.status(400).json({ error: e.message });
@@ -698,6 +843,15 @@ exports.init = async function (wordjs) {
                 [order.id]
             );
             if (!claim || claim.changes !== 1) {
+                // The order left 'pending' before this flip: say what it is now. Only a paid one has
+                // tickets; one that expired (its seats released) or was cancelled meanwhile was
+                // answered "already paid" with no tickets, so the buyer never got any.
+                const now = await db.get(`SELECT payment_status FROM ${T.orders} WHERE id = ?`, [order.id]);
+                if (!now) return res.status(404).json({ error: 'Pedido no encontrado.' });
+                if (now.payment_status === 'cancelled') return res.status(409).json({ error: 'El pedido está cancelado.' });
+                if (now.payment_status !== 'paid') {
+                    return res.status(409).json({ error: 'El pedido caducó sin pagarse y sus entradas se liberaron. Pide al comprador que haga un pedido nuevo.' });
+                }
                 // Already paid — return the existing tickets instead of duplicating them.
                 const existing = await db.all(
                     `SELECT t.code, tt.name AS type_name FROM ${T.tickets} t
@@ -721,24 +875,42 @@ exports.init = async function (wordjs) {
         }
     });
 
-    /** Cancel an order: restore the claimed capacity and void any generated tickets. */
+    /**
+     * Cancel an order: restore the capacity it holds and void any generated tickets. Only a pending or
+     * paid order holds seats — an expired one gave them back when it expired — and the flip to
+     * 'cancelled' is conditional on the status read, so the seats are released by exactly the state
+     * that held them. The flip used to accept any status but 'cancelled': cancelling an expired order
+     * (the admin list shows it with a "Cancelar" button), or a pending one the sweep expired between
+     * the read and the flip, released its seats a second time and the type could then sell more
+     * tickets than its capacity.
+     */
     http.route('post', '/orders/:id/cancel', { auth: true, admin: true }, async (req, res) => {
         try {
-            const order = await db.get(`SELECT * FROM ${T.orders} WHERE id = ?`, [req.params.id]);
-            if (!order) return res.status(404).json({ error: 'Pedido no encontrado.' });
-            const claim = await db.run(
-                `UPDATE ${T.orders} SET payment_status = 'cancelled' WHERE id = ? AND payment_status != 'cancelled'`,
-                [order.id]
-            );
-            if (!claim || claim.changes !== 1) return res.status(409).json({ error: 'El pedido ya está cancelado.' });
-            for (const it of parseItems(order.items)) {
-                const qty = Number(it.qty) || 0;
-                if (qty > 0 && it.ticket_type_id) {
-                    await db.run(`UPDATE ${T.types} SET sold = sold - ? WHERE id = ?`, [qty, it.ticket_type_id]);
+            for (let attempt = 1; attempt <= 3; attempt++) {
+                const order = await db.get(`SELECT * FROM ${T.orders} WHERE id = ?`, [req.params.id]);
+                if (!order) return res.status(404).json({ error: 'Pedido no encontrado.' });
+                if (order.payment_status === 'cancelled') return res.status(409).json({ error: 'El pedido ya está cancelado.' });
+                const holdsSeats = order.payment_status === 'pending' || order.payment_status === 'paid';
+                const claim = order.payment_status == null
+                    ? await db.run(`UPDATE ${T.orders} SET payment_status = 'cancelled' WHERE id = ? AND payment_status IS NULL`, [order.id])
+                    : await db.run(`UPDATE ${T.orders} SET payment_status = 'cancelled' WHERE id = ? AND payment_status = ?`, [order.id, order.payment_status]);
+                if (!claim || claim.changes !== 1) continue; // paid, expired or cancelled meanwhile: decide again
+                if (holdsSeats) {
+                    for (const it of parseItems(order.items)) {
+                        const qty = Number(it.qty) || 0;
+                        if (qty > 0 && it.ticket_type_id) {
+                            await db.run(`UPDATE ${T.types} SET sold = sold - ? WHERE id = ?`, [qty, it.ticket_type_id]);
+                        }
+                    }
                 }
+                // A cancelled free order gives its seats back to the buyer's free-seat quota.
+                if (Number(order.total_cents) === 0 && order.payment_status === 'paid') {
+                    await refundFreeSeats(order.event_id, order.buyer_email, seatsOf(order.items));
+                }
+                await db.run(`DELETE FROM ${T.tickets} WHERE order_id = ?`, [order.id]);
+                return res.json({ success: true });
             }
-            await db.run(`DELETE FROM ${T.tickets} WHERE order_id = ?`, [order.id]);
-            res.json({ success: true });
+            res.status(409).json({ error: 'El pedido cambió mientras se cancelaba. Inténtalo de nuevo.' });
         } catch (e) {
             res.status(500).json({ error: e.message });
         }
@@ -891,5 +1063,5 @@ exports.init = async function (wordjs) {
 };
 
 exports.deactivate = function () {
-    // Nothing to tear down — no timers or servers; rate-limit maps die with the child process.
+    // Nothing to tear down — no timers or servers; rate-limit windows die with the child process.
 };

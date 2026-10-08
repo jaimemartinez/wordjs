@@ -108,61 +108,124 @@ describe('#3 — /plugins publishes an allowlist, not the plugin tree', () => {
         // The bundle directory the UNAUTHENTICATED /api/v1/plugins/:slug/bundle* routes serve from.
         fs.mkdirSync(path.join(probeDir, 'dist'), { recursive: true });
         fs.writeFileSync(path.join(probeDir, 'dist', 'admin.bundle.css'), '.a{}');
+        fs.writeFileSync(path.join(probeDir, 'dist', 'component.bundle.css'), '.c{}');
         fs.writeFileSync(path.join(probeDir, 'dist', 'manifest.build.json'), '{}');
+        fs.mkdirSync(path.join(probeDir, 'client', 'admin'), { recursive: true });
+        fs.writeFileSync(path.join(probeDir, 'client', 'admin', 'admin.css'), '.admin{}');
         // A junction/symlink from the plugin's own dir back to itself: the lexical walk-around.
         try { fs.symlinkSync(probeDir, path.join(probeDir, 'self'), 'junction'); } catch { /* unprivileged FS */ }
     });
     after(() => { try { fs.rmSync(probeDir, { recursive: true, force: true }); } catch { /* best effort */ } });
 
+    // The /plugins mount serves a plugin's files only while it is ACTIVE (and its dist/ output only while
+    // it is granted browser:script) — core/plugin-serving; covered against a real database in
+    // plugin-public-footprint.test.ts. This file boots no database, so state both facts for the probe in
+    // memory: the gate reads isPluginActive through the module object at request time, and the grant
+    // through the in-memory mirror. Without them every request below would be the gate's 404, and the
+    // allowlist assertions would hold for the wrong reason.
+    //
+    // That applies to the REFUSALS as much as to the 200s: an inactive probe is a 404 from the gate
+    // whatever the allowlist says, so a test that expects data/, source or a traversal to be refused
+    // proves nothing unless the probe is active AND granted (dist/ is gated on browser:script too).
+    // Every negative test below therefore runs through this, with a 200 control in the same window.
+    async function asActiveProbe(fn: () => any, grants: string[] = [], alsoActive: string[] = []): Promise<any> {
+        const corePlugins = require('../core/plugins');
+        const perms = require('../core/plugin-permissions');
+        const realIsActive = corePlugins.isPluginActive;
+        corePlugins.isPluginActive = async (slug: string) =>
+            slug === PROBE || alsoActive.includes(slug) || realIsActive(slug);
+        perms._setGrantsInMemory(PROBE, grants);
+        try {
+            return await fn();
+        } finally {
+            corePlugins.isPluginActive = realIsActive;
+            perms._setGrantsInMemory(PROBE, []);
+        }
+    }
+
     it('serves plugins/<slug>/public/ with nosniff', async () => {
-        const r = await request(app).get(`/plugins/${PROBE}/public/probe.css`);
+        const r = await asActiveProbe(() => request(app).get(`/plugins/${PROBE}/public/probe.css`));
         assert.strictEqual(r.status, 200);
         assert.match(String(r.headers['content-type']), /text\/css/);
         assert.strictEqual(r.headers['x-content-type-options'], 'nosniff');
         assert.strictEqual(r.text, '.probe{color:red}');
     });
 
-    it('serves the three fixed files the admin shell asks for by construction', async () => {
-        const m = await request(app).get(`/plugins/${PROBE}/manifest.json`);
-        assert.strictEqual(m.status, 200);
-        assert.strictEqual(m.headers['x-content-type-options'], 'nosniff');
+    it('serves the one fixed file outside public/ — the block stylesheet — and never the manifest or the admin stylesheet', async () => {
+        // dist/component.bundle.css is what pluginBundleLoader links next to the Verso block bundle.
+        const c = await asActiveProbe(() => request(app).get(`/plugins/${PROBE}/dist/component.bundle.css`), ['browser:script']);
+        assert.strictEqual(c.status, 200);
+        assert.strictEqual(c.headers['x-content-type-options'], 'nosniff');
+        // manifest.json (name, version, author, permissions) and client/admin/admin.css used to be on
+        // this list. They are not public any more — the admin page reads them through the authenticated
+        // GET /api/v1/plugins/:slug/admin-style{,/css} — even for an active plugin.
+        for (const p of [`/plugins/${PROBE}/manifest.json`, `/plugins/${PROBE}/client/admin/admin.css`]) {
+            const r = await asActiveProbe(() => request(app).get(p), ['browser:script']);
+            assert.strictEqual(r.status, 404, `${p} must not be served (got ${r.status})`);
+        }
         // hello-world is a plugin shipped in-tree: proves the rule is not probe-specific.
         const h = await request(app).get('/plugins/hello-world/manifest.json');
-        assert.strictEqual(h.status, 200);
+        assert.strictEqual(h.status, 404);
     });
 
     it('the fixed files are revalidated on every load (no-cache + ETag); other assets keep 1 h', async () => {
         // Their URLs carry no version, and the stylesheets are regenerated from the UI sources on every
         // plugin update while the bundles they style are already no-cache: with max-age=3600 a browser
         // ran the NEW bundle against the OLD classes for up to an hour after an update.
+        //
+        // The fixed files of the static mount are io-guard's PLUGIN_SERVED_FILES (the block stylesheet). The
+        // other two this test used to list are no longer on the mount at all — manifest.json is served
+        // nowhere, and client/admin/admin.css moved to the authenticated GET /api/v1/plugins/:slug/
+        // admin-style/css, whose no-cache + ETag revalidation is asserted in plugin-public-footprint.test.ts
+        // (a signed-in session needs the database this file does not boot).
+        const { PLUGIN_SERVED_FILES } = require('../core/io-guard');
+        assert.ok(PLUGIN_SERVED_FILES.includes('dist/component.bundle.css'), 'the population is real');
         fs.mkdirSync(path.join(probeDir, 'client', 'admin'), { recursive: true });
         fs.writeFileSync(path.join(probeDir, 'client', 'admin', 'admin.css'), '.x{color:red}');
         fs.writeFileSync(path.join(probeDir, 'dist', 'component.bundle.css'), '.y{color:red}');
-        for (const p of ['manifest.json', 'client/admin/admin.css', 'dist/component.bundle.css']) {
-            const r = await request(app).get(`/plugins/${PROBE}/${p}`);
-            assert.strictEqual(r.status, 200, p);
-            assert.strictEqual(r.headers['cache-control'], 'no-cache', p);
-            assert.ok(r.headers.etag, `${p} carries an ETag`);
-            const again = await request(app).get(`/plugins/${PROBE}/${p}`).set('If-None-Match', r.headers.etag);
-            assert.strictEqual(again.status, 304, `${p}: unchanged → 304`);
-        }
-        const asset = await request(app).get(`/plugins/${PROBE}/public/probe.css`);
-        assert.strictEqual(asset.headers['cache-control'], 'public, max-age=3600');
+        await asActiveProbe(async () => {
+            for (const p of PLUGIN_SERVED_FILES as string[]) {
+                const r = await request(app).get(`/plugins/${PROBE}/${p}`);
+                assert.strictEqual(r.status, 200, p);
+                assert.strictEqual(r.headers['cache-control'], 'no-cache', p);
+                assert.ok(r.headers.etag, `${p} carries an ETag`);
+                const again = await request(app).get(`/plugins/${PROBE}/${p}`).set('If-None-Match', r.headers.etag);
+                assert.strictEqual(again.status, 304, `${p}: unchanged → 304`);
+            }
+            // A plugin update rewrites the file: the browser's next revalidation gets the new bytes.
+            const before = await request(app).get(`/plugins/${PROBE}/dist/component.bundle.css`);
+            fs.writeFileSync(path.join(probeDir, 'dist', 'component.bundle.css'), '.y{color:rebeccapurple}');
+            const updated = await request(app).get(`/plugins/${PROBE}/dist/component.bundle.css`).set('If-None-Match', before.headers.etag);
+            assert.strictEqual(updated.status, 200, 'an updated stylesheet is not a 304');
+            assert.strictEqual(updated.text, '.y{color:rebeccapurple}');
+            // Not on the static mount, so no cache can hold a copy to revalidate.
+            for (const p of ['manifest.json', 'client/admin/admin.css']) {
+                assert.strictEqual((await request(app).get(`/plugins/${PROBE}/${p}`)).status, 404, p);
+            }
+            const asset = await request(app).get(`/plugins/${PROBE}/public/probe.css`);
+            assert.strictEqual(asset.status, 200);
+            assert.strictEqual(asset.headers['cache-control'], 'public, max-age=3600');
+        }, ['browser:script']);
     });
 
     it('404s the plugin source, its data/ dir and anything it wrote at runtime', async () => {
-        for (const p of [
-            `/plugins/${PROBE}/index.js`,           // code
-            `/plugins/${PROBE}/data/secret.txt`,    // private runtime data
-            `/plugins/${PROBE}/leak.txt`,           // the exfiltration channel of #3
-            `/plugins/${PROBE}/public/probe.css.map`, // source map
-            `/plugins/${PROBE}/public/probe.html`,  // document-in-this-origin (the XSS variant)
-            `/plugins/${PROBE}/`,                   // directory listing
-            `/plugins/${PROBE}`,                    // the plugin root itself
-        ]) {
-            const r = await request(app).get(p);
-            assert.strictEqual(r.status, 404, `${p} must not be served (got ${r.status})`);
-        }
+        // ACTIVE and GRANTED, with a 200 control: every 404 below is the allowlist's, not the gate's.
+        await asActiveProbe(async () => {
+            assert.strictEqual((await request(app).get(`/plugins/${PROBE}/public/probe.css`)).status, 200, 'control');
+            for (const p of [
+                `/plugins/${PROBE}/index.js`,           // code
+                `/plugins/${PROBE}/data/secret.txt`,    // private runtime data
+                `/plugins/${PROBE}/leak.txt`,           // the exfiltration channel of #3
+                `/plugins/${PROBE}/public/probe.css.map`, // source map
+                `/plugins/${PROBE}/public/probe.html`,  // document-in-this-origin (the XSS variant)
+                `/plugins/${PROBE}/dist/manifest.build.json`, // dist/ beyond the block stylesheet
+                `/plugins/${PROBE}/`,                   // directory listing
+                `/plugins/${PROBE}`,                    // the plugin root itself
+            ]) {
+                const r = await request(app).get(p);
+                assert.strictEqual(r.status, 404, `${p} must not be served (got ${r.status})`);
+            }
+        }, ['browser:script']);
     });
 
     it('closes the clean-install leak named in the audit (a plugin\'s data/ dir)', async () => {
@@ -171,33 +234,49 @@ describe('#3 — /plugins publishes an allowlist, not the plugin tree', () => {
         // checkout git produces (5 files are tracked under backend/plugins; the rest are local
         // installs). The property is about the SHAPE of the path, not about that plugin, so the probe
         // ships the shape and the assertion is unconditional everywhere.
-        for (const p of [`/plugins/${PROBE}/data/bayes.json`,
-                         `/plugins/${PROBE}/data/attachments/msg.eml`,
-                         `/plugins/${PROBE}/data/attachments`]) {
-            const r = await request(app).get(p);
-            assert.strictEqual(r.status, 404, `${p} must not be served (got ${r.status})`);
-        }
-        // …and when the plugin the audit named IS installed, the same statement is made about it too.
-        // Extra coverage on top of the unconditional assertion above — never the only coverage.
-        if (fs.existsSync(path.join(PLUGINS_ROOT, 'mail-server', 'data'))) {
-            for (const p of ['/plugins/mail-server/data/bayes.json', '/plugins/mail-server/data/attachments']) {
+        //
+        // Stated for an ACTIVE plugin: mail-server is active wherever it is installed, and an inactive
+        // probe would be refused by the activity gate before the allowlist is consulted.
+        await asActiveProbe(async () => {
+            assert.strictEqual((await request(app).get(`/plugins/${PROBE}/public/probe.css`)).status, 200, 'control');
+            for (const p of [`/plugins/${PROBE}/data/bayes.json`,
+                             `/plugins/${PROBE}/data/attachments/msg.eml`,
+                             `/plugins/${PROBE}/data/attachments`]) {
                 const r = await request(app).get(p);
                 assert.strictEqual(r.status, 404, `${p} must not be served (got ${r.status})`);
             }
-        }
+            // …and when the plugin the audit named IS installed, the same statement is made about it
+            // too, as an active plugin. Extra coverage on top of the unconditional assertion above —
+            // never the only coverage.
+            if (fs.existsSync(path.join(PLUGINS_ROOT, 'mail-server', 'data'))) {
+                for (const p of ['/plugins/mail-server/data/bayes.json', '/plugins/mail-server/data/attachments']) {
+                    const r = await request(app).get(p);
+                    assert.strictEqual(r.status, 404, `${p} must not be served (got ${r.status})`);
+                }
+            }
+        }, ['browser:script'], ['mail-server']);
     });
 
     it('404s traversal attempts, encoded or not', async () => {
-        for (const p of [
-            `/plugins/${PROBE}/public/%2e%2e/index.js`,
-            `/plugins/${PROBE}/public/../index.js`,
-            `/plugins/${PROBE}/..%2f..%2fwordjs-config.json`,
-            `/plugins/${PROBE}/public/%2e%2e%2f%2e%2e%2f%2e%2e%2fwordjs-config.json`,
-        ]) {
-            const r = await request(app).get(p);
-            assert.ok(r.status === 404 || r.status === 400, `${p} → ${r.status}`);
-            assert.ok(!String(r.text || '').includes('siteUrl'), `${p} leaked config`);
-        }
+        // Out of an ACTIVE, GRANTED plugin's published dir: against an inactive probe the gate would
+        // answer 404 for a path the containment proof had let through.
+        await asActiveProbe(async () => {
+            assert.strictEqual((await request(app).get(`/plugins/${PROBE}/public/probe.css`)).status, 200, 'control');
+            for (const p of [
+                `/plugins/${PROBE}/public/%2e%2e/index.js`,
+                `/plugins/${PROBE}/public/../index.js`,
+                `/plugins/${PROBE}/public/%2e%2e/data/secret.txt`,
+                `/plugins/${PROBE}/public/..%2fleak.txt`,
+                `/plugins/${PROBE}/..%2f..%2fwordjs-config.json`,
+                `/plugins/${PROBE}/public/%2e%2e%2f%2e%2e%2f%2e%2e%2fwordjs-config.json`,
+            ]) {
+                const r = await request(app).get(p);
+                assert.ok(r.status === 404 || r.status === 400, `${p} → ${r.status}`);
+                for (const leak of ['siteUrl', 'plugin source', 'encryption key', 'exfiltrated']) {
+                    assert.ok(!String(r.text || '').includes(leak), `${p} leaked "${leak}"`);
+                }
+            }
+        }, ['browser:script']);
     });
 
     it('makes the published surface READ-ONLY to the plugin (io-guard)', () => {
@@ -346,7 +425,7 @@ describe('#3 — /plugins publishes an allowlist, not the plugin tree', () => {
     it('gives the /plugins handler a ROOT so a dot-directory in the install path cannot 404 every asset', async () => {
         // REGRESSION PIN. res.sendFile(abs) with no `root` makes `send` evaluate dotfiles against the
         // WHOLE absolute path, so an install under ~/.wordjs (or a CI checkout beneath ~/.cache)
-        // 404s manifest.json, admin.css and the component bundle — deterministically, invisibly to a
+        // 404s every public asset and the component stylesheet — deterministically, invisibly to a
         // checkout without a dot directory. Observe the arguments the REAL handler passes.
         const original = express.response.sendFile;
         const seen: any[] = [];
@@ -355,7 +434,7 @@ describe('#3 — /plugins publishes an allowlist, not the plugin tree', () => {
             return original.call(this, p, opts, cb);
         };
         try {
-            const r = await request(app).get(`/plugins/${PROBE}/public/probe.css`);
+            const r = await asActiveProbe(() => request(app).get(`/plugins/${PROBE}/public/probe.css`));
             assert.strictEqual(r.status, 200);
         } finally {
             express.response.sendFile = original;
@@ -580,5 +659,22 @@ describe("the backend's own Content-Security-Policy", () => {
             `script-src must keep 'unsafe-inline' for the swagger-ui bootstrap: ${directive}`);
         assert.ok(!sources.includes("'unsafe-eval'"),
             `nothing this origin serves builds code from a string: ${directive}`);
+    });
+});
+
+describe('GET /plugins/assets is never shared-cacheable (a revoked plugin\'s script must not outlive its revoke)', () => {
+    it('the real app answers it private and revalidated, with no shared-cache lifetime', async () => {
+        const res = await request(app).get(`${API}/plugins/assets`);
+        assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+        const cc = String(res.headers['cache-control'] || '');
+        assert.match(cc, /\bprivate\b/, `Cache-Control: ${cc}`);
+        assert.match(cc, /\bno-cache\b/, `Cache-Control: ${cc}`);
+        assert.doesNotMatch(cc, /\bpublic\b|s-maxage|stale-while-revalidate|max-age=[1-9]/, `a shared cache may hold it: ${cc}`);
+    });
+
+    it('nor is it on the list of paths that get the shared-cache default (the twin, if the route ever stops choosing)', () => {
+        const re: RegExp = require('../index').PUBLIC_CACHEABLE_RE;
+        assert.strictEqual(re.test('/plugins/assets'), false);
+        assert.strictEqual(re.test('/posts'), true, 'control: public content keeps its edge default');
     });
 });

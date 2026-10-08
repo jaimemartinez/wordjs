@@ -40,6 +40,8 @@ export interface MediaQueryState {
      * el paginador ofreciendo páginas vacías.
      */
     mimeType?: string;
+    /** Which items to list; omitted = the server default ("all", which is public-only for non-uploaders). */
+    visibility?: "all" | "public" | "private";
 }
 
 const positiveInt = (value: number, fallback: number): number => {
@@ -61,6 +63,7 @@ export function buildMediaQuery(state: MediaQueryState): MediaListOptions {
     };
     if (search) query.search = search;
     if (mimeType) query.mimeType = mimeType;
+    if (state.visibility) query.visibility = state.visibility;
     return query;
 }
 
@@ -136,6 +139,9 @@ export function hasMediaMetaChanges(original: MediaMetaFields, draft: MediaMetaF
  */
 export function mediaThumbnailUrl(item: MediaItem): string {
     const base = item.sourceUrl || item.guid || "";
+    // A PRIVATE item's sourceUrl is an authenticated download route, not a directory: there is no
+    // sibling thumbnail file to address.
+    if (item.visibility === "private") return base;
     const thumb = item.mediaDetails?.sizes?.thumbnail?.file;
     if (!thumb) return base;
     const slash = base.lastIndexOf("/");
@@ -181,7 +187,7 @@ export default function MediaLibrarySelector({ onSelect, selectedId }: MediaLibr
         setLoading(true);
         setLoadError(false);
         try {
-            const res = await mediaApi.listPaged(buildMediaQuery({ page, perPage: SELECTOR_PAGE_SIZE, search }));
+            const res = await mediaApi.listPaged(buildMediaQuery({ page, perPage: SELECTOR_PAGE_SIZE, search, visibility: "public" }));
             setMedia(res.data);
             setTotal(res.total);
             setTotalPages(res.totalPages);

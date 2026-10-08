@@ -251,6 +251,59 @@ describe('proxyToBackend — the request the backend sees', () => {
         }
     });
 
+    test('client-supplied forwarding headers are dropped and restated from the socket', async () => {
+        // This replica is the front door when WORDJS_BACKEND_URL is set, and the backend believes
+        // forwarded headers from a loopback hop — so a client's own X-Forwarded-For/Forwarded/X-Real-IP
+        // relayed verbatim would pick the address the backend rate-limits, locks out and audits by.
+        let seen: any = null;
+        const backend = await listen((req, res) => {
+            seen = req.headers;
+            res.writeHead(200).end('ok');
+        });
+        const frontend = await frontendProxying(backend.url);
+        try {
+            const { port } = new URL(frontend.url);
+            const status = await new Promise<number>((resolve, reject) => {
+                const r = http.request(
+                    {
+                        host: '127.0.0.1',
+                        port: Number(port),
+                        path: '/api/v1/auth/login',
+                        method: 'GET',
+                        headers: {
+                            Host: 'site.example',
+                            'X-Forwarded-For': '203.0.113.9',
+                            'X-Forwarded-Host': 'evil.example',
+                            'X-Forwarded-Proto': 'https',
+                            'X-Forwarded-Port': '443',
+                            'X-Forwarded-Server': 'evil.example',
+                            'X-Real-IP': '203.0.113.9',
+                            Forwarded: 'for=203.0.113.9;host=evil.example;proto=https',
+                        },
+                    },
+                    (res) => {
+                        res.resume();
+                        res.on('end', () => resolve(res.statusCode || 0));
+                    },
+                );
+                r.on('error', reject);
+                r.end();
+            });
+            expect(status).toBe(200);
+            // The peer this server actually saw — not the client's claim.
+            expect(seen['x-forwarded-for']).toBe('127.0.0.1');
+            // The Host this listener received, the scheme of its own (plain http) listener.
+            expect(seen['x-forwarded-host']).toBe('site.example');
+            expect(seen['x-forwarded-proto']).toBe('http');
+            for (const name of ['forwarded', 'x-real-ip', 'x-forwarded-port', 'x-forwarded-server']) {
+                expect(seen[name], name).toBeUndefined();
+            }
+        } finally {
+            await frontend.close();
+            await backend.close();
+        }
+    });
+
     test('the request BODY is relayed (a collab op POST is not swallowed)', async () => {
         let body = '';
         const backend = await listen((req, res) => {

@@ -172,11 +172,23 @@ exports.init = async function (wordjs) {
 
     // ---- public route (Puck block: editor iframe + public page) ------------------------------------
 
+    // Public callers never see an error's text: a driver's message names tables, columns and
+    // constraints. The details go to the server log.
+    const failQuietly = (res, e, what) => {
+        console.error(`[events-calendar] ${what} failed:`, e && e.message ? e.message : e);
+        res.status(500).json({ error: 'No se pudo completar la operación. Inténtalo de nuevo.' });
+    };
+    // Public routes answer every failure themselves, through failQuietly: a public caller only ever
+    // gets a reply this plugin wrote.
+    const quietly = (what, handler) => async (req, res) => {
+        try { await handler(req, res); } catch (e) { failQuietly(res, e, what); }
+    };
+
     // GET /public/events?from=&to=&limit=
     //   from: 'YYYY-MM-DD' or 'YYYY-MM-DDTHH:mm' (default: today, date-only — includes all of today)
     //   to:   same shapes; a date-only value includes that whole day
     //   limit: default 50, cap 200
-    http.route('get', '/public/events', async (req, res) => {
+    http.route('get', '/public/events', quietly('event list', async (req, res) => {
         const q = req.query || {};
 
         let from = String(q.from == null ? '' : q.from).trim();
@@ -205,7 +217,7 @@ exports.init = async function (wordjs) {
             params
         );
         res.json({ events: rows });
-    });
+    }));
 
     // ---- admin menu ---------------------------------------------------------------------------------
     adminMenu.add({

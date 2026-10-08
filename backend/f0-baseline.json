@@ -2,16 +2,16 @@
   "schemaVersion": 1,
   "snapshot": {
     "restSource": {
-      "routeFiles": 40,
-      "endpointDeclarations": 243,
-      "mountDeclarations": 85,
-      "semanticSha256": "b94775d2bbbf39c964abc42d96545d25f198d85e8833c7460f0706bb34ac22d0"
+      "routeFiles": 39,
+      "endpointDeclarations": 242,
+      "mountDeclarations": 84,
+      "semanticSha256": "c1efb10eb721833cdff759af779d52d4255b1d04f13ebbfd790283351a14c843"
     },
     "openapi": {
-      "paths": 186,
-      "operations": 236,
-      "coverage": 0.9712,
-      "semanticSha256": "d385229f2a233b7a734b065dd74d70da801d5e600586f18a815fa966763545d6"
+      "paths": 189,
+      "operations": 239,
+      "coverage": 0.9876,
+      "semanticSha256": "4afff99f37bd76290f948b3fc3aa7e4407643f4c1d6b6dc311bce2207321e83e"
     },
     "typingDebt": {
       "requestAny": {
@@ -43,8 +43,8 @@
       "semanticSha256": "dd4150cbbf70aa15c90992d91c4954c7d0502e27ca6901eef6c717dcc4f33c8e"
     },
     "verificationSurface": {
-      "backendTestFiles": 262,
-      "frontendTestFiles": 205,
+      "backendTestFiles": 296,
+      "frontendTestFiles": 212,
       "sandboxWorkflowSemanticSha256": "6589c490e047c52e4330eed83db22c91501686ccf6f30ba7ce030938c995a913",
       "performanceBudgetsSha256": "5a608e783d98267030d14c9ce70edb7cc9f5354cbf006c31353648425d7a7556"
     }
