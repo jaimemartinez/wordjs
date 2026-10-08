@@ -268,3 +268,33 @@ for (const hash of ['sha1', 'sha384', 'sha512']) {
         assert.throws(() => sign(pem), (e) => UNSUPPORTED.test(e.message) && e.message.includes(`${hash}WithRSAEncryption`));
     });
 }
+
+test('certificate serials are minimal DER integers, even when the random draw starts with zero bytes', () => {
+    // node-forge strips ONE leading zero byte from an INTEGER; the old serial ('0' + 15 random bytes) left a
+    // second one whenever the first random byte was 0x00 and the next below 0x80 — a non-minimal INTEGER
+    // OpenSSL 3 refuses with "illegal padding". Force exactly that draw and load what comes out.
+    const tls = require('node:tls');
+    const realRandomBytes = crypto.randomBytes;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-serial-'));
+    crypto.randomBytes = (size, ...rest) => {
+        if (rest.length === 0 && (size === 15 || size === 16)) {
+            const b = Buffer.alloc(size, 0x5a);
+            b[0] = 0x00; b[1] = 0x12;
+            return b;
+        }
+        return realRandomBytes(size, ...rest);
+    };
+    try {
+        const ca = clusterCa.ensureClusterCA(dir);
+        const id = clusterCa.issueIdentity({ caKeyPem: ca.caKeyPem, caCertPem: ca.caCertPem, cn: 'gateway-internal', sans: ['localhost'] });
+        assert.doesNotThrow(() => new crypto.X509Certificate(ca.caCertPem), 'the cluster CA certificate does not parse');
+        assert.doesNotThrow(() => tls.createSecureContext({ key: id.keyPem, cert: `${id.certPem.trim()}\n${ca.caCertPem.trim()}\n`, ca: ca.caCertPem }),
+            'OpenSSL refused the issued identity or the CA (non-minimal serial INTEGER)');
+        for (const serialHex of [new crypto.X509Certificate(ca.caCertPem).serialNumber, new crypto.X509Certificate(id.certPem).serialNumber]) {
+            assert.ok(!/^00/.test(serialHex) || /^00[89a-f]/i.test(serialHex), `serial ${serialHex} has a redundant leading zero byte`);
+        }
+    } finally {
+        crypto.randomBytes = realRandomBytes;
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});

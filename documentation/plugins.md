@@ -722,6 +722,24 @@ exports.init = function (wordjs) {
 };
 ```
 
+**Which hooks you may subscribe to.** A subscription is a *read* of everything the hook carries
+(the host serializes its arguments into your process), so core hooks follow the host's hook access
+policy (`backend/src/core/hook-access.ts`; full table in [security.md §8.1](security.md)):
+
+| Hooks | Permission you must declare (and the admin grant) | What you receive |
+| :-- | :-- | :-- |
+| `init`, `activated_plugin`, `deactivated_plugin`, `switch_theme`, `registered_*` | — | As fired. |
+| `wp_insert_comment`, `deleted_comment`, `comments:pre_insert` | `comments:read` | The comment **without** `authorEmail`, `authorIp`, `agent` — add `comments:pii` to receive those (anti-spam). |
+| `wp_insert_post`, `post_updated`, `deleted_post` | `posts:read` | Post data including drafts/private posts; never the post password. |
+| `notification_sent` | `notifications:read` | The notification with tokens, codes and reset/verification text redacted. |
+| `updated_option` | `settings:read` | Name and value; secret and protected option values arrive as `'[redacted]'`. |
+| `wordjs_head`, `wordjs_footer`, `wp_head`, `wp_footer`, `dynamic_sidebar`, `admin_menu_items`, core cron hooks | denied to every plugin | — |
+
+Your **own** hook names need no permission. Names in a core namespace that core does not define
+(`wp_*`, `wordjs_*`, `core:*`, `comments:*`, `posts:*`, `users:*`, …) are reserved and refused. A refused
+subscription is dropped and the host logs `denied hook subscription: … requires the <scope:access>
+permission`. Grants are re-checked on every delivery, so a revoke takes effect immediately.
+
 **Debugging Hooks:**
 You can use the **Hooks Registry** in the Admin Panel (`/admin/hooks`) to:
 1.  **Inspect:** See exactly which hooks are registered and by whom.
@@ -744,7 +762,7 @@ Every call is permission-checked on the host against your manifest.
 | `wordjs.users.findByEmail / findByLogin / findById / search(...)` | `users:read` | **Safe projection** only: `{ id, userLogin, username, userEmail, displayName, role, hasProfessionalMailbox }` — never `user_pass` or other credential fields. The sanctioned way to read users without core-table access. (`hasProfessionalMailbox` is the admin-owned corporate-mailbox grant as a boolean — read it, never re-derive it from `userEmail`, which the account itself can write.) |
 | `wordjs.site.url / domain / adminEmail` | `settings:read` | Read-only site identity. |
 | `wordjs.dns.resolveMx / resolveTxt / resolve4 / resolve6 / resolve(...)` | `network` | Host-mediated DNS. The raw resolver (`dns.resolve*`) is denied inside the child, so MX (direct delivery) and TXT (SPF/DKIM/DMARC) lookups go through here. The host strips every A/AAAA answer pointing at a private/internal address, so the address lookups return public IPs only. |
-| `wordjs.hooks.addAction/addFilter(hook, cb, priority)` · `doAction(hook, ...args)` | — | Callback runs in the child process; host installs an RPC shim. Raw-HTML output hooks — `wordjs_head`/`wordjs_footer` and their WordPress-compat aliases `wp_head`/`wp_footer` — are denied to every plugin (the registration is dropped with a host-side warning; no trust tier exempts anyone). `doAction` fires only your OWN registered callbacks — never core's or another plugin's. |
+| `wordjs.hooks.addAction/addFilter(hook, cb, priority)` · `doAction(hook, ...args)` | — | Callback runs in the child process; host installs an RPC shim. Core hooks that carry other parties' data need the matching grant — `comments:read` (`comments:pii` for commenter email/IP/agent), `posts:read`, `notifications:read`, `settings:read` — and arrive minimized (see §10.5); reserved core-namespace names are refused. Raw-HTML output hooks — `wordjs_head`/`wordjs_footer` and their WordPress-compat aliases `wp_head`/`wp_footer` and `dynamic_sidebar` — are denied to every plugin (the registration is dropped with a host-side warning; no trust tier exempts anyone). `doAction` fires only your OWN registered callbacks — never core's or another plugin's. |
 | `wordjs.http.route(method, path, [opts,] handler)` | `express:register_route` | Mounted at `/api/v1/plugin/<slug>/path` (always namespaced — no absolute mode). The host checks the grant on every registration: without a granted `express:register_route` the route is dropped with a host warning (`denied route registration: express:register_route not granted`) and nothing is mounted — `scope: "admin"` does NOT imply it, declare it explicitly. `opts`: `{ auth, admin }` (host runs the real auth middleware), `{ multipart: 'field' }`. Handler gets a mock `(req,res)` over RPC. |
 | `wordjs.shortcodes.add(tag, handler)` | — | Handler may be async; expanded via `doShortcodeAsync`. |
 | `wordjs.fs.read(relPath, enc)` / `write(relPath, data)` | `filesystem:read` / `write` | Confined to your **own** plugin dir only (realpath-checked) — never the shared `uploads/` dir. `manifest.json` is immutable, and so is everything under `public/` and `dist/` (§11a). |

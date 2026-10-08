@@ -411,6 +411,18 @@ describe('F6 performance budget — the four plan operations, measured as a rati
         }
     });
 
+    test('the run that failed an ENFORCING job on unchanged code is inside the linux calibration', () => {
+        // The first linux calibration was minted from the isolated CI perf job only. The budget is also
+        // enforced in busier jobs, and pull request #410 failed the F6 phase suites (CI run 37713438511,
+        // attempt 1) on code that does not touch content updates: this is that run's `measured:` line,
+        // verbatim. A calibration has to cover the tails of the jobs that enforce it.
+        const phaseSuitesRun: Run = { reference: { trimmedMeanMilliseconds: 0.1539 }, operations: { contentCreate: { trimmedMeanMilliseconds: 1.686, p95Milliseconds: 2.0993, ratioToReference: 10.958 }, contentUpdate: { trimmedMeanMilliseconds: 1.6527, p95Milliseconds: 1.9683, ratioToReference: 10.742 }, contentQuery: { trimmedMeanMilliseconds: 0.2484, p95Milliseconds: 0.4337, ratioToReference: 1.614 }, contentRender: { trimmedMeanMilliseconds: 0.0264, p95Milliseconds: 0.0606, ratioToReference: 0.172 } } };
+        const linux = calibrationFor(budget, 'linux');
+        assert.deepStrictEqual(evaluateRun(phaseSuitesRun, budget, linux, 'linux'), [],
+            'a run measured in an enforcing CI job on unchanged code is outside the linux calibration — re-mint it with that job\'s tails');
+        assert.ok(/enforcing/i.test(String(linux.measuredOn.source)), 'the linux calibration does not say it covers the enforcing jobs');
+    });
+
     test('a platform with no calibration borrows nobody else\'s ceilings', () => {
         assert.strictEqual(calibrationFor(budget, 'aix'), null, 'an uncalibrated platform resolved to some other platform\'s ceilings');
         assert.strictEqual(calibrationFor({ ...budget, calibrations: undefined }, 'linux'), null);

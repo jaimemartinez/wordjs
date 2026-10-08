@@ -555,7 +555,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
     }
 
     // --- SECURITY CHECK: Magic Numbers & SVG Sanitization ---
-    const fileType = require('file-type');
+    const { fileTypeFromBuffer } = require('../core/file-type-detect');
     const sanitizeHtml = require('sanitize-html');
 
     // SECURITY: Types whose binary signature MUST be confirmable. For these, a missing/unknown
@@ -568,9 +568,10 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
         declaredMime === 'application/pdf';
 
     try {
-        // SECURITY (GHSA-5v7r-6r5c-r473): file-type <=21.x has an ASF parser that can spin in an
+        // SECURITY (GHSA-5v7r-6r5c-r473): file-type before 21.3.1 has an ASF parser that can spin in an
         // infinite loop on a malformed ASF object (zero-size sub-header), hanging the single-process
-        // event loop (DoS). We bound the magic-byte detection three ways:
+        // event loop (DoS). The installed release is fixed; the bounds below stay as defence in depth
+        // against the next parser bug of that kind. Magic-byte detection is bounded three ways:
         //   1. Read only the first MAGIC_BYTES of the file — all signatures we care about live in the
         //      header, and a bounded buffer caps how much the parser can iterate.
         //   2. Skip the ASF code path outright: an ASF file is identified by its leading GUID; no ASF
@@ -606,7 +607,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
                 timer = setTimeout(() => reject(new Error('file-type detection timed out')), DETECT_TIMEOUT_MS);
             });
             try {
-                result = await Promise.race([fileType.fromBuffer(head), timeout]);
+                result = await Promise.race([fileTypeFromBuffer(head), timeout]);
             } finally {
                 clearTimeout(timer!);
             }

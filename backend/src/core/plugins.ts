@@ -525,8 +525,17 @@ const KNOWN_PERMISSIONS: Record<string, string[]> = {
     filesystem: ['read', 'write'],
     settings: ['read', 'write'],
     users: ['read'],
+    // Content DATA grants. There is no bridge call that reads core posts/comments (database:* is scoped
+    // to the plugin's own wjp_<slug>_ tables); these gate the core hooks that CARRY that data
+    // (core/hook-access): posts:read → wp_insert_post/post_updated/deleted_post (drafts and private
+    // posts included); comments:read → wp_insert_comment/deleted_comment/comments:pre_insert without
+    // the commenter's personal data; comments:pii → also the commenter's email, IP and user agent
+    // (explicit only — never implied, like provider).
+    posts: ['read'],
+    comments: ['read', 'pii'],
     email: ['admin', 'provider'],
-    notifications: ['send', 'provider'],
+    // read → the notification_sent hook (every user's notifications, secrets redacted).
+    notifications: ['send', 'provider', 'read'],
     express: ['register_route'],
     admin_menu: ['register'],
     assets: ['write'],

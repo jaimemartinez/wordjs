@@ -1538,14 +1538,11 @@ function getEgressAllowlistFor(slug: string): string[] {
 function egressPolicyLoaded(): boolean {
     try { return require('./plugin-permissions').isEgressPolicyLoaded() === true; } catch { return false; }
 }
-// Hooks whose filter return value is emitted as RAW, UNESCAPED HTML into every server-rendered page
-// (theme-engine wraps wordjs_head/wordjs_footer in a Handlebars SafeString). A plugin shimming one of
-// these is a stored-XSS primitive (incl. the admin UI), so it is denied for EVERY plugin — no plugin
-// gets raw-HTML output hooks.
-// `dynamic_sidebar` filters the whole rendered sidebar (core/widgets.ts renderSidebar), which is served
-// as text/html by the ANONYMOUS GET /widgets/sidebars/:id/render and painted into every public page —
-// the built-in widgets escape their values, but a filter returning markup would bypass all of that.
-const RAW_HTML_HOOKS = new Set(['wordjs_head', 'wordjs_footer', 'wp_head', 'wp_footer', 'dynamic_sidebar']);
+// Which core hooks a plugin may subscribe to, and what their arguments may carry into the child, is ONE
+// table: core/hook-access (CORE_HOOK_POLICY). Raw-HTML output hooks (wordjs_head/wordjs_footer/wp_head/
+// wp_footer/dynamic_sidebar) are denied to every plugin there; hooks that carry other parties' data
+// (comments, posts, notifications, options) require the matching read grant and are minimized.
+const hookAccess = require('./hook-access');
 
 // Host auth/session cookies that must never be forwarded to (or overwritten by) an isolated
 // plugin's route handler: `wordjs_token` is the HttpOnly auth JWT, plus defensive csrf/session names.
@@ -1554,7 +1551,7 @@ const HOST_AUTH_COOKIE_RE = /^wordjs_token$|csrf|xsrf|session/i;
 // EXACT allowlist of bridge methods reachable via a kind:'call' IPC message. A malicious child sends
 // ANY method string and callApi walks it as a dotted path on the api object — so without this gate it
 // could reach registration methods (hooks.addAction/addFilter) DIRECTLY, bypassing the dedicated
-// register kinds' caps + RAW_HTML_HOOKS denylist + teardown tracking, or `provideMail` past its trust
+// register kinds' caps + hook-access policy + teardown tracking, or `provideMail` past its trust
 // gate, or a prototype-chain segment. Registration / mail-provider / notify-transport / route flow
 // ONLY through their own IPC kinds, so they are deliberately ABSENT here (default-deny). Keep in sync
 // with the callHost('…') calls in plugin-worker.js.
@@ -2654,18 +2651,28 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 }
             } else if (msg.kind === 'register') {
                 if (registrationRejected(registeredHooks, MAX_HOOKS, 'hooks')) return;
-                // (#3) No plugin may shim raw-HTML output hooks (stored-XSS into every SSR page, incl.
-                // admin). Denied for ALL plugins — no trust tier exists to exempt anyone.
-                if (RAW_HTML_HOOKS.has(msg.hook)) {
-                    console.warn(`[Isolate ${logSafe(slug)}] denied: plugin may not shim raw-HTML hook '${logSafe(msg.hook)}' (XSS risk).`);
+                // HOOK ACCESS POLICY (core/hook-access). A subscription is a READ of everything the hook
+                // carries, serialized into this child. Raw-HTML output hooks are denied to every plugin
+                // (#3, stored XSS); hooks carrying other parties' data — commenter email/IP, notification
+                // content, draft/private post bodies, option values — require the matching read grant.
+                // Before this gate a ZERO-permission plugin could subscribe to all of them. Decided here,
+                // host-side: the child's own bridge code is not trusted to have asked.
+                const hookName = typeof msg.hook === 'string' ? msg.hook : '';
+                const access = hookAccess.checkHookSubscription(slug, hookName);
+                if (!access.ok) {
+                    console.warn(`[Isolate ${logSafe(slug)}] denied hook subscription: ${logSafe(access.reason)}.`);
+                    return;
+                }
+                if (msg.hookType !== 'filter' && msg.hookType !== 'action') {
+                    console.warn(`[Isolate ${logSafe(slug)}] rejected hook registration with invalid type '${logSafe(String(msg.hookType))}'.`);
                     return;
                 }
                 // Cap callbacks PER hook NAME too: many shims on one core hook (e.g. the_content)
                 // amplify per-request latency even with the per-shim timeout below.
-                const hookCnt = (hookNameCounts.get(msg.hook) || 0) + 1;
-                hookNameCounts.set(msg.hook, hookCnt);
+                const hookCnt = (hookNameCounts.get(hookName) || 0) + 1;
+                hookNameCounts.set(hookName, hookCnt);
                 if (hookCnt > MAX_PER_HOOK) {
-                    console.warn(`[Isolate ${logSafe(slug)}] too many callbacks on hook '${logSafe(msg.hook)}' (cap ${logSafe(MAX_PER_HOOK)}) — ignoring further.`);
+                    console.warn(`[Isolate ${logSafe(slug)}] too many callbacks on hook '${logSafe(hookName)}' (cap ${logSafe(MAX_PER_HOOK)}) — ignoring further.`);
                     return;
                 }
                 // Install a shim in the real hook system that calls back into the isolate. Cap the
@@ -2674,21 +2681,28 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 // or hung plugin can't add up to RPC_TIMEOUT_MS (30s) to every request that fires the
                 // hook. The underlying RPC still times out and recycles the wedged worker separately.
                 const HOOK_SHIM_TIMEOUT_MS = 2000;
+                const isFilter = msg.hookType === 'filter';
                 const shim = (...args: any[]) => {
+                    // Re-decided on EVERY delivery, not only at registration: a grant revoked since then
+                    // stops the flow at once, and the payload is always minimized for THIS plugin's grants
+                    // (no secrets, no commenter PII without comments:pii). Not delivered ⇒ a filter keeps
+                    // its value unchanged, an action is a no-op — exactly the timeout fallback below.
+                    const safeArgs = hookAccess.argsForPlugin(slug, hookName, args);
+                    if (!safeArgs) return Promise.resolve(isFilter ? args[0] : undefined);
                     let t: any;
                     const fallback = new Promise((resolve) => {
                         t = setTimeout(() => resolve(args[0]), HOOK_SHIM_TIMEOUT_MS);
                         if (t.unref) t.unref();
                     });
                     return Promise.race([
-                        invokeWorker(msg.cbId, args).then((v) => { clearTimeout(t); return v; }, () => { clearTimeout(t); return args[0]; }),
+                        invokeWorker(msg.cbId, safeArgs).then((v) => { clearTimeout(t); return v; }, () => { clearTimeout(t); return args[0]; }),
                         fallback,
                     ]);
                 };
-                registeredHooks.push({ hook: msg.hook, type: msg.hookType, shim });
+                registeredHooks.push({ hook: hookName, type: msg.hookType, shim });
                 runWithContext(slug, () => {
-                    if (msg.hookType === 'filter') hooks.addFilter(msg.hook, shim, msg.priority);
-                    else hooks.addAction(msg.hook, shim, msg.priority);
+                    if (isFilter) hooks.addFilter(hookName, shim, msg.priority);
+                    else hooks.addAction(hookName, shim, msg.priority);
                 });
             } else if (msg.kind === 'invoke-reply') {
                 rpcSettle(pendingInvoke, msg, msg.value);

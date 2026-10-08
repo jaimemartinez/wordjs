@@ -144,6 +144,52 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   the same 201 as a new one (the owner is notified instead; the body no longer carries `user`); otherwise
   both duplicates get one generic `400 rest_user_exists`. A username's availability, and an email's when
   verification is off, remain observable — see `documentation/security.md`.
+- **A sandboxed plugin's hook subscriptions are now gated by the data they expose.** Subscribing to a
+  hook makes the host serialize the hook's arguments into the plugin's process, but the isolate
+  `register` handler (and the bridge's `hooks.addAction`/`addFilter`) checked only count caps and the
+  raw-HTML denylist. A plugin with **zero** grants could therefore subscribe to `wp_insert_comment` and
+  receive every commenter's email and IP address, to `notification_sent` and receive every user's
+  notifications including reset codes and tokens, and to `wp_insert_post` / `post_updated` and receive
+  draft, private and password-protected post bodies. Every hook core fires is now classified in one
+  table (`backend/src/core/hook-access.ts`): public hooks (`init`, `activated_plugin`, `switch_theme`,
+  `registered_*`) stay open; data hooks require the matching grant — new **`comments:read`**,
+  **`comments:pii`**, **`posts:read`** and **`notifications:read`** permissions, and `settings:read`
+  for `updated_option`; raw-HTML hooks (now including `dynamic_sidebar`, whose result is served as
+  `text/html`), the host-only `admin_menu_items` filter and core cron hooks are denied to every plugin;
+  unclassified names in a core namespace (`wp_*`, `wordjs_*`, `core:*`, `comments:*`, …) are refused,
+  while a plugin's own hook names keep working. The decision is made host-side at registration and
+  again on every delivery, so a revoked grant stops the flow at once. Payloads are minimized at the
+  boundary whatever the grants: commenter email, IP and user agent only with `comments:pii`; never a
+  post password; protected option values redacted; and `notification_sent` is redacted at the source
+  (secret-named `data` keys and link parameters, and the message and link of reset / verification /
+  OTP notifications), as `updated_option` already was (audit F-02). A new completeness test fails when
+  core fires a hook missing from the table. No first-party plugin subscribes to a gated hook, so no
+  manifest changes were needed; a third-party plugin that relied on one must declare the new permission.
+  Documented in `documentation/security.md` §5 and §8.1 and `documentation/plugins.md` §10.5.
+- **Backend: file-type 21.3.4 (GHSA-5v7r-6r5c-r473, moderate).** Releases before 21.3.1 can loop forever
+  on a malformed ASF header, which would hang the event loop from a media upload or a WordPress (WXR)
+  attachment import. The 2.3.0 notes said the fixed line requires Node 22; only file-type 22+ does, and
+  21.3.1–21.3.4 support Node 20, so the backend moves from 16.5.4 to 21.3.4 without changing the engines
+  floor (Node >= 20.9.0). file-type is ESM-only since 17 and the backend compiles to CommonJS, so the new
+  `core/file-type-detect.ts` loads its `file-type/core` entry with a real dynamic `import()` (a `require()`
+  of an ES module needs Node 20.19). The upload route and the WXR importer keep their existing bounds
+  (header-only buffer, ASF skipped, 3 s timeout) as defence in depth. Detection results for the upload
+  allowlist are unchanged except two: WAV is now reported as `audio/wav` (16.x said `audio/vnd.wave`, which
+  the allowlist refused, so WAV uploads now pass the content check), and a DOCX/XLSX/PPTX head is reported as
+  `application/zip` (allowed, and these types do not require a matching signature, so they are still
+  accepted). Dependabot keeps file-type on the 21.x line.
+- **Accepted, with no fixed release anywhere:**
+  - `node-forge` 1.4.0 (GHSA-86w9-cpqp-85rv, high) in the backend, gateway and setup. Every release is
+    affected and acme-client 5.4.0 (latest) depends on it. The flaw is in RSA PKCS#1 v1.5 signature
+    verification, and WordJS never verifies a signature with node-forge: the cluster CSR check uses Node's
+    crypto, and the remaining uses (acme-client's key and CSR helpers, the gateway cluster CA, setup,
+    certManager, system-health) only generate keys, sign and parse PEM. It stays under its dated exception
+    in `scripts/audit-exceptions.json` (expires 2026-11-05).
+  - `braces` 3.0.3 (GHSA-vfj7-8cjw-p6xm, high) in the frontend, reached only through `eslint-config-next` →
+    `@next/eslint-plugin-next` → `fast-glob` → `micromatch`. It is a development dependency (lint), not
+    shipped or run by the server, and the glob patterns it expands come from the repository's own lint
+    configuration, not from input. The latest `@next/eslint-plugin-next` (16.4.0 and canary) still pins
+    `fast-glob` 3.3.1, so there is no upgrade or override that removes it.
 - **Plugin `dependencies` accept only plain npm registry version ranges.** The host installs a plugin's
   manifest `dependencies` with `npm install` in its own root at activation, and npm runs the `prepare`
   script of a `git+…`/`github:` or `file:` directory dependency even with `--ignore-scripts` — so a
@@ -207,6 +253,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **Cluster certificates are always loadable by OpenSSL.** The gateway's cluster CA drew certificate
+  serials as `'0'` + 15 random bytes and relied on node-forge stripping one leading zero byte; when the
+  first random byte was itself `0x00` (about 1 draw in 512) the certificate carried a non-minimal DER
+  INTEGER that OpenSSL 3 refuses (`illegal padding`), so that identity — or, if it was the CA itself,
+  every enrollment — failed. Serials are now 16 random bytes with a first byte of `0x01`–`0x7f`.
 - **The F6 performance budget no longer fails the Linux CI on unchanged code.** Its ratio ceilings were
   measured on one Windows host and judged on the Linux runners too, where the reference workload
   (autocommit inserts) is cheaper and the mostly-CPU operations read up to ~2.5x their Windows ratios —
@@ -218,7 +269,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   `verify:f0` requires a `linux` calibration. `perf-calibrate.mjs` mints one platform's calibration,
   can reduce already-recorded CI artifacts with `--from`, and reports a re-mint looser than the committed
   ceiling as an error. The CI `Performance budgets` job now enforces the `linux` calibration on every
-  push and pull request (it is still not a required check).
+  push and pull request (it is still not a required check). The `linux` calibration covers the tails of
+  the jobs that enforce it, not only the isolated perf job: a first version minted from that job alone
+  failed the F6 phase suites on unchanged code (`contentUpdate` 10.742x against 10.662x), so it was
+  re-minted from 145 rounds including the measurements of failing enforcing jobs (`--from` now also
+  accepts the harness's own `measured:` rounds).
 
 - **Marketplace plugins render with all of their styles on a live site.** A plugin installed from the
   marketplace is loaded at runtime from its own bundle, and a release build only compiled the Tailwind
