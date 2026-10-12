@@ -535,11 +535,14 @@ jobs:
     # uncovered rather than leaving it out of the denominator.
     #
     # Timeout: install ~3.5 min warm, up to ~9 on a cold-cache day (see the backend job), build seconds,
-    # then the instrumented suite, ~15 min on 2026-10-07. 30 covers that with margin and still turns a
-    # hang red.
+    # then the instrumented suite. That suite took ~15 min on 2026-10-07; after the 2.4.0 security round
+    # (about 4,100 tests) whole successful runs of this job took 20-28 min on 2026-10-12, and nine runs
+    # that day were cancelled at the old 30-minute wall with the suite still passing — every main push
+    # showed a red CI for a job that was only slow. 45 covers the measured worst case with margin and
+    # still turns a hang red.
     name: Backend coverage (c8 ratchet)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:16
