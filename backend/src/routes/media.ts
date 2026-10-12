@@ -36,9 +36,13 @@ function requestedVisibility(value: unknown): 'public' | 'private' | null | 'inv
  */
 function discardUploadedFile(filePath: string): void {
     const resolved = path.resolve(filePath);
-    const roots = [privateMedia.publicUploadsRoot(), privateMedia.privateUploadsRoot()];
-    if (!roots.some((root: string) => resolved.startsWith(root + path.sep))) return;
-    try { fs.unlinkSync(resolved); } catch { /* best effort */ }
+    const publicRoot = privateMedia.publicUploadsRoot() + path.sep;
+    const privateRoot = privateMedia.privateUploadsRoot() + path.sep;
+    if (resolved.startsWith(publicRoot)) {
+        try { fs.unlinkSync(resolved); } catch { /* best effort */ }
+    } else if (resolved.startsWith(privateRoot)) {
+        try { fs.unlinkSync(resolved); } catch { /* best effort */ }
+    }
 }
 
 // SECURITY (DoS): cap decoded pixels for EVERY sharp() pipeline in this file so a maliciously
