@@ -270,6 +270,18 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   HTTP requests only. WebSocket upgrades were dropped, Next.js's HMR socket (`/_next/hmr`) with them, and
   the wizard page never became interactive ("Next Step" stayed disabled). Upgrades now use the same
   bootstrap.
+- **A fresh clone no longer starts with somebody else's gateway routes.** `gateway/gateway-registry.json`
+  (the gateway's runtime state, gitignored) had been committed, so every new checkout routed all traffic
+  to `https://127.0.0.1:3001`/`:4000` while the services still spoke plain HTTP: every page answered
+  `502 Upstream Error` for about 90 seconds, until the health checks evicted those targets, and the
+  gateway then rewrote a tracked file. The file is no longer in the repository. A checkout whose copy was
+  changed by a running gateway may need `git checkout -- gateway/gateway-registry.json` before pulling.
+- **A split install made through the wizard serves its pages after a restart.** The frontend registered
+  with the gateway on the port of `frontendUrl` — the site's public origin, which the wizard sets to the
+  address visitors use (on one host, the gateway's own `:3000`). The gateway then proxied every page to
+  itself (`502`, `EPROTO`) until a health check evicted the target about 90 seconds later, after every
+  restart, and its cache purge had no frontend to reach. The frontend now registers the port its server
+  listens on.
 - **Cluster certificates are always loadable by OpenSSL.** The gateway's cluster CA drew certificate
   serials as `'0'` + 15 random bytes and relied on node-forge stripping one leading zero byte; when the
   first random byte was itself `0x00` (about 1 draw in 512) the certificate carried a non-minimal DER
