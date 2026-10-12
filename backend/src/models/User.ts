@@ -6,7 +6,7 @@
 const { db, dbAsync } = require('../config/database');
 const bcrypt = require('bcryptjs');
 const config = require('../config/app');
-const { sanitizeTitle, currentTimeGMT } = require('../core/formatting');
+const { sanitizeTitle } = require('../core/formatting');
 const { getRoles, getRoleCapabilities } = require('../core/roles');
 // One unique-violation predicate for all three drivers. This file used to carry its own, which knew
 // only SQLite and Postgres — see core/db-errors.ts for what that cost on MySQL.

@@ -791,12 +791,14 @@ app.use('/public', express.static(installPath('public'), {
 // driver increments a global counter). Opt-in by env in ANY mode: the meaningful numbers come
 // from PRODUCTION builds (dev caches lie). Approximate under concurrency; exact when benching
 // one request at a time, which is how the per-endpoint budget is measured.
+// The method and path are the client's: each is reduced to one inert line (core/log-safe).
+const { logSafe } = require('./core/log-safe');
 if (process.env.WORDJS_QUERY_STATS === '1') {
     app.use((req: Request, res: Response, next: NextFunction) => {
         const start = (globalThis as any).__wjsQueryCount || 0;
         res.on('finish', () => {
             const n = ((globalThis as any).__wjsQueryCount || 0) - start;
-            console.log(`${new Date().toISOString()} ${req.method} ${req.path} → ${n} queries`);
+            console.log(`${new Date().toISOString()} ${logSafe(req.method)} ${logSafe(req.path)} → ${n} queries`);
         });
         next();
     });
@@ -805,7 +807,7 @@ if (process.env.WORDJS_QUERY_STATS === '1') {
 // Request logging in development
 if (config.nodeEnv === 'development' && process.env.WORDJS_QUERY_STATS !== '1') {
     app.use((req: Request, res: Response, next: NextFunction) => {
-        console.log(`${new Date().toISOString()} ${req.method} ${req.path}`);
+        console.log(`${new Date().toISOString()} ${logSafe(req.method)} ${logSafe(req.path)}`);
         next();
     });
 }

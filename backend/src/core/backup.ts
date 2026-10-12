@@ -14,8 +14,8 @@ const config = require('../config/app');
 const { getOption } = require('./options');
 const { captureDump, restoreDump, dumpEntryName, usesExternalDump } = require('./db-dump');
 const { offloadBackup } = require('./s3-offload');
+const { logSafe } = require('./log-safe');
 
-const UPLOADS_DIR = path.resolve(config.uploads.dir);
 /** Top-level archive directory that carries config.uploads.privateDir (see createBackup step 4a). */
 const PRIVATE_UPLOADS_ARCHIVE_ROOT = 'private-uploads';
 
@@ -363,7 +363,8 @@ async function restoreBackup(filename: string) {
         throw new Error('Backup file not found');
     }
 
-    console.log(`♻️ Restoring backup: ${filename}...`);
+    // The name is the request's (POST /backups/:filename/restore): one inert line in the log.
+    console.log(`♻️ Restoring backup: ${logSafe(filename)}...`);
 
     const zip = new AdmZip(filepath);
     const zipEntries = zip.getEntries();

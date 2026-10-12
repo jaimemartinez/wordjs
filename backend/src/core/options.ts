@@ -7,6 +7,7 @@ const { dbAsync } = require('../config/database');
 const { verifyPermission, runWithContext } = require('./plugin-context');
 const { doAction } = require('./hooks');
 const cache = require('./cache');
+const { logSafe, logSafeError } = require('./log-safe');
 
 // Core-level backstop for the security-critical option-NAME denylist that otherwise lives ONLY in the
 // bridge (createPluginApi.isProtectedOption). Scoped to THEME context specifically — isolated plugins never
@@ -82,7 +83,10 @@ async function getOption(name: string, defaultValue: any = null) {
 
             return finalValue;
         } catch (e) {
-            console.error(`Error getting option ${name}:`, e.message);
+            // A constant format string: the name can come from a request (a widget id, a setting
+            // key), and inside the format position its '%s' would consume the next argument. The
+            // values go in as arguments, each reduced to one line.
+            console.error('Error getting option %s: %s', logSafe(name), logSafeError(e));
             return defaultValue;
         }
     });

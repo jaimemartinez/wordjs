@@ -9,7 +9,7 @@ const Post = require('../models/Post');
 const User = require('../models/User');
 const Term = require('../models/Term');
 const { Menu, MenuItem } = require('../models/Menu');
-const { getOption, updateOption, addOption } = require('./options');
+const { getOption, updateOption } = require('./options');
 // The writable post statuses, which an imported status is folded onto (see canonicalImportedPostStatus).
 const { canonicalImportedPostStatus } = require('./post-capabilities');
 

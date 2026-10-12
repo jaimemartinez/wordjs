@@ -5,7 +5,7 @@
 
 const crypto = require('crypto');
 const { getOption, updateOption } = require('./options');
-const { doAction, applyFilters } = require('./hooks');
+const { applyFilters } = require('./hooks');
 const { escHtml, escAttr } = require('./formatting');
 
 // Registered widgets
@@ -96,14 +96,36 @@ function getSidebars() {
 }
 
 /**
- * Get widgets assigned to a sidebar
+ * A stored widget option ({ key: value, ... }) with `key` set to `value`, as a new object.
+ *
+ * The key arrives from a request (a sidebar id, a widget instance id), so it is never written with
+ * `stored[key] = value`: on a plain object that write turns '__proto__' into the prototype setter, so
+ * the entry vanished from the stored JSON and the object took the request's value as its prototype.
+ * The entries go through a Map and Object.fromEntries, which defines every key as an own property:
+ * the stored JSON keeps the same shape and order as before, with '__proto__' or 'constructor' as
+ * ordinary keys. A stored value that is not an object (unreadable JSON) starts over empty.
  */
+function withEntry(stored: any, key: string, value: any): Record<string, any> {
+    const entries = new Map<string, any>(
+        stored && typeof stored === 'object' && !Array.isArray(stored) ? Object.entries(stored) : []
+    );
+    entries.set(String(key), value);
+    return Object.fromEntries(entries);
+}
+
+/** The stored option's OWN entry for `key`, never a member inherited from Object.prototype. */
+function ownEntry(stored: any, key: string): any {
+    return stored && typeof stored === 'object' && Object.prototype.hasOwnProperty.call(stored, key)
+        ? stored[key]
+        : undefined;
+}
+
 /**
  * Get widgets assigned to a sidebar
  */
 async function getSidebarWidgets(sidebarId: string) {
     const sidebarsWidgets = await getOption('sidebars_widgets', {});
-    return sidebarsWidgets[sidebarId] || [];
+    return ownEntry(sidebarsWidgets, sidebarId) || [];
 }
 
 /**
@@ -111,8 +133,7 @@ async function getSidebarWidgets(sidebarId: string) {
  */
 async function setSidebarWidgets(sidebarId: string, widgetIds: any) {
     const sidebarsWidgets = await getOption('sidebars_widgets', {});
-    sidebarsWidgets[sidebarId] = widgetIds;
-    await updateOption('sidebars_widgets', sidebarsWidgets);
+    await updateOption('sidebars_widgets', withEntry(sidebarsWidgets, sidebarId, widgetIds));
 }
 
 /**
@@ -120,7 +141,7 @@ async function setSidebarWidgets(sidebarId: string, widgetIds: any) {
  */
 async function getWidgetSettings(widgetId: string, instanceId: string) {
     const allSettings = await getOption(`widget_${widgetId}`, {});
-    return allSettings[instanceId] || {};
+    return ownEntry(allSettings, instanceId) || {};
 }
 
 /**
@@ -128,8 +149,7 @@ async function getWidgetSettings(widgetId: string, instanceId: string) {
  */
 async function setWidgetSettings(widgetId: string, instanceId: string, settings: any) {
     const allSettings = await getOption(`widget_${widgetId}`, {});
-    allSettings[instanceId] = settings;
-    await updateOption(`widget_${widgetId}`, allSettings);
+    await updateOption(`widget_${widgetId}`, withEntry(allSettings, instanceId, settings));
 }
 
 /**
