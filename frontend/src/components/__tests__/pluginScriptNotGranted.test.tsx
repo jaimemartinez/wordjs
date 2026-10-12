@@ -42,7 +42,13 @@ const TEAM_MENUS = [{ href: "/admin/plugin/conference-manager", label: "Conferen
 
 const render = () => renderToStaticMarkup(React.createElement(PluginScriptNotGranted, { pluginId: "conference-manager" }));
 /** The text a reader sees: a block (heading, paragraph, link) ends with a space, inline markup does not. */
-const textOf = (html: string) => html.replace(/<\/(h1|p|a)>/g, " ").replace(/<[^>]+>/g, "")
+const stripTags = (html: string): string => {
+    // Repeat until nothing changes, so a tag split around another tag cannot survive one pass.
+    let out = html;
+    for (let prev = ""; prev !== out;) { prev = out; out = out.replace(/<[^>]*>/g, ""); }
+    return out;
+};
+const textOf = (html: string) => stripTags(html.replace(/<\/(h1|p|a)>/g, " "))
     .replace(/&#x27;/g, "'").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
 const hrefOf = (html: string) => (/href="([^"]+)"/.exec(html) || [])[1] ?? null;
 

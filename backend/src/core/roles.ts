@@ -662,8 +662,11 @@ async function setRoleUnlocked(slug: string, roleData: any, opts: PluginRoleOpti
                 capabilities: roleData.capabilities || []
             };
         }
-        current[slug] = record;
-        return { next: current, result: true };
+        // The next map is rebuilt from entries rather than written through a dynamic key: the slug was
+        // checked by isSafeRoleSlug above, and a role is only ever an own entry of the map.
+        const next = new Map(Object.entries(current));
+        next.set(slug, record);
+        return { next: Object.fromEntries(next), result: true };
     });
 }
 
@@ -681,8 +684,9 @@ function getRole(slug: string) {
 function removeRole(slug: string) {
     return withRolesWriteLock(() => writeRoles(async (current) => {
         if (!ownRole(current, slug)) return { next: null, result: false };
-        delete current[slug];
-        return { next: current, result: true };
+        const next = new Map(Object.entries(current));
+        next.delete(slug);
+        return { next: Object.fromEntries(next), result: true };
     }));
 }
 
