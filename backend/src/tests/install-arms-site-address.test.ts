@@ -40,7 +40,7 @@ describe('POST /setup/install starts site-address in-process', () => {
         // recorded `lastChange: { kind: 'repair', via: 'upgrade' }` for good. The record itself (installRecord)
         // and the reconcile it meets are exercised in site-address-reconcile.test.ts.
         const body = installHandler();
-        const config = body.slice(body.indexOf('const newConfig'), body.indexOf('if (saveConfig(newConfig))'));
+        const config = body.slice(body.indexOf('const newConfig'), body.indexOf('const written = updateConfig('));
         assert.match(config, /^\s*siteAddress: require\('\.\.\/core\/site-address'\)\.installRecord\(Date\.now\(\)\),$/m,
             'newConfig carries the install record');
         const mirror = body.search(/^\s*await updateOption\('site_address_rev', newConfig\.siteAddress\.rev\);$/m);

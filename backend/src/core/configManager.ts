@@ -338,8 +338,10 @@ function updateConfigLocked(
 /**
  * Put back exact prior bytes (a rollback), but only if the file is still at `expectRev` — the revision
  * the failed change wrote. If anyone wrote after it (the CLI), their change wins and nothing is undone.
+ * `text: null` undoes a change that CREATED the file (updateConfig's `previousText` was null): the file
+ * is removed — or, for a symlinked config, the file the link points to, so the link stays as it was.
  */
-function restoreConfigText(text: string, opts: { expectRev: number; reload?: boolean }): boolean {
+function restoreConfigText(text: string | null, opts: { expectRev: number; reload?: boolean }): boolean {
     try {
         const locked = withConfigLock(() => restoreConfigTextLocked(text, opts));
         return locked.ok && locked.value;
@@ -349,9 +351,22 @@ function restoreConfigText(text: string, opts: { expectRev: number; reload?: boo
     }
 }
 
-function restoreConfigTextLocked(text: string, opts: { expectRev: number; reload?: boolean }): boolean {
+function restoreConfigTextLocked(text: string | null, opts: { expectRev: number; reload?: boolean }): boolean {
     const now = readConfigFresh();
     if (!now.exists || now.parseError || siteAddressRev(now.parsed) !== opts.expectRev) return false;
+    if (text === null) {
+        const real = resolveWriteTarget(CONFIG_FILE);
+        if (readTextOrNull(real) !== now.text) return false;
+        try {
+            fs.rmSync(real);
+        } catch (e) {
+            console.error('Failed to remove config file:', e);
+            return false;
+        }
+        invalidateConfigCache();
+        if (opts.reload !== false) reloadRuntimeConfig({});
+        return true;
+    }
     let restored: any;
     try { restored = JSON.parse(text); } catch { return false; }
     try {

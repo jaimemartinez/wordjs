@@ -718,7 +718,13 @@ async function migrateBrowserCapabilityGrants(): Promise<string[]> {
 async function recordFreshInstallBrowserCapability(): Promise<boolean> {
     const perms = require('./plugin-permissions');
     if (await perms.getHostMarker(BROWSER_CAPABILITY_MIGRATION_MARKER)) return false;
-    const active: string[] = await getActivePlugins();
+    // The active set as STORED in the database being installed, like the marker above — not
+    // getActivePlugins(), which reads through the option cache. The wizard can run again in the same
+    // process after a failed attempt (routes/setup.ts undoes it), against another database, and the cache
+    // may still answer what that attempt read in the first one: "no active plugins", recorded here as done
+    // on a database whose active plugins the upgrade was meant to keep working. A read error throws, and
+    // the caller records nothing (the upgrade then runs at the next boot).
+    const active: string[] = await require('./options').getOptionFresh('active_plugins', []);
     if (Array.isArray(active) && active.length > 0) return false;
     await perms.setHostMarker(BROWSER_CAPABILITY_MIGRATION_MARKER, `install:${new Date().toISOString()}`);
     return true;

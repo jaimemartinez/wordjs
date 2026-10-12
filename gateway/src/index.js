@@ -1242,7 +1242,12 @@ if (cluster.isPrimary) {
         // never relays a forged one.
         if (edge.handleUpgrade(req, socket)) return;
         hostEdge.pinUpgradeHeaders(req);
-        const target = getTarget(req.url);
+        // The same pre-install bootstrap as the HTTP path. Without it, a fresh split install in dev had its
+        // Next.js HMR socket (/_next/hmr) destroyed until the frontend registered — which it cannot do
+        // before the wizard has issued the cluster identity — so the wizard page never became interactive.
+        // The scheme is not flipped on a WebSocket error: a client closing the socket also ends in
+        // ECONNRESET there, and the HTTP path already corrects a wrong scheme on the page load.
+        const target = getTarget(req.url) || bootstrapTarget(req.url);
         if (target) {
             const isHttps = target.startsWith('https:');
             proxy.ws(req, socket, head, { target, agent: isHttps ? proxyAgent : httpKeepAliveAgent, secure: false }, (err) => {

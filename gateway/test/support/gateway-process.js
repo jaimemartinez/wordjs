@@ -156,8 +156,8 @@ function startEchoUpstream(name) {
     })));
 }
 
-function upgradePayload(host, extraHeaders = '') {
-    return `GET /ws HTTP/1.1\r\nHost: ${host}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n`
+function upgradePayload(host, extraHeaders = '', reqPath = '/ws') {
+    return `GET ${reqPath} HTTP/1.1\r\nHost: ${host}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n`
         + 'Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n' + extraHeaders + '\r\n';
 }
 
@@ -179,9 +179,11 @@ function copyDir(from, to) {
  *   acme           also start the port-80-style ACME listener (on a random port)
  *   upstreams      { frontend, backend } echo upstream ports for the registry ('/' and '/api')
  *   cluster        a CA from makeCa(): installs gateway-internal certs so the internal mTLS listener starts
+ *   registered     false = an empty registry, as on a box the install wizard has not run on yet: the
+ *                  upstreams are then reachable only through the pre-install bootstrap (their ports)
  * Returns { dir, port, internalPort, acmePort, output(), stop() }.
  */
-async function bootGateway({ secure = false, acme = false, upstreams, cluster }) {
+async function bootGateway({ secure = false, acme = false, upstreams, cluster, registered = true }) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wordjs-gw-'));
     const dir = path.join(root, 'gateway');
     copyDir(path.join(GATEWAY_ROOT, 'src'), path.join(dir, 'src'));
@@ -206,10 +208,10 @@ async function bootGateway({ secure = false, acme = false, upstreams, cluster })
         config.ssl = { enabled: true, key: './ssl/key.pem', cert: './ssl/cert.pem' };
     }
     fs.writeFileSync(path.join(dir, 'gateway-config.json'), JSON.stringify(config, null, 2));
-    fs.writeFileSync(path.join(dir, 'gateway-registry.json'), JSON.stringify({
+    fs.writeFileSync(path.join(dir, 'gateway-registry.json'), JSON.stringify(registered ? {
         '/': { targets: [`http://127.0.0.1:${upstreams.frontend}`], metrics: {} },
         '/api': { targets: [`http://127.0.0.1:${upstreams.backend}`], metrics: {} },
-    }));
+    } : {}));
     if (cluster) {
         const certs = path.join(dir, 'certs');
         fs.mkdirSync(certs, { recursive: true });
