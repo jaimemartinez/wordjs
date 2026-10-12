@@ -30,6 +30,17 @@ function requestedVisibility(value: unknown): 'public' | 'private' | null | 'inv
     return 'invalid';
 }
 
+/**
+ * Remove a file multer just wrote, but only from inside one of the two upload roots: multer chose the
+ * path, yet the unlink must never be steerable outside the trees uploads are written to.
+ */
+function discardUploadedFile(filePath: string): void {
+    const resolved = path.resolve(filePath);
+    const roots = [privateMedia.publicUploadsRoot(), privateMedia.privateUploadsRoot()];
+    if (!roots.some((root: string) => resolved.startsWith(root + path.sep))) return;
+    try { fs.unlinkSync(resolved); } catch { /* best effort */ }
+}
+
 // SECURITY (DoS): cap decoded pixels for EVERY sharp() pipeline in this file so a maliciously
 // oversized image (a "pixel bomb") can't exhaust memory and OOM/CPU-kill the single-process
 // backend during upload processing. ~40 megapixels is far above any legitimate web image.
@@ -789,7 +800,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
     const queryVisibility = requestedVisibility(req.query && req.query.visibility);
     const bodyVisibility = requestedVisibility(req.body && req.body.visibility);
     if (queryVisibility === 'invalid' || bodyVisibility === 'invalid') {
-        try { fs.unlinkSync(uploaded.path); } catch { /* best effort */ }
+        discardUploadedFile(uploaded.path);
         return res.status(400).json({
             code: 'rest_invalid_param',
             message: 'visibility must be public or private.',

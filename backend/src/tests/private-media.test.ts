@@ -423,3 +423,20 @@ test('Media.findAll / Media.count default to PUBLIC items only (every internal c
     assert.ok(all.every((m: any) => m.visibility === 'public'));
     assert.strictEqual(await Media.count({}), all.length);
 });
+
+test('an upload with an invalid visibility is refused and leaves no file behind in either root', async () => {
+    const listFiles = (root: string): string[] => {
+        if (!fs.existsSync(root)) return [];
+        return fs.readdirSync(root, { recursive: true }).map(String).filter((p: string) => fs.statSync(path.join(root, p)).isFile()).sort();
+    };
+    const before = { pub: listFiles(TMP_UPLOADS), priv: listFiles(TMP_PRIVATE) };
+    const viaQuery = await as('authorA', 'post', '/media?visibility=bogus')
+        .attach('file', zipBytes('bogus-query'), { filename: 'bogus-query.zip', contentType: 'application/zip' });
+    assert.strictEqual(viaQuery.status, 400, JSON.stringify(viaQuery.body));
+    assert.strictEqual(viaQuery.body.code, 'rest_invalid_param');
+    const viaField = await as('authorA', 'post', '/media')
+        .attach('file', zipBytes('bogus-field'), { filename: 'bogus-field.zip', contentType: 'application/zip' })
+        .field('visibility', 'bogus');
+    assert.strictEqual(viaField.status, 400, JSON.stringify(viaField.body));
+    assert.deepStrictEqual({ pub: listFiles(TMP_UPLOADS), priv: listFiles(TMP_PRIVATE) }, before, 'a refused upload left its file on disk');
+});

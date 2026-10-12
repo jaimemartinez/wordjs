@@ -137,7 +137,9 @@ describe('the live database is never deleted', () => {
         await assertDatabaseAnswers('after the default-path attempt');
     });
 
-    it('reached through another spelling of data/ (a junction): still the live database', async () => {
+    // Windows only: a POSIX getcwd() returns the resolved path after chdir into a symlink, so on Linux and
+    // macOS the working directory can never spell data/ differently from the live file this way.
+    it('reached through another spelling of data/ (a junction): still the live database', { skip: process.platform !== 'win32' }, async () => {
         process.chdir(ALIAS);
         try {
             assert.notStrictEqual(path.resolve('./data', 'wordjs-native.db'), LIVE, 'precondition: the request names the file differently');
