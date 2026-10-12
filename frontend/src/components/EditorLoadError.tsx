@@ -14,7 +14,7 @@ export default function EditorLoadError({ onRetry, onBack }: { onRetry: () => vo
     return (
         <div className="h-full w-full flex items-center justify-center bg-gray-50 p-6">
             <div className="max-w-md w-full text-center bg-white rounded-2xl border border-gray-200 shadow-xl p-8">
-                <div className="w-16 h-16 mx-auto rounded-2xl bg-red-50 text-red-500 flex items-center justify-center mb-4">
+                <div className="w-16 h-16 shrink-0 mx-auto rounded-2xl bg-red-50 text-red-500 flex items-center justify-center mb-4">
                     <i className="fa-solid fa-triangle-exclamation text-2xl"></i>
                 </div>
                 <h3 className="text-lg font-bold text-gray-800 mb-1">

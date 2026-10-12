@@ -339,6 +339,24 @@ export interface User {
 export interface Role {
     name: string;
     capabilities: string[];
+    /** A role a plugin declared (backend/src/core/plugin-roles.ts): 'plugin', with the plugin's id. */
+    source?: "plugin";
+    plugin?: string;
+    description?: string;
+    /** Its plugin is still installed — while it is, the role cannot be renamed or deleted. */
+    pluginInstalled?: boolean;
+    /** Its plugin was deleted while users held it: they keep only read/access_admin_panel. */
+    orphaned?: boolean;
+}
+
+/** A role a plugin's manifest declares (shown on the grant screens next to `roles:declare`). */
+export interface DeclaredPluginRole {
+    slug: string;
+    name: string;
+    description?: string;
+    capabilities: string[];
+    /** GET /plugins: how many users already hold this role slug (e.g. kept from an earlier installation). */
+    holders?: number;
 }
 
 export interface Plugin {
@@ -355,8 +373,12 @@ export interface Plugin {
         // code but predates the permission, so the admin can still see and revoke the upgrade-time grant.
         undeclared?: boolean;
     }[];
+    roles?: DeclaredPluginRole[];     // roles the manifest declares (registered only with the roles:declare grant)
     requestedPermissions?: string[];  // "scope:access" tokens the manifest requests (the togglable set)
     grantedPermissions?: string[];    // tokens the admin has granted (subset of requested + optional "network")
+    // Would activating it now grant every permission its manifest declares? (no grant record, or an empty
+    // one no administrator decided). false after an administrator revoked every grant: activation grants nothing.
+    activationSeedsGrants?: boolean;
     author?: string;
     homepage?: string;
     runtime?: PluginRuntime | null;   // live isolate health when active (null if inactive / not an isolate)

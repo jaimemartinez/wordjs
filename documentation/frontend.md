@@ -128,7 +128,7 @@ The theme system ships a single token-driven, Bootstrap-like CSS framework. The 
 ## Context Providers & State
 
 The app uses React Contexts to manage global state:
-*   **`AuthContext`**: Fetches the current user (including the `capabilities` array) from `GET /auth/me`, and exposes role-based capabilities and login/logout methods. The auth token lives in an HttpOnly cookie the frontend cannot read, so there is no client-side JWT parsing. It also clears the user centrally when **any** request discovers the session is over: `src/lib/api.ts` classifies a 401 whose code is one of `rest_token_expired` / `rest_token_revoked` / `rest_token_invalid` / `rest_not_logged_in` / `rest_user_invalid` and dispatches `SESSION_ENDED_EVENT` (`"wjs:session-ended"`) on `window`, which `AuthContext` listens for. Deliberately **excluded**: `rest_csrf_invalid` (a security signal — the session itself is fine), `rest_token_scope_insufficient`, and any 403 (authenticated-but-forbidden is not a session problem). `isSessionEnded(error)` is exported from `api.ts` so callers can stay quiet about an expected sign-out instead of reporting it as a failure.
+*   **`AuthContext`**: Fetches the current user (including the `capabilities` array, and `roleName`: the role's own display name from the roles registry, which `GET /roles` only gives administrators) from `GET /auth/me`, and exposes role-based capabilities and login/logout methods. The sidebar's user chip names the role with `roleDisplayName` (`src/lib/roleOptions.ts`): a core role in the admin's language, a custom or plugin role by `roleName`, the slug only when neither is known. The auth token lives in an HttpOnly cookie the frontend cannot read, so there is no client-side JWT parsing. It also clears the user centrally when **any** request discovers the session is over: `src/lib/api.ts` classifies a 401 whose code is one of `rest_token_expired` / `rest_token_revoked` / `rest_token_invalid` / `rest_not_logged_in` / `rest_user_invalid` and dispatches `SESSION_ENDED_EVENT` (`"wjs:session-ended"`) on `window`, which `AuthContext` listens for. Deliberately **excluded**: `rest_csrf_invalid` (a security signal — the session itself is fine), `rest_token_scope_insufficient`, and any 403 (authenticated-but-forbidden is not a session problem). `isSessionEnded(error)` is exported from `api.ts` so callers can stay quiet about an expected sign-out instead of reporting it as a failure.
 *   **`MenuContext`**: Fetches and caches the admin sidebar menu items from `/api/v1/plugins/menus`.
 
 ## System Components
@@ -203,6 +203,11 @@ Clickable cards for dashboards or quick actions.
 ### `Input` / `ModernSelect`
 **Location:** `src/components/ui/Input.tsx`, `src/components/ModernSelect.tsx`
 Form controls with consistent rounded styling and focus states.
+*   **The open list always fits the visible viewport, and is whole whenever it can be** (`ModernSelect` and `ui/Select`, through `src/lib/useDropdownPlacement.ts` → the pure `src/lib/dropdownPlacement.ts`). It tries, tightest first, the dialog's scrolling body, the dialog's card, then the visible viewport (opened from a `DialogLayer` dialog; a page has only the viewport — `dropdownContext`); in each it opens below the field when the whole list fits, else above the field's label (above the field itself only for a field without a label). When neither fits as things are, the dialog's body may scroll by the few pixels that make the whole list fit beside the field (`scrollBy`, applied once, right after the list renders and its height is known; the field always stays inside the body; a page is never scrolled). Only when no band holds the whole list beside the field does a labelled field's list go over its label (`over-label`, ending just above the trigger so it covers the whole label), and only when not even that fits is it clamped to the roomier side (inside the dialog body when that leaves at least `DROPDOWN_MIN_BOUNDED`, 160 px) and scrolls inside. "Visible" is the `visualViewport` (the on-screen keyboard and pinch-zoom shrink it). The list is portalled to `<body>` at the popover layer, above any dialog it is opened from. Option labels wrap instead of being truncated; options may carry a `group` heading.
+
+### Dialogs — `DialogLayer` and the stacking scale
+**Location:** `src/components/DialogLayer.tsx`, `src/lib/adminLayers.ts`
+Every core dialog renders its backdrop through `DialogLayer`: portalled to `<body>`, `position: fixed; inset: 0`, at a z-index from one scale (`ADMIN_Z`): admin shell 5000–5003 (phone header, phone-menu backdrop, sidebar, collapse toggle) < `dialog` 6000 < plugin overlays 6010–6090 (conference-manager's `overlayZ`) < `dialogOver` 6100 (confirm/alert from `useModal`, a secret shown once, the media picker) < popover 6500 (select lists) < toasts 9999. A dialog rendered inside the page as `fixed inset-0 z-50` sat under the phone header and the sidebar; `src/components/__tests__/dialogLayer.test.tsx` fails on any new `fixed inset-0` overlay under `src/app/admin`, the shared components or the contexts that does not go through it. The caller keeps its own backdrop and layout classes; admin dialogs keep the admin's `dir="ltr"` once portalled (`DialogDirectionContext`, provided by `DashboardLayoutClient`). Never render a `DialogLayer` open in server HTML (outside a browser it renders in place).
 
 ---
 
@@ -353,6 +358,35 @@ The Admin sidebar dynamically adjusts based on user permissions.
 *   **Role-Based Access Control:** User objects now include a `capabilities` array.
 *   **Dynamic Filtering:** Each sidebar menu item is mapped to a required backend capability (e.g., `edit_posts`, `manage_options`).
 *   **Deduplication:** The `Sidebar` component (`src/components/Sidebar.tsx`) automatically filters out items from `pluginMenus` if they match core menu items (based on `plugin: 'core'` or `href` collisions) to prevent duplicates.
+*   **One map for the menu and the guard:** the core entries, their capabilities and the route → capability
+    rules live in `src/lib/adminAccess.ts`. The admin layout (`src/app/admin/DashboardLayoutClient.tsx`)
+    enforces it after the sign-in and MFA gates — **a page you cannot see in the menu is a page you cannot
+    open**: a core screen needs its capability (any of `ADMIN_ROUTE_RULES[].anyOf`, most specific path
+    wins), `/admin/plugin/<slug>` needs a plugin menu item of the user's pointing there (a plugin item never
+    opens a core screen), `/admin/account` is always open, and administrators (`*`) open everything. A
+    refused page is never rendered; the user is sent to the first page their sidebar offers
+    (`firstAllowedAdminPath`), which is also where `/admin` lands without `edit_posts` — so signing in
+    takes a plugin team member straight to the plugin's screen; a user whose sidebar offers nothing else
+    lands on their account page. The landing is always an admin page (a plugin menu item that links
+    outside `/admin` stays a link). While the plugin menu loads, a decision that depends on it waits
+    (spinner) instead of guessing. The plugin menu follows the signed-in identity
+    (`src/lib/adminMenuLoad.ts`): it is loaded again when the user, their role or their two-factor block
+    changes (a user who just enrolled gets their plugin screens without a reload), a failed load is retried
+    before it counts, and nothing is decided for a user held at two-factor enrolment. Links the shell
+    offers — the dashboard shortcuts and comment links, the sidebar logo — lead only to pages the user may
+    open. A test keeps every `app/admin/**/page.tsx` covered by a rule, so a new screen cannot ship
+    unguarded. **This is a navigation guard in the browser, not access control**: every API enforces its
+    own capability and remains the security boundary.
+*   **Dashboard numbers:** the dashboard shows only the counts and panels its viewer can read
+    (`src/lib/dashboardStats.ts`): the users count needs `list_users`, the comments count and «Recent
+    comments» need `moderate_comments`, and the activity chart is for administrators (its endpoint checks
+    the role). A number the viewer cannot load is hidden, never drawn as 0. Its grids (stat cards, system
+    health, quick actions) pick their columns by their OWN width with container queries (`@container`
+    wrappers; `STAT_GRID_COLS`, `HEALTH_GRID_CLASS`, `QUICK_ACTIONS_GRID_CLASS`), never by the window's:
+    each threshold keeps the widest word of every label whole in es/en/pt, so no label breaks inside a word.
+*   **Role dropdowns:** the user create/edit forms list every role from `GET /roles` (`src/lib/roleOptions.ts`,
+    `useRoleOptions`), grouped into core, custom and plugin roles; when the list is not readable (the
+    endpoint is administrator-only) they fall back to the four core roles they always offered.
 
 ## Mobile & Responsive Behavior
 
@@ -362,7 +396,8 @@ The Admin Panel is fully responsive ("Mobile First").
 *   **Desktop:** Supports "Collapsed" (Icon only) vs "Expanded" (Full width) states, persisted in `localStorage`.
 *   **Mobile:** Enforces "Expanded" layout whenever the menu is open.
     *   The `Sidebar.tsx` component overrides `isCollapsed` styles using `md:` prefixes (e.g., `md:w-28 w-80`) to ensure text labels are always visible on small screens.
-    *   Uses a Backdrop (`z-[5001]`) and High Z-Index Sidebar (`z-[5002]`) to float above the interface.
+    *   Uses a Backdrop (`z-[5001]`) and High Z-Index Sidebar (`z-[5002]`) to float above the interface (dialogs stack above both — see **Dialogs — `DialogLayer`**).
+*   **Sections:** `visibleSidebarSections` (`src/lib/adminAccess.ts`) drops a section with no entry for the signed-in user, so no heading is ever drawn over nothing (a plugin team member whose plugin lost `roles:declare` sees only «Sistema › Cuenta»).
 
 *   **Top Bar:** Fetches site logo and title from the backend Settings API.
 *   **Notification Center:** Integrated directly into the mobile header as an "Inline" variant for easy access.

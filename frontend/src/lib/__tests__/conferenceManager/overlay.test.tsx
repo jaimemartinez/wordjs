@@ -111,6 +111,59 @@ describe('cards capped at 92vh are capped by the DYNAMIC viewport', () => {
     });
 });
 
+describe('a sheet taller than a phone keeps its title, close button and buttons on screen', () => {
+    // Round 2, iPhone SE: «Crear conferencia» was taller than the screen; with the fee field in view the
+    // overlay had scrolled and the title touched the top edge (its glyph tops cut), the sheet's top off-screen;
+    // at the top, «CREAR CONFERENCIA» was cut at the bottom. «Nuevo campo»: title and close scrolled away.
+    const at = OVERLAY_CSS.indexOf('@media (max-width: 639.98px)');
+    const phone = OVERLAY_CSS.slice(at);
+    const rules = [...phone.matchAll(/([^{}@]+)\{([^{}]*)\}/g)].map((m) => ({ selector: m[1].trim().replace(/\\(.)/g, '$1'), body: m[2] }));
+    const rule = (selector: string) => rules.find((r) => r.selector === selector)?.body ?? '';
+
+    it('below 640px the header (the card\'s first child) is pinned to the top and the footer row to the bottom, both opaque', () => {
+        expect(at).toBeGreaterThan(-1);
+        const head = rule('[data-cm-sheet] > [data-cm-overlay-inner] > * > :first-child');
+        expect(head).toMatch(/position:\s*sticky/);
+        expect(head).toMatch(/top:\s*env\(safe-area-inset-top, 0px\)/);
+        // The usual header is bg-gray-50/50 (translucent): pinned over scrolling fields it gets the same colour, opaque.
+        expect(rule('[data-cm-sheet] > [data-cm-overlay-inner] > * > .bg-gray-50/50:first-child')).toMatch(/background-color:\s*#fcfdfd/);
+        expect(rule('[data-cm-sheet] > [data-cm-overlay-inner] > * > :first-child:not([class*="bg-"])')).toMatch(/background-color:\s*#fff/);
+        const foot = rule('[data-cm-sheet] [data-cm-sheet-foot]');
+        expect(foot).toMatch(/position:\s*sticky/);
+        expect(foot).toMatch(/bottom:\s*0/);
+        expect(foot).toMatch(/background-color:\s*#fff/);
+        // A field scrolled into view (focus, the keyboard) stops clear of both pinned rows.
+        const pad = rule('[data-cm-sheet]');
+        expect(pad).toMatch(/scroll-padding-top:\s*6\.5rem/);
+        expect(pad).toMatch(/scroll-padding-bottom:\s*6rem/);
+        // Only on phones: none of it outside the media query.
+        expect(OVERLAY_CSS.slice(0, at)).not.toMatch(/sticky|data-cm-sheet-foot|overflow:\s*clip|scroll-padding/);
+    });
+    it('an overflow-hidden card is CLIPPED instead (a hidden card is a scroller and would hold the pinned rows inside itself)', () => {
+        expect(rule('[data-cm-sheet] > [data-cm-overlay-inner] > .overflow-hidden')).toMatch(/^\s*overflow:\s*clip;\s*$/);
+        // Not every card: one that scrolls itself (overflow-y-auto) must keep scrolling.
+        expect(rules.some((r) => r.selector === '[data-cm-sheet] > [data-cm-overlay-inner] > *' && /overflow/.test(r.body))).toBe(false);
+    });
+    it('the sheets that can outgrow a phone tag their footer row', () => {
+        const page = fs.readFileSync(path.join(ADMIN, 'page.tsx'), 'utf8');
+        // «Crear conferencia»: its Cancel / «Crear conferencia» row.
+        const create = page.slice(page.indexOf('{/* Create Conference Modal */}'), page.indexOf('// Dashboard Component'));
+        expect(create).toMatch(/<div className="[^"]*" data-cm-sheet-foot="">\s*<button\s+type="button"\s+onClick=\{\(\) => setShowCreateModal\(false\)\}/);
+        // Every <form> rendered in an Overlay card with no height cap of its own (the overlay scrolls it) has one.
+        const blocks = [...page.matchAll(/<Overlay\b[^>]*>\s*<div className="([^"]*)"[\s\S]*?<\/Overlay>/g)];
+        let checked = 0;
+        for (const m of blocks) {
+            const [block, cardClass] = [m[0], m[1]];
+            if (/max-h-\[/.test(cardClass) || !/<form\b/.test(block) || !/type="submit"/.test(block)) continue;
+            // The inscription detail sheet's inline payment form is not the sheet's footer row.
+            if (/handleAddPayment/.test(block) && !/handleSubmit/.test(block)) continue;
+            checked++;
+            expect(block, block.slice(0, 160)).toContain('data-cm-sheet-foot=""');
+        }
+        expect(checked).toBeGreaterThanOrEqual(6);
+    });
+});
+
 describe('lockBodyScroll: the page behind stays put on iOS', () => {
     function fakePage(scrollY: number) {
         const body = { style: { position: '', top: '', left: '', right: '', width: '', overflow: 'auto', overscrollBehavior: '' } as Record<string, string> };

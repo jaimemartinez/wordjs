@@ -295,7 +295,7 @@ export default function FormsPage() {
                                                             <button
                                                                 onClick={() => setExpandedId(expanded ? null : s.id)}
                                                                 title={expanded ? t("forms.detailHide") : t("forms.detailShow")}
-                                                                className="w-9 h-9 rounded-xl bg-gray-50 text-gray-500 hover:bg-gray-200 flex items-center justify-center transition-all"
+                                                                className="w-9 h-9 shrink-0 rounded-xl bg-gray-50 text-gray-500 hover:bg-gray-200 flex items-center justify-center transition-all"
                                                             >
                                                                 <i className={`fa-solid ${expanded ? "fa-chevron-up" : "fa-chevron-down"} text-xs`}></i>
                                                             </button>
@@ -303,7 +303,7 @@ export default function FormsPage() {
                                                                 onClick={() => remove(s)}
                                                                 disabled={deletingId === s.id}
                                                                 title={t("common.delete")}
-                                                                className="w-9 h-9 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all disabled:opacity-50"
+                                                                className="w-9 h-9 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all disabled:opacity-50"
                                                             >
                                                                 <i className={`fa-solid ${deletingId === s.id ? "fa-spinner fa-spin" : "fa-trash"} text-xs`}></i>
                                                             </button>

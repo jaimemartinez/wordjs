@@ -100,8 +100,12 @@ vi.mock("../MarketplaceTab", () => ({ default: () => null }));
 
 import PluginsPage from "../page";
 
-/** The permissions dialog's own copy — present in the markup only while the dialog is open. */
-const DIALOG_TEXT = "Grant only what this plugin needs";
+/**
+ * The permissions dialog's own copy — present in the markup only while the dialog is open. The dialog is
+ * translated (t('plugins.permissions.intro')) and the I18n mock above answers every key with itself, so
+ * the markup carries the key; the same goes for the dialog's heading and buttons below.
+ */
+const DIALOG_TEXT = "plugins.permissions.intro";
 
 const plugin = (over: Partial<Plugin> = {}): Plugin => ({
     name: "Mail Server",
@@ -234,8 +238,8 @@ describe("/admin/plugins?permissions=<slug>", () => {
         expect(before).not.toContain(DIALOG_TEXT);
         expect(after).toContain(DIALOG_TEXT);
         // The dialog is mail-server's: its heading names it, and its declared browser:script switch is listed.
-        expect(after).toMatch(/<h3[^>]*>Permissions<\/h3><p[^>]*>Mail Server<\/p>/);
-        expect(after).not.toMatch(/<h3[^>]*>Permissions<\/h3><p[^>]*>FAQ<\/p>/);
+        expect(after).toMatch(/<h3[^>]*>plugins\.permissions\.manage<\/h3><p[^>]*>Mail Server<\/p>/);
+        expect(after).not.toMatch(/<h3[^>]*>plugins\.permissions\.manage<\/h3><p[^>]*>FAQ<\/p>/);
     });
 
     it("without the parameter, the page opens no dialog and leaves the address alone", async () => {
@@ -271,7 +275,7 @@ describe("the link is consumed: it opens the dialog once", () => {
         const { after } = await mount([plugin()]);
         expect(after).toContain(DIALOG_TEXT);
 
-        const afterSave = await click("Save permissions");
+        const afterSave = await click("plugins.permissions.save");
         expect(api.setPermissions).toEqual([{ slug: "mail-server", grants: [] }]);
         expect(api.listCalls).toBe(2);                              // the list DID reload…
         expect(browser.address()).toBe("/admin/plugins?permissions=mail-server");   // …with the link still in the URL
@@ -284,7 +288,7 @@ describe("the link is consumed: it opens the dialog once", () => {
         const { after } = await mount([plugin({ name: "FAQ", slug: "faq", permissions: [] }), plugin()]);
         expect(after).toContain(DIALOG_TEXT);
 
-        const closed = await click("Cancel");
+        const closed = await click("cancel");
         expect(closed).not.toContain(DIALOG_TEXT);
 
         const afterDeactivate = await click("plugins.deactivate");  // the first card's (FAQ) power button

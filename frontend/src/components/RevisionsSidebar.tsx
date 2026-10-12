@@ -257,7 +257,7 @@ export default function RevisionsSidebar({ postId, isOpen, onClose, onRestore }:
                             <p className="text-[11px] text-[var(--ed-on-surface-variant)]">{tr("Control de versiones")}</p>
                         </div>
                     </div>
-                    <button type="button" onClick={onClose} aria-label={tr("Cerrar historial de revisiones")} className="verso-icon-button w-11 h-11 rounded-xl flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors">
+                    <button type="button" onClick={onClose} aria-label={tr("Cerrar historial de revisiones")} className="verso-icon-button w-11 h-11 shrink-0 rounded-xl flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors">
                         <MSym name="close" size={20} />
                     </button>
                 </div>
@@ -318,14 +318,14 @@ export default function RevisionsSidebar({ postId, isOpen, onClose, onRestore }:
                         </div>
                     ) : loadError ? (
                         <div role="alert" className="h-full min-h-64 flex flex-col items-center justify-center gap-3 text-center">
-                            <span className="w-12 h-12 rounded-2xl bg-[var(--ed-error-container)] text-[var(--ed-on-error-container)] flex items-center justify-center"><MSym name="info" size={24} /></span>
+                            <span className="w-12 h-12 shrink-0 rounded-2xl bg-[var(--ed-error-container)] text-[var(--ed-on-error-container)] flex items-center justify-center"><MSym name="info" size={24} /></span>
                             <p className="text-sm font-semibold text-[var(--ed-on-surface)]">{tr("No se pudieron cargar las revisiones")}</p>
                             <p className="max-w-xs text-xs text-[var(--ed-on-surface-variant)]">{tr("Comprueba la conexión y vuelve a intentarlo.")}</p>
                             <button type="button" onClick={loadRevisions} className="min-h-11 px-4 rounded-xl border border-[var(--ed-outline-variant)] text-sm font-semibold hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] transition-colors">{tr("Reintentar")}</button>
                         </div>
                     ) : revisions.length === 0 ? (
                         <div className="h-full min-h-64 flex flex-col items-center justify-center gap-3 text-center">
-                            <span className="w-12 h-12 rounded-2xl bg-[var(--ed-surface-container)] text-[var(--ed-on-surface-variant)] flex items-center justify-center"><MSym name="history" size={24} /></span>
+                            <span className="w-12 h-12 shrink-0 rounded-2xl bg-[var(--ed-surface-container)] text-[var(--ed-on-surface-variant)] flex items-center justify-center"><MSym name="history" size={24} /></span>
                             <p className="text-sm font-semibold text-[var(--ed-on-surface)]">{tr("Aún no hay revisiones")}</p>
                             <p className="max-w-xs text-xs text-[var(--ed-on-surface-variant)]">{tr("Guarda la página para crear su primera versión recuperable.")}</p>
                         </div>
@@ -336,7 +336,7 @@ export default function RevisionsSidebar({ postId, isOpen, onClose, onRestore }:
                                     {index === 0 && <span className="absolute top-3 right-3 rounded-full bg-[var(--ed-primary-solid)] text-white text-[10px] font-semibold px-2 py-1">{tr("Última")}</span>}
                                     <div className="pr-14">
                                         <div className="flex items-center gap-2 mb-2">
-                                            <span className="w-8 h-8 rounded-full bg-[var(--ed-surface-container-lowest)] border border-[var(--ed-outline-variant)] flex items-center justify-center text-[11px] text-[var(--ed-on-surface)] font-semibold">
+                                            <span className="w-8 h-8 shrink-0 rounded-full bg-[var(--ed-surface-container-lowest)] border border-[var(--ed-outline-variant)] flex items-center justify-center text-[11px] text-[var(--ed-on-surface)] font-semibold">
                                                 {users[rev.authorId]?.displayName?.charAt(0) || <MSym name="person" size={16} />}
                                             </span>
                                             <span className="text-sm font-semibold text-[var(--ed-on-surface)] truncate">{users[rev.authorId]?.displayName || `${tr("Autor")} #${rev.authorId}`}</span>

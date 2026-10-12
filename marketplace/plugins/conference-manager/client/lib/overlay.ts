@@ -86,6 +86,15 @@ export function canAutoFocus(): boolean {
  * the create-conference dates out of the card); the big desktop paddings are compacted. From 640px the
  * card is centred with a margin.
  *
+ * A sheet taller than the screen scrolls with the overlay (an iPhone SE: «Crear conferencia», «Nuevo campo»,
+ * the inscription form…), and its title and close button went off the top while its buttons started below
+ * the bottom. Below 640px its header (the card's first child) is pinned to the top of the overlay and its
+ * footer (`data-cm-sheet-foot`, the row of Cancel / Save) to the bottom, both opaque; a card with
+ * `overflow-hidden` is clipped with `overflow: clip` instead, which keeps the rounded corners without making
+ * the card the scroller the pinned rows would be held in. A browser without `overflow: clip` keeps the
+ * card as it was. The overlay's scroll padding keeps a focused field from being scrolled under either
+ * pinned row (the keyboard's "scroll into view" honours it). Nothing changes from 640px up.
+ *
  * At every width, a card capped at `max-h-[92vh]` (the receipt at `max-h-[90vh]`) is capped by the
  * DYNAMIC viewport instead: on iOS Safari and Chrome Android `vh` is the LARGE viewport (toolbar hidden),
  * the admin document never scrolls so the toolbar never hides, and a 92vh card came out taller than the
@@ -108,6 +117,12 @@ export const OVERLAY_CSS = `
   [data-cm-overlay] input:is([type="date"], [type="datetime-local"], [type="time"], [type="month"]) {
     min-width: 0; max-width: 100%; min-height: 3rem; -webkit-appearance: none; appearance: none;
   }
+  [data-cm-sheet] > [data-cm-overlay-inner] > .overflow-hidden { overflow: clip; }
+  [data-cm-sheet] > [data-cm-overlay-inner] > * > :first-child { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; }
+  [data-cm-sheet] > [data-cm-overlay-inner] > * > :first-child:not([class*="bg-"]) { background-color: #fff; }
+  [data-cm-sheet] > [data-cm-overlay-inner] > * > .bg-gray-50\\/50:first-child { background-color: #fcfdfd; }
+  [data-cm-sheet] [data-cm-sheet-foot] { position: sticky; bottom: 0; z-index: 20; background-color: #fff; padding-bottom: 1rem; }
+  [data-cm-sheet] { scroll-padding-top: 6.5rem; scroll-padding-bottom: 6rem; }
   [data-cm-overlay] :is(.p-10, .p-8) { padding: 1.25rem; }
   [data-cm-overlay] :is(.px-10, .px-8) { padding-left: 1.25rem; padding-right: 1.25rem; }
   [data-cm-overlay] .py-8 { padding-top: 1.25rem; padding-bottom: 1.25rem; }

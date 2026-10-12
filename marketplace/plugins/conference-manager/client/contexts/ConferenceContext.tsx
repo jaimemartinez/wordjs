@@ -14,6 +14,27 @@ interface ConferenceContextType {
 
 const ConferenceContext = createContext<ConferenceContextType | undefined>(undefined);
 
+export const CURRENT_KEY = 'conference-manager:current';
+
+/**
+ * The conference to open when none is selected: the one saved under CURRENT_KEY when it still exists,
+ * otherwise the first active one, otherwise the first. Exported for the unit test.
+ *
+ * refreshConferences used to pick "the first active" on load and write it over the saved id BEFORE the
+ * restore effect read it, so after a reload the plugin reopened the newest conference, not the one the
+ * user was working on.
+ */
+export function pickConference(conferences: Conference[], savedId: string | null): Conference | null {
+    if (!Array.isArray(conferences) || conferences.length === 0) return null;
+    const saved = savedId ? conferences.find((c) => String(c.id) === String(savedId)) : undefined;
+    return saved || conferences.find((c) => c.status === 'active') || conferences[0];
+}
+
+const readSaved = (): string | null => { try { return localStorage.getItem(CURRENT_KEY); } catch { return null; } };
+const writeSaved = (id: number | null) => {
+    try { if (id == null) localStorage.removeItem(CURRENT_KEY); else localStorage.setItem(CURRENT_KEY, String(id)); } catch { /* private mode */ }
+};
+
 export function ConferenceProvider({ children }: { children: ReactNode }) {
     const [currentConference, setCurrentConferenceState] = useState<Conference | null>(null);
     const [conferences, setConferences] = useState<Conference[]>([]);
@@ -24,11 +45,11 @@ export function ConferenceProvider({ children }: { children: ReactNode }) {
             const data = await conferenceApi.getConferences();
             setConferences(data);
             
-            // Si no hay conferencia actual pero hay conferencias disponibles, seleccionar la primera activa o la primera
+            // No conference selected yet: the saved one when it still exists (pickConference).
             if (!currentConference && data.length > 0) {
-                const active = data.find(c => c.status === 'active') || data[0];
-                setCurrentConferenceState(active);
-                localStorage.setItem('conference-manager:current', String(active.id));
+                const pick = pickConference(data, readSaved());
+                setCurrentConferenceState(pick);
+                if (pick) writeSaved(pick.id);
             }
         } catch (error) {
             console.error('Failed to load conferences:', error);
@@ -39,37 +60,12 @@ export function ConferenceProvider({ children }: { children: ReactNode }) {
 
     const setCurrentConference = (conference: Conference | null) => {
         setCurrentConferenceState(conference);
-        if (conference) {
-            localStorage.setItem('conference-manager:current', String(conference.id));
-        } else {
-            localStorage.removeItem('conference-manager:current');
-        }
+        writeSaved(conference ? conference.id : null);
     };
 
     useEffect(() => {
         refreshConferences();
     }, []);
-
-    // Restaurar conferencia seleccionada desde localStorage
-    useEffect(() => {
-        if (conferences.length > 0 && !currentConference) {
-            const savedId = localStorage.getItem('conference-manager:current');
-            if (savedId) {
-                const saved = conferences.find(c => c.id === Number(savedId));
-                if (saved) {
-                    setCurrentConferenceState(saved);
-                } else {
-                    // Si la conferencia guardada no existe, usar la primera activa o la primera
-                    const active = conferences.find(c => c.status === 'active') || conferences[0];
-                    setCurrentConferenceState(active);
-                }
-            } else {
-                // Si no hay guardada, usar la primera activa o la primera
-                const active = conferences.find(c => c.status === 'active') || conferences[0];
-                setCurrentConferenceState(active);
-            }
-        }
-    }, [conferences]);
 
     return (
         <ConferenceContext.Provider

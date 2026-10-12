@@ -216,16 +216,16 @@ export default function WebhooksPage() {
                                             </div>
                                         </div>
                                         <div className="flex items-center gap-2 shrink-0">
-                                            <button onClick={() => openDeliveries(w)} title={t("webhooks.deliveries")} className="w-10 h-10 rounded-xl bg-gray-50 text-gray-500 hover:bg-gray-200 flex items-center justify-center transition-all">
+                                            <button onClick={() => openDeliveries(w)} title={t("webhooks.deliveries")} className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-500 hover:bg-gray-200 flex items-center justify-center transition-all">
                                                 <i className={`fa-solid ${expandedId === w.id ? "fa-chevron-up" : "fa-list"} text-xs`}></i>
                                             </button>
-                                            <button onClick={() => toggleActive(w)} title={w.active ? t("webhooks.pause") : t("webhooks.resume")} className="w-10 h-10 rounded-xl bg-gray-50 text-gray-500 hover:bg-gray-200 flex items-center justify-center transition-all">
+                                            <button onClick={() => toggleActive(w)} title={w.active ? t("webhooks.pause") : t("webhooks.resume")} className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-500 hover:bg-gray-200 flex items-center justify-center transition-all">
                                                 <i className={`fa-solid ${w.active ? "fa-pause" : "fa-play"} text-xs`}></i>
                                             </button>
-                                            <button onClick={() => rotate(w)} title={t("webhooks.rotateTitle")} className="w-10 h-10 rounded-xl bg-gray-50 text-gray-500 hover:bg-amber-500 hover:text-white flex items-center justify-center transition-all">
+                                            <button onClick={() => rotate(w)} title={t("webhooks.rotateTitle")} className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-500 hover:bg-amber-500 hover:text-white flex items-center justify-center transition-all">
                                                 <i className="fa-solid fa-rotate text-xs"></i>
                                             </button>
-                                            <button onClick={() => remove(w)} title={t("common.delete")} className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all">
+                                            <button onClick={() => remove(w)} title={t("common.delete")} className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all">
                                                 <i className="fa-solid fa-trash text-xs"></i>
                                             </button>
                                         </div>

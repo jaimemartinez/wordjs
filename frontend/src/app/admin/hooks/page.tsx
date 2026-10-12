@@ -153,7 +153,7 @@ export default function HooksPage() {
                     </button>
                     <button
                         onClick={loadHooks}
-                        className="w-10 h-10 rounded-full bg-white border border-slate-200 text-slate-500 hover:text-indigo-600 hover:border-indigo-200 flex items-center justify-center transition-all"
+                        className="w-10 h-10 shrink-0 rounded-full bg-white border border-slate-200 text-slate-500 hover:text-indigo-600 hover:border-indigo-200 flex items-center justify-center transition-all"
                         title={t('hooks.admin.refreshRegistry')}
                     >
                         <i className={`fa-solid fa-rotate-right ${loading ? 'fa-spin' : ''}`}></i>
@@ -239,7 +239,7 @@ export default function HooksPage() {
                     <div className="space-y-4">
                         {hookNames.length === 0 ? (
                             <div className="flex flex-col items-center justify-center py-16 px-4 text-center border-2 border-dashed border-slate-100 rounded-2xl bg-slate-50/50">
-                                <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center mb-4 text-slate-300 text-xl">
+                                <div className="w-12 h-12 shrink-0 bg-slate-100 rounded-full flex items-center justify-center mb-4 text-slate-300 text-xl">
                                     <i className={`fa-solid ${activeTab === 'actions' ? 'fa-bolt' : 'fa-filter'}`}></i>
                                 </div>
                                 <h3 className="text-slate-900 font-bold text-lg mb-1">

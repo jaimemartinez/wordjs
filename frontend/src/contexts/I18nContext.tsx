@@ -42,3 +42,8 @@ export function useI18n() {
     }
     return context;
 }
+
+/** useI18n() for a component that may also render outside the provider: null there. */
+export function useOptionalI18n(): I18nContextType | null {
+    return useContext(I18nContext) ?? null;
+}

@@ -130,6 +130,28 @@ function getContentTypeSchemas(args: Record<string, unknown> = {}): ContentTypeS
 }
 
 /**
+ * Every capability a registered content type is gated by: its permissions.operations (create, edit,
+ * publish, delete and the others/published variants — names an administrator may choose freely, such as
+ * `events_publish`) and its read_private_<type>s. These are the core's capabilities whatever prefix they
+ * carry: core/roles.ts never lets a plugin-declared role confer one. Built from the live registry on every
+ * call (a handful of types, eight names each), so a type registered later counts at once.
+ */
+function getContentTypeCapabilities(): Set<string> {
+    const caps = new Set<string>();
+    for (const schema of contentTypeSchemas.values()) {
+        const permissions = schema && schema.permissions;
+        if (!permissions) continue;
+        for (const cap of Object.values(permissions.operations || {})) {
+            if (typeof cap === 'string' && cap) caps.add(cap);
+        }
+        if (typeof permissions.capabilityType === 'string' && permissions.capabilityType) {
+            caps.add(`read_private_${permissions.capabilityType}s`);
+        }
+    }
+    return caps;
+}
+
+/**
  * Get all post types
  * Equivalent to get_post_types()
  */
@@ -515,6 +537,7 @@ module.exports = {
     getPostTypes,
     getContentTypeSchema,
     getContentTypeSchemas,
+    getContentTypeCapabilities,
     postTypeExists,
     postTypeSupports,
     addPostTypeSupport,

@@ -291,7 +291,7 @@ export default function ReviewComments({ postId, isOpen, onClose }: ReviewCommen
                         onClick={load}
                         title={tr("Actualizar")}
                         aria-label={tr("Actualizar")}
-                        className="verso-icon-button w-11 h-11 rounded-xl flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
+                        className="verso-icon-button w-11 h-11 shrink-0 rounded-xl flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
                     >
                         <MSym name="refresh" size={20} className={loading ? "animate-spin" : ""} />
                     </button>
@@ -300,7 +300,7 @@ export default function ReviewComments({ postId, isOpen, onClose }: ReviewCommen
                         onClick={onClose}
                         title={tr("Cerrar")}
                         aria-label={tr("Cerrar")}
-                        className="verso-icon-button w-11 h-11 rounded-xl flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
+                        className="verso-icon-button w-11 h-11 shrink-0 rounded-xl flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
                     >
                         <MSym name="close" size={20} />
                     </button>
@@ -369,7 +369,7 @@ export default function ReviewComments({ postId, isOpen, onClose }: ReviewCommen
                                             title={c.resolved ? tr("Reabrir") : tr("Marcar como resuelto")}
                                             aria-label={c.resolved ? tr("Reabrir") : tr("Marcar como resuelto")}
                                             aria-pressed={!!c.resolved}
-                                            className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors hover:bg-[var(--ed-surface-container-high)] ${c.resolved ? "text-[var(--ed-success)]" : "text-[var(--ed-on-surface-variant)]"}`}
+                                            className={`w-8 h-8 shrink-0 rounded-full flex items-center justify-center transition-colors hover:bg-[var(--ed-surface-container-high)] ${c.resolved ? "text-[var(--ed-success)]" : "text-[var(--ed-on-surface-variant)]"}`}
                                         >
                                             <MSym name="check_circle" size={18} fill={!!c.resolved} />
                                         </button>
@@ -379,7 +379,7 @@ export default function ReviewComments({ postId, isOpen, onClose }: ReviewCommen
                                                 onClick={() => handleDelete(c.id)}
                                                 title={tr("Eliminar comentario")}
                                                 aria-label={tr("Eliminar comentario")}
-                                                className="w-8 h-8 rounded-full flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:text-[var(--ed-error)] hover:bg-[var(--ed-error-container)] transition-colors"
+                                                className="w-8 h-8 shrink-0 rounded-full flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:text-[var(--ed-error)] hover:bg-[var(--ed-error-container)] transition-colors"
                                             >
                                                 <MSym name="delete" size={18} />
                                             </button>

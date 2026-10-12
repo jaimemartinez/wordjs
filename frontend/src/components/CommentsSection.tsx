@@ -24,7 +24,7 @@ function InitialsAvatar({ name }: { name: string }) {
     for (let i = 0; i < (name || "").length; i++) hash = (hash + name.charCodeAt(i)) % AVATAR_BG.length;
     return (
         <div
-            className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold select-none"
+            className="w-10 h-10 shrink-0 rounded-full flex items-center justify-center text-sm font-semibold select-none"
             style={{ background: AVATAR_BG[hash], color: "var(--wjs-color-on-primary,#fff)" }}
             aria-hidden="true"
         >

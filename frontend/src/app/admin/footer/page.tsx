@@ -162,7 +162,7 @@ export default function FooterSettingsPage() {
                 {/* Left: Branding */}
                 <div className="flex items-center gap-6">
                     <div className="flex items-center gap-3 text-gray-900">
-                        <div className="w-10 h-10 bg-gradient-to-br from-purple-600 to-pink-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-purple-500/20">
+                        <div className="w-10 h-10 shrink-0 bg-gradient-to-br from-purple-600 to-pink-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-purple-500/20">
                             <i className="fa-solid fa-shoe-prints text-lg"></i>
                         </div>
                         <div className="hidden md:block">
@@ -207,7 +207,7 @@ export default function FooterSettingsPage() {
                         {/* Section 1: About */}
                         <div className="space-y-3">
                             <div className="flex items-center gap-3 mb-2 border-b border-gray-50 pb-2">
-                                <div className="w-6 h-6 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-xs shadow-sm">1</div>
+                                <div className="w-6 h-6 shrink-0 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-xs shadow-sm">1</div>
                                 <h3 className="text-xs font-black uppercase text-gray-900 tracking-widest">{t('footer.admin.siteDescription')}</h3>
                             </div>
                             <div className="pl-9 space-y-2">
@@ -225,7 +225,7 @@ export default function FooterSettingsPage() {
                         {/* Section 2: Socials */}
                         <div className="space-y-3">
                             <div className="flex items-center gap-3 mb-2 border-b border-gray-50 pb-2">
-                                <div className="w-6 h-6 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center font-bold text-xs shadow-sm">2</div>
+                                <div className="w-6 h-6 shrink-0 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center font-bold text-xs shadow-sm">2</div>
                                 <h3 className="text-xs font-black uppercase text-gray-900 tracking-widest">{t('footer.admin.socials')}</h3>
                             </div>
 
@@ -234,7 +234,7 @@ export default function FooterSettingsPage() {
                                 <div className="space-y-2">
                                     {socialLinks.map((link, idx) => (
                                         <div key={idx} className="flex items-center gap-3 bg-white p-2.5 rounded-xl border-2 border-gray-50 shadow-sm group hover:border-purple-100 transition-colors">
-                                            <div className="w-8 h-8 rounded-lg bg-gray-50 flex items-center justify-center text-gray-400 group-hover:bg-purple-50 group-hover:text-purple-600 transition-colors">
+                                            <div className="w-8 h-8 shrink-0 rounded-lg bg-gray-50 flex items-center justify-center text-gray-400 group-hover:bg-purple-50 group-hover:text-purple-600 transition-colors">
                                                 <i className={link.icon}></i>
                                             </div>
                                             <div className="flex-1 min-w-0">
@@ -243,7 +243,7 @@ export default function FooterSettingsPage() {
                                             </div>
                                             <button
                                                 onClick={() => removeSocialLink(idx)}
-                                                className="w-8 h-8 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors flex items-center justify-center"
+                                                className="w-8 h-8 shrink-0 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors flex items-center justify-center"
                                             >
                                                 <i className="fa-solid fa-trash-can text-xs"></i>
                                             </button>
@@ -277,7 +277,7 @@ export default function FooterSettingsPage() {
                                             type="button"
                                             onClick={addSocialLink}
                                             disabled={!newUrl}
-                                            className="bg-gray-900 text-white w-9 h-9 rounded-xl hover:bg-purple-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-gray-200 flex items-center justify-center"
+                                            className="bg-gray-900 text-white w-9 h-9 shrink-0 rounded-xl hover:bg-purple-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-gray-200 flex items-center justify-center"
                                         >
                                             <i className="fa-solid fa-plus text-xs"></i>
                                         </button>
@@ -289,7 +289,7 @@ export default function FooterSettingsPage() {
                         {/* Section 3: Copyright */}
                         <div className="space-y-3">
                             <div className="flex items-center gap-3 mb-2 border-b border-gray-50 pb-2">
-                                <div className="w-6 h-6 rounded-lg bg-orange-50 text-orange-600 flex items-center justify-center font-bold text-xs shadow-sm">3</div>
+                                <div className="w-6 h-6 shrink-0 rounded-lg bg-orange-50 text-orange-600 flex items-center justify-center font-bold text-xs shadow-sm">3</div>
                                 <h3 className="text-xs font-black uppercase text-gray-900 tracking-widest">{t('footer.admin.copyright')}</h3>
                             </div>
                             <div className="pl-9 space-y-2">
@@ -307,7 +307,7 @@ export default function FooterSettingsPage() {
                         {/* Section 4: Menu */}
                         <div className="space-y-3 pb-10">
                             <div className="flex items-center gap-3 mb-2 border-b border-gray-50 pb-2">
-                                <div className="w-6 h-6 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold text-xs shadow-sm">4</div>
+                                <div className="w-6 h-6 shrink-0 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold text-xs shadow-sm">4</div>
                                 <h3 className="text-xs font-black uppercase text-gray-900 tracking-widest">{t('footer.admin.navigation')}</h3>
                             </div>
                             <div className="pl-9">

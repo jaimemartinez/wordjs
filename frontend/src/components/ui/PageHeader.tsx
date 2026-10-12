@@ -34,7 +34,7 @@ export function PageHeader({ title, subtitle, icon, actions, backButton }: PageH
                 )}
                 <div className="flex items-center gap-4">
                     {icon && (
-                        <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-50 to-indigo-50 text-blue-600 flex items-center justify-center text-2xl shadow-inner">
+                        <div className="w-14 h-14 shrink-0 rounded-2xl bg-gradient-to-br from-blue-50 to-indigo-50 text-blue-600 flex items-center justify-center text-2xl shadow-inner">
                             <i className={`fa-solid ${icon}`}></i>
                         </div>
                     )}

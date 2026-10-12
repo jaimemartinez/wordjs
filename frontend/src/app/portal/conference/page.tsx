@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { ToastProvider, useToast } from "@/contexts/ToastContext";
 import { csrfHeaders } from "@/lib/csrf";
+import { portalPersonName } from "./form";
 // Pure form helpers (seeding, string-only values, request body, money) — see form.ts for the contract
 // with conference-manager: values travel as strings, the SERVER canonicalises numbers.
 import { fieldOptions, fmtMoney, formBody, initialFormValues, inputToFormValue, isLocationFull, paymentMethodsOf, seatsLabel, type PortalField } from "./form";
@@ -62,18 +63,9 @@ const fieldVal = (person: any, field: any) => {
     const cd = person?.custom_data?.[field.name];
     return (cd !== undefined && cd !== null && cd !== '') ? cd : '';
 };
-const personDisplayName = (person: any, fields: any[]) => {
-    const fl = fields || [];
-    // Prefer the fields tagged with the name roles; fall back to the first 1-2 form fields.
-    const named = ['first_name', 'last_name']
-        .map((role) => fl.find((f: any) => f.role === role))
-        .filter(Boolean)
-        .map((f: any) => fieldVal(person, f))
-        .filter((v: any) => v !== '' && v != null);
-    const parts = named.length ? named : fl.map((f: any) => fieldVal(person, f)).filter((v: any) => v !== '' && v != null).slice(0, 2);
-    const name = parts.join(' ').trim();
-    return name || `#${person?.id ?? ''}`;
-};
+// The display name, as the admin names people (form.ts portalPersonName: the fields tagged Nombre /
+// Apellido, else the first form fields fit to stand in for a name — never an ID document or a contact).
+const personDisplayName = (person: any, fields: any[]) => portalPersonName(person, fields);
 
 // Combobox for the GROUPING field: search/pick an existing group (with member preview) or create a
 // new one. Module-level (never define a component inside a component — it steals input focus).
@@ -506,7 +498,7 @@ function LocationPortalContent() {
         return (
             <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
                 <HeroCard tone="rose" className="w-full max-w-md text-center">
-                    <div className="w-14 h-14 rounded-2xl bg-rose-500 text-white flex items-center justify-center text-2xl shadow-xl shadow-rose-200 mx-auto mb-5">
+                    <div className="w-14 h-14 shrink-0 rounded-2xl bg-rose-500 text-white flex items-center justify-center text-2xl shadow-xl shadow-rose-200 mx-auto mb-5">
                         <i className="fa-solid fa-triangle-exclamation"></i>
                     </div>
                     <h1 className={cx("text-3xl", headingCls, "mb-2")}>Acceso No Disponible</h1>
@@ -1005,7 +997,7 @@ function LocationPortalContent() {
                                                     <p className="text-xs font-bold text-blue-600 truncate">Imagen cargada correctamente</p>
                                                     <p className="text-[10px] text-gray-400 italic">Haz clic para cambiar</p>
                                                 </div>
-                                                <button type="button" onClick={() => setPaymentForm({ ...paymentForm, proof: '' })} title="Quitar comprobante" aria-label="Quitar comprobante" className="relative z-20 w-9 h-9 flex items-center justify-center rounded-xl bg-white text-rose-500 hover:bg-rose-600 hover:text-white transition-all shadow-sm border border-rose-100">
+                                                <button type="button" onClick={() => setPaymentForm({ ...paymentForm, proof: '' })} title="Quitar comprobante" aria-label="Quitar comprobante" className="relative z-20 w-9 h-9 shrink-0 flex items-center justify-center rounded-xl bg-white text-rose-500 hover:bg-rose-600 hover:text-white transition-all shadow-sm border border-rose-100">
                                                     <i className="fa-solid fa-trash-can text-xs"></i>
                                                 </button>
                                             </div>

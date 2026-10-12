@@ -9,8 +9,14 @@
  * - Miembros: WordJS users added to the team with a role — searched by name / e-mail / login through the
  *   plugin's users:read grant — whose role can be changed, who can be deactivated / reactivated or removed.
  *
- * People sign in with their own WordJS account at /admin and find «Congresos» in the menu; every section
- * they open is filtered by their role (see perms.tsx) and re-checked by the server on every request.
+ * 2.16.0 — only accounts with the WordJS role «Equipo de conferencia» (TEAM_ROLE, declared by the plugin's
+ * manifest) can join: the administrator creates the account in Usuarios with that role, then adds it here.
+ * That role opens the admin, the person's own account page and «Conference» — no other admin page. The
+ * picker shows each account's WordJS role and greys out the others (saying why); a member whose account no
+ * longer has the role is flagged (kept, never silently removed) and gets no section until it is given back.
+ *
+ * People sign in with their own WordJS account at /admin and land on «Conference»; every section they open
+ * is filtered by their team role (see perms.tsx) and re-checked by the server on every request.
  *
  * Confirmations are inline two-step buttons (like MealsPage / MealScanner): the shared useModal dialog
  * renders at z-50, under the plugin's own overlays.
@@ -19,16 +25,18 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useToast } from "../../../../../frontend/src/contexts/ToastContext";
 import { conferenceApi, STAFF_SECTIONS } from "../lib/conference";
 import { canAutoFocus } from "../lib/overlay";
+import { PERM_MATRIX_CSS } from "../lib/phoneLayout";
 import { Overlay } from "./Overlay";
 import type { StaffLevel, StaffMember, StaffRole, StaffSection, StaffUser } from "../lib/conference";
 import { useTx, makeTxn } from "./MealScanner";
 import { normalizePermissions, levelRank } from "./perms";
+import { candidateBlock, memberLacksRole, USERS_ADMIN_HREF, wordjsRoleText } from "../lib/team";
 
 type Tab = 'roles' | 'members';
 const TAB_KEY = 'conference-manager:staff.tab';
 
 const inputCls = 'w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium text-sm';
-const labelCls = 'block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1';
+const labelCls = 'block text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1';
 const btnGhost = 'px-4 py-2.5 rounded-xl bg-white border-2 border-gray-100 text-gray-700 hover:border-blue-400 font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50 disabled:cursor-not-allowed';
 const btnPrimary = 'px-6 py-3 rounded-2xl bg-blue-600 text-white hover:bg-blue-700 font-black text-[10px] uppercase tracking-widest shadow-lg shadow-blue-500/30 transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed';
 const btnDanger = 'px-4 py-2.5 rounded-xl bg-rose-600 text-white hover:bg-rose-700 font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50';
@@ -63,10 +71,16 @@ const fmtStamp = (v?: string | null) => {
     return isNaN(d.getTime()) ? s : d.toLocaleDateString();
 };
 
+/** The account's WordJS role, in words (custom roles show their slug). */
+const wordjsRoleName = (tx, role?: string | null) => {
+    const r = wordjsRoleText(role);
+    return r.key ? tx(r.key, r.fallback) : r.fallback;
+};
+
 const Spinner = ({ label }: any) => (
     <div className="text-center py-16">
         <div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-3"></div>
-        <p className="text-gray-400 text-xs font-bold uppercase tracking-widest">{label}</p>
+        <p className="text-gray-500 text-xs font-bold uppercase tracking-widest">{label}</p>
     </div>
 );
 
@@ -105,7 +119,7 @@ export default function StaffPage() {
                 <div className="absolute top-0 right-0 -mr-16 -mt-16 w-64 h-64 bg-indigo-50/70 rounded-full blur-3xl pointer-events-none"></div>
                 <div className="relative">
                     <div className="flex items-center gap-3 mb-3">
-                        <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white shadow-lg shadow-indigo-200"><i className="fa-solid fa-user-shield" aria-hidden="true"></i></div>
+                        <div className="w-10 h-10 shrink-0 rounded-xl bg-indigo-600 flex items-center justify-center text-white shadow-lg shadow-indigo-200"><i className="fa-solid fa-user-shield" aria-hidden="true"></i></div>
                         <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-[0.2em]">{tx('staff', 'Equipo y permisos')}</span>
                     </div>
                     <h2 className="text-3xl font-black text-gray-900 italic tracking-tighter">{tx('staff.title', 'Quién entra y qué puede hacer')}</h2>
@@ -115,7 +129,11 @@ export default function StaffPage() {
                     <i className="fa-solid fa-circle-info text-indigo-500 mt-0.5" aria-hidden="true"></i>
                     <div className="text-xs text-indigo-900 space-y-1">
                         <p className="font-bold">{tx('staff.help.title', 'Cómo entran las personas del equipo')}</p>
-                        <p>{tx('staff.help.login', 'Cada persona entra con su propia cuenta de WordJS en /admin y encuentra «Conference» en el menú.')}</p>
+                        <ol className="list-decimal pl-4 space-y-0.5" data-staff-steps="">
+                            <li>{tx('staff.help.step1', 'En Usuarios, crea su cuenta (o edita la que ya tiene) con el rol «Equipo de conferencia». Ese rol solo le deja entrar a «Conference» y a su propia cuenta, a ninguna otra página del administrador. (¿Ya tiene otro rol, por ejemplo Editor? Dale a ese rol el permiso «conference_manager_access» en Usuarios › Roles: conserva sus páginas y entra también aquí.)')} <a href={USERS_ADMIN_HREF} className="font-bold underline hover:text-indigo-700">{tx('staff.help.users.link', 'Abrir Usuarios')}</a></li>
+                            <li>{tx('staff.help.step2', 'Aquí, en Miembros, añádela al equipo y elige su rol del equipo: decide qué secciones ve o gestiona.')}</li>
+                            <li>{tx('staff.help.step3', 'Entra con su propia cuenta en /admin y llega directamente a «Conference».')}</li>
+                        </ol>
                         <p>{tx('staff.help.scope', 'Solo verá las secciones que permita su rol, en todos los congresos. Los administradores de WordJS siempre tienen acceso total y no necesitan estar en el equipo.')}</p>
                     </div>
                 </div>
@@ -210,18 +228,18 @@ function RolesTab({ roles, sections, reload, onGoMembers }: any) {
                                             </button>
                                         </div>
                                         <div className="flex items-center gap-1 shrink-0">
-                                            <button type="button" onClick={() => { setEditing(role); setDeleteAsk(null); setDeleteError(null); }} className="p-2 text-gray-400 hover:text-blue-600" aria-label={tx('staff.role.edit.aria', 'Editar el rol {name}', { name: role.name })} title={tx('staff.role.edit', 'Editar rol')}>
+                                            <button type="button" onClick={() => { setEditing(role); setDeleteAsk(null); setDeleteError(null); }} className="p-2 text-gray-500 hover:text-blue-600" aria-label={tx('staff.role.edit.aria', 'Editar el rol {name}', { name: role.name })} title={tx('staff.role.edit', 'Editar rol')}>
                                                 <i className="fa-solid fa-pen" aria-hidden="true"></i>
                                             </button>
                                             {deleteAsk !== role.id && (
-                                                <button type="button" onClick={() => { setDeleteAsk(role.id); setDeleteError(null); }} className="p-2 text-gray-400 hover:text-rose-600" aria-label={tx('staff.role.delete.aria', 'Eliminar el rol {name}', { name: role.name })} title={tx('staff.role.delete', 'Eliminar rol')}>
+                                                <button type="button" onClick={() => { setDeleteAsk(role.id); setDeleteError(null); }} className="p-2 text-gray-500 hover:text-rose-600" aria-label={tx('staff.role.delete.aria', 'Eliminar el rol {name}', { name: role.name })} title={tx('staff.role.delete', 'Eliminar rol')}>
                                                     <i className="fa-solid fa-trash" aria-hidden="true"></i>
                                                 </button>
                                             )}
                                         </div>
                                     </div>
                                     {granted.length === 0 ? (
-                                        <p className="text-xs font-semibold text-gray-400">{tx('staff.role.nothing', 'No da acceso a ninguna sección.')}</p>
+                                        <p className="text-xs font-semibold text-gray-500">{tx('staff.role.nothing', 'No da acceso a ninguna sección.')}</p>
                                     ) : (
                                         <div className="flex flex-wrap gap-1.5">
                                             {granted.map((s: any) => (
@@ -242,7 +260,7 @@ function RolesTab({ roles, sections, reload, onGoMembers }: any) {
                                         <div className="rounded-xl bg-rose-50 border border-rose-200 px-3 py-2 text-xs font-bold text-rose-700 flex items-start gap-2" role="alert">
                                             <i className="fa-solid fa-triangle-exclamation mt-0.5" aria-hidden="true"></i>
                                             <span className="flex-1">{deleteError.message}</span>
-                                            <button type="button" onClick={() => setDeleteError(null)} className="text-rose-400 hover:text-rose-700" aria-label={tx('close', 'Cerrar')}><i className="fa-solid fa-xmark" aria-hidden="true"></i></button>
+                                            <button type="button" onClick={() => setDeleteError(null)} className="text-rose-600 hover:text-rose-800" data-delete-error-close="" aria-label={tx('close', 'Cerrar')}><i className="fa-solid fa-xmark" aria-hidden="true"></i></button>
                                         </div>
                                     )}
                                 </li>
@@ -259,7 +277,7 @@ function RolesTab({ roles, sections, reload, onGoMembers }: any) {
     );
 }
 
-function RoleEditor({ role, sections, existing, onClose, onSaved }: any) {
+export function RoleEditor({ role, sections, existing, onClose, onSaved }: any) {
     const tx = useTx();
     const { addToast } = useToast();
     const meta = sectionMeta(tx);
@@ -306,22 +324,27 @@ function RoleEditor({ role, sections, existing, onClose, onSaved }: any) {
                         <h3 className="font-black text-2xl italic tracking-tighter text-gray-900 break-words">{title}</h3>
                         <p className="text-xs font-semibold text-gray-500 mt-1">{tx('staff.role.editor.subtitle', 'Elige, para cada sección, si este rol no la ve, solo la ve o puede gestionarla.')}</p>
                     </div>
-                    <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-600 p-2 hover:bg-gray-100 rounded-2xl" aria-label={tx('close', 'Cerrar')}><i className="fa-solid fa-xmark text-xl" aria-hidden="true"></i></button>
+                    <button type="button" onClick={onClose} className="text-gray-500 hover:text-gray-700 p-2 hover:bg-gray-100 rounded-2xl" aria-label={tx('close', 'Cerrar')}><i className="fa-solid fa-xmark text-xl" aria-hidden="true"></i></button>
                 </div>
                 <div className="p-6 sm:p-8 space-y-5 overflow-y-auto">
                     <div className="space-y-1.5">
                         <label htmlFor="staff-role-name" className={labelCls}>{tx('staff.role.name', 'Nombre del rol')} *</label>
                         <input id="staff-role-name" ref={nameRef} className={inputCls} value={name} maxLength={80} autoFocus={canAutoFocus()}
                             onChange={(e) => { setName(e.target.value); setError(''); }} placeholder={tx('staff.role.name.placeholder', 'Ej.: Cocina, Tesorería, Recepción')} />
-                        {duplicate && <p className="text-xs font-bold text-rose-600">{tx('staff.role.name.duplicate', 'Ya existe un rol con ese nombre.')}</p>}
+                        {duplicate && <p className="text-xs font-bold text-rose-700">{tx('staff.role.name.duplicate', 'Ya existe un rol con ese nombre.')}</p>}
                     </div>
                     <div className="flex flex-wrap items-center gap-2 text-[10px] font-black uppercase tracking-widest">
-                        <span className="text-gray-400">{tx('staff.role.quick', 'Rápido:')}</span>
+                        <span className="text-gray-500">{tx('staff.role.quick', 'Rápido:')}</span>
                         <button type="button" className="text-blue-600 hover:underline" onClick={() => setAll('view')}>{tx('staff.role.all.view', 'Ver todo')}</button>
                         <button type="button" className="text-blue-600 hover:underline" onClick={() => setAll('manage')}>{tx('staff.role.all.manage', 'Gestionar todo')}</button>
                         <button type="button" className="text-blue-600 hover:underline" onClick={() => setAll('none')}>{tx('staff.role.all.none', 'Quitar todo')}</button>
                     </div>
-                    <div className="overflow-x-auto border border-gray-100 rounded-2xl" data-perm-matrix="">
+                    {/* Below 680 px (lib/phoneLayout.ts PERM_MATRIX_CSS) each section is a row of its own with its
+                        three levels side by side and captioned: the 560 px table scrolled sideways inside the dialog
+                        and only «Sin acceso» was in view. At every width the header row is sticky in the dialog's
+                        scroller, so the radio columns stay labelled while the sections scroll under it. */}
+                    <style>{PERM_MATRIX_CSS}</style>
+                    <div className="border border-gray-100 rounded-2xl" data-perm-matrix="">
                         <table className="w-full text-sm min-w-[560px]">
                             <thead className="bg-gray-50 text-[10px] font-black uppercase tracking-widest text-gray-500">
                                 <tr>
@@ -348,7 +371,9 @@ function RoleEditor({ role, sections, existing, onClose, onSaved }: any) {
                                                             <input type="radio" name={groupName} value={l} checked={(perms[s.key] || 'none') === l}
                                                                 onChange={() => setPerms((p) => ({ ...p, [s.key]: l }))}
                                                                 className="w-5 h-5 accent-indigo-600" aria-label={`${m.name}: ${levelName(tx, l, s.key)}`} />
-                                                            {l === 'manage' && s.key === 'meals_delivery' && <span className="text-[9px] font-black uppercase tracking-widest text-gray-400">{levelName(tx, l, s.key)}</span>}
+                                                            {/* The kitchen's «Operar» is always captioned; the other levels only on a phone, where the
+                                                                column headers are hidden. */}
+                                                            <span className="text-[9px] font-black uppercase tracking-widest text-gray-500" data-perm-caption={l === 'manage' && s.key === 'meals_delivery' ? 'always' : ''} aria-hidden="true">{levelName(tx, l, s.key)}</span>
                                                         </label>
                                                     ) : (
                                                         <span className="text-gray-200" aria-hidden="true">—</span>
@@ -361,7 +386,7 @@ function RoleEditor({ role, sections, existing, onClose, onSaved }: any) {
                             </tbody>
                         </table>
                     </div>
-                    <p className="text-[11px] text-gray-400">{tx('staff.matrix.hint', '«Ver» muestra la sección sin poder cambiar nada; «Gestionar» permite crear, editar, mover y validar. El servidor comprueba cada acción.')}</p>
+                    <p className="text-[11px] text-gray-500">{tx('staff.matrix.hint', '«Ver» muestra la sección sin poder cambiar nada; «Gestionar» permite crear, editar, mover y validar. El servidor comprueba cada acción.')}</p>
                     {error && <div className="rounded-2xl border-2 border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700" role="alert">{error}</div>}
                 </div>
                 <div className="px-6 sm:px-8 py-4 border-t border-gray-50 bg-gray-50/30 flex flex-wrap justify-end gap-3 shrink-0">
@@ -384,13 +409,20 @@ function MembersTab({ roles, reloadRoles, onGoRoles }: any) {
     const { addToast } = useToast();
     const [members, setMembers] = useState<StaffMember[] | null>(null);
     const [usersRead, setUsersRead] = useState(true);
+    // false = the team role is not registered / opens nothing (roles:declare not granted — an in-place
+    // update to 2.16.0 keeps the old grants): say so, or the whole team is shut out without a word.
+    const [rolesReady, setRolesReady] = useState<boolean | null>(null);
     const [loadError, setLoadError] = useState('');
     const [busy, setBusy] = useState<number | null>(null);
     const [removeAsk, setRemoveAsk] = useState<number | null>(null);
     const [filter, setFilter] = useState('');
 
     const load = useCallback(async () => {
-        try { const r: any = await conferenceApi.getStaffMembers(); setMembers(r?.members || []); setUsersRead(r?.users_read !== false); setLoadError(''); }
+        try {
+            const r: any = await conferenceApi.getStaffMembers();
+            setMembers(r?.members || []); setUsersRead(r?.users_read !== false);
+            setRolesReady(typeof r?.roles_ready === 'boolean' ? r.roles_ready : null); setLoadError('');
+        }
         catch (e: any) { setLoadError(e?.message || 'Error'); }
     }, []);
     useEffect(() => { load(); }, [load]);
@@ -421,6 +453,12 @@ function MembersTab({ roles, reloadRoles, onGoRoles }: any) {
 
     return (
         <div className="space-y-5">
+            {rolesReady === false && (
+                <div className="rounded-2xl border-2 border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800 flex items-start gap-3" role="alert" data-roles-not-ready="">
+                    <i className="fa-solid fa-user-lock mt-0.5" aria-hidden="true"></i>
+                    <p>{tx('staff.roles.not.ready', 'El rol «Equipo de conferencia» no está activo: concede al plugin el permiso «roles:declare» en Plugins › Conference Manager › Permisos. Hasta entonces, nadie del equipo con ese rol puede entrar a «Conference».')}</p>
+                </div>
+            )}
             <AddMember roles={roles} memberIds={memberIds} onAdded={afterChange} onGoRoles={onGoRoles} />
 
             <div className={`${card} p-5 sm:p-6 space-y-4`}>
@@ -455,18 +493,22 @@ function MembersTab({ roles, reloadRoles, onGoRoles }: any) {
                     <ul className="divide-y divide-gray-50 border border-gray-100 rounded-2xl overflow-hidden">
                         {shown.map((m) => {
                             const active = !!m.active;
+                            // The account lost the WordJS team role: the server refuses changing their team role
+                            // or reactivating them; deactivating / removing stays possible.
+                            const noRole = memberLacksRole(m);
                             return (
                                 <li key={m.id} className={`px-4 py-3 space-y-2 ${active ? 'bg-white' : 'bg-gray-50'}`} data-member-id={m.id}>
                                     <div className="flex flex-wrap items-center gap-3">
                                         <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${active ? 'bg-indigo-50 text-indigo-600' : 'bg-gray-100 text-gray-400'}`}><i className="fa-solid fa-user" aria-hidden="true"></i></div>
-                                        <div className="min-w-[12rem] flex-1">
+                                        <div className={IDENTITY_COLUMN_CLASS} data-member-identity="">
                                             <div className={`text-sm font-black break-words ${active ? 'text-gray-900' : 'text-gray-500'}`}>
                                                 {memberName(m)}
-                                                {!active && <span className="ml-2 px-2 py-0.5 rounded-lg bg-gray-200 text-gray-600 text-[9px] font-black uppercase tracking-widest align-middle">{tx('staff.member.inactive', 'Desactivado')}</span>}
+                                                {!active && <span className="ml-2 max-sm:inline-block px-2 py-0.5 rounded-lg bg-gray-200 text-gray-600 text-[9px] font-black uppercase tracking-widest align-middle">{tx('staff.member.inactive', 'Desactivado')}</span>}
+                                                {noRole && <span className="ml-2 max-sm:inline-block px-2 py-0.5 rounded-lg bg-amber-100 text-amber-800 border border-amber-200 text-[9px] font-black uppercase tracking-widest align-middle" data-member-no-role={m.id}><i className="fa-solid fa-triangle-exclamation mr-1" aria-hidden="true"></i>{tx('staff.member.no.role', 'Sin acceso a «Conference»')}</span>}
                                             </div>
-                                            <div className="text-xs font-semibold text-gray-500 break-all">{[m.user?.login ? `@${m.user.login}` : '', m.user?.email || ''].filter(Boolean).join(' · ')}</div>
+                                            <div className={ACCOUNT_LINE_CLASS} data-member-account="">{[m.user?.login ? `@${m.user.login}` : '', m.user?.email || '', m.user ? tx('staff.wprole.label', 'Rol en WordJS: {role}', { role: wordjsRoleName(tx, m.user.role) }) : ''].filter(Boolean).join(' · ')}</div>
                                             {(m.added_by || m.created_at) && (
-                                                <div className="text-[10px] text-gray-400 font-semibold">
+                                                <div className="text-[10px] text-gray-500 font-semibold">
                                                     {m.added_by
                                                         ? tx('staff.member.added.by', 'Añadido por {who} el {date}', { who: m.added_by, date: fmtStamp(m.created_at) })
                                                         : tx('staff.member.added.on', 'Añadido el {date}', { date: fmtStamp(m.created_at) })}
@@ -476,18 +518,20 @@ function MembersTab({ roles, reloadRoles, onGoRoles }: any) {
                                         <div className="flex flex-wrap items-center gap-2">
                                             <label className="sr-only" htmlFor={`staff-member-role-${m.id}`}>{tx('staff.member.role', 'Rol')}</label>
                                             <select id={`staff-member-role-${m.id}`} className="border-2 border-gray-100 rounded-xl px-3 py-2 bg-white focus:border-indigo-500 outline-none text-sm font-bold text-gray-800 disabled:opacity-50"
-                                                value={String(m.role_id)} disabled={busy === m.id}
+                                                value={String(m.role_id)} disabled={busy === m.id || noRole}
+                                                title={noRole ? tx('staff.member.no.role.locked', 'Dale primero acceso a «Conference»: el rol «Equipo de conferencia» en Usuarios, o el permiso «conference_manager_access» a su rol.') : undefined}
                                                 onChange={(e) => update(m, { role_id: Number(e.target.value) }, tx('staff.member.role.changed', 'Rol cambiado'))}>
                                                 {!roles.some((r: StaffRole) => Number(r.id) === Number(m.role_id)) && <option value={String(m.role_id)}>{m.role_name || `#${m.role_id}`}</option>}
                                                 {roles.map((r: StaffRole) => <option key={r.id} value={String(r.id)}>{r.name}</option>)}
                                             </select>
-                                            <button type="button" className={btnGhost} disabled={busy === m.id}
+                                            <button type="button" className={btnGhost} disabled={busy === m.id || (noRole && !active)}
+                                                title={noRole && !active ? tx('staff.member.no.role.locked', 'Dale primero acceso a «Conference»: el rol «Equipo de conferencia» en Usuarios, o el permiso «conference_manager_access» a su rol.') : undefined}
                                                 onClick={() => update(m, { active: !active }, active ? tx('staff.member.deactivated', 'Acceso desactivado') : tx('staff.member.reactivated', 'Acceso reactivado'))}>
                                                 <i className={`fa-solid ${active ? 'fa-user-slash' : 'fa-user-check'} mr-1`} aria-hidden="true"></i>
                                                 {active ? tx('staff.member.deactivate', 'Desactivar') : tx('staff.member.reactivate', 'Reactivar')}
                                             </button>
                                             {removeAsk !== m.id && (
-                                                <button type="button" className="p-2 text-gray-400 hover:text-rose-600 disabled:opacity-40" disabled={busy === m.id}
+                                                <button type="button" className="p-2 text-gray-500 hover:text-rose-600 disabled:opacity-40" disabled={busy === m.id}
                                                     onClick={() => setRemoveAsk(m.id)} aria-label={tx('staff.member.remove.aria', 'Quitar a {name} del equipo', { name: memberName(m) })} title={tx('staff.member.remove', 'Quitar del equipo')}>
                                                     <i className="fa-solid fa-trash" aria-hidden="true"></i>
                                                 </button>
@@ -501,7 +545,13 @@ function MembersTab({ roles, reloadRoles, onGoRoles }: any) {
                                             <button type="button" onClick={() => setRemoveAsk(null)} className={btnGhost}>{tx('cancel', 'Cancelar')}</button>
                                         </div>
                                     )}
-                                    {!active && <p className="text-[11px] font-semibold text-gray-500 pl-[3.25rem]">{tx('staff.member.inactive.hint', 'No podrá usar «Conference» hasta que lo reactives. Conserva su rol.')}</p>}
+                                    {noRole && (
+                                        <p className="text-[11px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 ml-[3.25rem] max-sm:ml-0" role="note">
+                                            {tx('staff.member.no.role.hint', 'Su cuenta tiene el rol de WordJS «{role}», que no da acceso a «Conference». Dale el rol «Equipo de conferencia» en Usuarios, o el permiso «conference_manager_access» a ese rol en Usuarios › Roles; o quítala del equipo.', { role: wordjsRoleName(tx, m.user?.role) })}
+                                            {' '}<a href={USERS_ADMIN_HREF} className="font-bold underline hover:text-amber-900">{tx('staff.help.users.link', 'Abrir Usuarios')}</a>
+                                        </p>
+                                    )}
+                                    {!active && !noRole && <p className="text-[11px] font-semibold text-gray-500 pl-[3.25rem] max-sm:pl-0">{tx('staff.member.inactive.hint', 'No podrá usar «Conference» hasta que lo reactives. Conserva su rol.')}</p>}
                                 </li>
                             );
                         })}
@@ -510,6 +560,48 @@ function MembersTab({ roles, reloadRoles, onGoRoles }: any) {
                 )}
             </div>
         </div>
+    );
+}
+
+/**
+ * Who this person is: name, «@login · email» and their WordJS role chip — shared by a search result and a
+ * team member row. The column keeps at least 12rem, so on a phone the badge or the buttons beside it wrap
+ * onto their own line instead of squeezing it: at `min-w-0` it shrank to ~80 px, the chip broke into four
+ * lines and ran under «Ya está en el equipo» (iPhone SE). The email breaks only where it must
+ * (`overflow-wrap: anywhere`), not mid-word wherever the line ends ("ana@ex / ample.test").
+ */
+export const IDENTITY_COLUMN_CLASS = 'min-w-[12rem] flex-1';
+export const ACCOUNT_LINE_CLASS = 'text-xs font-semibold text-gray-500 [overflow-wrap:anywhere]';
+export const ROLE_CHIP_CLASS = 'inline-block max-w-full break-words mt-1 px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-widest';
+
+/** One user in the «Añadir una persona al equipo» search results. Exported for the unit test. */
+export function UserResultRow({ u, already, block, roleName, adding, canAdd, onAdd }: {
+    u: StaffUser; already: boolean; block: ReturnType<typeof candidateBlock>; roleName: string;
+    adding: number | null; canAdd: boolean; onAdd: (u: StaffUser) => void;
+}) {
+    const tx = useTx();
+    return (
+        <li className={`px-4 py-3 flex flex-wrap items-center gap-3 ${block === 'not_team_role' && !already ? 'bg-gray-50/60' : ''}`} data-user-id={u.id} data-user-block={block || ''}>
+            <span className={IDENTITY_COLUMN_CLASS} data-user-identity="">
+                <span className="block text-sm font-black text-gray-900 break-words">{u.name || u.login}</span>
+                <span className={`block ${ACCOUNT_LINE_CLASS}`}>{[u.login ? `@${u.login}` : '', u.email || ''].filter(Boolean).join(' · ')}</span>
+                <span className={`${ROLE_CHIP_CLASS} ${block ? 'bg-gray-100 text-gray-600' : 'bg-indigo-50 text-indigo-700'}`} data-user-wprole="">{tx('staff.wprole.label', 'Rol en WordJS: {role}', { role: wordjsRoleName(tx, u.role) })}</span>
+            </span>
+            {block === 'admin' ? (
+                <span className="text-[10px] font-black uppercase tracking-widest text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-1 rounded-lg" data-user-badge="admin">{tx('staff.add.is.admin', 'Administrador: ya tiene acceso total')}</span>
+            ) : already ? (
+                <span className="text-[10px] font-black uppercase tracking-widest text-gray-600 bg-gray-100 px-2 py-1 rounded-lg" data-user-badge="already">{tx('staff.add.already', 'Ya está en el equipo')}</span>
+            ) : block === 'not_team_role' ? (
+                <span className="max-w-xs text-[11px] font-bold text-amber-800 bg-amber-50 border border-amber-200 px-2 py-1 rounded-lg" data-not-team-role="">
+                    {tx('staff.add.not.team.role', 'No se puede añadir: su rol no da acceso a «Conference». Dale el rol «Equipo de conferencia» en Usuarios, o el permiso «conference_manager_access» a su rol en Usuarios › Roles.')}
+                </span>
+            ) : (
+                <button type="button" className={btnPrimary} disabled={adding != null || !canAdd} onClick={() => onAdd(u)}
+                    aria-label={tx('staff.add.button.aria', 'Añadir a {name} con el rol {role}', { name: u.name || u.login, role: roleName })}>
+                    <i className="fa-solid fa-user-plus mr-1.5" aria-hidden="true"></i>{adding === u.id ? tx('saving', 'Guardando…') : tx('staff.add.button', 'Añadir')}
+                </button>
+            )}
+        </li>
     );
 }
 
@@ -572,12 +664,11 @@ function AddMember({ roles, memberIds, onAdded, onGoRoles }: any) {
         } finally { setAdding(null); }
     };
 
-    const isAdminUser = (u: StaffUser) => String(u.role || '').toLowerCase() === 'administrator';
     return (
         <div className={`${card} p-5 sm:p-6 space-y-4`} data-add-member="">
             <div>
                 <h3 className="text-lg font-black text-gray-900">{tx('staff.add.title', 'Añadir una persona al equipo')}</h3>
-                <p className="text-xs text-gray-500">{tx('staff.add.hint', 'Busca a un usuario de WordJS por su nombre, correo o usuario y elige su rol. Si aún no tiene cuenta, créala primero en Usuarios.')}</p>
+                <p className="text-xs text-gray-500">{tx('staff.add.hint.team', 'Busca a un usuario de WordJS por su nombre, correo o usuario y elige su rol del equipo. Solo se pueden añadir cuentas cuyo rol de WordJS da acceso a «Conference»: el rol «Equipo de conferencia», u otro rol con el permiso «conference_manager_access». Si aún no tiene cuenta, créala en Usuarios con ese rol.')} <a href={USERS_ADMIN_HREF} className="font-bold text-indigo-600 hover:underline">{tx('staff.help.users.link', 'Abrir Usuarios')}</a></p>
             </div>
             {grantMissing && (
                 <div className="rounded-2xl border-2 border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800 flex items-start gap-3" role="alert" data-grant-missing="">
@@ -608,32 +699,19 @@ function AddMember({ roles, memberIds, onAdded, onGoRoles }: any) {
                             </select>
                         </div>
                     </div>
-                    {loading && <p className="text-xs font-bold text-gray-400">{tx('loading', 'Cargando…')}</p>}
-                    {err && !loading && <p className="text-sm font-bold text-rose-600" role="alert">{err}</p>}
-                    {addError && <p className="text-sm font-bold text-rose-600" role="alert">{addError}</p>}
+                    {loading && <p className="text-xs font-bold text-gray-500">{tx('loading', 'Cargando…')}</p>}
+                    {err && !loading && <p className="text-sm font-bold text-rose-700" role="alert">{err}</p>}
+                    {addError && <p className="text-sm font-bold text-rose-700" role="alert">{addError}</p>}
                     {res && !loading && res.length === 0 && <p className="text-sm font-bold text-gray-500">{tx('staff.add.none', 'Ningún usuario coincide con la búsqueda.')}</p>}
                     {res && res.length > 0 && (
                         <ul className="divide-y divide-gray-50 border border-gray-100 rounded-2xl overflow-hidden" data-user-results="">
                             {res.map((u) => {
                                 const already = memberIds.has(Number(u.id));
-                                const admin = isAdminUser(u);
+                                const block = candidateBlock(u);
                                 return (
-                                    <li key={u.id} className="px-4 py-3 flex flex-wrap items-center gap-3">
-                                        <span className="min-w-0 flex-1">
-                                            <span className="block text-sm font-black text-gray-900 break-words">{u.name || u.login}</span>
-                                            <span className="block text-xs font-semibold text-gray-500 break-all">{[u.login ? `@${u.login}` : '', u.email || ''].filter(Boolean).join(' · ')}</span>
-                                        </span>
-                                        {admin ? (
-                                            <span className="text-[10px] font-black uppercase tracking-widest text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-1 rounded-lg">{tx('staff.add.is.admin', 'Administrador: ya tiene acceso total')}</span>
-                                        ) : already ? (
-                                            <span className="text-[10px] font-black uppercase tracking-widest text-gray-500 bg-gray-100 px-2 py-1 rounded-lg">{tx('staff.add.already', 'Ya está en el equipo')}</span>
-                                        ) : (
-                                            <button type="button" className={btnPrimary} disabled={adding != null || !roleId} onClick={() => add(u)}
-                                                aria-label={tx('staff.add.button.aria', 'Añadir a {name} con el rol {role}', { name: u.name || u.login, role: roles.find((r: StaffRole) => String(r.id) === roleId)?.name || '' })}>
-                                                <i className="fa-solid fa-user-plus mr-1.5" aria-hidden="true"></i>{adding === u.id ? tx('saving', 'Guardando…') : tx('staff.add.button', 'Añadir')}
-                                            </button>
-                                        )}
-                                    </li>
+                                    <UserResultRow key={u.id} u={u} already={already} block={block}
+                                        roleName={roles.find((r: StaffRole) => String(r.id) === roleId)?.name || ''}
+                                        adding={adding} canAdd={!!roleId} onAdd={add} />
                                 );
                             })}
                         </ul>

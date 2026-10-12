@@ -1,11 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { postsApi, usersApi, commentsApi, systemApi, api, Comment, SystemStatus } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { sanitizeHTML } from "@/lib/sanitize";
+import { canOpenAdminPath } from "@/lib/adminAccess";
+import {
+    dashboardSections, STAT_GRID_COLS, HEALTH_GRID_CLASS, QUICK_ACTIONS_GRID_CLASS, DASHBOARD_COLUMNS_CLASS, dashboardMainSpanClass,
+    HEALTH_LABEL_ROW_CLASS, HEALTH_LABEL_CLASS, HEALTH_DOT_CLASS, type DashboardStatKey,
+} from "@/lib/dashboardStats";
 
 interface Stats {
     posts: number;
@@ -37,7 +41,7 @@ const InitialsAvatar = ({ name }: { name: string }) => {
     for (let i = 0; i < (name || "").length; i++) hash = (hash + name.charCodeAt(i)) % AVATAR_GRADIENTS.length;
     return (
         <div
-            className={`w-10 h-10 rounded-xl shadow-sm bg-gradient-to-br ${AVATAR_GRADIENTS[hash]} flex items-center justify-center text-white text-sm font-black select-none`}
+            className={`w-10 h-10 shrink-0 rounded-xl shadow-sm bg-gradient-to-br ${AVATAR_GRADIENTS[hash]} flex items-center justify-center text-white text-sm font-black select-none`}
             aria-hidden="true"
         >
             {initials}
@@ -46,18 +50,18 @@ const InitialsAvatar = ({ name }: { name: string }) => {
 };
 
 // Premium Stat Card Component
-const StatCard = ({ label, value, icon, gradient }: { label: string, value: number, icon: string, color: string, gradient: string }) => (
-    <div className="group relative overflow-hidden bg-white rounded-[40px] p-8 border-2 border-gray-50 shadow-xl shadow-gray-100/50 hover:shadow-2xl hover:shadow-blue-500/10 hover:-translate-y-2 transition-all duration-500">
+const StatCard = ({ statKey, label, value, icon, gradient }: { statKey: DashboardStatKey, label: string, value: number, icon: string, color: string, gradient: string }) => (
+    <div data-dashboard-stat={statKey} className="group relative overflow-hidden bg-white rounded-[40px] p-8 border-2 border-gray-50 shadow-xl shadow-gray-100/50 hover:shadow-2xl hover:shadow-blue-500/10 hover:-translate-y-2 transition-all duration-500">
         {/* Background Blob */}
         <div className={`absolute -right-10 -top-10 w-40 h-40 bg-gradient-to-br ${gradient} rounded-full blur-[60px] opacity-20 group-hover:opacity-40 transition-opacity duration-700`}></div>
 
         <div className="relative z-10">
-            <div className={`w-16 h-16 rounded-3xl bg-gradient-to-br ${gradient} flex items-center justify-center text-white text-2xl mb-6 shadow-lg shadow-gray-200 group-hover:scale-110 transition-transform duration-500`}>
+            <div className={`w-16 h-16 shrink-0 rounded-3xl bg-gradient-to-br ${gradient} flex items-center justify-center text-white text-2xl mb-6 shadow-lg shadow-gray-200 group-hover:scale-110 transition-transform duration-500`}>
                 <i className={`fa-solid ${icon}`}></i>
             </div>
             <div>
                 <h3 className="text-4xl font-black text-gray-900 italic tracking-tighter mb-1">{value}</h3>
-                <p className="text-[10px] uppercase font-black tracking-widest text-gray-400 group-hover:text-gray-600 transition-colors">{label}</p>
+                <p className="text-[10px] uppercase font-black tracking-widest text-gray-500 group-hover:text-gray-600 transition-colors break-words">{label}</p>
             </div>
         </div>
     </div>
@@ -66,12 +70,12 @@ const StatCard = ({ label, value, icon, gradient }: { label: string, value: numb
 // Premium Quick Action Component
 const QuickAction = ({ href, icon, label, subLabel, color }: { href: string, icon: string, label: string, subLabel: string, color: string }) => (
     <a href={href} className="group relative flex items-center gap-6 p-6 bg-white rounded-[40px] border-2 border-gray-50 hover:border-blue-200 shadow-xl shadow-gray-100/50 hover:shadow-2xl hover:shadow-blue-500/10 hover:-translate-y-1 transition-all duration-500">
-        <div className={`w-12 h-12 rounded-2xl ${color} flex items-center justify-center text-white text-lg shadow-md group-hover:scale-110 transition-transform`}>
+        <div className={`w-12 h-12 shrink-0 rounded-2xl ${color} flex items-center justify-center text-white text-lg shadow-md group-hover:scale-110 transition-transform`}>
             <i className={`fa-solid ${icon}`}></i>
         </div>
-        <div>
-            <h4 className="font-bold text-gray-900 text-sm group-hover:text-blue-600 transition-colors">{label}</h4>
-            <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mt-0.5">{subLabel}</p>
+        <div className="min-w-0" data-quick-action-text="">
+            <h4 className="font-bold text-gray-900 text-sm group-hover:text-blue-600 transition-colors break-words">{label}</h4>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mt-0.5 break-words">{subLabel}</p>
         </div>
         <div className="absolute right-6 opacity-0 group-hover:opacity-100 transition-opacity -translate-x-4 group-hover:translate-x-0 duration-300 pointer-events-none">
             <i className="fa-solid fa-arrow-right text-gray-300"></i>
@@ -90,29 +94,40 @@ const HealthIndicator = ({ label, status, detail, icon }: { label: string, statu
 
     return (
         <div className="flex items-center gap-4 p-4 rounded-3xl bg-gray-50 border border-gray-100 group hover:bg-white hover:shadow-xl transition-all duration-300">
-            <div className={`w-10 h-10 rounded-2xl ${C.bg} ${C.text} flex items-center justify-center text-sm shadow-sm group-hover:scale-110 transition-transform`}>
+            <div className={`w-10 h-10 shrink-0 rounded-2xl ${C.bg} ${C.text} flex items-center justify-center text-sm shadow-sm group-hover:scale-110 transition-transform`}>
                 <i className={`fa-solid ${icon}`}></i>
             </div>
             <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">{label}</p>
-                    <span className={`flex h-2 w-2 rounded-full ${C.dot} animate-pulse`}></span>
+                {/* The label wraps between words only and the dot keeps its gap (lib/dashboardStats.ts). */}
+                <div className={HEALTH_LABEL_ROW_CLASS}>
+                    <p className={HEALTH_LABEL_CLASS} data-health-label="">{label}</p>
+                    <span className={`${HEALTH_DOT_CLASS} ${C.dot} animate-pulse`} data-health-dot=""></span>
                 </div>
-                <p className="text-xs font-bold text-gray-700 truncate">{detail}</p>
+                {/* Wraps between words instead of being cut («Conectado (…», «Certificados …»); `break-words`
+                    only ever splits a token longer than the whole line, such as a path in an error message. */}
+                <p className="text-xs font-bold text-gray-700 break-words" data-health-detail="">{detail}</p>
             </div>
         </div>
     );
 };
 
 export default function DashboardPage() {
-    const { user, can, isLoading } = useAuth();
-    const router = useRouter();
+    const { user, can } = useAuth();
     const { t } = useI18n();
 
     // Access gate: the dashboard is for content managers. A subscriber (no edit_posts) must never see
-    // dashboard data — not even by typing the URL. Redirect them to their own account page. The layout
-    // only checks access_admin_panel (which subscribers have), so this per-page gate is required.
+    // dashboard data — not even by typing the URL. The admin layout's route guard (lib/adminAccess.ts)
+    // never renders this page for them and sends them to the first page their sidebar offers (their
+    // account page, or a plugin screen their role opens); this flag only keeps the data loads below
+    // from ever firing for such a user.
     const allowed = can('edit_posts');
+    // The dashboard's shortcuts lead only to screens this user may open (lib/adminAccess.ts): a link the
+    // route guard refuses would just flash the loading screen and come back. Core paths only, so the
+    // plugin menu is not needed to decide.
+    const mayOpen = (href: string) => canOpenAdminPath(href, user, []);
+    // Only the numbers and panels this viewer can actually read (lib/dashboardStats.ts): an editor
+    // cannot list users, so a «0 USUARIOS» card was a number made up by the page, not by the site.
+    const sections = dashboardSections(user, can);
 
     // Core Dashboard State
     const [stats, setStats] = useState<Stats>({ posts: 0, pages: 0, comments: 0, users: 0 });
@@ -125,18 +140,15 @@ export default function DashboardPage() {
     const [chartPeriod, setChartPeriod] = useState<'weekly' | 'monthly'>('weekly');
 
     useEffect(() => {
-        if (!isLoading && !allowed) router.replace('/admin/account');
-    }, [isLoading, allowed, router]);
-
-    useEffect(() => {
         if (allowed) loadData();
     }, [allowed]);
 
     useEffect(() => {
-        if (allowed) loadAnalytics();
-    }, [chartPeriod, allowed]);
+        if (allowed && sections.activityChart) loadAnalytics();
+    }, [chartPeriod, allowed, sections.activityChart]);
 
     const loadAnalytics = async () => {
+        if (!sections.activityChart) return; // administrators only (GET /analytics/stats answers 403 otherwise)
         try {
             const data = await api(`/analytics/stats?period=${chartPeriod}`);
             setChartData(data as ChartData[]);
@@ -149,9 +161,10 @@ export default function DashboardPage() {
         try {
             loadAnalytics();
 
-            const fetchUsers = can('list_users') ? usersApi.list() : Promise.resolve([]);
-            const fetchComments = can('moderate_comments') ? commentsApi.list({ per_page: 5 }) : Promise.resolve([]);
-            const fetchSystem = can('manage_options') ? systemApi.getStatus() : Promise.resolve(null);
+            const fetchUsers = sections.stats.includes('users') ? usersApi.list() : Promise.resolve([]);
+            const fetchComments = sections.recentComments ? commentsApi.list({ per_page: 5 }) : Promise.resolve([]);
+            // Administrators only, like its endpoint; and a failure here must not blank every count above.
+            const fetchSystem = sections.systemHealth ? systemApi.getStatus().catch(() => null) : Promise.resolve(null);
 
             // ... (keep rest of function)
 
@@ -182,7 +195,7 @@ export default function DashboardPage() {
     if (!allowed) return null;
 
     return (
-        <div className="p-8 md:p-12 pb-20 space-y-12 animate-in fade-in duration-700 bg-gray-50 h-full w-full overflow-auto">
+        <div className="@container p-8 md:p-12 pb-20 space-y-12 animate-in fade-in duration-700 bg-gray-50 h-full w-full overflow-auto" data-dashboard-root="">
             {/* Header */}
             <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
                 <div>
@@ -190,8 +203,8 @@ export default function DashboardPage() {
                         {t('dashboard.overview')}
                     </h1>
                     <div className="flex items-center gap-2">
-                        <div className="h-1 w-10 bg-blue-600 rounded-full"></div>
-                        <p className="text-xs font-bold uppercase tracking-widest text-gray-400">
+                        <div className="h-1 w-10 shrink-0 bg-blue-600 rounded-full"></div>
+                        <p className="text-xs font-bold uppercase tracking-widest text-gray-500" data-dashboard-welcome="">
                             {t('dashboard.welcome.back')}, <span className="text-gray-600">{user?.displayName || user?.username || 'User'}</span>
                         </p>
                     </div>
@@ -199,65 +212,73 @@ export default function DashboardPage() {
 
                 {/* Health Overview (Mini) */}
                 {systemStatus && (
-                    <div className="hidden lg:flex items-center gap-4 px-6 py-3 bg-white rounded-full shadow-lg shadow-gray-200/50 border border-gray-100">
+                    <div className="hidden lg:flex shrink-0 items-center gap-4 px-6 py-3 bg-white rounded-full shadow-lg shadow-gray-200/50 border border-gray-100" data-dashboard-mini-pill="">
                         <div className="flex items-center gap-2">
-                            <span className={`w-2 h-2 rounded-full ${systemStatus.database.status === 'OK' ? 'bg-emerald-500' : 'bg-rose-500'} animate-pulse`}></span>
-                            <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">DB: {systemStatus.database.driver}</span>
+                            <span className={`w-2 h-2 shrink-0 rounded-full ${systemStatus.database.status === 'OK' ? 'bg-emerald-500' : 'bg-rose-500'} animate-pulse`}></span>
+                            <span className="text-[10px] font-black uppercase tracking-widest text-gray-500 whitespace-nowrap" data-dashboard-mini-health="">DB: {systemStatus.database.driver}</span>
                         </div>
                         <div className="w-px h-4 bg-gray-200"></div>
                         <div className="flex items-center gap-2">
-                            <span className={`w-2 h-2 rounded-full ${systemStatus.mtls.status === 'OK' ? 'bg-emerald-500' : 'bg-rose-500'} animate-pulse`}></span>
-                            <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">mTLS: {systemStatus.mtls.status}</span>
+                            <span className={`w-2 h-2 shrink-0 rounded-full ${systemStatus.mtls.status === 'OK' ? 'bg-emerald-500' : 'bg-rose-500'} animate-pulse`}></span>
+                            <span className="text-[10px] font-black uppercase tracking-widest text-gray-500 whitespace-nowrap" data-dashboard-mini-health="">mTLS: {systemStatus.mtls.status}</span>
                         </div>
                     </div>
                 )}
             </div>
 
-            {/* Stats Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                <StatCard
+            {/* Stats Grid — only the counts this viewer can read; columns by the grid's own width (@container) */}
+            <div className="@container">
+            <div className={`grid ${STAT_GRID_COLS[sections.stats.length] || STAT_GRID_COLS[4]} gap-6`} data-dashboard-stats="">
+                {sections.stats.includes('posts') && <StatCard
+                    statKey="posts"
                     label={t('nav.posts')}
                     value={stats.posts}
                     icon="fa-pen-to-square"
                     color="bg-blue-600"
                     gradient="from-blue-500 to-blue-700"
-                />
-                <StatCard
+                />}
+                {sections.stats.includes('pages') && <StatCard
+                    statKey="pages"
                     label={t('nav.pages')}
                     value={stats.pages}
                     icon="fa-file-lines"
                     color="bg-indigo-600"
                     gradient="from-indigo-500 to-purple-700"
-                />
-                <StatCard
+                />}
+                {sections.stats.includes('comments') && <StatCard
+                    statKey="comments"
                     label={t('nav.comments')}
                     value={stats.comments}
                     icon="fa-comments"
                     color="bg-amber-500"
                     gradient="from-amber-400 to-orange-600"
-                />
-                <StatCard
+                />}
+                {sections.stats.includes('users') && <StatCard
+                    statKey="users"
                     label={t('nav.users')}
                     value={stats.users}
                     icon="fa-users"
                     color="bg-emerald-600"
                     gradient="from-emerald-400 to-teal-600"
-                />
+                />}
+            </div>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
-                {/* Main Content Area */}
-                <div className="lg:col-span-2 space-y-8">
+            {/* Two columns by the page's own width (the root is the @container; lib/dashboardStats.ts) */}
+            <div className={DASHBOARD_COLUMNS_CLASS} data-dashboard-columns="">
+                {/* Main Content Area — the full width when there is no comments panel beside it */}
+                <div className={`${dashboardMainSpanClass(sections.recentComments)} space-y-8`} data-dashboard-main="">
                     {/* System Health Detailed */}
                     {systemStatus && (
                         <div>
                             <div className="flex items-center gap-3 mb-6">
-                                <span className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-600 flex items-center justify-center">
+                                <span className="w-8 h-8 shrink-0 rounded-xl bg-emerald-100 text-emerald-600 flex items-center justify-center">
                                     <i className="fa-solid fa-heart-pulse text-sm"></i>
                                 </span>
                                 <h2 className="text-xl font-black text-gray-900 italic tracking-tight">{t('dashboard.system.health')}</h2>
                             </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                            <div className="@container">
+                            <div className={HEALTH_GRID_CLASS} data-dashboard-health="">
                                 <HealthIndicator
                                     label={t('dashboard.health.database')}
                                     status={systemStatus.database.status}
@@ -277,67 +298,71 @@ export default function DashboardPage() {
                                     icon="fa-folder-tree"
                                 />
                             </div>
+                            </div>
                         </div>
                     )}
 
                     {/* Quick Actions */}
                     <div>
                         <div className="flex items-center gap-3 mb-6">
-                            <span className="w-8 h-8 rounded-xl bg-orange-100 text-orange-600 flex items-center justify-center">
+                            <span className="w-8 h-8 shrink-0 rounded-xl bg-orange-100 text-orange-600 flex items-center justify-center">
                                 <i className="fa-solid fa-bolt text-sm"></i>
                             </span>
                             <h2 className="text-xl font-black text-gray-900 italic tracking-tight">{t('dashboard.quick.actions')}</h2>
                         </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <QuickAction
+                        <div className="@container">
+                        <div className={QUICK_ACTIONS_GRID_CLASS} data-dashboard-quick-actions="">
+                            {mayOpen("/admin/posts/new") && <QuickAction
                                 href="/admin/posts/new"
                                 icon="fa-plus"
                                 label={t('dashboard.new.post')}
                                 subLabel={t('dashboard.new.post.sub')}
                                 color="bg-blue-500"
-                            />
-                            <QuickAction
+                            />}
+                            {mayOpen("/admin/pages/new") && <QuickAction
                                 href="/admin/pages/new"
                                 icon="fa-layer-group"
                                 label={t('dashboard.new.page')}
                                 subLabel={t('dashboard.new.page.sub')}
                                 color="bg-indigo-500"
-                            />
-                            <QuickAction
+                            />}
+                            {mayOpen("/admin/media") && <QuickAction
                                 href="/admin/media"
                                 icon="fa-cloud-arrow-up"
                                 label={t('dashboard.add.media')}
                                 subLabel={t('dashboard.add.media.sub')}
                                 color="bg-purple-500"
-                            />
-                            <QuickAction
+                            />}
+                            {mayOpen("/admin/users/new") && <QuickAction
                                 href="/admin/users/new"
                                 icon="fa-user-plus"
                                 label={t('dashboard.add.user')}
                                 subLabel={t('dashboard.add.user.sub')}
                                 color="bg-emerald-500"
-                            />
+                            />}
+                        </div>
                         </div>
                     </div>
 
-                    {/* Chart/Graph */}
-                    <div className="bg-white rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 p-10 relative overflow-hidden group hover:shadow-2xl transition-all duration-500">
+                    {/* Chart/Graph — administrators only (so is its endpoint) */}
+                    {sections.activityChart && (
+                    <div data-dashboard-activity-chart="" className="bg-white rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 p-10 relative overflow-hidden group hover:shadow-2xl transition-all duration-500">
                         <div className="absolute top-0 right-0 w-64 h-64 bg-gray-50 rounded-full blur-[80px] opacity-50 pointer-events-none"></div>
                         <div className="flex flex-wrap items-center justify-between gap-y-3 mb-8 relative z-10">
                             <div>
                                 <h2 className="text-2xl font-black text-gray-900 italic tracking-tighter">{t('dashboard.activity.overview')}</h2>
-                                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mt-1">{t('dashboard.traffic.engagement')}</p>
+                                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500 mt-1">{t('dashboard.traffic.engagement')}</p>
                             </div>
                             <div className="flex gap-2">
                                 <button
                                     onClick={() => setChartPeriod('weekly')}
-                                    className={`px-3 py-1 rounded-lg text-[10px] uppercase font-bold tracking-wider transition-colors ${chartPeriod === 'weekly' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
+                                    className={`px-3 py-1 rounded-lg text-[10px] uppercase font-bold tracking-wider transition-colors ${chartPeriod === 'weekly' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
                                 >
                                     {t('dashboard.weekly')}
                                 </button>
                                 <button
                                     onClick={() => setChartPeriod('monthly')}
-                                    className={`px-3 py-1 rounded-lg text-[10px] uppercase font-bold tracking-wider transition-colors ${chartPeriod === 'monthly' ? 'bg-gray-900 text-white' : 'bg-white border border-gray-200 text-gray-400 hover:bg-gray-50'}`}
+                                    className={`px-3 py-1 rounded-lg text-[10px] uppercase font-bold tracking-wider transition-colors ${chartPeriod === 'monthly' ? 'bg-gray-900 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'}`}
                                 >
                                     {t('dashboard.monthly')}
                                 </button>
@@ -398,17 +423,19 @@ export default function DashboardPage() {
                             </ResponsiveContainer>
                         </div>
                     </div>
+                    )}
                 </div>
 
-                {/* Sidebar: Recent Comments */}
-                <div className="bg-white rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 p-8 relative overflow-hidden">
+                {/* Sidebar: Recent Comments — only for whoever may moderate them (the only viewers they load for) */}
+                {sections.recentComments && (
+                <div data-dashboard-recent-comments="" className="bg-white rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 p-8 relative overflow-hidden">
                     <div className="flex items-center gap-3 mb-8">
-                        <span className="w-10 h-10 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center shadow-lg shadow-amber-100">
+                        <span className="w-10 h-10 shrink-0 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center shadow-lg shadow-amber-100" data-recent-comments-icon="">
                             <i className="fa-solid fa-comments"></i>
                         </span>
-                        <div>
+                        <div className="min-w-0">
                             <h2 className="text-xl font-black text-gray-900 italic tracking-tight">{t('dashboard.recent.comments')}</h2>
-                            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mt-0.5">{t('dashboard.community.engagement')}</p>
+                            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500 mt-0.5">{t('dashboard.community.engagement')}</p>
                         </div>
                     </div>
 
@@ -417,9 +444,10 @@ export default function DashboardPage() {
                             <div className="inline-block w-8 h-8 border-4 border-amber-500 border-t-transparent rounded-full animate-spin"></div>
                         </div>
                     ) : recentComments.length === 0 ? (
-                        <div className="text-center py-20 opacity-50">
-                            <i className="fa-solid fa-comment-slash text-4xl mb-4 text-gray-300"></i>
-                            <p className="text-xs font-bold uppercase tracking-widest text-gray-400">{t('dashboard.no.comments.yet')}</p>
+                        // No opacity-50 over gray-400 text any more: «AÚN NO HAY COMENTARIOS» was 1.56:1.
+                        <div className="text-center py-20" data-dashboard-no-comments="">
+                            <i className="fa-solid fa-comment-slash text-4xl mb-4 text-gray-300" aria-hidden="true"></i>
+                            <p className="text-xs font-bold uppercase tracking-widest text-gray-500">{t('dashboard.no.comments.yet')}</p>
                         </div>
                     ) : (
                         <div className="space-y-6">
@@ -442,7 +470,7 @@ export default function DashboardPage() {
                                                 <p className="text-sm font-black text-gray-900 truncate">
                                                     {comment.author}
                                                 </p>
-                                                <span className="text-[9px] font-bold uppercase tracking-wide text-gray-400 bg-white px-2 py-0.5 rounded-full shadow-sm border border-gray-100">
+                                                <span className="shrink-0 text-[9px] font-bold uppercase tracking-wide text-gray-500 bg-white px-2 py-0.5 rounded-full shadow-sm border border-gray-100">
                                                     {new Date(comment.date).toLocaleDateString()}
                                                 </span>
                                             </div>
@@ -452,19 +480,22 @@ export default function DashboardPage() {
                                             />
                                         </div>
                                     </div>
-                                    <a href="/admin/comments" className="absolute inset-0 z-10" aria-label="View comment"></a>
+                                    {mayOpen("/admin/comments") && <a href="/admin/comments" className="absolute inset-0 z-10" aria-label="View comment"></a>}
                                 </div>
                             ))}
                         </div>
                     )}
 
+                    {mayOpen("/admin/comments") && (
                     <a
                         href="/admin/comments"
                         className="mt-8 flex items-center justify-center gap-2 w-full py-4 rounded-2xl bg-gray-50 text-gray-600 font-black text-[10px] uppercase tracking-widest hover:bg-gray-900 hover:text-white transition-all duration-300 group"
                     >
                         {t('dashboard.view.all')} <i className="fa-solid fa-arrow-right-long group-hover:translate-x-1 transition-transform"></i>
                     </a>
+                    )}
                 </div>
+                )}
             </div>
         </div>
     );

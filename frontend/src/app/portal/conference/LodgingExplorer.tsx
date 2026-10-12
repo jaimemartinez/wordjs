@@ -35,6 +35,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
     attendeeName,
     dragDecision,
+    formHasGender,
     parseDragId,
     roomLabel,
     roomsWithSpace,
@@ -204,10 +205,19 @@ const focusPanel = (aside: HTMLElement | null, search: HTMLElement | null, toggl
 // Small pieces
 // ---------------------------------------------------------------------------------------------------
 
+/**
+ * Does the conference's form collect gender (conference-manager 2.16.0: every field is optional)? Without a
+ * «Género» field the explorer shows no gender at all — no dots, no «Género sin indicar» on every card, no
+ * «Ocupantes» filter that could only match nothing.
+ */
+const GenderShown = React.createContext(true);
+
 /** A pink / blue / grey dot; `decorative` when the gender is also written next to it (no double announcement). */
 function GenderDot({ gender, className, decorative }: { gender: unknown; className?: string; decorative?: boolean }) {
+    const shown = React.useContext(GenderShown);
     const k = genderKey(gender);
     const label = genderLabel(gender) || 'Género sin indicar';
+    if (!shown) return null;
     return (
         <span className={cx("inline-flex shrink-0 items-center", className)} title={decorative ? undefined : label} aria-hidden={decorative ? true : undefined}>
             <span className={cx("w-2.5 h-2.5 rounded-full", k === 'F' ? 'bg-pink-400' : k === 'M' ? 'bg-blue-400' : 'bg-gray-300')} aria-hidden="true"></span>
@@ -501,6 +511,7 @@ function HotelFilters({ filters, counts, total, shown, onChange }: {
 }) {
     const searchId = React.useId();
     const genderId = React.useId();
+    const genderShown = React.useContext(GenderShown);
     const active = filtersActive(filters);
     return (
         <Card className="p-4 sm:p-5 space-y-4" data-testid="lodging-filters">
@@ -520,12 +531,14 @@ function HotelFilters({ filters, counts, total, shown, onChange }: {
                         />
                     </div>
                 </div>
-                <div className="space-y-1.5">
+                {genderShown && (
+                <div className="space-y-1.5" data-testid="lodging-gender-filter">
                     <label htmlFor={genderId} className={labelCls}>Ocupantes</label>
                     <select id={genderId} className={inputCls} value={filters.gender} onChange={(e) => onChange({ gender: e.target.value as GenderFilter })}>
                         {GENDER_FILTERS.map((g) => <option key={g} value={g}>{GENDER_FILTER_LABELS[g]}</option>)}
                     </select>
                 </div>
+                )}
             </div>
             <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Filtrar por ocupación">
                 {OCCUPANCY_FILTERS.map((o) => (
@@ -574,6 +587,7 @@ function OccupantCard({ attendee, fields, editable, busy, canDrag, dragging, chi
     onRemove: (trigger: HTMLElement) => void;
 }) {
     const name = attendeeName(attendee);
+    const genderShown = React.useContext(GenderShown);
     const k = genderKey(attendee.gender);
     const gender = genderLabel(attendee.gender);
     const entries = fieldEntries(attendee, fields);
@@ -592,9 +606,11 @@ function OccupantCard({ attendee, fields, editable, busy, canDrag, dragging, chi
                 <div className="min-w-0 flex-1">
                     <h4 className={cx("text-lg leading-tight break-words", headingCls)}>{name}</h4>
                     <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-gray-50 border border-gray-100 text-xs font-bold text-gray-600">
+                        {genderShown && (
+                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-gray-50 border border-gray-100 text-xs font-bold text-gray-600" data-testid="lodging-occupant-gender">
                             <GenderDot gender={attendee.gender} decorative />{gender || 'Género sin indicar'}
                         </span>
+                        )}
                         {attendee.family_group ? (
                             <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-50 border border-amber-100 text-xs font-bold text-amber-700 max-w-full">
                                 <i className="fa-solid fa-people-roof text-[10px]" aria-hidden="true"></i>
@@ -1086,6 +1102,9 @@ export default function LodgingExplorer({
     rooms, unassigned, fields, summary, editable, readOnlyReason, busy, onAssign, onConfirm, notify, storageScope, initialNav,
 }: LodgingExplorerProps) {
     const storageKey = storageKeyOf(storageScope);
+    const genderShown = useMemo(
+        () => formHasGender(fields, [...unassigned, ...rooms.flatMap((r) => (Array.isArray(r.occupants) ? r.occupants : []))]),
+        [fields, rooms, unassigned]);
     const hotels = useMemo(() => groupRoomsByHotel(rooms), [rooms]);
     const owner = useMemo(() => navOwner(rooms), [rooms]);
     // The first position is checked against the payload before anything renders: a stale one never
@@ -1587,6 +1606,7 @@ export default function LodgingExplorer({
     }
 
     return (
+        <GenderShown.Provider value={genderShown}>
         <div ref={rootRef} className="space-y-5" data-testid="lodging-explorer" data-level={level}>
             <Card className={cx(stickyBar, "px-3 py-2 sm:px-5 sm:py-3 flex flex-wrap items-center gap-2 sm:gap-3")} data-testid="lodging-bar">
                 {level > 1 && (
@@ -1610,5 +1630,6 @@ export default function LodgingExplorer({
             </div>
             {pickerNode}
         </div>
+        </GenderShown.Provider>
     );
 }

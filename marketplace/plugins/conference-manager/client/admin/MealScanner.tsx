@@ -26,12 +26,27 @@
  * image; a rejected video.play() (iOS Low Power Mode) offers «Toca para activar la cámara»; the audio is
  * unlocked inside the tap that opens the scanner; the band under the aiming frame is decoded at full
  * resolution from a 1920×1080 stream.
+ *
+ * 2.16.0 («apenas lee un código enseguida sale entregado»): with «Confirmar antes de entregar» (default ON,
+ * per device, shared with «Entrega») a read registration code only ASKS the server (POST /meals/check,
+ * read-only) and opens `ConfirmCard` over the camera — the meal, the person's data the meals manager chose
+ * («Qué se muestra al entregar») and the status — with «Entregar» / «Cancelar» («Entregar sin derecho
+ * (autorizar)» / «Cancelar» without entitlement, «Cerrar» for the rest). Decoding pauses while it is open;
+ * «Cancelar» records nothing and the badge must leave the view before it opens a card again (shown again,
+ * it says so). The state machine is lib/mealConfirm.ts (createConfirmFlow). With the toggle OFF, a scan
+ * delivers at once (2.15.x). On a short phone the card takes the whole camera area (the counters fold away)
+ * and the person's name sits above the part that scrolls; its buttons — and those of the «Entregado» card
+ * that follows — ignore taps for a moment after they appear, so an impatient second tap cannot «Deshacer».
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "../../../../../frontend/src/contexts/I18nContext";
 import { conferenceApi } from "../lib/conference";
 import { createReadRouter, createScanMeter, normalizeCode, scanLoopDelay, sortServices, stampTime, verdictTone, groupByDay } from "../lib/meals";
+import {
+    CONFIRM_PREF_EVENT, CONFIRM_PREF_KEY, TAP_ARM_MS, VERDICT_TAP_ARM_MS, createConfirmFlow, displayLabel, displayValue, holdAfterClose, isDecision,
+    readConfirmPref, splitPersonFields, tapArmed, writeConfirmPref,
+} from "../lib/mealConfirm";
 import { aimCrop, decodeVideoRegion, formatLabel } from "../lib/barcodeScan";
 import { lockBodyScroll } from "../lib/overlay";
 import { fillVars } from "../lib/lodgingView";
@@ -116,6 +131,60 @@ export function useMealDelivery() {
     }, []);
 }
 
+// ── Confirmation (2.16.0) ────────────────────────────────────────────────────────────────────────────
+/** POST /meals/check → the card's result; like useMealDelivery, every failure becomes a result (never throws). */
+export async function checkMealOutcome(body: { service_id: number; code?: string; inscription_id?: number }) {
+    try {
+        const v = await conferenceApi.checkMeal(body);
+        return { result: v?.result || 'error', verdict: v };
+    } catch (e: any) {
+        if (e?.status === 404) return { result: 'no_service', message: e?.message };
+        if (isOffline(e)) return { result: 'offline', message: e?.message };
+        return { result: 'error', message: e?.message };
+    }
+}
+
+/**
+ * The confirmation state machine (lib/mealConfirm.ts) bound to the API and to React state. The handlers are
+ * read through a ref, so the flow is created once per screen. Unmounting RESETS it (an answer that lands
+ * after the screen is gone is dropped) instead of disposing it: StrictMode unmounts and remounts effects once
+ * in development while the memoised flow survives, and a disposed flow would ignore every scan after that.
+ */
+export function useConfirmFlow({ queue = false, onCheck, onResult, onClose }: any = {}) {
+    const deliver = useMealDelivery();
+    const handlers = useRef({ onCheck, onResult, onClose, deliver });
+    handlers.current = { onCheck, onResult, onClose, deliver };
+    const [state, setState] = useState<any>({ card: null, waiting: 0, checking: false, delivering: false, held: false, heldAt: null, settling: false });
+    const flow = useMemo(() => createConfirmFlow({
+        queue,
+        check: (serviceId, body) => checkMealOutcome({ service_id: serviceId, ...body }),
+        deliver: (serviceId, body) => handlers.current.deliver({ service_id: serviceId, ...body }),
+        onChange: (s) => setState(s),
+        onCheck: (card) => handlers.current.onCheck?.(card),
+        onResult: (outcome, card) => handlers.current.onResult?.(outcome, card),
+        onClose: (card, why) => handlers.current.onClose?.(card, why),
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }), []);
+    useEffect(() => () => flow.reset(), [flow]);
+    return [flow, state] as const;
+}
+
+/** «Confirmar antes de entregar»: per device (localStorage, guarded), default ON, shared by every screen. */
+export function useConfirmPref(): [boolean, (on: boolean) => void] {
+    const [on, setOn] = useState<boolean>(() => readConfirmPref());
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        // The event carries the value: with storage blocked a re-read would always say ON.
+        const onPref = (e: any) => setOn(typeof e?.detail === 'boolean' ? e.detail : readConfirmPref());
+        const onStorage = (e: any) => { if (!e || e.key === CONFIRM_PREF_KEY) setOn(readConfirmPref()); };
+        window.addEventListener(CONFIRM_PREF_EVENT, onPref);
+        window.addEventListener('storage', onStorage);
+        return () => { window.removeEventListener(CONFIRM_PREF_EVENT, onPref); window.removeEventListener('storage', onStorage); };
+    }, []);
+    const set = useCallback((v: boolean) => { setOn(!!v); writeConfirmPref(!!v); }, []);
+    return [on, set];
+}
+
 // ── Feedback: beep + vibration ───────────────────────────────────────────────────────────────────────
 const audioCtor = () => (typeof window === 'undefined' ? null : ((window as any).AudioContext || (window as any).webkitAudioContext || null));
 /** Resume a context and play one silent sample: inside a user gesture, that unlocks Web Audio on iOS. */
@@ -175,6 +244,11 @@ export function createFeedback({ adopt = false }: { adopt?: boolean } = {}) {
         bad: () => { tone(330, 0, 0.14); tone(330, 0.2, 0.14); vibrate([80, 60, 80]); },
         /** Something was read that is not a registration code: one short neutral blip. */
         info: () => { tone(880, 0, 0.07); vibrate(25); },
+        /**
+         * 2.16.0: a person is ready to be confirmed («Puede recibir esta comida»): two rising tones and a
+         * double pulse — by ear, never the blip of a barcode that is not a registration code.
+         */
+        attention: () => { tone(660, 0, 0.08); tone(990, 0.1, 0.1); vibrate([30, 40, 30]); },
         close: () => { closed = true; try { ctx?.close(); } catch { /* ignore */ } ctx = null; },
     };
 }
@@ -191,12 +265,20 @@ const keepFocus = (e: React.MouseEvent) => e.preventDefault();
 
 /**
  * `onForce(outcome)` is called only after the inline confirmation; `onArmedChange(true|false)` lets the
- * phone scanner pause decoding while someone is deciding.
+ * phone scanner pause decoding while someone is deciding. `armMs` (2.16.0, when it follows a pressed
+ * «Entregar» of the confirmation card): taps on it — «Deshacer», «Entregar de todas formas», dismiss — count
+ * only once it has been on screen that long; «Deshacer» sits where «Entregar» was, and an impatient second
+ * tap must not undo the delivery it just recorded. Without `armMs` (the immediate 2.15 delivery) nothing
+ * changes.
  */
-export function VerdictCard({ outcome, service, onForce, onUndo, onDismiss, onArmedChange, busy, large = false, language }: any) {
+export function VerdictCard({ outcome, service, onForce, onUndo, onDismiss, onArmedChange, busy, large = false, language, armMs = 0 }: any) {
     const tx = useTx();
     const [armed, setArmed] = useState(false);
     const seq = outcome?.seq;
+    // When THIS outcome appeared (a new seq = a new card).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const shownAt = useMemo(() => Date.now(), [seq]);
+    const tapOk = () => tapArmed(shownAt, Date.now(), armMs);
     useEffect(() => { setArmed(false); }, [seq]);
     useEffect(() => { onArmedChange?.(armed); }, [armed]);
     useEffect(() => () => onArmedChange?.(false), []);
@@ -221,13 +303,18 @@ export function VerdictCard({ outcome, service, onForce, onUndo, onDismiss, onAr
     const canForce = r === 'not_entitled' && onForce && p;
     const canUndo = r === 'delivered' && onUndo && v.delivery_id;
     return (
-        <div className={`rounded-3xl border-2 shadow-xl ${TONE_CLS[tone]} ${large ? 'p-6' : 'p-5'} animate-in fade-in zoom-in-95 duration-150`} role="status" aria-live="assertive" data-verdict={r} onClick={() => { if (!armed) onDismiss?.(); }}>
+        <div className={`rounded-3xl border-2 shadow-xl ${TONE_CLS[tone]} ${large ? 'p-6' : 'p-5'} animate-in fade-in zoom-in-95 duration-150`} role="status" aria-live="assertive" data-verdict={r} onClick={() => { if (!armed && tapOk()) onDismiss?.(); }}>
             <div className="flex items-start gap-4">
                 <i className={`fa-solid ${icon} ${large ? 'text-5xl' : 'text-4xl'} shrink-0 mt-0.5`} aria-hidden="true"></i>
                 <div className="min-w-0 flex-1">
                     <div className={`${large ? 'text-3xl' : 'text-2xl'} font-black tracking-tight leading-tight break-words`}>{title}</div>
-                    {p && <div className={`${large ? 'text-2xl' : 'text-xl'} font-bold mt-1 break-words`}>{p.name}</div>}
-                    {p && <div className="text-sm font-semibold opacity-90 mt-0.5">{[loc, p.family_group ? tx('meals.family', 'Grupo familiar: {name}', { name: p.family_group }) : '', p.reg_code || ''].filter(Boolean).join(' · ')}</div>}
+                    {/* 2.16.0: the conference's configured entries (the same the confirmation card showed). */}
+                    {p && Array.isArray(p.fields) && p.fields.length > 0
+                        ? <div className="mt-1"><PersonFields fields={p.fields} large={large} onColour={tone !== 'warn'} /></div>
+                        : p && <>
+                            <div className={`${large ? 'text-2xl' : 'text-xl'} font-bold mt-1 break-words`}>{p.name}</div>
+                            <div className="text-sm font-semibold opacity-90 mt-0.5">{[loc, p.family_group ? tx('meals.family', 'Grupo familiar: {name}', { name: p.family_group }) : '', p.reg_code || ''].filter(Boolean).join(' · ')}</div>
+                        </>}
                     {r === 'already' && v.delivered_at && (
                         <div className="text-sm font-bold mt-1">{v.delivered_by
                             ? tx('meals.verdict.already.at.by', 'Recibió a las {time} · registró {who}', { time: stampTime(v.delivered_at), who: v.delivered_by })
@@ -253,14 +340,14 @@ export function VerdictCard({ outcome, service, onForce, onUndo, onDismiss, onAr
                     {((canForce && !armed) || canUndo) ? (
                         <div className="flex flex-wrap gap-2 mt-3">
                             {canForce && !armed && (
-                                <button type="button" disabled={busy} onMouseDown={keepFocus} onClick={(e) => { e.stopPropagation(); setArmed(true); }}
+                                <button type="button" disabled={busy} onMouseDown={keepFocus} onClick={(e) => { e.stopPropagation(); if (tapOk()) setArmed(true); }}
                                     className="px-4 py-3 rounded-2xl bg-amber-950 text-amber-50 font-black text-xs uppercase tracking-widest disabled:opacity-50" data-force="">
                                     <i className="fa-solid fa-hand mr-1.5" aria-hidden="true"></i>{tx('meals.force', 'Entregar de todas formas')}
                                 </button>
                             )}
                             {canUndo && (
-                                <button type="button" disabled={busy} onMouseDown={keepFocus} onClick={(e) => { e.stopPropagation(); onUndo(v.delivery_id, outcome); }}
-                                    className="px-4 py-2.5 rounded-2xl bg-white/20 hover:bg-white/30 font-black text-[11px] uppercase tracking-widest disabled:opacity-50">
+                                <button type="button" disabled={busy} onMouseDown={keepFocus} onClick={(e) => { e.stopPropagation(); if (tapOk()) onUndo(v.delivery_id, outcome); }}
+                                    className="px-4 py-2.5 rounded-2xl bg-white/20 hover:bg-white/30 font-black text-[11px] uppercase tracking-widest disabled:opacity-50" data-verdict-undo="">
                                     <i className="fa-solid fa-rotate-left mr-1.5" aria-hidden="true"></i>{tx('meals.undo', 'Deshacer')}
                                 </button>
                             )}
@@ -272,8 +359,222 @@ export function VerdictCard({ outcome, service, onForce, onUndo, onDismiss, onAr
     );
 }
 
+// ── Confirmation card (2.16.0) ───────────────────────────────────────────────────────────────────────
+/** Translations for the configured entries (lib/mealConfirm displayLabel / displayValue). */
+export const displayLabelsOf = (tx) => ({
+    builtin: (key: string) => { const s = tx(`meals.display.${key}`, ''); return s || null; },
+    noLocation: tx('meals.no.location', 'Sin localidad'),
+    noRoom: tx('meals.display.no.room', 'Sin habitación'),
+    hidden: tx('meals.display.hidden', '(oculto)'),
+    empty: '—',
+    payment: (s: string) => (s === 'paid' ? tx('paid', 'Pagado') : s === 'partial' ? tx('partial', 'Parcial') : s === 'unpaid' ? tx('unpaid', 'Sin Pagar') : s),
+});
+
+/**
+ * The person's configured entries, in the configured order: the full name as a heading, every other entry
+ * as «LABEL value». Colours are inherited (it sits on the white confirmation card and on the coloured
+ * verdict card alike); `onColour` (the verdict card): labels at full strength — 70% white on emerald /
+ * rose was ≈2.6:1, unreadable at arm's length.
+ */
+export function PersonFields({ fields, large = false, onColour = false }: any) {
+    const tx = useTx();
+    const L = displayLabelsOf(tx);
+    return (
+        <div data-person-fields="" style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+            {(fields || []).map((f) => (f.key === '@name'
+                ? <div key={f.key} data-field={f.key} style={{ fontSize: large ? 26 : 22, fontWeight: 900, lineHeight: 1.15, overflowWrap: 'anywhere' }}>{displayValue(f, L)}</div>
+                : <div key={f.key} data-field={f.key} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', columnGap: 8, minWidth: 0 }}>
+                    <span data-field-label="" style={{ fontSize: onColour ? 12 : 11, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', opacity: onColour ? 1 : 0.7 }}>{displayLabel(f, L)}</span>
+                    <span style={{ fontSize: large ? 18 : 16, fontWeight: 800, overflowWrap: 'anywhere', minWidth: 0 }}>{displayValue(f, L)}</span>
+                </div>))}
+        </div>
+    );
+}
+
+const CONFIRM_TONE = {
+    ready: { band: '#047857', chip: '#d1fae5', text: '#065f46', icon: 'fa-circle-check' },
+    not_entitled: { band: '#b45309', chip: '#fef3c7', text: '#92400e', icon: 'fa-triangle-exclamation' },
+    bad: { band: '#be123c', chip: '#ffe4e6', text: '#9f1239', icon: 'fa-circle-xmark' },
+    muted: { band: '#374151', chip: '#f3f4f6', text: '#1f2937', icon: 'fa-circle-question' },
+};
+export const confirmTone = (r: string) =>
+    (r === 'ready' ? 'ready' : r === 'not_entitled' ? 'not_entitled' : r === 'already' || r === 'cancelled' || r === 'no_service' || r === 'error' ? 'bad' : 'muted');
+
+/**
+ * Short screens (an iPhone SE in Safari shows 375×548, a first-generation SE 320×460): the meal band on one
+ * line where it fits, tighter paddings and slimmer buttons, so the person's name and data keep their room;
+ * narrow ones: a smaller label on «Entregar sin derecho (autorizar)», which wraps there. Inline styles win
+ * over a stylesheet, hence !important; only the phone scanner's card (`large`) changes.
+ */
+export const CONFIRM_CSS = `
+@media (max-height: 640px) {
+  [data-confirm-card][data-confirm-large] [data-confirm-meal] { display: flex !important; flex-wrap: wrap; align-items: baseline; column-gap: 10px; padding-top: 8px !important; padding-bottom: 8px !important; }
+  [data-confirm-card][data-confirm-large] [data-confirm-meal-name] { font-size: 20px !important; }
+  [data-confirm-card][data-confirm-large] [data-confirm-head] { padding-top: 8px !important; gap: 6px !important; }
+  [data-confirm-card][data-confirm-large] [data-confirm-name] { font-size: 22px !important; }
+  [data-confirm-card][data-confirm-large] [data-confirm-body] { padding-bottom: 8px !important; }
+  [data-confirm-card][data-confirm-large] [data-confirm-actions] { padding-bottom: 12px !important; }
+  [data-confirm-card][data-confirm-large] [data-confirm-actions] button { min-height: 50px !important; padding-top: 6px !important; padding-bottom: 6px !important; }
+}
+@media (max-width: 380px) {
+  [data-confirm-card][data-confirm-large] [data-long-label] { font-size: 13px !important; padding-left: 8px !important; padding-right: 8px !important; }
+}`;
+
+/**
+ * The confirmation card (2.16.0): the meal (day + meal, prominent; never shrinks), then the middle — the
+ * status and the person's NAME in a header that stays at its top (sticky), the other configured entries
+ * scrolling under it, with «Más abajo» while some of it is out of view (iOS hides scrollbars) — and the
+ * decision at the bottom (thumb reach; never shrinks, so no screen can push the buttons out of the card):
+ *   'ready'        → «Cancelar» + «Entregar» (primary, right)
+ *   'not_entitled' → «Entregar sin derecho (autorizar)» (outlined, left) + «Cancelar» (primary, right): the
+ *                    routine tap on the big right-hand button never authorises an override
+ *   anything else  → «Cerrar».
+ * The decision buttons ignore taps for `armMs` after the card appears (a tap meant for what was there before
+ * must not decide for this person). Structure and colours are INLINE (it lives inside the phone scanner, see
+ * SCANNER_ROOT_STYLE). Its buttons never take the focus from «Entrega»'s scan input. `keyHints`: say what
+ * Enter / Esc do (USB scanners).
+ */
+export function ConfirmCard({ card, service, language, delivering = false, waiting = 0, large = false, keyHints = false, armMs = TAP_ARM_MS, onDeliver, onAuthorize, onCancel, onClose }: any) {
+    const tx = useTx();
+    const txn = makeTxn(tx);
+    const L = displayLabelsOf(tx);
+    const scrollRef = useRef<HTMLDivElement | null>(null);
+    const [more, setMore] = useState(false);
+    const measure = useCallback(() => {
+        const el = scrollRef.current;
+        if (el) setMore(el.scrollHeight - el.scrollTop - el.clientHeight > 4);
+    }, []);
+    useEffect(() => {
+        measure();
+        if (typeof window === 'undefined') return;
+        window.addEventListener('resize', measure);
+        return () => window.removeEventListener('resize', measure);
+    }, [measure, card?.seq]);
+    if (!card) return null;
+    const r = card.result;
+    const v = card.verdict || {};
+    const p = v.person;
+    const { name, rest } = splitPersonFields(p);
+    const s = v.service || service || null;
+    const tone = CONFIRM_TONE[confirmTone(r)];
+    const decision = isDecision(r);
+    const status =
+        r === 'ready' ? tx('meals.confirm.ready', 'Puede recibir esta comida')
+            : r === 'not_entitled' ? tx('meals.confirm.not_entitled', 'Sin derecho a esta comida')
+                : r === 'already' ? tx('meals.verdict.already', 'Ya recibió')
+                    : r === 'cancelled' ? tx('meals.verdict.cancelled', 'Inscripción cancelada')
+                        : r === 'unknown' ? tx('meals.verdict.unknown', 'Código no encontrado')
+                            : r === 'other_conference' ? tx('meals.verdict.other_conference', 'Ese código es de otra conferencia')
+                                : r === 'offline' ? tx('meals.verdict.offline', 'Sin conexión — vuelve a escanear')
+                                    : r === 'no_service' ? tx('meals.verdict.no_service', 'Servicio no encontrado: elige otro')
+                                        : (card.message || tx('meals.verdict.error', 'No se pudo registrar'));
+    const why = r !== 'not_entitled' ? ''
+        : v.source === 'exclude' ? tx('meals.confirm.not_entitled.exclude', 'Se la quitaron a esta persona') : tx('meals.confirm.not_entitled.none', 'No está en el plan de su localidad');
+    const btn = (background: string, color: string, flex: string): React.CSSProperties => ({
+        flex, minHeight: large ? 60 : 52, padding: '10px 14px', borderRadius: 16, border: 0, background, color, cursor: 'pointer',
+        fontWeight: 900, fontSize: large ? 18 : 16, lineHeight: 1.15, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, opacity: delivering ? 0.6 : 1,
+    });
+    const press = (fn?: () => void) => (e: React.MouseEvent) => { e.stopPropagation(); fn?.(); };
+    // A decision counts only once the card has been on screen for `armMs`.
+    const decide = (fn?: () => void) => (e: React.MouseEvent) => { e.stopPropagation(); if (tapArmed(card.shownAt, Date.now(), armMs)) fn?.(); };
+    const cancelBtn = (primary: boolean) => (
+        <button type="button" disabled={delivering} onMouseDown={keepFocus} onClick={decide(onCancel)} data-confirm-cancel=""
+            style={primary ? btn('#111827', '#fff', '2 1 0%') : btn('#f3f4f6', '#111827', '1 1 0%')}>
+            {tx('meals.confirm.cancel', 'Cancelar')}
+        </button>
+    );
+    return (
+        <div role={decision ? 'alertdialog' : 'status'} aria-live="assertive" aria-label={tx('meals.confirm.title', 'Confirmar entrega')} data-confirm-card={r} data-confirm-large={large ? '' : undefined}
+            style={{ background: '#fff', color: '#111827', borderRadius: 24, overflow: 'hidden', border: `3px solid ${tone.band}`, boxShadow: '0 12px 40px rgba(0,0,0,0.45)', display: 'flex', flexDirection: 'column', maxHeight: '100%', minHeight: 0 }}>
+            <div data-confirm-meal="" style={{ background: tone.band, color: '#fff', padding: large ? '12px 16px' : '10px 14px', flexShrink: 0 }}>
+                {s ? <>
+                    <div data-confirm-day="" style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{dayLabel(s.service_date, language, true)}</div>
+                    <div data-confirm-meal-name="" style={{ fontSize: large ? 26 : 22, fontWeight: 900, lineHeight: 1.1, overflowWrap: 'anywhere' }}>
+                        <i className={`fa-solid ${MEAL_ICON[s.meal] || 'fa-utensils'}`} aria-hidden="true" style={{ marginRight: 8 }}></i>{mealName(tx, s.meal)}{s.label ? ` — ${s.label}` : ''}
+                    </div>
+                </> : <div style={{ fontSize: 18, fontWeight: 900 }}>{tx('meals.confirm.title', 'Confirmar entrega')}</div>}
+            </div>
+            {/* The middle scrolls; its header — the status and WHO it is — stays at its top (sticky), so on the
+                shortest phone the name stays visible and nothing can push the buttons out of the card. */}
+            <div data-confirm-scroll="" ref={scrollRef} onScroll={measure} style={{ position: 'relative', overflowY: 'auto', minHeight: 0, flex: '0 1 auto' }}>
+                <div data-confirm-head="" style={{ position: 'sticky', top: 0, zIndex: 1, background: '#fff', padding: large ? '12px 16px 8px' : '12px 14px 8px', display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
+                    <div data-confirm-status="" style={{ alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderRadius: 999, background: tone.chip, color: tone.text, fontWeight: 900, fontSize: 14 }}>
+                        <i className={`fa-solid ${r === 'offline' ? 'fa-wifi' : tone.icon}`} aria-hidden="true"></i>{status}
+                    </div>
+                    {name && <div data-confirm-name="" data-field="@name" style={{ fontSize: large ? 26 : 22, fontWeight: 900, lineHeight: 1.15, overflowWrap: 'anywhere' }}>{displayValue(name, L)}</div>}
+                </div>
+                <div data-confirm-body="" style={{ padding: large ? '2px 16px 14px' : '2px 14px 12px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {why && <div style={{ fontSize: 13, fontWeight: 700, color: tone.text }}>{why}</div>}
+                    {rest.length > 0 && <PersonFields fields={rest} large={large} />}
+                    {r === 'already' && v.delivered_at && (
+                        <div style={{ fontSize: 14, fontWeight: 700 }}>{v.delivered_by
+                            ? tx('meals.verdict.already.at.by', 'Recibió a las {time} · registró {who}', { time: stampTime(v.delivered_at), who: v.delivered_by })
+                            : tx('meals.verdict.already.at', 'Recibió a las {time}', { time: stampTime(v.delivered_at) })}</div>
+                    )}
+                    {r === 'unknown' && card.code && <div style={{ fontFamily: 'ui-monospace, monospace', fontWeight: 800, fontSize: 15, overflowWrap: 'anywhere' }}>{card.code}</div>}
+                    {waiting > 0 && <div data-confirm-waiting={waiting} style={{ fontSize: 12, fontWeight: 800, color: '#6b7280' }}>{txn('meals.confirm.waiting', '{n} códigos en espera', '{n} código en espera', waiting)}</div>}
+                    {keyHints && decision && <div style={{ fontSize: 11, fontWeight: 700, color: '#6b7280' }}>{r === 'ready' ? tx('meals.confirm.keys', 'Enter = Entregar · Esc = Cancelar') : tx('meals.confirm.keys.authorize', 'Enter no autoriza: usa el botón · Esc = Cancelar')}</div>}
+                    {more && (
+                        <div data-confirm-more="" aria-hidden="true" style={{ position: 'sticky', bottom: 0, marginTop: -6, paddingTop: 14, textAlign: 'center', fontSize: 12, fontWeight: 900, color: '#374151', background: 'linear-gradient(rgba(255,255,255,0), #fff 55%)', pointerEvents: 'none' }}>
+                            {tx('meals.confirm.more', 'Más abajo')} <i className="fa-solid fa-arrow-down" aria-hidden="true"></i>
+                        </div>
+                    )}
+                </div>
+            </div>
+            <div data-confirm-actions="" style={{ display: 'flex', gap: 8, padding: large ? '0 16px 16px' : '0 14px 14px', flexShrink: 0 }}>
+                {r === 'ready' ? <>
+                    {cancelBtn(false)}
+                    <button type="button" disabled={delivering} onMouseDown={keepFocus} onClick={decide(onDeliver)} data-confirm-deliver="" style={btn('#059669', '#fff', '2 1 0%')}>
+                        <i className="fa-solid fa-check" aria-hidden="true"></i>{delivering ? tx('meals.confirm.delivering', 'Registrando…') : tx('meals.confirm.deliver', 'Entregar')}
+                    </button>
+                </> : r === 'not_entitled' ? <>
+                    <button type="button" disabled={delivering} onMouseDown={keepFocus} onClick={decide(onAuthorize)} data-confirm-authorize="" data-long-label=""
+                        style={{ ...btn('#fff', '#92400e', '1 1 0%'), border: '2px solid #b45309', fontSize: large ? 15 : 14, flexWrap: 'wrap', textAlign: 'center' }}>
+                        <i className="fa-solid fa-hand" aria-hidden="true"></i>{delivering ? tx('meals.confirm.delivering', 'Registrando…') : tx('meals.confirm.authorize', 'Entregar sin derecho (autorizar)')}
+                    </button>
+                    {cancelBtn(true)}
+                </> : (
+                    <button type="button" onMouseDown={keepFocus} onClick={press(onClose)} data-confirm-close="" style={btn('#111827', '#fff', '1 1 0%')}>
+                        {tx('meals.confirm.close', 'Cerrar')}
+                    </button>
+                )}
+            </div>
+            {/* Last child: the short-screen rules (CONFIRM_CSS); display:none, it takes no room. */}
+            <style>{CONFIRM_CSS}</style>
+        </div>
+    );
+}
+
+/** «Comprobando…» while the check of a scan is on its way. */
+export function CheckingCard() {
+    const tx = useTx();
+    return (
+        <div data-confirm-checking="" role="status" style={{ background: '#fff', color: '#111827', borderRadius: 20, padding: '12px 16px', fontWeight: 800, fontSize: 15, boxShadow: '0 10px 30px rgba(0,0,0,0.35)' }}>
+            <i className="fa-solid fa-spinner fa-spin" aria-hidden="true" style={{ marginRight: 8 }}></i>{tx('meals.confirm.checking', 'Comprobando…')}
+        </div>
+    );
+}
+
+/** «Confirmar antes de entregar» (per device, see useConfirmPref). */
+export function ConfirmToggle({ on, onChange, dark = false }: any) {
+    const tx = useTx();
+    return (
+        <label data-confirm-toggle={on ? 'on' : 'off'} style={{
+            display: 'flex', alignItems: 'flex-start', gap: 12, cursor: 'pointer', padding: '10px 12px', borderRadius: 16,
+            border: `2px solid ${dark ? 'rgba(255,255,255,0.2)' : '#f3f4f6'}`, background: dark ? 'rgba(255,255,255,0.06)' : '#fff',
+        }}>
+            <input type="checkbox" role="switch" checked={!!on} onChange={(e) => onChange(e.target.checked)} style={{ width: 22, height: 22, marginTop: 2, accentColor: '#059669', flexShrink: 0 }} />
+            <span style={{ minWidth: 0 }}>
+                <span style={{ display: 'block', fontSize: 16, fontWeight: 900, color: dark ? '#fff' : '#111827' }}>{tx('meals.confirm.toggle', 'Confirmar antes de entregar')}</span>
+                <span style={{ display: 'block', fontSize: 12, fontWeight: 600, color: dark ? 'rgba(255,255,255,0.65)' : '#6b7280' }}>{tx('meals.confirm.toggle.hint', 'Muestra la comida y los datos de la persona, y espera a que pulses Entregar. Se recuerda en este dispositivo.')}</span>
+            </span>
+        </label>
+    );
+}
+
 // ── Manual search (by name / document / code) ────────────────────────────────────────────────────────
-export function PersonSearch({ conferenceId, onPick, busy, autoFocus = true, dark = false }: any) {
+/** `action`: the word on each row (default «Entregar»; «Elegir» when picking only opens the confirmation card). */
+export function PersonSearch({ conferenceId, onPick, busy, autoFocus = true, dark = false, action }: any) {
     const tx = useTx();
     const [q, setQ] = useState('');
     const [res, setRes] = useState<{ people: any[]; total: number } | null>(null);
@@ -315,7 +616,7 @@ export function PersonSearch({ conferenceId, onPick, busy, autoFocus = true, dar
                                     <span className={`block font-black break-words ${dark ? 'text-white text-lg' : 'text-gray-900 text-sm'}`}>{p.name}</span>
                                     <span className={`block text-xs font-semibold ${dark ? 'text-white/60' : 'text-gray-500'}`}>{[p.location_id == null ? tx('meals.no.location', 'Sin localidad') : p.location, p.reg_code].filter(Boolean).join(' · ')}</span>
                                 </span>
-                                <span className={`text-[10px] font-black uppercase tracking-widest whitespace-nowrap ${dark ? 'text-emerald-300' : 'text-emerald-700'}`}>{tx('meals.deliver', 'Entregar')}</span>
+                                <span className={`text-[10px] font-black uppercase tracking-widest whitespace-nowrap ${dark ? 'text-emerald-300' : 'text-emerald-700'}`}>{action || tx('meals.deliver', 'Entregar')}</span>
                             </button>
                         </li>
                     ))}
@@ -383,6 +684,7 @@ export const SCANNER_CSS = `
 @keyframes cm-scan-sweep { 0%, 100% { transform: translateY(14%); } 50% { transform: translateY(86%); } }
 @keyframes cm-scan-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
 @media (prefers-reduced-motion: reduce) { [data-scan-line], [data-scan-dot] { animation: none !important; } }
+@media (max-height: 700px) { [data-meal-scanner][data-card-open] [data-scanner-counters] { display: none !important; } }
 `;
 export const SCANNER_ROOT_STYLE: React.CSSProperties = {
     position: 'fixed', top: 0, right: 0, bottom: 0, left: 0, height: '100dvh', zIndex: 6000,
@@ -477,10 +779,22 @@ export function CameraNotice({ health, playBlocked, onActivate, onRetry, tx }: a
 const READ_SHOWN_MAX = 120;
 /**
  * What the camera read that is NOT a registration code — shown, never silence: «Código leído: <valor> —
- * no es un código de inscripción», with its symbology. Tap to dismiss.
+ * no es un código de inscripción», with its symbology. Tap to dismiss. `read.held` (2.16.0): the badge of a
+ * card just cancelled, shown again too soon — say why nothing opens instead of staying silent.
  */
 export function ReadCard({ read, tx, onDismiss }: any) {
     if (!read) return null;
+    if (read.held) {
+        return (
+            <div data-scan-read="held" role="status" aria-live="polite" onClick={onDismiss} style={{
+                background: 'rgba(17,24,39,0.94)', color: '#fff', border: '2px solid rgba(255,255,255,0.3)', borderRadius: 20,
+                padding: '12px 16px', boxShadow: '0 10px 30px rgba(0,0,0,0.45)', fontSize: 15, fontWeight: 800, overflowWrap: 'anywhere',
+            }}>
+                <i className="fa-solid fa-hand mr-1.5" aria-hidden="true" style={{ marginRight: 6 }}></i>
+                {tx('meals.scanner.read.held', 'Entrega cancelada. Para volver a abrirla, aparta el código unos segundos y vuelve a acercarlo.')}
+            </div>
+        );
+    }
     const v = String(read.value || '');
     const shown = v.length > READ_SHOWN_MAX ? `${v.slice(0, READ_SHOWN_MAX)}…` : v;
     return (
@@ -505,7 +819,38 @@ export const cameraAvailability = (): 'ok' | 'insecure' | 'unsupported' => {
     return 'ok';
 };
 
+/**
+ * The service's name in the scanner's top bar: up to two lines, then an ellipsis. It was one line, cut on a
+ * phone to «Mar 10/11 · Almuerzo — Al…» — the custom label after the dash is what tells two services of the
+ * same meal apart. Inline, like the rest of the scanner's frame, so it does not depend on compiled classes.
+ */
+export const SERVICE_NAME_STYLE: React.CSSProperties = {
+    display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, overflow: 'hidden', overflowWrap: 'anywhere',
+};
+
+/**
+ * A getUserMedia failure, as a camera state and (for 'error') the i18n key of its message. Never the
+ * browser's own text: it is English whatever the admin's language («Not supported» on the Spanish
+ * scanner), and says nothing the user can act on.
+ */
+export function cameraFailure(e: { name?: string } | null | undefined): { cam: 'denied' | 'unsupported' | 'error'; key: string | null } {
+    const name = String(e?.name || '');
+    if (name === 'NotAllowedError' || name === 'SecurityError') return { cam: 'denied', key: null };
+    if (name === 'NotSupportedError' || name === 'TypeError') return { cam: 'unsupported', key: null };
+    if (name === 'NotFoundError' || name === 'OverconstrainedError') return { cam: 'error', key: 'meals.camera.notfound' };
+    if (name === 'NotReadableError' || name === 'TrackStartError' || name === 'AbortError') return { cam: 'error', key: 'meals.camera.busy' };
+    return { cam: 'error', key: null };
+}
+
 const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
+
+/**
+ * The decode loop skips frames (and the heartbeat says «En pausa») while a request is in flight, a sheet
+ * covers the camera, someone is confirming «Entregar de todas formas», or — 2.16.0 — a confirmation card is
+ * open or its request runs: no new code may replace the card on screen, nor deliver twice.
+ */
+export const scanPaused = ({ inFlight, sheet, armed, flow }: any): boolean =>
+    !!(inFlight || sheet || armed || (flow && (flow.isOpen() || flow.isBusy())));
 
 // ── Full-screen phone scanner ────────────────────────────────────────────────────────────────────────
 export function MealScanner({ conferenceId, services, serviceId, onServiceChange, onClose, onChanged, language }: any) {
@@ -547,7 +892,7 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
     const [health, setHealth] = useState<{ state: string; fps: number } | null>(null);
     const [playBlocked, setPlayBlocked] = useState(false);
     /** The last value read that is not a registration code (shown while it stays in view + 2.5 s). */
-    const [read, setRead] = useState<{ value: string; format: string; seq: number } | null>(null);
+    const [read, setRead] = useState<{ value: string; format: string; seq: number; held?: boolean } | null>(null);
     // Decoding pauses while a sheet covers the verdict or someone is confirming «Entregar de todas formas».
     const sheetRef = useRef(sheet);
     sheetRef.current = sheet;
@@ -594,15 +939,68 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
         } finally { inFlight.current = false; if (aliveRef.current) setBusy(false); }
     }, [deliver, show, onChanged]);
 
-    // A registration code is posted (once per sighting, never while a request is in flight); ANYTHING else
-    // the camera reads is shown on the read card — the operator sees the scanner works and what it saw.
-    const onCode = useCallback((raw: string, format = '') => {
-        const r = router.current.route(raw, format, inFlight.current);
-        if (!r) return;
-        if (r.action === 'submit') { submit({ code: r.code }); return; }
-        lastReadAt.current = Date.now();
-        if (r.fresh) { setRead({ value: r.value, format: r.format, seq: Date.now() }); feedback.current.info(); }
+    // ── 2.16.0: confirm before delivering (per device; OFF = `submit` above, the immediate delivery) ──
+    const [confirmOn, setConfirmOn] = useConfirmPref();
+    const confirmRef = useRef(confirmOn);
+    confirmRef.current = confirmOn;
+    const [flow, confirm] = useConfirmFlow({
+        queue: false,
+        onCheck: (card) => {
+            if (!aliveRef.current) return;
+            // Nothing is recorded yet: «ready» has its own cue (not the blip of a barcode that is not a
+            // registration code); anything else that needs attention sounds «bad».
+            if (card.result === 'ready') feedback.current.attention();
+            else {
+                feedback.current.bad();
+                setFlash('bad');
+                setTimeout(() => { if (aliveRef.current) setFlash(''); }, 350);
+            }
+            if (card.result === 'no_service') { setSheet('service'); onChanged?.(); }
+        },
+        // «Entregar» answered: the usual verdict card (only the server's 'delivered' reads «Entregado»). A
+        // service change resets the flow, so an answer for the previous service never lands here.
+        onResult: (o) => { if (aliveRef.current) show(o); },
+        // The badge of a card that just closed (delivered, «Cancelar», «Cerrar») must leave the view before
+        // it opens another card — «Cancelar» would otherwise bring the same card straight back. Not after a
+        // reset (pickService has just let the badge be read again, as in 2.15) nor after a failure (offline,
+        // error: «vuelve a escanear»); see holdAfterClose. After «Cancelar» the badge says why if shown again.
+        onClose: (card, why, outcome) => { const h = holdAfterClose(card, why, outcome); if (h) router.current.hold(h.code, Date.now(), h.hint); },
+    });
+    const flowRef = useRef(flow);
+    flowRef.current = flow;
+    useEffect(() => { if (!confirmOn) flow.reset(); }, [confirmOn, flow]);
+    // An informative card («Ya recibió», «Código no encontrado»…) closes itself after 3 s; a decision waits.
+    useEffect(() => {
+        const c = confirm.card;
+        if (!c || isDecision(c.result)) return;
+        const h = setTimeout(() => flowRef.current.close(), 3000);
+        return () => clearTimeout(h);
+    }, [confirm.card]);
+
+    // Everything that names a person — a badge read, a typed code, a name picked — goes through here. With
+    // the confirmation ON it opens the card; a MANUAL entry replaces an open card (flow.pick: nothing was
+    // recorded for it), while a camera read never does (decoding is paused while a card is open anyway).
+    const scanBody = useCallback((body: any, manual = false) => {
+        const sid = serviceRef.current;
+        if (!sid) { setSheet('service'); return; }
+        if (!confirmRef.current) { submit(body); return; }
+        const f = flowRef.current;
+        if ((manual ? f.pick(sid, body) : f.scan(sid, body)) === 'checking') { setOutcome(null); setRead(null); }
     }, [submit]);
+
+    // A registration code is posted (once per sighting, never while a request is in flight or a card is
+    // open); ANYTHING else the camera reads is shown on the read card — the operator sees the scanner works
+    // and what it saw.
+    const onCode = useCallback((raw: string, format = '') => {
+        const f = flowRef.current;
+        const r = router.current.route(raw, format, inFlight.current || f.isOpen() || f.isBusy());
+        if (!r) return;
+        if (r.action === 'submit') { scanBody({ code: r.code }); return; }
+        lastReadAt.current = Date.now();
+        // The badge of a card just cancelled, back in view too soon: say why nothing opens.
+        if (r.action === 'held') { if (r.fresh) { setRead({ value: r.code, format: '', held: true, seq: Date.now() }); feedback.current.info(); } return; }
+        if (r.fresh) { setRead({ value: r.value, format: r.format, seq: Date.now() }); feedback.current.info(); }
+    }, [scanBody]);
     // The frame loop is started once per camera start: it reads the CURRENT handler through a ref.
     const onCodeRef = useRef(onCode);
     onCodeRef.current = onCode;
@@ -625,7 +1023,7 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
     }, []);
 
     // Every turn either analyses a frame (meter.frame), skips one on purpose (meter.pause: a sheet, a
-    // verdict awaiting a decision, a request in flight) or finds no playable frame (nothing recorded):
+    // verdict awaiting a decision, a confirmation card, a request in flight) or finds no playable frame:
     // the heartbeat and the «no image» notice are read from what the loop really did.
     // The built-in reader runs on the main thread (~20 ms on a blank frame, ~100 ms on printed packaging):
     // the pause before the next frame grows with it (scanLoopDelay), so taps and sheets stay responsive.
@@ -635,7 +1033,7 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
         if (!video || !stream) return;
         let spent = 0;
         try {
-            if (inFlight.current || sheetRef.current || armedRef.current) meter.current.pause();
+            if (scanPaused({ inFlight: inFlight.current, sheet: sheetRef.current, armed: armedRef.current, flow: flowRef.current })) meter.current.pause();
             else if (video.readyState >= 2 && video.videoWidth > 0 && !video.paused) {
                 const native = await getNativeDetector();
                 if (native) {
@@ -701,9 +1099,11 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
         } catch (e: any) {
             if (stale()) return;
             stopCamera();
-            if (e?.name === 'NotAllowedError' || e?.name === 'SecurityError') setCam('denied');
-            else if (e?.name === 'NotFoundError' || e?.name === 'OverconstrainedError') { setCam('error'); setCamError(tx('meals.camera.notfound', 'No se encontró una cámara.')); }
-            else { setCam('error'); setCamError(e?.message || ''); }
+            const failure = cameraFailure(e);
+            setCam(failure.cam);
+            setCamError(failure.key === 'meals.camera.notfound' ? tx('meals.camera.notfound', 'No se encontró una cámara.')
+                : failure.key === 'meals.camera.busy' ? tx('meals.camera.busy', 'Otra aplicación está usando la cámara. Ciérrala y vuelve a intentarlo.')
+                    : '');
         }
     }, [scanLoop, stopCamera, tx]);
 
@@ -743,10 +1143,17 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // Esc: a sheet closes first, then the scanner. Tab stays inside the overlay (it is modal).
+    // Esc: a sheet closes first, then a confirmation card («Cancelar» / «Cerrar»), then the scanner. Tab
+    // stays inside the overlay (it is modal).
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') { if (sheetRef.current) setSheet(null); else onClose(); return; }
+            if (e.key === 'Escape') {
+                const f = flowRef.current;
+                if (sheetRef.current) setSheet(null);
+                else if (f.isOpen()) { if (!f.cancel()) f.close(); }
+                else onClose();
+                return;
+            }
             if (e.key !== 'Tab' || !rootRef.current) return;
             const items = Array.from(rootRef.current.querySelectorAll(FOCUSABLE)) as HTMLElement[];
             if (!items.length) { e.preventDefault(); rootRef.current.focus(); return; }
@@ -790,6 +1197,9 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
         if (id !== serviceId) { onServiceChange(id); router.current.reset(); }
         setOutcome(null); setSheet(null);
     };
+    // Another service (picked here, or the selected one was deleted): a card — and any answer still on its
+    // way — belongs to the previous one.
+    useEffect(() => { flow.reset(); }, [serviceId, flow]);
     // The heartbeat: twice a second while the camera is on, from what the decode loop really did.
     useEffect(() => {
         if (cam !== 'on') { setHealth(null); return; }
@@ -827,21 +1237,22 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
     const scanning = cam === 'on' && !playBlocked && health?.state === 'scanning';
     return createPortal(
         <div ref={rootRef} tabIndex={-1} className="fixed inset-0 z-[6000] bg-black text-white flex flex-col select-none outline-none" style={SCANNER_ROOT_STYLE} role="dialog" aria-modal="true" aria-label={tx('meals.scanner', 'Modo escáner')} data-meal-scanner="" data-engine={engine}
+            data-card-open={confirm.card || confirm.checking ? '' : undefined}
             onPointerDown={() => feedback.current.prime()}>
             <style>{SCANNER_CSS}</style>
             {/* Top: service + exit */}
             <div className="flex items-center gap-2 px-3 pt-[max(env(safe-area-inset-top),0.75rem)] pb-2 bg-black/80" style={{ ...SCANNER_BAR_STYLE, display: 'flex', alignItems: 'center', gap: 8, paddingLeft: SAFE_LEFT, paddingRight: SAFE_RIGHT, paddingBottom: 8, paddingTop: 'max(env(safe-area-inset-top), 12px)' }}>
                 <button type="button" onClick={() => setSheet('service')} className="flex-1 min-w-0 text-left px-4 py-3 rounded-2xl bg-white/10 active:bg-white/20" style={{ flex: '1 1 0%', minWidth: 0 }} aria-label={tx('meals.scanner.change.service', 'Cambiar servicio')}>
                     <span className="block text-[10px] font-black uppercase tracking-widest text-white/60" style={{ display: 'block' }}>{tx('meals.scanner.service', 'Servicio')}</span>
-                    <span className="block text-base font-black truncate" style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{service ? serviceName(tx, service, language) : tx('meals.scanner.pick', 'Elige un servicio')}</span>
+                    <span className="block text-base font-black leading-tight" style={SERVICE_NAME_STYLE} data-scanner-service-name="">{service ? serviceName(tx, service, language) : tx('meals.scanner.pick', 'Elige un servicio')}</span>
                 </button>
                 <button type="button" onClick={onClose} className="px-4 py-3 rounded-2xl bg-white/10 active:bg-white/20 font-black text-sm" aria-label={tx('meals.scanner.exit', 'Salir')}>
                     <i className="fa-solid fa-xmark mr-1.5" aria-hidden="true"></i>{tx('meals.scanner.exit', 'Salir')}
                 </button>
             </div>
 
-            {/* Counters */}
-            <div className="grid grid-cols-3 gap-2 px-3 pb-2 text-center bg-black/80" style={{ ...SCANNER_BAR_STYLE, display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8, paddingLeft: SAFE_LEFT, paddingRight: SAFE_RIGHT, paddingBottom: 8, textAlign: 'center' }}>
+            {/* Counters — fold away on a short phone while a confirmation card needs the room (SCANNER_CSS) */}
+            <div data-scanner-counters="" className="grid grid-cols-3 gap-2 px-3 pb-2 text-center bg-black/80" style={{ ...SCANNER_BAR_STYLE, display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8, paddingLeft: SAFE_LEFT, paddingRight: SAFE_RIGHT, paddingBottom: 8, textAlign: 'center' }}>
                 {[[tx('meals.count.delivered', 'Entregados'), stats?.delivered], [tx('meals.count.entitled', 'Con derecho'), stats?.entitled], [tx('meals.count.pending', 'Pendientes'), stats?.pending]].map(([label, n]: any) => (
                     <div key={label} className="rounded-xl bg-white/10 py-1.5">
                         <div className="text-xl font-black tabular-nums">{n ?? '—'}</div>
@@ -889,22 +1300,39 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
                 {cam === 'on' && (
                     <div className="absolute right-3 top-10 flex flex-col gap-2" style={{ position: 'absolute', right: SAFE_RIGHT, top: 40, zIndex: 3, display: 'flex', flexDirection: 'column', gap: 8 }}>
                         {torch.supported && (
-                            <button type="button" onClick={toggleTorch} className={`w-12 h-12 rounded-full flex items-center justify-center ${torch.on ? 'bg-yellow-300 text-black' : 'bg-black/60 text-white'}`} style={{ width: 48, height: 48, borderRadius: 999, background: torch.on ? '#fde047' : 'rgba(0,0,0,0.6)', color: torch.on ? '#000' : '#fff' }} aria-pressed={torch.on} aria-label={tx('meals.camera.torch', 'Linterna')}>
+                            <button type="button" onClick={toggleTorch} className={`w-12 h-12 shrink-0 rounded-full flex items-center justify-center ${torch.on ? 'bg-yellow-300 text-black' : 'bg-black/60 text-white'}`} style={{ width: 48, height: 48, borderRadius: 999, background: torch.on ? '#fde047' : 'rgba(0,0,0,0.6)', color: torch.on ? '#000' : '#fff' }} aria-pressed={torch.on} aria-label={tx('meals.camera.torch', 'Linterna')}>
                                 <i className="fa-solid fa-bolt" aria-hidden="true"></i>
                             </button>
                         )}
                         {devices.length > 1 && (
-                            <button type="button" onClick={switchCamera} className="w-12 h-12 rounded-full bg-black/60 text-white flex items-center justify-center" style={{ width: 48, height: 48, borderRadius: 999, background: 'rgba(0,0,0,0.6)', color: '#fff' }} aria-label={tx('meals.camera.switch', 'Cambiar de cámara')}>
+                            <button type="button" onClick={switchCamera} className="w-12 h-12 shrink-0 rounded-full bg-black/60 text-white flex items-center justify-center" style={{ width: 48, height: 48, borderRadius: 999, background: 'rgba(0,0,0,0.6)', color: '#fff' }} aria-label={tx('meals.camera.switch', 'Cambiar de cámara')}>
                                 <i className="fa-solid fa-camera-rotate" aria-hidden="true"></i>
                             </button>
                         )}
                     </div>
                 )}
 
+                {/* 2.16.0: the confirmation card over the camera, buttons at the bottom (thumb reach). It may use
+                    the whole camera area (top 8): decoding is paused, the aiming hint and torch are not needed. */}
+                {(confirm.card || confirm.checking) && (
+                    <div data-confirm-slot="" style={{ position: 'absolute', left: SAFE_LEFT, right: SAFE_RIGHT, bottom: 12, top: 8, zIndex: 4, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', pointerEvents: 'none' }}>
+                        {/* A long card shrinks to the camera area and scrolls its middle; the name and the buttons stay visible. */}
+                        <div style={{ pointerEvents: 'auto', minHeight: 0, maxHeight: '100%', display: 'flex', flexDirection: 'column' }}>
+                            {confirm.card
+                                ? <ConfirmCard card={confirm.card} service={service} language={language} large delivering={confirm.delivering}
+                                    onDeliver={() => flow.deliver()}
+                                    onAuthorize={() => flow.authorize(tx('meals.force.note', 'Autorizado en el escáner'))}
+                                    onCancel={() => flow.cancel()}
+                                    onClose={() => flow.close()} />
+                                : <CheckingCard />}
+                        </div>
+                    </div>
+                )}
                 {/* Verdict over the bottom third */}
-                {outcome && (
+                {outcome && !confirm.card && !confirm.checking && (
                     <div className="absolute left-3 right-3 bottom-3" style={{ position: 'absolute', left: SAFE_LEFT, right: SAFE_RIGHT, bottom: 12, zIndex: 4 }}>
                         <VerdictCard outcome={outcome} service={service} large busy={busy} language={language}
+                            armMs={confirmOn ? VERDICT_TAP_ARM_MS : 0}
                             onForce={outcome.result === 'not_entitled' ? force : undefined}
                             onArmedChange={(a) => { armedRef.current = !!a; }}
                             onUndo={undo}
@@ -931,8 +1359,9 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
                             <h2 className="text-lg font-black">
                                 {sheet === 'service' ? tx('meals.scanner.pick', 'Elige un servicio') : sheet === 'code' ? tx('meals.scanner.type', 'Escribir código') : tx('meals.scanner.search', 'Buscar por nombre')}
                             </h2>
-                            <button type="button" onClick={() => setSheet(null)} className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center" aria-label={tx('close', 'Cerrar')}><i className="fa-solid fa-xmark" aria-hidden="true"></i></button>
+                            <button type="button" onClick={() => setSheet(null)} className="w-10 h-10 shrink-0 rounded-full bg-white/10 flex items-center justify-center" aria-label={tx('close', 'Cerrar')}><i className="fa-solid fa-xmark" aria-hidden="true"></i></button>
                         </div>
+                        {sheet === 'service' && <ConfirmToggle dark on={confirmOn} onChange={setConfirmOn} />}
                         {sheet === 'service' && (
                             sorted.length === 0
                                 ? <p className="text-sm font-bold text-white/70">{tx('meals.services.none', 'Todavía no hay servicios de comida.')}</p>
@@ -952,15 +1381,16 @@ export function MealScanner({ conferenceId, services, serviceId, onServiceChange
                                 ))
                         )}
                         {sheet === 'code' && (
-                            <form onSubmit={(e) => { e.preventDefault(); const raw = typed; if (!normalizeCode(raw)) return; setSheet(null); submit({ code: raw }); }} className="space-y-3">
+                            <form onSubmit={(e) => { e.preventDefault(); const raw = typed; if (!normalizeCode(raw)) return; setSheet(null); scanBody({ code: raw }, true); }} className="space-y-3">
                                 <input value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus autoCapitalize="characters" autoComplete="off" spellCheck={false} inputMode="text"
                                     className="w-full rounded-2xl px-4 py-4 bg-white/10 border-2 border-white/20 text-white text-2xl font-mono font-black tracking-widest outline-none focus:border-white"
                                     aria-label={tx('meals.code', 'Código')} placeholder="ABCD234XYZ" />
-                                <button type="submit" disabled={!normalizeCode(typed) || busy} className="w-full py-4 rounded-2xl bg-emerald-500 text-black font-black disabled:opacity-40">{tx('meals.deliver', 'Entregar')}</button>
+                                <button type="submit" disabled={!normalizeCode(typed) || busy || confirm.delivering} className="w-full py-4 rounded-2xl bg-emerald-500 text-black font-black disabled:opacity-40">{confirmOn ? tx('meals.confirm.lookup', 'Continuar') : tx('meals.deliver', 'Entregar')}</button>
                             </form>
                         )}
                         {sheet === 'search' && (
-                            <PersonSearch conferenceId={conferenceId} dark busy={busy} onPick={(p) => { setSheet(null); submit({ inscription_id: p.id }); }} />
+                            <PersonSearch conferenceId={conferenceId} dark busy={busy || confirm.delivering} action={confirmOn ? tx('meals.confirm.pick', 'Elegir') : undefined}
+                                onPick={(p) => { setSheet(null); scanBody({ inscription_id: p.id }, true); }} />
                         )}
                     </div>
                 </div>

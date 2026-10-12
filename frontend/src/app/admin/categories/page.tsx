@@ -132,7 +132,7 @@ export default function CategoriesPage() {
                                             <tr key={cat.id} className="group hover:bg-blue-50/5 transition-colors">
                                                 <td className="px-8 py-6">
                                                     <div className="flex items-center gap-4">
-                                                        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center text-blue-600 group-hover:scale-110 transition-transform">
+                                                        <div className="w-10 h-10 shrink-0 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center text-blue-600 group-hover:scale-110 transition-transform">
                                                             <i className="fa-solid fa-folder"></i>
                                                         </div>
                                                         <span className="text-lg font-bold text-gray-700 italic tracking-tight">
@@ -153,7 +153,7 @@ export default function CategoriesPage() {
                                                 <td className="px-8 py-6 text-right">
                                                     <button
                                                         onClick={() => handleDelete(cat.id)}
-                                                        className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all shadow-sm hover:shadow-red-200 opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                                                        className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all shadow-sm hover:shadow-red-200 opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
                                                     >
                                                         <i className="fa-solid fa-trash text-xs"></i>
                                                     </button>

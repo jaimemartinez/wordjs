@@ -6,8 +6,9 @@
  * - Hotel assignment report: a summary sheet plus one sheet per hotel, room by room.
  */
 import type { XlsxCell, XlsxSheet } from './xlsx';
+import { isNameFallbackField } from './fields';
 
-export type ExportField = { name: string; label?: string | null };
+export type ExportField = { name: string; label?: string | null; role?: string | null; type?: string | null; is_unique?: number | boolean | null };
 export type ExportPerson = Record<string, any>;
 export type ExportLocation = { id: number; name: string };
 
@@ -142,16 +143,32 @@ export function buildRosterSheet(opts: {
     return { name: opts.name || 'Inscripciones', columns, rows, images };
 }
 
-/** Display name: the first two non-empty form-field values, falling back to first/last name. */
+/**
+ * Display name, the same on every screen (lib/lodgingView.ts nameFields, index.js personName): the fields
+ * tagged Nombre / Apellido, else the first_name / last_name columns, else the first two filled form fields
+ * fit to stand in for a name (lib/fields.ts isNameFallbackField: never an ID document, a contact or
+ * notes), else the number.
+ */
 export function displayName(p: ExportPerson, fields: ExportField[]): string {
+    const filledVal = (name: string) => {
+        const v = fieldValue(p, name);
+        return v !== undefined && v !== null && String(v).trim() !== '' ? String(v).trim() : '';
+    };
+    const named = ['first_name', 'last_name']
+        .map(role => (fields || []).find(f => f.role === role))
+        .map(f => (f ? filledVal(f.name) : ''))
+        .filter(Boolean);
+    if (named.length) return named.join(' ');
+    const legacy = [p.first_name, p.last_name].filter(Boolean).join(' ').trim();
+    if (legacy) return legacy;
     const parts: string[] = [];
-    for (const f of fields) {
-        const v = fieldValue(p, f.name);
-        if (v !== undefined && v !== null && String(v).trim() !== '') parts.push(String(v).trim());
+    for (const f of fields || []) {
+        if (!isNameFallbackField(f)) continue;
+        const v = filledVal(f.name);
+        if (v) parts.push(v);
         if (parts.length === 2) break;
     }
-    if (parts.length) return parts.join(' ');
-    return [p.first_name, p.last_name].filter(Boolean).join(' ').trim() || `#${p.id}`;
+    return parts.join(' ') || `#${p.id}`;
 }
 
 export type ReportRoom = { id: number; room_number: string; capacity: number; location_id?: number | null; location_name?: string | null; notes?: string | null };

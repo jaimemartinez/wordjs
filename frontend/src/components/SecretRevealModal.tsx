@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import DialogLayer from "./DialogLayer";
 import { Button } from "@/components/ui";
 
 /**
@@ -32,10 +33,11 @@ export default function SecretRevealModal({
     };
 
     return (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+        // dialogOver: shown right after the dialog that created the secret (components/DialogLayer.tsx).
+        <DialogLayer layer="dialogOver" className="flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
             <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full p-8 animate-in zoom-in-95 duration-200">
                 <div className="flex items-center gap-4 mb-6">
-                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-50 to-orange-50 flex items-center justify-center text-amber-600">
+                    <div className="w-12 h-12 shrink-0 rounded-2xl bg-gradient-to-br from-amber-50 to-orange-50 flex items-center justify-center text-amber-600">
                         <i className="fa-solid fa-key text-lg"></i>
                     </div>
                     <div>
@@ -73,6 +75,6 @@ export default function SecretRevealModal({
                     </Button>
                 </div>
             </div>
-        </div>
+        </DialogLayer>
     );
 }

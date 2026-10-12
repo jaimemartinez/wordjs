@@ -46,13 +46,17 @@ export function StatCard({ icon, value, label, color = "blue", trend, onClick }:
                 className={`absolute -right-6 -bottom-6 w-24 h-24 ${colors.bg} rounded-full opacity-50 group-hover:scale-150 transition-transform duration-500`}
             ></div>
 
+            {/* The icon keeps its 56px square (shrink-0) and the text column may shrink (min-w-0), its label
+                wrapping: in a narrow card the icon was squeezed into an 18-30px pill and the label clipped
+                («INSCRIP», «HOTELE»). */}
             <div className="flex items-center gap-5 relative z-10">
                 <div
-                    className={`w-14 h-14 rounded-2xl ${colors.bg} ${colors.text} flex items-center justify-center text-2xl shadow-lg ${colors.shadow} group-hover:scale-110 transition-transform duration-300`}
+                    className={`w-14 h-14 shrink-0 rounded-2xl ${colors.bg} ${colors.text} flex items-center justify-center text-2xl shadow-lg ${colors.shadow} group-hover:scale-110 transition-transform duration-300`}
+                    data-stat-icon=""
                 >
                     <i className={`fa-solid ${icon}`}></i>
                 </div>
-                <div className="flex-1">
+                <div className="flex-1 min-w-0" data-stat-text="">
                     <div className="flex items-end gap-2">
                         <span className="text-3xl font-black text-gray-900 italic tracking-tighter leading-none">
                             {typeof value === "number" ? value.toLocaleString() : value}
@@ -67,7 +71,7 @@ export function StatCard({ icon, value, label, color = "blue", trend, onClick }:
                             </span>
                         )}
                     </div>
-                    <span className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-1 block">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-gray-500 mt-1 block break-words" data-stat-label="">
                         {label}
                     </span>
                 </div>

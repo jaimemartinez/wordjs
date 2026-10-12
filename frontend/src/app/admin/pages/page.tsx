@@ -13,8 +13,9 @@ export default function PagesPage() {
     const { can, isLoading } = useAuth();
     const router = useRouter();
 
-    // Access gate: block subscribers (no edit_posts) from reaching the pages list by direct URL.
-    const allowed = can('edit_posts');
+    // Access gate: block anyone without edit_pages from reaching the pages list by direct URL — the same
+    // capability the admin layout's route guard (lib/adminAccess.ts) and the sidebar use for this screen.
+    const allowed = can('edit_pages');
     useEffect(() => {
         if (!isLoading && !allowed) router.replace('/admin/account');
     }, [isLoading, allowed, router]);

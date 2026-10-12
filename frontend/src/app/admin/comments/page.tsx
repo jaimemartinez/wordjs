@@ -174,7 +174,7 @@ export default function CommentsPage() {
                                                     />
                                                 ) : (
                                                     <div
-                                                        className={`h-10 w-10 rounded-full mr-3 flex items-center justify-center text-white text-sm font-bold ${avatarColor(comment.author)}`}
+                                                        className={`h-10 w-10 shrink-0 rounded-full mr-3 flex items-center justify-center text-white text-sm font-bold ${avatarColor(comment.author)}`}
                                                         role="img"
                                                         aria-label={comment.author}
                                                         title={comment.author}

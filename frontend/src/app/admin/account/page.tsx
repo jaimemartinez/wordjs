@@ -7,6 +7,7 @@ import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { usersApi, selfEditNeedsCurrentPassword, withSudoProof, isBadCurrentPassword } from "@/lib/api";
 import MfaSetup from "@/components/MfaSetup";
+import { roleDisplayName } from "@/lib/roleOptions";
 
 // Self-service account page — reachable by EVERY logged-in user (cap 'read'), including subscribers
 // who have no access to the admin Users editor. Lets any user update their profile + personal/recovery
@@ -107,12 +108,15 @@ export default function AccountPage() {
                     {/* Identity summary (sticky on desktop) */}
                     <aside className={`${cardCls} lg:sticky lg:top-4`}>
                         <div className="flex flex-col items-center text-center">
-                            <div className="w-20 h-20 rounded-3xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center text-3xl font-black shadow-lg shadow-blue-500/30">
+                            <div className="w-20 h-20 shrink-0 rounded-3xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center text-3xl font-black shadow-lg shadow-blue-500/30">
                                 {initials}
                             </div>
                             <h2 className="mt-4 text-lg font-black text-gray-900 tracking-tight break-words">{user?.displayName || user?.username}</h2>
-                            <span className="mt-1.5 inline-block text-[10px] font-black uppercase tracking-widest text-blue-600 bg-blue-50 px-3 py-1 rounded-full">
-                                {user?.role}
+                            {/* The role's NAME, as the sidebar's user chip shows it (lib/roleOptions.ts roleDisplayName):
+                                the raw slug read «CONFERENCE_MANAGER_TEAM» to a plugin team member, «ADMINISTRATOR» in
+                                a Spanish admin. */}
+                            <span className="mt-1.5 inline-block max-w-full break-words text-[10px] font-black uppercase tracking-widest text-blue-600 bg-blue-50 px-3 py-1 rounded-full" data-account-role="">
+                                {roleDisplayName(user, t)}
                             </span>
                         </div>
                         <div className="mt-6 pt-6 border-t border-gray-100 space-y-4">

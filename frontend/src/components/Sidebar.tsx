@@ -8,67 +8,12 @@ import { useMenu } from "@/contexts/MenuContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { useEffect, useState } from "react";
 import NotificationCenter from "./NotificationCenter";
+import { firstAllowedAdminPath, visibleSidebarSections, type AdminMenuItem } from "@/lib/adminAccess";
+import { roleDisplayName } from "@/lib/roleOptions";
 
-interface SidebarMenuItem {
-    href: string;
-    label: string;
-    icon: string;
-    cap?: string;
-}
-
-// Core menu items - labels will be translated in component
-const coreMenuItems: SidebarMenuItem[] = [
-    { href: "/admin", label: "nav.dashboard", icon: "fa-chart-pie", cap: "edit_posts" },
-    { href: "/admin/posts", label: "nav.posts", icon: "fa-pen-to-square", cap: "edit_posts" },
-    { href: "/admin/pages", label: "nav.pages", icon: "fa-file-lines", cap: "edit_pages" },
-    { href: "/admin/media", label: "nav.media", icon: "fa-images", cap: "upload_files" },
-    { href: "/admin/menus", label: "nav.menus", icon: "fa-bars", cap: "edit_theme_options" },
-    { href: "/admin/footer", label: "nav.footer", icon: "fa-shoe-prints", cap: "edit_theme_options" },
-    // Composable chrome editor (beta) — literal label like "Formularios" below (no pre-navigation
-    // i18n). The legacy /admin/footer page stays alongside it during the beta.
-    { href: "/admin/chrome", label: "Cabecera y Pie (beta)", icon: "fa-window-maximize", cap: "edit_theme_options" },
-    { href: "/admin/widgets", label: "nav.widgets", icon: "fa-shapes", cap: "edit_theme_options" },
-    { href: "/admin/comments", label: "nav.comments", icon: "fa-comments", cap: "moderate_comments" },
-    // Form submissions viewer — literal label (its page registers forms.* i18n keys at runtime, which
-    // cannot cover this pre-navigation render); manage_options mirrors the backend gate on /forms/*.
-    { href: "/admin/forms", label: "Formularios", icon: "fa-envelope-open-text", cap: "manage_options" },
-    { href: "/admin/users", label: "nav.users", icon: "fa-users", cap: "list_users" },
-    { href: "/admin/users?type=subscribers", label: "nav.subscribers", icon: "fa-user-group", cap: "list_users" },
-    { href: "/admin/users/roles", label: "nav.roles", icon: "fa-shield-halved", cap: "manage_options" },
-    { href: "/admin/categories", label: "nav.categories", icon: "fa-folder", cap: "manage_categories" },
-    // Etiquetas (taxonomía post_tag). Literal en vez de clave i18n, como el resto de las entradas
-    // añadidas después del corte de traducciones; mismo permiso que el router (manage_categories),
-    // que es también el que gatea POST/PUT/DELETE en backend/src/routes/tags.ts.
-    { href: "/admin/tags", label: "Etiquetas", icon: "fa-tags", cap: "manage_categories" },
-    { href: "/admin/plugins", label: "nav.plugins", icon: "fa-plug", cap: "activate_plugins" },
-    { href: "/admin/themes", label: "nav.themes", icon: "fa-palette", cap: "switch_themes" },
-    { href: "/admin/fonts", label: "nav.fonts", icon: "fa-font", cap: "manage_options" },
-    { href: "/admin/settings", label: "nav.settings", icon: "fa-gear", cap: "manage_options" },
-    // Preajustes de interacción del sitio (motor F9). Literal en vez de clave i18n, como el resto de
-    // las entradas añadidas después del corte de traducciones. Va DESPUÉS del índice 7, así que cae
-    // en la sección de gestión junto a Ajustes — no mueve el reparto de secciones.
-    { href: "/admin/settings/interactions", label: "Interacciones", icon: "fa-wand-magic-sparkles", cap: "manage_options" },
-    // Herramientas: exportación JSON/WXR (la mitad que faltaba de importar/exportar). El backend la
-    // gatea con isAdmin, que mira el ROL; `manage_options` es lo más cerca que la barra puede afinar
-    // con capabilities, y la propia página vuelve a comprobar el rol antes de ofrecer nada.
-    { href: "/admin/tools", label: "Herramientas", icon: "fa-screwdriver-wrench", cap: "manage_options" },
-    { href: "/admin/import", label: "nav.import", icon: "fa-file-import", cap: "manage_options" },
-    { href: "/admin/settings/backups", label: "nav.backups", icon: "fa-box-archive", cap: "manage_options" },
-    { href: "/admin/security", label: "nav.security", icon: "fa-lock", cap: "manage_options" },
-    // Registro de auditoría (solo lectura). Igual que Herramientas: el backend lo gatea con isAdmin
-    // (rol), y la pantalla repite esa comprobación — aquí `manage_options` solo evita enseñar la
-    // entrada a quien seguro no la puede usar.
-    { href: "/admin/audit", label: "Auditoría", icon: "fa-clipboard-list", cap: "manage_options" },
-    { href: "/admin/hooks", label: "nav.hooks", icon: "fa-microscope", cap: "manage_options" },
-    { href: "/admin/db-migration", label: "nav.dbMigration", icon: "fa-database", cap: "manage_options" },
-    // Outgoing webhooks — admin only (they can exfiltrate content changes), mirrors the backend isAdmin gate.
-    { href: "/admin/webhooks", label: "nav.webhooks", icon: "fa-bolt", cap: "manage_options" },
-    // API tokens are gated on `manage_api_tokens` (admins hold it via '*'), NOT shown to every user —
-    // minting a token is a privileged action even though the token inherits the owner's own permissions.
-    // Account self-service stays at 'read' (every logged-in user manages their own profile/password).
-    { href: "/admin/tokens", label: "nav.apiTokens", icon: "fa-key", cap: "manage_api_tokens" },
-    { href: "/admin/account", label: "nav.account", icon: "fa-user-gear", cap: "read" },
-];
+// The core entries, their capabilities and the section split live in lib/adminAccess.ts: the admin
+// layout's route guard reads the SAME map, so a page you cannot see here is a page you cannot open.
+type SidebarMenuItem = AdminMenuItem;
 
 interface SidebarProps {
     isOpen: boolean;
@@ -95,14 +40,6 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
 
     const currentLang = languages.find(l => l.code === language) || languages[0];
 
-    // Helper to check capabilities
-    const can = (cap: string | undefined) => {
-        if (!cap) return true;
-        if (!user || !user.capabilities) return false;
-        if (user.capabilities.includes("*")) return true;
-        return user.capabilities.includes(cap);
-    };
-
     useEffect(() => {
         const fetchSettings = async () => {
             try {
@@ -117,31 +54,13 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
         fetchSettings();
     }, []);
 
-    // Deduplicate: Filter out plugin menus that conflict with core items
-    // We filter out any item that is explicitly marked as 'core' plugin (provided by backend)
-    // or has a URL collision with our hardcoded core items
-    const uniquePluginMenus = pluginMenus.filter((pItem: any) => {
-        if (pItem.plugin === 'core') return false;
-        return !coreMenuItems.some(cItem => cItem.href === pItem.href);
-    });
-
-    // Combine core + unique plugin menus and FILTER by capability
-
-    // Split plugins into sections
-    const coreSectionPlugins = uniquePluginMenus.filter((p: any) => p.section !== 'management');
-    const managementSectionPlugins = uniquePluginMenus.filter((p: any) => p.section === 'management');
-
-    // Split index 7 = everything up to (and including) the chrome editor entry stays in the core
-    // section; keep it in sync with the coreMenuItems order above.
-    const coreSectionItems = [
-        ...coreMenuItems.slice(0, 7).filter(item => can(item.cap)),
-        ...coreSectionPlugins.filter(item => can(item.cap))
-    ];
-
-    const managementSectionItems = [
-        ...managementSectionPlugins.filter(item => can(item.cap)),
-        ...coreMenuItems.slice(7).filter(item => can(item.cap))
-    ];
+    // Core entries + plugin entries, filtered by capability and by what the route guard lets this user
+    // open, in display order (lib/adminAccess.ts sidebarSections — also what the post-login landing uses).
+    // A section with no entry for this user is not drawn at all: no heading over nothing.
+    const sections = visibleSidebarSections(user, pluginMenus as unknown as AdminMenuItem[]);
+    // The logo leads "home": the dashboard for whoever may open it, otherwise the first page this user's
+    // sidebar offers (a plugin team member's plugin screen) — never a page the route guard would refuse.
+    const homeHref = firstAllowedAdminPath(user, pluginMenus as unknown as AdminMenuItem[]);
 
     const renderMenuItem = (item: SidebarMenuItem) => {
         const itemUrl = new URL(item.href, 'http://localhost'); // Dummy base for URL parsing
@@ -214,17 +133,19 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
             {/* h-dvh, not h-screen: on iOS 100vh is the LARGE viewport, so the bottom of the menu sat
                 under Safari's toolbar (same reason as the shell in DashboardLayoutClient). */}
             <aside className={`
-                fixed inset-y-0 left-0 z-[5002] bg-[#0f172a] text-white h-dvh flex flex-col transition-all duration-500 [transition-timing-function:cubic-bezier(0.4,0,0.2,1)] border-r border-white/5 shadow-2xl
+                fixed inset-y-0 left-0 z-[5002] bg-[#0f172a] text-white h-dvh flex flex-col transition-all duration-500 [transition-timing-function:cubic-bezier(0.4,0,0.2,1)] border-r border-white/5 md:shadow-2xl
                 md:relative md:translate-x-0
                 ${isCollapsed ? "md:w-28 w-80" : "md:w-80 w-80"}
-                ${isOpen ? "translate-x-0" : "-translate-x-full"}
+                ${isOpen ? "translate-x-0 shadow-2xl" : "-translate-x-full shadow-none"}
             `}>
                 {/* Logo - Fixed */}
                 <div className={`
                     flex flex-shrink-0 transition-all duration-300
                     ${isCollapsed ? "md:flex-col md:items-center md:gap-6 md:p-6 justify-between items-center p-6 pb-8" : "justify-between items-center p-8 pb-10"}
                 `}>
-                    <Link href="/admin" className=" relative z-10 text-2xl font-black flex items-center gap-3 tracking-tight group overflow-hidden flex-1 min-w-0 mr-2">
+                    {/* No overflow-hidden here: it cut the logo's glow to a hard-edged box. The site name truncates on
+                        its own (`truncate`), and the logo keeps its square (shrink-0) beside a long name. */}
+                    <Link href={homeHref} data-sidebar-home="" className=" relative z-10 text-2xl font-black flex items-center gap-3 tracking-tight group flex-1 min-w-0 mr-2">
                         {logoUrl ? (
                             <div className={`
                                 flex-shrink-0 bg-white/5 rounded-2xl p-1.5 ring-1 ring-white/10 group-hover:ring-blue-500/50 transition-all shadow-lg shadow-black/20
@@ -233,8 +154,8 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
                                 <img src={logoUrl} alt={siteTitle} className="h-full w-full object-contain drop-shadow-md" />
                             </div>
                         ) : (
-                            <div className={`
-                                bg-gradient-to-br from-blue-600 to-indigo-600 rounded-2xl shadow-lg shadow-blue-500/30 ring-1 ring-white/20 group-hover:rotate-12 transition-transform
+                            <div data-sidebar-logo="" className={`
+                                shrink-0 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-2xl shadow-lg shadow-blue-500/30 ring-1 ring-white/20 group-hover:rotate-12 transition-transform
                                 ${isCollapsed ? "md:p-3 p-3" : "p-3"}
                             `}>
                                 <i className={`fa-solid fa-rocket text-white ${isCollapsed ? "md:text-lg text-xl" : "text-xl"}`}></i>
@@ -259,19 +180,14 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
                     flex-1 overflow-y-auto min-h-0 space-y-8 custom-scrollbar transition-all duration-300
                     ${isCollapsed ? "md:px-2 md:py-8 md:scrollbar-hide px-4 py-2" : "px-4 py-2"}
                 `}>
-                    <div className="space-y-2">
-                        <div className={`px-6 mb-3 ${isCollapsed ? "md:hidden block" : "block"}`}>
-                            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500/80">{t('nav.sectionCore')}</span>
+                    {sections.map((section) => (
+                        <div key={section.key} className="space-y-2" data-sidebar-section={section.key}>
+                            <div className={`px-6 mb-3 ${isCollapsed ? "md:hidden block" : "block"}`}>
+                                <span className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500/80">{t(section.labelKey)}</span>
+                            </div>
+                            {section.items.map((item) => renderMenuItem(item))}
                         </div>
-                        {coreSectionItems.map((item) => renderMenuItem(item))}
-                    </div>
-
-                    <div className="space-y-2">
-                        <div className={`px-6 mb-3 ${isCollapsed ? "md:hidden block" : "block"}`}>
-                            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500/80">{t('nav.sectionSystem')}</span>
-                        </div>
-                        {managementSectionItems.map((item) => renderMenuItem(item))}
-                    </div>
+                    ))}
                 </nav>
 
                 {/* User info & Logout - Fixed at bottom */}
@@ -282,7 +198,7 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
                     `}>
                         <div className="flex items-center gap-4">
                             <div className={`
-                                rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-900/50 ring-2 ring-white/10 transition-transform group-hover:scale-105
+                                shrink-0 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-900/50 ring-2 ring-white/10 transition-transform group-hover:scale-105
                                 ${isCollapsed ? "md:w-9 md:h-9 md:rounded-xl w-10 h-10 rounded-2xl" : "w-10 h-10 rounded-2xl"}
                             `}>
                                 <i className={`fa-solid fa-user text-white ${isCollapsed ? "md:text-sm text-sm" : "text-sm"}`}></i>
@@ -294,8 +210,8 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
                                         return typeof name === 'string' ? name : 'User';
                                     })()}
                                 </p>
-                                <p className="truncate text-[9px] text-blue-400 uppercase font-black tracking-widest leading-none mt-1">
-                                    {typeof user?.role === 'string' ? user.role : 'Member'}
+                                <p className="truncate text-[9px] text-blue-400 uppercase font-black tracking-widest leading-none mt-1" data-sidebar-role="">
+                                    {roleDisplayName(user, t) || 'Member'}
                                 </p>
                             </div>
                         </div>

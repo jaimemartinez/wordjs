@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { api, apiPost } from "@/lib/api";
 import { PageHeader } from "@/components/ui/PageHeader";
+import DialogLayer from "@/components/DialogLayer";
 
 import { useModal } from "@/contexts/ModalContext";
 
@@ -127,7 +128,9 @@ export default function DbMigrationPage() {
 
     if (loading && migrationProgress && migrationProgress.step !== 'idle' && migrationProgress.step !== 'done') {
         return (
-            <div className="fixed inset-0 z-[60] bg-white/95 flex flex-col items-center justify-center animate-in fade-in">
+            // A blocker over the WHOLE admin, shell included (components/DialogLayer.tsx): at z-60 inside the
+            // page the sidebar stayed clickable in the middle of a migration.
+            <DialogLayer className="bg-white/95 flex flex-col items-center justify-center animate-in fade-in">
                 <div className="w-96 max-w-full px-6">
                     <div className="flex justify-between mb-2 items-end">
                         <span className="font-bold text-gray-800 capitalize text-lg flex items-center gap-2">
@@ -160,19 +163,19 @@ export default function DbMigrationPage() {
                         </div>
                     )}
                 </div>
-            </div>
+            </DialogLayer>
         );
     }
 
     if (restarting) {
         return (
-            <div className="fixed inset-0 z-50 bg-white/90 flex flex-col items-center justify-center animate-in fade-in">
+            <DialogLayer className="bg-white/90 flex flex-col items-center justify-center animate-in fade-in">
                 <div className="animate-spin text-4xl text-blue-600 mb-4">
                     <i className="fa-solid fa-circle-notch"></i>
                 </div>
                 <h2 className="text-xl font-bold text-gray-800">Restarting Server...</h2>
                 <p className="text-gray-500 mt-2">Please wait while we apply changes.</p>
-            </div>
+            </DialogLayer>
         );
     }
 
@@ -243,7 +246,7 @@ export default function DbMigrationPage() {
                                 <i className="fa-solid fa-check text-emerald-400 text-sm"></i>
                             </div>
                         </div>
-                        <div className="w-12 h-12 bg-gray-700/50 rounded-2xl flex items-center justify-center text-emerald-400 text-xl relative z-10">
+                        <div className="w-12 h-12 shrink-0 bg-gray-700/50 rounded-2xl flex items-center justify-center text-emerald-400 text-xl relative z-10">
                             <i className="fa-solid fa-wave-square"></i>
                         </div>
                     </div>
@@ -263,7 +266,7 @@ export default function DbMigrationPage() {
                                         <span className="font-mono text-xs font-bold text-gray-600">{file}</span>
                                         <button
                                             onClick={() => runCleanup(file)}
-                                            className="w-8 h-8 flex items-center justify-center bg-red-100 text-red-600 rounded-lg hover:bg-red-600 hover:text-white transition-all"
+                                            className="w-8 h-8 shrink-0 flex items-center justify-center bg-red-100 text-red-600 rounded-lg hover:bg-red-600 hover:text-white transition-all"
                                             title="Delete File"
                                         >
                                             <i className="fa-solid fa-xmark"></i>
@@ -279,7 +282,7 @@ export default function DbMigrationPage() {
                 <div className="lg:col-span-8 animate-in slide-in-from-bottom-8 fade-in duration-700 delay-200">
                     <div className="bg-white/50 backdrop-blur-sm rounded-3xl p-2 md:p-8 border border-white/60">
                         <h2 className="text-xl font-bold text-gray-800 flex items-center gap-3 mb-6 px-2">
-                            <div className="w-8 h-8 rounded-lg bg-gray-900 text-white flex items-center justify-center text-sm">
+                            <div className="w-8 h-8 shrink-0 rounded-lg bg-gray-900 text-white flex items-center justify-center text-sm">
                                 <i className="fa-solid fa-share-nodes"></i>
                             </div>
                             Available Migrations
@@ -405,7 +408,7 @@ export default function DbMigrationPage() {
             <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-3 pointer-events-none max-w-[calc(100vw-3rem)]">
                 {result && (
                     <div className="pointer-events-auto p-4 bg-emerald-500 text-white shadow-2xl shadow-emerald-500/30 rounded-2xl animate-in slide-in-from-right fade-in flex items-center gap-4 max-w-md border border-emerald-400">
-                        <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                        <div className="w-8 h-8 shrink-0 bg-white/20 rounded-full flex items-center justify-center">
                             <i className="fa-solid fa-check text-lg"></i>
                         </div>
                         <span className="font-bold tracking-wide">{result}</span>
@@ -413,7 +416,7 @@ export default function DbMigrationPage() {
                 )}
                 {error && (
                     <div className="pointer-events-auto p-4 bg-red-500 text-white shadow-2xl shadow-red-500/30 rounded-2xl animate-in slide-in-from-right fade-in flex items-center gap-4 max-w-md border border-red-400">
-                        <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                        <div className="w-8 h-8 shrink-0 bg-white/20 rounded-full flex items-center justify-center">
                             <i className="fa-solid fa-triangle-exclamation text-lg"></i>
                         </div>
                         <span className="font-bold tracking-wide">{error}</span>
@@ -423,12 +426,12 @@ export default function DbMigrationPage() {
 
             {/* Custom Modal */}
             {modal.isOpen && (
-                <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
+                <DialogLayer className="flex items-center justify-center p-4">
                     <div className="absolute inset-0 bg-gray-900/60 backdrop-blur-sm animate-in fade-in" onClick={() => setModal({ ...modal, isOpen: false })}></div>
                     <div className="bg-white rounded-[40px] shadow-2xl max-w-lg w-full overflow-hidden relative z-10 animate-in zoom-in-95 duration-300">
                         {modal.type === 'confirm' ? (
                             <div className="p-8">
-                                <div className="w-16 h-16 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center mb-6 mx-auto">
+                                <div className="w-16 h-16 shrink-0 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center mb-6 mx-auto">
                                     <i className="fa-solid fa-arrow-right-arrow-left text-2xl"></i>
                                 </div>
                                 <h3 className="text-2xl font-black text-gray-900 text-center mb-2">Ready to Migrate?</h3>
@@ -525,7 +528,7 @@ export default function DbMigrationPage() {
                             </div>
                         )}
                     </div>
-                </div>
+                </DialogLayer>
             )}
         </div>
     );

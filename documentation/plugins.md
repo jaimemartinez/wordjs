@@ -417,6 +417,7 @@ When you upload a plugin ZIP, WordJS validates it **before** reporting success, 
 - **Decompression-bomb cap** — the uncompressed size and entry count are bounded (a small ZIP that expands to gigabytes is rejected). Same guard protects theme uploads and backup restores.
 - **Manifest** — must be valid JSON with a `name` and `"isolated": true`.
 - **Permissions** — every `{scope, access}` is checked against the known vocabulary; a typo (`databse`, `readwrite`) is rejected with the valid list.
+- **Declared roles** — a `roles` block must stay inside the plugin's namespace and request `roles:declare` (§12a); anything else is rejected with the reason.
 - **AST scan** — the same static scan that runs at activation runs here too; forbidden code (`eval`, `child_process`, dynamic `require`, …) is rejected up front, in your own source and — within the bounds in §7.2 — in any `node_modules/` you ship.
 - **Live-plugin safety** — re-uploading a slug that is currently **active** is refused (409). Deactivate it first so a botched extract can't corrupt a running plugin.
 
@@ -683,8 +684,22 @@ For a full list of security rules, see the **[Security Guide](security.md)**.
 
 ### 10.1 Admin Menus & Deduplication ⚠️
 WordJS's frontend (`Sidebar.tsx`) automatically **deduplicates** menu items.
-*   **Core Items:** Dashboard, Media, Posts, Settings, etc., are hardcoded in the frontend.
-*   **Plugin Items:** Fetched from the backend.
+*   **Core Items:** Dashboard, Media, Posts, Settings, etc., are defined in the frontend
+    (`frontend/src/lib/adminAccess.ts`, the same map the admin route guard enforces).
+*   **Plugin Items:** Fetched from the backend (`GET /plugins/menus`, filtered by each item's `cap`).
+
+**Your menu item is also the key to your page.** The admin layout lets a non-administrator open
+`/admin/plugin/<slug>` only when they have a menu item pointing there, so give the item the capability
+your page needs (for a plugin role, one of your own namespaced capabilities — §12a). A plugin menu item
+never opens a core screen: `/admin/users` stays `list_users`-only whatever capability your item names.
+Administrators open every page. A plugin's item may point only at **its own** admin page
+(`/admin/plugin/<frontend.adminPage.slug>`): an item pointing at another plugin's page is dropped with a
+host warning, so one plugin's roles can never open another plugin's screen. What is installed decides
+whose page a slug is — the plugin installed in the folder of that name, otherwise the one installed plugin
+whose manifest declares it — never your manifest alone, and the upload and the activation refuse an
+`adminPage.slug` that is another installed plugin's folder or admin page (`Invalid admin page`), as they
+refuse a plugin whose folder another installed plugin declares as its admin page. This guard is
+navigation in the browser, not access control — your routes must still check the caller (§12a).
 
 If your plugin registers a menu item with the same path as a core item (e.g., `/admin/media`), the frontend will **hide** your plugin's item to prevent React duplicate key errors.
 Always use unique paths (e.g., `/admin/plugin/my-plugin-media`) unless you intentionally want to rely on the core item.
@@ -776,12 +791,12 @@ Every call is permission-checked on the host against your manifest.
 | `wordjs.db.batch(statements)` | `database:read` / `write` | Up to 200 `[sql, params]` pairs in ONE host round-trip — a transport optimisation only: each statement is re-checked with the same permission + SQL guard as the single-statement call, and DDL is refused (use `db.run` / `db.createTable`). Validated as a whole before anything runs, but **not** a transaction — a mid-batch failure leaves the earlier statements applied. |
 | `wordjs.db.createTable(name, columns)` | `database:write` | Always creates a `wjp_<slug>_`-prefixed table; core table names blocked. |
 | `wordjs.db.getType()` | `database:read` | Returns `{ isPostgres, isMySQL, isSQLite, driver }` (`driver` is the full driver name, e.g. `'sqlite-native'`, `'sqlite-legacy'`, `'postgres'`, `'mysql'`, or `'mariadb'`) — branch your DDL on the `isPostgres`/`isMySQL` booleans rather than the raw `driver` string (`isMySQL` is `true` for both `'mysql'` and `'mariadb'`). Note `isSQLite` stays `true` under MySQL (the MySQL driver translates the SQLite dialect), so gate SQLite-only queries (`PRAGMA`/`sqlite_master`) on `isMySQL` explicitly. |
-| `wordjs.users.findByEmail / findByLogin / findById / search(...)` | `users:read` | **Safe projection** only: `{ id, userLogin, username, userEmail, displayName, role, hasProfessionalMailbox }` — never `user_pass` or other credential fields. The sanctioned way to read users without core-table access. (`hasProfessionalMailbox` is the admin-owned corporate-mailbox grant as a boolean — read it, never re-derive it from `userEmail`, which the account itself can write.) |
+| `wordjs.users.findByEmail / findByLogin / findById / search(...)` | `users:read` | **Safe projection** only: `{ id, userLogin, username, userEmail, displayName, role, hasProfessionalMailbox, pluginCapabilities }` — never `user_pass` or other credential fields. `pluginCapabilities` is the account's capabilities in your own namespace (§12a), the same list a route gets as `req.user.pluginCapabilities`. The sanctioned way to read users without core-table access. (`hasProfessionalMailbox` is the admin-owned corporate-mailbox grant as a boolean — read it, never re-derive it from `userEmail`, which the account itself can write.) |
 | `wordjs.site.url / domain / adminEmail` | `settings:read` | Read-only site identity. |
 | `wordjs.media.getPrivate(id)` · `res.sendPrivateMedia(id, { filename })` | `media:private_read` | PRIVATE media (`documentation/security.md` §1.5). `getPrivate` returns `{ id, title, mimeType, filesize, filename }` (never a path) or `null`; replying with `res.sendPrivateMedia` from one of your routes makes the HOST stream that file as a download (`no-store`, attachment). Your route decides who may download (e.g. a paid, unexpired token); the file never gets a public URL. Without the grant the call throws and the reply is `403`. |
 | `wordjs.dns.resolveMx / resolveTxt / resolve4 / resolve6 / resolve(...)` | `network` | Host-mediated DNS. The raw resolver (`dns.resolve*`) is denied inside the child, so MX (direct delivery) and TXT (SPF/DKIM/DMARC) lookups go through here. The host strips every A/AAAA answer pointing at a private/internal address, so the address lookups return public IPs only. The name being resolved must be inside the plugin's egress allowlist when one is set, and a name containing a control character (a NUL, which the resolver would stop at) is always refused. |
 | `wordjs.hooks.addAction/addFilter(hook, cb, priority)` · `doAction(hook, ...args)` | — | Callback runs in the child process; host installs an RPC shim. Core hooks that carry other parties' data need the matching grant — `comments:read` (`comments:pii` for commenter email/IP/agent), `posts:read`, `notifications:read`, `settings:read` — and arrive minimized (see §10.5); reserved core-namespace names are refused. Raw-HTML output hooks — `wordjs_head`/`wordjs_footer` and their WordPress-compat aliases `wp_head`/`wp_footer` and `dynamic_sidebar` — are denied to every plugin (the registration is dropped with a host-side warning; no trust tier exempts anyone). `doAction` fires only your OWN registered callbacks — never core's or another plugin's. |
-| `wordjs.http.route(method, path, [opts,] handler)` | `express:register_route` | Mounted at `/api/v1/plugin/<slug>/path` (always namespaced — no absolute mode). The host checks the grant on every registration: without a granted `express:register_route` the route is dropped with a host warning (`denied route registration: express:register_route not granted`) and nothing is mounted — `scope: "admin"` does NOT imply it, declare it explicitly. `opts`: `{ auth, admin }` (host runs the real auth middleware), `{ multipart: 'field' }`. Handler gets a mock `(req,res)` over RPC. |
+| `wordjs.http.route(method, path, [opts,] handler)` | `express:register_route` | Mounted at `/api/v1/plugin/<slug>/path` (always namespaced — no absolute mode). The host checks the grant on every registration: without a granted `express:register_route` the route is dropped with a host warning (`denied route registration: express:register_route not granted`) and nothing is mounted — `scope: "admin"` does NOT imply it, declare it explicitly. `opts`: `{ auth, admin }` (host runs the real auth middleware), `{ multipart: 'field' }`. Handler gets a mock `(req,res)` over RPC. With `auth`, `req.user` is `{ id, role, userEmail, userLogin, hasProfessionalMailbox, pluginCapabilities }` — `pluginCapabilities` being the caller's capabilities in your own namespace (§12a). |
 | `wordjs.shortcodes.add(tag, handler)` | — | Handler may be async; expanded via `doShortcodeAsync`. |
 | `wordjs.fs.read(relPath, enc)` / `write(relPath, data)` | `filesystem:read` / `write` | Confined to your **own** plugin dir only (realpath-checked) — never the shared `uploads/` dir. `manifest.json` is immutable, and so is everything under `public/` and `dist/` (§11a). |
 | `wordjs.mail(msg)` | `email:admin` | Sends via the active mail provider. (Distinct from `email:provider`, which only `wordjs.provideMail` needs.) |
@@ -857,11 +872,13 @@ the capability is BOTH declared in the manifest AND granted.
 
 **Grantable capabilities** (the canonical manifest vocabulary is `KNOWN_PERMISSIONS` in
 `backend/src/core/plugins.ts`): `database` (read/write — own tables only), `settings` (read/write —
-non-secret options), `filesystem` (read/write — own dir), `users:read` (the safe user projection),
+non-secret options), `filesystem` (read/write — own dir), `users:read` (the safe user projection, with the
+account's capabilities in your own namespace — §12a),
 `assets:write` (enqueue own scripts/styles on public pages), `email:admin` (send through the active mail
 provider) / `email:provider` (*become* the provider), `notifications:send` / `notifications:provider`,
 `express:register_route`, `admin_menu:register`, `browser:script` (serve and run the plugin's compiled
-frontend bundles in the browser — **not sandboxed**, see `security.md` §1.3b), and **`network`** (outbound access to **public IPs only**
+frontend bundles in the browser — **not sandboxed**, see `security.md` §1.3b), `roles:declare` (register the user roles of
+the manifest's `roles` block — §12a), and **`network`** (outbound access to **public IPs only**
 — the egress guard blocks loopback/link-local/`169.254.169.254` metadata/RFC1918/CGNAT/ULA and validates
 the resolved IP at connect time; opt-in, with an exfiltration warning — declare `scope: "network"`).
 An admin may narrow a `network` plugin further with a per-plugin **egress host allowlist**
@@ -897,8 +914,11 @@ Changing a plugin's grants **hot-reloads its child process** so the bridge gates
 decision, and the UI says so: `frontend/src/lib/permissionMeta.ts` classifies `database:write`,
 `settings:write`, `filesystem:write`, `email:admin`, `email:provider`, `notifications:provider`,
 `assets:write` and `network` as **high risk**, and both grant screens (the activation dialog and the per-permission
-toggles) render those rows with a `HIGH RISK` badge, a platform-authored explanation, and — separately
-labelled — the plugin's own stated reason from its manifest. `network` carries the explicit wording
+toggles) render those rows with a high-risk badge, a platform-authored explanation, and — separately
+labelled — the plugin's own stated reason from its manifest. The platform's label and explanation of each
+token, the risk badges and those labels are in the admin's language (`permMeta(token, t)` reads
+`perm.<token>.label` / `perm.<token>.description` from `frontend/src/lib/i18n.ts`, es/en/pt; the English in
+`permissionMeta.ts` is the fallback). `network` carries the explicit wording
 that data can leave your server, and `assets:write` spells out that the plugin's script runs in every
 visitor's browser. Only grant capabilities to code you have audited.
 
@@ -907,6 +927,104 @@ visitor's browser. Only grant capabilities to code you have audited.
 > no plugin can obtain any of these by any grant.
 
 ---
+
+## 12a. Declaring user roles (`roles:declare`) 👥
+
+A plugin may ship **user roles of its own** — for example a "conference team" role whose holders can open
+the plugin's admin page and nothing else. The administrator creates (or edits) a user, picks the role in
+the user form, and that person signs in straight onto the plugin's screen.
+
+**The rule: a role a plugin declares can only ever affect that plugin — never the core, never another
+plugin.** It is enforced by a namespace derived from the plugin id, not by trusting the manifest.
+
+```json
+"permissions": [
+    { "scope": "roles", "access": "declare", "reason": "Declares the conference team role." }
+],
+"roles": [
+    {
+        "slug": "conference_manager_team",
+        "name": "Equipo de conferencia",
+        "description": "Can open the Conference Manager page and nothing else.",
+        "capabilities": ["conference_manager_access"]
+    }
+]
+```
+
+*   **Namespace.** `PREFIX` = the plugin id with every character outside `[a-z0-9]` replaced by `_`, plus
+    `_` (`conference-manager` → `conference_manager_`). Every role `slug` and every capability **must**
+    start with it. `read` and `access_admin_panel` are added by the core to every plugin role (enough to
+    enter the admin and reach the user's own account page); do not list them. Up to 10 roles, 50
+    capabilities each; the only keys are `slug`, `name`, `description`, `capabilities`.
+*   **The core's vocabulary is never yours.** A capability that begins with a core capability verb
+    (`access`, `activate`, `create`, `delete`, `edit`, `install`, `list`, `manage`, `moderate`,
+    `promote`, `publish`, `read`, `remove`, `switch`, `unfiltered`, `update`, `upload`, each followed by
+    `_`) is in no plugin's namespace, whatever the plugin is called: plugin `manage` has the prefix
+    `manage_` but can never declare `manage_options`, and plugin `edit-flow` can never declare
+    `edit_flow_items` (the capability of a content type called `flow_item`). A plugin whose id begins with
+    one of those verbs therefore cannot declare roles; `manager` or `editorial` can.
+*   **All or nothing.** One bad entry rejects the whole block, with the reason: at upload, in the
+    marketplace submission gate (`backend/scripts/scan-plugin.mjs`) and at activation — and an activation
+    that is refused does not half-apply: every check runs before the plugin's code is spawned, so its
+    `init()` never runs and no role is written.
+*   **Content types are the core's.** A capability that gates a registered content type (its
+    `permissions.operations`, which an administrator names freely — `events_publish`) is never a plugin
+    role's, even when it carries the plugin's prefix: it is refused at registration and confers nothing if
+    a type that uses it is created later.
+*   **No shadowing.** A declared slug that is already a core role, a role an administrator created or
+    another plugin's role is refused. So is a slug or a capability inside another installed plugin's
+    namespace (`foo` may not declare `foo_bar_team` or `foo_bar_x` while `foo-bar` is installed; a role
+    registered before `foo-bar` arrived loses that capability — or, for its slug, is orphaned — when any
+    plugin is activated), and two installed plugins whose ids map to the same prefix (`a-b`, `a_b`) own
+    nothing in it: neither can declare roles, and a role either registered earlier confers nothing of it.
+*   **Grant, then registration.** The manifest *requests* `roles:declare`; the administrator *grants* it
+    (activation dialog or the per-plugin permission switches, which list the roles the plugin will
+    register). The roles are registered when the plugin is activated with the grant, when the grant is
+    given to a running plugin, and refreshed from the manifest on disk at every boot. Without the grant
+    a role is **inert**: it confers only `read`/`access_admin_panel`.
+*   **Afterwards.** The roles live in `wordjs_user_roles` with their provenance
+    (`{ source: "plugin", plugin: "<id>" }`); the Roles screen shows them as the plugin's, read-only. The
+    administrator may change a plugin role's capabilities only inside the plugin's namespace
+    (`POST /roles` → `400 rest_role_plugin_capability` otherwise) and may not rename or delete it while the
+    plugin is installed (`409 rest_role_plugin_managed`). Such an edit is kept as the role's
+    `adminChanges` (`{ added, removed }`), so the next activation, boot or permission change re-applies the
+    manifest's definition **with the administrator's edit on top** — a capability taken away to close
+    the plugin's screens to a role stays away. The boot-time role sync cuts anything that does not
+    belong, and the capabilities a user actually holds are computed from the namespace at every check, so
+    even a hand-edited option cannot give a plugin role a core capability. Role writes run one at a time
+    (a plugin role's refresh cannot overwrite an administrator's concurrent edit of another role), in each
+    process and across nodes, and each one is computed on the roles map stored in the database and saved
+    only while it is still that map — a role change made on another node is never written back over — and on
+    several nodes a `roles:declare` grant or revoke reaches every node through the same Redis signal as a
+    role edit.
+*   **Lifecycle.** Deactivating the plugin keeps its roles (their holders keep their accounts; the
+    capabilities reach nothing while the plugin is off). **Deleting** it removes each role nobody holds and
+    keeps the others **orphaned** — their holders keep only `read`/`access_admin_panel`; the administrator
+    can delete the role once nobody holds it (`409 rest_role_in_use` with `data.holders` while someone
+    does — a dangling role would be handed back to its holders by the next plugin declaring that slug). A
+    role whose plugin folder disappeared without the delete (removed by hand, a restored backup) is
+    orphaned at boot. A new version that stops declaring a role retires it the same way. Installing the
+    same plugin again re-adopts an orphaned role: its holders get its permissions back once
+    `roles:declare` is granted, so the grant screens show, next to each declared role, how many users
+    already hold it (`GET /plugins` → `roles[].holders`). While the grant is not in effect the note says
+    those users get the role's permissions back when it is granted; while it is, it only counts them
+    (they already have those permissions). Activating a plugin grants its requested permissions only when
+    it has no grant on record (`POST /plugins/:slug/activate`), so a permission revoked earlier stays
+    revoked: the activation dialog marks such a permission "Stays off" (`grantState.ts activationGrant`),
+    and under `roles:declare` its note says activating does not give the holders their permissions back —
+    granting it in Permissions does.
+
+**Gating your routes and your page.** A route registered with `{ auth: true }` receives
+`req.user.pluginCapabilities`: the caller's capabilities **in your namespace** (from your own roles or
+from a core/custom role an administrator gave them) — never a core capability, never another plugin's.
+An administrator receives every capability your roles confer, so `req.user.pluginCapabilities.includes(
+'conference_manager_access')` is a complete check (`req.user.role === 'administrator'` still works). The
+users bridge (`users:read`) adds the same `pluginCapabilities` to every account it returns, so you can
+tell which accounts your screens are open to. Prefer the capability over the role slug: an administrator
+may give your capability to another role (an editor who also works in your plugin) — the
+conference-manager team accepts any account whose role holds `conference_manager_access`. Register your
+admin menu item with your capability (`cap: 'conference_manager_access'`) so the item — and through it
+your page (§10.1) — is offered exactly to the users who hold it.
 
 ## 13. Verso Blocks (Visual Editor Components) 🧩
 

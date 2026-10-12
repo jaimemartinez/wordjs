@@ -29,7 +29,9 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/contexts/AuthContext", () => ({
     AuthProvider: ({ children }: { children: React.ReactNode }) => children,
     useAuth: () => ({
-        user: { id: 1, username: "admin", roles: ["administrator"], capabilities: [], mfa: null },
+        // `role`, as AuthContext's user carries it: the layout's route guard (lib/adminAccess.ts) only lets
+        // an administrator (or a holder of the page's capability) see a page — and the shell around it.
+        user: { id: 1, username: "admin", role: "administrator", roles: ["administrator"], capabilities: [], mfa: null },
         isLoading: false,
         logout: () => undefined,
         refreshUser: async () => undefined,
@@ -134,5 +136,29 @@ describe("admin document and viewport", () => {
         expect(rule![1]).toMatch(/overscroll-behavior-y\s*:\s*none\s*;?/);
         // Never the x axis on the root: that switches off the desktop two-finger back/forward swipe.
         expect(css).not.toMatch(/overscroll-behavior(-x)?\s*:\s*none/);
+    });
+});
+
+describe("the shell's edges on a phone (live review, iPhone SE / 13)", () => {
+    it("the CLOSED phone menu casts no shadow (its shadow-2xl bled a grey band onto the page's left edge)", async () => {
+        const aside = classesOf(await renderShell(), /<aside[^>]*>/);
+        expect(aside).toContain("-translate-x-full");      // rendered closed
+        expect(aside).toContain("shadow-none");
+        expect(aside).not.toContain("shadow-2xl");
+        expect(aside).toContain("md:shadow-2xl");           // the desktop sidebar keeps it
+        const src = fs.readFileSync(path.resolve(ADMIN_DIR, "../../components/Sidebar.tsx"), "utf8");
+        expect(src).toContain('${isOpen ? "translate-x-0 shadow-2xl" : "-translate-x-full shadow-none"}');
+    });
+
+    it("the logo keeps its square beside a long site name, and its glow is not clipped", async () => {
+        const html = await renderShell();
+        expect(classesOf(html, /<div[^>]*data-sidebar-logo[^>]*>/)).toContain("shrink-0");
+        expect(classesOf(html, /<a[^>]*data-sidebar-home[^>]*>/)).not.toContain("overflow-hidden");
+    });
+
+    it("the phone header's rule is light grey, not Tailwind v4's currentColor default (a black line)", async () => {
+        const header = classesOf(await renderShell(), /<header[^>]*>/);
+        expect(header).toContain("border-b");
+        expect(header).toContain("border-gray-100");
     });
 });

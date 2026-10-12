@@ -152,6 +152,10 @@ function checkManifest(slug, dir, manifest, core, { firstParty = false } = {}) {
     // installer refuses them, see core/plugins.ts dependencySpecProblem).
     for (const p of core.validateManifestDependencies(manifest.dependencies)) add(p);
 
+    // Declared roles: every role slug and capability in the plugin's own namespace, the roles:declare
+    // permission requested — the same function the upload gate and activation run (core/plugin-roles.ts).
+    for (const p of core.validateManifestRoles(slug, manifest)) add(p);
+
     // ... and a justification for every one of them. Either inline `reason` (the shape every existing
     // manifest uses) or an entry in `permissions_rationale` keyed by grant token.
     const rationale = manifest.permissions_rationale && typeof manifest.permissions_rationale === 'object'

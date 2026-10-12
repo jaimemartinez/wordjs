@@ -314,7 +314,7 @@ export default function AuditPage() {
                                                             title={expanded ? t("audit.detailHide") : t("audit.detailShow")}
                                                             aria-label={expanded ? t("audit.detailHide") : t("audit.detailShow")}
                                                             aria-expanded={expanded}
-                                                            className="w-9 h-9 rounded-xl bg-gray-50 text-gray-500 hover:bg-gray-200 flex items-center justify-center transition-all"
+                                                            className="w-9 h-9 shrink-0 rounded-xl bg-gray-50 text-gray-500 hover:bg-gray-200 flex items-center justify-center transition-all"
                                                         >
                                                             <i className={`fa-solid ${expanded ? "fa-chevron-up" : "fa-chevron-down"} text-xs`}></i>
                                                         </button>

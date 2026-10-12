@@ -2,7 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { pluginsApi, themesApi, Plugin, PluginPortConflict, PluginRuntime } from "@/lib/api";
-import { permMeta, PermissionRisk } from "@/lib/permissionMeta";
+import DeclaredRolesList, { ROLES_TOKEN } from "./DeclaredRolesList";
+import BreakableToken, { TOKEN_WRAP_CLASS } from "./BreakableToken";
+import { PermissionRow, RiskBadge, RISK_CLASSES, TOKEN_CLASS, REASON_LABEL_CLASS, PERMISSION_TOGGLE_CLASS, PERMISSION_DETAILS_CLASS } from "./PermissionRow";
+import { activationGrant, activationLeavesSomeOff, rolesHeldState } from "./grantState";
+import DialogLayer from "@/components/DialogLayer";
+import { permMeta } from "@/lib/permissionMeta";
 import { reloadActivePlugins } from "@/lib/plugins";
 import { deepLinkedPlugin, withoutPermissionsDeepLink } from "@/lib/pluginPermissionsLink";
 import { useMenu } from "@/contexts/MenuContext";
@@ -16,44 +21,7 @@ import MarketplaceTab from "./MarketplaceTab";
 // Small presentational helpers (kept in-file to avoid touching shared components)
 // ---------------------------------------------------------------------------
 
-const RISK_CLASSES: Record<PermissionRisk, string> = {
-    low: 'bg-emerald-50/60 text-emerald-700 border-emerald-200/50 hover:bg-emerald-50 transition-colors',
-    med: 'bg-amber-50/60 text-amber-700 border-amber-200/50 hover:bg-amber-50 transition-colors',
-    high: 'bg-rose-50/60 text-rose-700 border-rose-200/50 hover:bg-rose-50 transition-colors',
-};
-
-function RiskBadge({ risk }: { risk: PermissionRisk }) {
-    return (
-        <span className={`text-[8px] font-extrabold uppercase tracking-widest px-2 py-0.5 rounded-full border shadow-sm ${RISK_CLASSES[risk]}`}>
-            {risk === 'high' ? 'high risk' : risk === 'med' ? 'medium' : 'low risk'}
-        </span>
-    );
-}
-
-// A single permission row (platform label + risk + platform description + optional plugin reason).
-function PermissionRow({ token, reason, platformNote = false }: { token: string; reason?: string; platformNote?: boolean }) {
-    const meta = permMeta(token);
-    return (
-        <div className={`flex gap-3 p-4 rounded-2xl border backdrop-blur-sm transition-all duration-300 hover:shadow-sm ${RISK_CLASSES[meta.risk]}`}>
-            <div className="mt-0.5 shrink-0">
-                <i className={`fas ${meta.icon || 'fa-key'} text-sm opacity-70`} />
-            </div>
-            <div className="min-w-0">
-                <div className="flex items-center gap-2 mb-1 flex-wrap">
-                    <span className="font-extrabold text-sm text-slate-800">{meta.label}</span>
-                    <RiskBadge risk={meta.risk} />
-                    <span className="text-[10px] font-mono text-slate-400/80 font-semibold">{token}</span>
-                </div>
-                {meta.description && <p className="text-xs text-slate-600 font-medium leading-relaxed">{meta.description}</p>}
-                {reason && (
-                    <p className="text-xs text-slate-500 leading-relaxed mt-1.5 italic">
-                        <span className="not-italic font-bold text-slate-400">{platformNote ? 'WordJS note: ' : 'Plugin says: '}</span>{reason}
-                    </p>
-                )}
-            </div>
-        </div>
-    );
-}
+// RISK_CLASSES, RiskBadge and the activation dialog's PermissionRow live in ./PermissionRow.tsx.
 
 /**
  * The browser:script capability is the one grant that is not sandboxed: the plugin's compiled UI runs in
@@ -239,7 +207,7 @@ export function BrokenPluginCard({ plugin, onReinstall, onCleanup, busy }: {
                 </span>
             </div>
 
-            <h3 className="font-extrabold text-slate-900 text-lg mb-1 break-all">{plugin.slug}</h3>
+            <h3 className="font-extrabold text-slate-900 text-lg mb-1 break-words"><BreakableToken text={plugin.slug} /></h3>
             <p className="text-xs text-amber-700 font-semibold leading-relaxed mb-2">{brokenReasonText(plugin)}</p>
             <p className="text-xs text-slate-500 leading-relaxed mb-5">
                 {plugin.wasActive
@@ -718,7 +686,7 @@ export default function PluginsPage() {
             {/* Port-conflict fix modal: a known distro MTA is squatting a port this plugin claims.
                 Explains exactly WHAT will be disabled, that it is PERMANENT, and asks for consent. */}
             {portConflictPrompt && (
-                <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-in fade-in duration-300">
+                <DialogLayer className="bg-slate-950/40 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-300">
                     <div className="bg-white/95 backdrop-blur-lg rounded-[32px] p-8 max-w-md w-full shadow-[0_32px_64px_-16px_rgba(0,0,0,0.12)] border border-slate-200/50 transform transition-all scale-100">
                         <div className="flex items-center gap-4 mb-6">
                             <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-100 flex items-center justify-center flex-shrink-0 text-amber-600 shadow-sm">
@@ -762,12 +730,12 @@ export default function PluginsPage() {
                             </button>
                         </div>
                     </div>
-                </div>
+                </DialogLayer>
             )}
 
             {/* Companion-theme installed: offer the optional one-click switch (option B). */}
             {themeSwitchPrompt && (
-                <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-in fade-in duration-300">
+                <DialogLayer className="bg-slate-950/40 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-300">
                     <div className="bg-white/95 backdrop-blur-lg rounded-[32px] p-8 max-w-md w-full shadow-[0_32px_64px_-16px_rgba(0,0,0,0.12)] border border-slate-200/50 transform transition-all scale-100">
                         <div className="flex items-center gap-4 mb-6">
                             <div className="w-14 h-14 rounded-2xl bg-violet-50 border border-violet-100 flex items-center justify-center flex-shrink-0 text-violet-600 shadow-sm">
@@ -799,12 +767,12 @@ export default function PluginsPage() {
                             </button>
                         </div>
                     </div>
-                </div>
+                </DialogLayer>
             )}
 
             {/* Delete Confirmation Modal */}
             {deleteModalOpen && (
-                <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-in fade-in duration-300">
+                <DialogLayer className="bg-slate-950/40 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-300">
                     <div className="bg-white/95 backdrop-blur-lg rounded-[32px] p-8 max-w-md w-full shadow-[0_32px_64px_-16px_rgba(0,0,0,0.12)] border border-slate-200/50 transform transition-all scale-100">
                         <div className="flex items-center gap-4 mb-6">
                             <div className="w-14 h-14 rounded-2xl bg-rose-50 border border-rose-100 flex items-center justify-center flex-shrink-0 text-rose-500 shadow-sm">
@@ -866,13 +834,13 @@ export default function PluginsPage() {
                             </button>
                         </div>
                     </div>
-                </div>
+                </DialogLayer>
             )}
 
             {/* Activation Rejection Modal — structured (missing grants vs hard-blocked dangerous calls) */}
             {rejection && (
-                <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
-                    <div className="bg-white/95 backdrop-blur-lg rounded-[32px] max-w-lg w-full shadow-[0_32px_64px_-16px_rgba(0,0,0,0.12)] border border-slate-200/50 max-h-[85vh] flex flex-col transform transition-all scale-100">
+                <DialogLayer className="bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+                    <div className="bg-white/95 backdrop-blur-lg rounded-[32px] max-w-lg w-full shadow-[0_32px_64px_-16px_rgba(0,0,0,0.12)] border border-slate-200/50 max-h-[85dvh] flex flex-col transform transition-all scale-100">
                         <div className="p-8 pb-4 flex-shrink-0">
                             <div className="flex items-center gap-4">
                                 <div className="w-14 h-14 rounded-2xl bg-rose-50 border border-rose-100 flex items-center justify-center flex-shrink-0 text-rose-500 shadow-sm">
@@ -927,12 +895,12 @@ export default function PluginsPage() {
                             </button>
                         </div>
                     </div>
-                </div>
+                </DialogLayer>
             )}
 
             {/* Detail Drawer — per-plugin overview, permission diff, runtime health (rank 11) */}
             {detailPlugin && (
-                <div className="fixed inset-0 z-50 flex justify-end animate-in fade-in duration-300">
+                <DialogLayer className="flex justify-end animate-in fade-in duration-300">
                     <div className="absolute inset-0 bg-slate-950/40 backdrop-blur-sm" onClick={() => setDetailPlugin(null)} />
                     <div className="relative bg-white/95 backdrop-blur-lg w-full max-w-md h-full shadow-[0_0_50px_rgba(0,0,0,0.15)] flex flex-col border-l border-slate-200/50 animate-in slide-in-from-right duration-300">
                         <div className="p-6 border-b border-slate-100 flex items-start justify-between gap-4">
@@ -1026,13 +994,13 @@ export default function PluginsPage() {
 
                             {/* Requested vs granted permission diff */}
                             <div>
-                                <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2.5">Permissions</h4>
+                                <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2.5">{t('plugins.permissions.manage')}</h4>
                                 {declaredTokens(detailPlugin).length === 0 ? (
-                                    <p className="text-[11px] font-semibold text-slate-400 bg-slate-50 border border-slate-100 rounded-xl p-3.5">This plugin requests no permissions.</p>
+                                    <p className="text-[11px] font-semibold text-slate-600 bg-slate-50 border border-slate-100 rounded-xl p-3.5">{t('plugins.permissions.none')}</p>
                                 ) : (
                                     <div className="space-y-2">
                                         {declaredTokens(detailPlugin).map((token) => {
-                                            const meta = permMeta(token);
+                                            const meta = permMeta(token, t);
                                             const granted = (detailPlugin.grantedPermissions || []).includes(token);
                                             return (
                                                 <div key={token} className={`flex items-center justify-between gap-2 rounded-2xl border px-4 py-3 shadow-sm transition-colors ${RISK_CLASSES[meta.risk]}`}>
@@ -1042,10 +1010,10 @@ export default function PluginsPage() {
                                                             <span className="text-xs font-extrabold text-slate-800">{meta.label}</span>
                                                             <RiskBadge risk={meta.risk} />
                                                         </div>
-                                                        <span className="text-[9px] font-mono text-slate-400/80 font-bold block mt-0.5">{token}</span>
+                                                        <span className={`text-[9px] font-mono text-slate-600 font-bold mt-0.5 ${TOKEN_WRAP_CLASS}`}><BreakableToken text={token} /></span>
                                                     </div>
                                                     <span className={`text-[8px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full shadow-sm ${granted ? 'bg-emerald-600 text-white shadow-emerald-500/10' : 'bg-slate-200 text-slate-600'}`}>
-                                                        {granted ? 'granted' : 'denied'}
+                                                        {granted ? t('plugins.permission.granted') : t('plugins.permission.denied')}
                                                     </span>
                                                 </div>
                                             );
@@ -1055,13 +1023,13 @@ export default function PluginsPage() {
                             </div>
                         </div>
                     </div>
-                </div>
+                </DialogLayer>
             )}
 
             {/* Plugin Permissions Modal (activation consent) */}
             {permissionModalOpen && pluginToActivate && (
-                <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-in fade-in duration-300">
-                    <div className="bg-white/95 backdrop-blur-lg rounded-[32px] max-w-lg w-full shadow-[0_32px_64px_-16px_rgba(0,0,0,0.12)] border border-slate-200/50 max-h-[85vh] flex flex-col transform transition-all scale-100">
+                <DialogLayer className="bg-slate-950/40 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-300">
+                    <div className="bg-white/95 backdrop-blur-lg rounded-[32px] max-w-lg w-full shadow-[0_32px_64px_-16px_rgba(0,0,0,0.12)] border border-slate-200/50 max-h-[85dvh] flex flex-col transform transition-all scale-100">
 
                         {/* Header - Fixed */}
                         <div className="p-8 pb-4 flex-shrink-0">
@@ -1079,18 +1047,22 @@ export default function PluginsPage() {
                                 {t('plugins.requests.permissions')} <strong className="text-slate-900 font-extrabold">{pluginToActivate.name}</strong>:
                             </p>
 
-                            {declaredTokens(pluginToActivate).includes(BROWSER_SCRIPT_TOKEN) && (
+                            {/* Not when browser:script stays off: its row says so, and the banner would say the
+                                opposite («this plugin runs code in your browser»). */}
+                            {declaredTokens(pluginToActivate).includes(BROWSER_SCRIPT_TOKEN) && activationGrant(pluginToActivate, BROWSER_SCRIPT_TOKEN) !== 'stays-off' && (
                                 <BrowserScriptWarning title={t('plugins.browserScript.title')} body={t('plugins.browserScript.warning')} />
                             )}
 
                             <div className="space-y-3 mb-5">
                                 {declaredTokens(pluginToActivate).length > 0 ? (
+                                    // Each row says what confirming does to it (grantState.ts): a permission revoked
+                                    // earlier stays off, and the row says so instead of reading as granted.
                                     declaredTokens(pluginToActivate).map((token) => (
-                                        <PermissionRow key={token} token={token} reason={reasonFor(pluginToActivate, token)} platformNote={isUndeclared(pluginToActivate, token)} />
+                                        <PermissionRow key={token} token={token} reason={reasonFor(pluginToActivate, token)} platformNote={isUndeclared(pluginToActivate, token)} roles={pluginToActivate.roles} rolesHeld={rolesHeldState(pluginToActivate, 'activation')} activation={activationGrant(pluginToActivate, token)} />
                                     ))
                                 ) : (
                                     <div className="flex flex-col items-center justify-center p-8 bg-emerald-50/55 rounded-[24px] border border-emerald-100/60 text-center shadow-sm">
-                                        <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-sm mb-3 text-emerald-500">
+                                        <div className="w-12 h-12 shrink-0 bg-white rounded-2xl flex items-center justify-center shadow-sm mb-3 text-emerald-500">
                                             <FaCheck className="text-sm" />
                                         </div>
                                         <p className="text-emerald-800 font-extrabold text-sm">{t('plugins.safe.to.activate')}</p>
@@ -1099,8 +1071,10 @@ export default function PluginsPage() {
                                 )}
                             </div>
 
-                            <p className="text-[10px] text-slate-400/90 mb-2 p-3 bg-blue-50/45 rounded-xl border border-blue-100/50 italic leading-relaxed font-semibold">
-                                By activating this plugin, you are granting it strict access to these system capabilities.
+                            {/* What confirming grants (grantState.ts): when some requested permission stays off, the
+                                footer no longer says activating grants "these capabilities". slate-600 (was slate-400, 2.2:1). */}
+                            <p className="text-[10px] text-slate-600 mb-2 p-3 bg-blue-50/45 rounded-xl border border-blue-100/50 italic leading-relaxed font-semibold" data-activation-footer={activationLeavesSomeOff(pluginToActivate, declaredTokens(pluginToActivate)) ? 'partial' : 'all'}>
+                                {activationLeavesSomeOff(pluginToActivate, declaredTokens(pluginToActivate)) ? t('plugins.activation.footer.partial') : t('plugins.activation.footer')}
                             </p>
                         </div>
 
@@ -1123,24 +1097,24 @@ export default function PluginsPage() {
                             </button>
                         </div>
                     </div>
-                </div>
+                </DialogLayer>
             )}
 
             {/* Manage Permissions Modal — Android-style per-permission grants (default-deny) */}
             {permsModalPlugin && (
-                <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-300">
-                    <div className="bg-white/95 backdrop-blur-lg rounded-[32px] max-w-lg w-full shadow-[0_32px_64px_-16px_rgba(0,0,0,0.12)] border border-slate-200/50 max-h-[85vh] flex flex-col transform transition-all scale-100">
+                <DialogLayer className="bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-300">
+                    <div className="bg-white/95 backdrop-blur-lg rounded-[32px] max-w-lg w-full shadow-[0_32px_64px_-16px_rgba(0,0,0,0.12)] border border-slate-200/50 max-h-[85dvh] flex flex-col transform transition-all scale-100">
                         <div className="p-8 pb-4 flex-shrink-0">
                             <div className="flex items-center gap-4 text-blue-600">
                                 <div className="w-14 h-14 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center flex-shrink-0 text-blue-600 shadow-sm"><FaSlidersH className="text-xl" /></div>
-                                <div>
-                                    <h3 className="text-xl font-extrabold text-slate-900">Permissions</h3>
-                                    <p className="text-xs text-slate-400 font-semibold mt-0.5">{permsModalPlugin.name}</p>
+                                <div className="min-w-0">
+                                    <h3 className="text-xl font-extrabold text-slate-900">{t('plugins.permissions.manage')}</h3>
+                                    <p className="text-xs text-slate-500 font-semibold mt-0.5 break-words">{permsModalPlugin.name}</p>
                                 </div>
                             </div>
                         </div>
                         <div className="px-8 overflow-y-auto flex-1 custom-scrollbar">
-                            <p className="mb-4 text-slate-500 text-xs font-semibold leading-relaxed">Grant only what this plugin needs. Anything left off is <strong className="text-slate-800">denied</strong> (default-deny) — the plugin can use a capability only if it both requested it and you grant it here.</p>
+                            <p className="mb-4 text-slate-600 text-xs font-semibold leading-relaxed">{t('plugins.permissions.intro')}</p>
 
                             {declaredTokens(permsModalPlugin).includes(BROWSER_SCRIPT_TOKEN) && (
                                 <BrowserScriptWarning title={t('plugins.browserScript.title')} body={t('plugins.browserScript.warning')} />
@@ -1148,32 +1122,38 @@ export default function PluginsPage() {
 
                             <div className="space-y-2 mb-4">
                                 {declaredTokens(permsModalPlugin).length === 0 ? (
-                                    <div className="p-6 bg-slate-50 border border-slate-100 rounded-2xl text-slate-400 text-xs font-semibold text-center">This plugin declares no permissions — it can&apos;t access anything beyond its own sandbox.</div>
+                                    <div className="p-6 bg-slate-50 border border-slate-100 rounded-2xl text-slate-600 text-xs font-semibold text-center">{t('plugins.permissions.none')}</div>
                                 ) : declaredTokens(permsModalPlugin).map((token) => {
                                     const on = grantDraft.has(token);
-                                    const meta = permMeta(token);
+                                    const meta = permMeta(token, t);
                                     const highRisk = meta.risk === 'high';
                                     const activeClasses = highRisk ? 'bg-rose-50/80 border-rose-200/70 shadow-sm' : meta.risk === 'med' ? 'bg-amber-50/80 border-amber-200/70 shadow-sm' : 'bg-emerald-50/85 border-emerald-200/70 shadow-sm';
                                     const knobOn = highRisk ? 'bg-rose-500 shadow-[0_0_6px_rgba(244,63,94,0.3)]' : meta.risk === 'med' ? 'bg-amber-500 shadow-[0_0_6px_rgba(251,191,36,0.3)]' : 'bg-emerald-500 shadow-[0_0_6px_rgba(52,211,153,0.3)]';
                                     const reason = reasonFor(permsModalPlugin, token);
                                     return (
                                         <div key={token} className={`rounded-2xl border transition-all duration-300 ${on ? activeClasses : 'bg-slate-50/50 border-slate-200/60 hover:bg-slate-50'}`}>
+                                            {/* A grid: title line and switch on the first row; the description, the plugin's
+                                                reason and the declared roles under them — across the whole row on a phone
+                                                (PERMISSION_DETAILS_CLASS). In one column beside the switch they stopped ~75 px
+                                                short of the card's edge on an iPhone. */}
                                             <button
                                                 onClick={() => toggleGrant(token)}
-                                                className="w-full flex items-start justify-between gap-3 p-4 text-left cursor-pointer"
+                                                className={PERMISSION_TOGGLE_CLASS}
+                                                data-permission-toggle={token}
                                             >
-                                                <span className="min-w-0">
-                                                    <span className="flex items-center gap-2 flex-wrap">
-                                                        <i className={`fas ${meta.icon || 'fa-key'} text-xs opacity-75`} />
-                                                        <span className="font-extrabold text-sm text-slate-800">{meta.label}</span>
-                                                        <RiskBadge risk={meta.risk} />
-                                                        <span className="text-[10px] font-mono text-slate-400/80 font-bold">{token}</span>
-                                                    </span>
-                                                    {meta.description && <span className="block text-xs text-slate-600 font-medium leading-relaxed mt-1.5">{meta.description}</span>}
-                                                    {reason && <span className="block text-xs text-slate-500 font-semibold leading-relaxed mt-1.5 italic"><span className="not-italic font-bold text-slate-400">{isUndeclared(permsModalPlugin, token) ? 'WordJS note: ' : 'Plugin says: '}</span>{reason}</span>}
+                                                <span className="flex items-center gap-2 flex-wrap min-w-0">
+                                                    <i className={`fas ${meta.icon || 'fa-key'} text-xs opacity-75`} />
+                                                    <span className="font-extrabold text-sm text-slate-800">{meta.label}</span>
+                                                    <RiskBadge risk={meta.risk} />
+                                                    <span className={TOKEN_CLASS}><BreakableToken text={token} /></span>
                                                 </span>
-                                                <span className={`relative inline-flex h-6 w-11 items-center rounded-full transition-all duration-300 shrink-0 mt-0.5 ${on ? knobOn.split(' ')[0] : 'bg-slate-300'}`}>
+                                                <span className={`relative inline-flex h-6 w-11 items-center rounded-full transition-all duration-300 shrink-0 mt-0.5 col-start-2 row-start-1 ${on ? knobOn.split(' ')[0] : 'bg-slate-300'}`}>
                                                     <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform duration-300 ${on ? 'translate-x-6' : 'translate-x-1'} shadow-sm`} />
+                                                </span>
+                                                <span className={PERMISSION_DETAILS_CLASS} data-permission-details="">
+                                                    {meta.description && <span className="block text-xs text-slate-600 font-medium leading-relaxed mt-1.5">{meta.description}</span>}
+                                                    {reason && <span className="block text-xs text-slate-600 font-semibold leading-relaxed mt-1.5 italic"><span className={REASON_LABEL_CLASS}>{isUndeclared(permsModalPlugin, token) ? t('plugins.permission.wordjsNote') : t('plugins.permission.pluginSays')} </span>{reason}</span>}
+                                                    {token === ROLES_TOKEN && <DeclaredRolesList roles={permsModalPlugin.roles} heading={t('plugins.declaredRoles')} state={rolesHeldState(permsModalPlugin, 'permissions')} capabilitiesLabel={t('plugins.declaredRoles.capabilities')} heldTemplate={t('plugins.declaredRoles.held')} heldGrantedTemplate={t('plugins.declaredRoles.heldGranted')} heldStaysOffTemplate={t('plugins.declaredRoles.heldStaysOff')} />}
                                                 </span>
                                             </button>
                                         </div>
@@ -1182,13 +1162,13 @@ export default function PluginsPage() {
                             </div>
                         </div>
                         <div className="p-8 pt-6 flex justify-end gap-3 flex-shrink-0 border-t border-slate-100 mt-2">
-                            <button onClick={() => setPermsModalPlugin(null)} className="px-5 py-2.5 text-xs font-extrabold uppercase tracking-widest text-slate-500 hover:text-slate-950 hover:bg-slate-100/80 rounded-xl transition-all">Cancel</button>
+                            <button onClick={() => setPermsModalPlugin(null)} className="px-5 py-2.5 text-xs font-extrabold uppercase tracking-widest text-slate-500 hover:text-slate-950 hover:bg-slate-100/80 rounded-xl transition-all">{t('cancel')}</button>
                             <button onClick={savePermissions} disabled={savingPerms} className="px-6 py-3 bg-blue-600 text-white rounded-xl text-xs font-extrabold uppercase tracking-widest hover:bg-blue-700 disabled:opacity-50 shadow-lg shadow-blue-500/20 hover:shadow-blue-500/40 transition-all hover:scale-102 active:scale-98">
-                                {savingPerms ? 'Saving…' : 'Save permissions'}
+                                {savingPerms ? t('plugins.permissions.saving') : t('plugins.permissions.save')}
                             </button>
                         </div>
                     </div>
-                </div>
+                </DialogLayer>
             )}
 
             {/* Header */}
@@ -1419,11 +1399,11 @@ export default function PluginsPage() {
                                         <div className="flex flex-wrap gap-1.5">
                                             {plugin.permissions.map((p, idx) => {
                                                 const token = permToken(p);
-                                                const meta = permMeta(token);
+                                                const meta = permMeta(token, t);
                                                 return (
                                                     <span
                                                         key={idx}
-                                                        title={`${meta.label} — ${meta.risk} risk${p.reason ? ` · ${p.reason}` : ''}`}
+                                                        title={`${meta.label} — ${t(`plugins.risk.${meta.risk}`)}${p.reason ? ` · ${p.reason}` : ''}`}
                                                         className={`text-[9px] font-extrabold uppercase tracking-widest px-2 py-0.5 rounded-full border ${RISK_CLASSES[meta.risk]}`}
                                                     >
                                                         {p.scope === 'network' ? 'network' : `${p.scope}:${p.access}`}
@@ -1444,7 +1424,7 @@ export default function PluginsPage() {
                                             title="Manage what this plugin can access (per-permission grants)"
                                             className="text-[9px] font-extrabold uppercase tracking-widest px-2.5 py-1.5 rounded-lg border flex items-center gap-1 transition-all bg-slate-50 hover:bg-blue-50 hover:text-blue-600 text-slate-500 border-slate-200/60 shadow-sm hover:scale-105 active:scale-95"
                                         >
-                                            <FaSlidersH className="text-[10px]" /> Permissions
+                                            <FaSlidersH className="text-[10px]" /> {t('plugins.permissions.manage')}
                                         </button>
                                         {plugin.hasTheme && (
                                             <button

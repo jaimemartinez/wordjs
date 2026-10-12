@@ -21,6 +21,37 @@ export type PortalField = {
     role?: string;
 };
 
+/**
+ * A field fit to stand in for a person's NAME when the form has no Nombre / Apellido: never a unique
+ * identifier (an ID document), a contact (email, phone) or free text (notes) — conference-manager's own
+ * rule (client/lib/fields.ts isNameFallbackField), so the portal and the admin name people the same way.
+ */
+export const isNameFallbackField = (f: { name?: unknown; role?: unknown; type?: unknown; is_unique?: unknown } | null | undefined): boolean =>
+    !!f && typeof f.name === 'string' && f.name !== '' && f.name !== 'first_name' && f.name !== 'last_name'
+    && !Number(f.is_unique) && !['email', 'phone'].includes(String(f.role || '')) && !['email', 'phone'].includes(f.name)
+    && !['textarea', 'notes', 'email', 'tel'].includes(String(f.type || ''));
+
+const personValue = (person: Record<string, unknown> | null | undefined, name: string): string => {
+    const v = person?.[name];
+    if (v !== undefined && v !== null && v !== '') return String(v).trim();
+    const cd = (person?.custom_data as Record<string, unknown> | undefined)?.[name];
+    return cd !== undefined && cd !== null && cd !== '' ? String(cd).trim() : '';
+};
+
+/**
+ * An attendee's display name in the portal's lists: the fields tagged with the name roles (GET
+ * /public/fields carries `role`), else the first 1-2 filled fields fit to stand in for a name, else `#id`.
+ */
+export const portalPersonName = (person: Record<string, unknown> | null | undefined, fields: ReadonlyArray<Partial<PortalField> & { is_unique?: unknown }> | null | undefined): string => {
+    const fl = Array.isArray(fields) ? fields : [];
+    const named = ['first_name', 'last_name']
+        .map((role) => fl.find((f) => f && f.role === role))
+        .map((f) => (f && f.name ? personValue(person, f.name) : ''))
+        .filter(Boolean);
+    const parts = named.length ? named : fl.filter(isNameFallbackField).map((f) => personValue(person, String(f.name))).filter(Boolean).slice(0, 2);
+    return parts.join(' ').trim() || `#${person?.id ?? ''}`;
+};
+
 /** The comma-separated `options` of a select field, trimmed and without blanks. */
 export const fieldOptions = (f: PortalField): string[] =>
     String(f.options || '').split(',').map((o) => o.trim()).filter(Boolean);

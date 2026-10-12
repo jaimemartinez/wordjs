@@ -404,7 +404,7 @@ export default function ThemeCustomizerPage() {
                                 className="bg-white rounded-[32px] border border-gray-100 shadow-[0_15px_40px_-15px_rgba(0,0,0,0.04)] p-8"
                             >
                                 <div className="flex items-center gap-3 mb-6">
-                                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 text-blue-600 flex items-center justify-center shadow-inner">
+                                    <div className="w-10 h-10 shrink-0 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 text-blue-600 flex items-center justify-center shadow-inner">
                                         <i className={`fa-solid ${group.icon}`}></i>
                                     </div>
                                     <h2 className="text-lg font-black text-gray-900 italic tracking-tight">

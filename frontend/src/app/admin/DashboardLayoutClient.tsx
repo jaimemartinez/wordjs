@@ -8,7 +8,10 @@ import Sidebar from "@/components/Sidebar";
 import NotificationCenter from "@/components/NotificationCenter";
 import MfaSetup from "@/components/MfaSetup";
 import { UnsavedChangesProvider } from "@/contexts/UnsavedChangesContext";
+import { DialogDirectionContext } from "@/components/DialogLayer";
 import { initPlugins } from "@/lib/plugins";
+import { decideAdminRoute, type AdminMenuItem, type AdminRouteDecision } from "@/lib/adminAccess";
+import { isMfaBlocked, type MenuLoadUser } from "@/lib/adminMenuLoad";
 import { useI18n } from "@/contexts/I18nContext";
 import {
     SITE_ADDRESS_SETTINGS_PATH,
@@ -70,8 +73,34 @@ export function SiteAddressBannerList({ banners, host, isAdmin, onDismissLinkBas
     );
 }
 
-function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
+/**
+ * The layout's route-guard decision (lib/adminAccess.ts decideAdminRoute), with the two cases the layout
+ * itself owns: nothing is decided for a signed-out user, nor for one held at the two-factor enrolment
+ * screen — that screen is all they get whatever the path, and their plugin menu is only loaded once they
+ * have enrolled, so a decision taken now would send them away from a page they may open.
+ */
+export function layoutRouteDecision(args: {
+    user: (MenuLoadUser & { capabilities?: string[]; role?: string }) | null | undefined;
+    pathname: string;
+    pluginMenus: AdminMenuItem[];
+    menusLoading: boolean;
+}): AdminRouteDecision {
+    const { user, pathname, pluginMenus, menusLoading } = args;
+    if (!user || isMfaBlocked(user)) return { kind: "allow" };
+    return decideAdminRoute({ pathname, user: { role: user.role ?? undefined, capabilities: user.capabilities }, pluginMenus, menusLoaded: !menusLoading });
+}
+
+function AdminLoadingScreen() {
+    return (
+        <div className="flex h-dvh items-center justify-center bg-gray-100">
+            <div className="animate-spin rounded-full h-12 w-12 border-4 border-blue-500 border-t-transparent"></div>
+        </div>
+    );
+}
+
+export function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
     const { user, isLoading, logout, can, refreshUser } = useAuth();
+    const { pluginMenus, isLoading: menusLoading } = useMenu();
     const router = useRouter();
     const pathname = usePathname();
     const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -162,13 +191,27 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
         }
     }, [user, isLoading, router, logout, can]);
 
-    if (isLoading) {
-        return (
-            <div className="flex h-dvh items-center justify-center bg-gray-100">
-                <div className="animate-spin rounded-full h-12 w-12 border-4 border-blue-500 border-t-transparent"></div>
-            </div>
-        );
-    }
+    // ROUTE GUARD — "a page you cannot see in the menu is a page you cannot open" (lib/adminAccess.ts).
+    // A NAVIGATION guard in the browser, not access control: every API still enforces its own capability.
+    // It decides nothing for a signed-out user, nor for a user held at the two-factor enrolment screen
+    // (that screen is all they get, whatever the path; their plugin menu is loaded once they have
+    // enrolled — contexts/MenuContext.tsx). `wait` while the plugin menu loads (a plugin page, or where to
+    // send someone who may not stay); a redirect lands on the first admin page the user's sidebar offers
+    // — for /admin without the dashboard capability that is how a plugin team member lands straight on
+    // the plugin's screen after signing in. (The decision is computed up here only because the redirect
+    // is an effect, and hooks may not follow the early returns.)
+    const routeDecision = layoutRouteDecision({
+        user,
+        pathname: pathname ?? "",
+        pluginMenus: pluginMenus as unknown as AdminMenuItem[],
+        menusLoading,
+    });
+    const redirectTo = routeDecision.kind === "redirect" ? routeDecision.to : null;
+    useEffect(() => {
+        if (!isLoading && redirectTo) router.replace(redirectTo);
+    }, [isLoading, redirectTo, router, pathname]);
+
+    if (isLoading) return <AdminLoadingScreen />;
 
     if (!user) return null;
 
@@ -180,7 +223,7 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
             <div className="min-h-screen bg-gradient-to-br from-slate-100 to-blue-50 flex items-center justify-center p-4">
                 <div className="w-full max-w-lg">
                     <div className="text-center mb-6">
-                        <div className="inline-flex w-14 h-14 rounded-2xl bg-blue-600 text-white items-center justify-center mb-4 shadow-lg shadow-blue-500/30">
+                        <div className="inline-flex w-14 h-14 shrink-0 rounded-2xl bg-blue-600 text-white items-center justify-center mb-4 shadow-lg shadow-blue-500/30">
                             <i className="fa-solid fa-shield-halved text-2xl"></i>
                         </div>
                         <h1 className="text-2xl font-black italic tracking-tight text-gray-900">Two-factor authentication required</h1>
@@ -199,10 +242,13 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
         );
     }
 
+    // Not a page this user may open (or not decided yet): never render it, not even for a frame.
+    if (routeDecision.kind !== "allow") return <AdminLoadingScreen />;
+
     // The Puck editor routes render a FULLSCREEN workspace (fixed inset-0; its own rail + breadcrumb
     // replace the admin chrome, Gutenberg-style). Skip the admin shell there: rendering it is wasted
     // work, and the Sidebar (z-5002) would sit ON TOP of the editor. All auth/MFA gates above still
-    // ran; the contexts wrap this component, so children keep every provider.
+    // ran, and so did the route guard; the contexts wrap this component, so children keep every provider.
     // Same bypass for the Verso editor surfaces (F2): /admin/canvas-frame is the MINIMAL document a
     // canvas iframe loads (the sidebar inside the iframe would corrupt the page being edited), and
     // /admin/verso-lab is the fullscreen editor harness. Auth/MFA gates above still ran for both.
@@ -258,7 +304,9 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
                     column, so sticky never stuck — it only made the header look pinned while the whole
                     document moved under the finger. Same stacking (positioned, z-5000). The top padding
                     clears the status bar when the admin runs full-screen (viewport-fit=cover). */}
-                <header className="md:hidden bg-white border-b p-4 pt-[max(1rem,env(safe-area-inset-top))] flex items-center justify-between relative z-[5000] flex-shrink-0">
+                {/* border-gray-100: a bare `border-b` is currentColor in Tailwind v4 — a black rule under the bar that
+                    also showed, sharp, through the edge of every dialog's blurred backdrop. */}
+                <header className="md:hidden bg-white border-b border-gray-100 p-4 pt-[max(1rem,env(safe-area-inset-top))] flex items-center justify-between relative z-[5000] flex-shrink-0">
                     <div className="flex items-center gap-3">
                         <button
                             onClick={() => setSidebarOpen(true)}
@@ -308,7 +356,7 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
     );
 }
 
-import { MenuProvider } from "@/contexts/MenuContext";
+import { MenuProvider, useMenu } from "@/contexts/MenuContext";
 import { ToastProvider } from "@/contexts/ToastContext";
 import { I18nProvider } from "@/contexts/I18nContext";
 
@@ -317,17 +365,21 @@ export default function DashboardLayoutClient({
 }: {
     children: React.ReactNode;
 }) {
+    // Dialogs portal out of app/admin/layout.tsx's `<div dir="ltr">`: they keep the admin's direction
+    // (components/DialogLayer.tsx). Same value as that wrapper — change both together.
     return (
-        <I18nProvider>
-            <AuthProvider>
-                <UnsavedChangesProvider>
-                    <ToastProvider>
-                        <MenuProvider>
-                            <DashboardLayoutContent>{children}</DashboardLayoutContent>
-                        </MenuProvider>
-                    </ToastProvider>
-                </UnsavedChangesProvider>
-            </AuthProvider>
-        </I18nProvider>
+        <DialogDirectionContext.Provider value="ltr">
+            <I18nProvider>
+                <AuthProvider>
+                    <UnsavedChangesProvider>
+                        <ToastProvider>
+                            <MenuProvider>
+                                <DashboardLayoutContent>{children}</DashboardLayoutContent>
+                            </MenuProvider>
+                        </ToastProvider>
+                    </UnsavedChangesProvider>
+                </AuthProvider>
+            </I18nProvider>
+        </DialogDirectionContext.Provider>
     );
 }

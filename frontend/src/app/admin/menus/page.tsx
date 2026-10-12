@@ -300,7 +300,7 @@ export default function MenusPage() {
                             <button
                                 onClick={confirmDeleteMenu}
                                 disabled={!activeMenuId}
-                                className="w-12 h-12 bg-red-50 hover:bg-red-500 text-red-500 hover:text-white rounded-2xl transition-all disabled:opacity-50 flex items-center justify-center shadow-lg hover:shadow-red-500/30 hover:-translate-y-1 transform"
+                                className="w-12 h-12 shrink-0 bg-red-50 hover:bg-red-500 text-red-500 hover:text-white rounded-2xl transition-all disabled:opacity-50 flex items-center justify-center shadow-lg hover:shadow-red-500/30 hover:-translate-y-1 transform"
                                 title={t('menus.deleteMenu')}
                                 aria-label={t('menus.deleteMenu')}
                             >
@@ -319,7 +319,7 @@ export default function MenusPage() {
                                     className="flex-1 bg-gray-50 border-2 border-gray-100 rounded-xl px-4 py-3 text-sm font-bold text-gray-700 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 focus:outline-none transition-all placeholder:font-normal"
                                     required
                                 />
-                                <button type="submit" aria-label={t('menus.createMenuButton')} className="w-12 h-12 bg-gray-900 hover:bg-blue-600 text-white rounded-2xl transition-all shadow-xl hover:shadow-blue-500/30 hover:-translate-y-1 flex items-center justify-center">
+                                <button type="submit" aria-label={t('menus.createMenuButton')} className="w-12 h-12 shrink-0 bg-gray-900 hover:bg-blue-600 text-white rounded-2xl transition-all shadow-xl hover:shadow-blue-500/30 hover:-translate-y-1 flex items-center justify-center">
                                     <i className="fa-solid fa-plus"></i>
                                 </button>
                             </form>
@@ -336,7 +336,7 @@ export default function MenusPage() {
                             {/* Custom Links */}
                             <div className="p-6 group hover:bg-blue-50/5 transition-colors">
                                 <div className="flex items-center gap-3 mb-4">
-                                    <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center text-xs">
+                                    <div className="w-8 h-8 shrink-0 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center text-xs">
                                         <i className="fa-solid fa-link"></i>
                                     </div>
                                     <h4 className="font-bold text-sm text-gray-700">{t('menus.customLink')}</h4>
@@ -369,7 +369,7 @@ export default function MenusPage() {
                             {/* Pages */}
                             <div className="p-6 group hover:bg-indigo-50/5 transition-colors">
                                 <div className="flex items-center gap-3 mb-4">
-                                    <div className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs">
+                                    <div className="w-8 h-8 shrink-0 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs">
                                         <i className="fa-regular fa-file-lines"></i>
                                     </div>
                                     <h4 className="font-bold text-sm text-gray-700">{t('menus.pages')}</h4>
@@ -410,7 +410,7 @@ export default function MenusPage() {
                             {/* System Pages */}
                             <div className="p-6 group hover:bg-purple-50/5 transition-colors">
                                 <div className="flex items-center gap-3 mb-4">
-                                    <div className="w-8 h-8 rounded-lg bg-purple-100 text-purple-600 flex items-center justify-center text-xs">
+                                    <div className="w-8 h-8 shrink-0 rounded-lg bg-purple-100 text-purple-600 flex items-center justify-center text-xs">
                                         <i className="fa-solid fa-gear"></i>
                                     </div>
                                     <h4 className="font-bold text-sm text-gray-700">{t('menus.systemPages')}</h4>
@@ -492,14 +492,14 @@ export default function MenusPage() {
                         <div className="p-8 flex-1 bg-gray-50/30 overflow-y-auto custom-scrollbar relative">
                             {!activeMenu ? (
                                 <div className="h-full flex flex-col items-center justify-center text-gray-300 opacity-60">
-                                    <div className="w-24 h-24 rounded-full bg-gray-100 flex items-center justify-center mb-6">
+                                    <div className="w-24 h-24 shrink-0 rounded-full bg-gray-100 flex items-center justify-center mb-6">
                                         <i className="fa-solid fa-arrow-left text-4xl"></i>
                                     </div>
                                     <p className="text-2xl font-black italic tracking-tight">{t('menus.selectMenuFromLeft')}</p>
                                 </div>
                             ) : activeMenu.items.length === 0 ? (
                                 <div className="h-full flex flex-col items-center justify-center text-center p-8 border-4 border-dashed border-gray-100 rounded-[32px]">
-                                    <div className="w-20 h-20 bg-blue-50 rounded-[40px] flex items-center justify-center mb-6 text-blue-300 animate-pulse">
+                                    <div className="w-20 h-20 shrink-0 bg-blue-50 rounded-[40px] flex items-center justify-center mb-6 text-blue-300 animate-pulse">
                                         <i className="fa-solid fa-layer-group text-3xl"></i>
                                     </div>
                                     <h3 className="text-xl font-black text-gray-900 mb-2 italic tracking-tight">{t('menus.emptyMenu')}</h3>
@@ -546,13 +546,13 @@ export default function MenusPage() {
                                                 <div className="flex items-center gap-2">
                                                     <button
                                                         onClick={() => startEditing(item)}
-                                                        className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${editingItemId === item.id ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white hover:shadow-md'}`}
+                                                        className={`w-10 h-10 shrink-0 rounded-xl flex items-center justify-center transition-all ${editingItemId === item.id ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white hover:shadow-md'}`}
                                                     >
                                                         <i className={`fa-solid ${editingItemId === item.id ? 'fa-xmark' : 'fa-pen'}`}></i>
                                                     </button>
                                                     <button
                                                         onClick={() => confirmDeleteItem(item.id)}
-                                                        className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-500 hover:text-white flex items-center justify-center transition-all opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:shadow-md"
+                                                        className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-500 hover:text-white flex items-center justify-center transition-all opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:shadow-md"
                                                     >
                                                         <i className="fa-solid fa-trash-can"></i>
                                                     </button>

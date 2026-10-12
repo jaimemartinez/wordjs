@@ -1046,6 +1046,12 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
  *                   properties:
  *                     mfa:
  *                       $ref: '#/components/schemas/MfaStatus'
+ *                     roleName:
+ *                       type: string
+ *                       nullable: true
+ *                       description: >-
+ *                         The display name of the user's role in the roles registry (a custom role's or a
+ *                         plugin role's own name), or null when the role is not in the registry.
  *       401:
  *         description: >-
  *           rest_not_logged_in (or another rest_token_* code) — no valid session cookie, session JWT or API
@@ -1059,7 +1065,11 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
  */
 router.get('/me', withSignInEligibility, authenticate, asyncHandler(async (req: Request, res: Response) => {
     // mfa is an EXTRA top-level key (the client reads /auth/me as the user object directly — do not re-wrap).
-    res.json({ ...req.user.toJSON(), mfa: await mfa.evaluate(req.user) });
+    // roleName: the role's display name, so the admin's user chip can say «Equipo de conferencia» instead of
+    // the raw slug (GET /roles, where the names live, is administrator-only).
+    const role = require('../core/roles').getRole(req.user.role);
+    const roleName = role && typeof role.name === 'string' && role.name.trim() ? role.name.trim() : null;
+    res.json({ ...req.user.toJSON(), mfa: await mfa.evaluate(req.user), roleName });
 }));
 
 /**

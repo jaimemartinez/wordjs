@@ -4,7 +4,7 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
-## [Unreleased]
+## [2.4.0] - 2026-10-12
 
 ### Security
 
@@ -877,6 +877,94 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   admin-only) and saves `<slug>-<version>.zip`, or shows the packer's refusal reason. Outside development
   the route answers 404 and `GET /plugins` reports `packable: false`, so the button is hidden. `--dir` (and `WORDJS_PLUGINS_DIR` for `build-plugin.js`)
   lets a private plugin live outside `backend/plugins/`. Documented in `documentation/plugins.md` §4–5.
+- **conference-manager 2.16.0: the kitchen confirms each meal before it is recorded.** A scan used to be
+  recorded as delivered the moment the code was read. Now the phone scanner and the «Entrega» tab first ask
+  the new read-only `POST /meals/check` (same lookup and decision as `/meals/deliver`, shared code, nothing
+  written) and show a confirmation card with the meal (day and meal), the person's data and the status:
+  «Entregar» or «Cancelar»; «Entregar sin derecho (autorizar)» or «Cancelar» without entitlement;
+  «Cerrar» for an attendee already served, cancelled, unknown or from another conference. «Cancelar»
+  records nothing: the person stays pending and the next scan shows the card again. On the phone, decoding
+  pauses while the card is open and the badge must leave the camera before it opens a card again (shown
+  again too soon after «Cancelar», it says so; after a reset or a failed request it is not held); on a short
+  phone the card takes the whole camera area and the status and name stay at the top of the part that
+  scrolls. In «Entrega» Enter on the empty input delivers (never the override), Esc cancels, and a
+  USB-scanner code read while a card is open is queued behind it instead of touching it; Enter only answers a
+  card that has been on screen for half a second and never as a held-down key or the second Enter of a
+  CR+LF scanner suffix, the queue waits until a delivery's result has been seen («Entregado» for a moment,
+  any failure until Enter, Esc or a click), and a person picked by name replaces the open card. Whatever
+  appears under the scan input («Comprobando…», the card, a delivery's result) is scrolled into view at once
+  (on common desktop sizes it opened below the fold) and the card is capped to the visible area, so its meal,
+  name and buttons are on screen together; giving the focus back to the scan input never scrolls it away. The
+  meal counters (page header, «Entrega» panel, «Reporte») sit side by side only where their labels fit, one
+  per row otherwise («ENTREGADOS» spilled into the next tile at 1280 px). Both
+  screens ignore taps on a card's buttons for a moment after it appears, so a second tap on «Entregar»
+  cannot hit «Deshacer» on the «Entregado» card. On a not-entitled card «Cancelar» is the large button and
+  the override the smaller, outlined one. A ready card has its own sound. A per-device switch, «Confirmar
+  antes de entregar» (on by default), brings back the immediate delivery. **The data on the card is
+  configurable** per conference («Qué se muestra al entregar», `GET`/`PUT /meals/display-fields`,
+  `meals:manage` to change it): the location, registration code, payment status, room and any
+  registration-form field, in the chosen order, under the full name, which is always shown first (the server
+  enforces it), with a live preview; the default is name + location, and «Restablecer» only refills the form.
+  `/meals/check` and `/meals/deliver` (which also returns them, so the «Entregado» card shows the same data)
+  carry the configured values in `person.fields`, so form answers, payment status and room reach the
+  delivery device only when chosen; `person` keeps the 2.15 projection (name, location, family group, masked
+  code) that delivery staff already get from the search by name. Stored in a new `meal_display_fields`
+  column of the conferences table, added idempotently on boot.
+- **Plugins can declare user roles, and such a role can only ever reach its own plugin.** A manifest may
+  carry a `roles` block (`[{ slug, name, description, capabilities }]`), requested through the new
+  `roles:declare` permission and registered when the plugin is activated with that grant. Every role slug
+  and capability must start with the plugin's namespace (`conference-manager` → `conference_manager_`);
+  the only other capabilities such a role ever holds are `read` and `access_admin_panel`, which the core
+  adds itself. A name from the core's own capability vocabulary (`manage_…`, `edit_…`, `list_…` and the
+  other core verbs) is never a plugin capability, so a plugin called `manage` cannot declare
+  `manage_options`, and a capability that gates a content type (whose operations an administrator names
+  freely) is never a plugin role's either. Anything else refuses the whole block — at upload, in the
+  marketplace submission gate (`scan-plugin.mjs`) and at activation, which checks it before the plugin's
+  code runs and so never half-applies. A plugin role never replaces a core role, an administrator's role or
+  another plugin's role, and a slug or capability inside another installed plugin's (nested) namespace is
+  refused; a namespace two installed plugins share is owned by neither. The same rule holds on every later
+  path: `POST /roles` refuses a foreign capability on a plugin role (`400 rest_role_plugin_capability`) and
+  renaming or deleting it while the plugin is installed (`409 rest_role_plugin_managed`); the boot-time role
+  sync cuts what does not belong and orphans the role of a plugin that is no longer installed; and the
+  capabilities a user actually holds are computed from the namespace, so a hand-edited option cannot widen
+  a plugin role either. An administrator's accepted edit of a plugin role's capabilities is kept across
+  every refresh from the manifest (`adminChanges`). Every write of the roles map — a plugin role's
+  registration, refresh or retirement, `POST`/`DELETE /roles` and the boot-time sync — runs one at a time,
+  in each process and across nodes (the `wordjs:roles` lock), computes the new map on the one stored in the
+  database rather than on the node's cached copy, and saves it only if the stored map is still the one it
+  read (otherwise it reads and computes again): a role change made on another node is never written back
+  over, even by a node that has not heard of it yet. On several nodes a grant or revoke of
+  `roles:declare` reaches every node through the Redis option signal. Without the grant the role is inert;
+  while the plugin is deactivated it is kept; when the plugin is deleted it is removed if nobody holds it,
+  otherwise kept as orphaned with `read`/`access_admin_panel` only, and it can be deleted once nobody holds
+  it (`409 rest_role_in_use`). Roles carry their provenance (`source: "plugin"`, `plugin`), and the Roles
+  screen shows them as the plugin's, read-only. A plugin route receives the caller's capabilities in its
+  own namespace as `req.user.pluginCapabilities` (an administrator receives every capability the plugin's
+  roles confer), and the users bridge adds the same list to every account it returns. A plugin's admin
+  menu item may point only at its own admin page: `/admin/plugin/<slug>` belongs to the plugin installed in
+  that folder, otherwise to the one installed plugin whose manifest declares it as its admin page — never
+  to a plugin just because its manifest names it. An upload or activation whose declared admin page is
+  another installed plugin's folder or admin page, or whose folder another installed plugin declares as
+  its admin page, is refused (`Invalid admin page`). The grant screens list the roles a plugin will register
+  and how many users already hold each one (an orphaned role from an earlier installation comes back to
+  them with the grant). Documented in `documentation/plugins.md` §12a.
+- **The user forms offer every role.** The role dropdowns of the user create and edit forms list all roles
+  from the roles API — core, administrator-made and plugin roles, grouped and labelled — instead of a
+  hardcoded subscriber/author/editor/administrator. When the list cannot be read (it is
+  administrator-only) they keep those four.
+- **A page you cannot see in the admin menu is a page you cannot open.** The admin layout now applies one
+  route → capability map (`frontend/src/lib/adminAccess.ts`, shared with the sidebar) after the sign-in and
+  MFA gates: a screen the user lacks the capability for is not rendered and they are sent to the first page
+  their sidebar offers; `/admin/plugin/<slug>` opens only through a plugin menu item the user has (a plugin
+  menu item never opens a core screen); `/admin/account` is always open. Signing in, or opening `/admin`
+  without the dashboard capability, lands on that first admin page — a plugin team member goes straight to
+  the plugin's screen; a user whose sidebar offers nothing else lands on their account page. The plugin
+  menu is reloaded when the signed-in user, their role or their two-factor block changes (a team member who
+  just enrolled reaches their plugin screen without reloading), and a failed load is retried before it
+  counts. The dashboard's shortcuts and the sidebar logo lead only to pages the user may open, and the
+  pages screens ask for `edit_pages` like the guard. Administrators keep every page, and the editor's
+  fullscreen routes keep their bypass. This is a navigation guard in the browser, not access control:
+  every API still enforces its own capability.
 
 ### Changed
 
@@ -886,6 +974,52 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   exchanges its GitHub OIDC token for a one-time publish credential (`id-token: write`, npm ≥ 11.5.1), so
   no npm credential is stored in the repository and each version carries provenance. It needs a trusted
   publisher configured once on npmjs.com for `jaimemartinez/wordjs`, workflow `release.yml`.
+- **conference-manager 2.17.0: the conference team gets its own WordJS role, and the registration form
+  starts empty.** The plugin declares the role «Equipo de conferencia» (`conference_manager_team`, permission
+  `roles:declare`), whose only capability is `conference_manager_access`. The «Conference» menu entry now
+  needs that capability, so it shows for administrators and the holders of the capability only. A team
+  member's account is created in Users with that role and then added to the team. It can open the
+  conference screens and its own account page and no other admin page. An administrator can still put an
+  editor (or any other role) on the team, as in 2.15: by giving that role `conference_manager_access` in
+  Users › Roles. `POST /staff/members` accepts only accounts whose role holds the capability
+  (`400 not_team_role` otherwise), and so do a role change and a reactivation through `PUT` that leave the
+  member active, while deactivating is always allowed (and without the `users:read` grant every change is
+  made, as in 2.15). A member added before 2.17.0 whose account lacks the capability is kept, flagged in
+  the team list, and gets no section until it is given (`GET /staff/members` reports `team_role` per member
+  and `roles_ready`; `GET /staff/me` reports `teamRole` and `member`, and the no-access screen says which
+  is missing). When the role is not active — an in-place update keeps the old grants, without
+  `roles:declare` — «Equipo y permisos» says so and where to grant it. The team picker shows each account's
+  WordJS role and explains why an account cannot be added. A new conference, including the default conference of
+  a fresh install, has no form field and no assignment rule. A restart no longer seeds the old default
+  form back onto a conference without fields; existing conferences keep their fields.
+  «Nuevo campo» offers the base fields (Nombre, Apellido, Email, Teléfono, Género, Grupo familiar) as
+  templates. `POST /fields { template }` creates each one with the exact column, type, options and role
+  the other features read, adds it at the end of the form, and refuses a second copy (`409 field_exists`,
+  also on a double click). Every field can be edited and deleted while the form is unpublished; the
+  published-form lock is unchanged. Deleting a field asks first and names what stops working: the display
+  name, the lodging gender hints, the portal groups, the duplicate check, and the price and assignment
+  rules that read the field. The features cope without a base field. A price rule on a deleted field is
+  skipped instead of being matched against an empty value, and the Precios and Asignación pages flag such
+  rules. Without a «Género» field the lodging views show no gender hints or room-type filter and the
+  report has no gender breakdown, and the lodging gender hints read the word («Mujer» is F). The location
+  is not a form field: the portal login sets it, or the admin picks it from Localidades — and a price rule
+  on the location keeps applying. An assignment rule on a field the form no longer has is skipped by the
+  engine and the lodging audits (a new one is refused), and the delete confirmation also names the
+  coordinators' own rules. A form with no field cannot be published (`400 form_empty`). Without Nombre /
+  Apellido, people are named by the other form fields fit for a name — never an ID document, a contact or
+  notes, which the meals screens would otherwise show to a kitchen role that cannot read the roster — and
+  the coordinators' portal names them the same way (`display_name`), with no gender shown when the form
+  collects none. On phones every field can be edited, deleted and reordered (the row's buttons are visible
+  on screens without hover, with ↑ / ↓ next to them), and «Nuevo campo» opens above the admin header.
+  Deleting a conference (`DELETE /:id`) takes its attendees, fee payments, transport payments and
+  accounting ledger with it, so it now asks for what erasing each of those asks for: «Configuración»
+  (manage) alone deletes a conference that holds none of them, and one that does also needs manage on
+  «Inscripciones», «Pagos», «Transporte» and «Contabilidad» for its attendees, fee payments, transport
+  payments and ledger entries respectively — otherwise `409 conference_has_records`, naming them in
+  `sections`, and nothing is deleted. Administrators delete any conference, as before, and the
+  confirmation says what goes with it. The meals people search (`GET /meals/people`) returns an attendee's
+  ID document (`document_number`) only to a role with «Inscripciones» (view), like the registration code;
+  without it (the kitchen's «Entrega de comidas») a document finds a person only when typed whole.
 
 ### Fixed
 
@@ -940,7 +1074,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   fails with its cause. When the public plugin registry says the plugin is active and not granted
   (resolving an admin-page slug such as `emails` to its plugin through the admin menu), the page shows
   "This plugin's interface is not served until you grant 'Run code in your browser' (browser:script) in
-  Admin → Plugins → Permissions" with a link to `/admin/plugins?permissions=<plugin>`, which opens that
+  Admin → Plugins → Permissions", in the admin's language (Spanish, English or Portuguese), to a viewer
+  who can open the plugins screen (`activate_plugins`), with a link to `/admin/plugins?permissions=<plugin>`.
+  Anyone else — a plugin team member, whose role opens the plugin's page and not the plugins screen —
+  reads that the screen is not available yet and to ask an administrator, with no link the admin guard
+  would send them back from. The link opens that
   plugin's permissions dialog once — the screen then drops the parameter from the address bar, and its
   later list reloads (after a save, an activation, a deactivation) or a page reload do not reopen it; any
   other failure renders the not-found fallback. A refusal is not
@@ -1057,6 +1195,164 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     painted).
     `catalogClassAssets.test.ts` keeps every catalog source the host compiles free of `url()` to another
     host.
+- **Core admin dialogs open above the admin chrome at every screen width.** They were `fixed inset-0 z-50`
+  (or `z-[100]`) inside the page, under the admin shell (5000–5003): on a phone «Nuevo Usuario» opened under
+  the header with its close button cut off, and on a desktop the sidebar was not dimmed and its collapse
+  toggle sat on the dialog's corner. These dialogs now render on `<body>` through one `DialogLayer` with
+  one stacking scale (`frontend/src/lib/adminLayers.ts`): shell < dialogs (6000) < plugin overlays
+  (6010–6090) < a dialog over a dialog (6100) < select lists (6500) < toasts. Moved: the shared confirm/alert
+  dialog (also used for unsaved changes and the media and menus deletes), which no longer opens underneath a
+  plugin's own overlay or the media lightbox; the one-time secret dialog (tokens, webhooks, two-factor
+  setup); the media picker; the user form; the seven dialogs and the detail drawer of the Plugins screen;
+  the Marketplace install confirmation; the database-migration overlays, which now also cover the sidebar
+  during a migration or restart; the media lightbox; and the site-address dialog. They keep the admin's
+  left-to-right direction once outside its layout, and the moved cards are capped with `dvh` so their footer
+  stays on screen on iOS. A test refuses a new page-local `fixed inset-0` overlay in the admin.
+- **Select lists always fit the visible screen, and show every option whole whenever they can.**
+  `ModernSelect` and `ui/Select` share one placement rule (`frontend/src/lib/dropdownPlacement.ts`). A list
+  opens below the field when the whole list fits there, otherwise above the field's label (above the field
+  itself only when it has no label). Opened from a dialog, it tries the dialog's scrolling body first, then
+  the dialog's card, then the screen. When the list does not fit as things are, the dialog's body scrolls
+  by the few pixels that let the whole list fit beside the field; the field stays in view and a page is
+  never scrolled. Only when the whole list fits nowhere beside the field does it go over the field's label,
+  covering all of it. A list is shortened and scrolls inside only when not even that fits. On an iPhone SE,
+  in «Nuevo usuario» scrolled to the bottom, the role list was clamped to 300 px and its last option,
+  «Equipo de conferencia · plugin conference-manager», was cut at the list's edge; it is now whole. On an
+  iPhone 13 the list's top edge cut the dialog's subtitle in half; it now stays inside the dialog's body.
+  The list follows the visible viewport, so the on-screen keyboard and zoom count, and it is placed again
+  once its real height is known. The role list no longer runs past the dialog and the bottom of the screen,
+  and long option labels wrap instead of being cut off. The group headings «ROLES DEL SISTEMA» and «ROLES DE
+  PLUGINS» meet WCAG AA even over a dark page behind the translucent list (they were 2.5:1), and so do the
+  empty-list line and the placeholder.
+- **Plugin grant screens: the note under a plugin role that users already hold matches the grant.** While
+  `roles:declare` is granted it only counts the holders ("Held by N user(s)") instead of saying they "get
+  its permissions back when you grant this". When the grant is not in effect, the note no longer says the
+  holders come from an earlier installation only: they may also have been given the role before the
+  permission was revoked. The platform's description of `roles:declare`, shown in every state, no longer
+  talks about an earlier installation either. Each role's slug and permissions meet WCAG AA (they were
+  2.5:1) and the permissions line is labelled (es/en/pt).
+- **Plugin grant screens on a phone: identifiers no longer break in the middle.** A role slug, a permission
+  and a token were `break-all`, so a phone broke them at any letter («conference_manage|r_team»,
+  «conference_manager_acce|ss»). Each one now moves to the next line whole when it fits there, and a longer
+  one wraps only after a `_`, `:`, `.`, `/` or `,`. The same applies to the token in the plugin detail
+  drawer and the slug on a broken plugin's card. In the Permissions dialog, a permission's description, the
+  plugin's reason and the declared roles now use the row's full width on a phone. They had stopped about
+  75 px short of the card's edge, beside the switch.
+- **The plugin activation dialog says what activating grants.** Activating grants a plugin's requested
+  permissions only while no administrator has decided its grants, so a permission revoked earlier stays
+  revoked (by design), and so does a revoke of every grant: `GET /plugins` reports which applies as
+  `activationSeedsGrants`, since an empty grant list alone cannot tell a plugin that was never activated
+  from one whose every permission was switched off. The dialog still listed such a permission like the
+  others under "you are granting it strict access to these system capabilities", and for `roles:declare`
+  said the role's holders get its permissions back; the
+  plugin was activated without it and a team member kept landing on their account page. Such a permission
+  is now drawn neutral with "Stays off: … grant it in Permissions", the note under the role says
+  activating does not give its permissions back, the footer says activating keeps the grants on record, and
+  the "This plugin runs code in your browser" banner is not shown when `browser:script` stays off.
+  The Marketplace install confirmation no longer says "nothing is granted automatically": it says
+  confirming the activation dialog grants what it lists, and that an update keeps the grants on record.
+- **The plugin grant screens are in the admin's language.** The activation dialog, the Permissions dialog,
+  the detail drawer and the plugin card showed the platform's labels and descriptions of every permission,
+  the risk badges, "Plugin says:", "WordJS note:", the Permissions dialog's title, intro and buttons, and
+  "granted"/"denied" in English. `permMeta(token, t)` reads `perm.<token>.label` / `.description` (es/en/pt),
+  for every permission a plugin can request, `posts:read`, `comments:read`, `comments:pii`,
+  `notifications:read` and `media:private_read` included.
+  The token next to each label, "Plugin says:" and the activation footer meet WCAG AA (2.1:1, 2.6:1 and
+  2.2:1 before).
+- **«Nuevo usuario» is in the admin's language and readable.** The user dialog said «New User», «Role»,
+  «Cancel», «Save User» and the rest in English; its labels and helper text, and those of the full-page
+  user editor, were gray-400 on white (2.6:1) and are now WCAG AA.
+- **The admin names a user's role instead of showing its slug.** The sidebar's user chip, the identity card
+  of the account page and the Role column of the Users list showed the raw slug («ADMINISTRATOR» in a
+  Spanish admin, «CONFERENCE_MANAGER_TEAM» on a plugin team member's own account page, while the sidebar
+  said «EQUIPO DE CONFERENCIA»). A core role is named in the admin's language and any other role by its own
+  name. `GET /auth/me` now returns that name as `roleName`, and the Users list reads it from `GET /roles`,
+  which is administrator-only.
+- **Square icon boxes stay square.** Next to long text, an icon box in a flex row shrank into a pill: the
+  stat cards (18–30 px wide instead of 56 at 1280 px, labels clipped to «INSCRIP», «HOTELE»), the dashboard's
+  «Comentarios Recientes» and quick-action icons, the system-status icons and the sidebar logo. Every square
+  icon box of the admin (every screen, its dialogs and the shell), the shared components, the coordinators'
+  portal and conference-manager now keeps its size (a test refuses one that can shrink);
+  `StatCard` and `ActionCard` labels wrap instead of being cut («Agregar una nu…»), and so do the dashboard's
+  system-status values («Conectado (…»). «Aún no hay comentarios» meets WCAG AA (it was 1.56:1).
+- **No dashboard label breaks inside a word.** At 1280 px the system-health panel is about 565 px wide
+  beside the sidebar and the comments column, and its three columns, chosen by the window's width, left
+  «ALMACENAMIENTO» a 72 px line: it broke «ALMACENAM» / «IENTO» and its status dot touched it. The stat
+  cards at 1024 px («PUBLICACIONES») and the quick actions («Publicación») had the same flaw. The
+  dashboard's grids now pick their columns by their own width (container queries,
+  `frontend/src/lib/dashboardStats.ts`): the health indicators one per row, or three side by side from
+  48rem; the stat cards one, two or all in a row (four never three-and-one); the quick actions two from
+  30rem. Each threshold keeps the widest word of every label whole in es, en and pt, and the status dot
+  keeps a gap beside its label. «Comentarios recientes» sits beside the main column from 50rem of the
+  page's own width (at 1024 px its title had about 61 px and was cut by the card; it now goes under the
+  main column there, and comes back beside it when the sidebar is collapsed). The header's small health
+  pill no longer wraps «SQLITE-» / «NATIVE». The welcome line, that pill, the chart's subtitle and period
+  buttons and the comment dates meet WCAG AA.
+- **The admin shell's edges on a phone.** The closed phone menu no longer casts its shadow onto the page's
+  left edge; the sidebar logo's glow is no longer cut to a hard box; the phone header's bottom rule is light
+  grey instead of black (a bare `border-b` is `currentColor` in Tailwind v4), which also showed, sharp,
+  through the edge of every dialog's blurred backdrop.
+- **The admin sidebar and phone menu draw no heading over an empty section.** A team member whose plugin
+  lost `roles:declare` saw an empty «Principal» heading.
+- **The dashboard hides the numbers and panels the viewer cannot read instead of showing 0.** The users
+  count needs `list_users`; the comments count and the recent-comments panel need `moderate_comments` (a
+  contributor or author saw 0 comments and an empty panel; the main column now takes the full width); the
+  activity chart and the system-health panel are for administrators, like their endpoints (a
+  non-administrator saw an empty chart and a 403). A non-administrator role holding `manage_options` no
+  longer gets every count left at 0: the system-health request it could not make rejected the whole load.
+- **conference-manager 2.17.0 on phones: the conference screens scroll with the page.**
+  - **Scrolling.** Below 768 px wide or 600 px high the title, the tabs and the white panel take their
+    natural height, so the screen scrolls with the admin's plugin page. Before, every tab, Campos and Equipo
+    y permisos included, scrolled inside a fixed box about 500 px tall that cut headings and buttons. The
+    rules are rendered by the component itself (`client/lib/phoneLayout.ts`), so they do not depend on
+    compiled plugin classes. Below 640 px the panel paddings are compacted. The desktop keeps the fixed
+    panel and the fields beside the preview. After a reload the tab strip scrolls the saved tab into view.
+  - **Campos.** Publishing a form with no field is refused next to «Publicar» instead of in a toast, which
+    stayed on top of the «Nuevo campo» dialog opened to fix it; opening that dialog or adding a field
+    clears the notice. The intro no longer says the preview is "on the right" (it is below on a phone), and
+    it and the published-form text are translated (es/en/pt). On a phone a field card shows its move, edit
+    and delete buttons in a row under the label instead of a column of four, and the form card and the
+    empty state use smaller paddings. Below 640 px the builder card puts its icon above «Constructor Visual
+    de Formularios» (at 320 px «Formularios» was cut at the card's edge), and so does the «Localidades»
+    public-link card. Those cards, each location card and the form preview's header keep their decorative
+    blobs in a clipped layer of their own: a blob hanging below the `overflow-hidden` card gave it 80 px to
+    scroll, and bringing the «no puedes publicar» notice into view scrolled the card's own content up inside
+    it on an iPhone SE, cutting the title and the wand icon, with nothing able to scroll it back.
+  - **«Nuevo campo».** The «Campos básicos» hint, the templates' descriptions and notes, the form's labels
+    and helper lines, the «O un campo propio» divider and the placeholders meet WCAG AA (2.6:1 and 1.5:1
+    before). A template already in the form is no longer faded to half opacity: it shows a check mark and
+    says where the field is, readable. The close button has an accessible name.
+  - **Equipo y permisos.** The role editor's sections × levels table fits a phone: each section is a row
+    with its three levels side by side, each labelled. Before, a 560 px table scrolled sideways inside the
+    dialog and only «Sin acceso» was in view. The header row (Sección, Sin acceso, Ver, Gestionar; the three
+    levels on a phone) now stays at the top of the editor while the eleven sections scroll under it, on a
+    desktop and on a phone; it used to scroll away, leaving the radio columns unlabelled. The table layout
+    starts at 680 px, where its 560 px fit without a sideways scroll. The screen's labels, hints and notes
+    meet WCAG AA, and its icon-only buttons (edit, delete, close, remove) 3:1. The notes under a team member drop their indent on a phone.
+    In the «Añadir una persona al equipo» results, a person's name, email and WordJS role keep at least
+    12rem, so «Ya está en el equipo» wraps under them instead of overlapping a role chip squeezed into four
+    lines (iPhone SE); emails break only where they must («ana@ex / ample.test» before), there and in the
+    team list.
+  - **Panel.** The stat cards take as many columns as fit (six fixed columns at 1280 px clipped their
+    labels), and the conference status is translated («ACTIVE» before).
+  - **Tabs.** The conference tab strip fades out on the side that has more tabs, instead of cutting a tab at
+    its edge with nothing saying it scrolls. A tab tapped at the strip's edge is scrolled out from under the
+    fade: on an iPhone SE, «Campos» and its underline stayed faded out until a reload. The «Alimentación»
+    sub-tabs, which have the same fade, now keep their active tab in view too.
+  - **Dialogs.** On a phone, a dialog taller than the screen keeps its title and close button pinned at the
+    top while it scrolls, and its Cancel / Save row pinned at the bottom. This covers «Crear conferencia»,
+    «Nuevo campo», the inscription, hotel, room, price-rule and location forms. On an iPhone SE, with the
+    fee field in view, the «Crear conferencia» title was cut at the top edge; at the top of the form,
+    «Crear conferencia» was cut at the bottom. A focused field is scrolled into view clear of both pinned
+    rows. The desktop is unchanged.
+  - **Scanner.** A camera that cannot open says why in the admin's language instead of the browser's
+    English message («Not supported»); the service in the top bar takes up to two lines, so its own label
+    is no longer cut to «Almuerzo — Al…».
+  - **Reload.** After a reload the plugin reopens the conference you were working on; it reopened the
+    newest active one.
+  - **Conference list.** «Comenzar nuevo evento», «Estadísticas» and the card descriptions meet WCAG AA
+    contrast, and «Comenzar nuevo evento» is translated (es/en/pt). The card footer wraps, so «Gestionar»
+    no longer runs into the stats label or out of a narrow card. The delete button has an accessible name.
 - **One query for the parent entries of a media page.** The media list's per-item visibility check
   resolved each parent with its own `Post.findById` — up to 100 lookups per page. The page's parents are
   now loaded with a single `IN` query (`Post.findByIds`).

@@ -9,9 +9,11 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import DialogLayer from "@/components/DialogLayer";
 import { marketplaceApi, MarketplaceEntry, MarketplaceSourceStatus } from "@/lib/api";
 import { permMeta } from "@/lib/permissionMeta";
 import { useToast } from "@/contexts/ToastContext";
+import { useI18n } from "@/contexts/I18nContext";
 import { FaSearch, FaSyncAlt, FaDownload, FaCheck, FaThLarge, FaStore, FaCog, FaTrash, FaPlus, FaShieldAlt, FaCodeBranch, FaQuestionCircle } from "react-icons/fa";
 import type { IconType } from "react-icons";
 import { Button, EmptyState } from "@/components/ui";
@@ -97,8 +99,20 @@ export function ReviewPill({ review, official }: { review: MarketplaceEntry["rev
  * already filtered to it instead of asking the admin to find a name they just read. It seeds the
  * search box only — the admin can clear or change it like any other search.
  */
+/**
+ * The note under the permissions of the install confirmation, as an i18n key. It said "Nada se otorga
+ * automáticamente: tras activar el plugin, apruebas cada permiso en su panel" — but confirming the
+ * activation dialog of a plugin with no grant on record grants every permission it lists (backend
+ * routes/plugins.ts POST /:slug/activate). An update keeps the grants on record, and what this version
+ * adds stays off until it is granted in Permissions.
+ */
+export function installGrantNoteKey(entry: Pick<MarketplaceEntry, "installed" | "updateAvailable">): string {
+    return entry.installed && entry.updateAvailable ? "plugins.marketplace.grantNote.update" : "plugins.marketplace.grantNote.install";
+}
+
 export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { onInstalled: () => void; initialSearch?: string }) {
     const { addToast } = useToast();
+    const { t } = useI18n();
     const [entries, setEntries] = useState<MarketplaceEntry[]>([]);
     const [source, setSource] = useState<string>("");
     const [isLocal, setIsLocal] = useState(false);
@@ -245,7 +259,7 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
     if (error) {
         return (
             <div className="max-w-xl mx-auto text-center py-16">
-                <div className="w-16 h-16 bg-amber-50 text-amber-500 rounded-2xl flex items-center justify-center text-2xl mx-auto mb-4">
+                <div className="w-16 h-16 shrink-0 bg-amber-50 text-amber-500 rounded-2xl flex items-center justify-center text-2xl mx-auto mb-4">
                     <FaStore />
                 </div>
                 <h3 className="font-bold text-gray-900 mb-2">No se pudo cargar el marketplace</h3>
@@ -284,14 +298,14 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                     <button
                         onClick={() => (showSources ? setShowSources(false) : openSources())}
                         title="Configurar fuentes del marketplace"
-                        className={`w-10 h-10 flex items-center justify-center rounded-2xl border transition-all shadow-sm hover:scale-105 active:scale-95 ${showSources ? "bg-blue-50 border-blue-200 text-blue-600" : "bg-white border-slate-200/60 text-slate-500 hover:text-slate-850 hover:border-slate-300"}`}
+                        className={`w-10 h-10 shrink-0 flex items-center justify-center rounded-2xl border transition-all shadow-sm hover:scale-105 active:scale-95 ${showSources ? "bg-blue-50 border-blue-200 text-blue-600" : "bg-white border-slate-200/60 text-slate-500 hover:text-slate-850 hover:border-slate-300"}`}
                     >
                         <FaCog className="text-xs" />
                     </button>
                     <button
                         onClick={() => load(true)}
                         title="Actualizar catálogo"
-                        className="w-10 h-10 flex items-center justify-center rounded-2xl bg-white border border-slate-200/60 text-slate-500 hover:text-slate-850 hover:border-slate-300 hover:scale-105 active:scale-95 transition-all shadow-sm"
+                        className="w-10 h-10 shrink-0 flex items-center justify-center rounded-2xl bg-white border border-slate-200/60 text-slate-500 hover:text-slate-850 hover:border-slate-300 hover:scale-105 active:scale-95 transition-all shadow-sm"
                     >
                         <FaSyncAlt className="text-xs" />
                     </button>
@@ -388,7 +402,7 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                                     )}
                                     {(e.permissions || []).map((p) => {
                                         const token = permToken(p);
-                                        const meta = permMeta(token);
+                                        const meta = permMeta(token, t);
                                         return (
                                             <span key={token} title={meta.label} className={`text-[8px] font-extrabold uppercase tracking-widest px-2.5 py-1 rounded-full border shadow-sm ${meta.risk === "high" ? "bg-rose-50 text-rose-600 border-rose-100/50" : meta.risk === "med" ? "bg-amber-50 text-amber-600 border-amber-100/50" : "bg-slate-50 text-slate-550 border-slate-100"}`}>
                                                 {token.split(':')[0]}
@@ -430,7 +444,7 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
             {/* Install confirm modal — surfaces the permissions the plugin will REQUEST (grants stay
                 default-deny; the admin approves each one after activation, same as uploads). */}
             {confirmEntry && (
-                <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setConfirmEntry(null)}>
+                <DialogLayer className="bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setConfirmEntry(null)}>
                     <div className="bg-white/95 backdrop-blur-lg rounded-[32px] shadow-[0_32px_64px_-16px_rgba(0,0,0,0.12)] border border-slate-200/50 w-full max-w-md p-8 animate-in fade-in zoom-in-95 duration-200" onClick={(ev) => ev.stopPropagation()}>
                         <h3 className="font-extrabold text-lg text-slate-900 mb-1">{confirmEntry.installed && confirmEntry.updateAvailable ? "Actualizar" : "Instalar"} {confirmEntry.name}</h3>
                         <p className="text-xs font-medium text-slate-500 mb-5 leading-relaxed">
@@ -442,7 +456,7 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                                 <div className="space-y-2 mb-5 max-h-48 overflow-y-auto custom-scrollbar pr-1">
                                     {confirmEntry.permissions.map((p) => {
                                         const token = permToken(p);
-                                        const meta = permMeta(token);
+                                        const meta = permMeta(token, t);
                                         return (
                                             <div key={token} className="flex items-center gap-2.5 text-xs font-medium bg-slate-50 border border-slate-100 rounded-xl p-2.5 shadow-[inset_0_2px_4px_rgba(0,0,0,0.015)]">
                                                 <span className={`w-2 h-2 rounded-full shrink-0 relative flex ${meta.risk === "high" ? "bg-rose-500 shadow-[0_0_6px_rgba(244,63,94,0.4)]" : meta.risk === "med" ? "bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.4)]" : "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.4)]"}`} />
@@ -452,7 +466,7 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                                         );
                                     })}
                                 </div>
-                                <p className="text-[10px] text-slate-400 mb-5 italic bg-blue-50/50 border border-blue-100/50 rounded-xl p-3 leading-relaxed">Nada se otorga automáticamente: tras activar el plugin, apruebas cada permiso en su panel.</p>
+                                <p className="text-[10px] text-slate-600 mb-5 italic bg-blue-50/50 border border-blue-100/50 rounded-xl p-3 leading-relaxed" data-install-grant-note="">{t(installGrantNoteKey(confirmEntry))}</p>
                             </>
                         )}
                         <div className="flex justify-end gap-2.5 pt-2 border-t border-slate-100">
@@ -460,7 +474,7 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                             <Button onClick={() => doInstall(confirmEntry)}><FaDownload className="mr-2 text-xs" /> Instalar</Button>
                         </div>
                     </div>
-                </div>
+                </DialogLayer>
             )}
         </div>
     );

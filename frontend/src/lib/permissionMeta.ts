@@ -151,6 +151,12 @@ export const PERMISSION_META: Record<string, PermissionMeta> = {
         risk: 'high',
         icon: 'fa-code',
     },
+    'roles:declare': {
+        label: 'Register its own user roles',
+        description: 'Add the user roles listed below, so you can give someone access to this plugin\'s screens and nothing else. Such a role can only ever hold this plugin\'s own permissions, plus entering the admin panel and the user\'s own account page — the platform refuses anything else, so it can never reach your content, users, settings or another plugin. You choose who holds it, in Users; if some users already hold it, how many is shown next to the role.',
+        risk: 'med',
+        icon: 'fa-user-tag',
+    },
     'network': {
         label: 'Outbound network',
         description: 'Make outbound network calls (fetch / raw sockets). This is an exfiltration risk — data can leave your server. Grant only if you trust this plugin.',
@@ -162,7 +168,18 @@ export const PERMISSION_META: Record<string, PermissionMeta> = {
 /**
  * Look up platform metadata for a permission token, falling back to a neutral med-risk entry so
  * an unrecognised token still renders sensibly rather than crashing the grant screen.
+ *
+ * With `t` (the admin's i18n lookup), the label and description come in the admin's language from
+ * `perm.<token>.label` / `perm.<token>.description` (lib/i18n.ts, es/en/pt); the English above is the
+ * fallback for a key a language lacks. The grant screens of a Spanish admin showed all of it in English.
  */
-export function permMeta(token: string): PermissionMeta {
-    return PERMISSION_META[token] || { label: token, risk: 'med' };
+export function permMeta(token: string, t?: (key: string) => string): PermissionMeta {
+    const base = PERMISSION_META[token];
+    if (!base) return { label: token, risk: 'med' };
+    if (!t) return base;
+    const tr = (key: string, fallback?: string) => {
+        const v = t(key);
+        return typeof v === 'string' && v && v !== key ? v : fallback;
+    };
+    return { ...base, label: tr(`perm.${token}.label`, base.label) as string, description: tr(`perm.${token}.description`, base.description) };
 }

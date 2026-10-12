@@ -45,11 +45,12 @@ export default function PageEditorPage() {
     const isNew = params.id === "new";
     const pageId = isNew ? null : Number(params.id);
 
-    // Access gate: the page editor is for content managers. A subscriber (no edit_posts) can't save
+    // Access gate: the page editor is for content managers. Without edit_pages nobody can save a page
     // anyway (POST/PUT /posts is capability-gated) but the editor UI still opened by direct URL — block
-    // it and send them to their account page. (authLoading avoids a redirect before caps are known.)
+    // it and send them to their account page. edit_pages, like the admin layout's route guard
+    // (lib/adminAccess.ts). (authLoading avoids a redirect before caps are known.)
     const { can, isLoading: authLoading } = useAuth();
-    const allowedToEdit = can('edit_posts');
+    const allowedToEdit = can('edit_pages');
     useEffect(() => {
         if (!authLoading && !allowedToEdit) router.replace('/admin/account');
     }, [authLoading, allowedToEdit, router]);
