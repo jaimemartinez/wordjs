@@ -32,6 +32,14 @@ npm run install:all
 # = npm install (root) + backend + frontend + gateway + setup
 ```
 
+**Install scripts.** The default SQLite driver, `better-sqlite3`, is a native module whose compiled binary is put in place by its own install script (a prebuilt download for your platform and Node.js version, or a local compile when none exists). An install with `--ignore-scripts` skips that step, and so does nothing to rebuild it after a Node.js upgrade. Restore it with:
+
+```bash
+cd backend && npm rebuild better-sqlite3
+```
+
+It is the only runtime dependency that needs its install script. The install wizard checks the binary before it writes anything and stops with this same instruction when it is missing; the pure-JS **SQLite (legacy / WASM)** option in the wizard needs no binary, at the cost of ranked full-text search.
+
 ---
 
 ## 🟦 Backend: dev vs prod

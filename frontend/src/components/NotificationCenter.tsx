@@ -380,15 +380,17 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
                                                             {new Date(n.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                                         </span>
                                                     </div>
-                                                    <p className="text-[14px] text-gray-500 font-medium leading-relaxed line-clamp-2">
+                                                    {/* Without hover the delete button sits in the bottom-right corner: keep the text clear of it. */}
+                                                    <p className="text-[14px] text-gray-500 font-medium leading-relaxed line-clamp-2 pr-10 [@media(hover:hover)]:pr-0">
                                                         {n.message}
                                                     </p>
                                                 </div>
 
-                                                {/* Delete Button (Visible on Hover) */}
+                                                {/* Delete button: always visible in the bottom-right corner on screens without hover (phones,
+                                                    tablets), revealed on hover (or keyboard focus) at the middle of the right edge elsewhere. */}
                                                 <button
                                                     onClick={(e) => deleteNotification(e, n.uuid)}
-                                                    className="absolute -right-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-rose-50 text-rose-500 opacity-0 group-hover:opacity-100 group-hover:right-4 transition-all duration-300 flex items-center justify-center hover:bg-rose-500 hover:text-white shadow-lg shadow-rose-200"
+                                                    className="absolute right-4 bottom-4 [@media(hover:hover)]:bottom-auto [@media(hover:hover)]:top-1/2 [@media(hover:hover)]:-translate-y-1/2 [@media(hover:hover)]:-right-2 w-10 h-10 rounded-full bg-rose-50 text-rose-500 opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-hover:right-4 focus-visible:opacity-100 focus-visible:right-4 transition-all duration-300 flex items-center justify-center hover:bg-rose-500 hover:text-white shadow-lg shadow-rose-200"
                                                     title={t('notif.delete')}
                                                     aria-label={t('notif.delete')}
                                                 >

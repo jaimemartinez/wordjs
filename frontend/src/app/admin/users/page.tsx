@@ -126,7 +126,7 @@ export default function UsersPage() {
                                             />
                                         </td>
                                         <td className="px-8 py-6 text-right">
-                                            <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity translate-x-4 group-hover:translate-x-0 duration-300">
+                                            <div className="flex items-center justify-end gap-2 opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity translate-x-0 [@media(hover:hover)]:translate-x-4 group-hover:translate-x-0 focus-within:translate-x-0 duration-300">
                                                 <button
                                                     onClick={() => setSelectedUser(user)}
                                                     className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white flex items-center justify-center transition-all shadow-sm hover:shadow-blue-200"

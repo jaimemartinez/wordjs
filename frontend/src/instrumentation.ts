@@ -42,6 +42,22 @@ export function gatewayClientOptions(
 }
 
 /**
+ * The port this node tells the gateway to proxy to: the one its server LISTENS on.
+ *
+ * `scripts/start-frontend.js` chooses that port and hands it to `server.js` as `PORT`, so `PORT` is the
+ * answer; `frontendPort` (then 3001) only covers a server started some other way. It is never the port
+ * of `frontendUrl`: that is the site's PUBLIC origin — the install wizard stores there the address
+ * visitors use, which on a single host is the gateway itself (:3000). Advertising that port made the
+ * gateway proxy every page to itself (502) after each restart of a split install made through the
+ * wizard, until a health check evicted the target about 90 s later.
+ */
+export function advertisedPort(listenPort: string | undefined, frontendPort: unknown): string {
+    if (listenPort && /^\d+$/.test(listenPort)) return listenPort;
+    const configured = Number(frontendPort);
+    return Number.isInteger(configured) && configured > 0 ? String(configured) : '3001';
+}
+
+/**
  * Is this registration failure PERMANENT misconfiguration rather than "the gateway is still booting"?
  *
  * The retry loop below swallows every error and retries forever in silence, which is right for a
@@ -86,12 +102,12 @@ export async function register() {
         };
 
         const registerWithGateway = () => {
-            // Advertised host/port the gateway proxies to. Defaults to loopback (co-located), but a
+            // Advertised host the gateway proxies to. Defaults to loopback (co-located), but a
             // frontend on a SEPARATE machine must advertise its routable address via config.advertiseHost
             // (or the host of config.frontendUrl) — otherwise the gateway records 127.0.0.1 and proxies
-            // '/' back to its own loopback instead of the real frontend node.
+            // '/' back to its own loopback instead of the real frontend node. The port: advertisedPort.
             let hostname = '127.0.0.1';
-            let port = '3001';
+            let frontendPort: unknown;
 
             // Try to read config
             let gatewaySecret = null;
@@ -112,11 +128,11 @@ export async function register() {
                     if (config.gatewayHost) gatewayHost = config.gatewayHost;
                     if (config.gatewayInternalPort) gatewayInternalPort = config.gatewayInternalPort;
                     if (config.gatewayPort) gatewayPort = config.gatewayPort;
+                    frontendPort = config.frontendPort;
 
                     if (config.frontendUrl) {
                         try {
                             const url = new URL(config.frontendUrl);
-                            if (url.port) port = url.port;
                             if (url.hostname) hostname = url.hostname;
                         } catch (e: any) {
                             console.warn('[Frontend Instrumentation] Failed to parse frontendUrl:', e.message);
@@ -129,6 +145,7 @@ export async function register() {
             } catch (e: any) {
                 console.warn('[Frontend Instrumentation] Failed to load/parse wordjs-config.json:', e.message);
             }
+            const port = advertisedPort(process.env.PORT, frontendPort);
 
             // mTLS Certs Load
             const certDir = fs.existsSync(path.resolve(process.cwd(), 'certs')) ? path.resolve(process.cwd(), 'certs') : path.resolve(process.cwd(), '../backend/certs');

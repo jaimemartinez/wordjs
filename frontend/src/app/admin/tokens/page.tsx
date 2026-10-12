@@ -244,7 +244,7 @@ export default function TokensPage() {
                                                             <button
                                                                 onClick={() => handleRevoke(tok)}
                                                                 title={t("tokens.revoke")}
-                                                                className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all shadow-sm opacity-0 group-hover:opacity-100"
+                                                                className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all shadow-sm opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
                                                             >
                                                                 <i className="fa-solid fa-ban text-xs"></i>
                                                             </button>

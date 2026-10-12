@@ -200,7 +200,7 @@ export default function PatternsPanel({ handle, registry }: VersoPatternsPanelPr
                                 type="button"
                                 title={trStr("Eliminar plantilla", language)}
                                 onClick={(e) => { e.stopPropagation(); setUserPatterns(deleteUserPattern(p.id)); }}
-                                className="absolute top-2 right-2 w-7 h-7 rounded-md bg-[var(--ed-surface-container-lowest)] border border-[var(--ed-outline-variant)] flex items-center justify-center text-[var(--ed-outline)] hover:text-[var(--ed-error)] opacity-0 group-hover:opacity-100 focus-visible:opacity-100 group-focus-within:opacity-100 transition"
+                                className="absolute top-2 right-2 w-7 h-7 rounded-md bg-[var(--ed-surface-container-lowest)] border border-[var(--ed-outline-variant)] flex items-center justify-center text-[var(--ed-outline)] hover:text-[var(--ed-error)] opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 focus-visible:opacity-100 group-focus-within:opacity-100 transition"
                             >
                                 <MSym name="delete" size={14} />
                             </button>
