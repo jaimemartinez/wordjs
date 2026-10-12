@@ -9,10 +9,11 @@
  *       a contributor could stamp their own draft in 2099, and `date` with NO status at all makes
  *       Post.update re-evaluate the CURRENT status — a future date on a published post unpublishes it.
  *
- *   #18 (read twin) — a slug is unique PER TYPE (generateUniqueSlug de-duplicates within one
- *       post_type), so a post `about` and a page `about` is an ordinary pair. GET /posts/slug/:slug
- *       looked the row up with NO type, and `WHERE post_name = ?` with nothing ordering it served
- *       whichever row came back first.
+ *   #18 (read twin) — a slug WAS unique PER TYPE (generateUniqueSlug de-duplicated within one
+ *       post_type; it now shares one namespace across the publicly routed types, but older pairs
+ *       remain), so a post `about` and a page `about` could coexist. GET /posts/slug/:slug looked the
+ *       row up with NO type, and `WHERE post_name = ?` with nothing ordering it served whichever row
+ *       came back first.
  *
  * Everything here goes through the REAL router with supertest and the REAL post-type registry: a
  * hand-built object would prove nothing about what the producer emits.
@@ -163,19 +164,23 @@ describe('posts router: date capability + typed slug identity', () => {
 
     let postId: number, pageId: number;
 
-    it('a post and a page may legally share a slug (generateUniqueSlug is per type)', async () => {
+    it('a post and a page that already share a slug (created before the shared namespace) both stay addressable', async () => {
+        // generateUniqueSlug now keeps every publicly routed type in ONE slug namespace (see
+        // posts-slug-namespace.test.ts), so the API can no longer CREATE this pair — but installs that
+        // predate the rule have them, and the typed lookups below must still tell them apart.
         const p = await as(adminToken)(request(app).post('/api/v1/posts'))
             .send({ title: 'About the blog', slug: 'about', status: 'publish', type: 'post' });
         assert.strictEqual(p.status, 201);
         postId = p.body.id;
 
         const pg = await as(adminToken)(request(app).post('/api/v1/posts'))
-            .send({ title: 'About us', slug: 'about', status: 'publish', type: 'page' });
+            .send({ title: 'About us', slug: 'about-legacy', status: 'publish', type: 'page' });
         assert.strictEqual(pg.status, 201);
         pageId = pg.body.id;
+        await dbAsync.run('UPDATE posts SET post_name = ? WHERE id = ?', ['about', pageId]);
 
         const row = await dbAsync.get('SELECT post_name FROM posts WHERE id = ?', [pageId]);
-        assert.strictEqual(row.post_name, 'about', 'the page keeps the slug — the collision is real, not de-duplicated');
+        assert.strictEqual(row.post_name, 'about', 'the legacy collision is real');
         assert.notStrictEqual(postId, pageId);
     });
 
@@ -193,11 +198,11 @@ describe('posts router: date capability + typed slug identity', () => {
         assert.strictEqual(res.body.type, 'post');
     });
 
-    it('with NO declared type the answer is DETERMINISTIC (post wins) and repeats', async () => {
+    it('with NO declared type the answer is DETERMINISTIC (the page wins) and repeats', async () => {
         for (let i = 0; i < 3; i++) {
             const res = await request(app).get('/api/v1/posts/slug/about');
             assert.strictEqual(res.status, 200);
-            assert.strictEqual(res.body.id, postId, 'same request, same row, every time');
+            assert.strictEqual(res.body.id, pageId, 'same request, same row, every time — and a post cannot shadow the page');
         }
     });
 

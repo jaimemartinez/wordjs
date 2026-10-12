@@ -10,6 +10,8 @@ const User = require('../models/User');
 const Term = require('../models/Term');
 const { Menu, MenuItem } = require('../models/Menu');
 const { getOption, updateOption, addOption } = require('./options');
+// The writable post statuses, which an imported status is folded onto (see canonicalImportedPostStatus).
+const { canonicalImportedPostStatus } = require('./post-capabilities');
 
 /**
  * Export all site content
@@ -108,10 +110,14 @@ async function exportSite(options: Record<string, any> = {}) {
     // Export users
     if (includeUsers) {
         const users = await User.findAll({ limit: 10000 });
+        // NO PASSWORD HASH. This line used to read `password: u.userPass // Include hashed password`, but
+        // the User model never carries user_pass (models/User constructor), so the field was always
+        // undefined and dropped by JSON.stringify — and importSite never reads one either (it gives every
+        // imported account a random password). Not exported at all, so a change to the model can never
+        // start shipping the hashes in an archive an administrator downloads and passes around.
         exportData.content.users = users.map((u: any) => ({
             id: u.id,
             username: u.userLogin,
-            password: u.userPass, // Include hashed password
             email: u.userEmail,
             displayName: u.displayName,
             registered: u.userRegistered,
@@ -414,7 +420,8 @@ async function importSite(data: any, options: Record<string, any> = {}) {
                         title: post.title,
                         content: post.content,
                         excerpt: post.excerpt,
-                        status: post.status
+                        // An absent status leaves the column alone, as Post.update reads "not sent".
+                        status: post.status === undefined ? undefined : canonicalImportedPostStatus(post.status)
                     });
                     idMap.posts[post.id] = existing.id;
                     results.posts.updated++;
@@ -423,9 +430,12 @@ async function importSite(data: any, options: Record<string, any> = {}) {
                         title: post.title,
                         content: post.content,
                         excerpt: post.excerpt,
-                        status: post.status,
+                        status: canonicalImportedPostStatus(post.status),
                         slug: post.slug,
                         type: 'post',
+                        // Per-type slugs, as in the site that was exported: the lookup above is by
+                        // (slug, type), so a restore must not rename one side of a post/page pair.
+                        slugScope: 'type',
                         authorId: 1
                     });
                     idMap.posts[post.id] = newPost.id;
@@ -456,7 +466,7 @@ async function importSite(data: any, options: Record<string, any> = {}) {
                     await Post.update(existing.id, {
                         title: page.title,
                         content: page.content,
-                        status: page.status
+                        status: page.status === undefined ? undefined : canonicalImportedPostStatus(page.status)
                     });
                     idMap.pages[page.id] = existing.id;
                     results.pages.updated++;
@@ -464,9 +474,10 @@ async function importSite(data: any, options: Record<string, any> = {}) {
                     const newPage = await Post.create({
                         title: page.title,
                         content: page.content,
-                        status: page.status,
+                        status: canonicalImportedPostStatus(page.status),
                         slug: page.slug,
                         type: 'page',
+                        slugScope: 'type', // same as the posts loop above
                         authorId: 1
                     });
                     idMap.pages[page.id] = newPage.id;

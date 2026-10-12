@@ -53,11 +53,12 @@ function VerifyEmailInner() {
         let active = true;
         // Si este navegador ya confirmó esta cuenta no se vuelve a llamar: el token es de un solo uso
         // y el segundo intento devolvería un 400 que se leería como «tu enlace no vale».
-        const settle: Promise<VerifyStatus> = wasVerifiedHere(link.uid, store)
+        const settle: Promise<VerifyStatus> = wasVerifiedHere(link, store)
             ? Promise.resolve<VerifyStatus>("already")
-            : authApi.verifyEmail(link).then(
+            // A current link sends the token alone; a legacy one, the uid it carried as well.
+            : authApi.verifyEmail(link.uid !== null ? { uid: link.uid, token: link.token } : { token: link.token }).then(
                   (): VerifyStatus => {
-                      markVerifiedHere(link.uid, store);
+                      markVerifiedHere(link, store);
                       return "success";
                   },
                   (err): VerifyStatus => classifyVerifyFailure(err)

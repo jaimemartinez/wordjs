@@ -86,8 +86,20 @@ exports.init = function (wordjs) {
 
     // --- GALLERIES ---
 
+    // Public callers never see an error's text: a driver's message names tables, columns and
+    // constraints. The details go to the server log.
+    const failQuietly = (res, e, what) => {
+        console.error(`[video-gallery] ${what} failed:`, e && e.message ? e.message : e);
+        res.status(500).json({ error: 'No se pudo completar la operación. Inténtalo de nuevo.' });
+    };
+    // Public routes answer every failure themselves, through failQuietly: a public caller only ever
+    // gets a reply this plugin wrote.
+    const quietly = (what, handler) => async (req, res) => {
+        try { await handler(req, res); } catch (e) { failQuietly(res, e, what); }
+    };
+
     // GET /galleries - List all galleries
-    http.route('get', '/galleries', async (req, res) => {
+    http.route('get', '/galleries', quietly('gallery list', async (req, res) => {
         const list = await options.get('vgallery_galleries_list', []);
 
         // Parallel fetch
@@ -103,7 +115,7 @@ exports.init = function (wordjs) {
         }));
 
         res.json(galleries.filter(Boolean));
-    });
+    }));
 
     // POST /galleries - Create new gallery (admin)
     http.route('post', '/galleries', { auth: true, admin: true }, async (req, res) => {
@@ -129,11 +141,11 @@ exports.init = function (wordjs) {
     });
 
     // GET /galleries/:id - Get specific gallery details
-    http.route('get', '/galleries/:id', async (req, res) => {
+    http.route('get', '/galleries/:id', quietly('gallery', async (req, res) => {
         const gallery = await getGallery(req.params.id);
         if (!gallery) return res.status(404).json({ error: 'Gallery not found' });
         res.json(gallery);
-    });
+    }));
 
     // PUT /galleries/:id - Update gallery metadata (admin)
     http.route('put', '/galleries/:id', { auth: true, admin: true }, async (req, res) => {
@@ -274,7 +286,7 @@ exports.init = function (wordjs) {
     // --- LEGACY / HELPER ROUTES ---
 
     // GET / - Default legacy route (Returns default gallery videos, honoring ?gallery=)
-    http.route('get', '/', async (req, res) => {
+    http.route('get', '/', quietly('gallery', async (req, res) => {
         // If 'gallery' query param is present, try to fetch that one
         const manualId = req.query.gallery;
         if (manualId) {
@@ -295,7 +307,7 @@ exports.init = function (wordjs) {
             }
             res.json([]);
         }
-    });
+    }));
 
     // === SHORTCODE ===
     shortcodes.add('vgallery', (attrs) => {

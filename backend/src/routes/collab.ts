@@ -39,6 +39,8 @@ const jwt = require('jsonwebtoken');
 const { authenticate, trustedHost, originMatchesHost, sameOriginAllowList, hostlessAmbientRequest, sessionAddressStillAccepted } = require('../middleware/auth');
 const { asyncHandler, offStack } = require('../middleware/errorHandler');
 const { canEditPostRecord, isRestExposedPostType } = require('../core/post-capabilities');
+// An attachment's entry decides too (core/attachment-visibility) — the same gate every attachment write takes.
+const { attachmentWriteRefusal } = require('../core/attachment-visibility');
 const config = require('../config/app');
 const Post = require('../models/Post');
 const collab = require('../core/collab-rooms');
@@ -140,7 +142,15 @@ async function gate(req: Principal, postId: number): Promise<Gate> {
     const post = await Post.findById(postId);
     if (!post) return { ok: false, status: 404, code: 'rest_post_invalid', message: 'Post not found.' };
 
-    if (!isRestExposedPostType(post.type || post.postType || 'post') || !canEditPostRecord(req.user, post)) {
+    // An attachment this caller may not even SEE (core/attachment-visibility: an entry they may not read,
+    // someone else's private item) answers exactly as a missing post. It used to fall into the 403 below,
+    // and 403-versus-404 told any authenticated caller that the hidden item exists — the answer GET
+    // /media/:id and GET /posts/:id refuse to give.
+    const attachmentRefusal = await attachmentWriteRefusal(req.user, post);
+    if (attachmentRefusal === 404) return { ok: false, status: 404, code: 'rest_post_invalid', message: 'Post not found.' };
+
+    if (!isRestExposedPostType(post.type || post.postType || 'post') || !canEditPostRecord(req.user, post)
+        || attachmentRefusal !== null) {
         return { ok: false, status: 403, code: 'rest_forbidden', message: 'You cannot edit this post.' };
     }
     return { ok: true, post };
@@ -344,7 +354,7 @@ async function connGate(req: Request, res: Response): Promise<any | null> {
  *       403:
  *         description: Cross-site request blocked (rest_csrf_invalid), or you cannot edit this post (rest_forbidden)
  *       404:
- *         description: Post not found (rest_post_invalid)
+ *         description: Post not found, or an attachment this caller may not see (rest_post_invalid) - the same answer for both
  */
 router.get('/:postId/stream', authenticate, asyncHandler(async (req: Request, res: Response) => {
     const postId = parsePostId(req.params.postId);
@@ -561,7 +571,7 @@ router.get('/:postId/stream', authenticate, asyncHandler(async (req: Request, re
  *       403:
  *         description: You cannot edit this post (rest_forbidden). Authorization is the same gate PUT /posts/{id} applies - there is no reader mode.
  *       404:
- *         description: Post not found (rest_post_invalid)
+ *         description: Post not found, or an attachment this caller may not see (rest_post_invalid) - the same answer for both
  *       409:
  *         description: No live SSE session for that siteId (collab_no_session), the connection is closed (collab_closed), or the room epoch moved and the document must be reloaded (collab_epoch)
  *       413:
@@ -657,7 +667,7 @@ router.post('/:postId/ops', authenticate, asyncHandler(async (req: Request, res:
  *       403:
  *         description: You cannot edit this post (rest_forbidden). Authorization is the same gate PUT /posts/{id} applies - there is no reader mode.
  *       404:
- *         description: Post not found (rest_post_invalid)
+ *         description: Post not found, or an attachment this caller may not see (rest_post_invalid) - the same answer for both
  *       409:
  *         description: No live SSE session for that siteId (collab_no_session), the connection is closed (collab_closed), or the room is gone and the client must rejoin (collab_no_room). Presence never compares epochs, so it never answers collab_epoch.
  *       429:
@@ -749,7 +759,7 @@ router.post('/:postId/presence', authenticate, asyncHandler(async (req: Request,
  *       403:
  *         description: You cannot edit this post (rest_forbidden). Authorization is the same gate PUT /posts/{id} applies - there is no reader mode.
  *       404:
- *         description: Post not found (rest_post_invalid)
+ *         description: Post not found, or an attachment this caller may not see (rest_post_invalid) - the same answer for both
  *       409:
  *         description: No live SSE session for that siteId (collab_no_session), or the connection is closed (collab_closed). A resync is never refused for a stale epoch - an epoch the client no longer shares is answered with a 200 carrying the base snapshot to re-seed from.
  *       429:
@@ -828,7 +838,7 @@ router.post('/:postId/resync', authenticate, asyncHandler(async (req: Request, r
  *       403:
  *         description: You cannot edit this post (rest_forbidden). Authorization is the same gate PUT /posts/{id} applies - there is no reader mode.
  *       404:
- *         description: Post not found (rest_post_invalid)
+ *         description: Post not found, or an attachment this caller may not see (rest_post_invalid) - the same answer for both
  *       409:
  *         description: No live SSE session for that siteId (collab_no_session). Leaving is not rate limited and does not compare epochs, so it answers none of collab_closed, collab_epoch, collab_frame_too_large or collab_rate_limit - once the connection is found, the departure always succeeds.
  */

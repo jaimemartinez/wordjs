@@ -720,6 +720,18 @@ router.post('/install', async (req: Request, res: Response) => {
             // The mirror of siteAddress.rev in the config just written (core/site-address installRecord).
             await updateOption('site_address_rev', newConfig.siteAddress.rev);
 
+            // A site CREATED here has no plugin that predates browser:script, so the one-time upgrade that
+            // grants it to "already-active" plugins is recorded as done now. Otherwise it first ran at the
+            // first restart after real use (this process booted in setup mode and skipped the boot block)
+            // and granted it back to plugins whose browser:script the administrator had revoked (core/plugins
+            // migrateBrowserCapabilityGrants). Best-effort: the upgrade also never touches a plugin whose
+            // grants an administrator decided, so a failure here does not reopen that.
+            try {
+                await require('../core/plugins').recordFreshInstallBrowserCapability();
+            } catch (e: any) {
+                console.warn('⚠️ Setup: could not record the browser:script upgrade as done:', e && e.message);
+            }
+
             // SECURITY: Generate mTLS Certificates — but NEVER on a cluster-enrolled node. There the
             // cluster CA already exists on the GATEWAY (its private key deliberately never leaves that
             // machine) and this node holds a CN=backend leaf signed by it. Minting a second, unrelated

@@ -979,7 +979,8 @@ async function requireSudoPassword(req: Request, res: Response, currentPassword:
     // The key comes from the RESOLVED session identity only. Nothing here is derived from a request
     // body, a query string or a header, which is what makes the bucket unreachable from outside.
     const userId = Number(req.user && req.user.id);
-    const inflightKey = `${userId}|${require('../core/client-ip').clientIp(req)}`;
+    // Per source: the address's rate-limit identity (an IPv6 caller is its /64 — core/client-ip ipBucket).
+    const inflightKey = `${userId}|${require('../core/client-ip').clientIpBucket(req)}`;
 
     if (!sudoBeginAttempt(inflightKey)) {
         // Transient by construction (slots are released in `finally`) and scoped to ONE source address,
@@ -1023,6 +1024,36 @@ function isPrivilegedTarget(user: any): boolean {
     ));
 }
 
+/**
+ * THE PRIMARY-EMAIL CHECKS, IN TWO HALVES — and the half that reads OTHER accounts runs after the sudo gate.
+ *
+ * Both answer the same uniform 400 rest_invalid_email: User.update() used to throw 'Email already in use'
+ * as a 500, an authenticated account-existence oracle (500 for a registered address, 200 for a free one),
+ * and the single generic message does not say WHY an address is unusable.
+ *
+ * But the ORDER is part of the answer. The uniqueness lookup ran BEFORE the current-password gate, so
+ * `PUT /users/me {email: <anyone's address>}` with no (or a wrong) currentPassword answered 400 for a taken
+ * address and 403 rest_bad_current_password for a free one: a hijacked session, a same-origin script or a
+ * borrowed browser enumerated accounts without the password. A changed address always demands the sudo
+ * proof (selfRecoveryAddressChanged), so the lookup now runs after it, and only a caller who just proved
+ * the password learns whether another account holds the address — which they would learn anyway, by the
+ * change succeeding or not. The format check depends on nothing but the request and stays up front.
+ */
+function primaryEmailMalformed(email: any): boolean {
+    if (email === undefined || email === null || String(email).trim() === '') return false;
+    return !isValidAddress(String(email).trim().toLowerCase());
+}
+
+async function primaryEmailTakenByAnother(email: any, ownerId: number): Promise<boolean> {
+    if (email === undefined || email === null || String(email).trim() === '') return false;
+    const existing = await User.findByEmail(String(email).trim().toLowerCase());
+    return !!(existing && existing.id !== ownerId);
+}
+
+function unusableEmail(res: Response) {
+    return res.status(400).json({ code: 'rest_invalid_email', message: "This email address can't be used.", data: { status: 400 } });
+}
+
 router.put('/me', asyncHandler(async (req: Request, res: Response) => {
     const { email, displayName, password, url, personalEmail, currentPassword } = req.body;
 
@@ -1043,22 +1074,9 @@ router.put('/me', asyncHandler(async (req: Request, res: Response) => {
     const emailRefusal = await refuseSelfServiceEmailChange(req.user, email);
     if (emailRefusal) return res.status(403).json(emailRefusal);
 
-    // Validate the primary email UP FRONT and return a uniform 400 for both a malformed address and one
-    // already taken by another account. Previously User.update() threw 'Email already in use' surfaced as
-    // a 500, which (unlike the anti-enumeration posture everywhere else) was an authenticated
-    // account-existence oracle: a distinct 500 for a registered address vs 200 for a free one. The single
-    // generic message here does not reveal WHY the address is unusable.
-    if (email !== undefined && email !== null && String(email).trim() !== '') {
-        const normalized = String(email).trim().toLowerCase();
-        let usable = isValidAddress(normalized);
-        if (usable) {
-            const existing = await User.findByEmail(normalized);
-            if (existing && existing.id !== req.user.id) usable = false;
-        }
-        if (!usable) {
-            return res.status(400).json({ code: 'rest_invalid_email', message: "This email address can't be used.", data: { status: 400 } });
-        }
-    }
+    // The primary email's FORMAT up front; whether ANOTHER account holds it only after the sudo gate below
+    // (see primaryEmailMalformed / primaryEmailTakenByAnother).
+    if (primaryEmailMalformed(email)) return unusableEmail(res);
 
     // SINK CRITERION: 'nonblank' for both `email` and `password` (see ACCOUNT_SECURITY_FIELDS). The
     // password used to go through RAW, and `User.update` only skips a FALSY one — so `'   '` was truthy,
@@ -1076,14 +1094,17 @@ router.put('/me', asyncHandler(async (req: Request, res: Response) => {
     // field, and MAILBOX_META_KEY is in its PROTECTED_META list, so the `meta` bag above cannot reach it
     // either.
 
-    // SUDO, LAST GATE BEFORE THE WRITE — password OR either recovery address. Placed here, after the
-    // format/uniqueness/mail-domain refusals, so a request that was going to be rejected anyway never
-    // spends an attempt in the sudo throttle, and so the answer for a bad address does not depend on
-    // whether the caller knew the password.
+    // SUDO — password OR either recovery address. After the refusals that depend on the request alone
+    // (format, mail domain), so a request that was going to be rejected anyway never spends an attempt in
+    // the sudo throttle; BEFORE the one that reads other accounts, so only the account owner learns it.
     const recoveryChanged = await selfRecoveryAddressChanged(req.user, req.body);
     // Judged on the SAME normalized value the sink stores (suppliedText): a whitespace-only password is
     // not a credential change, so it must not demand a sudo proof for a write that will not happen.
     if ((suppliedText(password) || recoveryChanged) && await requireSudoPassword(req, res, currentPassword)) return;
+
+    // LAST GATE BEFORE THE WRITE: is the address another account's? Answered only to a caller who has just
+    // proved the password (a changed address always demands it — see recoveryChanged).
+    if (await primaryEmailTakenByAnother(email, req.user.id)) return unusableEmail(res);
 
     const updated = await User.update(req.user.id, updateData);
     // A changed recovery address invalidates any reset link already in flight to the old one.
@@ -1240,20 +1261,11 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
     // value the gate judged is the value that is written.
     const updateData: any = { email: suppliedText(email), displayName, password: suppliedText(password), url };
 
-    // Uniform 400 for a malformed or already-taken primary email (target = the account being edited),
-    // instead of the model's 500 'Email already in use'. Same anti-enumeration reasoning as PUT /me: a
-    // distinct 500-vs-200 was an authenticated account-existence oracle. One generic message, no reason leak.
-    if (email !== undefined && email !== null && String(email).trim() !== '') {
-        const normalized = String(email).trim().toLowerCase();
-        let usable = isValidAddress(normalized);
-        if (usable) {
-            const existing = await User.findByEmail(normalized);
-            if (existing && existing.id !== userId) usable = false;
-        }
-        if (!usable) {
-            return res.status(400).json({ code: 'rest_invalid_email', message: "This email address can't be used.", data: { status: 400 } });
-        }
-    }
+    // Uniform 400 for a malformed or already-taken primary email (target = the account being edited), the
+    // same two halves as PUT /me (primaryEmailMalformed / primaryEmailTakenByAnother): the format here, the
+    // lookup of other accounts after the sudo gate below — this route serves self-edits too, and its
+    // lookup used to run before the current-password check exactly as PUT /me's did.
+    if (primaryEmailMalformed(email)) return unusableEmail(res);
 
     // SECURITY (ACTIVE CORPORATE MAILBOX). This route also serves SELF-edits — `isOwn` skips the
     // `edit_users` check above — so both the grant and the address it names must be re-gated on the
@@ -1386,6 +1398,9 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
     const selfRecoveryChanged = isOwn && await selfRecoveryAddressChanged(user, req.body);
     // Same normalization as the sink a few lines up — see PUT /me.
     if (isOwn && (suppliedText(password) || selfRecoveryChanged) && await requireSudoPassword(req, res, req.body.currentPassword)) return;
+
+    // Last gate before the write, after sudo — see primaryEmailTakenByAnother.
+    if (await primaryEmailTakenByAnother(email, userId)) return unusableEmail(res);
 
     const updated = await User.update(userId, updateData);
     if (selfRecoveryChanged) await invalidatePendingPasswordReset(userId);

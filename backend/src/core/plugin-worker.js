@@ -199,6 +199,10 @@ if (!netAllowed) {
         // prototype) — validating + pinning the destination IP so none can reach loopback/metadata/private
         // or DNS-rebind. dgram has no `lookup` option, so this is the only reliable UDP chokepoint.
         eg.installChildDgramGuard();
+        // A host NAME given to a server's listen() or a dgram bind() is resolved by Node's own dns.lookup,
+        // not by a connect path. Gate that lookup so the name is judged by this plugin's egress policy
+        // before it is resolved, exactly as a connection's host is; IP literals and empty hosts pass as before.
+        eg.installChildResolverGate();
         // Defense-in-depth: fast, clear failures on the binding-backed globals. We DO NOT hand-roll
         // redirects anymore — native fetch follows them AND correctly strips Authorization/Cookie on a
         // cross-origin hop; each hop's connect is IP-validated by the prototype patch above.
@@ -457,6 +461,12 @@ const wordjs = {
         domain: () => callHost('site.domain', []),
         adminEmail: () => callHost('site.adminEmail', [])
     },
+    // PRIVATE MEDIA (gated host-side on media:private_read). getPrivate(id) → a path-free description
+    // {id,title,mimeType,filesize,filename} or null. To DELIVER the file, reply from a route with
+    // res.sendPrivateMedia(id, { filename }) — the host streams it; the bytes never enter this isolate.
+    media: {
+        getPrivate: (id) => callHost('media.getPrivate', [id])
+    },
     // Host-mediated DNS (gated host-side on the `network` grant). The isolate denies the raw c-ares
     // resolver surface (dns.resolve*) because it bypasses egress filtering; a mail server reaches MX/TXT
     // records through here. The host strips private-IP A/AAAA answers. Async (RPC): `await wordjs.dns.…`.
@@ -546,10 +556,12 @@ onMessage(async (msg) => {
         const handler = routeHandlers.get(msg.routeId);
         const reqData = msg.req || {};
         let settled = false;
-        const reply = (status, body, headers, cookies) => {
+        const reply = (status, body, headers, cookies, media) => {
             if (settled) return; settled = true;
             if (replyTooLarge(body)) { send({ kind: 'route-reply', id: msg.id, ok: false, error: 'response body too large' }); return; }
-            send({ kind: 'route-reply', id: msg.id, ok: true, response: { status, body, headers, cookies } });
+            const response = { status, body, headers, cookies };
+            if (media) response.media = media;
+            send({ kind: 'route-reply', id: msg.id, ok: true, response });
         };
         const res = {
             _status: 200, _headers: undefined, _cookies: undefined,
@@ -560,7 +572,15 @@ onMessage(async (msg) => {
             clearCookie(name, options) { (this._cookies = this._cookies || []).push({ name, options, clear: true }); return this; },
             json(b) { reply(this._status, b, this._headers, this._cookies); return this; },
             send(b) { reply(this._status, b, this._headers, this._cookies); return this; },
-            end() { reply(this._status, undefined, this._headers, this._cookies); return this; }
+            end() { reply(this._status, undefined, this._headers, this._cookies); return this; },
+            // Ask the HOST to stream a PRIVATE media-library file as this response (needs the
+            // media:private_read grant). The host sets the download headers itself and refuses anything
+            // that is not a private attachment; the plugin only names the id and a download file name.
+            sendPrivateMedia(mediaId, opts) {
+                const o = opts && typeof opts === 'object' ? opts : {};
+                reply(200, undefined, undefined, this._cookies, { id: Number(mediaId), filename: typeof o.filename === 'string' ? o.filename.slice(0, 200) : undefined });
+                return this;
+            }
         };
         try {
             if (!handler) throw new Error('No such route handler');

@@ -521,6 +521,7 @@ export default function PostEditorPage() {
                     breadcrumbRoot="Entradas"
                     pageId={postId || undefined}
                     previewSlug={slug || undefined}
+                    previewType="post"
                     rootFields={rootFields}
                     // W30: el canvas envuelve en la plantilla `single` (single-post → single → page),
                     // igual que la ruta pública del post; el pick _wjs_template se lee EN VIVO del store.

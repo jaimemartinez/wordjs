@@ -11,8 +11,10 @@
  * degrades to a quiet Spanish placeholder instead of crashing the page).
  *
  * Flow: card button → mini email form → POST /public/order.
- *   - free product: order is created 'paid'; success view offers "Descargar ahora" (calls
- *     /public/download, which reveals the file URL only after the token checks pass).
+ *   - free product: order is created 'paid'; success view offers "Descargar ahora". The button asks
+ *     /public/status first; for a private-file product ('stream' delivery) it then NAVIGATES to
+ *     /public/download, which re-checks paid + expiry + uses and has the host stream the file — no
+ *     file URL is ever revealed. A legacy product ('url' delivery) still answers JSON {url}.
  *   - paid product: order is created 'pending'; the view shows the manual-payment instructions
  *     and the order token; the admin marks it paid and the link is auto-emailed.
  * On mount, a ?dl=<token> URL param (from the emailed link) — or a locally stored recent order —
@@ -91,6 +93,23 @@ function DownloadNow({ token, big }) {
     const go = async () => {
         setBusy(true); setError("");
         try {
+            const stRes = await fetch(`${API}/public/status?token=${encodeURIComponent(token)}`);
+            const st = await stRes.json().catch(() => null);
+            if (!stRes.ok || !st) {
+                setError((st && st.error) || "No se pudo obtener la descarga. Intenta de nuevo.");
+                return;
+            }
+            if (st.delivery === "stream") {
+                // Pre-checks only for a friendly message — the server enforces them again on download.
+                if (st.payment_status !== "paid") { setError("El pago de este pedido aún no ha sido confirmado."); return; }
+                if (st.expired) { setError("Enlace expirado. Contacta con la tienda para renovarlo."); return; }
+                if (!(Number(st.remaining) > 0)) { setError("Enlace agotado — se alcanzó el máximo de descargas."); return; }
+                setRemaining(Math.max(0, Number(st.remaining) - 1));
+                // The host streams the private file as an attachment; the page stays where it is.
+                if (typeof window !== "undefined") window.location.href = `${API}/public/download?token=${encodeURIComponent(token)}`;
+                return;
+            }
+            // Legacy product (public file URL, created before 1.1.0).
             const res = await fetch(`${API}/public/download?token=${encodeURIComponent(token)}`);
             const data = await res.json().catch(() => null);
             if (!res.ok || !data || !data.url) {
@@ -98,7 +117,7 @@ function DownloadNow({ token, big }) {
                 return;
             }
             setRemaining(data.remaining);
-            // The revealed URL is a public media-library file — navigate to start the download.
+            // Legacy: the revealed URL is a public media-library file — navigate to start the download.
             if (typeof window !== "undefined") window.location.href = data.url;
         } catch {
             setError("Error de red. Intenta de nuevo.");

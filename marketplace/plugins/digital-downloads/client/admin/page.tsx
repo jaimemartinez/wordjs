@@ -7,6 +7,10 @@
  * CSV export), Configuración (currency symbol, manual-payment instructions, notify email,
  * link expiry days, max uses). All calls go through the host api helpers (session cookie).
  *
+ * Product files are PRIVATE media items: picked from (or uploaded straight into) the private part of
+ * the core media library via /api/v1/media?visibility=private. Products created before 1.1.0 kept a
+ * PUBLIC file URL; they are flagged with a warning until their file is re-selected as private.
+ *
  * Visual identity lives in the plugin's OWN stylesheet (client/admin/admin.css, injected by the
  * host admin shell and scoped to .plugin-admin-downloads) — the markup below only uses cf-*
  * classes plus sparse inline styles for one-off layout.
@@ -17,7 +21,14 @@ import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
 
 const BASE = "/plugin/digital-downloads";
 
-const EMPTY_FORM = { name: "", slug: "", description: "", price: "0", file_url: "", file_label: "", image_url: "", is_published: true };
+const EMPTY_FORM = { name: "", slug: "", description: "", price: "0", media_id: "", legacy_file_url: "", file_label: "", image_url: "", is_published: true };
+
+const fmtSize = (bytes) => {
+    const n = Number(bytes) || 0;
+    if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+    if (n >= 1024) return `${Math.round(n / 1024)} KB`;
+    return `${n} B`;
+};
 
 const fmtMoney = (cents, symbol) => `${symbol || "$"}${((Number(cents) || 0) / 100).toFixed(2)}`;
 
@@ -78,6 +89,29 @@ export default function DigitalDownloadsAdminPage() {
     // orders filter
     const [orderFilter, setOrderFilter] = useState("all");
 
+    // PRIVATE media items the product file can be chosen from (core media library, visibility=private).
+    const [privateFiles, setPrivateFiles] = useState([]);
+    const [uploading, setUploading] = useState(false);
+    const loadPrivateFiles = async () => {
+        try { setPrivateFiles(await api(`/media?visibility=private&per_page=100&orderby=date&order=desc`)); }
+        catch { setPrivateFiles([]); }
+    };
+    const uploadPrivateFile = async (file) => {
+        if (!file) return;
+        setUploading(true); setMessage("");
+        try {
+            const fd = new FormData();
+            fd.append("file", file);
+            // visibility=private in the QUERY STRING: the host writes the file straight into the private
+            // store (never under the public /uploads folder).
+            const item = await api(`/media?visibility=private`, { method: "POST", body: fd });
+            await loadPrivateFiles();
+            setForm((f) => ({ ...f, media_id: String(item.id) }));
+            flash("Archivo subido como privado.");
+        } catch (err) { flash(`Error: no se pudo subir el archivo (${err?.message || err}).`); }
+        finally { setUploading(false); }
+    };
+
     const symbol = config?.currencySymbol || "$";
     const pendingCount = useMemo(() => orders.filter((o) => o.payment_status === "pending").length, [orders]);
     const isError = /error|inválid|no encontrado|no se pudo|falló/i.test(message);
@@ -87,7 +121,7 @@ export default function DigitalDownloadsAdminPage() {
         try { setOrders(await api(`${BASE}/orders`)); } catch { setOrders([]); }
         try { setConfig(await api(`${BASE}/config`)); } catch { setConfig(null); }
     };
-    useEffect(() => { loadAll(); }, []);
+    useEffect(() => { loadAll(); loadPrivateFiles(); }, []);
 
     const flash = (msg) => { setMessage(msg); };
 
@@ -97,7 +131,8 @@ export default function DigitalDownloadsAdminPage() {
         setForm({
             name: p.name || "", slug: p.slug || "", description: p.description || "",
             price: ((Number(p.price_cents) || 0) / 100).toFixed(2),
-            file_url: p.file_url || "", file_label: p.file_label || "", image_url: p.image_url || "",
+            media_id: p.media_id ? String(p.media_id) : "", legacy_file_url: p.media_id ? "" : (p.file_url || ""),
+            file_label: p.file_label || "", image_url: p.image_url || "",
             is_published: !!p.is_published,
         });
         setEditingId(p.id); setShowForm(true); setMessage("");
@@ -107,14 +142,17 @@ export default function DigitalDownloadsAdminPage() {
         e.preventDefault();
         const cents = priceToCents(form.price);
         if (cents === null) return flash("Error: precio inválido (usa un número, 0 = gratis).");
-        if (!form.file_url.trim()) return flash("Error: la URL del archivo es obligatoria.");
+        // A legacy product may be saved without re-selecting (its public URL keeps working, with a
+        // warning); a NEW product must have a private file.
+        if (!form.media_id && !(editingId && form.legacy_file_url)) return flash("Error: selecciona o sube el archivo como medio privado.");
         setBusy(true); setMessage("");
         try {
             const body = {
                 name: form.name.trim(), slug: form.slug.trim(), description: form.description,
-                price_cents: cents, file_url: form.file_url.trim(), file_label: form.file_label.trim(),
+                price_cents: cents, file_label: form.file_label.trim(),
                 image_url: form.image_url.trim(), is_published: form.is_published,
             };
+            if (form.media_id) body.media_id = Number(form.media_id);
             if (editingId) await apiPut(`${BASE}/products/${editingId}`, body);
             else await apiPost(`${BASE}/products`, body);
             setShowForm(false); setForm(EMPTY_FORM); setEditingId(null);
@@ -274,11 +312,32 @@ export default function DigitalDownloadsAdminPage() {
                                         <input id="dd-flabel" type="text" value={form.file_label} onChange={(e) => setForm({ ...form, file_label: e.target.value })} placeholder="PDF — 12 MB" className="cf-input" />
                                     </div>
                                     <div className="cf-span-2">
-                                        <label className="cf-label" htmlFor="dd-furl">URL del archivo *</label>
-                                        <input id="dd-furl" type="text" value={form.file_url} onChange={(e) => setForm({ ...form, file_url: e.target.value })} placeholder="/uploads/2026/07/mi-ebook.pdf" className="cf-input" required />
+                                        <label className="cf-label" htmlFor="dd-file">Archivo privado *</label>
+                                        {form.legacy_file_url && !form.media_id && (
+                                            <div role="alert" className="cf-flash is-error" style={{ marginBottom: "0.6rem" }}>
+                                                Este producto usa un archivo PÚBLICO ({form.legacy_file_url}): cualquiera puede descargarlo sin comprar.
+                                                Selecciona o sube el archivo como privado para protegerlo.
+                                            </div>
+                                        )}
+                                        <select id="dd-file" value={form.media_id} onChange={(e) => setForm({ ...form, media_id: e.target.value })} className="cf-input">
+                                            <option value="">— Selecciona un archivo privado —</option>
+                                            {privateFiles.map((m) => (
+                                                <option key={m.id} value={String(m.id)}>
+                                                    {m.title || `#${m.id}`} ({m.mimeType}{m.mediaDetails?.filesize ? `, ${fmtSize(m.mediaDetails.filesize)}` : ""})
+                                                </option>
+                                            ))}
+                                        </select>
+                                        <div style={{ marginTop: "0.5rem" }}>
+                                            <label className="cf-btn-ghost" style={{ cursor: uploading ? "default" : "pointer" }}>
+                                                {uploading ? "Subiendo…" : "Subir archivo privado"}
+                                                <input type="file" style={{ display: "none" }} disabled={uploading}
+                                                    onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ""; uploadPrivateFile(f); }} />
+                                            </label>
+                                        </div>
                                         <p className="cf-help">
-                                            Sube el archivo a la <strong>biblioteca de medios</strong> y pega aquí su URL. El enlace nunca se muestra públicamente:
-                                            solo se revela a quien tenga un token de descarga válido.
+                                            El archivo se guarda como <strong>privado</strong> en la biblioteca de medios: no tiene URL pública y no aparece
+                                            en ningún listado. Solo se entrega, en streaming, a quien tenga un token de descarga válido (pagado, sin caducar
+                                            y con usos restantes). Requiere el permiso <code>media:private_read</code> del plugin.
                                         </p>
                                     </div>
                                     <div className="cf-span-2">
@@ -334,6 +393,16 @@ export default function DigitalDownloadsAdminPage() {
                                                         <div style={{ minWidth: 0 }}>
                                                             <div className="cf-prod-name">{p.name}</div>
                                                             <div className="cf-prod-sub">{p.file_label || p.slug}</div>
+                                                            {p.file_status === "public_legacy" && (
+                                                                <div className="cf-prod-sub" style={{ color: "#b91c1c", fontWeight: 700 }}>
+                                                                    ⚠ Archivo público: cualquiera puede descargarlo. Edita el producto y elige un archivo privado.
+                                                                </div>
+                                                            )}
+                                                            {p.file_status === "unavailable" && (
+                                                                <div className="cf-prod-sub" style={{ color: "#b91c1c", fontWeight: 700 }}>
+                                                                    ⚠ Archivo no disponible (borrado, ya no es privado, o falta el permiso media:private_read).
+                                                                </div>
+                                                            )}
                                                         </div>
                                                     </div>
                                                 </td>

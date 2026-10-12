@@ -169,8 +169,20 @@ exports.init = async function (wordjs) {
         res.json({ categories: rows.map((r) => r.category) });
     });
 
+    // Public callers never see an error's text: a driver's message names tables, columns and
+    // constraints. The details go to the server log.
+    const failQuietly = (res, e, what) => {
+        console.error(`[faq] ${what} failed:`, e && e.message ? e.message : e);
+        res.status(500).json({ error: 'No se pudo completar la operación. Inténtalo de nuevo.' });
+    };
+    // Public routes answer every failure themselves, through failQuietly: a public caller only ever
+    // gets a reply this plugin wrote.
+    const quietly = (what, handler) => async (req, res) => {
+        try { await handler(req, res); } catch (e) { failQuietly(res, e, what); }
+    };
+
     // ---- public route (the Puck block calls this from the editor iframe AND the public site) ------
-    http.route('get', '/public/list', async (req, res) => {
+    http.route('get', '/public/list', quietly('FAQ list', async (req, res) => {
         const q = req.query || {};
         const category = String(q.category == null ? '' : q.category).trim();
         let limit = parseInt(q.limit == null ? PUBLIC_MAX_LIMIT : q.limit, 10);
@@ -189,7 +201,7 @@ exports.init = async function (wordjs) {
             params
         );
         res.json({ faqs: rows });
-    });
+    }));
 
     adminMenu.add({
         href: '/admin/plugin/faq',

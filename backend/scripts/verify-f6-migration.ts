@@ -58,8 +58,12 @@ const MAX_REQUEST_AS_ANY_CASTS = 0;
 const MAX_RESPONSE_ANY_OCCURRENCES = 0;
 /** Boundary files that still contain at least one `req: any`. A brand-new untyped route file raises it. */
 const MAX_UNTYPED_BOUNDARY_FILES = 0;
-/** Boundary files that are FULLY migrated: at least one typed `req` and not one `req: any` left. */
-const MIN_FULLY_TYPED_BOUNDARY_FILES = 45;
+/**
+ * Boundary files that are FULLY migrated: at least one typed `req` and not one `req: any` left.
+ * 44, not 45: the 45th was routes/frontend.ts, the never-mounted legacy page renderer, which was DELETED
+ * (tests/route-modules-mounted.test.ts) rather than un-migrated. Every file that remains is still counted.
+ */
+const MIN_FULLY_TYPED_BOUNDARY_FILES = 44;
 /**
  * Does this workflow actually HAND `needle` to a runner, inside a `run:` step?
  *

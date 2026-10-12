@@ -20,7 +20,7 @@ const BASE = "/plugin/bookings";
 const DAY_ORDER = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 const DAY_ES = { mon: "Lunes", tue: "Martes", wed: "Miércoles", thu: "Jueves", fri: "Viernes", sat: "Sábado", sun: "Domingo" };
 const DOW_ES = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
-const STATUS_ES = { confirmed: "Confirmada", cancelled: "Cancelada", completed: "Completada" };
+const STATUS_ES = { pending: "Pendiente", confirmed: "Confirmada", cancelled: "Cancelada", completed: "Completada", expired: "Caducada" };
 const STATUS_BADGE = {
     confirmed: "is-confirmed",
     cancelled: "is-cancelled",
@@ -447,9 +447,11 @@ export default function BookingsAdminPage() {
                         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
                             <select aria-label="Filtrar por estado" className="cf-select is-compact" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
                                 <option value="">Todos los estados</option>
+                                <option value="pending">Pendientes</option>
                                 <option value="confirmed">Confirmadas</option>
                                 <option value="completed">Completadas</option>
                                 <option value="cancelled">Canceladas</option>
+                                <option value="expired">Caducadas</option>
                             </select>
                             <select aria-label="Filtrar por servicio" className="cf-select is-compact" value={serviceFilter} onChange={(e) => setServiceFilter(e.target.value)}>
                                 <option value="">Todos los servicios</option>
@@ -501,6 +503,9 @@ export default function BookingsAdminPage() {
                                                     value={b.status}
                                                     onChange={(e) => changeStatus(b.id, e.target.value)}
                                                 >
+                                                    {b.status === "pending" || b.status === "expired" ? (
+                                                        <option value={b.status} disabled>{STATUS_ES[b.status]}</option>
+                                                    ) : null}
                                                     <option value="confirmed">Confirmada</option>
                                                     <option value="completed">Completada</option>
                                                     <option value="cancelled">Cancelada</option>

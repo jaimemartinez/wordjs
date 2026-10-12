@@ -499,16 +499,41 @@ export const getThemeChrome = cache(async (slug: string, part: string): Promise<
 });
 
 /**
+ * GET /posts/slug/:slug, optionally narrowed to ONE type.
+ *
+ * Without a type the backend resolves a slug that a post and a page share (pairs older than the shared
+ * slug namespace, and the importers' per-type slugs) to the PAGE — the bare /<slug> URL is the page's.
+ * A caller that knows it wants something else says so with `type`: the /<category>/<post-slug> route
+ * wants the post, and a draft preview wants the entry its editor opened. A type is sent only when it is
+ * spelled the way the backend accepts one (lowercase letters, digits, `_` and `-`; anything else answers
+ * 400 there), so a value from a query string can never turn a lookup into an error.
+ */
+export const POST_TYPE_PARAM = /^[a-z0-9_-]{1,64}$/;
+export function postBySlugPath(slug: string, type?: string | null): string {
+    const base = `/posts/slug/${encodeURIComponent(slug)}`;
+    return typeof type === 'string' && POST_TYPE_PARAM.test(type) ? `${base}?type=${encodeURIComponent(type)}` : base;
+}
+
+/**
  * Draft-preview loader: forwards the admin's session cookie, so the backend's
  * GET /posts/slug/:slug (optionalAuth) returns non-published posts to their author /
  * editors. A separate cache() entry from getPostBySlug keeps the keying correct.
  */
-export const getPostBySlugPreview = cache((slug: string): Promise<Post | null> =>
-    serverFetch<Post>(`/posts/slug/${encodeURIComponent(slug)}`, { forwardCookies: true })
+export const getPostBySlugPreview = cache((slug: string, type?: string | null): Promise<Post | null> =>
+    serverFetch<Post>(postBySlugPath(slug, type), { forwardCookies: true })
 );
 
-export const getPostBySlug = cache((slug: string): Promise<Post | null> =>
-    serverFetch<Post>(`/posts/slug/${encodeURIComponent(slug)}`, { revalidate: 30, tags: ['posts', `post:${slug}`] })
+export const getPostBySlug = cache((slug: string, type?: string | null): Promise<Post | null> =>
+    serverFetch<Post>(postBySlugPath(slug, type), { revalidate: 30, tags: ['posts', `post:${slug}`] })
+);
+
+/**
+ * The entry a /<category>/<post-slug> URL names: the POST of that slug first, then whatever the bare slug
+ * resolves to (what this route served before the backend started preferring the page). Untyped, a post
+ * and a page sharing a slug rendered the PAGE under the post's category URL.
+ */
+export const getCategoryPostBySlug = cache(async (slug: string): Promise<Post | null> =>
+    (await getPostBySlug(slug, 'post')) ?? (await getPostBySlug(slug))
 );
 
 export const getPostById = cache((id: number): Promise<Post | null> =>

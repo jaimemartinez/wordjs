@@ -1,12 +1,20 @@
 /**
  * WordJS Plugin: Digital Downloads — ISOLATED, sandboxed (Easy Digital Downloads parity, v1).
  *
- * Sell or give away downloadable products. The FILE is a media-library URL the admin pastes
- * (this plugin cannot host files). Delivery is a TOKEN-GATED REVEAL:
- *   - the public product listing NEVER exposes file_url;
+ * Sell or give away downloadable products. The FILE is a PRIVATE media-library item (stored by the
+ * host outside the public /uploads tree and hidden from every public media listing). Delivery is a
+ * TOKEN-GATED STREAM:
  *   - a buyer receives a random 32-char token (by email and/or on screen);
  *   - GET /public/download?token= checks paid + expiry + max-uses in a SINGLE UPDATE statement
- *     (the db bridge has no transactions) and only then reveals the file URL.
+ *     (the db bridge has no transactions) on EVERY download and only then asks the host to stream
+ *     the file (res.sendPrivateMedia, media:private_read grant). No URL is ever revealed, so an
+ *     expired or exhausted link really is dead.
+ *
+ * SECURITY HISTORY (1.0.x): products used to hold a PUBLIC media URL whose only protection was not
+ * being listed — but the core media API listed it to anonymous callers, so every paid file could be
+ * downloaded without buying it, and a revealed URL outlived its token. Products created before 1.1.0
+ * still carry that public `file_url`; they keep working (the URL is still revealed, as before) but the
+ * admin is warned on every such product until its file is re-selected as a private media item.
  *
  * v1 flows:
  *   - price 0 (gratis): instant — order inserted as 'paid', link emailed + shown on screen.
@@ -15,14 +23,15 @@
  *   - Stripe checkout is deliberately OUT of v1 scope (future work) to keep this plugin tight.
  *
  * Sandbox constraints honored here: tokens via the host CSPRNG (wordjs.crypto.randomToken), NOT
- * Math.random — rate limiting is defense-in-depth; no transactions (single-statement counters), CSV export
- * returned as res.json({csv}) because the isolate JSON-encodes string bodies.
+ * Math.random — rate limiting (per client, req.clientKey) is defense-in-depth; no transactions
+ * (single-statement counters), CSV export returned as res.json({csv}) because the isolate
+ * JSON-encodes string bodies.
  */
 
 exports.metadata = {
     name: 'Digital Downloads',
-    version: '1.0.1',
-    description: 'Downloadable products with token-gated, expiring, limited-use download links.',
+    version: '1.1.0',
+    description: 'Downloadable products (private media files) with token-gated, expiring, limited-use download links.',
     author: 'WordJS',
 };
 
@@ -42,13 +51,16 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_PRICE_CENTS = 100000000; // $1,000,000 — sanity cap
 
 exports.init = async function (wordjs) {
-    const { options, http, db, adminMenu, mail, site } = wordjs;
+    const { options, http, db, adminMenu, mail, site, media } = wordjs;
 
     // Per-plugin table namespace enforced by the host. slug 'digital-downloads' -> 'wjp_digital_downloads_'.
     const P = db.tablePrefix;
     const T = {
         products: `${P}products`,
         orders: `${P}orders`,
+        // product -> PRIVATE media item. A side table because the db bridge cannot ALTER TABLE; a
+        // product with a row here is delivered by the host stream, one without is a legacy public URL.
+        files: `${P}product_files`,
     };
 
     // ---- schema (idempotent, full column set from day 1 — ALTER TABLE is not available) ----------
@@ -80,6 +92,10 @@ exports.init = async function (wordjs) {
             use_count INTEGER DEFAULT 0,
             page_path TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )`);
+        await db.run(`CREATE TABLE IF NOT EXISTS ${T.files} (
+            product_id INTEGER PRIMARY KEY,
+            media_id INTEGER NOT NULL
         )`);
         // Index names and targets must carry the plugin prefix (host-enforced).
         try {
@@ -125,17 +141,35 @@ exports.init = async function (wordjs) {
         return wordjs.crypto.randomToken(16);
     }
 
-    // In-memory rolling-window rate limiter (single child process; req has no IP in the sandbox,
-    // so limits are global per resource — coarse but effective against bots and token guessing).
-    const rateBuckets = new Map(); // bucket name -> number[] timestamps
+    // In-memory rolling-window rate limiter (single child process). Buckets are PER CLIENT: the host
+    // forwards req.clientKey, an HMAC of the caller's IP. Named site-wide buckets let one client
+    // exhaust 'order', 'download' or 'status' and answer 429 to every other buyer. Each call checks
+    // AND counts in one synchronous step, so concurrent requests cannot all pass a check. Tokens are
+    // 128-bit CSPRNG values, so a per-client cap is enough against guessing. The mails sent to one
+    // address are bounded whatever clients ask (see mailBudget).
+    const RATE_MAX_KEYS = 10000;
+    const rateBuckets = new Map(); // '<name>:<clientKey>' -> number[] timestamps
     function rateLimited(name, max, windowMs) {
         const now = Date.now();
+        if (!rateBuckets.has(name) && rateBuckets.size >= RATE_MAX_KEYS) {
+            // Drop buckets with nothing recent (every window here is <= 1 h), then the oldest.
+            for (const [k, ts] of rateBuckets) if (!ts.length || now - ts[ts.length - 1] >= 60 * 60 * 1000) rateBuckets.delete(k);
+            while (rateBuckets.size >= RATE_MAX_KEYS) rateBuckets.delete(rateBuckets.keys().next().value);
+        }
         const arr = (rateBuckets.get(name) || []).filter((t) => now - t < windowMs);
         if (arr.length >= max) { rateBuckets.set(name, arr); return true; }
         arr.push(now);
         rateBuckets.set(name, arr);
         return false;
     }
+    const clientBucket = (req, name) => `${name}:${String((req && req.clientKey) || 'anon').slice(0, 64)}`;
+
+    // Mails to one customer address are bounded whatever clients ask (rotating clients defeat a
+    // per-client limit): past MAIL_PER_ADDRESS_MAX in the window the order is still created and its
+    // token shown on screen, but no mail is sent (emailSent: false).
+    const MAIL_PER_ADDRESS_MAX = 5;
+    const MAIL_PER_ADDRESS_WINDOW_MS = 60 * 60 * 1000;
+    const mailBudget = (email) => !rateLimited(`mail:${email}`, MAIL_PER_ADDRESS_MAX, MAIL_PER_ADDRESS_WINDOW_MS);
 
     const escapeHtml = (s) => String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -266,11 +300,13 @@ exports.init = async function (wordjs) {
                 errors.push('Precio inválido (usa centavos enteros, 0 = gratis).');
             } else out.price_cents = cents;
         }
-        if (has('file_url') || !partial) {
-            const url = String(body.file_url || '').trim().slice(0, 2000);
-            if (!url || !/^(https?:\/\/|\/)/.test(url)) {
-                errors.push('La URL del archivo es obligatoria — usa la URL de la biblioteca de medios.');
-            } else out.file_url = url;
+        // The file is a PRIVATE media item id. A public URL (`file_url`) is no longer accepted: it was the
+        // vulnerability (anyone could list and fetch it). Legacy rows keep theirs until re-selected.
+        if (has('media_id') || !partial) {
+            const mediaId = parseInt(body.media_id, 10);
+            if (!Number.isFinite(mediaId) || mediaId < 1) {
+                errors.push('Selecciona o sube el archivo como medio PRIVADO.');
+            } else out.media_id = mediaId;
         }
         if (has('file_label')) out.file_label = String(body.file_label || '').trim().slice(0, 200);
         if (has('image_url')) {
@@ -282,7 +318,43 @@ exports.init = async function (wordjs) {
         return { out, errors };
     }
 
+    /** The private media description for an id, or null (not private / gone / grant missing). */
+    async function privateFileInfo(mediaId) {
+        if (!mediaId) return null;
+        try { return await media.getPrivate(mediaId); } catch (e) { return null; }
+    }
+
+    /** media_id of a product's private file, or 0 for a legacy (public file_url) product. */
+    async function productMediaId(productId) {
+        const row = await db.get(`SELECT media_id FROM ${T.files} WHERE product_id = ?`, [productId]);
+        return row ? Number(row.media_id) || 0 : 0;
+    }
+
+    /** Validate that `mediaId` is a private media item the host will deliver. Error message or ''. */
+    async function checkPrivateMedia(mediaId) {
+        try {
+            const info = await media.getPrivate(mediaId);
+            return info ? '' : 'El archivo seleccionado no existe o no es PRIVADO. Márcalo como privado en la biblioteca de medios.';
+        } catch (e) {
+            return 'El plugin no tiene el permiso "media:private_read". Concédelo en Admin → Plugins para entregar archivos privados.';
+        }
+    }
+
+    async function setProductMedia(productId, mediaId) {
+        await db.run(`DELETE FROM ${T.files} WHERE product_id = ?`, [productId]);
+        await db.run(`INSERT INTO ${T.files} (product_id, media_id) VALUES (?, ?)`, [productId, mediaId]);
+        // The private file supersedes any legacy public URL — never reveal it again.
+        await db.run(`UPDATE ${T.products} SET file_url = '' WHERE id = ?`, [productId]);
+    }
+
     // ============================ PUBLIC ROUTES ============================
+
+    // Public callers never see an error's text: a driver's message names tables, columns and
+    // constraints. The details go to the server log.
+    const failQuietly = (res, e, what) => {
+        console.error(`[digital-downloads] ${what} failed:`, e && e.message ? e.message : e);
+        res.status(500).json({ error: 'No se pudo completar la operación. Inténtalo de nuevo.' });
+    };
 
     // Product grid for the Puck block (editor iframe AND public page).
     // NEVER exposes file_url — the file is only revealed by /public/download after the token checks.
@@ -308,13 +380,13 @@ exports.init = async function (wordjs) {
                 );
             }
             res.json({ products: rows, currencySymbol: cfg.currencySymbol });
-        } catch (e) { res.status(500).json({ error: e.message }); }
+        } catch (e) { failQuietly(res, e, 'product list'); }
     });
 
     // Create an order. Server-side price ONLY: the client sends the product id — never a price.
     http.route('post', '/public/order', async (req, res) => {
         try {
-            if (rateLimited('order', 10, 60 * 1000)) {
+            if (rateLimited(clientBucket(req, 'order'), 10, 60 * 1000)) {
                 return res.status(429).json({ error: 'Demasiadas solicitudes. Intenta de nuevo en un minuto.' });
             }
             const body = req.body || {};
@@ -362,27 +434,36 @@ exports.init = async function (wordjs) {
 
             if (free) {
                 await db.run(`UPDATE ${T.products} SET sales_count = sales_count + 1 WHERE id = ?`, [product.id]);
-                const emailSent = await sendDownloadLinkEmail(order, product, cfg);
+                const emailSent = mailBudget(email) ? await sendDownloadLinkEmail(order, product, cfg) : false;
                 return res.json({ success: true, free: true, token, emailSent });
             }
 
-            const emailSent = await sendOrderReceivedEmail(order, product, cfg);
+            const emailSent = mailBudget(email) ? await sendOrderReceivedEmail(order, product, cfg) : false;
             await notifyAdminNewOrder(order, product, cfg);
             res.json({ success: true, free: false, token, emailSent, manualInstructions: cfg.manualInstructions });
-        } catch (e) { res.status(500).json({ error: e.message }); }
+        } catch (e) { failQuietly(res, e, 'order'); }
     });
 
-    // Token-gated download. The file itself lives at a public media-library URL (the plugin cannot
-    // host or proxy files from the sandbox) — the GATE is this reveal: file_url is never listed
-    // publicly and is only returned here after paid + expiry + max-uses pass, so only someone
-    // holding a valid token learns the URL.
+    // Token-gated download. Every request re-checks paid + expiry + max-uses and consumes one use in a
+    // single UPDATE; a private-file product is then STREAMED by the host (res.sendPrivateMedia), so no
+    // URL ever reaches the buyer and an expired/exhausted token cannot be bypassed by reusing one.
+    // Legacy products (public file_url, created before 1.1.0) still get their URL revealed as before.
     http.route('get', '/public/download', async (req, res) => {
         try {
-            if (rateLimited('download', 60, 60 * 1000)) {
+            if (rateLimited(clientBucket(req, 'download'), 60, 60 * 1000)) {
                 return res.status(429).json({ error: 'Demasiadas solicitudes. Intenta de nuevo en un minuto.' });
             }
             const token = String((req.query && req.query.token) || '').trim();
             if (!TOKEN_RE.test(token)) return res.status(400).json({ error: 'Token de descarga inválido.' });
+
+            const pre = await db.get(`SELECT product_id FROM ${T.orders} WHERE token = ?`, [token]);
+            if (!pre) return res.status(404).json({ error: 'Enlace de descarga no encontrado.' });
+            const mediaId = await productMediaId(pre.product_id);
+            // A private file the host would refuse to deliver must not cost the buyer a download.
+            const info = mediaId ? await privateFileInfo(mediaId) : null;
+            if (mediaId && !info) {
+                return res.status(503).json({ error: 'El archivo no está disponible en este momento. Contacta con la tienda.' });
+            }
 
             const nowIso = new Date().toISOString();
             // Single-statement consume: no transactions in the sandbox, so the paid/expiry/uses
@@ -407,45 +488,76 @@ exports.init = async function (wordjs) {
             if (!product) return res.status(404).json({ error: 'El producto ya no existe.' });
             await db.run(`UPDATE ${T.products} SET download_count = download_count + 1 WHERE id = ?`, [order.product_id]);
 
+            if (mediaId) {
+                const base = slugify(product.slug || product.name) || 'descarga';
+                return res.sendPrivateMedia(mediaId, { filename: base });
+            }
+
+            // LEGACY (pre-1.1.0 product): the file is a PUBLIC media URL. Kept working so existing sales
+            // are not broken; the admin sees a warning on this product until it is re-selected as private.
+            if (!product.file_url) return res.status(503).json({ error: 'El archivo no está disponible en este momento. Contacta con la tienda.' });
             res.json({
                 url: product.file_url,
                 name: product.name,
                 remaining: Math.max(0, (Number(order.max_uses) || 0) - (Number(order.use_count) || 0)),
             });
-        } catch (e) { res.status(500).json({ error: e.message }); }
+        } catch (e) { failQuietly(res, e, 'download'); }
     });
 
     // Order status for the block's ?dl= banner.
     http.route('get', '/public/status', async (req, res) => {
         try {
-            if (rateLimited('status', 120, 60 * 1000)) {
+            if (rateLimited(clientBucket(req, 'status'), 120, 60 * 1000)) {
                 return res.status(429).json({ error: 'Demasiadas solicitudes. Intenta de nuevo en un minuto.' });
             }
             const token = String((req.query && req.query.token) || '').trim();
             if (!TOKEN_RE.test(token)) return res.status(400).json({ error: 'Token inválido.' });
             const order = await db.get(
-                `SELECT o.payment_status, o.expires_at, o.max_uses, o.use_count, o.amount_cents, p.name AS product_name
+                `SELECT o.product_id, o.payment_status, o.expires_at, o.max_uses, o.use_count, o.amount_cents, p.name AS product_name
                  FROM ${T.orders} o LEFT JOIN ${T.products} p ON p.id = o.product_id
                  WHERE o.token = ?`,
                 [token]
             );
             if (!order) return res.status(404).json({ error: 'Pedido no encontrado.' });
+            const mediaId = await productMediaId(order.product_id);
             res.json({
                 payment_status: order.payment_status,
                 expires_at: order.expires_at,
+                expired: !!(order.expires_at && order.expires_at <= new Date().toISOString()),
+                // 'stream': the browser navigates to /public/download and the host streams the file;
+                // 'url': legacy product whose download answers JSON {url}.
+                delivery: mediaId ? 'stream' : 'url',
                 remaining: Math.max(0, (Number(order.max_uses) || 0) - (Number(order.use_count) || 0)),
                 product_name: order.product_name || '',
                 free: (Number(order.amount_cents) || 0) === 0,
             });
-        } catch (e) { res.status(500).json({ error: e.message }); }
+        } catch (e) { failQuietly(res, e, 'order status'); }
     });
 
     // ============================ ADMIN ROUTES ============================
 
     // --- products CRUD ---
+    // Each product carries `file_status`: 'private' (delivered by the host stream), 'public_legacy'
+    // (pre-1.1.0 public URL — anyone can fetch it; the admin UI shows a warning until re-selected) or
+    // 'unavailable' (the private file is gone, is no longer private, or the grant is missing).
     http.route('get', '/products', { auth: true, admin: true }, async (req, res) => {
         try {
-            const rows = await db.all(`SELECT * FROM ${T.products} ORDER BY id DESC`);
+            const rows = await db.all(
+                `SELECT p.*, f.media_id AS media_id
+                 FROM ${T.products} p LEFT JOIN ${T.files} f ON f.product_id = p.id
+                 ORDER BY p.id DESC`
+            );
+            for (const row of rows) {
+                if (row.media_id) {
+                    const info = await privateFileInfo(row.media_id);
+                    row.file_status = info ? 'private' : 'unavailable';
+                    row.file_name = info ? info.filename : '';
+                    row.file_size = info ? info.filesize : 0;
+                } else {
+                    row.media_id = null;
+                    row.file_status = row.file_url ? 'public_legacy' : 'unavailable';
+                }
+            }
             res.json(rows);
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
@@ -454,15 +566,18 @@ exports.init = async function (wordjs) {
         try {
             const { out, errors } = validateProductBody(req.body || {}, { partial: false });
             if (errors.length) return res.status(400).json({ error: errors[0] });
+            const mediaError = await checkPrivateMedia(out.media_id);
+            if (mediaError) return res.status(400).json({ error: mediaError });
             if (!out.slug) out.slug = 'producto-' + Date.now().toString(36);
             const clash = await db.get(`SELECT id FROM ${T.products} WHERE slug = ?`, [out.slug]);
             if (clash) return res.status(409).json({ error: 'Ya existe un producto con ese slug.' });
             const result = await db.run(
                 `INSERT INTO ${T.products} (name, slug, description, price_cents, file_url, file_label, image_url, is_published)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-                [out.name, out.slug, out.description || '', out.price_cents, out.file_url,
+                 VALUES (?, ?, ?, ?, '', ?, ?, ?)`,
+                [out.name, out.slug, out.description || '', out.price_cents,
                  out.file_label || '', out.image_url || '', out.is_published === undefined ? 1 : out.is_published]
             );
+            await setProductMedia(result.lastID, out.media_id);
             res.json({ success: true, id: result.lastID });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
@@ -478,14 +593,20 @@ exports.init = async function (wordjs) {
                 const clash = await db.get(`SELECT id FROM ${T.products} WHERE slug = ? AND id != ?`, [out.slug, id]);
                 if (clash) return res.status(409).json({ error: 'Ya existe un producto con ese slug.' });
             }
+            if (out.media_id !== undefined) {
+                const mediaError = await checkPrivateMedia(out.media_id);
+                if (mediaError) return res.status(400).json({ error: mediaError });
+            }
             const sets = [];
             const params = [];
-            for (const key of ['name', 'slug', 'description', 'price_cents', 'file_url', 'file_label', 'image_url', 'is_published']) {
+            for (const key of ['name', 'slug', 'description', 'price_cents', 'file_label', 'image_url', 'is_published']) {
                 if (out[key] !== undefined) { sets.push(`${key} = ?`); params.push(out[key]); }
             }
-            if (!sets.length) return res.json({ success: true });
-            params.push(id);
-            await db.run(`UPDATE ${T.products} SET ${sets.join(', ')} WHERE id = ?`, params);
+            if (sets.length) {
+                params.push(id);
+                await db.run(`UPDATE ${T.products} SET ${sets.join(', ')} WHERE id = ?`, params);
+            }
+            if (out.media_id !== undefined) await setProductMedia(id, out.media_id);
             res.json({ success: true });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
@@ -496,6 +617,7 @@ exports.init = async function (wordjs) {
         try {
             const id = parseInt(req.params.id, 10);
             await db.run(`DELETE FROM ${T.orders} WHERE product_id = ?`, [id]);
+            await db.run(`DELETE FROM ${T.files} WHERE product_id = ?`, [id]);
             await db.run(`DELETE FROM ${T.products} WHERE id = ?`, [id]);
             res.json({ success: true });
         } catch (e) { res.status(500).json({ error: e.message }); }

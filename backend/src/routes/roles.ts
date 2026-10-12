@@ -7,9 +7,10 @@ import type { Request, Response } from 'express';
 const express = require('express');
 const router = express.Router();
 const { getRoles, setRole, getRole, removeRole, getAllAvailableCapabilities } = require('../core/roles');
-// unboundSessionOnly: a role definition is what every account holding it may do, so a session started at
-// an address other than the main one may not change one (middleware/auth.ts refuseBoundSession).
-const { authenticate, unboundSessionOnly } = require('../middleware/auth');
+// accountAuthorityOnly: a role definition is what every account holding it may do, so neither an API token
+// nor a session started at an address other than the main one may change one (middleware/auth.ts
+// refuseAccountAuthority).
+const { authenticate, accountAuthorityOnly } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 
@@ -111,10 +112,11 @@ router.get('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request, re
  *         description: Role saved
  *       403:
  *         description: >-
- *           rest_forbidden (not an administrator), or rest_account_bound_session (a session started at
- *           an address other than the main one may not change what a role may do).
+ *           rest_forbidden (not an administrator), rest_token_management_forbidden (an API token), or
+ *           rest_account_bound_session (a session started at an address other than the main one): neither
+ *           may change what a role may do.
  */
-router.post('/', authenticate, isAdmin, unboundSessionOnly, asyncHandler(async (req: Request, res: Response) => {
+router.post('/', authenticate, isAdmin, accountAuthorityOnly, asyncHandler(async (req: Request, res: Response) => {
     const { slug, name, capabilities } = req.body;
 
     if (!slug || !name) {
@@ -150,10 +152,10 @@ router.post('/', authenticate, isAdmin, unboundSessionOnly, asyncHandler(async (
  *         description: Cannot delete core roles
  *       403:
  *         description: >-
- *           rest_forbidden (not an administrator), or rest_account_bound_session (a session started at
- *           an address other than the main one).
+ *           rest_forbidden (not an administrator), rest_token_management_forbidden (an API token), or
+ *           rest_account_bound_session (a session started at an address other than the main one).
  */
-router.delete('/:slug', authenticate, isAdmin, unboundSessionOnly, asyncHandler(async (req: Request, res: Response) => {
+router.delete('/:slug', authenticate, isAdmin, accountAuthorityOnly, asyncHandler(async (req: Request, res: Response) => {
     const slug: string = req.params.slug as string;
 
     // Prevent deleting core roles

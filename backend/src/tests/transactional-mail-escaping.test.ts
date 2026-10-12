@@ -9,7 +9,7 @@
  * own sender. The core mails now go through one helper (core/formatting escHtml); the plugin uses the
  * same local escHtml the other marketplace plugins (bookings, job-board, donations) already had.
  *
- * MUTATION PROOF: drop escHtml() around siteName / user.userLogin in routes/auth.ts, or around
+ * MUTATION PROOF: drop escHtml() around siteName (or the login) in routes/auth.ts, or around
  * prevTop.bidder_name / a.title in marketplace/plugins/auctions/index.js, and the matching case fails
  * with the raw <a href> in the captured mail.
  */
@@ -75,7 +75,7 @@ describe('core transactional mails escape what they interpolate', () => {
         assert.strictEqual(res.status, 201, JSON.stringify(res.body));
         assert.strictEqual(sent.length, 1);
         assertEscaped(String(sent[0].html), 'verification mail');
-        assert.match(String(sent[0].html), /href="[^"]*\/verify-email\?uid=\d+&amp;token=[a-f0-9]+"/, 'the real link survives escaping');
+        assert.match(String(sent[0].html), /href="[^"]*\/verify-email\?token=[a-f0-9]{64}"/, 'the real link survives escaping');
     });
 
     it('the password-reset mail escapes the login and the site name', async () => {

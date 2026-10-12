@@ -133,6 +133,38 @@ test('login requires a second factor and completes with a valid TOTP code', asyn
     await disableMfa(backupCodes[9]);
 });
 
+// The replay counter (mfa_totp_last_step) can be missing — a partial restore, an imported database, an
+// enrollment written by other tooling. A compare-and-set on a row that does not exist updates nothing, so
+// before the fix EVERY TOTP code was refused forever for such an account (fail-closed lockout, not a
+// replay hole). The first use must now be accepted exactly once, and its replay refused.
+test('first TOTP use with no replay-counter row is accepted once; its replay is refused', async () => {
+    const { secret, backupCodes } = await enroll();
+    await dbAsync.run(`DELETE FROM user_meta WHERE user_id = ? AND meta_key = 'mfa_totp_last_step'`, [uid]);
+    const code = totp.totp(secret);
+    const l1 = await request(app).post(`${B}/auth/login`).send({ username: 'mfauser', password: PASSWORD });
+    const first = await request(app).post(`${B}/auth/mfa`).send({ mfaToken: l1.body.mfaToken, code });
+    assert.strictEqual(first.status, 200, 'the first TOTP use must be accepted even without a counter row');
+    const rows = await dbAsync.all(`SELECT meta_value FROM user_meta WHERE user_id = ? AND meta_key = 'mfa_totp_last_step'`, [uid]);
+    assert.strictEqual(rows.length, 1, 'the first use creates exactly one counter row');
+    const l2 = await request(app).post(`${B}/auth/login`).send({ username: 'mfauser', password: PASSWORD });
+    const replay = await request(app).post(`${B}/auth/mfa`).send({ mfaToken: l2.body.mfaToken, code });
+    assert.strictEqual(replay.status, 401, 'the consumed first-use step cannot be replayed');
+    await disableMfa(backupCodes[9]);
+});
+
+test('concurrent double-submit of one TOTP code is accepted exactly once (with and without a counter row)', async () => {
+    const mfa = require('../core/mfa');
+    for (const dropCounter of [true, false]) {
+        const { secret, backupCodes } = await enroll();
+        if (dropCounter) await dbAsync.run(`DELETE FROM user_meta WHERE user_id = ? AND meta_key = 'mfa_totp_last_step'`, [uid]);
+        const code = totp.totp(secret);
+        const results: boolean[] = await Promise.all(Array.from({ length: 6 }, () => mfa.verifyLoginCode(uid, code)));
+        assert.strictEqual(results.filter(Boolean).length, 1, `exactly one concurrent submission wins (counter row dropped: ${dropCounter})`);
+        assert.strictEqual(await mfa.verifyLoginCode(uid, code), false, 'and the step stays consumed afterwards');
+        await disableMfa(backupCodes[9]);
+    }
+});
+
 test('a backup code logs in once and is then consumed (single-use)', async () => {
     const { secret, backupCodes } = await enroll();
     const code = backupCodes[0];

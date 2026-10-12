@@ -74,7 +74,7 @@ A **conformance test** (`backend/src/tests/driver-conformance.test.ts`) runs the
 
 **Clean unique-constraint errors.** `User.create` and `User.update` translate a cross-driver UNIQUE-constraint violation (on `idx_users_login` / `idx_users_email`) into a clean application error — `Username or email already exists` on create, `Email already in use` on update — instead of surfacing a raw driver constraint error / 500. The detector `isUniqueViolation` (`core/db-errors.ts`) handles SQLite `SQLITE_CONSTRAINT_UNIQUE` / `SQLITE_CONSTRAINT_PRIMARYKEY`, Postgres SQLSTATE `23505` and MySQL `ER_DUP_ENTRY` (errno 1062), with a `UNIQUE constraint` / `duplicate key` / `Duplicate entry` message match as the last resort. Emails are canonicalized (full-Unicode lowercase + NFC via `normalizeEmail`) before store/lookup, so the ASCII-only SQLite `LOWER()` backstop holds.
 
-> **Roles cache (DATA-05).** `getRoles()` serves from an in-memory cache that, once older than `ROLES_CACHE_TTL_MS` (**10s** in code), kicks a non-blocking, single-flight background re-read to bound staleness and self-heal a missed pub/sub invalidation. A monotonic `_localWriteEpoch` is captured before the background DB read and the result is applied **only** if the epoch is unchanged, so a stale read cannot clobber a just-written local change. Role edits reach the other nodes live through the Redis `wordjs:option-changed` pub/sub (`core/coherence.ts`); what is **deferred** is a cross-node coherence epoch (DATA-COH-01, see `multi-node.md` → Known limitations).
+> **Roles cache (DATA-05).** `getRoles()` serves from an in-memory cache that, once older than `ROLES_CACHE_TTL_MS` (**10s** in code), kicks a non-blocking, single-flight background re-read to bound staleness and self-heal a missed pub/sub invalidation. A monotonic `_localWriteEpoch` is captured before the background DB read and the result is applied **only** if the epoch is unchanged, so a stale read cannot clobber a just-written local change. Role edits reach the other nodes live through the Redis `wordjs:option-changed` pub/sub (`core/coherence.ts`). A node that misses a publish picks the change up at its next roles-cache refresh, which reads through the option cache, whose in-process entries live at most **30s** when Redis is configured. Make role and capability changes while the writing node can reach Redis: a change saved while it cannot is published to no one, and with the object cache enabled the shared cache keeps the previous value until its entry expires, so save the change again once Redis is back (see [multi-node.md → Known limitations](multi-node.md#known-limitations)).
 
 ### 1.3 Automatic Fallback Mechanics
 
@@ -101,7 +101,7 @@ WordJS includes a **Zero Data Loss** migration tool for switching drivers withou
 
 > **MySQL/MariaDB is now a supported migration target.** The DB-Admin migration tool's `availableDrivers` are `sqlite-legacy`, `sqlite-native`, `postgres`, and `mysql` — you can migrate existing data *into* MySQL/MariaDB from the admin UI just like Postgres (it is also a first-class **runtime** driver, §1.1). The tool recreates the non-core schema on the target, then performs an atomic, fail-closed row copy (`SET FOREIGN_KEY_CHECKS` off during the copy, `TEXT`→`LONGTEXT` for long-content columns via the target CREATE).
 
-The backing API is mounted at `/api/v1/db-migration` (guarded by `authenticate` + the `manage_options` permission).
+The backing API is mounted at `/api/v1/db-migration` (guarded by `authenticate` + the `manage_options` permission). Starting a migration (`POST /migrate`) additionally needs an interactive session started at the main address: it copies every table, credentials included, to the server you name and then runs the site on it, so an API token and a session from a secondary address are refused. Deleting a leftover database file after a migration (`POST /cleanup`) takes the same gate, and never deletes a file of the database the site is running on: the configured `dbPath` with its `-wal`, `-shm` and `-journal` is refused (`409`) whatever spelling, symlink or junction names it, and so is a migration whose SQLite target file is that database (a `dbPath` pinned to the other driver's default name).
 
 ### 1.5 Backups & Retention
 
@@ -228,13 +228,21 @@ The central content table. Used for posts, pages, attachments, revisions, and me
 | `post_title`     | TEXT       |                                 |
 | `post_status`    | VARCHAR    | `publish`, `draft`, `trash`     |
 | `comment_status` | VARCHAR    | `open`, `closed`                |
-| `post_name`      | VARCHAR    | URL Slug (unique per type)      |
+| `post_name`      | VARCHAR    | URL slug (see below)            |
 | `post_modified`  | DATETIME   | Last edit                       |
 | `post_parent`    | INTEGER    | For hierarchy (pages)           |
 | `guid`           | VARCHAR    | Global Unique Identifier        |
 | `menu_order`     | INTEGER    | Sorting order                   |
 | `post_type`      | VARCHAR    | `post`, `page`, `attachment`... |
 | `post_mime_type` | VARCHAR    | For attachments                 |
+
+**`post_name` uniqueness.** The public site resolves a bare slug without a type (`/<slug>`,
+`/pages/<slug>` and `/<archive>/<slug>` all ask `GET /posts/slug/:slug`), so a slug written through
+`POST`/`PUT /posts` is unique across **every publicly routed type at once**: a post cannot take a page's
+`contact`, it gets `contact-2` (`Post.generateUniqueSlug`). Attachments and internal types (revisions,
+menu items, any type registered `showInRest: false`) keep a namespace of their own. The two importers
+keep a source site's slugs unique **per type**, as WordPress does, and re-saving an entry under the slug
+it already has keeps it. Where a post and a page share a slug, the bare URL resolves to the page.
 
 ### 2.4 `post_meta`
 Extensible fields for posts (e.g. template settings, SEO data).

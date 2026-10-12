@@ -85,16 +85,28 @@ exports.init = async function (wordjs) {
         console.warn('[cookie-consent] could not enqueue the banner assets (missing assets grant?): ' + (e && e.message ? e.message : e));
     }
 
-    // In-process site-wide rate cap for the anonymous log endpoint (no req.ip in the sandbox → a
-    // fixed shared window is the honest cap; the endpoint stores 1 short row, so 60/min is plenty).
-    const LOG_MAX_PER_WINDOW = 60;
+    // In-process rate cap for the anonymous log endpoint, PER CLIENT (req.clientKey, an HMAC of the
+    // caller's IP forwarded by the host; it is only a map key here and is never stored). It used to
+    // be one site-wide window of 60/min, so one client could fill it and keep every other visitor's
+    // choice out of the stats. A visitor logs one choice, so 10/min per client is plenty.
+    const LOG_MAX_PER_CLIENT = 10;
     const LOG_WINDOW_MS = 60 * 1000;
-    let logWindow = { start: 0, count: 0 };
-    function logAllowed() {
+    const LOG_MAX_KEYS = 10000;
+    const logWindows = new Map(); // clientKey -> { start, count }
+    function logAllowed(req) {
+        const key = String((req && req.clientKey) || 'anon').slice(0, 64);
         const now = Date.now();
-        if (now - logWindow.start >= LOG_WINDOW_MS) logWindow = { start: now, count: 0 };
-        if (logWindow.count >= LOG_MAX_PER_WINDOW) return false;
-        logWindow.count++;
+        let w = logWindows.get(key);
+        if (!w || now - w.start >= LOG_WINDOW_MS) {
+            if (logWindows.size >= LOG_MAX_KEYS) {
+                for (const [k, v] of logWindows) if (now - v.start >= LOG_WINDOW_MS) logWindows.delete(k);
+                while (logWindows.size >= LOG_MAX_KEYS) logWindows.delete(logWindows.keys().next().value);
+            }
+            w = { start: now, count: 0 };
+            logWindows.set(key, w);
+        }
+        if (w.count >= LOG_MAX_PER_CLIENT) return false;
+        w.count++;
         return true;
     }
 
@@ -116,7 +128,7 @@ exports.init = async function (wordjs) {
             if (choice !== 'accepted' && choice !== 'rejected') {
                 return res.status(400).json({ error: 'Elección inválida.' });
             }
-            if (!logAllowed()) {
+            if (!logAllowed(req)) {
                 return res.status(429).json({ error: 'Demasiadas solicitudes, inténtalo más tarde.' });
             }
             await db.run(`INSERT INTO ${T.log} (choice) VALUES (?)`, [choice]);

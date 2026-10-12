@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import PostContent from "@/components/public/PostContent";
 import JsonLd from "@/components/public/JsonLd";
-import { getPostBySlug, getSettings, buildPostMetadata, buildPostJsonLd, resolveSiteBase } from "@/lib/server-api";
+import { getCategoryPostBySlug, getSettings, buildPostMetadata, buildPostJsonLd, resolveSiteBase } from "@/lib/server-api";
 import { withResolvedBlocks } from "@/lib/resolveDynamicBlocks";
 import ThemeTemplate from "@/components/content/ThemeTemplate";
 
@@ -16,7 +16,9 @@ interface RouteParams {
 
 export async function generateMetadata({ params }: { params: Promise<RouteParams> }): Promise<Metadata> {
     const { postSlug } = await params;
-    const post = await getPostBySlug(postSlug);
+    // The POST of that slug first (getCategoryPostBySlug): a page sharing the slug owns the bare /<slug>,
+    // not this category URL.
+    const post = await getCategoryPostBySlug(postSlug);
     if (!post) return { title: "Not found", robots: { index: false } };
     const settings = await getSettings();
     // Canonical resolves to the post's primary URL (/slug), not the category path, so the two URLs
@@ -29,7 +31,7 @@ export async function generateMetadata({ params }: { params: Promise<RouteParams
 
 export default async function CategoryPostPage({ params }: { params: Promise<RouteParams> }) {
     const { slug, postSlug } = await params;
-    const [post, settings, base] = await Promise.all([getPostBySlug(postSlug), getSettings(), resolveSiteBase()]);
+    const [post, settings, base] = await Promise.all([getCategoryPostBySlug(postSlug), getSettings(), resolveSiteBase()]);
     if (!post) notFound();
     // Real posts for the dynamic blocks, resolved server-side (see resolveDynamicBlocks).
     const withBlocks = await withResolvedBlocks(post);

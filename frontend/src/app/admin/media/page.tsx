@@ -33,6 +33,25 @@ const MIME_FILTERS: Array<{ label: string; value: string }> = [
     { label: "Texto", value: "text" },
 ];
 
+/**
+ * Visibility filter. PRIVATE items live outside the public uploads folder and never appear in a public
+ * listing; only people who may upload see them here (backend/src/core/private-media.ts).
+ */
+const VISIBILITY_FILTERS: Array<{ label: string; value: "" | "public" | "private" }> = [
+    { label: "Públicos y privados", value: "" },
+    { label: "Solo públicos", value: "public" },
+    { label: "Solo privados", value: "private" },
+];
+
+/** Small "Privado" badge shown on private items. */
+function PrivateBadge() {
+    return (
+        <span className="inline-flex items-center gap-1.5 text-[9px] font-black uppercase tracking-wider text-violet-700 bg-violet-50 border border-violet-100 px-2 py-1 rounded-lg">
+            <i className="fa-solid fa-lock"></i> Privado
+        </span>
+    );
+}
+
 const fieldClass =
     "w-full px-4 py-3 bg-gray-50 border-2 border-gray-100 rounded-2xl text-sm font-medium text-gray-700 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all placeholder:text-gray-300";
 const labelClass = "text-[10px] font-black uppercase tracking-widest text-gray-400 block mb-1.5";
@@ -60,6 +79,25 @@ function MediaDetailModal({
     const original = useMemo(() => mediaMetaOf(item), [item]);
     const [draft, setDraft] = useState(original);
     const [saving, setSaving] = useState(false);
+    const [changingVisibility, setChangingVisibility] = useState(false);
+    const isPrivate = item.visibility === "private";
+
+    // Private <-> public moves the stored files between the private store and the public uploads
+    // folder on the server; it is its own request so it never mixes with an unsaved metadata draft.
+    const toggleVisibility = async () => {
+        setChangingVisibility(true);
+        try {
+            const updated = await mediaApi.update(item.id, { visibility: isPrivate ? "public" : "private" });
+            onSaved(updated as EditableMediaItem);
+            addToast(isPrivate ? "El archivo ahora es público" : "El archivo ahora es privado", "success");
+        } catch (error) {
+            console.error("Failed to change media visibility:", error);
+            const message = error instanceof Error && error.message ? error.message : "No se pudo cambiar la visibilidad";
+            addToast(message, "error");
+        } finally {
+            setChangingVisibility(false);
+        }
+    };
 
     // Re-seed the form when the item changes (including after a successful save, which swaps in the
     // server's own copy — the source of truth for what is now stored).
@@ -153,6 +191,27 @@ function MediaDetailModal({
                         </div>
                     </div>
 
+                    <div className="mt-6">
+                        <label className="flex items-start gap-3 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                className="mt-1"
+                                checked={isPrivate}
+                                disabled={changingVisibility}
+                                onChange={toggleVisibility}
+                                aria-describedby="media-private-help"
+                            />
+                            <span>
+                                <span className="text-sm font-bold text-gray-700">Archivo privado</span>
+                                <span id="media-private-help" className="block text-[11px] font-medium text-gray-400 mt-1 leading-snug">
+                                    Se guarda fuera de la carpeta pública: no tiene URL pública ni aparece en listados públicos.
+                                    Solo lo descargan los editores o un plugin autorizado (p. ej. descargas de pago). Si el archivo
+                                    fue público antes, su antigua URL pudo quedar en cachés o navegadores.
+                                </span>
+                            </span>
+                        </label>
+                    </div>
+
                     <div className="space-y-4 my-6">
                         <div>
                             <span className={labelClass}>{t('media.type')}</span>
@@ -219,6 +278,9 @@ export default function MediaPage() {
     // Filtro por tipo. Va al SERVIDOR (no se filtra la página ya traída): filtrar aquí sólo escondería
     // filas de las 24 cargadas y el contador seguiría hablando de la biblioteca entera.
     const [mimeType, setMimeType] = useState("");
+    const [visibility, setVisibility] = useState<"" | "public" | "private">("");
+    // Upload the next file(s) as PRIVATE (stored outside the public uploads folder).
+    const [uploadPrivate, setUploadPrivate] = useState(false);
     const [page, setPage] = useState(1);
     const [total, setTotal] = useState(0);
     const [totalPages, setTotalPages] = useState(1);
@@ -245,7 +307,7 @@ export default function MediaPage() {
     const loadMedia = useCallback(async () => {
         setLoading(true);
         try {
-            const res = await mediaApi.listPaged(buildMediaQuery({ page, perPage: LIBRARY_PAGE_SIZE, search, mimeType }));
+            const res = await mediaApi.listPaged(buildMediaQuery({ page, perPage: LIBRARY_PAGE_SIZE, search, mimeType, visibility: visibility || undefined }));
             setMedia(res.data);
             setTotal(res.total);
             setTotalPages(res.totalPages);
@@ -260,7 +322,7 @@ export default function MediaPage() {
             setLoading(false);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [page, search, mimeType, refreshKey]);
+    }, [page, search, mimeType, visibility, refreshKey]);
 
     useEffect(() => { loadMedia(); }, [loadMedia]);
 
@@ -280,7 +342,7 @@ export default function MediaPage() {
         try {
             await mediaApi.uploadWithProgress(formData, (progress) => {
                 setUploadProgress(Math.round(progress));
-            });
+            }, { visibility: uploadPrivate ? "private" : "public" });
             // The upload lands newest-first on page 1, so go there and refetch.
             setPage(1);
             setRefreshKey((k) => k + 1);
@@ -425,6 +487,22 @@ export default function MediaPage() {
                             </select>
                         </div>
 
+                        {/* Visibility filter (public / private items). */}
+                        <div className="relative group">
+                            <i className="fa-solid fa-lock absolute left-5 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-blue-500 transition-colors pointer-events-none"></i>
+                            <label className="sr-only" htmlFor="media-visibility-filter">Filtrar por visibilidad</label>
+                            <select
+                                id="media-visibility-filter"
+                                value={visibility}
+                                onChange={(e) => { setVisibility(e.target.value as "" | "public" | "private"); setPage(1); }}
+                                className="w-full md:w-52 pl-12 pr-6 py-4 bg-white border-2 border-gray-100 rounded-2xl text-sm font-bold text-gray-700 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all shadow-sm appearance-none cursor-pointer"
+                            >
+                                {VISIBILITY_FILTERS.map((option) => (
+                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                ))}
+                            </select>
+                        </div>
+
                         {/* View Toggles */}
                         <div className="flex bg-white rounded-2xl p-1.5 border-2 border-gray-100 shadow-sm">
                             <button
@@ -453,6 +531,10 @@ export default function MediaPage() {
                         >
                             {uploading ? t('media.uploading') : t('media.upload')}
                         </Button>
+                        <label className="flex items-center gap-2 text-xs font-bold text-gray-600 cursor-pointer whitespace-nowrap">
+                            <input type="checkbox" checked={uploadPrivate} onChange={(e) => setUploadPrivate(e.target.checked)} />
+                            Subir como privado
+                        </label>
                         <input ref={fileInputRef} type="file" onChange={handleInputChange} className="hidden" multiple accept="image/*,video/*,application/pdf" />
                     </div>
                 }
@@ -534,6 +616,7 @@ export default function MediaPage() {
                                             {new Date(item.date).toLocaleDateString()}
                                         </span>
                                     </div>
+                                    {item.visibility === "private" && <div className="mt-2"><PrivateBadge /></div>}
                                     {/* Missing alt text is invisible until someone audits the site; surface it here. */}
                                     {item.mimeType.startsWith('image/') && !item.alt && (
                                         <span className="mt-2 inline-flex items-center gap-1.5 text-[9px] font-black uppercase tracking-wider text-amber-600 bg-amber-50 border border-amber-100 px-2 py-1 rounded-lg">
@@ -571,6 +654,7 @@ export default function MediaPage() {
                                             </td>
                                             <td className="px-8 py-4">
                                                 <span className="font-bold text-gray-700 group-hover:text-blue-600 transition-colors italic tracking-tight text-lg">{item.title}</span>
+                                                {item.visibility === "private" && <span className="ml-3 align-middle"><PrivateBadge /></span>}
                                                 {item.mimeType.startsWith('image/') && !item.alt && (
                                                     <span className="ml-3 inline-flex items-center gap-1.5 text-[9px] font-black uppercase tracking-wider text-amber-600 bg-amber-50 border border-amber-100 px-2 py-1 rounded-lg align-middle">
                                                         <i className="fa-solid fa-triangle-exclamation"></i> Sin texto alternativo

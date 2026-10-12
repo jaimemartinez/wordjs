@@ -67,12 +67,19 @@ const {
 // isRestExposedPostType answers "may the GENERIC /posts surface touch this type at all" — see below.
 const {
     capsFor, capsForType, canEditPostRecord, canDeletePostRecord,
-    canReadPostRecord, isRestExposedPostType,
+    isRestExposedPostType,
     canManagePostRecord, canReadPostContent, isPasswordProtected, publicPostMeta,
-    isInternalPostType,
+    isInternalPostType, isCanonicalPostTypeName, readPolicyForType,
+    // THE STATUSES A REQUEST MAY WRITE through POST/PUT /posts — one set, shared with the importers,
+    // which fold an imported status onto it (see its definition for why the set is explicit).
+    WRITABLE_POST_STATUSES,
 } = require('../core/post-capabilities');
 const { contentContractForType } = require('../core/content-contract');
 const { runContentMutation, recordContentEvent } = require('../core/content-outbox');
+// AN ATTACHMENT ROW ON THE GENERIC SURFACE follows the media rule too: visible only to who may read the
+// entry it hangs off, writable only by who may edit that entry (core/attachment-visibility). The type's own
+// record gate (canReadPostRecord / canEditPostRecord) still applies on top.
+const { canReadRecordThroughRest, attachmentWriteRefusal } = require('../core/attachment-visibility');
 
 // Meta keys the generic writers must refuse: the attachment's on-disk path (`_wp_attached_file`,
 // which Media.delete turns into an unlink target) and the other server-owned bookkeeping keys.
@@ -111,19 +118,6 @@ const { recordAudit } = require('../core/audit');
 function isPublicStatus(status: any): boolean {
     return status === 'publish' || status === 'future';
 }
-
-/**
- * THE STATUSES A REQUEST MAY WRITE through POST/PUT /posts.
- *
- * Post.create/Post.update store whatever string arrives (the F1 contract's enum is the column's
- * vocabulary, which also lists the lifecycle-internal 'trash', 'inherit' and 'auto-draft'), so the
- * route used to be the only gate and it gated just two values: 'publish'/'future' were downgraded for
- * a caller without the publish capability, and EVERYTHING ELSE went through. A contributor could
- * therefore mark their own draft 'private' (a published state, out of every review queue) or move it
- * to 'trash' through the EDIT gate instead of the delete one. The writable set is now explicit;
- * 'trash' stays reachable through DELETE /posts/:id, which carries the delete capability family.
- */
-const WRITABLE_POST_STATUSES: ReadonlySet<string> = new Set(['draft', 'pending', 'publish', 'future', 'private']);
 
 /**
  * THE DOWNGRADED EDIT GATE — type family + ownership, WITHOUT edit_published_<type>s.
@@ -206,8 +200,29 @@ function rejectOverComplexMeta(res: Response, error: any): boolean {
 }
 
 // isInternalPostType — "registered, but marked showInRest: false", which is NOT the same answer as
-// "unregistered" — lives in core/post-capabilities so routes/comments.ts applies the SAME rule to
-// the entry a comment belongs to.
+// "unregistered" — lives in core/post-capabilities so routes/comments.ts and core/attachment-visibility
+// apply the SAME rule to the entry a comment belongs to and to the entry an attachment hangs off.
+
+/**
+ * A `type` FROM THE REQUEST MUST BE SPELLED THE ONLY WAY EVERY ENGINE COMPARES IDENTICALLY.
+ *
+ * The list authorizes on the type NAME (readPolicyForType → publiclyReadable / editOthers / readPrivate) and
+ * then queries `post_type = ?` with the same string. Those are two comparisons: the registry's is an
+ * exact Map lookup in JavaScript, the database's runs under the column's collation (see
+ * isCanonicalPostTypeName). `?type=INVOICE` found NO registered type on MySQL — so the list fell back to
+ * the publicly-readable `post` policy and skipped the non-public clamp — and then matched every `invoice`
+ * row; `?type=nav_menu_item%20` passed the internal-type refusal and listed the menu items. The
+ * authorization was decided on one name and the rows were selected by another.
+ *
+ * Anything outside the canonical alphabet (another case, an accent, a space, an invisible character) is
+ * refused with the same 400 as an internal type, rather than resolved to whichever registered type the
+ * database happens to equate it with. An unregistered type IN the alphabet stays listable (orphaned
+ * content must stay reachable) under the read policy for an unknown type (readPolicyForType): not public,
+ * so its author and the `post` family's edit_others / read_private holders see it, and nobody else.
+ */
+function isListablePostTypeParam(type: unknown): type is string {
+    return isCanonicalPostTypeName(type) && !isInternalPostType(type);
+}
 
 /**
  * Is this loaded post INVISIBLE to the generic /posts routes?
@@ -226,6 +241,70 @@ function rejectOverComplexMeta(res: Response, error: any): boolean {
  */
 function isHiddenFromRest(post: any): boolean {
     return isInternalPostType(post.type || post.postType || 'post');
+}
+
+/**
+ * May this caller READ this loaded row through the generic /posts surface? The record gate plus, for an
+ * ATTACHMENT, the media rule (core/attachment-visibility): an attachment of an entry the caller may not
+ * read is as absent here as on GET /media/:id. The record gate alone let an editor holding
+ * edit_others_posts read — and `_wp_attached_file` from the meta route — every attachment of the entries
+ * of a type with its own capability family, which GET /media/:id answered 404 for. Every read route in
+ * this file that loads a row asks this, so the answer cannot drift between them — and it is the shared
+ * canReadRecordThroughRest, which the OTHER routes that hand back an entry's fields (GET /seo/meta/:postId,
+ * the comment routes) ask as well.
+ */
+async function canReadThroughRest(user: any, post: any): Promise<boolean> {
+    return canReadRecordThroughRest(user, post);
+}
+
+/**
+ * The attachment rule on the WRITE routes (core/attachment-visibility attachmentWriteRefusal): an attachment
+ * the caller may not see is 404 (asked BEFORE the record's own edit gate, whose 403 would confirm it exists),
+ * one whose entry they may not edit is 403. Answers true when it has sent the refusal. Non-attachments pass.
+ */
+async function refuseAttachmentWrite(res: Response, user: any, post: any): Promise<boolean> {
+    const refusal = await attachmentWriteRefusal(user, post);
+    if (refusal === 404) {
+        res.status(404).json(NOT_FOUND);
+        return true;
+    }
+    if (refusal === 403) {
+        res.status(403).json({ code: 'rest_forbidden', message: 'You cannot edit the entry this attachment belongs to.', data: { status: 403 } });
+        return true;
+    }
+    return false;
+}
+
+const INVALID_POST_PARENT = { code: 'rest_invalid_post_parent', message: 'Invalid post parent.', data: { status: 400 } };
+
+/**
+ * THE PARENT GATE of POST /posts and PUT /posts/:id, for a `parent` id > 0. Answers true when it has sent
+ * the refusal.
+ *   - A parent that does not exist, belongs to an internal type, is the entry itself (`selfId`), or that
+ *     the caller may not READ through this surface (canReadRecordThroughRest — an attachment of an entry
+ *     they may not see included) is one and the same 400: the answer for an id the caller cannot read is
+ *     the answer for an id that is not there.
+ *   - An attachment parent then takes the attachment write rule (attachmentWriteRefusal): one the caller
+ *     sees but whose entry they may not edit is 403.
+ *   - Every parent takes its own edit gate last: parenthood is a write on the parent (it changes what the
+ *     parent's children query returns).
+ */
+async function refuseParent(res: Response, user: any, parentPost: any, selfId?: number): Promise<boolean> {
+    if (!parentPost || isHiddenFromRest(parentPost) || (selfId !== undefined && parentPost.id === selfId)
+        || !(await canReadRecordThroughRest(user, parentPost))) {
+        res.status(400).json(INVALID_POST_PARENT);
+        return true;
+    }
+    const refusal = await attachmentWriteRefusal(user, parentPost);
+    if (refusal === 404) {
+        res.status(400).json(INVALID_POST_PARENT);
+        return true;
+    }
+    if (refusal === 403 || !canEditPostRecord(user, parentPost)) {
+        res.status(403).json({ code: 'rest_forbidden', message: 'You cannot attach content to that parent.', data: { status: 403 } });
+        return true;
+    }
+    return false;
 }
 
 /**
@@ -269,6 +348,12 @@ function toInt(raw: unknown): number | null {
 
 /** The 404 body every route in this file uses for "no such post". */
 const NOT_FOUND = { code: 'rest_post_invalid_id', message: 'Invalid post ID.', data: { status: 404 } };
+
+/**
+ * The 404 body of GET /posts/slug/:slug for EVERY miss — no row holds the slug, or only rows this caller may
+ * not read do. One body, so the answer never says which.
+ */
+const SLUG_NOT_FOUND = { code: 'rest_post_invalid_slug', message: 'Invalid post slug.', data: { status: 404 } };
 
 // THE ROUTE-ID CONTRACT — see core/query-params.
 //
@@ -461,22 +546,48 @@ function invalidContentContract(res: Response, issues: Array<{ path: string; cod
     });
 }
 
-async function visibleTranslationRefs(
-    translations: Array<{ id: number }>,
+/**
+ * The translation refs (id, language, slug, type, status) THIS caller may read — each sibling through the
+ * same gate as GET /posts/:id. A ref that is published, of a publicly readable type and not an attachment
+ * or an internal type is readable by anyone, so it is kept without loading its row; any other ref is
+ * loaded and asked.
+ */
+async function visibleTranslationRefs<T extends { id: number; type?: string; status?: string }>(
+    translations: T[],
     user?: ContentRouteUser,
-) {
+): Promise<T[]> {
     const decisions = await Promise.all(translations.map(async (translation) => {
+        if (isPublicTranslationRef(translation)) return translation;
         const candidate = await Post.findById(translation.id);
-        return candidate && canReadPostRecord(user, candidate) ? translation : null;
+        return candidate && await canReadThroughRest(user, candidate) ? translation : null;
     }));
-    return decisions.filter((translation) => translation !== null);
+    return decisions.filter((translation) => translation !== null) as T[];
+}
+
+/**
+ * Readable by anyone without asking the row: published, public type, neither attachment nor internal.
+ * The READ policy decides (readPolicyForType): a sibling of a type the registry does not know is not
+ * public, so it is loaded and asked like any other non-public ref.
+ */
+function isPublicTranslationRef(ref: { type?: string; status?: string }): boolean {
+    const type = ref.type || 'post';
+    if (ref.status !== 'publish' || type === 'attachment' || isInternalPostType(type)) return false;
+    return !!readPolicyForType(type).publiclyReadable;
 }
 
 /**
  * THE READ PROJECTION of one entry for one caller. Every /posts read and write response goes through
  * here, so what a caller may see is decided once:
  *
- *  · translations — a private REST type must not leak sibling slugs through Post.toJSON().translations;
+ *  · translations — sibling refs this caller may not read are kept out of Post.toJSON().translations.
+ *    EVERY post's refs, not only a non-public type's. toJSON lists the PUBLISHED siblings of the group,
+ *    and a published sibling is not necessarily a readable one: the published entry of a `public: false`
+ *    type linked to a public post (GET /posts/:id → 404 for an anonymous caller) handed its id and slug
+ *    to every reader of the public post. The check used to be keyed on the type of the post being
+ *    SERIALIZED; what decides is the type of each SIBLING;
+ *  · projections from OTHER rows — toJSON is handed the caller, so the featured image it projects is
+ *    what this caller may read (core/attachment-visibility), not what the post's author pointed
+ *    `_thumbnail_id` at, and a protected entry's featured image goes only to who may read its content;
  *  · meta — the full map only for a caller who manages the entry (its author, editors). Everyone else
  *    gets publicPostMeta(): unprefixed keys plus the `_` keys the public site renders. The editorial
  *    review thread (`_wjs_review_comments`) and internal/plugin `_` keys used to be public on every
@@ -487,9 +598,8 @@ async function visibleTranslationRefs(
  *    stay, as they do in WordPress, so a theme can render "this content is password protected".
  */
 async function serializeVisibleContent(post: any, user?: ContentRouteUser) {
-    const json = await post.toJSON();
-    const policy = capsForType(post.type || post.postType || 'post') || capsFor('post');
-    if (!policy.publiclyReadable && Array.isArray(json.translations) && json.translations.length) {
+    const json = await post.toJSON(true, user);
+    if (Array.isArray(json.translations) && json.translations.length) {
         json.translations = await visibleTranslationRefs(json.translations, user);
     }
     json.protected = isPasswordProtected(post);
@@ -543,11 +653,23 @@ async function serializeVisibleContent(post: any, user?: ContentRouteUser) {
  *           type: integer
  *         protected:
  *           type: boolean
- *           description: The entry is password protected. For a caller who cannot edit it, content, excerpt and meta._puck_data are returned empty.
+ *           description: The entry is password protected. For a caller who cannot edit it, content, excerpt and meta._puck_data are returned empty, and featuredMedia and meta._thumbnail_id are left out.
  *         meta:
  *           type: object
  *           additionalProperties: true
  *           description: The full meta map for a caller who can edit the entry; otherwise only unprefixed keys plus _puck_data, _wjs_template and _thumbnail_id.
+ *         featuredMedia:
+ *           type: object
+ *           description: The featured image (`meta._thumbnail_id`). Present only when that id names an attachment THIS caller could read through GET /media/{id} - never another post type, never an item hidden by its parent or private to someone else. A private item, for a caller who may edit it, carries its authenticated /media/{id}/file route instead of an /uploads path.
+ *           properties:
+ *             id:
+ *               type: integer
+ *             url:
+ *               type: string
+ *             path:
+ *               type: string
+ *             title:
+ *               type: string
  *
  * /posts:
  *   get:
@@ -572,6 +694,11 @@ async function serializeVisibleContent(post: any, user?: ContentRouteUser) {
  *           type: string
  *       - in: query
  *         name: type
+ *         description: >-
+ *           The post type to list (default post). Must be spelled exactly as registered — lowercase
+ *           letters, digits, `_` and `-` — because the database compares it under its own collation; any
+ *           other spelling, and an internal type, answers 400 rest_invalid_post_type. An unregistered
+ *           type in that alphabet stays listable, so content whose custom type was removed can be found.
  *         schema:
  *           type: string
  *       - in: query
@@ -620,6 +747,10 @@ async function serializeVisibleContent(post: any, user?: ContentRouteUser) {
  *               type: array
  *               items:
  *                 $ref: '#/components/schemas/Post'
+ *       400:
+ *         description: >-
+ *           rest_invalid_post_type (type is internal, or not spelled as a registered type would be) or
+ *           rest_invalid_param (a non-string or repeated scalar, or a malformed categories/tags/author list).
  */
 router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest<Record<string, string>, unknown, ContentListQuery>, res: Response) => {
     // THE WHOLE STRING CLASS, ONCE — see LIST_QUERY_STRING_FIELDS. `?status[]=publish` reached every
@@ -679,8 +810,12 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
     // It rejects INTERNAL types, not unregistered ones — same rule as isHiddenFromRest, so listing and
     // reading agree about what exists. A type whose registration an admin removed must stay listable
     // or its content cannot be found, let alone migrated.
+    //
+    // AND IT IS A NAME EVERY ENGINE READS THE SAME WAY — see isListablePostTypeParam. The policy below is chosen
+    // by this string and the rows are selected by it under the database's collation, so the two must not
+    // be able to disagree about which type it names.
     const resolvedType = (type === undefined || type === null || type === '') ? 'post' : type;
-    if (typeof resolvedType !== 'string' || isInternalPostType(resolvedType)) {
+    if (!isListablePostTypeParam(resolvedType)) {
         return res.status(400).json({
             code: 'rest_invalid_post_type',
             message: `Invalid post type '${String(resolvedType)}'.`,
@@ -719,7 +854,11 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
     // authorization that narrows to "your own posts" must not be intersectable with anything.
     let authorFilter: IdentityList | number | undefined = requestedAuthor;
     let effectiveStatus = status;
-    const listPolicy = capsForType(resolvedType) || capsFor('post');
+    // THE READ POLICY, NOT THE WRITE FALLBACK. `capsForType(t) || capsFor('post')` read an unregistered
+    // type as the public `post` family, so `?type=<a type the registry does not know>` — a WordPress
+    // import's private types, a deleted non-public custom type, any custom type during boot — listed its
+    // published entries to anyone. readPolicyForType fails closed for such a type.
+    const listPolicy = readPolicyForType(resolvedType);
     const canReadAllOfType = !!(req.user
         && (req.user.can(listPolicy.editOthers) || req.user.can(listPolicy.readPrivate)));
 
@@ -759,6 +898,21 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
         ? (req.user ? req.user.id : -1)
         : undefined;
 
+    // A LIST OF ATTACHMENTS takes the media rule in the query (core/attachment-visibility, through
+    // Post.buildWhere): the type's status/author gate above says nothing about the ENTRY an attachment hangs
+    // off, so `?type=attachment&status=inherit` listed — and counted — to an editor every attachment of the
+    // entries of a type with its own capability family. Applied to the rows and the count alike.
+    //
+    // DECIDED ON THE NAME THE QUERY MATCHES. This `===` and the query's type filter must name the same rows,
+    // and they do because Post.buildWhere compares `post_type` EXACTLY on every engine (core/sql-exact-text).
+    // Under MySQL's default collation the plain `post_type = ?` it used to run also matched 'ATTACHMENT' and
+    // 'attachment ': `?type=ATTACHMENT&status=inherit` skipped this rule and listed every hidden attachment,
+    // and the same comparison let `?type=ADV_LEDGER` (no registered type → the public `post` policy) list the
+    // published entries of a `public: false` type to anonymous callers and `?type=NAV_MENU_ITEM` (not an
+    // internal name) list the menu items. A spelling that differs from the stored type in case, accents or
+    // trailing spaces now selects no rows on any engine.
+    const attachmentViewer = resolvedType === 'attachment' ? { user: req.user || null } : undefined;
+
     // Use findAllWithRelations to batch-load post meta (avoids N+1 in the list path).
     const posts = await Post.findAllWithRelations({
         // resolvedType, NOT the raw query value — see the guard above.
@@ -770,6 +924,7 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
         tags: tagsFilter,
         search,
         searchProtectedVisibleTo,
+        attachmentViewer,
         limit,
         offset,
         orderBy: orderByMap[orderby] || 'post_date',
@@ -787,7 +942,8 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
         categories: categoriesFilter,
         tags: tagsFilter,
         search,
-        searchProtectedVisibleTo
+        searchProtectedVisibleTo,
+        attachmentViewer
     });
     const totalPages = Math.ceil(total / limit);
 
@@ -802,7 +958,7 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
  * /posts/slug/{slug}:
  *   get:
  *     summary: Get a single post by slug
- *     description: A slug is unique per post TYPE, not globally, so a post and a page may both own "about". Without a type the lookup runs post, then page, then untyped, and stops at the first candidate THIS caller may read - so a colleague's draft that happens to share the slug cannot take a published page off the public site. Authentication is optional and widens what counts as readable. Internal post types are never addressable here.
+ *     description: A slug written through POST/PUT /posts is unique across every publicly routed post type, but a post and a page created before that rule, or brought in by an importer (which keeps a source site's permalinks per type), may both own "about". Without a type the lookup runs page, then post, then untyped, and stops at the first candidate THIS caller may read - so neither a colleague's draft nor another type's entry that happens to share the slug can take a published page off the public site. Authentication is optional and widens what counts as readable. Internal post types are never addressable here.
  *     tags: [Posts]
  *     security:
  *       - bearerAuth: []
@@ -816,7 +972,7 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
  *       - in: query
  *         name: type
  *         required: false
- *         description: Narrow the lookup to one post type. An internal type is refused; an unregistered one stays addressable and simply matches nothing, so content whose custom type was removed can still be migrated.
+ *         description: Narrow the lookup to one post type, spelled exactly as registered (lowercase letters, digits, _ and -). An internal type, or any other spelling, is refused; an unregistered one stays addressable and simply matches nothing, so content whose custom type was removed can still be migrated.
  *         schema:
  *           type: string
  *     responses:
@@ -827,13 +983,14 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
  *             schema:
  *               $ref: '#/components/schemas/Post'
  *       400:
- *         description: type is not a string, or it names an internal post type (rest_invalid_post_type)
+ *         description: type is not a string, is not spelled as a registered type would be, or names an internal post type (rest_invalid_post_type)
  *       404:
- *         description: Nothing with that slug is visible to this caller. rest_post_invalid_id when a row exists but may not be read, rest_post_invalid_slug when nothing matches at all - both are 404, so neither answer confirms that a draft exists.
+ *         description: Nothing with that slug is visible to this caller (rest_post_invalid_slug). A slug held only by rows this caller may not read - another user's draft, an entry of a non-public type, a hidden attachment - answers exactly as a slug nobody holds. Pass type to address an entry of a type other than page and post.
  */
 router.get('/slug/:slug', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest<SlugParams, unknown, TypeQuery>, res: Response) => {
-    // A SLUG IS UNIQUE PER TYPE, NOT GLOBALLY. generateUniqueSlug de-duplicates within one post_type,
-    // so a post `about` and a page `about` is a legal, ordinary pair — and this route asked
+    // A SLUG USED TO BE UNIQUE PER TYPE, NOT GLOBALLY (generateUniqueSlug now shares one namespace
+    // across the publicly routed types, but pairs created before that still exist), so a post `about`
+    // and a page `about` could coexist — and this route asked
     // Post.findBySlug(slug) with NO type, whose SQL is `WHERE post_name = ?` with no LIMIT ordering.
     // The public site therefore served whichever row the engine happened to return first: the same URL
     // could render the post today and the page after a VACUUM or an index change. This is the READ twin
@@ -852,8 +1009,13 @@ router.get('/slug/:slug', optionalAuth, asyncHandler(async (req: MaybeAuthentica
     // 400, two guards contradicting each other about the same invariant, and the 400 landed on exactly
     // the tool an admin would use to migrate the orphaned content. Internal is refused; unregistered
     // is addressable and simply resolves to nothing if no row matches.
+    // Same spelling rule as the list (isListablePostTypeParam). Here the authorization already reads each
+    // candidate ROW's own stored type (isVisible below), so a collation-equal spelling could not widen
+    // what is served — but one rule for "what a type parameter may be" is what keeps the two routes from
+    // drifting apart again, which is how they contradicted each other before.
     const requestedType = req.query.type;
-    if (requestedType !== undefined && requestedType !== '' && (typeof requestedType !== 'string' || isInternalPostType(requestedType))) {
+    if (requestedType !== undefined && requestedType !== ''
+        && (typeof requestedType !== 'string' || !isListablePostTypeParam(requestedType))) {
         return res.status(400).json({
             code: 'rest_invalid_post_type',
             message: `Invalid post type '${String(requestedType)}'.`,
@@ -872,32 +1034,40 @@ router.get('/slug/:slug', optionalAuth, asyncHandler(async (req: MaybeAuthentica
      * never consulted. A 404 on a live URL, caused by an ordinary editorial action, with no warning.
      *
      * So the precedence now runs over candidates and stops at the first one the caller may READ. The
-     * anonymous answer is still deterministic (only published rows qualify) and an editor still sees
-     * their draft first, because for them the draft IS visible.
+     * anonymous answer is still deterministic (only published rows qualify), and a draft that is the
+     * only candidate is still found by the people who may read it.
+     *
+     * AND THE PAGE COMES FIRST. With `post` ahead of `page`, a PUBLISHED post was enough to take a
+     * page's URL: an Author (no page capability at all) published a post `contact` and /contact — the
+     * page's address, in the menu and the sitemap — served the Author's content. Post.generateUniqueSlug
+     * now keeps every publicly routed type in ONE slug namespace for the REST writers, so no new pair can
+     * be created there; this order decides the pairs that already exist (older installs, and the two
+     * importers, which keep a source site's permalinks per type) in favour of the page, the site's
+     * structure, which only page-capable users could have created. WordPress resolves a bare
+     * /%postname%/ the same way. For such a pair, the post is addressed with ?type=post.
      */
-    const isVisible = (p: any) => !isHiddenFromRest(p) && canReadPostRecord(req.user, p);
+    const isVisible = (p: any) => canReadThroughRest(req.user, p);
 
     const lookups: Array<string | undefined> = requestedType
         ? [requestedType as string]
-        : ['post', 'page', undefined];
+        : ['page', 'post', undefined];
 
     let post: any = null;
-    let hiddenCandidate: any = null;
     for (const t of lookups) {
         const candidate = t === undefined
             ? await Post.findBySlug(req.params.slug)
             : await Post.findBySlug(req.params.slug, t);
         if (!candidate) continue;
-        if (isVisible(candidate)) { post = candidate; break; }
-        if (!hiddenCandidate) hiddenCandidate = candidate;
+        if (await isVisible(candidate)) { post = candidate; break; }
     }
 
     if (!post) {
-        // Nothing visible. "Exists but you may not read it" and "does not exist" answer the same 404 —
-        // the codes below only preserve the two bodies this route has always returned.
-        return res.status(404).json(hiddenCandidate && !isHiddenFromRest(hiddenCandidate)
-            ? { code: 'rest_post_invalid_id', message: 'Invalid post ID.', data: { status: 404 } }
-            : { code: 'rest_post_invalid_slug', message: 'Invalid post slug.', data: { status: 404 } });
+        // Nothing visible: ONE body, whether rows this caller may not read hold the slug or no row does.
+        // It used to answer `rest_post_invalid_id` when a hidden candidate existed and
+        // `rest_post_invalid_slug` when none did — the same 404 status, but the code alone confirmed that
+        // an exact slug exists: another user's draft, the published entry of a `public: false` type and
+        // (with ?type=attachment) a hidden attachment, whose slug is derived from its uploaded file name.
+        return res.status(404).json(SLUG_NOT_FOUND);
     }
 
     res.json(await serializeVisibleContent(post, req.user));
@@ -936,8 +1106,8 @@ router.get('/:id', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequ
         return res.status(404).json(NOT_FOUND);
     }
 
-    // Check if user can view non-published posts
-    if (!canReadPostRecord(req.user, post)) {
+    // Check if user can view non-published posts — and, for an attachment, the entry it hangs off.
+    if (!(await canReadThroughRest(req.user, post))) {
         return res.status(404).json({
             code: 'rest_post_invalid_id',
             message: 'Invalid post ID.',
@@ -1064,17 +1234,9 @@ router.post('/', authenticate, asyncHandler(async (req: AuthenticatedRequest<Rec
     const hasParent = parent !== undefined && parent !== null && parent !== '';
     const parentId = hasParent ? toNonNegativeInt(parent) : 0;
     if (parentId === null) {
-        return res.status(400).json({ code: 'rest_invalid_post_parent', message: 'Invalid post parent.', data: { status: 400 } });
+        return res.status(400).json(INVALID_POST_PARENT);
     }
-    if (parentId > 0) {
-        const parentPost = await Post.findById(parentId);
-        if (!parentPost || isHiddenFromRest(parentPost)) {
-            return res.status(400).json({ code: 'rest_invalid_post_parent', message: 'Invalid post parent.', data: { status: 400 } });
-        }
-        if (!canEditPostRecord(req.user, parentPost)) {
-            return res.status(403).json({ code: 'rest_forbidden', message: 'You cannot attach content to that parent.', data: { status: 403 } });
-        }
-    }
+    if (parentId > 0 && await refuseParent(res, req.user, await Post.findById(parentId))) return;
 
     // THE SLUG IS PRODUCED, NOT ACCEPTED. Post.create used to take the body's `slug` VERBATIM
     // (`slug || sanitizeTitle(title)`) while PUT ran the same field through sanitizeTitle inside
@@ -1231,6 +1393,8 @@ router.put('/:id', authenticate, asyncHandler(async (req: AuthenticatedRequest<I
     if (!post || isHiddenFromRest(post)) {
         return res.status(404).json(NOT_FOUND);
     }
+    // An attachment: hidden → 404, its entry not editable → 403 (see refuseAttachmentWrite).
+    if (await refuseAttachmentWrite(res, req.user, post)) return;
 
     // Type-aware permissions: post.type picks the capability family (a post-only author must not edit a
     // page). Editing an ALREADY-PUBLISHED post additionally requires edit_published_<type>s — a contributor
@@ -1281,17 +1445,10 @@ router.put('/:id', authenticate, asyncHandler(async (req: AuthenticatedRequest<I
     const hasParent = parent !== undefined && parent !== null && parent !== '';
     const newParentId = hasParent ? toNonNegativeInt(parent) : 0;
     if (newParentId === null) {
-        return res.status(400).json({ code: 'rest_invalid_post_parent', message: 'Invalid post parent.', data: { status: 400 } });
+        return res.status(400).json(INVALID_POST_PARENT);
     }
-    if (newParentId > 0 && newParentId !== (post.postParent || 0)) {
-        const parentPost = await Post.findById(newParentId);
-        if (!parentPost || isHiddenFromRest(parentPost) || parentPost.id === postId) {
-            return res.status(400).json({ code: 'rest_invalid_post_parent', message: 'Invalid post parent.', data: { status: 400 } });
-        }
-        if (!canEditPostRecord(req.user, parentPost)) {
-            return res.status(403).json({ code: 'rest_forbidden', message: 'You cannot attach content to that parent.', data: { status: 403 } });
-        }
-    }
+    if (newParentId > 0 && newParentId !== (post.postParent || 0)
+        && await refuseParent(res, req.user, await Post.findById(newParentId), postId)) return;
 
     // menu_order: same shape, same normalization as POST / (absent → untouched, '' → 0).
     const menuOrderProvided = menu_order !== undefined;
@@ -1477,6 +1634,8 @@ router.delete('/:id', authenticate, asyncHandler(async (req: AuthenticatedReques
     if (!post || isHiddenFromRest(post)) {
         return res.status(404).json(NOT_FOUND);
     }
+    // An attachment: hidden → 404, its entry not editable → 403 (see refuseAttachmentWrite).
+    if (await refuseAttachmentWrite(res, req.user, post)) return;
 
     // Type-aware permissions: post.type picks the capability family, and deleting an already-published
     // post additionally requires delete_published_<type>s (mirrors the edit gate).
@@ -1589,6 +1748,8 @@ router.post('/:id/meta', authenticate, asyncHandler(async (req: AuthenticatedReq
     if (!post || isHiddenFromRest(post)) {
         return res.status(404).json(NOT_FOUND);
     }
+    // An attachment: hidden → 404, its entry not editable → 403 (see refuseAttachmentWrite).
+    if (await refuseAttachmentWrite(res, req.user, post)) return;
 
     // SECURITY: Ownership check (prevents IDOR). This route was gated by authenticate only, letting any
     // logged-in user write arbitrary meta on ANY post.
@@ -1761,8 +1922,9 @@ router.get('/:id/meta', optionalAuth, asyncHandler(async (req: MaybeAuthenticate
 
     // SECURITY (IDOR): mirror the single-post read gate. Without this, anyone could read the full meta
     // map (SEO drafts, internal notes, plugin-stashed data, _wp_trash_meta_status, etc.) of draft/
-    // private/pending/trashed posts, or other users' content.
-    if (!canReadPostRecord(req.user, post)) {
+    // private/pending/trashed posts, or other users' content. For an attachment, also the entry it hangs
+    // off: `_wp_attached_file` here IS the file's /uploads path.
+    if (!(await canReadThroughRest(req.user, post))) {
         return res.status(404).json({
             code: 'rest_post_invalid_id',
             message: 'Invalid post ID.',
@@ -1773,11 +1935,15 @@ router.get('/:id/meta', optionalAuth, asyncHandler(async (req: MaybeAuthenticate
     // The full map is for the people who work on the entry (its author, editors). Everyone else gets
     // the PUBLIC projection — the same one GET /posts/:id carries, see serializeVisibleContent — so the
     // editorial review thread and internal `_`-prefixed keys never reach an anonymous reader, and the
-    // page-builder tree of a password-protected entry is withheld with its body.
+    // page-builder tree of a password-protected entry is withheld with its body. So is its featured
+    // image: the same rule Post.toJSON applies to `featuredMedia` and to the `_thumbnail_id` it emits.
     const allMeta = await Post.getAllMeta(postId);
     if (canManagePostRecord(req.user, post)) return res.json(allMeta);
     const visibleMeta = publicPostMeta(allMeta);
-    if (!canReadPostContent(req.user, post)) delete visibleMeta._puck_data;
+    if (!canReadPostContent(req.user, post)) {
+        delete visibleMeta._puck_data;
+        delete visibleMeta._thumbnail_id;
+    }
     res.json(visibleMeta);
 }));
 
@@ -1835,6 +2001,7 @@ router.put('/:id/language', authenticate, asyncHandler(async (req: Authenticated
     if (!post || isHiddenFromRest(post)) {
         return res.status(404).json(NOT_FOUND);
     }
+    if (await refuseAttachmentWrite(res, req.user, post)) return;
     if (!canEditPostRecord(req.user, post)) {
         return res.status(403).json({ code: 'rest_forbidden', message: 'You cannot edit this post.', data: { status: 403 } });
     }
@@ -1907,8 +2074,8 @@ router.get('/:id/translations', optionalAuth, asyncHandler(async (req: MaybeAuth
     if (!post || isHiddenFromRest(post)) {
         return res.status(404).json(NOT_FOUND);
     }
-    // Mirror the single-post read gate for a non-published post.
-    if (!canReadPostRecord(req.user, post)) {
+    // Mirror the single-post read gate for a non-published post (and an attachment's entry).
+    if (!(await canReadThroughRest(req.user, post))) {
         return res.status(404).json({ code: 'rest_post_invalid_id', message: 'Invalid post ID.', data: { status: 404 } });
     }
     const candidates = await Post.getTranslations(postId, undefined, { includeUnpublished: true });
@@ -1921,7 +2088,7 @@ router.get('/:id/translations', optionalAuth, asyncHandler(async (req: MaybeAuth
  * /posts/{id}/translations:
  *   post:
  *     summary: Link this post and another as translations of each other
- *     description: Symmetric and idempotent - both posts end up in one translation group, and when either already belongs to a group that WHOLE set is folded in, not just the two posts. The caller must be able to edit BOTH posts. Unlike the GET, the list returned here is the raw group and includes unpublished siblings, which is what the editor doing the linking needs to see.
+ *     description: Symmetric and idempotent - both posts end up in one translation group, and when either already belongs to a group that WHOLE set is folded in, not just the two posts. The caller must be able to edit BOTH posts. The list returned is the group's members this caller may read, unpublished ones included when they may read them (as GET /posts/{id} decides) - a member they may not read is left out of the list, though it stays in the group.
  *     tags: [Posts]
  *     security:
  *       - bearerAuth: []
@@ -1987,6 +2154,8 @@ router.post('/:id/translations', authenticate, asyncHandler(async (req: Authenti
     if (!post || !other || isHiddenFromRest(post) || isHiddenFromRest(other)) {
         return res.status(404).json(NOT_FOUND);
     }
+    if (await refuseAttachmentWrite(res, req.user, post)) return;
+    if (await refuseAttachmentWrite(res, req.user, other)) return;
     if (!canEditPostRecord(req.user, post) || !canEditPostRecord(req.user, other)) {
         return res.status(403).json({ code: 'rest_forbidden', message: 'You cannot edit both posts.', data: { status: 403 } });
     }
@@ -1998,7 +2167,13 @@ router.post('/:id/translations', authenticate, asyncHandler(async (req: Authenti
     if (!group) {
         return res.status(400).json({ code: 'rest_link_failed', message: 'Could not link these posts.', data: { status: 400 } });
     }
-    const translations = await Post.getTranslations(postId, group, { includeUnpublished: true });
+    // The members THIS caller may read — unpublished ones included when they may read them (the linking
+    // editor's own drafts, or everything of the type for a holder of its edit_others capability). The raw
+    // group can hold entries folded in from a set somebody else built: an unpublished entry of a type with
+    // its own capability family, a hidden attachment. Editing the two linked posts is not a right to read
+    // every other member's slug, type and status.
+    const translations = await visibleTranslationRefs(
+        await Post.getTranslations(postId, group, { includeUnpublished: true }), req.user);
     res.json({ group, translations });
 }));
 
@@ -2041,6 +2216,7 @@ router.delete('/:id/translations', authenticate, asyncHandler(async (req: Authen
     if (!post || isHiddenFromRest(post)) {
         return res.status(404).json(NOT_FOUND);
     }
+    if (await refuseAttachmentWrite(res, req.user, post)) return;
     if (!canEditPostRecord(req.user, post)) {
         return res.status(403).json({ code: 'rest_forbidden', message: 'You cannot edit this post.', data: { status: 403 } });
     }

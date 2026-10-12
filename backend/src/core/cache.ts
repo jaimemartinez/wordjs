@@ -258,6 +258,19 @@ async function flush() {
 // coherence/realtime must work across nodes even when the object cache is turned off.
 let subscriber: any = null;
 const subHandlers = new Map<string, Set<(message: string) => void>>();
+// Called every time the subscriber connection becomes READY — the first connect and every reconnect —
+// and once when registered on a bus that is already ready (see onBusReady). Pub/sub is fire-and-forget:
+// whatever was published while this node was not subscribed (the boot window before a consumer's
+// SUBSCRIBE, a Redis restart, a network blip) is gone, so a consumer that keeps state in sync through the
+// bus re-reads that state here instead of waiting for the next message.
+const busReadyHandlers = new Set<() => void>();
+// The latest SUBSCRIBE sent (settled either way). Replies come back in order on the one connection, so
+// once it settles every channel subscribed before it is live too.
+let lastSubscribe: Promise<unknown> = Promise.resolve();
+
+function runBusReadyHandler(h: () => void): void {
+    try { h(); } catch (e: any) { console.warn('[Cache] bus-ready handler error:', e && e.message); }
+}
 
 function redisConfigured(): boolean { return !!(config.redis && config.redis.enabled !== false); }
 
@@ -293,9 +306,12 @@ async function publish(channel: string, payload: any): Promise<boolean> {
         // Only warn when Redis is CONFIGURED (multi-node expected) but currently down: a missed
         // publish means cross-node coherence is degraded (e.g. a role revocation won't reach other
         // nodes until their TTL fallback re-reads). Single-node installs (Redis not configured) skip
-        // pub/sub by design — no warning there to avoid log spam.
+        // pub/sub by design — no warning there to avoid log spam. The message names no bound: how long
+        // a peer stays stale depends on the state (plugin policy: its 10 s re-sync; options read through
+        // the cache: the 30 s in-process cap, or the shared entry's TTL when this node's del() could not
+        // reach Redis either — documentation/multi-node.md, "Known limitations").
         if (redisConfigured()) {
-            console.warn(`[Cache] publish('${channel}') skipped: Redis unavailable — cross-node coherence DEGRADED until reconnect (state self-heals within the roles-cache TTL).`);
+            console.warn(`[Cache] publish('${channel}') skipped: Redis unavailable — cross-node coherence DEGRADED until reconnect (other nodes catch up only when their caches expire or re-sync).`);
         }
         return false;
     }
@@ -326,8 +342,32 @@ function subscribe(channel: string, handler: (message: string) => void): void {
             if (hs) for (const h of hs) { try { h(msg); } catch (e: any) { console.warn('[Cache] sub handler error:', e && e.message); } }
         });
         subscriber.on('error', (e: any) => console.warn('[Cache] Subscriber error:', e.message));
+        // ioredis emits 'ready' at the top of its ready handler and writes the automatic re-SUBSCRIBE right
+        // after, synchronously; deferring a turn lets that go out before a handler starts its re-read.
+        subscriber.on('ready', () => setImmediate(() => {
+            for (const h of busReadyHandlers) runBusReadyHandler(h);
+        }));
     }
-    subscriber.subscribe(channel).catch((e: any) => console.warn('[Cache] subscribe failed:', e.message));
+    lastSubscribe = subscriber.subscribe(channel).catch((e: any) => console.warn('[Cache] subscribe failed:', e.message));
+}
+
+/**
+ * Run `handler` whenever the cluster bus (re)connects — see busReadyHandlers. No-op when Redis isn't
+ * configured (single node: nothing is ever published, so nothing can be missed).
+ *
+ * A handler registered while the bus is ALREADY ready also runs once right away — after the SUBSCRIBEs
+ * sent so far are acknowledged, so that from its re-read on every publish reaches this node. That is the
+ * usual case at boot, not an edge: this module subscribes 'wordjs:cache-del' when it loads, so the
+ * subscriber has typically connected — and its first 'ready' has fired, to no one — long before a
+ * consumer such as core/coherence.ts registers. Without this, whatever was published between that
+ * consumer's initial read and its own SUBSCRIBE was caught only by the consumer's own timer.
+ */
+function onBusReady(handler: () => void): void {
+    if (!redisConfigured()) return;
+    busReadyHandlers.add(handler);
+    if (subscriber && subscriber.status === 'ready') {
+        void lastSubscribe.then(() => setImmediate(() => runBusReadyHandler(handler)));
+    }
 }
 
 /**
@@ -384,6 +424,7 @@ module.exports = {
     // Multi-node primitives:
     publish,
     subscribe,
+    onBusReady,
     pubsubAvailable,
     // "Is a cluster leg EXPECTED here?" — deliberately NOT the same question as pubsubAvailable()
     // ("is it up right now?"). Callers that must tell a single-node install (nothing to deliver

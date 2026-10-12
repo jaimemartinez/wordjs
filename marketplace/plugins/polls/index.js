@@ -4,10 +4,12 @@
  * WordPress parity target: WP-Polls / Poll Maker. Admin creates polls (question + 2..12 options),
  * visitors vote through the public Puck block "Polls" and see animated result bars.
  *
- * Vote dedupe model (IMPORTANT): one vote per BROWSER, enforced client-side via
- * localStorage ('wjpoll_voted_<pollId>') — the same tradeoff as WP-Polls "cookie" mode.
- * The sandbox serializes requests WITHOUT req.ip, so server-side per-visitor dedupe is
- * impossible here; the real abuse bound is the in-memory rate cap (30 votes/min per poll).
+ * Vote dedupe model (IMPORTANT): one vote per BROWSER via localStorage ('wjpoll_voted_<pollId>')
+ * — the same tradeoff as WP-Polls "cookie" mode — plus, server-side, one vote per CLIENT per poll
+ * (req.clientKey, an HMAC of the caller's IP forwarded by the host; in memory, so per process and
+ * reset on restart) and an in-memory rate cap of 30 votes/min per poll. Both are claimed in the
+ * same synchronous step as their check, so a burst of simultaneous votes cannot pass them together.
+ * Visitors behind one NAT share a clientKey and therefore one vote per poll.
  *
  * Option ids are stable numeric ids stored inside the poll's options JSON. Editing preserves
  * existing ids so old votes stay valid; a removed option leaves its votes orphaned-but-harmless
@@ -28,7 +30,7 @@ const MAX_QUESTION_LEN = 500;
 const MAX_LABEL_LEN = 200;
 const SHOW_RESULTS_VALUES = ['after', 'always', 'never'];
 
-// In-memory rolling-window rate cap per poll (no req.ip in the sandbox — see header comment).
+// In-memory rolling-window rate cap per poll (see the header comment).
 const VOTE_WINDOW_MS = 60 * 1000;
 const VOTE_CAP_PER_WINDOW = 30;
 
@@ -138,9 +140,12 @@ exports.init = async function (wordjs) {
     }
 
     // Rolling-window throttle state: pollId -> array of vote timestamps within the window.
-    // Check and record are SEPARATE: only fully validated, inserted votes consume the budget, so
-    // garbage requests (bad option_id, unknown poll) can't starve legitimate voters. The map is
-    // bounded so fabricated poll_ids can't grow child-process memory without limit.
+    // Only fully validated votes consume the budget, so garbage requests (bad option_id, unknown
+    // poll) can't starve legitimate voters: voteThrottled is a cheap early reject, and claimVote
+    // re-checks and counts in ONE synchronous step right before the INSERT, refunded if the INSERT
+    // fails. Route handlers run concurrently, so recording only AFTER the awaited INSERT let a burst
+    // of simultaneous votes all pass the check. The map is bounded so fabricated poll_ids can't grow
+    // child-process memory without limit (they never reach claimVote).
     const voteWindows = new Map();
     const MAX_WINDOW_ENTRIES = 500;
     function pruneVoteWindows(now) {
@@ -160,12 +165,43 @@ exports.init = async function (wordjs) {
         else voteWindows.delete(pollId);
         return recent.length >= VOTE_CAP_PER_WINDOW;
     }
-    function noteVote(pollId) {
+    /** Check AND count one vote for the poll; returns release() (an idempotent refund) or null when full. */
+    function claimVote(pollId) {
+        if (voteThrottled(pollId)) return null;
         const now = Date.now();
         pruneVoteWindows(now);
         const recent = (voteWindows.get(pollId) || []).filter((t) => now - t < VOTE_WINDOW_MS);
         recent.push(now);
         voteWindows.set(pollId, recent);
+        let released = false;
+        return () => {
+            if (released) return;
+            released = true;
+            const cur = voteWindows.get(pollId);
+            const i = cur ? cur.lastIndexOf(now) : -1;
+            if (i !== -1) cur.splice(i, 1);
+        };
+    }
+
+    /**
+     * Reserve this client's one vote on the poll, in the same synchronous step as the check; returns
+     * release() (idempotent) or null when the client already voted. No clientKey → no dedupe.
+     */
+    function claimClientVote(pollId, clientKey) {
+        if (!clientKey) return () => {};
+        if (votedClients.get(pollId) && votedClients.get(pollId).has(clientKey)) return null;
+        if (votedClients.size > 5000) votedClients.clear(); // crude bound on process memory
+        let seen = votedClients.get(pollId);
+        if (!seen) { seen = new Set(); votedClients.set(pollId, seen); }
+        if (seen.size >= 100000) return () => {}; // memory bound on this poll's per-client marks
+        seen.add(clientKey);
+        let released = false;
+        return () => {
+            if (released) return;
+            released = true;
+            const cur = votedClients.get(pollId);
+            if (cur) cur.delete(clientKey);
+        };
     }
 
     // ---- admin routes -------------------------------------------------------------------------------
@@ -300,6 +336,13 @@ exports.init = async function (wordjs) {
 
     // ---- public routes (consumed by the Puck block from the editor iframe AND the public site) ------
 
+    // Public callers never see an error's text: a driver's message names tables, columns and
+    // constraints. The details go to the server log.
+    const failQuietly = (res, e, what) => {
+        console.error(`[polls] ${what} failed:`, e && e.message ? e.message : e);
+        res.status(500).json({ error: 'No se pudo completar la operación. Inténtalo de nuevo.' });
+    };
+
     // GET /public/poll?id=X[&voted=1]
     // Results disclosure: 'always' → everyone; 'after' → the client attests it already voted
     // (voted=1 — per-browser dedupe is client-side anyway, so this is not a new leak) and everyone
@@ -327,7 +370,7 @@ exports.init = async function (wordjs) {
             }
             res.json(payload);
         } catch (e) {
-            res.status(500).json({ error: e.message });
+            failQuietly(res, e, 'poll');
         }
     });
 
@@ -342,7 +385,7 @@ exports.init = async function (wordjs) {
             if (!Number.isInteger(pollId) || pollId < 1 || !Number.isInteger(optionId) || optionId < 1) {
                 return res.status(400).json({ error: 'Datos de voto inválidos.' });
             }
-            // Throttle check before the DB; the budget is only CONSUMED after a valid insert.
+            // Cheap early rejects before the DB; the budget is CLAIMED only once the vote validated.
             if (voteThrottled(pollId)) {
                 return res.status(429).json({ error: 'Demasiados votos en poco tiempo. Inténtalo de nuevo en un minuto.' });
             }
@@ -358,14 +401,23 @@ exports.init = async function (wordjs) {
             if (!options.some((o) => o.id === optionId)) {
                 return res.status(400).json({ error: 'Opción inválida.' });
             }
-            await db.run(`INSERT INTO ${T.votes} (poll_id, option_id) VALUES (?, ?)`, [pollId, optionId]);
-            if (clientKey) {
-                if (votedClients.size > 5000) votedClients.clear(); // crude bound on process memory
-                let seen = votedClients.get(pollId);
-                if (!seen) { seen = new Set(); votedClients.set(pollId, seen); }
-                if (seen.size < 100000) seen.add(clientKey);
+            // Claim the client's vote and a unit of the poll's window in ONE synchronous step (no
+            // await between the checks and the counts), so concurrent requests see each other's
+            // claims; both are refunded if the INSERT fails.
+            const releaseClient = claimClientVote(pollId, clientKey);
+            if (!releaseClient) return res.status(409).json({ error: 'Ya registramos tu voto en esta encuesta.' });
+            const releaseWindow = claimVote(pollId);
+            if (!releaseWindow) {
+                releaseClient();
+                return res.status(429).json({ error: 'Demasiados votos en poco tiempo. Inténtalo de nuevo en un minuto.' });
             }
-            noteVote(pollId);
+            try {
+                await db.run(`INSERT INTO ${T.votes} (poll_id, option_id) VALUES (?, ?)`, [pollId, optionId]);
+            } catch (e) {
+                releaseClient();
+                releaseWindow();
+                throw e;
+            }
             const show = SHOW_RESULTS_VALUES.includes(poll.show_results) ? poll.show_results : 'after';
             const payload = { success: true };
             if (show !== 'never') {
@@ -375,7 +427,7 @@ exports.init = async function (wordjs) {
             }
             res.json(payload);
         } catch (e) {
-            res.status(500).json({ error: e.message });
+            failQuietly(res, e, 'vote');
         }
     });
 

@@ -922,14 +922,15 @@ describe('siteurl / home cannot be written around the site-address API', () => {
     test('site_address_rev is a protected option: plugins cannot read or write it, themes cannot write it', async () => {
         const { isProtectedOption } = require('../core/plugin-api');
         assert.strictEqual(isProtectedOption('site_address_rev'), true);
-        // The theme-context backstop in core/options is a regex literal reachable only by a theme holding
-        // an admin-granted settings:write; compile the literal itself rather than restating it here.
-        const src = fs.readFileSync(path.join(__dirname, '..', 'core', 'options.ts'), 'utf8');
-        const literal = (/const PROTECTED_NAME = \/(\^\(.*\)\$)\/;/.exec(src) || [])[1];
-        assert.ok(literal, 'core/options.ts PROTECTED_NAME was not found');
-        const PROTECTED_NAME = new RegExp(String(literal));
-        assert.ok(PROTECTED_NAME.test('site_address_rev'));
-        assert.ok(PROTECTED_NAME.test('siteurl') && !PROTECTED_NAME.test('site_address_revision'), 'anchored, exact names');
+        // The theme-context backstop in core/options (every option writer calls it) delegates to the same
+        // predicate; ask the backstop itself, in a theme's context, rather than restating its list here.
+        const { assertThemeOptionWritable } = require('../core/options');
+        const { runWithContext } = require('../core/plugin-context');
+        runWithContext('theme:site-address-probe', () => {
+            assert.throws(() => assertThemeOptionWritable('site_address_rev'), /not writable from theme context/);
+            assert.throws(() => assertThemeOptionWritable('siteurl'), /not writable from theme context/);
+            assert.doesNotThrow(() => assertThemeOptionWritable('site_address_revision'), 'exact names, not prefixes');
+        });
     });
 });
 

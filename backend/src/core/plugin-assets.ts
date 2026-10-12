@@ -86,15 +86,27 @@ async function clearAssets(slug: string): Promise<void> {
     });
 }
 
-/** Flat asset lists for ACTIVE plugins only (a deactivated plugin's stale entries never render). */
+/**
+ * Flat asset lists for ACTIVE plugins that currently HOLD assets:write (a deactivated plugin's stale
+ * entries never render, and neither do the entries of a plugin whose grant was revoked or never given).
+ *
+ * The grant is re-checked on the way OUT, not only at enqueue time. enqueue() is gated by
+ * verifyPermission('assets', 'write'), but the registry is an option row, and an option row has other
+ * writers: a plugin holding only settings:write could write `plugin_assets` through the options bridge
+ * (now refused there too — plugin-api PROTECTED_OPTION_NAMES), and a revoke left the entries a plugin
+ * had enqueued while it held the grant on every public page. What is emitted must follow the grant the
+ * administrator sees today, whoever wrote the row and whenever.
+ */
 async function getActiveAssets(): Promise<{ scripts: any[]; styles: any[] }> {
     const store = (await asHost(() => getOption(OPT, {}))) || {};
     const { getActivePlugins } = require('./plugins');
     const active = new Set(await getActivePlugins());
     const { isPluginServedRelPath } = require('./io-guard');
+    const { isGranted } = require('./plugin-permissions');
     const scripts: any[] = [], styles: any[] = [];
     for (const [slug, list] of Object.entries(store)) {
         if (!active.has(slug) || !Array.isArray(list)) continue;
+        if (!isGranted(slug, 'assets', 'write')) continue;
         for (const e of list as any[]) {
             // (#3) Re-check the STORED url against the published surface on the way out, not only on
             // the way in: entries registered before the public/ rule existed (or by any other writer

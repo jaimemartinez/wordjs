@@ -111,6 +111,7 @@ import { symbolsApi } from "@/lib/symbols";
 import { PATTERNS, insertVersoPattern } from "./patterns";
 import { runBackgroundSave, runManualSave, type OnSave } from "./saveFlow";
 import { toLocalInputValue, shouldShowPostDateField, SCHEDULED_STATUS } from "@/lib/editorSchedule";
+import { previewHref } from "@/lib/previewHref";
 
 export interface VersoEditorProps {
     /** Documento inicial (la forma persistida `_puck_data`). Se lee UNA vez al montar. */
@@ -140,6 +141,8 @@ export interface VersoEditorProps {
     pageId?: number;
     /** Slug del registro — habilita "Vista Previa" (/preview/slug). */
     previewSlug?: string;
+    /** Post type of the entry being edited, sent with the preview (lib/previewHref) so a page that shares the slug does not answer for it. */
+    previewType?: string;
     /** Raíz del breadcrumb (string ES fuente, traducido con trStr) — "Entradas" en posts. */
     breadcrumbRoot?: string;
     /** Campos ROOT del tipo (rootFieldsPage / rootFieldsPost) — la asimetría del CMS (W41). */
@@ -287,6 +290,7 @@ export default function VersoEditor({
     onCancel,
     pageId,
     previewSlug,
+    previewType,
     breadcrumbRoot,
     rootFields,
     templateKind = "page",
@@ -578,8 +582,8 @@ export default function VersoEditor({
         } catch {
             /* preview igualmente — el usuario ve el último estado guardado */
         }
-        if (previewSlug) window.open(`/preview/${previewSlug}`, "_blank", "noopener");
-    }, [hasChanges, onSave, previewSlug]);
+        if (previewSlug) window.open(previewHref(previewSlug, previewType), "_blank", "noopener");
+    }, [hasChanges, onSave, previewSlug, previewType]);
 
     /* ---------------- colaboración en vivo (F8.4) ---------------- */
 

@@ -452,10 +452,17 @@ exports.init = async function (wordjs) {
     // ── shared helpers (pure; used by the migrations below and by every route) ───────────────────
 
     // HTTP-mapped validation error: routes `throw httpError(400, '...')` and every catch does
-    // `sendError(res, e)` → res.status(e.status || 500).json({ error: e.message }).
+    // `sendError(res, e)` → res.status(e.status).json({ error: e.message }). Any other error is
+    // unexpected: its text goes to the server log and the reply is generic, because the catch blocks
+    // also serve the public form and the location portal, and a driver's message names tables and
+    // constraints ("no such table: wjp_conference_manager_conferences").
     class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
     const httpError = (status, message) => new HttpError(status, message);
-    const sendError = (res, e) => res.status(e && e.status ? e.status : 500).json({ error: e && e.message ? e.message : String(e) });
+    const sendError = (res, e) => {
+        if (e instanceof HttpError) return res.status(e.status).json({ error: e.message });
+        console.error('[conference-manager] request failed:', e && e.message ? e.message : e);
+        return res.status(500).json({ error: 'No se pudo completar la operación. Inténtalo de nuevo.' });
+    };
 
     // Money: integer-cents arithmetic, 2-decimal results.
     // Upper bound: 1e13 (ten trillion) in whole currency units — far above any real fee, and still
@@ -2496,7 +2503,9 @@ exports.init = async function (wordjs) {
     // Sold apart from the participation fee: a ticket stores the bus price at sale time and is paid by its
     // own transport payments (cash / transfer, recorded by the admin). Capacity never drops below the
     // tickets sold; a cancelled attendee cannot get a new ticket; a ticket (or a bus) with payments cannot
-    // be removed until those payments are — money is never deleted as a side effect.
+    // be removed until those payments are — money is never deleted as a side effect. Every check here that
+    // a transport payment could invalidate (the price a ticket owes, whether a ticket has payments) runs
+    // with the write it decides under the assignment lock, the lock payments are recorded under.
     const BUS_MAX_PASSENGERS_PER_CALL = 500;
     const busSelect = `SELECT b.*, (SELECT COUNT(*) FROM ${T.tickets} t WHERE t.bus_id = b.id) AS sold,`
         + ` (SELECT COALESCE(SUM(t.price), 0) FROM ${T.tickets} t WHERE t.bus_id = b.id) AS revenue,`
@@ -2575,24 +2584,35 @@ exports.init = async function (wordjs) {
         if (!await allow(req, res, 'transport', 'manage')) return;
         try {
             const id = positiveInt(req.params.id);
-            const bus = id ? await db.get(`${busSelect} WHERE b.id = ?`, [id]) : null;
-            if (!bus) return res.status(404).json({ error: 'Bus no encontrado.' });
-            const v = parseBusBody(req.body || {}, true);
-            if (v.capacity !== undefined && v.capacity < (Number(bus.sold) || 0)) {
-                return res.status(409).json({ error: `La capacidad no puede ser menor que los ${bus.sold} pasajes vendidos.`, sold: Number(bus.sold) });
-            }
-            // Repricing may never leave a ticket paid beyond its new price (money already received is not
-            // silently turned into a credit): refuse before writing anything.
-            if (req.body && req.body.reprice_tickets && v.price !== undefined) {
-                const over = await db.get(`SELECT COUNT(*) AS n FROM ${T.tickets} WHERE bus_id = ? AND amount_paid > ? + 0.005`, [id, v.price]);
-                if (Number(over && over.n) > 0) return res.status(409).json({ error: `El nuevo precio es menor que lo ya pagado en ${over.n} pasaje(s); ajusta esos pagos primero o aplica el precio solo a las próximas ventas.` });
-            }
-            const keys = Object.keys(v);
-            if (keys.length) await db.run(`UPDATE ${T.buses} SET ${keys.map(k => `${k} = ?`).join(', ')} WHERE id = ?`, [...keys.map(k => v[k]), id]);
-            if (req.body && req.body.reprice_tickets && v.price !== undefined) {
-                await db.run(`UPDATE ${T.tickets} SET price = ? WHERE bus_id = ?`, [v.price, id]);
-                await recomputeTickets('bus_id = ?', [id]);
-            }
+            // The sold-seats check and the write run under the assignment lock, the lock ticket sales
+            // (POST /buses/:id/passengers) check the seats left under: a sale landing between this
+            // check and the write otherwise left more tickets sold than the capacity just set. A
+            // reprice writes the tickets' new price under it too, the lock transport payments check
+            // what a ticket still owes under: written after the lock was released, a payment landing
+            // in between was accepted against the old price, and the ticket ended up paid beyond the
+            // new one — what the check below refuses.
+            const outcome = await withAssignmentLock(async () => {
+                const bus = id ? await db.get(`${busSelect} WHERE b.id = ?`, [id]) : null;
+                if (!bus) throw httpError(404, 'Bus no encontrado.');
+                const v = parseBusBody(req.body || {}, true);
+                if (v.capacity !== undefined && v.capacity < (Number(bus.sold) || 0)) {
+                    return { status: 409, body: { error: `La capacidad no puede ser menor que los ${bus.sold} pasajes vendidos.`, sold: Number(bus.sold) } };
+                }
+                // Repricing may never leave a ticket paid beyond its new price (money already received is not
+                // silently turned into a credit): refuse before writing anything.
+                if (req.body && req.body.reprice_tickets && v.price !== undefined) {
+                    const over = await db.get(`SELECT COUNT(*) AS n FROM ${T.tickets} WHERE bus_id = ? AND amount_paid > ? + 0.005`, [id, v.price]);
+                    if (Number(over && over.n) > 0) return { status: 409, body: { error: `El nuevo precio es menor que lo ya pagado en ${over.n} pasaje(s); ajusta esos pagos primero o aplica el precio solo a las próximas ventas.` } };
+                }
+                const keys = Object.keys(v);
+                if (keys.length) await db.run(`UPDATE ${T.buses} SET ${keys.map(k => `${k} = ?`).join(', ')} WHERE id = ?`, [...keys.map(k => v[k]), id]);
+                if (req.body && req.body.reprice_tickets && v.price !== undefined) {
+                    await db.run(`UPDATE ${T.tickets} SET price = ? WHERE bus_id = ?`, [v.price, id]);
+                    await recomputeTickets('bus_id = ?', [id]);
+                }
+                return {};
+            });
+            if (outcome.status) return res.status(outcome.status).json(outcome.body);
             res.json({ success: true });
         } catch (e) { sendError(res, e); }
     });
@@ -2601,13 +2621,20 @@ exports.init = async function (wordjs) {
         if (!await allow(req, res, 'transport', 'manage')) return;
         try {
             const id = positiveInt(req.params.id);
-            const bus = id ? await db.get(`SELECT id FROM ${T.buses} WHERE id = ?`, [id]) : null;
-            if (!bus) return res.status(404).json({ error: 'Bus no encontrado.' });
-            const paid = await db.get(`SELECT COUNT(*) AS n FROM ${T.transportPayments} WHERE ticket_id IN (SELECT id FROM ${T.tickets} WHERE bus_id = ? )`, [id]);
-            if (Number(paid && paid.n) > 0) return res.status(409).json({ error: 'El bus tiene pasajes con pagos registrados; elimina esos pagos antes de borrar el bus.' });
-            const released = await db.run(`DELETE FROM ${T.tickets} WHERE bus_id = ?`, [id]);
-            await db.run(`DELETE FROM ${T.buses} WHERE id = ?`, [id]);
-            res.json({ success: true, released: (released && released.changes) || 0 });
+            // The no-payments check and the deletes run under the assignment lock, the lock payments
+            // are recorded under: a payment landing between them was answered as recorded and then
+            // erased with the ticket (the foreign key cascades; without one it pointed at nothing).
+            const outcome = await withAssignmentLock(async () => {
+                const bus = id ? await db.get(`SELECT id FROM ${T.buses} WHERE id = ?`, [id]) : null;
+                if (!bus) return { status: 404, body: { error: 'Bus no encontrado.' } };
+                const paid = await db.get(`SELECT COUNT(*) AS n FROM ${T.transportPayments} WHERE ticket_id IN (SELECT id FROM ${T.tickets} WHERE bus_id = ? )`, [id]);
+                if (Number(paid && paid.n) > 0) return { status: 409, body: { error: 'El bus tiene pasajes con pagos registrados; elimina esos pagos antes de borrar el bus.' } };
+                const released = await db.run(`DELETE FROM ${T.tickets} WHERE bus_id = ?`, [id]);
+                await db.run(`DELETE FROM ${T.buses} WHERE id = ?`, [id]);
+                return { released: (released && released.changes) || 0 };
+            });
+            if (outcome.status) return res.status(outcome.status).json(outcome.body);
+            res.json({ success: true, released: outcome.released });
         } catch (e) { sendError(res, e); }
     });
 
@@ -2649,11 +2676,16 @@ exports.init = async function (wordjs) {
         if (!await allow(req, res, 'transport', 'manage')) return;
         try {
             const id = positiveInt(req.params.id), iid = positiveInt(req.params.inscriptionId);
-            const ticket = id && iid ? await db.get(`SELECT id FROM ${T.tickets} WHERE bus_id = ? AND inscription_id = ?`, [id, iid]) : null;
-            if (!ticket) return res.status(404).json({ error: 'Pasaje no encontrado.' });
-            const paid = await db.get(`SELECT COUNT(*) AS n FROM ${T.transportPayments} WHERE ticket_id = ?`, [ticket.id]);
-            if (Number(paid && paid.n) > 0) return res.status(409).json({ error: 'El pasaje tiene pagos registrados; elimínalos antes de quitar al pasajero.' });
-            await db.run(`DELETE FROM ${T.tickets} WHERE id = ?`, [ticket.id]);
+            // Same as the bus delete: the no-payments check and the delete under the payments' lock.
+            const outcome = await withAssignmentLock(async () => {
+                const ticket = id && iid ? await db.get(`SELECT id FROM ${T.tickets} WHERE bus_id = ? AND inscription_id = ?`, [id, iid]) : null;
+                if (!ticket) return { status: 404, body: { error: 'Pasaje no encontrado.' } };
+                const paid = await db.get(`SELECT COUNT(*) AS n FROM ${T.transportPayments} WHERE ticket_id = ?`, [ticket.id]);
+                if (Number(paid && paid.n) > 0) return { status: 409, body: { error: 'El pasaje tiene pagos registrados; elimínalos antes de quitar al pasajero.' } };
+                await db.run(`DELETE FROM ${T.tickets} WHERE id = ?`, [ticket.id]);
+                return {};
+            });
+            if (outcome.status) return res.status(outcome.status).json(outcome.body);
             res.json({ success: true });
         } catch (e) { sendError(res, e); }
     });
@@ -3634,60 +3666,70 @@ exports.init = async function (wordjs) {
         if (!await allow(req, res, 'inscriptions', 'manage')) return;
         const { conference_id, ...fieldValues } = req.body || {};
         try {
-            const existing = await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ?`, [req.params.id]);
-            if (!existing) return res.status(404).json({ error: 'Inscripción no encontrada.' });
-            const id = existing.id;
+            // Read, decide and write under the assignment lock, like every other write that moves a bed
+            // or freezes a location (manual and portal placement, the engine run, the lodging submit and
+            // review): the lodging checks below read the row and its room, and an edit decided outside
+            // the lock let a placement land between its read and its write — a cancelled attendee then
+            // kept the bed it had just been given — and a move out of a location could pass the frozen
+            // check while the location's arrangement was being submitted.
+            const existing = await withAssignmentLock(async () => {
+                const existing = await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ?`, [req.params.id]);
+                if (!existing) throw httpError(404, 'Inscripción no encontrada.');
+                const id = existing.id;
 
-            // Write each DEFINED field's canonical value to its column (schema follows the form) + the
-            // operational edits the admin is allowed to change directly (status, notes, location_id).
-            const confFields = await db.all(FIELD_COLUMNS_SQL, [existing.conference_id]);
-            const vals = canonicalFieldValues(confFields, fieldValues);
-            assertRequired(confFields, vals, true);
-            await assertUnique(confFields, vals, { conference_id: existing.conference_id }, id);
+                // Write each DEFINED field's canonical value to its column (schema follows the form) + the
+                // operational edits the admin is allowed to change directly (status, notes, location_id).
+                const confFields = await db.all(FIELD_COLUMNS_SQL, [existing.conference_id]);
+                const vals = canonicalFieldValues(confFields, fieldValues);
+                assertRequired(confFields, vals, true);
+                await assertUnique(confFields, vals, { conference_id: existing.conference_id }, id);
 
-            const sets = [], params = [];
-            for (const [k, v] of Object.entries(vals)) { sets.push(`${k} = ?`); params.push(v); }
-            let newStatus = existing.status;
-            if (fieldValues.status !== undefined) {
-                // Closed vocabulary — the same rule the conference `status` already follows. 'pending' is the
-                // insert default, 'active' is what the admin's toggle writes; anything else is a typo or a probe.
-                const st = fieldValues.status == null ? null : String(fieldValues.status);
-                if (st !== null && !INSCRIPTION_STATUSES.has(st)) return res.status(400).json({ error: 'Estado de inscripción inválido.' });
-                sets.push('status = ?'); params.push(st);
-                newStatus = st;
-            }
-            if (fieldValues.notes !== undefined) { sets.push('notes = ?'); params.push(fieldValues.notes == null ? null : String(fieldValues.notes)); }
-            const loc = await resolveAdminLocation(existing.conference_id, { location_id: fieldValues.location_id });
-            if (loc === null) { sets.push('location_id = ?', 'location = ?'); params.push(null, null); }
-            else if (loc) { sets.push('location_id = ?', 'location = ?'); params.push(loc.id, loc.name); }
-            // Lodging: moving an attendee out of a frozen location is refused (the arrangement is under
-            // review); a move out of an ALLOTTED room frees the bed (invariant 1) unless the room is
-            // allotted to the DESTINATION location (the placement stays valid), and a cancellation
-            // always frees the bed (invariant 2) — even in a frozen location.
-            const currentLocationId = existing.location_id == null ? null : Number(existing.location_id);
-            const locationChanges = loc !== undefined && (loc ? Number(loc.id) : null) !== currentLocationId;
-            let freeBed = false;
-            if (locationChanges) {
-                if (currentLocationId != null) await assertLocationNotFrozen(currentLocationId, 'mover a sus participantes');
-                if (existing.room_id != null) {
-                    const curRoom = await db.get(`SELECT location_id FROM ${T.rooms} WHERE id = ?`, [existing.room_id]);
-                    if (curRoom && curRoom.location_id != null && Number(curRoom.location_id) !== (loc ? Number(loc.id) : NaN)) freeBed = true;
+                const sets = [], params = [];
+                for (const [k, v] of Object.entries(vals)) { sets.push(`${k} = ?`); params.push(v); }
+                let newStatus = existing.status;
+                if (fieldValues.status !== undefined) {
+                    // Closed vocabulary — the same rule the conference `status` already follows. 'pending' is the
+                    // insert default, 'active' is what the admin's toggle writes; anything else is a typo or a probe.
+                    const st = fieldValues.status == null ? null : String(fieldValues.status);
+                    if (st !== null && !INSCRIPTION_STATUSES.has(st)) throw httpError(400, 'Estado de inscripción inválido.');
+                    sets.push('status = ?'); params.push(st);
+                    newStatus = st;
                 }
-            }
-            if (newStatus === 'cancelled' && existing.room_id != null) freeBed = true;
-            if (freeBed) { sets.push('room_id = ?'); params.push(null); }
-            // Capacity: the edit takes a seat when the attendee ends up counted in a location where they were
-            // not counted before — moved in from elsewhere (or from no location), or un-cancelled in place.
-            // Staying put, cancelling, or leaving a location never needs a free seat.
-            const target = loc !== undefined ? loc
-                : (existing.location_id != null ? await db.get(`SELECT id, name, capacity FROM ${T.locations} WHERE id = ?`, [existing.location_id]) : null);
-            const willCount = !!target && newStatus !== 'cancelled';
-            const wasCountedThere = !!target && existing.location_id === target.id && existing.status !== 'cancelled';
-            if (willCount && !wasCountedThere) await assertLocationHasRoom(target);
-            if (sets.length) {
-                params.push(id);
-                await db.run(`UPDATE ${T.inscriptions} SET ${sets.join(', ')} WHERE id = ?`, params);
-            }
+                if (fieldValues.notes !== undefined) { sets.push('notes = ?'); params.push(fieldValues.notes == null ? null : String(fieldValues.notes)); }
+                const loc = await resolveAdminLocation(existing.conference_id, { location_id: fieldValues.location_id });
+                if (loc === null) { sets.push('location_id = ?', 'location = ?'); params.push(null, null); }
+                else if (loc) { sets.push('location_id = ?', 'location = ?'); params.push(loc.id, loc.name); }
+                // Lodging: moving an attendee out of a frozen location is refused (the arrangement is under
+                // review); a move out of an ALLOTTED room frees the bed (invariant 1) unless the room is
+                // allotted to the DESTINATION location (the placement stays valid), and a cancellation
+                // always frees the bed (invariant 2) — even in a frozen location.
+                const currentLocationId = existing.location_id == null ? null : Number(existing.location_id);
+                const locationChanges = loc !== undefined && (loc ? Number(loc.id) : null) !== currentLocationId;
+                let freeBed = false;
+                if (locationChanges) {
+                    if (currentLocationId != null) await assertLocationNotFrozen(currentLocationId, 'mover a sus participantes');
+                    if (existing.room_id != null) {
+                        const curRoom = await db.get(`SELECT location_id FROM ${T.rooms} WHERE id = ?`, [existing.room_id]);
+                        if (curRoom && curRoom.location_id != null && Number(curRoom.location_id) !== (loc ? Number(loc.id) : NaN)) freeBed = true;
+                    }
+                }
+                if (newStatus === 'cancelled' && existing.room_id != null) freeBed = true;
+                if (freeBed) { sets.push('room_id = ?'); params.push(null); }
+                // Capacity: the edit takes a seat when the attendee ends up counted in a location where they were
+                // not counted before — moved in from elsewhere (or from no location), or un-cancelled in place.
+                // Staying put, cancelling, or leaving a location never needs a free seat.
+                const target = loc !== undefined ? loc
+                    : (existing.location_id != null ? await db.get(`SELECT id, name, capacity FROM ${T.locations} WHERE id = ?`, [existing.location_id]) : null);
+                const willCount = !!target && newStatus !== 'cancelled';
+                const wasCountedThere = !!target && existing.location_id === target.id && existing.status !== 'cancelled';
+                if (willCount && !wasCountedThere) await assertLocationHasRoom(target);
+                if (sets.length) {
+                    params.push(id);
+                    await db.run(`UPDATE ${T.inscriptions} SET ${sets.join(', ')} WHERE id = ?`, params);
+                }
+                return existing;
+            });
+            const id = existing.id;
             // Re-price ONLY if the edit changed the outcome of the CURRENT rules (before vs after the
             // update, same rules, same base fee) — so a rule added since registration cannot leak onto
             // one attendee through a notes-only edit (see the route comment). Then keep payment_status
@@ -3711,13 +3753,21 @@ exports.init = async function (wordjs) {
             // Deleting the attendee deletes its money too (fee payments cascade, transport payments below).
             // That is a payments / transport decision: a role that may only manage inscriptions must not
             // erase validated income through this door (DELETE /payments/:id and DELETE /buses/:id refuse it).
-            const fee = await db.get(`SELECT COUNT(*) AS n FROM ${T.payments} WHERE inscription_id = ?`, [req.params.id]);
-            const rides = await db.get(`SELECT COUNT(*) AS n FROM ${T.transportPayments} WHERE ticket_id IN (SELECT id FROM ${T.tickets} WHERE inscription_id = ? )`, [req.params.id]);
-            if ((Number(fee && fee.n) > 0 && !hasLevel(perms, 'payments', 'manage')) || (Number(rides && rides.n) > 0 && !hasLevel(perms, 'transport', 'manage'))) {
+            // The transport side runs under the assignment lock, the lock transport payments are recorded
+            // under: a payment landing between the check and the deletes (or between the two deletes) was
+            // either erased by a role that may not erase it, or answered as recorded and then erased
+            // with its ticket.
+            const refused = await withAssignmentLock(async () => {
+                const fee = await db.get(`SELECT COUNT(*) AS n FROM ${T.payments} WHERE inscription_id = ?`, [req.params.id]);
+                const rides = await db.get(`SELECT COUNT(*) AS n FROM ${T.transportPayments} WHERE ticket_id IN (SELECT id FROM ${T.tickets} WHERE inscription_id = ? )`, [req.params.id]);
+                if ((Number(fee && fee.n) > 0 && !hasLevel(perms, 'payments', 'manage')) || (Number(rides && rides.n) > 0 && !hasLevel(perms, 'transport', 'manage'))) return true;
+                await db.run(`DELETE FROM ${T.transportPayments} WHERE ticket_id IN (SELECT id FROM ${T.tickets} WHERE inscription_id = ? )`, [req.params.id]);
+                await db.run(`DELETE FROM ${T.tickets} WHERE inscription_id = ?`, [req.params.id]);
+                return false;
+            });
+            if (refused) {
                 return res.status(409).json({ error: 'La inscripción tiene pagos registrados: pide a quien gestiona los pagos que los anule, o cancela la inscripción en lugar de eliminarla.' });
             }
-            await db.run(`DELETE FROM ${T.transportPayments} WHERE ticket_id IN (SELECT id FROM ${T.tickets} WHERE inscription_id = ? )`, [req.params.id]);
-            await db.run(`DELETE FROM ${T.tickets} WHERE inscription_id = ?`, [req.params.id]);
             // Meals (2.14.0): the attendee first, then its meal rows (the FKs cascade; the explicit deletes
             // keep it so with foreign keys off). Under the meals lock an override write cannot slip in for
             // a deleted attendee, and a scan racing this re-checks the attendee after its INSERT.
@@ -3739,16 +3789,18 @@ exports.init = async function (wordjs) {
         const { room_id: rawRoomId } = req.body || {};
         try {
             const id = positiveInt(req.params.id);
-            const ins = id ? await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ?`, [id]) : null;
-            if (!ins) return res.status(404).json({ error: 'Inscripción no encontrada.' });
+            if (!id || !await db.get(`SELECT id FROM ${T.inscriptions} WHERE id = ?`, [id])) return res.status(404).json({ error: 'Inscripción no encontrada.' });
             const unassign = rawRoomId === null || rawRoomId === undefined || rawRoomId === '';
             const roomId = unassign ? null : positiveInt(rawRoomId);
             if (!unassign && !roomId) return res.status(400).json({ error: 'Habitación inválida.' });
             // Check-then-write under the assignment lock: two concurrent assigns into the last bed (or an
             // assign racing an engine run's load→flush window) would otherwise overbook the room. The
-            // UPDATE is conditional on the capacity as well, so a lost race answers "llena" instead of
-            // writing.
+            // attendee is read INSIDE the lock, where an edit (PUT /inscriptions) cannot cancel or move
+            // them between the read and the write: read before the lock, a cancellation landing in
+            // between left the cancelled attendee holding the bed.
             await withAssignmentLock(async () => {
+                const ins = await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ?`, [id]);
+                if (!ins) throw httpError(404, 'Inscripción no encontrada.');
                 if (ins.location_id != null) await assertLocationNotFrozen(ins.location_id, 'cambiar su hospedaje');
                 if (unassign) {
                     await db.run(`UPDATE ${T.inscriptions} SET room_id = NULL WHERE id = ?`, [id]);
@@ -4672,7 +4724,11 @@ exports.init = async function (wordjs) {
         // lodging columns stay out too: GET /portal/lodging is the only source of the note/stamps and it
         // hides the note once the arrangement is submitted — this twin surface must not leak it.
         const { code, lodging_reviewed_by, lodging_note, lodging_submitted_at, lodging_reviewed_at, lodging_status, lodging_permission, lodging_permission_until, ...safe } = location;
-        res.json({ ...safe, inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location), ...(await portalLodgingSummary(location)) });
+        // Inside a catch: the handler answers every failure itself (sendError: a generic reply, the
+        // details in the server log).
+        try {
+            res.json({ ...safe, inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location), ...(await portalLodgingSummary(location)) });
+        } catch (e) { sendError(res, e); }
     });
 
     // 4b. Logout — clear the namespaced session cookie so a refresh on a shared device does not

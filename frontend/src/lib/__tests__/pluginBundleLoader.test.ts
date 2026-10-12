@@ -1,4 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+
+// next/dynamic renders nothing outside a browser, and createRemotePluginComponent — the call the generated
+// /admin/plugin/<slug> page makes — hands its loader straight to it. Return that LOADER as the "component",
+// so a test can await exactly what next/dynamic would and render the module it resolves to. Nothing else in
+// the loader imports next/dynamic.
+vi.mock("next/dynamic", () => ({ default: (loader: unknown) => loader }));
 
 /**
  * Regression cover for the runtime plugin loader's FAILURE semantics.
@@ -15,6 +23,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const ACTIVE_URL = '/api/v1/plugins/active';
 const REGISTRY_URL = '/api/v1/plugins/registry';
+const MENUS_URL = '/api/v1/plugins/menus';
 
 // Import fresh per test: activePromise/hooksRegistration/blockConfigCache are module-level session
 // caches, and the caching behaviour is exactly what is under test.
@@ -305,12 +314,20 @@ describe("hooks-bundle 404 — warn only when the bundle SHOULD have been there"
         expect(fetchMock.mock.calls.filter(([u]) => u === REGISTRY_URL)).toHaveLength(1);
     });
 
-    it("does NOT fetch the registry when nothing 404s (no cost on the happy path)", async () => {
-        fetchMock.mockImplementation(async (url: string) =>
-            url === ACTIVE_URL ? jsonResponse(['a-plugin']) : jsonResponse({}, 503));
+    // The registry used to be read only to classify a 404 ("no cost on the happy path"). It now decides
+    // which plugins are asked for a hooks bundle at all (see the suite below), so it is read once per
+    // pass — and only once, however many plugins are asked or fail.
+    it("reads the registry ONCE per pass, however many plugins are asked", async () => {
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === ACTIVE_URL) return jsonResponse(['a-plugin', 'b-plugin']);
+            if (url === REGISTRY_URL) return registryResponse([
+                registryEntry('a-plugin', { hooks: true }), registryEntry('b-plugin', { hooks: true }),
+            ]);
+            return jsonResponse({}, 503);
+        });
         const { loadRuntimePluginHooks } = await freshLoader();
-        await expect(loadRuntimePluginHooks()).rejects.toThrow(/failed to load/);
-        expect(fetchMock.mock.calls.some(([u]) => u === REGISTRY_URL)).toBe(false);
+        await expect(loadRuntimePluginHooks()).rejects.toThrow(/2 plugin hooks bundle\(s\) failed/);
+        expect(fetchMock.mock.calls.filter(([u]) => u === REGISTRY_URL)).toHaveLength(1);
     });
 
     it("stays silent (and does not cache) when the registry itself is unreachable", async () => {
@@ -475,6 +492,337 @@ describe("registry classification is bounded — a hanging /plugins/registry can
         } finally {
             vi.useRealTimers();
         }
+    });
+});
+
+/**
+ * ASK ONLY THE PLUGINS THAT HAVE HOOKS. Every admin screen runs this pass, and it used to request
+ * `?type=hooks` from EVERY active plugin — one of the 31 catalog plugins declares hooks, so a typical site
+ * paid a silent 404 per plugin on every admin navigation. The registry (one entry per active plugin,
+ * fetched once per pass) says which ones declare `frontend.hooks`; only those are asked — plus every
+ * plugin it cannot vouch for, so a registry problem never costs a plugin its hooks.
+ */
+describe("hooks bundles are requested only for plugins whose registry entry declares hooks", () => {
+    const hooksRequests = (): string[] =>
+        fetchMock.mock.calls.map(([u]) => String(u)).filter((u) => u.includes('type=hooks')).sort();
+
+    it("asks only the plugins that declare hooks, or that the registry cannot vouch for", async () => {
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === ACTIVE_URL) return jsonResponse(['faq', 'backend-only', 'mail-server', 'ghost', 'newcomer']);
+            if (url === REGISTRY_URL) return registryResponse([
+                registryEntry('faq', {}),                     // a frontend, no hooks → not asked
+                registryEntry('backend-only', undefined),     // no frontend section → not asked
+                registryEntry('mail-server', { hooks: true }),
+                registryEntry('ghost', null),                 // manifest unreadable: unknown → asked
+                // 'newcomer' is not listed (a registry older than the active list) → asked
+            ]);
+            return jsonResponse({}, 404);
+        });
+        const { loadRuntimePluginHooks } = await freshLoader();
+
+        await expect(loadRuntimePluginHooks()).resolves.toBeUndefined();
+
+        expect(hooksRequests()).toEqual([
+            '/api/v1/plugins/ghost/bundle?type=hooks',
+            '/api/v1/plugins/mail-server/bundle?type=hooks',
+            '/api/v1/plugins/newcomer/bundle?type=hooks',
+        ]);
+    });
+
+    it("still asks a plugin that declares hooks without the browser:script grant (the 404 then explains it)", async () => {
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === ACTIVE_URL) return jsonResponse(['mail-server']);
+            if (url === REGISTRY_URL) return registryResponse([registryEntry('mail-server', { hooks: true }, false)]);
+            return jsonResponse({}, 404);
+        });
+        const { loadRuntimePluginHooks } = await freshLoader();
+        await loadRuntimePluginHooks();
+        expect(hooksRequests()).toEqual(['/api/v1/plugins/mail-server/bundle?type=hooks']);
+        expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('"browser:script" permission is not granted'));
+    });
+
+    it("asks every active plugin when the registry cannot be read", async () => {
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === ACTIVE_URL) return jsonResponse(['faq', 'mail-server']);
+            if (url === REGISTRY_URL) return jsonResponse({}, 502);
+            return jsonResponse({}, 404);
+        });
+        const { loadRuntimePluginHooks } = await freshLoader();
+        await expect(loadRuntimePluginHooks()).resolves.toBeUndefined();
+        expect(hooksRequests()).toEqual([
+            '/api/v1/plugins/faq/bundle?type=hooks',
+            '/api/v1/plugins/mail-server/bundle?type=hooks',
+        ]);
+    });
+
+    it("re-reads the registry with the active list: a plugin updated to ship hooks is asked after the reload", async () => {
+        let declaresHooks = false;
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === ACTIVE_URL) return jsonResponse(['faq']);
+            if (url === REGISTRY_URL) return registryResponse([registryEntry('faq', declaresHooks ? { hooks: true } : {})]);
+            return jsonResponse({}, 404);
+        });
+        const { loadRuntimePluginHooks, invalidateActivePluginIds } = await freshLoader();
+
+        await loadRuntimePluginHooks();
+        expect(hooksRequests()).toEqual([]);
+
+        declaresHooks = true;               // the update landed; reloadActivePlugins() invalidates and re-runs
+        invalidateActivePluginIds();
+        await loadRuntimePluginHooks();
+        expect(hooksRequests()).toEqual(['/api/v1/plugins/faq/bundle?type=hooks']);
+        expect(fetchMock.mock.calls.filter(([u]) => u === REGISTRY_URL)).toHaveLength(2);
+    });
+});
+
+/**
+ * THE BLANK ADMIN PAGE. With a plugin ACTIVE but `browser:script` NOT granted, the host refuses its
+ * admin bundle (404), and /admin/plugin/<slug> rendered a completely empty page: loadPluginBundle
+ * RESOLVED an empty `() => null` component on any non-OK response, so the fallback of
+ * createRemotePluginComponent — and the generated page's "Plugin Not Found" passed into it — could never
+ * render. Now the load REJECTS with the cause; a refusal by the browser:script gate renders a notice that
+ * names the switch and links to that plugin's permissions, and every other failure renders the caller's
+ * fallback. Never nothing.
+ */
+describe("a refused plugin admin page explains itself instead of rendering nothing", () => {
+    const BUNDLE = (slug: string) => `/api/v1/plugins/${slug}/bundle?type=admin`;
+    /** Visible text of rendered markup, entities decoded the two ways React emits them here. */
+    const textOf = (html: string) => html.replace(/<[^>]+>/g, '').replace(/&#x27;/g, "'").replace(/&amp;/g, '&');
+    const Fallback = () => React.createElement('h1', null, 'Plugin Not Found');
+
+    it("REJECTS with reason 'not-granted' when the registry says browser:script is off (was: an empty component)", async () => {
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === REGISTRY_URL) return registryResponse([registryEntry('conference-manager', {}, false)]);
+            return jsonResponse({ error: 'Bundle not found' }, 404);
+        });
+        const { loadPluginBundle, PluginBundleError } = await freshLoader();
+
+        const err = await loadPluginBundle('conference-manager').then(() => null, (e: unknown) => e);
+
+        expect(err).toBeInstanceOf(PluginBundleError);
+        expect(err).toMatchObject({ reason: 'not-granted', pluginId: 'conference-manager', status: 404 });
+        expect(fetchMock.mock.calls.map(([u]) => u)).toContain(BUNDLE('conference-manager'));
+    });
+
+    it("resolves an ADMIN-PAGE slug to its plugin through the admin menu (the registry lists folders)", async () => {
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === REGISTRY_URL) return registryResponse([registryEntry('mail-server', { hooks: true }, false)]);
+            if (url === MENUS_URL) return jsonResponse([
+                { href: '/admin', label: 'Dashboard', plugin: 'core' },
+                { href: '/admin/plugin/emails', label: 'Emails', plugin: 'mail-server' },
+            ]);
+            return jsonResponse({ error: 'Bundle not found' }, 404);
+        });
+        const { loadPluginBundle } = await freshLoader();
+        await expect(loadPluginBundle('emails')).rejects.toMatchObject({ reason: 'not-granted', pluginId: 'mail-server' });
+    });
+
+    it("does not guess when two plugins claim the same admin page (a menu href is plugin-controlled)", async () => {
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === REGISTRY_URL) return registryResponse([registryEntry('mail-server', {}, false), registryEntry('impostor', {}, true)]);
+            if (url === MENUS_URL) return jsonResponse([
+                { href: '/admin/plugin/emails', plugin: 'mail-server' },
+                { href: '/admin/plugin/emails?tab=x', plugin: 'impostor' },
+            ]);
+            return jsonResponse({}, 404);
+        });
+        const { loadPluginBundle } = await freshLoader();
+        await expect(loadPluginBundle('emails')).rejects.toMatchObject({ reason: 'not-found', pluginId: null });
+    });
+
+    it("a 404 for a plugin that IS granted, or that no active plugin answers to, is 'not-found'", async () => {
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === REGISTRY_URL) return registryResponse([registryEntry('faq', {}, true)]);
+            if (url === MENUS_URL) return jsonResponse([]);
+            return jsonResponse({}, 404);
+        });
+        const { loadPluginBundle } = await freshLoader();
+        await expect(loadPluginBundle('faq')).rejects.toMatchObject({ reason: 'not-found' });
+        await expect(loadPluginBundle('never-installed')).rejects.toMatchObject({ reason: 'not-found', pluginId: null });
+    });
+
+    it("a 5xx or a network failure is 'failed' — and is not cached, so the next mount asks again", async () => {
+        fetchMock.mockResolvedValueOnce(jsonResponse({}, 503));
+        fetchMock.mockRejectedValueOnce(new Error('Failed to fetch'));
+        const { loadPluginBundle } = await freshLoader();
+        await expect(loadPluginBundle('faq')).rejects.toMatchObject({ reason: 'failed', status: 503 });
+        await expect(loadPluginBundle('faq')).rejects.toMatchObject({ reason: 'failed', status: null });
+        expect(fetchMock.mock.calls.filter(([u]) => u === BUNDLE('faq'))).toHaveLength(2);
+        // A 5xx is not a refusal: nothing to classify.
+        expect(fetchMock.mock.calls.some(([u]) => u === REGISTRY_URL)).toBe(false);
+    });
+
+    it("classifies from a FRESH registry: a grant revoked after the session's memo is still explained", async () => {
+        let granted = true;
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === ACTIVE_URL) return jsonResponse(['conference-manager']);
+            if (url === REGISTRY_URL) return registryResponse([registryEntry('conference-manager', {}, granted)]);
+            return jsonResponse({}, 404);
+        });
+        const { loadRuntimePluginHooks, loadPluginBundle } = await freshLoader();
+        await loadRuntimePluginHooks();     // the admin layout memoizes the registry (granted)
+        granted = false;                    // the administrator revokes browser:script in another tab
+        await expect(loadPluginBundle('conference-manager')).rejects.toMatchObject({ reason: 'not-granted' });
+        expect(fetchMock.mock.calls.filter(([u]) => u === REGISTRY_URL)).toHaveLength(2);
+    });
+
+    it("renders the browser:script notice, with a link to that plugin's permissions", async () => {
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === REGISTRY_URL) return registryResponse([registryEntry('mail-server', {}, false)]);
+            if (url === MENUS_URL) return jsonResponse([{ href: '/admin/plugin/emails', plugin: 'mail-server' }]);
+            return jsonResponse({}, 404);
+        });
+        const { loadRemotePluginModule } = await freshLoader();
+
+        const mod = await loadRemotePluginModule('emails', 'admin', Fallback);
+        const html = renderToStaticMarkup(React.createElement(mod.default));
+
+        expect(textOf(html)).toContain(
+            "This plugin's interface is not served until you grant 'Run code in your browser' (browser:script) in Admin → Plugins → Permissions");
+        expect(html).toContain('href="/admin/plugins?permissions=mail-server"');
+        expect(textOf(html)).not.toContain('Plugin Not Found');
+    });
+
+    it("renders the caller's fallback for every other failure — never an empty page", async () => {
+        const { loadRemotePluginModule } = await freshLoader();
+        for (const answer of [jsonResponse({}, 404), jsonResponse({}, 502)]) {
+            fetchMock.mockImplementation(async (url: string) => {
+                if (url === REGISTRY_URL) return registryResponse([]);
+                if (url === MENUS_URL) return jsonResponse([]);
+                return answer;
+            });
+            const mod = await loadRemotePluginModule('acme', 'admin', Fallback);
+            expect(renderToStaticMarkup(React.createElement(mod.default))).toBe('<h1>Plugin Not Found</h1>');
+        }
+    });
+
+    it("loads the page on the next mount once the grant is given (the refusal was not cached)", async () => {
+        installImportableBundleShim();
+        let granted = false;
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === REGISTRY_URL) return registryResponse([registryEntry('conference-manager', {}, granted)]);
+            if (url === BUNDLE('conference-manager')) {
+                return granted
+                    ? textResponse('export default function ConferencePage() { return "conference admin"; }\n')
+                    : jsonResponse({}, 404);
+            }
+            return jsonResponse({}, 404);
+        });
+        const { loadRemotePluginModule } = await freshLoader();
+
+        const refused = await loadRemotePluginModule('conference-manager', 'admin', Fallback);
+        expect(textOf(renderToStaticMarkup(React.createElement(refused.default)))).toContain('browser:script');
+
+        granted = true;
+        const page = await loadRemotePluginModule('conference-manager', 'admin', Fallback);
+        expect(renderToStaticMarkup(React.createElement(page.default))).toBe('conference admin');
+    });
+});
+
+/**
+ * The same refusal, reached the way the generated admin page reaches it: createRemotePluginComponent(slug,
+ * 'admin', <Plugin Not Found>). The suite above drives loadRemotePluginModule directly, which proves the
+ * choice but not that the page's entry point makes it — a createRemotePluginComponent whose loader called
+ * loadPluginBundle and mapped every rejection to the fallback would leave the not-granted notice
+ * unreachable from the page while those cases stayed green.
+ */
+describe("createRemotePluginComponent — what /admin/plugin/<slug> renders when its bundle is refused", () => {
+    const textOf = (html: string) => html.replace(/<[^>]+>/g, '').replace(/&#x27;/g, "'").replace(/&amp;/g, '&');
+    const Fallback = () => React.createElement('h1', null, 'Plugin Not Found');
+    /** Await the loader next/dynamic would, then render the module's component as the page would. */
+    async function renderPage(slug: string): Promise<string> {
+        const { createRemotePluginComponent } = await freshLoader();
+        const loader = createRemotePluginComponent(slug, 'admin', Fallback) as unknown as () => Promise<{ default: React.ComponentType }>;
+        const mod = await loader();
+        return renderToStaticMarkup(React.createElement(mod.default));
+    }
+
+    it("a not-granted 404 renders the browser:script notice linking to the plugin's permissions (by FOLDER id)", async () => {
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === REGISTRY_URL) return registryResponse([registryEntry('mail-server', {}, false)]);
+            if (url === MENUS_URL) return jsonResponse([{ href: '/admin/plugin/emails', plugin: 'mail-server' }]);
+            return jsonResponse({ error: 'Bundle not found' }, 404);
+        });
+        const html = await renderPage('emails');
+        expect(html).toContain('href="/admin/plugins?permissions=mail-server"');
+        expect(textOf(html)).toContain("not served until you grant 'Run code in your browser' (browser:script)");
+        expect(textOf(html)).not.toContain('Plugin Not Found');
+        expect(fetchMock.mock.calls.map(([u]) => u)).toContain('/api/v1/plugins/emails/bundle?type=admin');
+    });
+
+    it("an unknown plugin (404 nobody answers for) renders the page's fallback, not the notice", async () => {
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === REGISTRY_URL) return registryResponse([registryEntry('faq', {}, true)]);
+            if (url === MENUS_URL) return jsonResponse([]);
+            return jsonResponse({}, 404);
+        });
+        expect(await renderPage('never-installed')).toBe('<h1>Plugin Not Found</h1>');
+    });
+
+    it("a 502 renders the page's fallback, not the notice (and asks no registry: it is not a refusal)", async () => {
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === REGISTRY_URL) return registryResponse([registryEntry('mail-server', {}, false)]);
+            return jsonResponse({}, 502);
+        });
+        expect(await renderPage('mail-server')).toBe('<h1>Plugin Not Found</h1>');
+        expect(fetchMock.mock.calls.some(([u]) => u === REGISTRY_URL)).toBe(false);
+    });
+});
+
+/**
+ * GET /plugins/registry reports a plugin's browser:script grant (`browser`) only to a signed-in caller with
+ * admin-panel access; everyone else gets the entries without it (backend/src/routes/plugins.ts). So the
+ * loader must ask WITH the session — the admin shell's notice and warning are built from that flag — and
+ * must never read a missing flag as "not granted" (or, for hooks, as "never built").
+ */
+describe("the registry's browser:script grant: asked with the session, never assumed when absent", () => {
+    const Fallback = () => React.createElement('h1', null, 'Plugin Not Found');
+    /** An entry as the registry answers a caller without admin-panel access: no `browser`. */
+    const withoutGrant = (id: string, frontend: unknown) => ({ id, path: `/plugins/${id}`, frontend });
+
+    it("asks the registry with the session — on a refused admin page and in the hooks pass", async () => {
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === ACTIVE_URL) return jsonResponse(['conference-manager']);
+            if (url === REGISTRY_URL) return registryResponse([registryEntry('conference-manager', { hooks: true }, false)]);
+            return jsonResponse({}, 404);
+        });
+        const { loadRuntimePluginHooks, loadPluginBundle } = await freshLoader();
+        await loadRuntimePluginHooks();
+        await expect(loadPluginBundle('conference-manager')).rejects.toMatchObject({ reason: 'not-granted' });
+        const registryCalls = fetchMock.mock.calls.filter(([u]) => u === REGISTRY_URL);
+        expect(registryCalls).toHaveLength(2);
+        for (const [, init] of registryCalls) expect(init).toMatchObject({ credentials: 'same-origin' });
+    });
+
+    it("an entry that does not report the grant is never 'not granted': the page renders its fallback", async () => {
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === REGISTRY_URL) return registryResponse([withoutGrant('conference-manager', {})]);
+            if (url === MENUS_URL) return jsonResponse([]);
+            return jsonResponse({}, 404);
+        });
+        const { loadPluginBundle, loadRemotePluginModule } = await freshLoader();
+        await expect(loadPluginBundle('conference-manager')).rejects.toMatchObject({ reason: 'not-found', pluginId: 'conference-manager' });
+        const mod = await loadRemotePluginModule('conference-manager', 'admin', Fallback);
+        expect(renderToStaticMarkup(React.createElement(mod.default))).toBe('<h1>Plugin Not Found</h1>');
+    });
+
+    it("a hooks 404 the registry cannot explain without the grant is not called 'never built' — a later pass explains it", async () => {
+        let entry: unknown = withoutGrant('mail-server', { hooks: true });
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === ACTIVE_URL) return jsonResponse(['mail-server']);
+            if (url === REGISTRY_URL) return registryResponse([entry]);
+            return jsonResponse({}, 404);
+        });
+        const { loadRuntimePluginHooks, invalidateActivePluginIds } = await freshLoader();
+        await expect(loadRuntimePluginHooks()).resolves.toBeUndefined();
+        expect(console.warn).not.toHaveBeenCalled();
+
+        // The next pass asks with a session that gets the grant: the same 404 is explained for real.
+        entry = registryEntry('mail-server', { hooks: true }, false);
+        invalidateActivePluginIds();
+        await expect(loadRuntimePluginHooks()).resolves.toBeUndefined();
+        expect(console.warn).toHaveBeenCalledTimes(1);
+        expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('"browser:script" permission is not granted'));
     });
 });
 

@@ -17,7 +17,9 @@
  *  - Secrets: the Stripe secret key lives in the plugin's OWN wjp_ settings table, write-only from
  *    the admin (absent = keep, '' = clear, value = replace) and is NEVER echoed back.
  *  - Anti-spam on the public form: honeypot field, minimum fill time, and in-memory rolling-window
- *    rate caps (global + per email; there is no req.ip in the sandbox).
+ *    rate caps per client (req.clientKey, an HMAC of the caller's IP forwarded by the host) and per
+ *    email. They used to be site-wide windows, so one client could close donations (and the Stripe
+ *    return leg) for every donor.
  */
 
 exports.metadata = {
@@ -43,12 +45,13 @@ const MAX_AMOUNT_CENTS = 100000000;
 
 // Anti-spam knobs for the public form
 const MIN_ELAPSED_MS = 1800;                 // faster than this = bot
-const DONATE_GLOBAL_MAX = 15;                // donations per rolling minute, instance-wide
-const DONATE_GLOBAL_WINDOW_MS = 60 * 1000;
+const DONATE_CLIENT_MAX = 10;                // donations per client (req.clientKey) per rolling minute
+const DONATE_CLIENT_WINDOW_MS = 60 * 1000;
 const EMAIL_MAX = 5;                         // donations per email per rolling window
 const EMAIL_WINDOW_MS = 10 * 60 * 1000;
-const CONFIRM_GLOBAL_MAX = 60;               // confirm-stripe calls per rolling minute (each hits Stripe)
-const CONFIRM_GLOBAL_WINDOW_MS = 60 * 1000;
+const CONFIRM_CLIENT_MAX = 20;               // confirm-stripe calls per client per rolling minute (each hits Stripe)
+const CONFIRM_CLIENT_WINDOW_MS = 60 * 1000;
+const LIMITER_MAX_KEYS = 10000;              // bound on each in-memory limiter map
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -199,25 +202,34 @@ exports.init = async function (wordjs) {
         });
     };
 
-    // ---- in-memory rate limiting (single child process; no req.ip exists in the sandbox) --------
-    const makeWindowLimiter = (max, windowMs) => {
-        const hits = [];
-        return () => {
+    // ---- in-memory rate limiting (single child process) -------------------------------------------
+    // Per client: the host forwards req.clientKey, an HMAC of the caller's IP. Each call checks AND
+    // counts in one synchronous step, so concurrent requests cannot all pass a check.
+    const makeClientLimiter = (max, windowMs) => {
+        const buckets = new Map(); // clientKey -> number[] timestamps
+        return (req) => {
+            const key = String((req && req.clientKey) || 'anon').slice(0, 64);
             const now = Date.now();
-            while (hits.length && now - hits[0] > windowMs) hits.shift();
-            if (hits.length >= max) return false;
+            if (!buckets.has(key) && buckets.size >= LIMITER_MAX_KEYS) {
+                for (const [k, ts] of buckets) if (!ts.length || now - ts[ts.length - 1] > windowMs) buckets.delete(k);
+                while (buckets.size >= LIMITER_MAX_KEYS) buckets.delete(buckets.keys().next().value);
+            }
+            const hits = (buckets.get(key) || []).filter((t) => now - t <= windowMs);
+            if (hits.length >= max) { buckets.set(key, hits); return false; }
             hits.push(now);
+            buckets.set(key, hits);
             return true;
         };
     };
-    const donateAllowed = makeWindowLimiter(DONATE_GLOBAL_MAX, DONATE_GLOBAL_WINDOW_MS);
-    const confirmAllowed = makeWindowLimiter(CONFIRM_GLOBAL_MAX, CONFIRM_GLOBAL_WINDOW_MS);
+    const donateAllowed = makeClientLimiter(DONATE_CLIENT_MAX, DONATE_CLIENT_WINDOW_MS);
+    const confirmAllowed = makeClientLimiter(CONFIRM_CLIENT_MAX, CONFIRM_CLIENT_WINDOW_MS);
 
     const emailHits = new Map(); // email -> { count, first }
     const emailAllowed = (email) => {
         const now = Date.now();
-        if (emailHits.size > 1000) {
+        if (emailHits.size > LIMITER_MAX_KEYS) {
             for (const [k, v] of emailHits) { if (now - v.first > EMAIL_WINDOW_MS) emailHits.delete(k); }
+            while (emailHits.size > LIMITER_MAX_KEYS) emailHits.delete(emailHits.keys().next().value);
         }
         const rec = emailHits.get(email);
         if (!rec || now - rec.first > EMAIL_WINDOW_MS) { emailHits.set(email, { count: 1, first: now }); return true; }
@@ -274,24 +286,36 @@ exports.init = async function (wordjs) {
     // PUBLIC ROUTES (consumed by the Puck block from the editor iframe AND the public page)
     // ================================================================================================
 
+    // Public callers never see an error's text: a driver's message names tables, columns and
+    // constraints. The details go to the server log.
+    const failQuietly = (res, e, what) => {
+        console.error(`[donations] ${what} failed:`, e && e.message ? e.message : e);
+        res.status(500).json({ error: 'No se pudo completar la operación. Inténtalo de nuevo.' });
+    };
+    // Public routes answer every failure themselves, through failQuietly: a public caller only ever
+    // gets a reply this plugin wrote.
+    const quietly = (what, handler) => async (req, res) => {
+        try { await handler(req, res); } catch (e) { failQuietly(res, e, what); }
+    };
+
     // Active campaigns with progress.
-    http.route('get', '/public/campaigns', async (req, res) => {
+    http.route('get', '/public/campaigns', quietly('campaign list', async (req, res) => {
         const rows = await db.all(`SELECT * FROM ${T.campaigns} WHERE is_active = 1 ORDER BY id ASC`);
         res.json({ campaigns: rows.map(publicCampaignShape) });
-    });
+    }));
 
     // One active campaign by slug — no slug means "the first active one".
-    http.route('get', '/public/campaign', async (req, res) => {
+    http.route('get', '/public/campaign', quietly('campaign', async (req, res) => {
         const slug = String((req.query && req.query.slug) || '').trim().slice(0, 200);
         const row = slug
             ? await db.get(`SELECT * FROM ${T.campaigns} WHERE slug = ? AND is_active = 1`, [slug])
             : await db.get(`SELECT * FROM ${T.campaigns} WHERE is_active = 1 ORDER BY id ASC LIMIT 1`);
         if (!row) return res.status(404).json({ error: 'No hay campañas de donación activas.' });
         res.json({ campaign: publicCampaignShape(row) });
-    });
+    }));
 
     // Non-secret display config for the block (currency, presets, whether Stripe is available).
-    http.route('get', '/public/donations-config', async (req, res) => {
+    http.route('get', '/public/donations-config', quietly('public config', async (req, res) => {
         const cfg = await getConfig();
         const stripeKey = await getSetting('stripe_sk');
         res.json({
@@ -300,10 +324,10 @@ exports.init = async function (wordjs) {
             presets: parsePresets(cfg.presets),
             stripeEnabled: !!stripeKey,
         });
-    });
+    }));
 
     // Create a donation (pending). Manual -> instructions; Stripe -> Checkout session URL.
-    http.route('post', '/public/donate', async (req, res) => {
+    http.route('post', '/public/donate', quietly('donation', async (req, res) => {
         const body = req.body || {};
 
         // -- anti-spam ------------------------------------------------------------------------------
@@ -314,7 +338,7 @@ exports.init = async function (wordjs) {
         if (!Number.isFinite(elapsed) || elapsed < MIN_ELAPSED_MS) {
             return res.status(429).json({ error: 'Formulario enviado demasiado rápido — espera un momento e inténtalo de nuevo.' });
         }
-        if (!donateAllowed()) {
+        if (!donateAllowed(req)) {
             return res.status(429).json({ error: 'Demasiadas donaciones en este momento — inténtalo de nuevo en un minuto.' });
         }
 
@@ -406,14 +430,14 @@ exports.init = async function (wordjs) {
         });
         await sendAdminNotify(donation, campaign, cfg, 'recibida (manual, pendiente)');
         res.json({ token, manualInstructions: cfg.manualInstructions || '' });
-    });
+    }));
 
     // Stripe return leg: verify the session server-side and mark the donation paid (idempotent).
-    http.route('get', '/public/confirm-stripe', async (req, res) => {
+    http.route('get', '/public/confirm-stripe', quietly('Stripe return', async (req, res) => {
         const sessionId = String((req.query && req.query.session_id) || '').trim().slice(0, 200);
         const token = String((req.query && req.query.token) || '').trim().slice(0, 64);
         if (!sessionId || !token) return res.status(400).json({ error: 'Parámetros incompletos.' });
-        if (!confirmAllowed()) {
+        if (!confirmAllowed(req)) {
             return res.status(429).json({ error: 'Demasiadas verificaciones en este momento — inténtalo de nuevo en un minuto.' });
         }
 
@@ -454,10 +478,10 @@ exports.init = async function (wordjs) {
             return res.json({ paid: true });
         }
         res.json({ paid: false });
-    });
+    }));
 
     // Last paid donations of a campaign — public wall. NEVER exposes emails; honors is_anonymous.
-    http.route('get', '/public/recent', async (req, res) => {
+    http.route('get', '/public/recent', quietly('recent donations', async (req, res) => {
         const campaignId = parseInt((req.query && req.query.campaign_id) || '', 10);
         if (!Number.isInteger(campaignId) || campaignId < 1) {
             return res.status(400).json({ error: 'Campaña inválida.' });
@@ -479,7 +503,7 @@ exports.init = async function (wordjs) {
                 created_at: r.created_at,
             })),
         });
-    });
+    }));
 
     // ================================================================================================
     // ADMIN ROUTES
@@ -603,10 +627,19 @@ exports.init = async function (wordjs) {
         }
         const donation = await db.get(`SELECT * FROM ${T.donations} WHERE id = ?`, [id]);
         if (!donation) return res.status(404).json({ error: 'Donación no encontrada.' });
-        const wasPaid = donation.payment_status === 'paid';
-        await db.run(`UPDATE ${T.donations} SET payment_status = ? WHERE id = ?`, [status, id]);
+        // The flip into 'paid' is conditional on the donation not being paid already and its
+        // result.changes gates the receipt, like the Stripe return leg's flip: decided from the read
+        // above, two admins marking it paid at the same time (or one racing the Stripe return) both
+        // mailed the donor a receipt.
+        let flipped = false;
+        if (status === 'paid') {
+            const r = await db.run(`UPDATE ${T.donations} SET payment_status = 'paid' WHERE id = ? AND payment_status != 'paid'`, [id]);
+            flipped = !!(r && r.changes === 1);
+        } else {
+            await db.run(`UPDATE ${T.donations} SET payment_status = ? WHERE id = ?`, [status, id]);
+        }
         await recomputeRaised(donation.campaign_id);
-        if (status === 'paid' && !wasPaid) {
+        if (flipped) {
             const campaign = await db.get(`SELECT * FROM ${T.campaigns} WHERE id = ?`, [donation.campaign_id]);
             if (campaign) {
                 const cfg = await getConfig();

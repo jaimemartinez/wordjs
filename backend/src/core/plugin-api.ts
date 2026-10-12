@@ -116,12 +116,42 @@ const PROTECTED_OPTION_NAMES = new Set([
     // fork and the same OS confinement a plugin gets. The option stays protected anyway — choosing which
     // directory becomes the active theme is choosing which code runs under the `theme:` identity, with
     // that identity's own grants and its own isolate, and no plugin may make that choice for the site.
-    'template', 'stylesheet', 'active_theme_layout', 'active_theme_mods', 'theme_mods'
+    'template', 'stylesheet', 'active_theme_layout', 'active_theme_mods', 'theme_mods',
+    // HOST BOOKKEEPING THE PERMISSION SYSTEM READS. Each of these is written only by host code and read
+    // back as a decision, so a plugin that can rewrite one makes that decision itself:
+    //   · 'plugin_assets' is the enqueue registry (core/plugin-assets). Its entries are emitted as
+    //     <script src>/<link href> on every public page, which share the admin app's origin. A plugin
+    //     holding settings:write but NOT assets:write could write its own public/*.js into it and get
+    //     exactly what the assets:write grant (and browser:script) exist to gate.
+    //   · 'plugin_browser_capability_migrated' was the only guard of the one-time browser:script upgrade
+    //     (core/plugins migrateBrowserCapabilityGrants). Cleared, the next boot re-granted browser:script
+    //     to every active plugin with browser code — undoing the administrator's revocations. The marker
+    //     now lives inside 'plugin_grants' itself; the old name stays protected for installs that have it.
+    'plugin_assets', 'plugin_browser_capability_migrated',
+    // 'site_chrome_announcement' is the third chrome part (routes/chrome.ts PARTS), the top bar of every
+    // public page, written only through PUT /api/v1/chrome/announcement and its validator — the same
+    // dedicated-write-API class as the header and footer above, which were listed while it was not.
+    'site_chrome_announcement',
+    // The custom content-type and taxonomy REGISTRIES. Their only writers are the admin-only /types and
+    // /taxonomies routes, and initPostTypes() turns them into authorization at boot: a schema's
+    // visibility.public decides who may read a type's entries and permissions.operations which capability
+    // edits them. Rewritten by a settings:write plugin, `invoice` becomes public, or editable with `read`.
+    'custom_post_types', 'custom_content_schemas', 'custom_taxonomies'
 ]);
+
 // Protected for EVERY plugin now (no trusted bypass). Secret/security-critical options are never
 // readable/writable through the generic options bridge; safe non-secret reads go via the `site` bridge.
-const isProtectedOption = (key: string, _slug?: string): boolean =>
-    (PROTECTED_OPTION_RE.test(String(key)) || PROTECTED_OPTION_NAMES.has(String(key).toLowerCase()));
+//
+// THE NAME THE GUARD SEES MUST BE THE NAME THE DATABASE SEES: the name is judged in its canonical form
+// (core/option-names canonicalOptionName — MySQL compares option names case-, accent- and
+// trailing-space-insensitively), and a name that has none (outside printable ASCII, a leading or trailing
+// space, not a string) is answered "protected".
+const { canonicalOptionName } = require('./option-names');
+const isProtectedOption = (key: unknown, _slug?: string): boolean => {
+    const name = canonicalOptionName(key);
+    if (name === null) return true;
+    return PROTECTED_OPTION_RE.test(name) || PROTECTED_OPTION_NAMES.has(name);
+};
 
 // Core DB tables a plugin may never touch (mirrors the dbAsync scoping in secure-require).
 const PROTECTED_TABLES = new Set(['users', 'user_meta', 'usermeta', 'options', 'user_roles', 'roles', 'sessions']);
@@ -795,6 +825,21 @@ function createPluginApi(slug: string) {
             async adminEmail() { verifyPermission('settings', 'read'); const { getOption } = require('./options'); return getOption('admin_email', ''); },
         },
 
+        // PRIVATE MEDIA (grant: media:private_read — default-deny, never implied by any other grant).
+        // getPrivate(id) answers a PATH-FREE description of a private attachment ({id,title,mimeType,
+        // filesize,filename}) or null when the id is not a private attachment. The bytes themselves are
+        // delivered by the host as a route reply (res.sendPrivateMedia in the isolate), never handed to
+        // the plugin and never given a public URL — see core/private-media.ts.
+        media: {
+            async getPrivate(id: any) {
+                verifyPermission('media', 'private_read');
+                // The lookup is the HOST's own read of core tables (posts/post_meta), not the plugin's:
+                // run it outside the plugin context so it is not judged against the plugin's db grants.
+                const { runAsHost } = require('./plugin-context');
+                return runAsHost(() => require('./private-media').describePrivateMedia(id));
+            },
+        },
+
         // Host-mediated DNS record lookups (gated on the `network` grant). The RAW c-ares resolver
         // surface (dns.resolve*/Resolver/setServers) is DENIED inside the isolate by the egress-guard
         // because it bypasses egress filtering and enables internal DNS recon — but getaddrinfo
@@ -821,14 +866,44 @@ function createPluginApi(slug: string) {
                 try { granted = require('./plugin-permissions').isNetworkGranted(slug); } catch { granted = false; }
                 if (!granted) throw new Error(`🛡️ Security Block: plugin '${slug}' needs the 'network' grant for DNS lookups.`);
             };
+            const { hostMatchesAllowlist } = require('./egress-guard');
             const clean = (s: any) => String(s == null ? '' : s).slice(0, 253);
+            // EVERY lookup is governed by the plugin's EGRESS ALLOWLIST, applied to the NAME being
+            // resolved — the same policy (and the same fail-closed rule) its sockets obey in the child.
+            // Filtering the ANSWERS is not enough: MX/TXT records carry no IP to filter, and a lookup
+            // is itself egress — a query for `<secret>.attacker.example` reaches the attacker's
+            // authoritative server through the host resolver, so a plugin confined to `api.vendor.com`
+            // could still exfiltrate by name. Empty allowlist = allow-all-public (unchanged); policy not
+            // loaded = deny every name, exactly as the spawn path ships `egressDenyAll`.
+            // A control character never belongs in a DNS name, and the resolver does not query the string
+            // it is handed: c-ares takes a C string and stops at the first NUL, so the name it would send is
+            // not the name judged here (`<data>.attacker.example\u0000.vendor.example` is queried as
+            // `<data>.attacker.example`). Refused in every policy state, before the allowlist is consulted;
+            // for an allowlisted plugin hostMatchesAllowlist also refuses anything outside the hostname
+            // alphabet.
+            const governed = (name: any): string => {
+                requireNetwork();
+                const host = clean(name);
+                // eslint-disable-next-line no-control-regex
+                if (/[\u0000-\u001f\u007f-\u009f]/.test(host)) {
+                    throw new Error(`🛡️ Security Block: plugin '${slug}' may not resolve a name containing control characters.`);
+                }
+                const perms = require('./plugin-permissions');
+                let loaded: boolean;
+                let list: string[] = [];
+                try { loaded = perms.isEgressPolicyLoaded() === true; list = perms.getEgressAllowlist(slug) || []; } catch { loaded = false; }
+                if (!loaded || (list.length > 0 && !hostMatchesAllowlist(host, list))) {
+                    throw new Error(`🛡️ Security Block: plugin '${slug}' may not resolve '${host || '(empty)'}' — not in its egress allowlist.`);
+                }
+                return host;
+            };
             return {
-                async resolveMx(domain: string) { requireNetwork(); return realDns.resolveMx(clean(domain)); },
-                async resolveTxt(name: string) { requireNetwork(); return realDns.resolveTxt(clean(name)); },
-                async resolve4(host: string) { requireNetwork(); const a = await realDns.resolve4(clean(host)); return (a || []).filter((ip: string) => !isBlockedIp(ip)); },
-                async resolve6(host: string) { requireNetwork(); const a = await realDns.resolve6(clean(host)); return (a || []).filter((ip: string) => !isBlockedIp(ip)); },
+                async resolveMx(domain: string) { return realDns.resolveMx(governed(domain)); },
+                async resolveTxt(name: string) { return realDns.resolveTxt(governed(name)); },
+                async resolve4(host: string) { const a = await realDns.resolve4(governed(host)); return (a || []).filter((ip: string) => !isBlockedIp(ip)); },
+                async resolve6(host: string) { const a = await realDns.resolve6(governed(host)); return (a || []).filter((ip: string) => !isBlockedIp(ip)); },
                 // dns.promises.resolve() with no rrtype defaults to A records (string IPs) — mirror that.
-                async resolve(host: string) { requireNetwork(); const a = await realDns.resolve4(clean(host)); return (a || []).filter((ip: string) => !isBlockedIp(ip)); },
+                async resolve(host: string) { const a = await realDns.resolve4(governed(host)); return (a || []).filter((ip: string) => !isBlockedIp(ip)); },
             };
         })(),
 
@@ -973,4 +1048,4 @@ function createPluginApi(slug: string) {
 // projectUser is exported for TESTS only: it is one of the two wires carrying the corporate-mailbox grant
 // to a plugin, and deleting that field left the whole suite green because the gate suite hand-builds the
 // projection. Asserting the real function is what makes that wire load-bearing.
-module.exports = { createPluginApi, isProtectedOption, projectUser, assertSqlAllowed };
+module.exports = { createPluginApi, isProtectedOption, PROTECTED_OPTION_NAMES, projectUser, assertSqlAllowed };

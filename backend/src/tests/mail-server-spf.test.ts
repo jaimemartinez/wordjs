@@ -30,77 +30,18 @@ import assert from 'node:assert';
 import fs from 'fs';
 import path from 'path';
 import vm from 'vm';
+import { createSlicer } from './fixtures/plugin-source-slicer';
 
 const PLUGIN_SRC = path.resolve(__dirname, '../../../marketplace/plugins/mail-server/index.js');
 
-// --- Source slicer ------------------------------------------------------------------------------
+// --- Source slicer (shared: ./fixtures/plugin-source-slicer) ------------------------------------
 
-/**
- * Brace-match from an index pointing at the '{' that opens a block, skipping over strings, comments
- * and regex literals so a '}' inside one of them does not close the block early.
- */
-function matchBrace(text: string, openIdx: number): number {
-    let depth = 0;
-    let inStr: string | null = null;
-    let inLineComment = false;
-    let inBlockComment = false;
-    let inRegex = false;
-    let prev = '';
-    for (let i = openIdx; i < text.length; i++) {
-        const c = text[i];
-        const n = text[i + 1];
-        if (inLineComment) { if (c === '\n') inLineComment = false; prev = c; continue; }
-        if (inBlockComment) { if (c === '*' && n === '/') { inBlockComment = false; i++; } prev = c; continue; }
-        if (inStr) { if (c === '\\') { i++; prev = ''; continue; } if (c === inStr) inStr = null; prev = c; continue; }
-        if (inRegex) { if (c === '\\') { i++; prev = ''; continue; } if (c === '/') inRegex = false; prev = c; continue; }
-        if (c === '/' && n === '/') { inLineComment = true; i++; prev = ''; continue; }
-        if (c === '/' && n === '*') { inBlockComment = true; i++; prev = ''; continue; }
-        if (c === '"' || c === "'" || c === '`') { inStr = c; prev = c; continue; }
-        // A '/' is a regex literal iff the previous significant character cannot end an expression.
-        if (c === '/' && !/[A-Za-z0-9_$)\]]/.test(prev)) { inRegex = true; prev = ''; continue; }
-        if (c === '{') depth++;
-        else if (c === '}') { depth--; if (depth === 0) return i; }
-        if (!/\s/.test(c)) prev = c;
-    }
-    throw new Error(`mail-server SPF suite: unbalanced braces from offset ${openIdx} in ${PLUGIN_SRC}`);
-}
-
-/** Match '(' … ')' so a default parameter value containing '{' (evaluateSPF's `budget = { lookups: 0 }`)
- *  is not mistaken for the start of the function body. */
-function matchParen(text: string, openIdx: number): number {
-    let depth = 0;
-    for (let i = openIdx; i < text.length; i++) {
-        if (text[i] === '(') depth++;
-        else if (text[i] === ')') { depth--; if (depth === 0) return i; }
-    }
-    throw new Error(`mail-server SPF suite: unbalanced parens from offset ${openIdx} in ${PLUGIN_SRC}`);
-}
-
-function sliceFn(text: string, name: string): string {
-    const m = new RegExp('^(?:async\\s+)?function\\s+' + name + '\\s*\\(', 'm').exec(text);
-    assert.ok(
-        m,
-        `mail-server SPF suite: function ${name}() not found in ${PLUGIN_SRC}. ` +
-        'This suite runs the SHIPPED code by slicing it out of that file — if the function was renamed ' +
-        'or restructured, update the slice list here so the SPF behaviour stays covered.'
-    );
-    const paramClose = matchParen(text, text.indexOf('(', m.index));
-    const open = text.indexOf('{', paramClose);
-    return text.slice(m.index, matchBrace(text, open) + 1);
-}
-
-/** Slice an object-literal method's BODY BLOCK (braces included) by its exact signature text. */
-function sliceMethodBody(text: string, signature: string): string {
-    const idx = text.indexOf(signature);
-    assert.ok(idx >= 0, `mail-server SPF suite: method "${signature}" not found in ${PLUGIN_SRC}`);
-    const open = text.indexOf('{', idx + signature.length - 1);
-    return text.slice(open, matchBrace(text, open) + 1);
-}
+const { sliceFn, sliceMethodBody } = createSlicer(PLUGIN_SRC, 'mail-server SPF suite');
 
 const SLICED_FUNCTIONS = [
     'isDnsNoRecord', 'spfResolveAddrs', 'splitDualCidr', 'evaluateSPF', 'qualifierToResult',
     'spfAction', 'sanitizeHeaderValue', 'buildReceivedSpf', 'cidrMatch', 'ipInCidr', 'isBlockedIp',
-    'getOptionsBatch', 'isTrustedSmtpSession', 'bareIp', 'smtpError'
+    'getOptionsBatch', 'isTrustedSmtpSession', 'bareIp', 'smtpError', 'vacationSenderVerified'
 ];
 
 function buildHarnessSource(): string {
@@ -136,7 +77,7 @@ function buildHarnessSource(): string {
     out.push('const onMailFrom = function (address, session, callback) ' + sliceMethodBody(text, 'onMailFrom(address, session, callback)') + ';');
     out.push(
         'module.exports = { evaluateSPF, splitDualCidr, spfAction, buildReceivedSpf, sanitizeHeaderValue,' +
-        ' cidrMatch, CIDR_MALFORMED, ipInCidr, isBlockedIp, isDnsNoRecord, onMailFrom,' +
+        ' cidrMatch, CIDR_MALFORMED, ipInCidr, isBlockedIp, isDnsNoRecord, onMailFrom, vacationSenderVerified,' +
         ' SPF_MAX_DNS_LOOKUPS, SPF_MAX_MX_RECORDS, SPF_MAX_DEPTH,' +
         ' __setDns: (d) => { dns = d; }, __setGetOption: (g) => { getOption = g; }, __setSiteDomain: (s) => { mailDomain = s; } };'
     );
@@ -154,6 +95,7 @@ interface SpfModule {
     ipInCidr(ip: string, cidr: string): boolean;
     isBlockedIp(ip: string): boolean;
     onMailFrom(address: { address: string }, session: any, callback: (err?: any) => void): void;
+    vacationSenderVerified(spfHeader: unknown, envelopeFrom: unknown, headerFrom: unknown): boolean;
     SPF_MAX_DNS_LOOKUPS: number;
     SPF_MAX_MX_RECORDS: number;
     SPF_MAX_DEPTH: number;
@@ -874,6 +816,34 @@ test('the SPF verdict is recorded in exactly ONE place — the field onData read
         !('spfResult' in r.session),
         'onMailFrom must not write session fields nothing reads — wire a consumer or drop the write'
     );
+});
+
+test('a later transaction in the same session never inherits the previous SPF verdict', async () => {
+    // onData reads session.spfHeader to persist the verdict AND to gate vacation replies. A session can
+    // carry several MAIL FROMs; one that skips SPF (operator off here) must not keep the last 'pass'.
+    const first = await deliver({ record: 'v=spf1 ip4:203.0.113.9 -all' });
+    assert.strictEqual(verdictOf(first.session), 'pass');
+    SPF.__setGetOption(async (k, d) => (k === 'mail_security_spf_enabled' ? '0' : d));
+    await new Promise((resolve) => SPF.onMailFrom({ address: 'other@ex.test' }, first.session, resolve));
+    assert.strictEqual(first.session.spfHeader, undefined);
+});
+
+test('vacation replies are gated on an SPF pass for the header From domain (real verdict -> real gate)', async () => {
+    const pass = await deliver({ record: 'v=spf1 ip4:203.0.113.9 -all', from: 'alice@ex.test' });
+    assert.strictEqual(SPF.vacationSenderVerified(pass.session.spfHeader, 'alice@ex.test', 'alice@ex.test'), true);
+    assert.strictEqual(SPF.vacationSenderVerified(pass.session.spfHeader, 'alice@ex.test', 'Bob@EX.test'), true, 'domain match is case-insensitive');
+    assert.strictEqual(
+        SPF.vacationSenderVerified(pass.session.spfHeader, 'alice@ex.test', 'victim@elsewhere.test'), false,
+        'a forged header From that SPF never vouched for gets no reply'
+    );
+    for (const record of ['v=spf1 ?all', 'v=spf1 ~all']) {
+        const r = await deliver({ record, from: 'alice@ex.test', options: { mail_security_spf_reject: '0' } });
+        assert.strictEqual(SPF.vacationSenderVerified(r.session.spfHeader, 'alice@ex.test', 'alice@ex.test'), false, record);
+    }
+    const none = await deliver({ record: null, from: 'alice@ex.test' });
+    assert.strictEqual(SPF.vacationSenderVerified(none.session.spfHeader, 'alice@ex.test', 'alice@ex.test'), false, 'no SPF record');
+    assert.strictEqual(SPF.vacationSenderVerified(undefined, 'alice@ex.test', 'alice@ex.test'), false, 'SPF skipped/disabled');
+    assert.strictEqual(SPF.vacationSenderVerified(pass.session.spfHeader, '', 'alice@ex.test'), false, 'null envelope sender');
 });
 
 test('Received-SPF has the RFC 7208 §9.1 shape', () => {

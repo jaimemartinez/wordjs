@@ -8,8 +8,10 @@
  * Anti-spam on the public submit endpoint:
  *  - Honeypot field `hp` must be empty and `elapsed` (ms the form was open) must be >= 3s,
  *    otherwise we answer a FAKE {success:true} without inserting (do not tip off bots).
- *  - Global in-memory rate cap (the serialized req has no req.ip, so the cap is global): at most
- *    SUBMIT_MAX_PER_WINDOW inserts per rolling minute.
+ *  - In-memory rate cap PER CLIENT (req.clientKey, an HMAC of the caller's IP forwarded by the
+ *    host): at most SUBMIT_MAX_PER_CLIENT submissions per client per rolling minute. It used to be
+ *    one site-wide window, so one client closed the form for every visitor. Every submission waits
+ *    for moderation.
  * Public submissions always land as status 'pending' / source 'public' and only appear after an
  * admin approves them.
  */
@@ -32,8 +34,9 @@ const PUBLIC_LIST_DEFAULT = 9;
 const PUBLIC_LIST_CAP = 50;
 
 const MIN_ELAPSED_MS = 3000;
-const SUBMIT_MAX_PER_WINDOW = 10;
+const SUBMIT_MAX_PER_CLIENT = 5;
 const SUBMIT_WINDOW_MS = 60 * 1000;
+const SUBMIT_MAX_KEYS = 10000;   // bound on the in-memory limiter map
 
 exports.init = async function (wordjs) {
     const { options, http, db, adminMenu } = wordjs;
@@ -67,17 +70,23 @@ exports.init = async function (wordjs) {
     /** Photo URL must be http(s) or empty. */
     const isValidPhoto = (url) => url === '' || /^https?:\/\//i.test(url);
 
-    // Global rolling-window rate limiter for public submissions (in-memory; single child process).
-    let submitWindowStart = 0;
-    let submitCount = 0;
-    const submitRateLimited = () => {
+    // Per-client window for public submissions (in-memory; single child process). Checks AND counts
+    // in one synchronous step, so concurrent requests cannot all pass the check.
+    const submitWindows = new Map(); // clientKey -> { start, count }
+    const submitRateLimited = (req) => {
+        const key = String((req && req.clientKey) || 'anon').slice(0, 64);
         const now = Date.now();
-        if (now - submitWindowStart >= SUBMIT_WINDOW_MS) {
-            submitWindowStart = now;
-            submitCount = 0;
+        let w = submitWindows.get(key);
+        if (!w || now - w.start >= SUBMIT_WINDOW_MS) {
+            if (submitWindows.size >= SUBMIT_MAX_KEYS) {
+                for (const [k, v] of submitWindows) if (now - v.start >= SUBMIT_WINDOW_MS) submitWindows.delete(k);
+                while (submitWindows.size >= SUBMIT_MAX_KEYS) submitWindows.delete(submitWindows.keys().next().value);
+            }
+            w = { start: now, count: 0 };
+            submitWindows.set(key, w);
         }
-        submitCount++;
-        return submitCount > SUBMIT_MAX_PER_WINDOW;
+        w.count++;
+        return w.count > SUBMIT_MAX_PER_CLIENT;
     };
 
     // ---- admin routes -----------------------------------------------------------------------------
@@ -189,9 +198,21 @@ exports.init = async function (wordjs) {
 
     // ---- public routes (no opts object → no auth) — consumed by the Puck block -------------------
 
+    // Public callers never see an error's text: a driver's message names tables, columns and
+    // constraints. The details go to the server log.
+    const failQuietly = (res, e, what) => {
+        console.error(`[testimonials] ${what} failed:`, e && e.message ? e.message : e);
+        res.status(500).json({ error: 'No se pudo completar la operación. Inténtalo de nuevo.' });
+    };
+    // Public routes answer every failure themselves, through failQuietly: a public caller only ever
+    // gets a reply this plugin wrote.
+    const quietly = (what, handler) => async (req, res) => {
+        try { await handler(req, res); } catch (e) { failQuietly(res, e, what); }
+    };
+
     // Approved testimonials, newest first. ?limit= 1..50. Also tells the block whether the public
     // submission form may be rendered (allowPublicSubmit).
-    http.route('get', '/public/list', async (req, res) => {
+    http.route('get', '/public/list', quietly('testimonial list', async (req, res) => {
         let limit = parseInt((req.query && req.query.limit) || PUBLIC_LIST_DEFAULT, 10);
         if (!Number.isFinite(limit) || limit < 1) limit = PUBLIC_LIST_DEFAULT;
         limit = Math.min(limit, PUBLIC_LIST_CAP);
@@ -205,10 +226,10 @@ exports.init = async function (wordjs) {
         );
         const settings = await getSettings();
         res.json({ items, allowPublicSubmit: settings.allowPublicSubmit });
-    });
+    }));
 
     // Public submission → always inserted as status 'pending' / source 'public'.
-    http.route('post', '/public/submit', async (req, res) => {
+    http.route('post', '/public/submit', quietly('testimonial submission', async (req, res) => {
         const settings = await getSettings();
         if (!settings.allowPublicSubmit) {
             return res.status(403).json({ success: false, error: 'Los envíos públicos están desactivados.' });
@@ -223,7 +244,7 @@ exports.init = async function (wordjs) {
             return res.json({ success: true, message: 'Gracias — tu testimonio será revisado.' });
         }
 
-        if (submitRateLimited()) {
+        if (submitRateLimited(req)) {
             return res.status(429).json({ success: false, error: 'Demasiados envíos en este momento. Inténtalo de nuevo en un minuto.' });
         }
 
@@ -242,7 +263,7 @@ exports.init = async function (wordjs) {
             [authorName, authorRole, content, rating]
         );
         res.json({ success: true, message: 'Gracias — tu testimonio será revisado.' });
-    });
+    }));
 
     adminMenu.add({
         href: '/admin/plugin/testimonials',

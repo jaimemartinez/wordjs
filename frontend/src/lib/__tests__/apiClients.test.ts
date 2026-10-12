@@ -139,6 +139,11 @@ describe('authApi', () => {
         // verify-email's body is exactly { uid, token } — the route parseInts uid and refuses anything else.
         expect(JSON.parse(calls[1].body as string)).toEqual({ uid: 4, token: 'abc' });
     });
+
+    it('sends a current (token-only) verification link without a uid', async () => {
+        await authApi.verifyEmail({ token: 'abc' });
+        expect(JSON.parse(calls[calls.length - 1].body as string)).toEqual({ token: 'abc' });
+    });
 });
 
 describe('export download', () => {

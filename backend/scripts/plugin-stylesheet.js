@@ -16,10 +16,12 @@
  * pinned backend devDependency, so every job that builds the catalog has it; no network, no native
  * binary) over the plugin's own sources and writes the result where the host already loads plugin CSS:
  *
- *   admin page  → `client/admin/admin.css` INSIDE THE PACKAGE. The admin shell already HEAD-checks and
- *                 links /plugins/<folder>/client/admin/admin.css (generate-admin-plugin-registry.js),
- *                 and io-guard already serves it — on every host released so far, so a plugin update
- *                 alone brings the classes to an older site. The package file is the plugin's own
+ *   admin page  → `client/admin/admin.css` INSIDE THE PACKAGE. Every host links that file on the plugin's
+ *                 admin page (generate-admin-plugin-registry.js): released hosts up to 2.3.0 from the
+ *                 static /plugins/<folder>/client/admin/admin.css, newer ones from the authenticated
+ *                 GET /api/v1/plugins/<slug>/admin-style/css (any signed-in user who can open the page,
+ *                 active plugin, no-cache + ETag; routes/plugin-bundles.ts) — so a plugin update alone
+ *                 brings the classes to an older site. The package file is the plugin's own
  *                 hand-written admin.css (if it has one), verbatim, followed by the compiled utilities;
  *                 the build writes it to dist/admin.css and the packers ship it at the path the host
  *                 requests (see withPackagedStylesheet). The SOURCE tree is never written to.

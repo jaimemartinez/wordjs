@@ -74,7 +74,23 @@ Create a folder named `hello-world` inside `backend/plugins/`. Inside it, create
 > `{ "scope": "browser", "access": "script", "reason": "…" }`. That code is **not sandboxed**: it runs in
 > the admin app's origin with the viewer's session, so the administrator is asked about it explicitly,
 > and the host serves the bundles only while the plugin is active and the capability is granted. Install
-> and activation refuse an undeclared plugin. See `documentation/security.md` §1.3b.
+> and activation refuse an undeclared plugin. While the capability is not granted, the plugin's admin
+> page says so and links to its permissions (`/admin/plugins?permissions=<plugin-id>`) instead of
+> rendering your UI. The gate applies to the **served** bundle (`dist/admin.bundle.js`), which on a
+> release is every plugin admin page: a release build (`WORDJS_HERMETIC_BUILD=1`) compiles in only the
+> plugins git tracks (build it from a git checkout: without git it takes every folder on disk, and says
+> so), and none of the tracked ones has an admin page. A frontend built any other way compiles admin
+> pages in from plugin source (the static map `frontend/scripts/generate-admin-plugin-registry.js` writes
+> before `next build` and `next dev`), and what it compiles in is part of that build:
+> - **Self-built production frontend**: the plugins the backend reported active when the frontend was
+>   built — or, when the generator cannot reach the backend, every plugin on disk that has an admin page.
+>   Build it only with plugins you trust with the admin session.
+> - **Development**: the backend re-runs the generator with the active list on every activation,
+>   deactivation and deletion (`regenerateRegistry()` in `backend/src/routes/plugins.ts`, skipped when
+>   `NODE_ENV=production`); test the `browser:script` gate against a release build.
+>
+> The same holds for hooks and Verso blocks, whose generators compile them in the same way. See
+> `documentation/security.md` §1.3b.
 
 > [!IMPORTANT]
 > **Hard Lock Protection:** If your plugin requires a version of a package that conflicts with another active plugin (e.g., `lodash@^3.0.0` vs `lodash@^4.0.0`), activation will be **blocked** with a clear error message. You must either deactivate the conflicting plugin or update your dependency.
@@ -260,7 +276,7 @@ frontend entry:
 - `admin.bundle.js`: Your admin UI (`frontend.adminPage.entry`).
 - `component.bundle.js`: Your Verso block (`frontend.versoComponents.entry`, or the conventional `client/verso/<Pascal>Verso.tsx`; the pre-rename `frontend.puckComponents` / `client/puck/<Pascal>Puck.tsx` still resolve — see §13).
 - `hooks.bundle.js`: Your frontend hooks (`frontend.hooks`).
-- `manifest.build.json`: Build metadata.
+- `manifest.build.json`: Build metadata. Over HTTP (`GET /api/v1/plugins/:slug/bundle/manifest`) only its `bundles` list is served; the other fields, the version among them, stay on disk.
 
 > A declared entry whose file is missing is a **build error**, not a skip — the build fails loudly
 > instead of shipping a plugin whose UI is silently absent at runtime.
@@ -274,7 +290,8 @@ theme, no preflight, and are **not** scoped to `.plugin-admin-<slug>` (a modal o
 - `admin.css`: your own `client/admin/admin.css` (if you have one), verbatim, followed by the classes
   found in `client/**` and in everything the admin bundle imports. The packers (`npm run
   pack:plugin`, `wordjs pack`, the marketplace build) ship it **as** `client/admin/admin.css`, the file the
-  admin shell links; your source file is never written (building an installed copy, whose
+  admin shell links (through `GET /api/v1/plugins/<slug>/admin-style/css`, for every signed-in user who
+  can open your page, administrator or not); your source file is never written (building an installed copy, whose
   `client/admin/admin.css` is already a packaged sheet, keeps only its hand-written part).
 - `component.bundle.css` / `hooks.bundle.css`: the classes of the block / hooks bundle only (a block's
   CSS reaches public pages), after any CSS esbuild extracted from your imports. The loader links them.
@@ -761,7 +778,8 @@ Every call is permission-checked on the host against your manifest.
 | `wordjs.db.getType()` | `database:read` | Returns `{ isPostgres, isMySQL, isSQLite, driver }` (`driver` is the full driver name, e.g. `'sqlite-native'`, `'sqlite-legacy'`, `'postgres'`, `'mysql'`, or `'mariadb'`) — branch your DDL on the `isPostgres`/`isMySQL` booleans rather than the raw `driver` string (`isMySQL` is `true` for both `'mysql'` and `'mariadb'`). Note `isSQLite` stays `true` under MySQL (the MySQL driver translates the SQLite dialect), so gate SQLite-only queries (`PRAGMA`/`sqlite_master`) on `isMySQL` explicitly. |
 | `wordjs.users.findByEmail / findByLogin / findById / search(...)` | `users:read` | **Safe projection** only: `{ id, userLogin, username, userEmail, displayName, role, hasProfessionalMailbox }` — never `user_pass` or other credential fields. The sanctioned way to read users without core-table access. (`hasProfessionalMailbox` is the admin-owned corporate-mailbox grant as a boolean — read it, never re-derive it from `userEmail`, which the account itself can write.) |
 | `wordjs.site.url / domain / adminEmail` | `settings:read` | Read-only site identity. |
-| `wordjs.dns.resolveMx / resolveTxt / resolve4 / resolve6 / resolve(...)` | `network` | Host-mediated DNS. The raw resolver (`dns.resolve*`) is denied inside the child, so MX (direct delivery) and TXT (SPF/DKIM/DMARC) lookups go through here. The host strips every A/AAAA answer pointing at a private/internal address, so the address lookups return public IPs only. |
+| `wordjs.media.getPrivate(id)` · `res.sendPrivateMedia(id, { filename })` | `media:private_read` | PRIVATE media (`documentation/security.md` §1.5). `getPrivate` returns `{ id, title, mimeType, filesize, filename }` (never a path) or `null`; replying with `res.sendPrivateMedia` from one of your routes makes the HOST stream that file as a download (`no-store`, attachment). Your route decides who may download (e.g. a paid, unexpired token); the file never gets a public URL. Without the grant the call throws and the reply is `403`. |
+| `wordjs.dns.resolveMx / resolveTxt / resolve4 / resolve6 / resolve(...)` | `network` | Host-mediated DNS. The raw resolver (`dns.resolve*`) is denied inside the child, so MX (direct delivery) and TXT (SPF/DKIM/DMARC) lookups go through here. The host strips every A/AAAA answer pointing at a private/internal address, so the address lookups return public IPs only. The name being resolved must be inside the plugin's egress allowlist when one is set, and a name containing a control character (a NUL, which the resolver would stop at) is always refused. |
 | `wordjs.hooks.addAction/addFilter(hook, cb, priority)` · `doAction(hook, ...args)` | — | Callback runs in the child process; host installs an RPC shim. Core hooks that carry other parties' data need the matching grant — `comments:read` (`comments:pii` for commenter email/IP/agent), `posts:read`, `notifications:read`, `settings:read` — and arrive minimized (see §10.5); reserved core-namespace names are refused. Raw-HTML output hooks — `wordjs_head`/`wordjs_footer` and their WordPress-compat aliases `wp_head`/`wp_footer` and `dynamic_sidebar` — are denied to every plugin (the registration is dropped with a host-side warning; no trust tier exempts anyone). `doAction` fires only your OWN registered callbacks — never core's or another plugin's. |
 | `wordjs.http.route(method, path, [opts,] handler)` | `express:register_route` | Mounted at `/api/v1/plugin/<slug>/path` (always namespaced — no absolute mode). The host checks the grant on every registration: without a granted `express:register_route` the route is dropped with a host warning (`denied route registration: express:register_route not granted`) and nothing is mounted — `scope: "admin"` does NOT imply it, declare it explicitly. `opts`: `{ auth, admin }` (host runs the real auth middleware), `{ multipart: 'field' }`. Handler gets a mock `(req,res)` over RPC. |
 | `wordjs.shortcodes.add(tag, handler)` | — | Handler may be async; expanded via `doShortcodeAsync`. |
@@ -780,21 +798,33 @@ Every call is permission-checked on the host against your manifest.
 ## 11a. What of your plugin is served over HTTP ⚠️ *contract change*
 
 **This changed. Read it before shipping an asset.** WordJS no longer publishes your plugin folder as a
-static tree. `/plugins/<slug>/…` now serves an **allowlist**:
+static tree. `/plugins/<folder>/…` (addressed by your plugin's **folder** — the admin-page slug is not
+an alias here) now serves an **allowlist**, and **only while your plugin is active**:
 
 *   `public/**` with a servable extension — `.css`, `.js`, `.mjs`, images (`.png .jpg .jpeg .gif .webp
-    .avif .ico`), fonts (`.woff .woff2 .ttf .otf`), media (`.mp4 .webm .mp3 .ogg .wav`) and `.pdf`;
-*   plus exactly three fixed paths the admin shell fetches by construction: `manifest.json`,
-    `client/admin/admin.css`, `dist/component.bundle.css`.
+    .avif .ico`), fonts (`.woff .woff2 .ttf .otf`), media (`.mp4 .webm .mp3 .ogg .wav`) and `.pdf` —
+    served while the plugin is **active**;
+*   plus one fixed path, `dist/component.bundle.css` (the stylesheet the host links next to your Verso
+    block bundle) — served while the plugin is **active and granted `browser:script`**, the same rule as
+    the bundle itself (§12).
 
-**Everything else is a `404`** — your `index.js`, `lib/`, `data/`, `node_modules/`, `.map` files, any
-`.json` outside the manifest, and anything your code writes at runtime. Deliberately **not** servable:
-`.html`, `.svg`, `.xml` (they execute as documents in the site's origin) and `.json`/`.txt`/`.db`
-(source and data leaks).
+**Everything else is a `404`** — your `index.js`, `lib/`, `data/`, `node_modules/`, `.map` files, every
+`.json` **including `manifest.json`**, `client/admin/admin.css`, and anything your code writes at
+runtime. An inactive plugin's files are the same `404` as a plugin that was never installed. Deliberately
+**not** servable: `.html`, `.svg`, `.xml` (they execute as documents in the site's origin) and
+`.json`/`.txt`/`.db` (source and data leaks).
+
+**Your admin page's styling** — the manifest's `style` / `theme` fields and `client/admin/admin.css` —
+still reaches your page, but not from the static mount: the host's generated admin page reads them through
+`GET /api/v1/plugins/<slug>/admin-style` and links `GET /api/v1/plugins/<slug>/admin-style/css`, which
+answer a **signed-in** user for an **active** plugin only. Nothing changes for you: keep shipping
+`client/admin/admin.css` and the manifest fields. (The manifest used to be public at
+`/plugins/<slug>/manifest.json` — your exact version, author and permissions, to anyone.)
 
 **And every published subtree is read-only to your plugin — `public/` and `dist/` alike.**
-`wordjs.fs.write` and a raw `fs` write both refuse any path under either (and the three fixed files
-above), and `.html` cannot be created anywhere at all.
+`wordjs.fs.write` and a raw `fs` write both refuse any path under either (and `manifest.json` and
+`client/admin/admin.css`, which the host reads on your behalf), and `.html` cannot be created anywhere at
+all.
 
 **Why, plainly.** Your plugin's own directory is writable **without any grant** — that is deliberate, it
 is your scratch space. Previously the *entire* directory was also readable over HTTP by anyone, so those
@@ -809,7 +839,8 @@ either: mail-server's `data/` (attachments, Bayes corpus) was reachable on a cle
 with `wordjs.assets.enqueueScript`/`enqueueStyle`, whose `src` is now validated against exactly this
 surface. (The §4 builder's `dist/` output still reaches the browser: the admin and Verso **JS** bundles are
 fetched through the API route `/api/v1/plugins/<slug>/bundle`, not statically, and
-`dist/component.bundle.css` is one of the three fixed allowlisted paths. It is the *builder* that writes
+`dist/component.bundle.css` is the one fixed allowlisted path — both only while the plugin is active and
+granted `browser:script`. It is the *builder* that writes
 `dist/`, from outside the sandbox — your plugin's own code cannot.) If you were generating an asset at runtime, move
 that data into your own `wjp_<slug>_` table or the options API and render it through a route
 (`wordjs.http.route`) instead. Every shipped marketplace plugin already enqueues from `public/`.
@@ -836,7 +867,11 @@ the resolved IP at connect time; opt-in, with an exfiltration warning — declar
 An admin may narrow a `network` plugin further with a per-plugin **egress host allowlist**
 (`GET`/`POST /api/v1/plugins/:slug/egress-hosts`, stored in the `plugin_egress_hosts` option): empty =
 allow-all-public, a non-empty list flips that plugin to default-deny for everything but the listed hosts
-and their subdomains.
+and their subdomains. The list also governs the plugin's own `dns.lookup` / `dns.lookupService` (a lookup
+is egress too), and under a list a host is only matched when it is a plain ASCII hostname (letters,
+digits, `-`, `_`, dots) or an IP literal: pass the punycode form of an internationalised name (`fetch` and
+`URL` already do). If the host cannot load the egress policy, a `network` plugin reaches no public host
+and resolves no name until it reloads.
 
 > `scope: "admin"` on a capability implies only its ordinary `read`+`write` verbs — it never subsumes the
 > high-power verbs (`provider`, `register`, `register_route`), which must be granted explicitly.
@@ -851,7 +886,8 @@ and their subdomains.
 > `plugin-isolate.ts` / `adminMenu.ts` apply on top of the grant, never instead of it.
 
 There is no first-party pre-seeding: **activation** grants a plugin exactly the capabilities its
-manifest declares (idempotent — only when the plugin has no prior grant record), and that applies
+manifest declares (idempotent — only when the plugin holds no grants an administrator decided, so a
+revoke survives a re-activation), and that applies
 identically to first-party plugins (`mail-server`, `conference-manager`, the galleries, …) and
 anything you upload. First-party plugins are **not privileged** — they run in the same sandbox under
 the same checks.

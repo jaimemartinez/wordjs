@@ -287,10 +287,23 @@ function servedRootOf(resolved: string): string | null {
 // Serving an allowlist while leaving it writable would just reopen the channel through the door next
 // to it, so the two rules are derived from one declaration.
 const PLUGIN_PUBLIC_DIR = 'public';
-// Fixed, host-known files the admin shell requests by construction (frontend/src/app/admin/plugin/
-// [slug]/page.tsx fetches manifest.json + client/admin/admin.css; pluginBundleLoader links
-// dist/component.bundle.css). EXACT paths, never directories — no prefix, no traversal.
-const PLUGIN_PUBLIC_FILES = ['manifest.json', 'client/admin/admin.css', 'dist/component.bundle.css'];
+// The one fixed file outside public/ that the static /plugins mount serves: the Verso block stylesheet
+// pluginBundleLoader links next to the component bundle, on public pages and in the editor. EXACT
+// paths, never directories — no prefix, no traversal.
+const PLUGIN_SERVED_FILES = ['dist/component.bundle.css'];
+// The plugin's admin-page stylesheet. NOT on the static mount: it is an admin asset, handed out only
+// to a signed-in session, for an active plugin, by GET /api/v1/plugins/:slug/admin-style/css
+// (routes/plugin-bundles.ts).
+const PLUGIN_ADMIN_STYLESHEET = 'client/admin/admin.css';
+// Host-known files the host READS on the plugin's behalf and hands out in some form — the static mount
+// (dist/component.bundle.css), the authenticated admin-style routes (admin.css, and the manifest's
+// `style`/`theme` fields). None of them is servable anonymously except the first, but ALL of them stay
+// read-only to the plugin: what the host publishes for it must be what the administrator installed.
+//
+// manifest.json used to be served from /plugins/<slug>/manifest.json to anyone — name, exact version,
+// author, requested permissions and dependencies of every INSTALLED plugin, active or not: a ready-made
+// inventory for matching versions to known vulnerabilities. It is no longer on the served list.
+const PLUGIN_HOST_FILES = ['manifest.json', PLUGIN_ADMIN_STYLESHEET, ...PLUGIN_SERVED_FILES];
 // (#3, verification) THE OTHER SINK THAT SERVES A PLUGIN'S FILES: routes/plugin-bundles.ts answers
 // GET /api/v1/plugins/:slug/bundle{,/css,/manifest} — UNAUTHENTICATED — out of plugins/<slug>/dist/.
 // Listing only `dist/component.bundle.css` as unwritable closed one file of that directory and left
@@ -323,8 +336,12 @@ const PLUGIN_PUBLIC_EXT = new Set([
 
 /**
  * Is `rel` — a '/'-separated path RELATIVE to plugins/<folder>/ — part of the surface the host
- * publishes over HTTP? Everything else (data/, source, tests, .map, node_modules, anything a plugin
- * dropped at runtime) is a 404. FAIL CLOSED: a shape this cannot describe is not served.
+ * publishes over HTTP? Everything else (data/, source, tests, .map, node_modules, the manifest, the
+ * admin stylesheet, anything a plugin dropped at runtime) is a 404. FAIL CLOSED: a shape this cannot
+ * describe is not served.
+ *
+ * This is the PATH half of the rule. The PLUGIN half — only an active plugin's files, and its dist/
+ * output only while browser:script is granted — is core/plugin-serving, which index.ts applies on top.
  */
 function isPluginServedRelPath(rel: unknown): boolean {
     if (typeof rel !== 'string' || rel.length === 0 || rel.includes('\0')) return false;
@@ -334,7 +351,7 @@ function isPluginServedRelPath(rel: unknown): boolean {
     // Reject empty ('a//b'), relative ('.', '..') and dotfile segments before anything else — the
     // form gate, not a search for forbidden substrings.
     if (segs.some(s => !s || s === '.' || s === '..' || s.startsWith('.'))) return false;
-    if (PLUGIN_PUBLIC_FILES.indexOf(clean) !== -1) return true;
+    if (PLUGIN_SERVED_FILES.indexOf(clean) !== -1) return true;
     if (segs.length < 2 || segs[0] !== PLUGIN_PUBLIC_DIR) return false;
     return PLUGIN_PUBLIC_EXT.has(path.extname(clean).toLowerCase());
 }
@@ -403,7 +420,7 @@ function isPluginPublishedPath(ownDir: string, resolved: string): boolean {
         if (under(resolved, path.join(ownDir, sub))) return true;
     }
     const r = foldPath(resolved);
-    return PLUGIN_PUBLIC_FILES.some(f => r === foldPath(path.join(ownDir, ...f.split('/'))));
+    return PLUGIN_HOST_FILES.some(f => r === foldPath(path.join(ownDir, ...f.split('/'))));
 }
 
 // ── EFFECTIVE FILESYSTEM CAPABILITY, READ AT THE CALL ───────────────────────────────────────────────
@@ -443,8 +460,10 @@ function declaredPermissionsOf(pluginSlug: string): any[] {
 // ── WHERE THE GRANT IS READ, AND WHO WRITES IT: HOST vs ISOLATED CHILD ──────────────────────────────
 //
 // `plugin-permissions` keeps the granted-token set in a process-local Map. That Map has exactly one
-// population path — loadGrants()/setGrants()/backfillActive()/_setGrantsInMemory() — and ALL of them run
-// on the HOST, because they read or write the `plugin_grants` option and the child has no database.
+// population path — loadGrants(), adoptStoredPolicy(), the writers (setGrants()/applyGrants()/
+// seedGrants()/clearGrants()/ensureGrantRecord()/addUpgradeGrant()/removeGrants()/backfillActive()) and
+// _setGrantsInMemory() — and ALL of them run on the HOST, because
+// they read or write the `plugin_grants` option and the child has no database.
 //
 // The child NEVER writes that Map, so every reader inside the child was reading an empty one. That is
 // how "the grant is read LIVE at every call" became "the grant is unreadable, therefore refused": for a
@@ -471,10 +490,15 @@ function declaredPermissionsOf(pluginSlug: string): any[] {
 //
 // STALENESS, stated rather than assumed: the pushed value is a SPAWN-TIME snapshot, so it is only as
 // live as the isolate. Every writer of the grant store either precedes the spawn or forces a respawn —
-// loadGrants()/backfillActive() run at boot before isolates start; grant-on-activate seeds the mirror
-// and then activation spawns; and POST /plugins/:slug/permissions calls reloadIsolatedPlugin() after
-// setGrants() precisely so a revocation takes effect now. That is the same guarantee the network grant
-// has had, and it is the reason a revoke is not left inert.
+// loadGrants()/backfillActive() and the one-time browser:script upgrade (addUpgradeGrant()) run at boot
+// before isolates start; grant-on-activate persists the grants
+// and then activation spawns; and POST /plugins/:slug/permissions calls reloadIsolatedPlugin() as soon as
+// applyGrants() has the change in memory — before the `updated_option` subscribers have all been told —
+// precisely so a revocation takes effect now. On the OTHER nodes of a cluster the respawn is
+// core/coherence.ts's: it compares each child's spawn-time policy (plugin-isolate spawnPolicyFingerprint)
+// with the current one on every grant/egress broadcast and on a 10 s re-sync, so a revoke made elsewhere
+// takes effect within that bound (plus the respawn itself) even when the broadcast is lost. That is the
+// same guarantee the network grant has, and it is the reason a revoke is not left inert.
 const ISOLATE_FS_GRANT: { slug: string; read: boolean; write: boolean } | null = (() => {
     const g: any = (typeof globalThis !== 'undefined') ? globalThis : {};
     // HOST: the in-memory grant map is authoritative and live. Read the marker off `globalThis` (per
@@ -1295,9 +1319,13 @@ module.exports = {
     isPluginServedRelPath,
     PLUGIN_PUBLIC_DIR,
     PLUGIN_PUBLIC_EXT,
-    // The fixed, host-known files: index.ts serves them with ETag revalidation (no-cache) because their
-    // URLs carry no version while a plugin update rewrites them.
-    PLUGIN_PUBLIC_FILES,
+    // The admin-page stylesheet: off the static mount, served by the authenticated admin-style route
+    // (routes/plugin-bundles.ts), and — like every host file — never writable by the plugin.
+    PLUGIN_ADMIN_STYLESHEET,
+    // The fixed, host-known files of the static mount: index.ts serves them with ETag revalidation
+    // (no-cache) because their URLs carry no version while a plugin update rewrites them. (The admin
+    // stylesheet gets the same revalidation from its authenticated route.)
+    PLUGIN_SERVED_FILES,
     // The bundle sink's half of the same declaration: routes/plugin-bundles.ts serves EXACTLY these
     // names out of plugins/<folder>/dist/, and isPathSafe() denies the plugin writing any of them.
     isPluginBundleRelPath,

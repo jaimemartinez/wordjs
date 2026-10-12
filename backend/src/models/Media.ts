@@ -13,6 +13,15 @@ const fs = require('fs');
 // path.join() on a value read straight out of post_meta — see Media._deletableFiles below.
 const { resolveWithin } = require('../core/safe-path');
 const { runContentMutation, isContentMutationActive } = require('../core/content-outbox');
+// PRIVATE MEDIA (see core/private-media.ts): post_status 'private' + files outside the served tree.
+const privateMedia = require('../core/private-media');
+
+/** Which attachment statuses a listing covers, by requested visibility. Public is the default. */
+function statusesForVisibility(visibility: unknown): string[] {
+    if (visibility === 'all') return [privateMedia.PUBLIC_ATTACHMENT_STATUS, privateMedia.PRIVATE_ATTACHMENT_STATUS];
+    if (visibility === 'private') return [privateMedia.PRIVATE_ATTACHMENT_STATUS];
+    return [privateMedia.PUBLIC_ATTACHMENT_STATUS];
+}
 
 /**
  * Where a `link`-mode WXR import records that an attachment's bytes live on ANOTHER host.
@@ -50,7 +59,10 @@ class Media {
             sources = {},
             description = '',
             caption = '',
-            alt = ''
+            alt = '',
+            // PRIVATE MEDIA: the caller has ALREADY stored the file under config.uploads.privateDir.
+            // The row is marked with post_status 'private', which every public media query excludes.
+            isPrivate = false
         } = data;
 
         // Create attachment post
@@ -59,13 +71,14 @@ class Media {
             title: title || filename,
             content: description,
             excerpt: caption,
-            status: 'inherit',
+            status: isPrivate ? privateMedia.PRIVATE_ATTACHMENT_STATUS : privateMedia.PUBLIC_ATTACHMENT_STATUS,
             type: 'attachment',
             mimeType
         });
 
-        // Update GUID to relative path (portable across domains)
-        const relativePath = `/uploads/${filename}`;
+        // Update GUID to relative path (portable across domains). A private item has NO public path:
+        // its guid stays empty and formatAttachment answers the authenticated download route instead.
+        const relativePath = isPrivate ? '' : `/uploads/${filename}`;
         await dbAsync.run('UPDATE posts SET guid = ? WHERE id = ?', [relativePath, attachment.id]);
 
         // Store attachment metadata
@@ -98,13 +111,17 @@ class Media {
     }
 
     /**
-     * Get all media
+     * Get all media. `visibility` ('public' — the default —, 'private' or 'all') decides which
+     * attachment statuses are listed; authorization for anything but 'public' is the CALLER's job
+     * (routes/media.ts GET /).
      */
-    static async findAll(options = {}) {
+    static async findAll(options: any = {}) {
+        const { visibility, ...rest } = options || {};
         const posts = await Post.findAll({
-            ...options,
+            ...rest,
             type: 'attachment',
-            status: 'inherit'
+            status: null,
+            includeStatuses: statusesForVisibility(visibility)
         });
 
         // Bulk-hydrate all post meta in ONE query, then format from each bucket
@@ -124,6 +141,7 @@ class Media {
         const metadata = allMeta['_wp_attachment_metadata'] || {};
         const attachedFile = allMeta['_wp_attached_file'] || '';
         const alt = allMeta['_wp_attachment_image_alt'] || '';
+        const isPrivate = post.postStatus === privateMedia.PRIVATE_ATTACHMENT_STATUS;
 
         // AN ATTACHMENT WHOSE BYTES ARE SOMEWHERE ELSE. The WXR importer's `link` mode creates the row
         // and deliberately downloads nothing, so the file lives on the OLD site. Its guid holds the
@@ -145,7 +163,12 @@ class Media {
         // This makes the system fully portable across domains.
         let relativePath = post.guid || '';
 
-        if (remoteUrl) {
+        if (isPrivate) {
+            // A PRIVATE item has no public path at all: its only URL is the authenticated download
+            // route, which answers 404 to anyone who may not edit it. Never /uploads/... — that tree is
+            // served without authentication, and the file is not in it.
+            relativePath = privateMedia.privateFileUrl(post.id);
+        } else if (remoteUrl) {
             relativePath = remoteUrl;
         } else if (relativePath.startsWith('http://') || relativePath.startsWith('https://')) {
             // Handle legacy absolute URLs by extracting relative path
@@ -158,7 +181,7 @@ class Media {
         }
 
         // Build absolute URL for API response (a linked attachment is already absolute, and elsewhere)
-        const absoluteUrl = remoteUrl || `${config.site.url}${relativePath}`;
+        const absoluteUrl = (!isPrivate && remoteUrl) || `${config.site.url}${relativePath}`;
 
         return {
             id: post.id,
@@ -176,6 +199,9 @@ class Media {
             // post_status='inherit', so their visibility is derived from this parent — the media
             // route uses it to hide draft/private-parented attachments from non-owners.
             parent: post.postParent || 0,
+            // 'private' = stored outside the public uploads tree and hidden from every public listing
+            // (core/private-media.ts); 'public' = an ordinary media-library item.
+            visibility: isPrivate ? 'private' : 'public',
             mimeType: post.postMimeType,
             guid: absoluteUrl,      // RSS requires absolute URLs (globally unique)
             sourceUrl: relativePath, // Use relative path (e.g. /uploads/file.jpg) for internal app flexibility
@@ -241,9 +267,11 @@ class Media {
      * (the DB row still goes, so a poisoned value cannot make an attachment undeletable); a single bad
      * size entry drops only itself, because each surviving path carries its own containment proof.
      */
-    static _deletableFiles(storedFile: unknown, sizes: any, sources: any = null): string[] {
+    static _deletableFiles(storedFile: unknown, sizes: any, sources: any = null, rootDir: string | null = null): string[] {
         if (typeof storedFile !== 'string' || storedFile.length === 0) return [];
-        const uploadDir = path.resolve(config.uploads.dir);
+        // The root the files live under: the public uploads tree by default, or the private one for a
+        // private attachment. Every proof below is made against THIS root.
+        const uploadDir = path.resolve(rootDir || config.uploads.dir);
 
         // Split on BOTH separators, not just '/': a legacy row written on Win32 can carry backslashes,
         // and splitting on them is safe precisely because each resulting segment must still pass
@@ -334,7 +362,10 @@ class Media {
         // Resolve targets while metadata still exists, but unlink only AFTER the database commits.
         // A rollback must never leave a live attachment row pointing at a file we already removed.
         if (mayUnlink) {
-            const targets = Media._deletableFiles(media.mediaDetails.file, media.mediaDetails.sizes, media.mediaDetails.sources);
+            const targets = Media._deletableFiles(
+                media.mediaDetails.file, media.mediaDetails.sizes, media.mediaDetails.sources,
+                privateMedia.uploadsRootFor(media.visibility === 'private')
+            );
             database.afterCommit(() => {
                 for (const target of targets) {
                     try { if (fs.existsSync(target)) fs.unlinkSync(target); }
@@ -345,6 +376,62 @@ class Media {
 
         // Delete the post
         return await Post.delete(id, true);
+    }
+
+    /**
+     * Make an attachment private (or public again): move every file it owns between the public uploads
+     * tree and config.uploads.privateDir, then flip its status. The move is all-or-nothing and happens
+     * BEFORE the row changes, so a failure leaves the item exactly as it was; a database failure after
+     * the move puts the files back.
+     *
+     * Throws an Error with `code` = 'media_remote_linked' for a `link`-mode import (it owns no local bytes
+     * to protect) and 'media_file_missing' when the stored file is not where the row says.
+     */
+    static async setVisibility(id: number, makePrivate: boolean) {
+        const media = await Media.findById(id);
+        if (!media) throw new Error('Media not found');
+        const isPrivate = media.visibility === 'private';
+        if (isPrivate === !!makePrivate) return media;
+
+        if (await Media._isRemotelyLinked(id)) {
+            const err: any = new Error('This attachment is linked to a file on another site; it has no local file to make private.');
+            err.code = 'media_remote_linked';
+            throw err;
+        }
+
+        const details = media.mediaDetails || {};
+        const fromRoot = privateMedia.uploadsRootFor(isPrivate);
+        const toRoot = privateMedia.uploadsRootFor(!isPrivate);
+        const fromFiles = Media._deletableFiles(details.file, details.sizes, details.sources, fromRoot);
+        const toFiles = Media._deletableFiles(details.file, details.sizes, details.sources, toRoot);
+        if (!fromFiles.length || fromFiles.length !== toFiles.length || !fs.existsSync(fromFiles[0])) {
+            const err: any = new Error('The stored file for this attachment could not be found.');
+            err.code = 'media_file_missing';
+            throw err;
+        }
+        const pairs: Array<[string, string]> = fromFiles.map((f: string, i: number) => [f, toFiles[i]]);
+        privateMedia.moveAttachmentFiles(pairs);
+
+        try {
+            const status = makePrivate ? privateMedia.PRIVATE_ATTACHMENT_STATUS : privateMedia.PUBLIC_ATTACHMENT_STATUS;
+            const guid = makePrivate ? '' : `/uploads/${String(details.file).replace(/\\/g, '/')}`;
+            await dbAsync.run(
+                `UPDATE posts SET post_status = ?, guid = ? WHERE id = ? AND post_type = 'attachment'`,
+                [status, guid, id]
+            );
+            await Post._invalidatePostCacheById(id);
+            Post._invalidateCounts();
+        } catch (e) {
+            privateMedia.moveAttachmentFiles(pairs.map(([a, b]) => [b, a] as [string, string]));
+            throw e;
+        }
+
+        if (makePrivate) {
+            // Drop any AVIF/WebP the negotiation middleware cached for these files in the public tree.
+            const publicRoot = privateMedia.publicUploadsRoot();
+            privateMedia.purgeNegotiationCache(fromFiles.map((f: string) => path.relative(publicRoot, f)));
+        }
+        return await Media.findById(id);
     }
 
     /**
@@ -366,14 +453,16 @@ class Media {
     /**
      * Count media
      */
-    static async count(options = {}) {
-        // Mirror Media.findAll's WHERE exactly (it forces status: 'inherit' AFTER the
+    static async count(options: any = {}) {
+        // Mirror Media.findAll's WHERE exactly (same visibility → statuses mapping, applied AFTER the
         // spread) so the pager total matches the listed rows. Without this, Post.count
         // defaults status to 'publish' and undercounts inherit-status attachments.
+        const { visibility, ...rest } = options || {};
         return await Post.count({
-            ...options,
+            ...rest,
             type: 'attachment',
-            status: 'inherit'
+            status: null,
+            includeStatuses: statusesForVisibility(visibility)
         });
     }
 

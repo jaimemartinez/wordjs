@@ -65,7 +65,7 @@ const STYLES = `
 
 const DOW = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
 const MON = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
-const STATUS_ES = { confirmed: "Confirmada", cancelled: "Cancelada", completed: "Completada" };
+const STATUS_ES = { pending: "Pendiente de confirmar", confirmed: "Confirmada", cancelled: "Cancelada", completed: "Completada", expired: "Caducada" };
 
 const pad2 = (n) => String(n).padStart(2, "0");
 const dateStr = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
@@ -210,7 +210,22 @@ export default function BookingsVerso({ serviceId, accentColor, elementId }) {
             if (tok) {
                 setLookupOpen(true);
                 setLookupCode(tok);
-                doLookup(tok);
+                if (params.get("confirm") === "1") {
+                    // Link from the confirmation email: confirm first, then show the status.
+                    fetch(`${API}/public/confirm`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ token: tok }),
+                    })
+                        .then(async (res) => {
+                            const data = await res.json().catch(() => ({}));
+                            if (res.ok) doLookup(tok);
+                            else setLookupError(data.error || "No se pudo confirmar la reserva.");
+                        })
+                        .catch(() => setLookupError("No se pudo conectar. Intenta de nuevo."));
+                } else {
+                    doLookup(tok);
+                }
             }
         } catch { /* ignore */ }
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -266,6 +281,7 @@ export default function BookingsVerso({ serviceId, accentColor, elementId }) {
                     notes: form.notes.trim(),
                     hp: form.hp,
                     elapsed: Date.now() - (formShownAt.current || 0),
+                    page_url: typeof window !== "undefined" ? window.location.href : "",
                 }),
             });
             const data = await res.json().catch(() => ({}));
@@ -349,6 +365,19 @@ export default function BookingsVerso({ serviceId, accentColor, elementId }) {
                     onCancel={doCancel}
                     onClose={() => { setLookupBooking(null); setLookupCode(""); setCancelMsg(null); }}
                 />
+            ) : done && done.pending ? (
+                /* ── awaiting email confirmation ── */
+                <div className="wjbk-card">
+                    <p className="wjbk-title">Revisa tu correo</p>
+                    <div className="wjbk-summary">
+                        <div><strong>{service ? service.name : ""}</strong></div>
+                        <div>{date} a las {time}</div>
+                    </div>
+                    <div className="wjbk-ok">{done.message || "Te enviamos un correo: abre el enlace para confirmar la reserva."}</div>
+                    <div className="wjbk-row" style={{ marginTop: "0.75rem" }}>
+                        <button type="button" className="wjbk-btn-ghost" onClick={resetAll}>Hacer otra reserva</button>
+                    </div>
+                </div>
             ) : done ? (
                 /* ── success view ── */
                 <div className="wjbk-card">

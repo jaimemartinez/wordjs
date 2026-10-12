@@ -79,4 +79,99 @@ function clientIp(req: any): string {
     return String(sock.remoteAddress || '');
 }
 
-module.exports = { clientIp, resolveTrustProxy, trustProxyConfigured, normalizeTrustProxy };
+/** The 8 hextets of an IPv6 literal net.isIPv6 accepted (zone id already removed), or null. */
+function ipv6Hextets(addr: string): number[] | null {
+    const net = require('net');
+    let s = addr.toLowerCase();
+    // An embedded IPv4 tail (::ffff:192.0.2.1) becomes its two hextets.
+    const lastColon = s.lastIndexOf(':');
+    const tail = s.slice(lastColon + 1);
+    if (tail.includes('.')) {
+        if (!net.isIPv4(tail)) return null;
+        const o = tail.split('.').map(Number);
+        s = `${s.slice(0, lastColon + 1)}${((o[0] << 8) | o[1]).toString(16)}:${((o[2] << 8) | o[3]).toString(16)}`;
+    }
+    const halves = s.split('::');
+    if (halves.length > 2) return null;
+    const head = halves[0] ? halves[0].split(':') : [];
+    const rest = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+    const fill = halves.length === 2 ? 8 - head.length - rest.length : 0;
+    if (fill < 0) return null;
+    const groups = [...head, ...new Array(fill).fill('0'), ...rest];
+    if (groups.length !== 8) return null;
+    const out: number[] = [];
+    for (const g of groups) {
+        if (!/^[0-9a-f]{1,4}$/.test(g)) return null;
+        out.push(parseInt(g, 16));
+    }
+    return out;
+}
+
+/**
+ * THE RATE-LIMIT IDENTITY OF AN ADDRESS — what every per-client limit keys on.
+ *
+ * An IPv4 address is one client (or one NAT, which is the best anyone can do). An IPv6 address is not:
+ * a subscriber, a VPS or a cloud instance is routinely handed a whole /64 (2^64 addresses), and every
+ * address in it reaches the server. Keyed per /128, a limit is no limit for such a client — rotating the
+ * low 64 bits mints a fresh bucket per request for the login throttle, the API and auth limiters, the
+ * comment limiter and the per-client key plugins rate-limit on. So an IPv6 address is keyed by its /64
+ * (rendered `2001:db8:1:2::/64`), the smallest prefix a single subscriber is normally given.
+ *
+ * An IPv4-MAPPED address (`::ffff:192.0.2.1`, how a dual-stack listener reports an IPv4 peer) stays per
+ * address, in its plain IPv4 spelling: grouped by /64 it would put EVERY IPv4 client in ONE bucket
+ * (`::ffff:0:0` is all one /64), and both spellings of the same client must share a bucket. Anything that
+ * is not an address (an empty peer) is returned unchanged.
+ */
+function ipBucket(raw: unknown): string {
+    const net = require('net');
+    const original = raw === undefined || raw === null ? '' : String(raw);
+    let ip = original.trim();
+    if (ip.startsWith('[') && ip.endsWith(']')) ip = ip.slice(1, -1);
+    const zone = ip.indexOf('%');
+    if (zone !== -1) ip = ip.slice(0, zone);
+    if (net.isIPv4(ip)) return ip;
+    if (!net.isIPv6(ip)) return original;
+    const h = ipv6Hextets(ip);
+    if (!h) return ip.toLowerCase();
+    if (h[0] === 0 && h[1] === 0 && h[2] === 0 && h[3] === 0 && h[4] === 0 && h[5] === 0xffff) {
+        return `${h[6] >> 8}.${h[6] & 255}.${h[7] >> 8}.${h[7] & 255}`;
+    }
+    return `${h.slice(0, 4).map((x) => x.toString(16)).join(':')}::/64`;
+}
+
+/** clientIp() as a rate-limit identity (ipBucket). Audit lines keep the full clientIp(). */
+function clientIpBucket(req: any): string {
+    return ipBucket(clientIp(req));
+}
+
+/**
+ * The privacy-preserving per-client key a plugin route receives (`req.clientKey`), so a plugin can
+ * rate-limit or deduplicate by caller WITHOUT ever seeing the raw IP.
+ *
+ * An HMAC keyed with a per-install secret plugins never see: a plain sha256 over the 32-bit IPv4 space is
+ * rainbow-tabled back to the address, and the table is reusable across installs when the prefix is a
+ * global constant (#28/#30). The input is the rate-limit identity (ipBucket), so a client holding an IPv6
+ * /64 is ONE caller to the plugin, as it is to every core limit.
+ *
+ * The key is the site's JWT signing secret (`config.jwt.secret`): persisted with the install and the same
+ * on every node, so a plugin's per-client counters survive a restart and agree across nodes. It used to
+ * read `config.jwtSecret`, a property the loaded config does not have, so every process silently fell back
+ * to a random per-process key. The published placeholder is still treated as absent.
+ */
+function pluginClientKey(req: any): string {
+    try {
+        const bucket = clientIpBucket(req);
+        if (!bucket) return '';
+        const crypto = require('crypto');
+        let secret: string | undefined = config && config.jwt && typeof config.jwt.secret === 'string' ? config.jwt.secret : undefined;
+        if (!secret || secret === 'wordjs-default-secret-change-me') {
+            const g: any = globalThis as any;
+            secret = g.__wjClientKeySecret || (g.__wjClientKeySecret = crypto.randomBytes(32).toString('hex'));
+        }
+        return crypto.createHmac('sha256', 'wjck-hmac:' + secret).update(bucket).digest('hex').slice(0, 24);
+    } catch {
+        return '';
+    }
+}
+
+module.exports = { clientIp, clientIpBucket, ipBucket, pluginClientKey, resolveTrustProxy, trustProxyConfigured, normalizeTrustProxy };

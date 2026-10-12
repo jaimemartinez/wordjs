@@ -43,22 +43,34 @@ exports.init = function (wordjs) {
 
     // === API ROUTES (host namespaces them under /api/v1/plugin/card-gallery) ===
 
+    // Public callers never see an error's text: a driver's message names tables, columns and
+    // constraints. The details go to the server log.
+    const failQuietly = (res, e, what) => {
+        console.error(`[card-gallery] ${what} failed:`, e && e.message ? e.message : e);
+        res.status(500).json({ error: 'No se pudo completar la operación. Inténtalo de nuevo.' });
+    };
+    // Public routes answer every failure themselves, through failQuietly: a public caller only ever
+    // gets a reply this plugin wrote.
+    const quietly = (what, handler) => async (req, res) => {
+        try { await handler(req, res); } catch (e) { failQuietly(res, e, what); }
+    };
+
     // GET / — list all galleries (public)
-    http.route('get', '/', async (req, res) => {
+    http.route('get', '/', quietly('gallery list', async (req, res) => {
         const list = await options.get('card_galleries_list', []);
         const galleries = await Promise.all(list.map(async id => {
             const data = await options.get(`card_gallery_${id}`, null);
             return data ? { id, ...data, cardCount: (data.cards || []).length } : null;
         }));
         res.json(galleries.filter(Boolean));
-    });
+    }));
 
     // GET /:id — single gallery (public)
-    http.route('get', '/:id', async (req, res) => {
+    http.route('get', '/:id', quietly('gallery', async (req, res) => {
         const data = await options.get(`card_gallery_${req.params.id}`, null);
         if (!data) return res.status(404).json({ error: 'Gallery not found' });
         res.json({ id: req.params.id, ...data });
-    });
+    }));
 
     // POST / — create gallery (admin)
     http.route('post', '/', { auth: true, admin: true }, async (req, res) => {

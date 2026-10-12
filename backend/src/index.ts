@@ -94,7 +94,7 @@ const app = express();
 setApp(app);
 
 const rateLimit = require('express-rate-limit');
-const { clientIp, resolveTrustProxy } = require('./core/client-ip');
+const { clientIpBucket, resolveTrustProxy } = require('./core/client-ip');
 
 // TRUST PROXY — from the single source of truth, NOT a hard-coded `1`. In the monolith there is no
 // fronting proxy, so trusting one X-Forwarded-For hop trusted a header the CLIENT wrote: an attacker
@@ -105,8 +105,10 @@ app.set('trust proxy', resolveTrustProxy());
 
 // The honest per-request key for EVERY IP-based limiter below. Keying through clientIp() rather than
 // leaving express-rate-limit's default req.ip means the bucket can never diverge from the trust
-// decision, even if later middleware rewrites req.ip.
-const ipKey = (req: any) => clientIp(req);
+// decision, even if later middleware rewrites req.ip. And it is the address's rate-limit identity
+// (clientIpBucket): an IPv6 client is its /64, or rotating the low 64 bits of an address it owns would
+// mint a fresh bucket per request.
+const ipKey = (req: any) => clientIpBucket(req);
 
 // REQUEST CORRELATION AND HTTP METRICS — THE FIRST MIDDLEWARE ON THE APP, ahead of helmet, CORS, the
 // cookie parser and every limiter. It mints (or validates and echoes) X-Request-Id and opens the
@@ -648,66 +650,18 @@ app.use('/themes', (req: Request, res: Response, next: NextFunction) => {
     });
 });
 
-// Plugins declare an admin-page URL slug (manifest.frontend.adminPage.slug) that frequently DIFFERS
-// from the on-disk folder (e.g. slug "youtube" → folder "youtube-videos"). The admin shell requests a
-// plugin's assets under the SLUG (/plugins/<slug>/client/admin/admin.css, /plugins/<slug>/manifest.json).
-// For plugins BAKED into the frontend build the slug→folder map is compiled in, but a plugin installed
-// at RUNTIME isn't in that map, so its stylesheet 404s and its admin page renders UNSTYLED. Rewrite the
-// leading path segment slug→folder before the static handler so any asset resolves regardless of how the
-// plugin was installed (cached; no-op when the segment is already a real folder).
 const PLUGINS_ROOT = installPath('plugins');
-const adminSlugFolderCache = new Map<string, string>();
-// Resolve <folder>/manifest.json under PLUGINS_ROOT, confirming it stays inside the root (path-injection
-// barrier). Returns the absolute manifest path, or null if the segment escapes.
-function pluginManifestPath(folder: string): string | null {
-    const root = path.resolve(PLUGINS_ROOT);
-    const p = path.resolve(root, folder, 'manifest.json');
-    return p.startsWith(root + path.sep) ? p : null;
-}
-// NEGATIVE cache: a segment that resolved to nothing costs a readdir + a manifest parse of EVERY
-// plugin — and unknown segments are exactly what bot crawls generate. Short TTL so a just-installed
-// plugin's slug still resolves within seconds; size-capped so random-segment spam can't grow it.
-const adminSlugMissCache = new Map<string, number>();
-const SLUG_MISS_TTL_MS = 10_000;
-function resolveAdminSlugFolder(seg: string): string | null {
-    if (!/^[a-zA-Z0-9_-]+$/.test(seg)) return null;                        // reject traversal / odd names
-    const missUntil = adminSlugMissCache.get(seg);
-    if (missUntil !== undefined) {
-        if (missUntil > Date.now()) return null;
-        adminSlugMissCache.delete(seg);
-    }
-    const direct = pluginManifestPath(seg);
-    if (direct && fs.existsSync(direct)) return seg;                       // already a folder
-    const cached = adminSlugFolderCache.get(seg);
-    const cachedPath = cached ? pluginManifestPath(cached) : null;
-    if (cachedPath && fs.existsSync(cachedPath)) return cached!;
-    let dirs: string[];
-    try {
-        dirs = fs.readdirSync(PLUGINS_ROOT, { withFileTypes: true })
-            .filter((d: any) => d.isDirectory()).map((d: any) => d.name);
-    } catch { return null; }
-    for (const folder of dirs) {
-        if (!/^[a-zA-Z0-9_-]+$/.test(folder)) continue;
-        const mp = pluginManifestPath(folder);
-        if (!mp) continue;
-        try {
-            const m = JSON.parse(fs.readFileSync(mp, 'utf8'));
-            if (m?.frontend?.adminPage?.slug === seg) { adminSlugFolderCache.set(seg, folder); return folder; }
-        } catch { /* unreadable/invalid manifest → skip */ }
-    }
-    if (adminSlugMissCache.size > 500) adminSlugMissCache.clear();
-    adminSlugMissCache.set(seg, Date.now() + SLUG_MISS_TTL_MS);
-    return null;
-}
-app.use('/plugins', (req: any, _res: any, next: any) => {
-    const parts = req.url.split('/');           // req.url is post-mount: "/<seg>/rest..." → ['', seg, ...]
-    const seg = parts[1] ? decodeURIComponent(parts[1].split('?')[0]) : '';
-    if (seg) {
-        const folder = resolveAdminSlugFolder(seg);
-        if (folder && folder !== seg) { parts[1] = folder; req.url = parts.join('/'); }
-    }
-    next();
-});
+// NO SLUG→FOLDER REWRITE HERE ANY MORE. A middleware in front of this mount used to rewrite a leading
+// admin-page slug (manifest.frontend.adminPage.slug, e.g. "youtube") to the plugin's folder
+// ("youtube-videos") by scanning every INSTALLED manifest, because the admin page fetched
+// /plugins/<slug>/manifest.json and /plugins/<slug>/client/admin/admin.css by slug. Neither file is on
+// this mount now — the page asks the authenticated GET /api/v1/plugins/:slug/admin-style{,/css}, which
+// resolves the slug among ACTIVE plugins only — and nothing else addresses a plugin file by its admin
+// slug: enqueued assets (core/plugin-assets) and Verso block CSS (pluginBundleLoader) use the folder.
+// The rewrite was an anonymous oracle of its own: it resolved the slug of an INACTIVE plugin, and an
+// installed folder answered from one existsSync while an unknown segment paid a readdir plus a parse of
+// every manifest on disk. With it gone, the work below no longer depends on what is installed.
+//
 // SECURITY (#3): this used to be `express.static(path.resolve('./plugins'))`, i.e. the ENTIRE plugin
 // tree published to the anonymous internet — source, tests, .map files, and every plugin's data/ dir
 // (mail-server's attachments + bayes.json were reachable on a CLEAN INSTALL). Combined with the fact
@@ -719,8 +673,19 @@ app.use('/plugins', (req: any, _res: any, next: any) => {
 //
 // It is now an ALLOWLIST, declared once in core/io-guard (isPluginServedRelPath) so that "what is
 // published" and "what the plugin may not write" are the same statement: plugins/<slug>/public/ with
-// a servable extension, plus three fixed host-known files the admin shell requests by construction.
-// Everything else — data/, code, manifest-adjacent files, .map, node_modules — is a 404.
+// a servable extension, plus dist/component.bundle.css (the Verso block stylesheet public pages and
+// the editor link). Everything else — data/, code, the manifest, the admin stylesheet, .map,
+// node_modules — is a 404.
+//
+// …AND ONLY FOR A PLUGIN THAT IS SWITCHED ON. The allowlist says which PATHS; core/plugin-serving says
+// which PLUGINS, with the same predicates the bundle routes use: public/** only while the plugin is
+// ACTIVE, dist/ only while it is active AND granted browser:script (exactly the gate of
+// /api/v1/plugins/:slug/bundle, whose stylesheet this is). Before, every INSTALLED plugin answered
+// here, inactive or not, so probing /plugins/<slug>/… was an anonymous inventory of the install —
+// including plugins deactivated precisely because they are vulnerable. A refusal is the same bare 404
+// as a missing file, produced after the same work: the gate (one cached option read) runs for every
+// candidate path BEFORE the filesystem is touched, so "installed but inactive" and "never installed"
+// cost the same and look the same.
 //
 // The check is performed on the SAME value that is served. express.static re-parses and re-decodes
 // req.url itself, so a gate placed in front of it validates a string the file layer may read
@@ -728,7 +693,9 @@ app.use('/plugins', (req: any, _res: any, next: any) => {
 // segments are decoded ONCE, proved with safe-path.resolveWithin, and the RESOLVED absolute path is
 // what res.sendFile receives.
 // (resolveWithin is required above, with the /themes twin that uses the same containment proof.)
-const { isPluginServedRelPath, PLUGIN_PUBLIC_FILES } = require('./core/io-guard');
+const { isPluginServedRelPath, PLUGIN_BUNDLE_DIR, PLUGIN_SERVED_FILES } = require('./core/io-guard');
+// Read through the module object at request time, so the live active list and grant store decide.
+const pluginServing = require('./core/plugin-serving');
 // The /uploads denylist minus JS: a plugin asset .js is admin-installed, AST-scanned code that the
 // structured enqueue bridge (core/plugin-assets.ts) exists to emit as <script src>, and with nosniff
 // an octet-stream would simply refuse to load. Uploads are visitor-controlled bytes, so they keep the
@@ -753,35 +720,56 @@ app.use('/plugins', (req: Request, res: Response, next: NextFunction) => {
     const abs = resolveWithin(PLUGINS_ROOT, ...segs);
     if (!abs) return res.status(404).end();
 
-    const ext = path.extname(abs).toLowerCase();
-    const headers: Record<string, string> = { 'X-Content-Type-Options': 'nosniff' };
-    if (PLUGIN_ATTACH_EXTS.has(ext)) {
-        headers['Content-Type'] = 'application/octet-stream';
-        headers['Content-Disposition'] = 'attachment';
-    }
-    // Plugin assets can change in place on update → 1h + ETag revalidation (same policy as before).
-    // EXCEPT the fixed, host-known files (manifest.json, client/admin/admin.css, dist/component.bundle.css):
-    // their URLs carry no version, and the stylesheets are generated from the same UI sources as the
-    // bundles, which are already `no-cache`. An hour of a cached stylesheet next to a fresh bundle is a
-    // screen without its new classes after every plugin update — the failure the stylesheets exist to
-    // fix. So `no-cache` + the ETag: always revalidated, a cheap 304 when unchanged.
-    const fixedFile = PLUGIN_PUBLIC_FILES.indexOf(rel) !== -1;
-    if (fixedFile) headers['Cache-Control'] = 'no-cache';
-    //
-    // REGRESSION FIXED: this passed the ABSOLUTE path with no `root`. In that mode `send` splits the
-    // WHOLE absolute path and `dotfiles: 'deny'` rejects the request if ANY component starts with a
-    // dot — so on an install under `~/.wordjs`, `/opt/.apps/wordjs`, or a CI checkout beneath
-    // `~/.cache/…`, every plugin asset (manifest.json, admin.css, the component bundle) answered 404
-    // deterministically. express.static never had that behaviour because it evaluates the parts
-    // RELATIVE to the mount root. Giving `send` the root back restores that: dotfiles is judged on
-    // the served subtree, which is the only place a dot segment could ever be attacker-influenced —
-    // and `isPluginServedRelPath` already rejects every dot segment before we get here.
-    res.sendFile(path.relative(PLUGINS_ROOT, abs), { root: PLUGINS_ROOT, dotfiles: 'deny', maxAge: fixedFile ? 0 : '1h', cacheControl: !fixedFile, headers }, (err: any) => {
-        if (!err) return;
-        if (res.headersSent) { try { res.end(); } catch { /* client gone */ } return; }
-        const missing = err.status === 403 || err.status === 404
-            || err.code === 'ENOENT' || err.code === 'ENOTDIR' || err.code === 'EISDIR';
-        res.status(missing ? 404 : 500).end();
+    // dist/ is build output of the plugin's browser bundle: the bundle's gate. public/**: active only.
+    const isBundleOutput = segs[1] === PLUGIN_BUNDLE_DIR;
+    const servable: Promise<boolean> = isBundleOutput
+        ? pluginServing.browserCodeServable(folder)
+        : pluginServing.pluginFilesServable(folder);
+    servable.then((ok: boolean) => {
+        if (!ok) return res.status(404).end();
+
+        const ext = path.extname(abs).toLowerCase();
+        const headers: Record<string, string> = { 'X-Content-Type-Options': 'nosniff' };
+        if (PLUGIN_ATTACH_EXTS.has(ext)) {
+            headers['Content-Type'] = 'application/octet-stream';
+            headers['Content-Disposition'] = 'attachment';
+        }
+        // CACHING.
+        //  · The fixed, host-known files (io-guard PLUGIN_SERVED_FILES — today dist/component.bundle.css)
+        //    and the rest of dist/: `no-cache` + the ETag `send` computes. Their URLs carry no version,
+        //    and the block stylesheet is generated from the same UI sources as the bundle it styles,
+        //    which is already `no-cache`: an hour of a cached stylesheet next to a fresh bundle is a
+        //    screen without its new classes after every plugin update. It is also the policy of the
+        //    bundle routes the file belongs to, so a deactivation or a browser:script revoke is seen at
+        //    the next load (a cheap 304 while nothing changed).
+        //  · public/**: 1h + ETag revalidation, as before — these are linked from every public page. A
+        //    deactivated plugin's tags leave the page at once (core/plugin-assets emits active plugins
+        //    only), so what remains is that a cache which already holds a copy may answer for it until
+        //    the hour is up.
+        const revalidate = isBundleOutput || PLUGIN_SERVED_FILES.indexOf(rel) !== -1;
+        const cache = revalidate
+            ? { cacheControl: false, headers: { ...headers, 'Cache-Control': 'no-cache' } }
+            : { maxAge: '1h', headers };
+        //
+        // REGRESSION FIXED: this passed the ABSOLUTE path with no `root`. In that mode `send` splits the
+        // WHOLE absolute path and `dotfiles: 'deny'` rejects the request if ANY component starts with a
+        // dot — so on an install under `~/.wordjs`, `/opt/.apps/wordjs`, or a CI checkout beneath
+        // `~/.cache/…`, every plugin asset (the component stylesheet, every public/ file) answered 404
+        // deterministically. express.static never had that behaviour because it evaluates the parts
+        // RELATIVE to the mount root. Giving `send` the root back restores that: dotfiles is judged on
+        // the served subtree, which is the only place a dot segment could ever be attacker-influenced —
+        // and `isPluginServedRelPath` already rejects every dot segment before we get here.
+        res.sendFile(path.relative(PLUGINS_ROOT, abs), { root: PLUGINS_ROOT, dotfiles: 'deny', ...cache }, (err: any) => {
+            if (!err) return;
+            if (res.headersSent) { try { res.end(); } catch { /* client gone */ } return; }
+            const missing = err.status === 403 || err.status === 404
+                || err.code === 'ENOENT' || err.code === 'ENOTDIR' || err.code === 'EISDIR';
+            res.status(missing ? 404 : 500).end();
+        });
+    }, () => {
+        // The predicates fail closed on their own (an unreadable active list reads as "nothing is
+        // active"); anything that still throws is a refusal too, never a file.
+        if (!res.headersSent) res.status(404).end();
     });
 });
 // Serve .well-known (ACME support) - Allow dotfiles. NEVER cache challenge tokens (short-lived, per-order).
@@ -1052,7 +1040,10 @@ app.use(config.api.prefix, mfaComplianceGate);
 // only when everything is provably public: read method, allowlisted content prefix, no resolved
 // user, no credentials on the request, no Set-Cookie on the response, 2xx, and no header already
 // chosen by the route. Anything authenticated or personalized never gets it.
-const PUBLIC_CACHEABLE_RE = /^\/(settings|posts|menus|fonts|categories|tags|comments|plugins\/assets|seo)(\/|$)/;
+// Not `plugins/assets`: that list is what puts a plugin's <script> on every public page, and it changes
+// the moment a plugin is deactivated or loses assets:write. A shared copy would keep a revoked plugin's
+// script in front of visitors where no purge reaches (the route sends `private, no-cache` itself).
+const PUBLIC_CACHEABLE_RE = /^\/(settings|posts|menus|fonts|categories|tags|comments|seo)(\/|$)/;
 app.use(config.api.prefix, (req: Request, res: Response, next: NextFunction) => {
     if ((req.method === 'GET' || req.method === 'HEAD') && PUBLIC_CACHEABLE_RE.test(req.path)) {
         const origJson = res.json.bind(res);
@@ -1117,12 +1108,12 @@ app.get('/api', (req: Request, res: Response) => {
 // Internal Routes (Gateway Hooks)
 app.use('/api/internal', require('./routes/internal'));
 
-// NOTE: the legacy Handlebars public renderer (./routes/frontend → theme-engine) is intentionally
-// NOT mounted. The public site is rendered by the Next.js frontend in BOTH split and monolith mode
-// (the gateway/monolith only route /api,/uploads,/themes,/plugins,/.well-known,/healthz,/readyz,
-// /metrics to the backend; everything else → Next.js). That catch-all was unreachable in both modes;
-// leaving it mounted was a latent footgun (it would shadow backend paths if the prefix list changed).
-// routes/frontend.ts + theme-engine.ts are kept on disk only as a legacy/monolith-render fallback.
+// NOTE: the public site is rendered by the Next.js frontend in BOTH split and monolith mode (the
+// gateway/monolith only route /api,/uploads,/themes,/plugins,/.well-known,/healthz,/readyz,/metrics to
+// the backend; everything else → Next.js). The legacy Handlebars catch-all renderer that used to sit
+// here (routes/frontend.ts) was unreachable in both modes, then unmounted, and is now deleted: it still
+// resolved a bare slug post-before-page and could not render a single entry, and dead code that keeps an
+// old read rule is a twin waiting to be re-mounted (tests/route-modules-mounted.test.ts).
 
 // Add analytics route
 app.use('/api/v1/analytics', require('./routes/analytics'));
@@ -1529,10 +1520,12 @@ async function initialize() {
             console.error(`❌ Site address reconciliation failed: ${e && e.message}`);
         }
 
-        // Load the per-plugin permission grants (Android-style, default-deny). Then a one-time,
-        // non-breaking backfill: grandfather the manifest-declared permissions of plugins that are
-        // ALREADY ACTIVE (and have no grant record yet) so flipping to default-deny doesn't break a
-        // running site — new activations stay default-deny. Best-effort; never blocks boot.
+        // Load the per-plugin permission grants (Android-style, default-deny). Then a non-breaking
+        // backfill: grandfather the manifest-declared permissions of plugins that are ACTIVE and have
+        // no grant record, so flipping to default-deny doesn't break a running site — new activations
+        // stay default-deny. Best-effort; never blocks boot. It runs at EVERY boot over the manifests on
+        // disk, which is why an in-place update gives a plugin with no grant record an empty one first
+        // (plugin-permissions ensureGrantRecord).
         try {
             await require('./core/plugin-permissions').loadGrants();
             await require('./core/plugin-permissions').loadEgressHosts();
@@ -1550,8 +1543,9 @@ async function initialize() {
             await require('./core/plugin-permissions').backfillActive(entries);
             // One-time upgrade step for the browser:script capability: plugins that were already active
             // and already shipped browser code keep their admin pages, hooks and blocks (the bundle routes
-            // now serve only granted plugins). Runs once — recorded in an option — and only ever adds
-            // that one token. See core/plugins.ts migrateBrowserCapabilityGrants.
+            // now serve only granted plugins). Runs once — recorded in the grant store, and at install time
+            // on a site the installer created — only ever adds that one token, and never to a plugin whose
+            // grants an administrator has decided. See core/plugins.ts migrateBrowserCapabilityGrants.
             await require('./core/plugins').migrateBrowserCapabilityGrants();
         } catch (e: any) {
             console.warn('[PluginPermissions] load/backfill skipped:', e && e.message);
@@ -1920,4 +1914,7 @@ module.exports = app;
 // Expose the async initializer so the monolith entrypoint can boot DB + plugins + theme engine
 // without the self-listen/self-register block (which is guarded by EMBEDDED above).
 module.exports.initialize = initialize;
+// Which API paths get the shared-cache default when the route chose no Cache-Control — exported so a
+// test can hold the list to what may be shared (public-surface-hardening.test.ts).
+module.exports.PUBLIC_CACHEABLE_RE = PUBLIC_CACHEABLE_RE;
 

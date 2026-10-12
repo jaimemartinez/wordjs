@@ -8,8 +8,11 @@
  * Proves:
  *   - with NO mail provider, `require_email_verification=1` resolves OFF (fail-closed): a new user is
  *     created ACTIVE and can log in immediately;
- *   - with a provider ready, a new user is created UNVERIFIED, is refused login with rest_email_unverified,
- *     and — after consuming the tokenized link — can log in.
+ *   - with a provider ready, registering creates NO account: the username cannot log in (the same 401 as
+ *     any unknown login) until the tokenized link is followed, which creates the account; the link is
+ *     single-use;
+ *   - an account created UNVERIFIED by an earlier version (its link carries `uid`) is still refused with
+ *     rest_email_unverified and still verifies through that link.
  */
 
 const { describe, it, before, after } = require('node:test');
@@ -29,7 +32,7 @@ let request: any;
 let app: any;
 let sentMail: any[] = [];
 
-const VERIFY_LINK_RE = /\/verify-email\?uid=(\d+)&token=([a-f0-9]+)/i;
+const VERIFY_LINK_RE = /\/verify-email\?token=([a-f0-9]{64})(?![&a-f0-9])/i;
 
 describe('Email verification on registration', () => {
     before(async () => {
@@ -78,8 +81,9 @@ describe('Email verification on registration', () => {
     });
 
     // --- Provider ready → full verify round-trip --------------------------------------------------
-    it('with a provider ready, a new user is created unverified, refused login, then verifies and logs in', async () => {
+    it('with a provider ready, registering creates nothing until the link is followed, which creates the account', async () => {
         const { updateOption } = require('../core/options');
+        const User = require('../models/User');
         sentMail = [];
         (global as any).wordjs_send_mail = (msg: any) => { sentMail.push(msg); return { queued: true }; };
         await updateOption('mail_delivery_ready', '1');
@@ -90,43 +94,62 @@ describe('Email verification on registration', () => {
             .send({ username: 'verifyme', email: 'verifyme@gmail.com', password: 'origpass123' });
         assert.strictEqual(reg.status, 201, 'registration must succeed');
         assert.strictEqual(reg.body.verificationRequired, true, 'verification must be required');
-        assert.ok(!reg.headers['set-cookie'], 'NO session cookie may be issued to an unverified account');
+        assert.ok(!reg.headers['set-cookie'], 'NO session cookie may be issued before the address is confirmed');
         assert.strictEqual(sentMail.length, before + 1, 'exactly one verification mail must be sent');
+        assert.strictEqual(await User.findByLogin('verifyme'), null, 'no account exists until the link is followed');
 
         const msg = sentMail[sentMail.length - 1];
         assert.strictEqual(String(msg.to).toLowerCase(), 'verifyme@gmail.com', 'verification mail targets the registered address');
         const m = String(msg.text || msg.html || '').match(VERIFY_LINK_RE);
-        if (!m) { assert.fail('the mail body must contain a verify-email link with uid + token'); return; }
-        const uid = Number(m[1]);
-        const token = m[2];
+        if (!m) { assert.fail('the mail body must contain a verify-email link with a token'); return; }
+        const token = m[1];
 
-        // Password is correct, but the account is unverified → login refused with the distinct code.
+        // There is no account yet, so the correct password is refused exactly like an unknown login.
         const refused = await request(app).post('/api/v1/auth/login')
             .send({ username: 'verifyme', password: 'origpass123' });
-        assert.strictEqual(refused.status, 403, 'an unverified account must be refused login');
-        assert.strictEqual(refused.body.code, 'rest_email_unverified', 'the refusal carries the email-unverified code');
+        assert.strictEqual(refused.status, 401, 'nothing to log in to before the link is followed');
+        assert.strictEqual(refused.body.code, 'rest_invalid_credentials');
 
-        // A wrong token does not verify.
-        const wrong = await request(app).post('/api/v1/auth/verify-email').send({ uid, token: 'deadbeef' });
+        // A wrong token does not verify (and does not create anything).
+        const wrong = await request(app).post('/api/v1/auth/verify-email').send({ token: 'deadbeef'.repeat(8) });
         assert.strictEqual(wrong.status, 400, 'a wrong verification token must be rejected');
+        assert.strictEqual(await User.findByLogin('verifyme'), null);
 
-        // Still refused while unverified.
-        const stillRefused = await request(app).post('/api/v1/auth/login')
-            .send({ username: 'verifyme', password: 'origpass123' });
-        assert.strictEqual(stillRefused.status, 403, 'still refused until a valid token verifies');
+        // Correct token → the account is created, and is active.
+        const good = await request(app).post('/api/v1/auth/verify-email').send({ token });
+        assert.strictEqual(good.status, 200, 'a valid token must verify the registration');
+        const created = await User.findByLogin('verifyme');
+        assert.ok(created, 'the account exists once the link is followed');
+        assert.strictEqual(created.userEmail, 'verifyme@gmail.com');
 
-        // Correct token → verified.
-        const good = await request(app).post('/api/v1/auth/verify-email').send({ uid, token });
-        assert.strictEqual(good.status, 200, 'a valid token must verify the account');
-
-        // Now login succeeds.
+        // Now login succeeds — with the password given at registration.
         const login = await request(app).post('/api/v1/auth/login')
             .send({ username: 'verifyme', password: 'origpass123' });
         assert.strictEqual(login.status, 200, 'a verified account must log in');
         assert.ok(login.body.user, 'login returns the user');
 
         // Single-use: replaying the consumed token fails.
-        const replay = await request(app).post('/api/v1/auth/verify-email').send({ uid, token });
+        const replay = await request(app).post('/api/v1/auth/verify-email').send({ token });
         assert.strictEqual(replay.status, 400, 'a consumed verification token must not be replayable');
+    });
+
+    // --- An account created unverified by an earlier version keeps working --------------------------
+    it('a legacy unverified account (link with uid) is still gated and still verifies through its link', async () => {
+        const User = require('../models/User');
+        const crypto = require('crypto');
+        const legacy = await User.create({ username: 'legacyuser', email: 'legacyuser@gmail.com', password: 'origpass123' });
+        const raw = crypto.randomBytes(32).toString('hex');
+        await User.updateMeta(legacy.id, 'email_verification_hash', crypto.createHash('sha256').update(raw).digest('hex'));
+        await User.updateMeta(legacy.id, 'email_verification_expires', String(Date.now() + 60_000));
+        await User.updateMeta(legacy.id, 'email_verification_pending', '1');
+
+        const refused = await request(app).post('/api/v1/auth/login').send({ username: 'legacyuser', password: 'origpass123' });
+        assert.strictEqual(refused.status, 403);
+        assert.strictEqual(refused.body.code, 'rest_email_unverified');
+
+        const good = await request(app).post('/api/v1/auth/verify-email').send({ uid: legacy.id, token: raw });
+        assert.strictEqual(good.status, 200);
+        const login = await request(app).post('/api/v1/auth/login').send({ username: 'legacyuser', password: 'origpass123' });
+        assert.strictEqual(login.status, 200);
     });
 });

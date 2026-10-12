@@ -162,6 +162,38 @@ describe("mediaThumbnailUrl", () => {
     it("falls back to guid when sourceUrl is missing rather than rendering a blank tile", () => {
         expect(mediaThumbnailUrl(item({ sourceUrl: "" }) as MediaItem)).toBe(item().guid);
     });
+
+    it("a PRIVATE item keeps its authenticated download route — there is no sibling thumbnail file", () => {
+        const priv = item({
+            visibility: "private",
+            sourceUrl: "/api/v1/media/7/file",
+            mediaDetails: {
+                width: 1200, height: 800, file: "2026/08/foto.jpg", filesize: 1,
+                sizes: { thumbnail: { file: "foto-150x150.jpg", width: 150, height: 150, mimeType: "image/jpeg", filesize: 1 } },
+            },
+        });
+        expect(mediaThumbnailUrl(priv)).toBe("/api/v1/media/7/file");
+    });
+});
+
+describe("private media visibility on the wire", () => {
+    const realFetch = globalThis.fetch;
+    afterEach(() => { globalThis.fetch = realFetch; });
+
+    it("buildMediaQuery passes visibility through only when it is set", () => {
+        expect(buildMediaQuery({ page: 1, perPage: 20 })).toEqual({ page: 1, perPage: 20 });
+        expect(buildMediaQuery({ page: 1, perPage: 20, visibility: "public" }).visibility).toBe("public");
+    });
+
+    it("the list request carries visibility=… (the content picker asks for PUBLIC items only)", async () => {
+        let seen = "";
+        globalThis.fetch = (async (url: string) => {
+            seen = String(url);
+            return { ok: true, json: async () => [], headers: { get: () => null } };
+        }) as unknown as typeof fetch;
+        await mediaApi.listPaged(buildMediaQuery({ page: 1, perPage: 20, visibility: "public" }));
+        expect(seen).toContain("visibility=public");
+    });
 });
 
 // The wire: what the screens' query state actually becomes on the URL the backend router reads.

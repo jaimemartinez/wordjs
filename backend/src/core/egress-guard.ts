@@ -22,6 +22,12 @@ import * as dns from 'dns';
 // Capture the real modules at load time (bootstrap = no plugin context, so these are unproxied).
 const realNet: any = net;
 const realDns: any = dns;
+// Capture net.isIP NOW, as a standalone function bound to the real module. Every classifier below calls
+// THIS, never `realNet.isIP` live: a network-granted plugin may `import('net')` (the ESM loader returns
+// the real module) and assign `net.isIP = () => 0`, which would otherwise blunt isBlockedIp / the
+// allowlist IP compare at call time. Reading it once at bootstrap, before any plugin runs, makes the
+// classification immune to that tampering. (twin of the dns-facade leak)
+const realIsIP: (input: string) => number = realNet.isIP.bind(realNet);
 let realTls: any, realHttp: any, realHttps: any, realHttp2: any, realDgram: any;
 try { realTls = require('tls'); } catch { /* */ }
 try { realHttp = require('http'); } catch { /* */ }
@@ -104,7 +110,7 @@ export function isBlockedIp(ip: string): boolean {
     if (!ip || typeof ip !== 'string') return true;
     let a = ip.replace(/^\[|\]$/g, '');                // strip [..] brackets
     const z = a.indexOf('%'); if (z >= 0) a = a.slice(0, z); // strip IPv6 zone id
-    const fam = realNet.isIP(a);
+    const fam = realIsIP(a);
     if (fam === 4) return isBlockedV4(a);
     if (fam === 6) {
         const b = ipv6ToBytes(a);
@@ -187,20 +193,52 @@ export function setAllowedHosts(list: any): void {
 // spellings — bracketed vs bare, compressed vs expanded IPv6 — compare equal. Returns null for a hostname.
 function canonIp(s: string): string | null {
     const a = String(s).replace(/^\[|\]$/g, '');
-    const fam = realNet.isIP(a);
+    const fam = realIsIP(a);
     if (fam === 4) return 'v4:' + a;
     if (fam === 6) { const b = ipv6ToBytes(a); return b ? 'v6:' + b.join('.') : null; }
     return null;
 }
+/**
+ * The egress POLICY verdict for one destination host, in all three states: deny-all (policy unavailable)
+ * refuses every host, no allowlist allows every host (the public-IP block still applies at connect), and
+ * an allowlist allows only what hostMatchesAllowlist accepts. Every chokepoint calls this UNCONDITIONALLY.
+ * Guarding a call with `allowedHosts && ...` skipped the deny-all state entirely, because deny-all leaves
+ * `allowedHosts` null: a plugin whose policy failed to load got the whole public internet instead of
+ * nothing.
+ */
 export function isHostAllowed(host: string | undefined): boolean {
     if (denyAllEgress) return false;              // fail-closed: egress policy unavailable → deny every host
     if (!allowedHosts) return true;               // no allowlist configured → unchanged behavior
+    return hostMatchesAllowlist(host, allowedHosts);
+}
+// One hostname label in the alphabet the allowlist itself is written in (plugin-permissions'
+// VALID_EGRESS_HOST): ASCII letters, digits, '-' and '_'. The host has already been lowercased.
+const ALLOWLIST_HOSTNAME_RE = /^[a-z0-9_-]+(?:\.[a-z0-9_-]+)*$/;
+/**
+ * The allowlist MATCH itself, for a list that is passed in rather than installed process-wide. The host
+ * process uses it to govern host-mediated bridges (wordjs.dns) by the calling plugin's own allowlist —
+ * the same rule its connect chokepoints apply inside the child. An EMPTY list matches nothing; callers
+ * decide what "no allowlist" means (allow-all-public) before calling.
+ */
+export function hostMatchesAllowlist(host: string | undefined, list: string[]): boolean {
     if (!host) return false;                      // default-deny a no-host / default-localhost target
+    const entries = (Array.isArray(list) ? list : [])
+        .map((h) => String(h).toLowerCase().trim().replace(/^\*?\./, '').replace(/\.$/, ''))
+        .filter(Boolean);
     // Strip [] brackets (URL.hostname keeps them for IPv6) + trailing dot so URL-derived hosts compare
     // equal to the bare entries the admin stored.
     const raw = String(host).toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
     const hIp = canonIp(raw);
-    for (const d of allowedHosts) {
+    // The string judged here must be the name the resolver will query, so anything outside the
+    // hostname / IP-literal alphabet is refused before matching. The resolvers do NOT query the string
+    // they are given: getaddrinfo and c-ares both take a C string and stop at the first NUL, so
+    // `attacker.example\u0000.vendor.example` ends in `.vendor.example` here and resolves (and is
+    // queried at the attacker's nameserver) as `attacker.example`. Node also applies IDNA mapping to
+    // non-ASCII names, and c-ares reads `\` escapes, so neither can be judged by its spelling. The
+    // allowlist entries are plain ASCII, so a legitimate host is ASCII too (fetch/URL hand over the
+    // punycode form already).
+    if (!hIp && !ALLOWLIST_HOSTNAME_RE.test(raw)) return false;
+    for (const d of entries) {
         if (raw === d) return true;               // exact string match (hostnames + identical IP spellings)
         const dIp = canonIp(d);
         if (dIp) { if (hIp && hIp === dIp) return true; continue; } // IP entry: canonical-IP compare only
@@ -225,8 +263,8 @@ function noteDgramTarget(ip: any): void {
 export function validatingLookup(hostname: string, options: any, callback?: any): void {
     if (typeof options === 'function') { callback = options; options = {}; }
     options = options || {};
-    // Per-plugin allowlist (opt-in): deny a hostname not on the list BEFORE resolving it.
-    if (allowedHosts && !isHostAllowed(hostname)) return callback(blockErr(String(hostname || '(no host)')));
+    // Per-plugin egress policy (allowlist or deny-all): deny a hostname it refuses BEFORE resolving it.
+    if (!isHostAllowed(hostname)) return callback(blockErr(String(hostname || '(no host)')));
     realDns.lookup(hostname, { ...options, all: true, verbatim: true }, (err: any, addresses: any) => {
         if (err) return callback(err);
         const list = Array.isArray(addresses) ? addresses : [{ address: addresses, family: options.family || 4 }];
@@ -238,12 +276,55 @@ export function validatingLookup(hostname: string, options: any, callback?: any)
     });
 }
 
+// ---- name resolution under the egress policy (isolated child only) -----------------------------
+// Resolving a name is itself egress: the query for `<secret>.attacker.example` reaches that domain's
+// nameserver whether or not anything connects afterwards. Every connect path judges the name before it is
+// resolved (validatingLookup, assertUrlAllowed, secureDgramSend/Connect, the governed dns facade), but a
+// server's listen(port, host) and a dgram socket's bind(port, address) resolve their host through Node's
+// own module-level dns.lookup — net's lookupAndListen calls it, and a dgram socket's default lookup is it —
+// so those hosts have to be judged there. The gate applies the connection rule to them: an IP literal or
+// an empty host is not a query and passes through untouched; a NAME is judged by the plugin's egress
+// policy before it is resolved, so an allowlisted plugin resolves only what it may reach and deny-all
+// resolves nothing. With no policy configured it is a pass-through. The connect paths already judged
+// their name with the same isHostAllowed, so the gate never changes their answer. SAFE ONLY in the child
+// (one plugin per process); NEVER call this on the host, whose core resolves names of its own.
+let childResolverGateInstalled = false;
+export function installChildResolverGate(): void {
+    if (childResolverGateInstalled) return;
+    childResolverGateInstalled = true;
+    try {
+        const dnsModule: any = require('dns');
+        const rawLookup: any = dnsModule && dnsModule.lookup;
+        if (typeof rawLookup !== 'function' || rawLookup.__wjGuarded) return;
+        const gated: any = function (this: any, ...args: any[]) {
+            const hostname = args[0];
+            if (typeof hostname === 'string' && hostname !== '' && !realIsIP(hostname) && !isHostAllowed(hostname)) {
+                const err = blockErr(hostname);
+                const cb = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null;
+                if (!cb) throw err;
+                process.nextTick(cb, err); // asynchronous, like a real resolution failure
+                return;
+            }
+            return rawLookup.apply(this, args);
+        };
+        // util.promisify(dns.lookup) resolves {address, family} through Node's customPromisifyArgs symbol;
+        // carry the builtin's symbol-keyed markers over so that shape survives.
+        for (const sym of Object.getOwnPropertySymbols(rawLookup)) {
+            try { Object.defineProperty(gated, sym, { value: rawLookup[sym], enumerable: false }); } catch { /* best-effort */ }
+        }
+        gated.__wjGuarded = true;
+        // LOCKED like the connect chokepoint: rawLookup lives only in this closure.
+        const desc = Object.getOwnPropertyDescriptor(dnsModule, 'lookup');
+        Object.defineProperty(dnsModule, 'lookup', { value: gated, writable: false, configurable: false, enumerable: desc ? !!desc.enumerable : true });
+    } catch { /* best-effort, like the other child guards */ }
+}
+
 function assertHostLiteral(host: string | undefined): void {
     // Per-plugin allowlist (opt-in): deny any host — IP literal OR hostname — not on the list. This is the
     // chokepoint every IP-literal connect path shares (secureConnect, assertUrlAllowed*, dgram), so it also
     // covers WebSocket/EventSource + IP-literal fetch. Runs BEFORE (and never replaces) the private-IP block.
-    if (allowedHosts && !isHostAllowed(host)) throw blockErr(String(host || '(no host)'));
-    if (host && realNet.isIP(host) && isBlockedIp(host)) throw blockErr(host);
+    if (!isHostAllowed(host)) throw blockErr(String(host || '(no host)'));
+    if (host && realIsIP(host) && isBlockedIp(host)) throw blockErr(host);
 }
 
 // ---- connect-arg normalization (net/tls) -------------------------------------------------------
@@ -301,6 +382,14 @@ function secureConnect(orig: any, thisArg: any, args: any[]): any {
 // getter-only accessors, so assignment throws "has only a getter".) Module getters run against the
 // real target (receiver=target) so their internal `this` stays correct.
 function wrapModule(mod: any, overrides: Record<string, any>): any {
+    // A get-only Proxy is sufficient HERE, unlike for dns: the authoritative egress chokepoint for
+    // net/tls/http/http2/dgram is the LOCKED, non-writable net.Socket.prototype.connect (and the dgram
+    // prototype) installed by installChildNetGuard/installChildDgramGuard — every outbound path, including
+    // a raw `connect`/`createConnection`/`Socket`/`request` recovered through
+    // Object.getOwnPropertyDescriptor(guarded, …) off the real module, bottoms out there and is validated
+    // against the resolved IP and the per-plugin policy. So recovering the raw member buys no reachable
+    // destination. (dns is the exception the deny-set note calls out: c-ares has no such prototype
+    // chokepoint, so its guard is a frozen allow-set object — buildGuardedDns — not a module wrapper.)
     return new Proxy(mod, {
         get(target, prop) {
             if (typeof prop === 'string' && Object.prototype.hasOwnProperty.call(overrides, prop)) return overrides[prop];
@@ -423,7 +512,7 @@ function guardHttp2(mod: any): any {
             try { host = new URL(String(authority)).hostname; } catch { /* */ }
             assertHostLiteral(host);
             options = options && typeof options === 'object' ? { ...options } : {};
-            if (host && !realNet.isIP(host)) options.lookup = validatingLookup;
+            if (host && !realIsIP(host)) options.lookup = validatingLookup;
             return mod.connect(authority, options, listener);
         };
     }
@@ -467,7 +556,7 @@ function dgramSendAddressIndex(args: any[]): number {
 // address in `list` was already IP-validated as public, so any is safe security-wise.
 function pinDgramAddress(sock: any, list: any[]): string {
     const want = sock && sock.type === 'udp6' ? 6 : sock && sock.type === 'udp4' ? 4 : 0;
-    if (want) { const m = list.find((a) => realNet.isIP(a.address) === want); if (m) return m.address; }
+    if (want) { const m = list.find((a) => realIsIP(a.address) === want); if (m) return m.address; }
     return list[0].address;
 }
 
@@ -484,8 +573,8 @@ function secureDgramSend(orig: any, thisArg: any, args: any[]): any {
         if (dgramConnectedSockets.has(thisArg)) return orig.apply(thisArg, args);
         const e = blockErr('127.0.0.1', '(dgram default)'); if (cb) { cb(e); return; } throw e;
     }
-    if (allowedHosts && !isHostAllowed(address)) { const e = blockErr(String(address)); if (cb) { cb(e); return; } throw e; }
-    if (realNet.isIP(address)) {
+    if (!isHostAllowed(address)) { const e = blockErr(String(address)); if (cb) { cb(e); return; } throw e; }
+    if (realIsIP(address)) {
         // Already an IP literal → no DNS, no rebind window; validate and pass straight through.
         try { assertHostLiteral(address); } catch (e) { if (cb) { cb(e as Error); return; } throw e; }
         noteDgramTarget(address);
@@ -511,8 +600,8 @@ function secureDgramConnect(orig: any, thisArg: any, args: any[]): any {
         // connect(port) with no address defaults to 127.0.0.1 / ::1 — a loopback binding. Deny. (EG-3)
         const e = blockErr('127.0.0.1', '(dgram connect default)'); if (cb) { cb(e); return; } throw e;
     }
-    if (allowedHosts && !isHostAllowed(address)) { const e = blockErr(String(address)); if (cb) { cb(e); return; } throw e; }
-    if (realNet.isIP(address)) {
+    if (!isHostAllowed(address)) { const e = blockErr(String(address)); if (cb) { cb(e); return; } throw e; }
+    if (realIsIP(address)) {
         try { assertHostLiteral(address); } catch (e) { if (cb) { cb(e as Error); return; } throw e; }
         noteDgramTarget(address);
         dgramConnectedSockets.add(thisArg);
@@ -582,11 +671,11 @@ export function installChildDgramGuard(): void {
         if (typeof origBind === 'function' && !(origBind as any).__wjGuarded) {
             const guardHandleFn = (ho: any, addrIdx: number) => function (this: any, ...ha: any[]) {
                 const addr = ha[addrIdx];
-                if (typeof addr === 'string' && !realNet.isIP(addr)) { /* hostname at native layer — deny (no rebind-safe resolve here) */ throw blockErr(addr, addr); }
+                if (typeof addr === 'string' && !realIsIP(addr)) { /* hostname at native layer — deny (no rebind-safe resolve here) */ throw blockErr(addr, addr); }
                 if (typeof addr === 'string' && isBlockedIp(addr)) throw blockErr(addr, addr);
                 // Per-plugin allowlist: a reflected send to an arbitrary off-allowlist public IP is denied.
                 // IPs the JS guard already validated + pinned (allowlisted-hostname sends) are exempted.
-                if (typeof addr === 'string' && allowedHosts && !isHostAllowed(addr) && !jsValidatedDgramTargets.has(addr)) throw blockErr(addr, addr);
+                if (typeof addr === 'string' && !isHostAllowed(addr) && !jsValidatedDgramTargets.has(addr)) throw blockErr(addr, addr);
                 return ho.apply(this, ha);
             };
             const patchedBind = function (this: any, ...bargs: any[]) {
@@ -687,19 +776,83 @@ const DNS_DENIED_MEMBERS = new Set<string>([
 function dnsDenied(name: string): never {
     throw new Error(`[sandbox] dns.${name} is not permitted for plugins — the raw DNS resolver bypasses egress filtering; use dns.lookup (getaddrinfo) instead`);
 }
-function guardDns(mod: any): any {
-    // dns.promises has the SAME resolver surface, so guard it with the same deny-list.
-    const guardMembers = (target: any) => new Proxy(target, {
-        get(t, prop) {
-            // A plain function (not an arrow) so BOTH `dns.resolve(...)` and `new dns.Resolver(...)` run the
-            // body and throw our clear message (an arrow under `new` would throw a vaguer "not a constructor").
-            if (typeof prop === 'string' && DNS_DENIED_MEMBERS.has(prop)) return function (..._a: any[]): never { return dnsDenied(prop); };
-            if (prop === 'promises') return t.promises ? guardMembers(t.promises) : t.promises;
-            return Reflect.get(t, prop);
-        },
-    });
-    return guardMembers(mod);
+// dns.lookup / dns.lookupService stay available, but a lookup is itself egress: the query for
+// `<secret>.attacker.example` reaches the attacker's authoritative nameserver through the system
+// resolver, whether or not anything connects afterwards. So the name (or, for lookupService, the address
+// whose PTR name is queried) is judged by the plugin's egress policy BEFORE it is resolved, exactly as
+// validatingLookup judges it on the connect path: an allowlisted plugin may only resolve what it may
+// reach, and deny-all resolves nothing. With no policy configured this is a pass-through.
+const DNS_GOVERNED_MEMBERS = new Set<string>(['lookup', 'lookupService']);
+function governedDnsMember(t: any, prop: string, promises: boolean): any {
+    if (typeof Reflect.get(t, prop) !== 'function') return Reflect.get(t, prop);
+    const refused = (args: any[]): Error | null => (isHostAllowed(args[0] == null ? '' : String(args[0])) ? null : blockErr(String(args[0] || '(no host)')));
+    // The builtin is read at CALL time, like every other member the proxy forwards.
+    const real = (): any => Reflect.get(t, prop);
+    if (promises) {
+        return function (...args: any[]) {
+            const err = refused(args);
+            return err ? Promise.reject(err) : real().apply(t, args);
+        };
+    }
+    const wrapped: any = function (...args: any[]) {
+        const err = refused(args);
+        if (!err) return real().apply(t, args);
+        const cb = args.length && typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null;
+        if (!cb) throw err;
+        process.nextTick(cb, err); // asynchronous, like a real resolution failure
+    };
+    // util.promisify(dns.lookup) resolves {address, family} because the builtin carries Node's
+    // customPromisifyArgs symbol; carry the builtin's own symbol-keyed markers over so that shape survives.
+    const original = Reflect.get(t, prop);
+    for (const sym of Object.getOwnPropertySymbols(original)) {
+        try { Object.defineProperty(wrapped, sym, { value: original[sym], enumerable: false }); } catch { /* best-effort */ }
+    }
+    return wrapped;
 }
+// Functions that are NOT resolver-exfil surface: they change only this child's own getaddrinfo result
+// ordering, open no socket and return no records, so they pass through unguarded.
+const DNS_SAFE_PASSTHROUGH = new Set<string>(['getDefaultResultOrder', 'setDefaultResultOrder']);
+
+// Build the guarded dns (or dns.promises) as a BRAND-NEW FROZEN object that never wraps the real module
+// as a Proxy target — so NO read path can reach an original. The previous get-only Proxy leaked every
+// member it was supposed to hide: Object.getOwnPropertyDescriptor(dns, 'lookup'|'Resolver'|'resolveTxt')
+// .value, and the 'promises' accessor, were the REAL members (a get-only Proxy forwards the
+// getOwnPropertyDescriptor / ownKeys / getPrototypeOf traps it does not define straight to the target),
+// so a plugin resolved any name — the whole SSRF/exfil surface — under an allowlist or deny-all, and a
+// raw c-ares Resolver was constructible. A deny-LIST also rots: Node 23+ added dns.resolveTlsa, which no
+// list named, so the get trap forwarded it raw. This is DEFAULT-DENY instead: the two governed members
+// are egress-judged, the ordering helpers pass through, and EVERY other function — named or not, now or
+// in a future Node — is a clear throwing stub. The real functions live only in this closure; the only
+// values on the returned object are our wrappers, stubs and the (inert) error-code constants.
+function buildGuardedDns(real: any, promises: boolean): any {
+    const out: any = {};
+    // A plain (non-arrow) function so BOTH `dns.resolve(...)` and `new dns.Resolver(...)` run the body and
+    // throw the clear message (an arrow under `new` throws a vaguer "not a constructor").
+    const deniedStub = (name: string) => function (..._a: any[]): never { return dnsDenied(name); };
+    for (const key of Object.getOwnPropertyNames(real)) {
+        if (key === 'promises') continue;                        // handled below — never the real object
+        let val: any;
+        try { val = real[key]; } catch { continue; }
+        if (DNS_GOVERNED_MEMBERS.has(key) && typeof val === 'function') {
+            out[key] = governedDnsMember(real, key, promises);   // lookup / lookupService — egress-judged
+        } else if (typeof val === 'function') {
+            out[key] = DNS_SAFE_PASSTHROUGH.has(key) ? val.bind(real) : deniedStub(key);
+        } else if (val === null || typeof val !== 'object') {
+            out[key] = val;                                      // error-code constants, ADDRCONFIG, …
+        }
+        // Objects (a namespace wrapper's `default`, any nested object) are DROPPED: copying one would hand
+        // back a live reference into the real module graph.
+    }
+    // Belt-and-braces for the named resolver surface, in case a build hid a member behind a getter that
+    // threw above or omitted it from the enumeration — it is still present as a clear throwing stub.
+    for (const name of DNS_DENIED_MEMBERS) if (typeof out[name] !== 'function') out[name] = deniedStub(name);
+    if (!promises) out.promises = real.promises ? buildGuardedDns(real.promises, true) : real.promises;
+    return Object.freeze(out);
+}
+function guardDns(mod: any): any { return buildGuardedDns(mod, false); }
+// require('dns/promises') / node:dns/promises resolves to the promises object directly (not dns.promises),
+// so hand back the promises-shaped guard rather than the full dns facade.
+function guardDnsPromises(mod: any): any { return mod ? buildGuardedDns(mod, true) : mod; }
 
 const guardedCache: Record<string, any> = {};
 
@@ -713,6 +866,7 @@ export function getGuardedModule(base: string): any {
     let g: any;
     switch (base) {
         case 'dns': g = guardDns(realDns); break;
+        case 'dns/promises': g = realDns && realDns.promises ? guardDnsPromises(realDns.promises) : undefined; break;
         case 'net': g = guardNet(realNet); break;
         case 'tls': g = realTls ? guardTls(realTls) : undefined; break;
         case 'http': g = realHttp ? guardHttp(realHttp) : undefined; break;
@@ -737,8 +891,8 @@ export async function assertUrlAllowed(rawUrl: string): Promise<void> {
     let host: string | undefined;
     try { host = new URL(String(rawUrl)).hostname; } catch { return; } // non-URL (e.g. relative) → let fetch handle
     if (!host) return;
-    if (allowedHosts && !isHostAllowed(host)) throw blockErr(host); // per-plugin allowlist (hostname path)
-    if (realNet.isIP(host)) { assertHostLiteral(host); return; }
+    if (!isHostAllowed(host)) throw blockErr(host); // per-plugin egress policy: allowlist or deny-all (hostname path)
+    if (realIsIP(host)) { assertHostLiteral(host); return; }
     await new Promise<void>((resolve, reject) => {
         realDns.lookup(host as string, { all: true, verbatim: true }, (err: any, addresses: any) => {
             if (err) return reject(err); // fail closed

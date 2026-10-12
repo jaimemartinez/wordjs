@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { pluginsApi, themesApi, Plugin, PluginPortConflict, PluginRuntime } from "@/lib/api";
 import { permMeta, PermissionRisk } from "@/lib/permissionMeta";
 import { reloadActivePlugins } from "@/lib/plugins";
+import { deepLinkedPlugin, withoutPermissionsDeepLink } from "@/lib/pluginPermissionsLink";
 import { useMenu } from "@/contexts/MenuContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
@@ -399,6 +400,14 @@ export default function PluginsPage() {
         setGrantDraft(new Set((plugin.grantedPermissions || []).filter(t => declared.has(t))));
         setPermsModalPlugin(plugin);
     };
+    // /admin/plugins?permissions=<id>: a plugin page whose interface is withheld because browser:script is
+    // not granted links here (components/PluginScriptNotGranted). When the first list arrives (loadPlugins
+    // below), open that plugin's permissions dialog — once per visit, only for a plugin the list has — and
+    // drop the parameter from the address bar. This latch is what keeps every LATER loadPlugins() (after a
+    // permissions save, an activation, a deactivation…) from opening the dialog again while the parameter
+    // is still in the URL; removing the parameter is what keeps a reload, or coming back to this history
+    // entry from another screen, from doing the same.
+    const permissionsDeepLinkDone = useRef(false);
     const toggleGrant = (token: string) => {
         setGrantDraft(prev => {
             const next = new Set(prev);
@@ -437,6 +446,21 @@ export default function PluginsPage() {
             setPlugins(data);
             // Keep an open detail drawer fresh with the latest runtime/grant data.
             setDetailPlugin(prev => prev ? (data.find(p => p.slug === prev.slug) || null) : prev);
+            if (!permissionsDeepLinkDone.current) {
+                permissionsDeepLinkDone.current = true;
+                const loc = typeof window === "undefined" ? null : window.location;
+                const linked = deepLinkedPlugin(data, loc ? loc.search : "");
+                if (linked) openPermissions(linked);
+                // Consumed (opened, or names nothing this list has): replace — not push — this history
+                // entry with the same address minus ?permissions=. Next's router follows a native
+                // replaceState. If the browser refuses it, the latch above still holds for this visit.
+                const rest = loc ? withoutPermissionsDeepLink(loc.pathname, loc.search, loc.hash) : null;
+                if (rest !== null) {
+                    try {
+                        window.history.replaceState(null, "", rest);
+                    } catch { /* see above */ }
+                }
+            }
         } catch (error) {
             console.error("Failed to load plugins:", error);
         } finally {

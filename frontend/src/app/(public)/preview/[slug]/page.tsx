@@ -17,11 +17,20 @@ interface RouteParams {
     slug: string;
 }
 
+// `?type=` names the type of the entry the editor opened (lib/previewHref). Without it, a slug that a
+// post and a page share resolves to the PAGE (the backend's order for the bare URL), so previewing the
+// post's draft showed the published page instead. getPostBySlugPreview sends only a well-formed type.
+type PreviewSearch = Promise<{ type?: string | string[] }>;
+const typeOf = async (searchParams?: PreviewSearch): Promise<string | undefined> => {
+    const t = searchParams ? (await searchParams).type : undefined;
+    return typeof t === "string" ? t : undefined;
+};
+
 export async function generateMetadata(
-    { params }: { params: Promise<RouteParams> }
+    { params, searchParams }: { params: Promise<RouteParams>; searchParams?: PreviewSearch }
 ): Promise<Metadata> {
     const { slug } = await params;
-    const post = await getPostBySlugPreview(slug);
+    const post = await getPostBySlugPreview(slug, await typeOf(searchParams));
     if (!post) return { title: "Not found", robots: { index: false } };
     const settings = await getSettings();
     const meta = buildPostMetadata(post, {
@@ -34,11 +43,12 @@ export async function generateMetadata(
 }
 
 export default async function PostPreviewPage(
-    { params }: { params: Promise<RouteParams> }
+    { params, searchParams }: { params: Promise<RouteParams>; searchParams?: PreviewSearch }
 ) {
     const { slug } = await params;
+    const type = await typeOf(searchParams);
     const [post, settings, base] = await Promise.all([
-        getPostBySlugPreview(slug),
+        getPostBySlugPreview(slug, type),
         getSettings(),
         resolveSiteBase(),
     ]);

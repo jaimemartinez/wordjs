@@ -337,6 +337,78 @@ const GRANTED_INIT = `
     out.streamFdBlocked = (() => { try { new (require('net').Stream)({ fd: 3 }); return false; } catch (e) { return true; } })();
     res.json(out);
   });
+
+  // The guarded dns facade: require('dns') must NOT leak the raw c-ares resolver by ANY read path. A
+  // recovered resolver is CONTAINED only if invoking it throws the sandbox denial (the real resolver
+  // would start a DNS query and return without throwing). TRUE == contained.
+  wordjs.http.route('get', '/dns-facade', (req, res) => {
+    const dns = require('dns');
+    const callDenied = (fn) => { if (typeof fn !== 'function') return true; try { fn('example.com', function () {}); return false; } catch (e) { return /not permitted|blocked/i.test(String(e && e.message)); } };
+    const viaDesc = (obj, k) => { const d = Object.getOwnPropertyDescriptor(obj, k); if (!d) return undefined; return ('value' in d) ? d.value : (d.get ? d.get.call(obj) : undefined); };
+    const out = {};
+    out.getResolveTxt = callDenied(dns.resolveTxt);                 // the plain read
+    out.descResolveTxt = callDenied(viaDesc(dns, 'resolveTxt'));     // descriptor recovery (the get-only hole)
+    out.descResolveTlsa = callDenied(viaDesc(dns, 'resolveTlsa'));   // a Node-added resolver (deny-list rot)
+    out.descResolver = (() => { const R = viaDesc(dns, 'Resolver'); try { new R(); return false; } catch (e) { return /not permitted|blocked|not a constructor/i.test(String(e && e.message)); } })();
+    out.descPromisesResolve = (() => { const p = viaDesc(dns, 'promises'); const raw = p && viaDesc(p, 'resolve'); if (typeof raw !== 'function') return true; try { const r = raw('example.com'); if (r && typeof r.then === 'function') { r.then(function () {}, function () {}); return false; } return false; } catch (e) { return /not permitted|blocked/i.test(String(e && e.message)); } })();
+    res.json(out);
+  });
+
+  // A REAL dynamic import(). Under ts-node (source mode, which this harness runs) the plugin's own files
+  // are transpiled to CommonJS, so an import() written in index.js silently becomes require() and never
+  // reaches the ESM loader — not what a production child does. ts-node leaves node_modules alone, so the
+  // fixture ships a one-line dependency whose import() is a genuine ESM import, exactly as in production.
+  const esm = require('./node_modules/wjs-esm-probe');
+
+  // require('dns/promises') / require('node:dns/promises') resolve to the PROMISES object, so secure-require
+  // must hand back the promises-shaped guard (getGuardedModule('dns/promises')): frozen, no nested
+  // .promises, a lookup that returns a promise. Routing the submodule by its 'dns' base handed back the
+  // callback-style facade instead (a .promises member, a lookup that throws without a callback). import()
+  // of either specifier is refused by the worker's ESM guard — dns stays import-blocked with the network.
+  wordjs.http.route('get', '/dns-promises', async (req, res) => {
+    const out = {};
+    const shape = async (mod) => ({
+      frozen: Object.isFrozen(mod),
+      noPromisesMember: !('promises' in mod),
+      resolveTxtDenied: (() => { try { const p = mod.resolveTxt('example.com'); if (p && typeof p.then === 'function') p.then(function () {}, function () {}); return false; } catch (e) { return /not permitted/i.test(String(e && e.message)); } })(),
+      // An IP literal answers without any DNS traffic; the fixture's policy is allow-all-public.
+      lookupIsPromise: await (async () => { try { const p = mod.lookup('203.0.113.10'); if (!p || typeof p.then !== 'function') return false; const v = await p; return !!(v && v.address === '203.0.113.10'); } catch (e) { return false; } })(),
+    });
+    for (const id of ['dns/promises', 'node:dns/promises']) {
+      out['require:' + id] = await (async () => { try { return await shape(require(id)); } catch (e) { return 'error:' + String(e && e.message); } })();
+      out['import:' + id] = await (async () => { try { await esm.load(id); return 'loaded'; } catch (e) { return /blocked/i.test(String(e && e.message)) ? 'blocked' : 'error:' + String(e && e.message); } })();
+    }
+    res.json(out);
+  });
+
+  // The guard classifies addresses with net.isIP CAPTURED at load. import('net') hands a network-granted
+  // plugin the REAL net module, whose isIP is an ordinary writable property; a guard that read it live
+  // stopped recognising '127.0.0.1' as an address, and the private-range check never ran. The overwrite is
+  // restored before answering (this child serves the other probes too). TRUE == contained.
+  wordjs.http.route('get', '/isip-tamper', async (req, res) => {
+    const out = {};
+    const port = Number(req.query && req.query.port);
+    const realNet = (await esm.load('net')).default;
+    const orig = realNet.isIP;
+    const attempt = (open) => new Promise((resolve) => {
+      try {
+        const s = open();
+        s.on('error', () => resolve(true));
+        s.on('connect', () => { try { s.destroy(); } catch (e) {} resolve(false); });
+        setTimeout(() => { try { s.destroy(); } catch (e) {} resolve(true); }, 1500);
+      } catch (e) { resolve(true); }
+    });
+    try {
+      try { realNet.isIP = function () { return 0; }; } catch (e) { /* not writable: nothing to tamper with */ }
+      out.tampered = realNet.isIP('127.0.0.1') === 0;
+      out.netConnect = await attempt(() => require('net').connect(port, '127.0.0.1'));
+      out.realSocketConnect = await attempt(() => new realNet.Socket().connect(port, '127.0.0.1'));
+      out.fetchLoopback = await (async () => { try { await fetch('http://127.0.0.1:' + port + '/'); return false; } catch (e) { return true; } })();
+    } finally {
+      try { realNet.isIP = orig; } catch (e) { /* */ }
+    }
+    res.json(out);
+  });
 `;
 
 let ungrantedDir = '';
@@ -386,10 +458,17 @@ before(async () => {
         { scope: 'settings', access: 'read' },
         { scope: 'express', access: 'register_route' },
     ], GRANTED_INIT);
+    // The one-line dependency GRANTED_INIT uses for a genuine (untranspiled) ESM import().
+    fs.mkdirSync(path.join(grantedDir, 'node_modules', 'wjs-esm-probe'), { recursive: true });
+    fs.writeFileSync(path.join(grantedDir, 'node_modules', 'wjs-esm-probe', 'index.js'), 'module.exports = { load: (s) => import(s) };\n');
 
     // Grant the GRANTED fixture BEFORE load so cfg.network resolves true at spawn (host context — allowed).
     // express:register_route is included so its probe routes mount (delivery channel, as for UNGRANTED).
     perms._setGrantsInMemory(GRANTED, ['database:read', 'database:write', 'settings:read', 'express:register_route', perms.NETWORK_TOKEN]);
+    // A LOADED, empty egress policy (allow-all-public), as on a node whose policy read succeeded. Without it
+    // the child spawns deny-all (policy unavailable, F-06), and every SSRF probe below would be refused by
+    // the deny-all latch before the private-address classifier they exist to test was ever consulted.
+    perms._setEgressAllowlistInMemory(GRANTED, []);
     perms._setGrantsInMemory(UNGRANTED, ['express:register_route']);
 
     await loadWithTimeout(UNGRANTED, path.join(ungrantedDir, 'index.js'));
@@ -534,5 +613,34 @@ describe('sandbox escape — a FULLY-GRANTED plugin is still contained (real for
         // that is expected. What must hold is that no socket can be CONSTRUCTED over it, so the raw-write
         // path to forge a host-trusted frame does not exist.
         allTrue(r, ['socketFdBlocked', 'streamFdBlocked']);
+    });
+
+    test('egress guard: the guarded dns facade leaks no raw resolver, by any read path', async () => {
+        const r = await probe(GRANTED, 'dns-facade');
+        // getResolveTxt — the plain denial; descResolveTxt/descResolver/descPromisesResolve — the
+        // getOwnPropertyDescriptor recoveries a get-only Proxy used to leak; descResolveTlsa — a resolver
+        // Node added that no deny-list named (default-deny must still refuse it).
+        allTrue(r, ['getResolveTxt', 'descResolveTxt', 'descResolveTlsa', 'descResolver', 'descPromisesResolve']);
+    });
+
+    test('egress guard: require("dns/promises") — either spelling — is the promises-shaped guard, and import() of it is refused', async () => {
+        const r = await probe(GRANTED, 'dns-promises');
+        for (const id of ['dns/promises', 'node:dns/promises']) {
+            const m = r['require:' + id];
+            assert.ok(m && typeof m === 'object', `require('${id}') failed: ${JSON.stringify(m)}`);
+            // frozen — not the raw module; noPromisesMember + lookupIsPromise — not the callback-style dns
+            // facade (which is what routing the submodule by its 'dns' base handed back); resolveTxtDenied —
+            // the resolver surface is still refused.
+            allTrue(m, ['frozen', 'noPromisesMember', 'lookupIsPromise', 'resolveTxtDenied']);
+            assert.strictEqual(r['import:' + id], 'blocked', `import('${id}') must be refused, got ${JSON.stringify(r['import:' + id])}`);
+        }
+    });
+
+    test('egress guard: overwriting net.isIP through import("net") does not blunt the loopback block', async () => {
+        const before = ssrfHits;
+        const r = await probe(GRANTED, 'isip-tamper', `?port=${ssrfPort}`);
+        assert.strictEqual(r.tampered, true, 'precondition: the plugin really did overwrite the real net.isIP');
+        allTrue(r, ['netConnect', 'realSocketConnect', 'fetchLoopback']);
+        assert.strictEqual(ssrfHits, before, 'the loopback listener must receive ZERO connections from the plugin');
     });
 });

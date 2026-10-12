@@ -161,6 +161,7 @@ export default function NewsletterAdminPage() {
     const [editing, setEditing] = useState(null); // null | {} (new) | campaign (edit)
     const [notice, setNotice] = useState(null);   // { kind: 'ok' | 'warn' | 'err', text }
     const [sendingId, setSendingId] = useState(null);
+    const [mailError, setMailError] = useState(null); // last double opt-in mail failure (server-reported)
 
     const loadSubs = async () => {
         try {
@@ -171,6 +172,7 @@ export default function NewsletterAdminPage() {
             const data = await api(`/plugin/newsletter/subscribers${qs ? `?${qs}` : ""}`);
             setSubs(data.subscribers || []);
             setStats(data.stats || { total: 0, confirmed: 0, pending: 0, unsubscribed: 0 });
+            setMailError(data.confirmMailError || null);
         } catch {
             setSubs([]);
         }
@@ -297,6 +299,12 @@ export default function NewsletterAdminPage() {
                         <span>{notice.text}</span>
                         <button type="button" className="cf-flash-x" onClick={() => setNotice(null)} aria-label="Cerrar aviso">✕</button>
                     </div>
+                </div>
+            )}
+
+            {mailError && (
+                <div role="alert" className="cf-flash is-warn">
+                    No se pudo enviar el correo de confirmación ({mailError.message}). Las nuevas suscripciones quedan pendientes hasta que el correo funcione.
                 </div>
             )}
 

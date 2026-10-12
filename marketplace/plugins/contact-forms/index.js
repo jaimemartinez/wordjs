@@ -12,8 +12,9 @@
  *    deletes the child submissions first, so a crash between statements can never orphan rows.
  *  - There is NO crypto API in the sandbox: field-name slugs are Math.random based — they only need
  *    uniqueness, not secrecy.
- *  - The serialized request carries no req.ip, so anti-spam is honeypot + minimum-fill-time +
- *    a per-form in-memory rate limit (keyed by form id).
+ *  - Anti-spam is honeypot + minimum-fill-time + an in-memory rate limit per form AND per client
+ *    (req.clientKey, an HMAC of the caller's IP forwarded by the host). Keyed by form id alone, one
+ *    client could close a form for every visitor.
  *  - EVERYTHING responds via res.json: the isolate JSON-encodes string bodies, so the CSV export
  *    returns { csv, filename, count } and the admin client builds the Blob download.
  */
@@ -33,7 +34,8 @@ const MAX_VALUE_LEN = 5000;     // per submitted value
 const MAX_URL_LEN = 500;        // page_url cap
 const MIN_FILL_MS = 3000;       // submissions faster than this are treated as bots
 const RATE_WINDOW_MS = 60 * 1000;
-const RATE_MAX = 10;            // max submissions per form per window
+const RATE_MAX = 5;             // max submissions per client per form per window
+const RATE_MAX_KEYS = 10000;    // bound on the in-memory limiter map
 
 exports.init = async function (wordjs) {
     const { db, http, adminMenu } = wordjs;
@@ -142,19 +144,22 @@ exports.init = async function (wordjs) {
         unread_count: row.unread_count == null ? undefined : row.unread_count,
     });
 
-    // ---- per-form in-memory rate limiter (no req.ip in the sandbox) ------------------------------
-    const submitCounters = new Map(); // form_id -> { count, windowStart }
-    function allowSubmit(formId) {
+    // ---- per-form, per-client in-memory rate limiter ------------------------------------------
+    // Checks AND counts in one synchronous step, so concurrent requests cannot all pass the check.
+    const submitCounters = new Map(); // '<form_id>:<clientKey>' -> { count, windowStart }
+    function allowSubmit(formId, req) {
+        const key = formId + ':' + String((req && req.clientKey) || 'anon').slice(0, 64);
         const now = Date.now();
-        // Opportunistic pruning so the map cannot grow unbounded.
-        if (submitCounters.size > 500) {
+        // Pruning so the map cannot grow unbounded: expired windows first, then the oldest.
+        if (!submitCounters.has(key) && submitCounters.size >= RATE_MAX_KEYS) {
             for (const [k, v] of submitCounters) {
                 if (now - v.windowStart > RATE_WINDOW_MS) submitCounters.delete(k);
             }
+            while (submitCounters.size >= RATE_MAX_KEYS) submitCounters.delete(submitCounters.keys().next().value);
         }
-        const entry = submitCounters.get(formId);
+        const entry = submitCounters.get(key);
         if (!entry || now - entry.windowStart > RATE_WINDOW_MS) {
-            submitCounters.set(formId, { count: 1, windowStart: now });
+            submitCounters.set(key, { count: 1, windowStart: now });
             return true;
         }
         entry.count += 1;
@@ -307,8 +312,20 @@ exports.init = async function (wordjs) {
 
     // ================================ PUBLIC ROUTES ================================================
 
+    // Public callers never see an error's text: a driver's message names tables, columns and
+    // constraints. The details go to the server log.
+    const failQuietly = (res, e, what) => {
+        console.error(`[contact-forms] ${what} failed:`, e && e.message ? e.message : e);
+        res.status(500).json({ error: 'No se pudo completar la operación. Inténtalo de nuevo.' });
+    };
+    // Public routes answer every failure themselves, through failQuietly: a public caller only ever
+    // gets a reply this plugin wrote.
+    const quietly = (what, handler) => async (req, res) => {
+        try { await handler(req, res); } catch (e) { failQuietly(res, e, what); }
+    };
+
     // Form definition for the Puck block. Never exposes notify_email.
-    http.route('get', '/public/form', async (req, res) => {
+    http.route('get', '/public/form', quietly('form', async (req, res) => {
         const id = parseInt(req.query && req.query.id, 10);
         if (!Number.isFinite(id) || id < 1) return res.status(400).json({ error: 'ID de formulario inválido.' });
         const form = await db.get(`SELECT id, name, fields, success_message FROM ${T.forms} WHERE id = ?`, [id]);
@@ -319,10 +336,10 @@ exports.init = async function (wordjs) {
             fields: parseJson(form.fields, []),
             success_message: form.success_message || '',
         });
-    });
+    }));
 
     // Visitor submission.
-    http.route('post', '/public/submit', async (req, res) => {
+    http.route('post', '/public/submit', quietly('submission', async (req, res) => {
         const body = req.body || {};
         const formId = parseInt(body.form_id, 10);
         if (!Number.isFinite(formId) || formId < 1) return res.status(400).json({ error: 'ID de formulario inválido.' });
@@ -366,8 +383,8 @@ exports.init = async function (wordjs) {
             }
         }
 
-        // Per-form rate limit (last gate before the write).
-        if (!allowSubmit(formId)) {
+        // Per-form, per-client rate limit (last gate before the write).
+        if (!allowSubmit(formId, req)) {
             return res.status(429).json({ error: 'Demasiados envíos. Intenta de nuevo en un minuto.' });
         }
 
@@ -405,7 +422,7 @@ exports.init = async function (wordjs) {
         }
 
         res.json({ success: true, message: successMessage });
-    });
+    }));
 
     // ---- admin menu -------------------------------------------------------------------------------
     adminMenu.add({

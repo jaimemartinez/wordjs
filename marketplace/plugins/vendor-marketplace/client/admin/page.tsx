@@ -411,7 +411,7 @@ export default function MarketplaceAdminPage() {
                                         <td>{p.category || "—"}</td>
                                         <td>
                                             <span className={`cf-pill ${p.is_published ? "is-ok" : "is-muted"}`}>
-                                                {p.is_published ? "Publicado" : "Oculto"}
+                                                {p.is_published ? "Publicado" : p.admin_hidden ? "Oculto (moderación)" : "Oculto"}
                                             </span>
                                         </td>
                                         <td>

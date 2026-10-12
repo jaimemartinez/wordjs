@@ -257,16 +257,24 @@ describe('plugin supply chain', () => {
             const r = await request(app).get('/api/v1/plugins/registry');
             assert.strictEqual(r.status, 200);
             const byId = Object.fromEntries(r.body.plugins.map((e: any) => [e.id, e]));
-            assert.deepStrictEqual(byId[UI], { id: UI, path: `/plugins/${UI}`, browser: true, frontend: { hooks: true } });
-            assert.deepStrictEqual(byId[BACKEND_ONLY], { id: BACKEND_ONLY, path: `/plugins/${BACKEND_ONLY}`, browser: false });
+            // Not even the browser:script grant: that is for an admin-panel user (below).
+            assert.deepStrictEqual(byId[UI], { id: UI, path: `/plugins/${UI}`, frontend: { hooks: true } });
+            assert.deepStrictEqual(byId[BACKEND_ONLY], { id: BACKEND_ONLY, path: `/plugins/${BACKEND_ONLY}` });
             const text = JSON.stringify(r.body);
-            for (const leak of ['version', 'permissions', 'settings', 'name', 'reason', 'client/']) {
+            for (const leak of ['version', 'permissions', 'settings', 'name', 'reason', 'client/', 'browser']) {
                 assert.ok(!text.includes(leak), `registry leaks "${leak}": ${text}`);
             }
+            // The administrator's admin shell reads which active plugins are granted browser:script.
+            const admin = await request(app).get('/api/v1/plugins/registry').set('Authorization', `Bearer ${adminToken}`);
+            const adminById = Object.fromEntries(admin.body.plugins.map((e: any) => [e.id, e]));
+            assert.deepStrictEqual(adminById[UI], { id: UI, path: `/plugins/${UI}`, browser: true, frontend: { hooks: true } });
+            assert.deepStrictEqual(adminById[BACKEND_ONLY], { id: BACKEND_ONLY, path: `/plugins/${BACKEND_ONLY}`, browser: false });
             await updateOption('active_plugins', []);
         });
 
         it('the upgrade step grants browser:script ONCE, only to already-active plugins that ship browser code', async () => {
+            // "Not yet upgraded": no completion marker in the grant store, and none under the old option.
+            await perms.setHostMarker(core.BROWSER_CAPABILITY_MIGRATION_MARKER, null);
             await updateOption(core.BROWSER_CAPABILITY_MIGRATION_OPTION, null);
             await perms.setGrants(UI, ['settings:read']);
             await perms.setGrants(LEGACY, ['settings:read']);
@@ -279,7 +287,7 @@ describe('plugin supply chain', () => {
             assert.deepStrictEqual(perms.getGrants(LEGACY).sort(), ['browser:script', 'settings:read'], 'only ADDS the token');
             assert.ok(!perms.getGrants(BACKEND_ONLY).includes('browser:script'), 'no browser code → nothing granted');
             assert.ok(!perms.getGrants(INACTIVE_UI).includes('browser:script'), 'inactive → default-deny');
-            assert.ok(await getOption(core.BROWSER_CAPABILITY_MIGRATION_OPTION, null), 'completion recorded');
+            assert.ok(await perms.getHostMarker(core.BROWSER_CAPABILITY_MIGRATION_MARKER), 'completion recorded (in the grant store)');
 
             // Idempotent: an admin's later revoke is not undone by the next boot.
             await perms.setGrants(LEGACY, ['settings:read']);

@@ -539,6 +539,9 @@ const KNOWN_PERMISSIONS: Record<string, string[]> = {
     express: ['register_route'],
     admin_menu: ['register'],
     assets: ['write'],
+    // PRIVATE MEDIA (core/private-media.ts): read a private attachment's description and STREAM its bytes
+    // as the response of one of the plugin's own routes. A special verb — `admin` never implies it.
+    media: ['private_read'],
     // browser:script — the plugin's compiled frontend bundles (dist/{admin,hooks,component}.bundle.js)
     // run in the ADMIN SHELL's origin, with the session of whoever is viewing. See BROWSER_SCRIPT_TOKEN.
     browser: ['script'],
@@ -564,7 +567,9 @@ const KNOWN_PERMISSIONS: Record<string, string[]> = {
  *   · a plugin that ships browser code must DECLARE browser:script (install and activation refuse it
  *     otherwise — validateBrowserCapability below);
  *   · the host SERVES a plugin's bundles only while the plugin is active AND browser:script is granted
- *     (routes/plugin-bundles.ts), so revoking the switch stops the code at the next page load;
+ *     (core/plugin-serving.ts browserCodeServable — read by routes/plugin-bundles.ts and by the static
+ *     /plugins mount for dist/component.bundle.css), so revoking the switch stops the code at the next
+ *     page load;
  *   · plugins that were already active with frontend entries when this shipped were granted it once,
  *     at boot (migrateBrowserCapabilityGrants), so an upgrade does not silently break a working site.
  */
@@ -636,15 +641,54 @@ function validateBrowserCapability(pluginDir: string | null, manifest: any): str
  * admin pages, hooks and blocks of a working site. Plugins activated later go through the normal
  * default-deny path (declare → shown in the activation dialog → granted on activation).
  *
- * Idempotent twice over: it records completion in the `plugin_browser_capability_migrated` option and
- * never runs again once that is set, and it only ADDS the token (an existing grant is left alone, no
- * other grant is touched). Must run AFTER plugin-permissions.loadGrants()/backfillActive(). Returns the
- * slugs it granted.
+ * Idempotent twice over: it records completion and never runs again once that is recorded, and it only
+ * ADDS the token (an existing grant is left alone, no other grant is touched). Must run AFTER
+ * plugin-permissions.loadGrants()/backfillActive(). Returns the slugs it granted.
+ *
+ * DECIDED ON THE STORED RECORD, and only once the store has been read. Each grant is
+ * plugin-permissions addUpgradeGrant: the plugin's record read fresh under the policy lease, the token
+ * added to what is STORED (every other grant in it kept), written guarded on that read — this node's map
+ * is never what gets written back. And while this boot has not read `plugin_grants` at all (the boot
+ * load and the backfill's retry both failed), the step does nothing and records nothing, so it runs at
+ * the next boot: the backfill skipped too, and a plugin given a record holding browser:script alone
+ * would then never be given what its manifest declares (the backfill only fills a missing record).
+ *
+ * WHERE "DONE" IS RECORDED IS PART OF THE GUARANTEE. After the first run, every plugin with browser code
+ * that lacks the token lacks it because an administrator decided so (a revoke, or a re-activation of a
+ * record that had it revoked) — so a second run can only ever undo administrators' decisions. The
+ * completion marker used to be its own option, `plugin_browser_capability_migrated`, which any plugin
+ * holding settings:write could clear through the options bridge; the next boot then re-granted
+ * browser:script to every active plugin that ships browser code, its own included. The marker is now a
+ * host entry INSIDE the grant store (plugin-permissions setHostMarker), which only a writer that can
+ * already rewrite every grant can reset. The old option still counts as "done" where it exists (an
+ * install that ran the earlier version of this step), and its name stays protected from the bridge.
+ *
+ * "MARKER ABSENT" IS NOT "THIS SITE PREDATES THE CAPABILITY". A site installed through the setup wizard
+ * never ran this step: the process that served the wizard booted in setup mode, which skips the boot
+ * block, and the install happens in-process. So the first run came at the first restart after real use,
+ * and it read every plugin the administrator had activated since — and whose browser:script they had
+ * then revoked — as a pre-upgrade plugin, and granted it back. Two rules close that:
+ *   · a site created by the installer records the step as done (recordFreshInstallBrowserCapability,
+ *     called by routes/setup.ts), since none of its plugins can predate the capability;
+ *   · whatever the marker says, the step never touches a plugin whose grants an administrator has
+ *     decided (plugin-permissions ADMIN_DECISIONS_MARKER, read in the same row as the record: the
+ *     activation dialog, the permissions screen), so a decision made under this version is never undone
+ *     by it.
  */
 const BROWSER_CAPABILITY_MIGRATION_OPTION = 'plugin_browser_capability_migrated';
+const BROWSER_CAPABILITY_MIGRATION_MARKER = 'browserCapabilityMigrated';
 async function migrateBrowserCapabilityGrants(): Promise<string[]> {
-    if (await getOption(BROWSER_CAPABILITY_MIGRATION_OPTION, null)) return [];
     const perms = require('./plugin-permissions');
+    if (!perms.isGrantsLoaded()) {
+        console.warn(`[PluginPermissions] The one-time "${BROWSER_SCRIPT_TOKEN}" upgrade did not run: plugin_grants could not be read. It runs at the next boot.`);
+        return [];
+    }
+    if (await perms.getHostMarker(BROWSER_CAPABILITY_MIGRATION_MARKER)) return [];
+    const legacyDone = await getOption(BROWSER_CAPABILITY_MIGRATION_OPTION, null);
+    if (legacyDone) {
+        await perms.setHostMarker(BROWSER_CAPABILITY_MIGRATION_MARKER, String(legacyDone));
+        return [];
+    }
     const active: string[] = await getActivePlugins();
     const granted: string[] = [];
     for (const plugin of scanPlugins()) {
@@ -652,16 +696,32 @@ async function migrateBrowserCapabilityGrants(): Promise<string[]> {
         let manifest: any = {};
         try { manifest = JSON.parse(fs.readFileSync(path.join(plugin.path, 'manifest.json'), 'utf8')); } catch { /* no/invalid manifest: dist/ files still count */ }
         if (browserCodeSources(plugin.path, manifest).length === 0) continue;
-        const current: string[] = perms.getGrants(plugin.slug);
-        if (current.includes(BROWSER_SCRIPT_TOKEN)) continue;
-        await perms.setGrants(plugin.slug, [...current, BROWSER_SCRIPT_TOKEN]);
-        granted.push(plugin.slug);
+        // Added to the STORED record, unless it already holds the token or an administrator has decided
+        // this plugin's grants under a version that knows browser:script (addUpgradeGrant decides both on
+        // the row it reads under the lease).
+        if (await perms.addUpgradeGrant(plugin.slug, BROWSER_SCRIPT_TOKEN)) granted.push(plugin.slug);
     }
-    await updateOption(BROWSER_CAPABILITY_MIGRATION_OPTION, new Date().toISOString());
+    await perms.setHostMarker(BROWSER_CAPABILITY_MIGRATION_MARKER, new Date().toISOString());
     if (granted.length) {
         console.log(`[PluginPermissions] One-time upgrade: granted "${BROWSER_SCRIPT_TOKEN}" to already-active plugins that ship browser code: ${logSafe(granted.join(', '))}. Review it in Admin → Plugins → Permissions.`);
     }
     return granted;
+}
+
+/**
+ * A site the installer just CREATED has no plugin that was active before browser:script existed, so the
+ * one-time upgrade above has nothing to do on it — record it as done (see "MARKER ABSENT" above). Called
+ * by routes/setup.ts once the database is initialized. A database that already has active plugins (the
+ * installer pointed at an existing database) is left to the upgrade, which still never touches a plugin
+ * an administrator has decided. Returns true when it recorded the step as done.
+ */
+async function recordFreshInstallBrowserCapability(): Promise<boolean> {
+    const perms = require('./plugin-permissions');
+    if (await perms.getHostMarker(BROWSER_CAPABILITY_MIGRATION_MARKER)) return false;
+    const active: string[] = await getActivePlugins();
+    if (Array.isArray(active) && active.length > 0) return false;
+    await perms.setHostMarker(BROWSER_CAPABILITY_MIGRATION_MARKER, `install:${new Date().toISOString()}`);
+    return true;
 }
 
 /**
@@ -2256,7 +2316,13 @@ async function _withActivePluginsDistLock(mutator: (active: string[]) => string[
         throw new Error('Could not acquire active_plugins lock (another node/operation holds it)');
     }
     try {
-        const active = await getActivePlugins();
+        // FRESH and STRICT, not getActivePlugins(): that reads through the option cache, so a peer's
+        // write whose invalidation broadcast this node missed came back as the OLD set and was written
+        // back over the peer's change (re-activating a plugin the peer had just deactivated, or dropping
+        // one it activated) — under the very lock meant to prevent lost updates. And getOption answers a
+        // database error with the default `[]`, which the mutator then extended and wrote: every other
+        // plugin deactivated cluster-wide by one failed read. A read error now fails the operation.
+        const active = await require('./options').getOptionFresh('active_plugins', []);
         const next = await mutator(Array.isArray(active) ? active : []);
         if (next !== undefined) {
             await updateOption('active_plugins', next);
@@ -2308,15 +2374,22 @@ function fixMiddlewareOrder() {
 // B cannot start until A has committed to active_plugins closes both races. Activation is an admin action,
 // not a hot path, so full serialization is acceptable.
 let _pluginActivationChain: Promise<any> = Promise.resolve();
+// Slugs with an activation running on THIS node — queued, or between its child being spawned and the
+// active set being written. reconcileDeactivatedPlugins() must not mistake that window for a lost
+// deactivation. A count, not a flag: the same slug can be queued twice.
+const activationsInFlight = new Map<string, number>();
 async function activatePlugin(slug: string) {
+    activationsInFlight.set(slug, (activationsInFlight.get(slug) || 0) + 1);
     const prev = _pluginActivationChain;
     let release!: () => void;
     _pluginActivationChain = new Promise<void>((r) => { release = r; });
-    await prev.catch(() => { /* a prior failed activation must not block the next */ });
     try {
+        await prev.catch(() => { /* a prior failed activation must not block the next */ });
         return await _activatePluginUnlocked(slug);
     } finally {
         release();
+        const n = (activationsInFlight.get(slug) || 1) - 1;
+        if (n > 0) activationsInFlight.set(slug, n); else activationsInFlight.delete(slug);
     }
 }
 
@@ -2499,9 +2572,21 @@ async function loadOnePlugin(slug: string) {
     if (fs.existsSync(manifestPath)) { try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); } catch { /* */ } }
     if (!manifest || !manifest.isolated) return false;
     try {
+        // Re-read the grant/egress policy FIRST. The activating node persists the plugin's grants before
+        // it publishes 'activate', but this node only learns of them through its own re-read: the
+        // 'option-changed' message that precedes this one is handled asynchronously (its DB read may not
+        // have landed yet) or may have been lost outright. Validating and spawning against the map as it
+        // happened to be refused the plugin here (every declared capability "not granted") or ran it
+        // without its grants. loadGrants/loadEgressHosts are serialized, so this read is ordered after
+        // any in flight, and a failed read keeps what this node already had.
+        try {
+            const perms = require('./plugin-permissions');
+            await perms.loadGrants();
+            await perms.loadEgressHosts();
+        } catch { /* keep the maps this node already has */ }
         // Re-validate locally (code-poisoning guard). GRANT mode: grants are replicated through the same
-        // `plugin_grants` option this node already loaded, so a capability the admin revoked on ANOTHER
-        // node must not be authorized here just because the manifest still declares it.
+        // `plugin_grants` option just re-read, so a capability the admin revoked on ANOTHER node must not
+        // be authorized here just because the manifest still declares it.
         validatePluginPermissions(slug, plugin.path, manifest, { mode: 'grant' });
         await installPluginDependencies(slug, manifest, plugin.path); // shared node_modules; idempotent
         try { unloadIsolatedPlugin(slug); } catch { /* not loaded here yet */ }
@@ -2521,6 +2606,45 @@ async function loadOnePlugin(slug: string) {
 function unloadOnePlugin(slug: string) {
     try { unloadIsolatedPlugin(slug); console.log(`[plugins] '${logSafe(slug)}' unloaded live (cross-node deactivation)`); return true; }
     catch (e: any) { console.warn(`[plugins] cross-node unload of '${logSafe(slug)}': ${logSafe(e && e.message)}`); return false; }
+}
+
+/**
+ * Stop plugins that run on THIS node although the shared active set no longer lists them — a
+ * deactivation (an admin's, a revoke that condemned the plugin, CrashGuard's) whose 'wordjs:plugin-changed'
+ * broadcast this node never received. Pub/sub drops messages silently, and without this such a plugin
+ * kept running here, with whatever it had been granted, until the node restarted. Called by the periodic
+ * and on-reconnect re-sync in core/coherence.ts.
+ *
+ * Deliberately ONE-directional and conservative: it only ever STOPS a plugin, only one this node runs as a
+ * plugin (theme isolates are not in the active set), never one with an activation in flight here (its
+ * child is spawned before the active set is written), and only on the SECOND consecutive observation,
+ * so a write landing between two reads is not acted on. An unreadable active set changes nothing. The
+ * other direction (a lost 'activate') is an availability gap, not a containment one, and loading code
+ * from a timer is not something to do quietly; it is left to the next activation or restart.
+ */
+const strayObservations = new Map<string, number>();
+async function reconcileDeactivatedPlugins(): Promise<string[]> {
+    let active: any;
+    try { active = await require('./options').getOptionFresh('active_plugins', []); }
+    catch { return []; }
+    if (!Array.isArray(active)) return [];
+    const { listIsolates } = require('./plugin-isolate');
+    const stray = new Set<string>();
+    for (const slug of listIsolates()) {
+        if (String(slug).startsWith('theme:')) continue;
+        if (active.includes(slug) || activationsInFlight.has(slug)) continue;
+        stray.add(slug);
+    }
+    const stopped: string[] = [];
+    for (const slug of [...strayObservations.keys()]) if (!stray.has(slug)) strayObservations.delete(slug);
+    for (const slug of stray) {
+        const seen = (strayObservations.get(slug) || 0) + 1;
+        if (seen < 2) { strayObservations.set(slug, seen); continue; }
+        strayObservations.delete(slug);
+        console.warn(`[plugins] '${logSafe(slug)}' runs here but is no longer active in the shared active set (a lost deactivation) — stopping it`);
+        if (unloadOnePlugin(slug)) stopped.push(slug);
+    }
+    return stopped;
 }
 
 /**
@@ -2712,18 +2836,25 @@ exports.deactivate = function() {
 }
 
 /**
- * Purge a plugin's persisted footprint on uninstall. ALWAYS clears grants (security: otherwise a
- * re-uploaded slug silently inherits the old, possibly-revoked grants) + crash strikes. When
+ * Purge a plugin's persisted footprint on uninstall. Clears grants and the egress allowlist (security:
+ * otherwise a re-uploaded slug silently inherits the old, possibly-revoked grants) + crash strikes. When
  * dropTables is set, also drops the plugin's OWN wjp_<slug>_* tables — the sandbox confines each
  * plugin to exactly that prefix, so dropping them is complete and can't touch core or another plugin.
  * Options are intentionally NOT auto-purged: the options bridge is a GLOBAL key space with no
  * per-plugin namespace, so a plugin's keys can't be identified safely (a plugin.uninstall hook is the
  * clean path for that). Best-effort: each step is guarded so one failure doesn't abort the rest.
+ *
+ * `keepGrants` is for an in-place UPDATE (routes/plugins runPluginUpdate), which keeps the plugin and so
+ * keeps what an administrator decided for it: the stored grant record and egress allowlist are left as
+ * they are. Clearing them and writing back a copy taken from this node's memory undid, on a node that had
+ * not heard of it, a revoke or a narrowed allowlist another node had stored.
  */
-async function uninstallPluginData(slug: string, { dropTables = false }: { dropTables?: boolean } = {}) {
+async function uninstallPluginData(slug: string, { dropTables = false, keepGrants = false }: { dropTables?: boolean; keepGrants?: boolean } = {}) {
     const result: { grantsRemoved: boolean; strikesCleared: boolean; tablesDropped: string[]; appContainerRetired: boolean } = { grantsRemoved: false, strikesCleared: false, tablesDropped: [], appContainerRetired: false };
-    try { const { removeGrants } = require('./plugin-permissions'); await removeGrants(slug); result.grantsRemoved = true; }
-    catch (e: any) { console.warn(`[uninstall ${logSafe(slug)}] removeGrants failed: ${logSafe(e && e.message)}`); }
+    if (!keepGrants) {
+        try { const { removeGrants } = require('./plugin-permissions'); await removeGrants(slug); result.grantsRemoved = true; }
+        catch (e: any) { console.warn(`[uninstall ${logSafe(slug)}] removeGrants failed: ${logSafe(e && e.message)}`); }
+    }
     try { const { clearStrikes } = require('./crash-guard'); clearStrikes(slug); result.strikesCleared = true; }
     catch (e: any) { console.warn(`[uninstall ${logSafe(slug)}] clearStrikes failed: ${logSafe(e && e.message)}`); }
     try { await require('./plugin-assets').clearAssets(slug); } catch (e: any) { console.warn(`[uninstall ${logSafe(slug)}] clearAssets failed: ${logSafe(e && e.message)}`); }
@@ -2778,6 +2909,7 @@ module.exports = {
     loadActivePlugins,
     loadOnePlugin,
     unloadOnePlugin,
+    reconcileDeactivatedPlugins,
     getAllPlugins,
     createSamplePlugin,
     validatePluginPermissions,
@@ -2795,8 +2927,13 @@ module.exports = {
     browserCodeSources,
     validateBrowserCapability,
     migrateBrowserCapabilityGrants,
+    recordFreshInstallBrowserCapability,
     BROWSER_CAPABILITY_MIGRATION_OPTION,
+    BROWSER_CAPABILITY_MIGRATION_MARKER,
     fixMiddlewareOrder,
+    // Cross-node propagation primitive (multi-node): the permission/egress routes publish a
+    // {action:'reload', slug} so every node refreshes its grant/egress maps and respawns the isolate.
+    publishPluginChange,
     // Hard Lock + Bundling utilities
     isBundledPlugin,
     checkDependencyConflicts,

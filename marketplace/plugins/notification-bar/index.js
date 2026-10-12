@@ -148,13 +148,25 @@ exports.init = async function (wordjs) {
 
     const readConfig = async () => normalizeConfig(await options.get(OPT_CONFIG, null));
 
+    // Public callers never see an error's text: a driver's message names tables, columns and
+    // constraints. The details go to the server log.
+    const failQuietly = (res, e, what) => {
+        console.error(`[notification-bar] ${what} failed:`, e && e.message ? e.message : e);
+        res.status(500).json({ error: 'No se pudo completar la operación. Inténtalo de nuevo.' });
+    };
+    // Public routes answer every failure themselves, through failQuietly: a public caller only ever
+    // gets a reply this plugin wrote.
+    const quietly = (what, handler) => async (req, res) => {
+        try { await handler(req, res); } catch (e) { failQuietly(res, e, what); }
+    };
+
     // ---- routes ---------------------------------------------------------------------------------
     // PUBLIC config — consumed by public/bar.js on every public page (and harmless to expose:
     // it contains exactly what the bar renders). All checks (enabled, schedule window,
     // dismissal version) run client-side so this stays a plain cached-options read.
-    http.route('get', '/public/config', async (req, res) => {
+    http.route('get', '/public/config', quietly('public config', async (req, res) => {
         res.json(await readConfig());
-    });
+    }));
 
     // Admin: current config for the settings form.
     http.route('get', '/config', { auth: true, admin: true }, async (req, res) => {
