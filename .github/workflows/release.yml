@@ -280,7 +280,7 @@ jobs:
         # the comment is the only human-readable half of it, and a label that does not match its SHA turns
         # the pin into decoration. v0.24.1/v0.24.2 are dependency and CI-workflow changes upstream (eslint
         # bump, zizmor trigger changes); nothing in the action's inputs moved.
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2 — pinned to an immutable commit SHA (supply-chain: a moving tag can be repointed to malicious code)
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.2 — pinned to an immutable commit SHA (supply-chain: a moving tag can be repointed to malicious code)
         with:
           path: .
           format: cyclonedx-json
