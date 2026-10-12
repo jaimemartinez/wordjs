@@ -129,6 +129,25 @@ async function runTransaction<T>(fn: (tx: TransactionQuery) => Promise<T>): Prom
   return result;
 }
 
+/**
+ * Why the native SQLite driver cannot open a database in this process, or null when it can.
+ *
+ * `require('better-sqlite3')` succeeds without the compiled binary: the package only opens it on the
+ * first `new Database()`. The binary is put in place by the package's install script (a prebuilt
+ * download, or a local compile), so `npm install --ignore-scripts` — or a Node.js upgrade after the
+ * install — leaves a driver that loads and then fails at its first connection. The installer asks this
+ * before it writes anything; a throwaway in-memory database touches no file.
+ */
+function nativeSqliteLoadError(): Error | null {
+  try {
+    const Database = require('better-sqlite3');
+    new Database(':memory:').close();
+    return null;
+  } catch (e: any) {
+    return e instanceof Error ? e : new Error(String(e));
+  }
+}
+
 // Helper to load driver dynamically
 async function loadDriver(overrideName: string | null = null) {
   const name = overrideName || config.dbDriver || 'sqlite-native';
@@ -899,6 +918,7 @@ module.exports = {
   // reads the getter so /health/details reports the ACTIVE driver, not the configured one.
   getDriverDegradation,
   reportDriverDegradation,
+  nativeSqliteLoadError,
   hasActiveTransaction,
   afterCommit,
   db: dbProxy,

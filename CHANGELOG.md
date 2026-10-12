@@ -253,6 +253,23 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **A failed install no longer leaves the site half-installed.** `POST /setup/install` wrote
+  `wordjs-config.json` before it opened the database, and that file marks the site installed: when a
+  later step failed, every retry of the wizard was answered `Already installed` — with no database and no
+  administrator — until the file was deleted by hand. A failure before the administrator account exists
+  now puts the config back exactly as it was (no file at all on a fresh box), and the steps before that
+  point can be repeated, so the wizard simply runs again.
+- **The install wizard checks the native SQLite driver before it writes anything.** `better-sqlite3`
+  loads without its compiled binary and only fails at the first connection, so an install made with
+  `npm install --ignore-scripts` (which skips the step that puts the binary in place) failed halfway
+  through with `Could not locate the bindings file`. The wizard now stops first and says how to fix it
+  (`npm rebuild better-sqlite3` in `backend/`, or the pure-JS SQLite option); `POST /setup/test-db`
+  reports the same. See *Install scripts* in `documentation/development.md`.
+- **The install wizard works in split-mode development.** Before the wizard has run, nothing can register
+  with the gateway, so it reaches the local backend and frontend through its pre-install bootstrap — for
+  HTTP requests only. WebSocket upgrades were dropped, Next.js's HMR socket (`/_next/hmr`) with them, and
+  the wizard page never became interactive ("Next Step" stayed disabled). Upgrades now use the same
+  bootstrap.
 - **Cluster certificates are always loadable by OpenSSL.** The gateway's cluster CA drew certificate
   serials as `'0'` + 15 random bytes and relied on node-forge stripping one leading zero byte; when the
   first random byte was itself `0x00` (about 1 draw in 512) the certificate carried a non-minimal DER

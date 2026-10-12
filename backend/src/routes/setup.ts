@@ -2,7 +2,7 @@ import type { Request, Response } from 'express';
 import type { SiteHost, SiteUrl } from '../core/host-policy';
 const express = require('express');
 const router = express.Router();
-const { getConfig, saveConfig, isInstalled } = require('../core/configManager');
+const { getConfig, updateConfig, restoreConfigText, siteAddressRev, isInstalled } = require('../core/configManager');
 const config = require('../config/app');
 const path = require('path');
 const { verifyInstallToken } = require('../core/install-token');
@@ -24,6 +24,19 @@ function requireInstallToken(req: Request, res: Response): boolean {
         return false;
     }
     return true;
+}
+
+// The native SQLite driver's compiled binary is missing or was built for another Node.js version. The
+// loader's own message (the paths it searched) goes to the server log only, like every installer error.
+const NATIVE_SQLITE_UNAVAILABLE = 'The native SQLite driver (better-sqlite3) cannot load on this server: its compiled '
+    + 'binary is missing or was built for another Node.js version. An "npm install --ignore-scripts" skips the step '
+    + 'that installs it. Run "npm rebuild better-sqlite3" in the backend folder, restart the backend and try again, '
+    + 'or choose "SQLite (legacy / WASM)". Nothing was saved.';
+
+function nativeSqliteUnavailable(): boolean {
+    const error = require('../config/database').nativeSqliteLoadError();
+    if (error) console.error('❌ Setup: the native SQLite driver cannot load:', error.message);
+    return !!error;
 }
 
 /**
@@ -372,6 +385,9 @@ router.post('/test-db', async (req: Request, res: Response) => {
             return res.json({ ok: true, message: 'MySQL connection successful.' });
         }
         if (dbDriver === 'sqlite-native' || dbDriver === 'sqlite-legacy') {
+            if (dbDriver === 'sqlite-native' && nativeSqliteUnavailable()) {
+                return res.json({ ok: false, error: NATIVE_SQLITE_UNAVAILABLE });
+            }
             const fs = require('fs');
             const dataDir = path.resolve('./data');
             fs.mkdirSync(dataDir, { recursive: true });
@@ -538,7 +554,10 @@ router.post('/test-db', async (req: Request, res: Response) => {
  *       429:
  *         description: Rate limited by the setup limiter.
  *       500:
- *         description: The configuration could not be written, or the install itself failed.
+ *         description: >-
+ *           The configuration could not be written, the native SQLite driver cannot load (checked before
+ *           anything is written), or the install itself failed. A failure before the administrator
+ *           account exists puts the configuration back as it was, so the wizard can be run again.
  *         content:
  *           application/json:
  *             schema:
@@ -572,6 +591,11 @@ router.post('/install', async (req: Request, res: Response) => {
     if (!ALLOWED_DRIVERS.includes(dbDriver)) return fail('Invalid database driver.');
     if ((dbDriver === 'postgres' || dbDriver === 'mysql') && (!dbConn || !dbConn.host || !dbConn.database || !dbConn.user)) {
         return fail(`${dbDriver === 'mysql' ? 'MySQL' : 'PostgreSQL'} requires host, database, and user.`);
+    }
+    // Before anything is written: a native driver without its binary used to fail halfway through the
+    // install, after the config below already marked the site installed.
+    if (dbDriver === 'sqlite-native' && nativeSqliteUnavailable()) {
+        return res.status(500).json({ error: NATIVE_SQLITE_UNAVAILABLE });
     }
 
     // SECURITY: siteUrl comes from this one address, and it lands in the same-origin allow-lists — see
@@ -694,9 +718,26 @@ router.post('/install', async (req: Request, res: Response) => {
     };
 
     // Note: We no longer write to .env as per "Never Use Env Vars" policy.
-    // Secrets are persisted solely in wordjs-config.json via saveConfig().
+    // Secrets are persisted solely in wordjs-config.json.
 
-    if (saveConfig(newConfig)) {
+    // saveConfig(), keeping the previous bytes for undoInstall() below.
+    const written = updateConfig((current: Record<string, any>) => ({ ...current, ...newConfig, updatedAt: new Date().toISOString() }));
+    if (written.ok) {
+        // The config just written already marks the site installed (isInstalledConfig). If the install
+        // fails before the administrator account exists, there is no site anyone can use, yet every
+        // retry of the wizard was answered "Already installed" until the file was deleted by hand. So
+        // until then a failure puts the config back exactly as it was (no file at all on a fresh box)
+        // and the wizard can simply be run again; every step before that point is safe to repeat. The
+        // live config keeps the failed attempt's values, which the next attempt overwrites (Object.assign
+        // below) and a restart rereads from the file.
+        let adminReady = false;
+        const undoInstall = (): boolean => {
+            const undone = restoreConfigText(written.previousText, { expectRev: siteAddressRev(written.config) });
+            if (!undone) console.error('❌ Setup: the configuration of the failed install could not be undone; remove backend/wordjs-config.json before running the wizard again.');
+            return undone;
+        };
+        const failedText = (e: any, fallback: string) => publicErrorText(e, fallback)
+            + (!adminReady && undoInstall() ? ' Nothing was kept: fix the cause and run the wizard again.' : '');
         try {
             // Initialize DB connection dynamically
             console.log(`📦 Setup: Initializing database (driver: ${dbDriver})...`);
@@ -736,7 +777,7 @@ router.post('/install', async (req: Request, res: Response) => {
                     console.log('✅ mTLS certificates generated for the local services (localhost, 127.0.0.1).');
                 } catch (e) {
                     console.error('❌ Setup failed during mTLS generation:', e);
-                    res.status(500).json({ error: publicErrorText(e, 'Setup failed during mTLS generation.') });
+                    res.status(500).json({ error: failedText(e, 'Setup failed during mTLS generation.') });
                     return; // Exit if mTLS generation fails
                 }
             }
@@ -785,7 +826,11 @@ router.post('/install', async (req: Request, res: Response) => {
             await initTaxonomies();
 
             const Term = require('../models/Term');
-            await Term.create({ name: 'Uncategorized', taxonomy: 'category', slug: 'uncategorized', description: 'Default category' });
+            // Already there when an earlier attempt failed after this point (undoInstall); Term.create
+            // throws on a duplicate, and that would fail every retry from here on.
+            if (!await Term.findBySlug('uncategorized', 'category')) {
+                await Term.create({ name: 'Uncategorized', taxonomy: 'category', slug: 'uncategorized', description: 'Default category' });
+            }
 
             // The ONE moment the product provisions a theme on its own: install. This is Ghost shipping
             // casper with the package — a site must not finish the wizard with an empty themes dir.
@@ -803,6 +848,9 @@ router.post('/install', async (req: Request, res: Response) => {
             } else {
                 await User.update(admin.id, { password: adminPassword, email: adminEmailDisplay, role: 'administrator' });
             }
+            // From here on the site exists and its administrator can sign in: a later failure is reported,
+            // but the install is no longer undone.
+            adminReady = true;
 
             // Persist the admin's email as the site admin_email option (was left at the default before).
             await updateOption('admin_email', adminEmailDisplay);
@@ -917,7 +965,7 @@ router.post('/install', async (req: Request, res: Response) => {
 
         } catch (e) {
             console.error('❌ Setup failed:', e);
-            res.status(500).json({ error: publicErrorText(e, 'Setup failed during the install.') });
+            res.status(500).json({ error: failedText(e, 'Setup failed during the install.') });
         }
     } else {
         res.status(500).json({ error: 'Failed to save configuration' });

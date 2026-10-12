@@ -81,11 +81,11 @@ stub(fromHere('../models/User'), {
     create: async (u: any) => { admin = { id: 1, userLogin: u.username, userEmail: u.email, meta: {} }; return admin; },
     update: async () => true,
 });
-stub(fromHere('../config/database'), { init: async () => {}, initializeDatabase: async () => {} });
+stub(fromHere('../config/database'), { init: async () => {}, initializeDatabase: async () => {}, nativeSqliteLoadError: () => null });
 stub(fromHere('../core/options'), { updateOption: async () => true, getOption: async () => null });
 stub(fromHere('../core/roles'), { loadRoles: async () => {}, syncRoles: async () => {}, getRoles: () => ({}) });
 stub(fromHere('../core/post-types'), { initPostTypes: async () => {}, initTaxonomies: async () => {} });
-stub(fromHere('../models/Term'), { create: async () => ({}) });
+stub(fromHere('../models/Term'), { findBySlug: async () => null, create: async () => ({}) });
 stub(fromHere('../core/themes'), { createDefaultTheme: () => {} });
 stub(fromHere('../core/certManager'), {
     generateClusterCA: () => ({ key: 'stub-ca-key', cert: 'stub-ca-cert' }),
