@@ -256,7 +256,7 @@ export default function SettingsPage() {
                                             <button
                                                 type="button"
                                                 onClick={() => setSettings({ ...settings, site_logo: "" })}
-                                                className="absolute top-2 right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center shadow-lg opacity-0 group-hover:opacity-100 transition-opacity transform hover:scale-110"
+                                                className="absolute top-2 right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center shadow-lg opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity transform hover:scale-110"
                                             >
                                                 <i className="fa-solid fa-xmark text-xs"></i>
                                             </button>
@@ -295,7 +295,7 @@ export default function SettingsPage() {
                                             <button
                                                 type="button"
                                                 onClick={() => setSettings({ ...settings, site_icon: "" })}
-                                                className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center shadow-lg opacity-0 group-hover:opacity-100 transition-opacity transform hover:scale-110"
+                                                className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center shadow-lg opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity transform hover:scale-110"
                                             >
                                                 <i className="fa-solid fa-xmark text-[10px]"></i>
                                             </button>

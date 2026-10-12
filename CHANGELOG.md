@@ -889,6 +889,16 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **Admin row actions are visible on phones and tablets.** Several admin screens hid their row actions
+  with `opacity-0 group-hover:opacity-100`, and Tailwind v4 only applies `group-hover:` where the device
+  can hover. On touch screens those buttons therefore stayed invisible but still tappable, including the
+  delete buttons on Users, Categories and Menus, and the revoke button on Tokens. Media, Backups and the
+  posts table used a width-based variant that failed the same way on tablets. These controls are now
+  visible by default and hidden only where hover exists. Hovering or keyboard focus still reveals them on
+  desktop. Also covered: Roles, Plugins, the Settings logo/favicon remove buttons, the notification
+  centre (whose delete button sits in the card's bottom-right corner on touch screens) and the Verso
+  saved-pattern delete. Purely decorative hover layers stay hover-only and no longer intercept taps. A
+  test now fails on any admin or shared-component class list that reveals a control only on hover.
 - **Cluster certificates are always loadable by OpenSSL.** The gateway's cluster CA drew certificate
   serials as `'0'` + 15 random bytes and relied on node-forge stripping one leading zero byte; when the
   first random byte was itself `0x00` (about 1 draw in 512) the certificate carried a non-minimal DER

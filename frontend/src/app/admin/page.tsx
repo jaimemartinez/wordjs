@@ -73,7 +73,7 @@ const QuickAction = ({ href, icon, label, subLabel, color }: { href: string, ico
             <h4 className="font-bold text-gray-900 text-sm group-hover:text-blue-600 transition-colors">{label}</h4>
             <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mt-0.5">{subLabel}</p>
         </div>
-        <div className="absolute right-6 opacity-0 group-hover:opacity-100 transition-opacity -translate-x-4 group-hover:translate-x-0 duration-300">
+        <div className="absolute right-6 opacity-0 group-hover:opacity-100 transition-opacity -translate-x-4 group-hover:translate-x-0 duration-300 pointer-events-none">
             <i className="fa-solid fa-arrow-right text-gray-300"></i>
         </div>
     </a>

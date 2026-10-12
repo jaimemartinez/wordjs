@@ -552,7 +552,7 @@ export default function MenusPage() {
                                                     </button>
                                                     <button
                                                         onClick={() => confirmDeleteItem(item.id)}
-                                                        className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-500 hover:text-white flex items-center justify-center transition-all opacity-0 group-hover:opacity-100 hover:shadow-md"
+                                                        className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-500 hover:text-white flex items-center justify-center transition-all opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:shadow-md"
                                                     >
                                                         <i className="fa-solid fa-trash-can"></i>
                                                     </button>
