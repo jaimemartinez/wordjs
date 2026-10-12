@@ -76,7 +76,14 @@ describe('pluginClientKey: one caller per /64, stable across restarts', () => {
         assert.notStrictEqual(pluginClientKey(peer('2001:db8:aa:bc::1')), k);
         assert.strictEqual(pluginClientKey(peer('::ffff:203.0.113.5')), pluginClientKey(peer('203.0.113.5')));
         assert.notStrictEqual(pluginClientKey(peer('203.0.113.5')), pluginClientKey(peer('203.0.113.6')));
-        assert.ok(!k.includes('2001') && !pluginClientKey(peer('203.0.113.5')).includes('203'), 'never the raw address');
+        // Never the raw address: a key is lowercase hex only, so it cannot carry an address's ':' or '.'
+        // — and not the address hex-encoded either. (A check for the substrings '2001' or '203' failed
+        // whenever the random keyed hash happened to contain them.)
+        const k4 = pluginClientKey(peer('203.0.113.5'));
+        assert.match(k4, /^[0-9a-f]{24}$/);
+        for (const [key, raw] of [[k, '2001:db8:aa:bb'], [k4, '203.0.113.5']]) {
+            assert.ok(!key.includes(Buffer.from(raw).toString('hex').slice(0, 8)), `never the raw address: ${raw}`);
+        }
     });
 
     it('the key survives a restart (it is keyed with the site secret, not a per-process random one)', () => {

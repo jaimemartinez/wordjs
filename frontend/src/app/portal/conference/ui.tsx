@@ -279,7 +279,7 @@ export function Spinner({ label }: { label?: string }) {
 export function EmptyState({ icon, title, hint, action, className, padding = "lg" }: { icon: string; title: React.ReactNode; hint?: React.ReactNode; action?: React.ReactNode; className?: string; padding?: "sm" | "lg" }) {
     return (
         <div className={cx("flex flex-col justify-center items-center px-6 bg-gray-50/50 border-2 border-dashed border-gray-100 rounded-3xl text-center", padding === "lg" ? "py-20" : "py-16", className)}>
-            <div className="w-20 h-20 bg-white rounded-3xl flex items-center justify-center text-gray-200 text-3xl shadow-sm mb-4">
+            <div className="w-20 h-20 shrink-0 bg-white rounded-3xl flex items-center justify-center text-gray-200 text-3xl shadow-sm mb-4">
                 <i className={cx("fa-solid", icon)}></i>
             </div>
             <p className="text-gray-400 text-xs font-bold uppercase tracking-widest">{title}</p>

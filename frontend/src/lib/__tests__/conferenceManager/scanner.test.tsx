@@ -304,7 +304,8 @@ describe('wiring (source): the tested pieces are the ones the scanner runs', () 
     const body = scanner.slice(scanner.indexOf('export function MealScanner('));
 
     it('the decode loop feeds the heartbeat and decodes the aiming band with the built-in reader', () => {
-        expect(body).toMatch(/if \(inFlight\.current \|\| sheetRef\.current \|\| armedRef\.current\) meter\.current\.pause\(\);/);
+        // 2.16.0: scanPaused also pauses while a confirmation card is open (see mealConfirm.test.tsx).
+        expect(body).toMatch(/if \(scanPaused\(\{ inFlight: inFlight\.current, sheet: sheetRef\.current, armed: armedRef\.current, flow: flowRef\.current \}\)\) meter\.current\.pause\(\);/);
         expect(body).toMatch(/const hit = decodeCameraFrame\(video, canvas, aimRef\.current\);\s+meter\.current\.frame\(\);\s+if \(hit\) onCodeRef\.current\(hit\.text, hit\.format\);/);
         expect(body).toMatch(/meter\.current\.frame\(\);\s+for \(const c of codes \|\| \[\]\) onCodeRef\.current\(String\(c\.rawValue \|\| ''\), String\(c\.format \|\| ''\)\);/);
         // A native detect() in flight keeps the heartbeat alive; a throwing one does not.
@@ -318,8 +319,11 @@ describe('wiring (source): the tested pieces are the ones the scanner runs', () 
         expect(body).toMatch(/<AimFrame frameRef=\{aimRef\}/);
     });
     it('onCode routes every read: a badge is posted, anything else lands on the read card', () => {
-        expect(body).toMatch(/const r = router\.current\.route\(raw, format, inFlight\.current\);/);
-        expect(body).toMatch(/if \(r\.action === 'submit'\) \{ submit\(\{ code: r\.code \}\); return; \}/);
+        // 2.16.0: also busy while a confirmation card is open; scanBody still delivers at once with the
+        // confirmation switched off (2.15.x behaviour).
+        expect(body).toMatch(/const r = router\.current\.route\(raw, format, inFlight\.current \|\| f\.isOpen\(\) \|\| f\.isBusy\(\)\);/);
+        expect(body).toMatch(/if \(r\.action === 'submit'\) \{ scanBody\(\{ code: r\.code \}\); return; \}/);
+        expect(body).toMatch(/if \(!confirmRef\.current\) \{ submit\(body\); return; \}/);
         expect(body).toMatch(/if \(r\.fresh\) \{ setRead\(\{ value: r\.value, format: r\.format, seq: Date\.now\(\) \}\); feedback\.current\.info\(\); \}/);
         expect(body).toMatch(/<ReadCard read=\{read\}/);
     });

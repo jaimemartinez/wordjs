@@ -6,6 +6,8 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useRouter } from "next/navigation";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
+// A role a plugin declared is shown as that plugin's, read-only (backend core/plugin-roles.ts).
+import { PluginRoleBadges, PluginRolePanel, canDeleteRole, isPluginRole } from "./PluginRole";
 
 export default function RolesPage() {
     const { t } = useI18n();
@@ -51,6 +53,12 @@ export default function RolesPage() {
 
     const handleEdit = (slug: string, role: Role) => {
         setEditingSlug(slug);
+        if (isPluginRole(role)) {
+            // Read-only: the plugin defines it (the panel below shows it instead of the form).
+            setSuccess(null);
+            setError(null);
+            return;
+        }
         setEditName(role.name);
         setEditCaps(role.capabilities);
         setSuccess(null);
@@ -159,7 +167,11 @@ export default function RolesPage() {
                                 <div>
                                     <h3 className="font-bold text-gray-900 capitalize">{role.name}</h3>
                                     <p className="text-xs text-gray-400 mt-1 uppercase tracking-widest font-black leading-none">{slug}</p>
+                                    <PluginRoleBadges role={role} t={t} />
                                 </div>
+                                {/* A plugin's role goes away with its plugin: no delete while it is installed. The button
+                                    is visible on screens without hover (phones) and revealed on hover elsewhere. */}
+                                {canDeleteRole(role) && (
                                 <div className="flex gap-2 opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity" data-role-actions={slug}>
                                     <button
                                         onClick={(e) => { e.stopPropagation(); handleDelete(slug); }}
@@ -169,6 +181,7 @@ export default function RolesPage() {
                                         <i className="fa-solid fa-trash-can text-sm"></i>
                                     </button>
                                 </div>
+                                )}
                             </div>
                             <div className="mt-4 flex flex-wrap gap-1">
                                 <span className="text-[10px] px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full font-bold">
@@ -181,7 +194,9 @@ export default function RolesPage() {
 
                 {/* Editor */}
                 <div className="lg:col-span-2">
-                    {editingSlug !== null ? (
+                    {editingSlug !== null && isPluginRole(roles[editingSlug]) ? (
+                        <PluginRolePanel slug={editingSlug} role={roles[editingSlug]} t={t} onClose={() => setEditingSlug(null)} />
+                    ) : editingSlug !== null ? (
                         <div className="bg-white rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 p-8 sticky top-8">
                             <form onSubmit={handleSave}>
                                 <div className="flex flex-wrap justify-between items-center gap-3 mb-8">
@@ -249,7 +264,7 @@ export default function RolesPage() {
                                                         : "bg-gray-50 border-gray-100 text-gray-500 hover:bg-white hover:border-gray-200"
                                                         }`}
                                                 >
-                                                    <div className={`w-5 h-5 rounded flex items-center justify-center transition-all ${editCaps.includes(cap) ? "bg-blue-600 text-white" : "bg-white border border-gray-300"
+                                                    <div className={`w-5 h-5 shrink-0 rounded flex items-center justify-center transition-all ${editCaps.includes(cap) ? "bg-blue-600 text-white" : "bg-white border border-gray-300"
                                                         }`}>
                                                         {editCaps.includes(cap) && <i className="fa-solid fa-check text-[10px]"></i>}
                                                     </div>
@@ -271,7 +286,7 @@ export default function RolesPage() {
                         </div>
                     ) : (
                         <div className="h-full min-h-[400px] bg-gray-50 border-2 border-dashed border-gray-200 rounded-[40px] flex flex-col items-center justify-center p-12 text-center text-gray-400">
-                            <div className="w-16 h-16 bg-white rounded-2xl shadow-sm flex items-center justify-center mb-4">
+                            <div className="w-16 h-16 shrink-0 bg-white rounded-2xl shadow-sm flex items-center justify-center mb-4">
                                 <i className="fa-solid fa-shield-halved text-2xl text-gray-200"></i>
                             </div>
                             <h3 className="font-bold text-gray-900 mb-2">{t('roles.emptyStateTitle')}</h3>

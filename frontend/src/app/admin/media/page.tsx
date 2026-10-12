@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { mediaApi } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
 import ConfirmationModal from "@/components/ConfirmationModal";
+import DialogLayer from "@/components/DialogLayer";
 import { useToast } from "@/contexts/ToastContext";
 import { PageHeader, Button, EmptyState } from "@/components/ui";
 import {
@@ -133,9 +134,9 @@ function MediaDetailModal({
         setDraft((d) => ({ ...d, [key]: e.target.value }));
 
     return (
-        <div className="fixed inset-0 z-[6000] flex items-center justify-center p-6 bg-black/90 backdrop-blur-md animate-in fade-in duration-300">
+        <DialogLayer className="flex items-center justify-center p-6 bg-black/90 backdrop-blur-md animate-in fade-in duration-300">
             <div className="absolute inset-0" onClick={onClose}></div>
-            <div className="relative bg-white rounded-[40px] overflow-y-auto md:overflow-hidden shadow-2xl max-w-5xl w-full max-h-[85vh] flex flex-col md:flex-row animate-in zoom-in-95 duration-300">
+            <div className="relative bg-white rounded-[40px] overflow-y-auto md:overflow-hidden shadow-2xl max-w-5xl w-full max-h-[85dvh] flex flex-col md:flex-row animate-in zoom-in-95 duration-300">
                 <div className="flex-1 bg-gray-100/50 flex items-center justify-center p-8 min-h-[300px] relative">
                     <div className="absolute inset-0 bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:16px_16px] opacity-50"></div>
                     {item.mimeType.startsWith('image/') ? (
@@ -263,7 +264,7 @@ function MediaDetailModal({
                     </div>
                 </div>
             </div>
-        </div>
+        </DialogLayer>
     );
 }
 
@@ -444,7 +445,7 @@ export default function MediaPage() {
             {/* Drag Overlay */}
             {isDragging && (
                 <div className="absolute inset-0 z-[5000] bg-blue-600/90 flex flex-col items-center justify-center text-white backdrop-blur-md animate-in fade-in duration-300">
-                    <div className="w-40 h-40 rounded-[40px] border-4 border-dashed border-white/50 flex items-center justify-center mb-8 animate-bounce">
+                    <div className="w-40 h-40 shrink-0 rounded-[40px] border-4 border-dashed border-white/50 flex items-center justify-center mb-8 animate-bounce">
                         <i className="fa-solid fa-cloud-arrow-up text-6xl"></i>
                     </div>
                     <h2 className="text-5xl font-black italic tracking-tighter mb-4">{t('media.drop.file')}</h2>
@@ -508,14 +509,14 @@ export default function MediaPage() {
                             <button
                                 onClick={() => setViewMode('grid')}
                                 aria-label={t('media.grid.view')}
-                                className={`w-10 h-10 rounded-xl flex items-center justify-center text-sm transition-all duration-300 ${viewMode === 'grid' ? 'bg-gray-100 text-gray-900 shadow-inner' : 'text-gray-400 hover:text-gray-600'}`}
+                                className={`w-10 h-10 shrink-0 rounded-xl flex items-center justify-center text-sm transition-all duration-300 ${viewMode === 'grid' ? 'bg-gray-100 text-gray-900 shadow-inner' : 'text-gray-400 hover:text-gray-600'}`}
                             >
                                 <i className="fa-solid fa-grid-2"></i>
                             </button>
                             <button
                                 onClick={() => setViewMode('list')}
                                 aria-label={t('media.list.view')}
-                                className={`w-10 h-10 rounded-xl flex items-center justify-center text-sm transition-all duration-300 ${viewMode === 'list' ? 'bg-gray-100 text-gray-900 shadow-inner' : 'text-gray-400 hover:text-gray-600'}`}
+                                className={`w-10 h-10 shrink-0 rounded-xl flex items-center justify-center text-sm transition-all duration-300 ${viewMode === 'list' ? 'bg-gray-100 text-gray-900 shadow-inner' : 'text-gray-400 hover:text-gray-600'}`}
                             >
                                 <i className="fa-solid fa-list"></i>
                             </button>
@@ -590,14 +591,14 @@ export default function MediaPage() {
                                     <div className="absolute inset-0 flex items-center justify-center opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-300 gap-3">
                                         <button
                                             onClick={(e) => confirmDelete(e, item.id)}
-                                            className="w-12 h-12 bg-white text-red-500 rounded-2xl shadow-xl flex items-center justify-center transform translate-y-0 [@media(hover:hover)]:translate-y-4 group-hover:translate-y-0 group-focus-within:translate-y-0 transition-all duration-300 hover:scale-110 hover:bg-red-50"
+                                            className="w-12 h-12 shrink-0 bg-white text-red-500 rounded-2xl shadow-xl flex items-center justify-center transform translate-y-0 [@media(hover:hover)]:translate-y-4 group-hover:translate-y-0 group-focus-within:translate-y-0 transition-all duration-300 hover:scale-110 hover:bg-red-50"
                                             title={t('common.delete')}
                                             aria-label={t('common.delete')}
                                         >
                                             <i className="fa-solid fa-trash-can"></i>
                                         </button>
                                         <button
-                                            className="w-12 h-12 bg-white text-blue-600 rounded-2xl shadow-xl flex items-center justify-center transform translate-y-0 [@media(hover:hover)]:translate-y-4 group-hover:translate-y-0 group-focus-within:translate-y-0 transition-all duration-300 delay-75 hover:scale-110 hover:bg-blue-50"
+                                            className="w-12 h-12 shrink-0 bg-white text-blue-600 rounded-2xl shadow-xl flex items-center justify-center transform translate-y-0 [@media(hover:hover)]:translate-y-4 group-hover:translate-y-0 group-focus-within:translate-y-0 transition-all duration-300 delay-75 hover:scale-110 hover:bg-blue-50"
                                             title={t('common.edit')}
                                             aria-label={t('common.edit')}
                                         >
@@ -644,7 +645,7 @@ export default function MediaPage() {
                                     {media.map((item) => (
                                         <tr key={item.id} className="group hover:bg-blue-50/5 transition-colors cursor-pointer" onClick={() => setPreviewItem(item)}>
                                             <td className="px-8 py-4 w-32">
-                                                <div className="w-16 h-16 bg-gray-100 rounded-2xl overflow-hidden shadow-sm group-hover:shadow-md transition-all flex items-center justify-center">
+                                                <div className="w-16 h-16 shrink-0 bg-gray-100 rounded-2xl overflow-hidden shadow-sm group-hover:shadow-md transition-all flex items-center justify-center">
                                                     {item.mimeType.startsWith('image/') ? (
                                                         <img src={item.sourceUrl} alt={item.alt || item.title} className="w-full h-full object-cover" />
                                                     ) : (
@@ -672,7 +673,7 @@ export default function MediaPage() {
                                                     onClick={(e) => confirmDelete(e, item.id)}
                                                     aria-label={t('common.delete')}
                                                     title={t('common.delete')}
-                                                    className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all shadow-sm hover:shadow-red-200 ml-auto opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 translate-x-0 [@media(hover:hover)]:translate-x-2 group-hover:translate-x-0 group-focus-within:translate-x-0 duration-300"
+                                                    className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all shadow-sm hover:shadow-red-200 ml-auto opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 translate-x-0 [@media(hover:hover)]:translate-x-2 group-hover:translate-x-0 group-focus-within:translate-x-0 duration-300"
                                                 >
                                                     <i className="fa-solid fa-trash-can text-sm"></i>
                                                 </button>

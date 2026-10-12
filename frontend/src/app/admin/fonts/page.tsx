@@ -115,7 +115,7 @@ const FontFamilyCard = ({ family, variants, isSystem, onDelete }: FontFamilyCard
                                             onDelete(font.filename);
                                         }}
                                         className={`
-                                            w-5 h-5 flex items-center justify-center rounded-full transition-colors ml-1
+                                            w-5 h-5 shrink-0 flex items-center justify-center rounded-full transition-colors ml-1
                                             ${isActive
                                                 ? 'hover:bg-blue-500 text-blue-100 hover:text-white'
                                                 : 'text-gray-400 hover:text-red-500 hover:bg-red-50'
@@ -287,7 +287,7 @@ export default function FontsPage() {
                         }`}
                 >
                     <input {...getInputProps()} />
-                    <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform">
+                    <div className="w-16 h-16 shrink-0 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform">
                         <i className="fa-solid fa-cloud-arrow-up text-2xl"></i>
                     </div>
                     {uploading ? (

@@ -236,7 +236,7 @@ export default function MediaLibrarySelector({ onSelect, selectedId }: MediaLibr
                         type="button"
                         onClick={() => setRefreshKey((k) => k + 1)}
                         disabled={loading}
-                        className="verso-icon-button w-11 h-11 rounded-xl flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] hover:text-[var(--ed-primary)] disabled:opacity-40 transition-colors"
+                        className="verso-icon-button w-11 h-11 shrink-0 rounded-xl flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] hover:text-[var(--ed-primary)] disabled:opacity-40 transition-colors"
                         title={t('common.refresh')}
                         aria-label={t('common.refresh')}
                     >
@@ -255,7 +255,7 @@ export default function MediaLibrarySelector({ onSelect, selectedId }: MediaLibr
                     </div>
                 ) : loadError ? (
                     <div role="alert" className="min-h-64 flex flex-col items-center justify-center gap-3 text-center text-[var(--ed-on-surface-variant)]">
-                        <span className="w-12 h-12 rounded-2xl bg-[var(--ed-error-container)] text-[var(--ed-on-error-container)] flex items-center justify-center"><MSym name="info" size={24} /></span>
+                        <span className="w-12 h-12 shrink-0 rounded-2xl bg-[var(--ed-error-container)] text-[var(--ed-on-error-container)] flex items-center justify-center"><MSym name="info" size={24} /></span>
                         <p className="text-sm font-medium text-[var(--ed-on-surface)]">{t('media.load.failed')}</p>
                         <button type="button" onClick={loadMedia} className="min-h-11 px-4 rounded-xl border border-[var(--ed-outline-variant)] text-sm font-semibold hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] transition-colors">
                             {t('common.refresh')}
@@ -263,7 +263,7 @@ export default function MediaLibrarySelector({ onSelect, selectedId }: MediaLibr
                     </div>
                 ) : media.length === 0 ? (
                     <div className="min-h-64 flex flex-col items-center justify-center gap-3 text-center text-[var(--ed-on-surface-variant)]">
-                        <span className="w-12 h-12 rounded-2xl bg-[var(--ed-surface-container)] flex items-center justify-center"><MSym name="image" size={24} /></span>
+                        <span className="w-12 h-12 shrink-0 rounded-2xl bg-[var(--ed-surface-container)] flex items-center justify-center"><MSym name="image" size={24} /></span>
                         <p className="text-sm">{t('media.no.media')}</p>
                     </div>
                 ) : (

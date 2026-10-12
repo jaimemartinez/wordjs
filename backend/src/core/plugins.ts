@@ -13,6 +13,8 @@ const fs = require('fs');
 const path = require('path');
 const { addAction, doAction, addFilter } = require('./hooks');
 const { loadIsolatedPlugin, unloadIsolatedPlugin } = require('./plugin-isolate');
+// The static half of plugin-declared roles (the namespace rules); the stateful half is core/roles.ts.
+const { validateManifestRoles } = require('./plugin-roles');
 const { getOption, updateOption } = require('./options');
 
 const semver = require('semver');
@@ -545,6 +547,9 @@ const KNOWN_PERMISSIONS: Record<string, string[]> = {
     // browser:script — the plugin's compiled frontend bundles (dist/{admin,hooks,component}.bundle.js)
     // run in the ADMIN SHELL's origin, with the session of whoever is viewing. See BROWSER_SCRIPT_TOKEN.
     browser: ['script'],
+    // Register the roles the manifest's `roles` block declares (core/plugin-roles.ts). Every such role and
+    // capability lives in the plugin's own namespace; the grant cannot reach a core capability.
+    roles: ['declare'],
     network: [], // scope-only: {scope:'network'} carries no access token
 };
 
@@ -1943,6 +1948,7 @@ class Plugin {
     init: any;
     deactivate: any;
     permissions: any;
+    roles: any;
 
     constructor(data: any) {
         this.name = data.name;
@@ -1956,6 +1962,9 @@ class Plugin {
         this.init = data.init || null;
         this.deactivate = data.deactivate || null;
         this.permissions = data.permissions || [];
+        // The roles the manifest DECLARES (shown on the grant screens next to `roles:declare`). Display
+        // data only: registration re-reads and re-validates the manifest (core/roles.registerPluginRoles).
+        this.roles = Array.isArray(data.roles) ? data.roles : [];
     }
 }
 
@@ -1995,7 +2004,8 @@ function scanPlugins() {
                     version: manifest.version,
                     description: manifest.description,
                     author: manifest.author,
-                    permissions: manifest.permissions || []
+                    permissions: manifest.permissions || [],
+                    roles: Array.isArray(manifest.roles) ? manifest.roles : []
                 };
                 // We don't load init/deactivate here to avoid requiring the file before deps match
             } catch (e) {
@@ -2022,6 +2032,7 @@ function scanPlugins() {
             homepage: metadata.homepage || metadata.repository || '',
             path: pluginDir,
             permissions: metadata.permissions || [],
+            roles: metadata.roles || [],
             // We defer loading 'init' and 'deactivate' hooks until activation/load time
             // However, existing code expects them in the object.
             // If we didn't require the module, these will be undefined.
@@ -2425,6 +2436,18 @@ async function _activatePluginUnlocked(slug: string) {
             // declared but DENIED must block activation — otherwise the per-permission switch is inert.
             validatePluginPermissions(slug, plugin.path, manifest, { mode: 'grant' });
 
+            // 0b. The roles block (core/plugin-roles.ts) — refused as a whole BEFORE anything is installed
+            // or spawned, so an invalid block can never half-apply. The checks that need live state run
+            // again at registration below.
+            const roleProblems = validateManifestRoles(slug, manifest);
+            if (roleProblems.length) throw new Error(`Invalid roles in manifest.json:\n- ${roleProblems.join('\n- ')}`);
+
+            // 0c. Its admin page is its own: no other installed plugin answers to the same
+            // /admin/plugin/<slug> (core/adminMenu.ts adminPageConflict) — checked again here because the
+            // plugins installed since its upload count, and a folder copied by hand never went through it.
+            const pageConflict = require('./adminMenu').adminPageConflict(slug, manifest);
+            if (pageConflict) throw new Error(`Invalid admin page in manifest.json: ${pageConflict}`);
+
             // 1a. Check if this is a bundled plugin
             const isBundled = isBundledPlugin(plugin.path, manifest);
 
@@ -2480,12 +2503,27 @@ async function _activatePluginUnlocked(slug: string) {
             throw new Error(`Plugin '${slug}' must declare "isolated": true and use the wordjs bridge — legacy in-process plugins are no longer supported.`);
         }
 
+        // The roles it declares are checked against the LIVE state (a slug already taken, another installed
+        // plugin's namespace, a content type's capability) BEFORE its code runs: a refusal found only after
+        // the spawn would leave whatever init() did (tables, cron, options) behind a failed activation.
+        await checkPluginRoles(slug, manifest);
+
         // Provision the plugin's low-privilege DB role (Postgres) BEFORE the worker can issue a query, so
         // its SELECT/DML runs under a role GRANTed only its own wjp_<slug>_ tables — the database enforces
         // isolation below the SQL text-guard. No-op off Postgres; graceful if the pool user lacks CREATEROLE.
         try { await require('./plugin-db-isolation').provision(slug); } catch { /* best-effort — text-guard remains */ }
 
         await loadIsolatedPlugin(slug, mainFile);
+
+        // Register the roles the manifest declares (when the administrator granted `roles:declare`). All
+        // or nothing: a refusal tears the just-spawned isolate down again, so the plugin is not active
+        // and no role was written — the activation did not half-apply.
+        try {
+            await syncPluginRoles(slug, manifest);
+        } catch (roleErr: any) {
+            try { unloadIsolatedPlugin(slug); } catch { /* already gone */ }
+            throw roleErr;
+        }
 
         // Reorder middleware to ensure plugin routes work
         fixMiddlewareOrder();
@@ -2771,6 +2809,10 @@ async function loadActivePlugins() {
                 await loadIsolatedPlugin(slug, mainFile);
                 console.log(`   ✓ Plugin loaded ISOLATED: ${logSafe(plugin.name)} (${logSafe(slug)})`);
                 CrashGuard.finishLoading(slug);
+                // Keep its declared roles in line with the manifest on disk (a plugin updated in place
+                // between two boots). Best-effort: a refusal is logged and the roles stay as they were.
+                try { await syncPluginRoles(slug, manifest); }
+                catch (e: any) { console.error(`   ✗ Roles of ${logSafe(slug)} not refreshed: ${logSafe(e && e.message)}`); }
                 continue;
             }
 
@@ -2783,6 +2825,72 @@ async function loadActivePlugins() {
             console.error(`   ✗ Failed to load plugin ${logSafe(slug)}: ${logSafe(error.message)}`);
         }
     }
+}
+
+/** The ids (folder names) of every installed plugin. */
+function listInstalledPluginIds(): string[] {
+    try { return scanPlugins().map((p) => p.slug); } catch { return []; }
+}
+
+// The installed ids, for a per-request caller (the isolate's req.user projection): scanning every manifest on
+// each plugin route request would be wasteful, and the list only changes on install / delete. A short TTL
+// bounds the staleness after one.
+const INSTALLED_IDS_TTL_MS = 2000;
+let installedIdsCache: { at: number; ids: string[] } | null = null;
+function listInstalledPluginIdsCached(): string[] {
+    const now = Date.now();
+    if (installedIdsCache && now - installedIdsCache.at < INSTALLED_IDS_TTL_MS) return installedIdsCache.ids;
+    const ids = listInstalledPluginIds();
+    installedIdsCache = { at: now, ids };
+    return ids;
+}
+
+/** Is a plugin with this id installed (its folder holds a manifest.json)? */
+function isPluginInstalled(pluginId: string): boolean {
+    if (typeof pluginId !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(pluginId)) return false;
+    return fs.existsSync(path.join(PLUGINS_DIR, pluginId, 'manifest.json'));
+}
+
+/**
+ * Bring the roles plugin `slug` provides in line with its manifest (core/roles.registerPluginRoles):
+ *
+ *   · declares roles AND the administrator granted `roles:declare` → registered / refreshed (all or
+ *     nothing; throws code PLUGIN_ROLES_REFUSED on any problem);
+ *   · declares roles but the grant is missing → nothing is registered; roles registered earlier stay
+ *     (inert — core/roles.ts confers their plugin capabilities only while the grant stands);
+ *   · declares no roles → roles it registered earlier are retired.
+ *
+ * Then every stored plugin role is re-checked against the installed plugins (nested namespaces).
+ */
+async function syncPluginRoles(slug: string, manifest: any) {
+    return applyPluginRoles(slug, manifest, false);
+}
+
+/**
+ * syncPluginRoles without writing anything: every check registration would run, throwing the same
+ * PLUGIN_ROLES_REFUSED error. Activation calls it before the plugin's code is spawned.
+ */
+async function checkPluginRoles(slug: string, manifest: any) {
+    return applyPluginRoles(slug, manifest, true);
+}
+
+async function applyPluginRoles(slug: string, manifest: any, dryRun: boolean) {
+    const roles = require('./roles');
+    const { declaresRoles, ROLES_PERMISSION } = require('./plugin-roles');
+    const { isGranted } = require('./plugin-permissions');
+    const installed = listInstalledPluginIds();
+    let result = { registered: [] as string[], removed: [] as string[], orphaned: [] as string[], skipped: false };
+    if (declaresRoles(manifest) && !isGranted(slug, ROLES_PERMISSION.scope, ROLES_PERMISSION.access)) {
+        if (!dryRun) console.warn(`[plugins] '${logSafe(slug)}' declares roles but roles:declare is not granted — no role registered.`);
+        result.skipped = true;
+    } else {
+        result = { ...(await roles.registerPluginRoles(slug, manifest, { installedPluginIds: installed, dryRun })), skipped: false };
+        if (dryRun) return result;
+        if (result.registered.length) console.log(`[plugins] '${logSafe(slug)}' roles registered: ${logSafe(result.registered.join(', '))}`);
+    }
+    if (dryRun) return result;
+    await roles.enforcePluginRoleNamespaces(installed);
+    return result;
 }
 
 /**
@@ -2924,6 +3032,11 @@ module.exports = {
     RESIDUE_NOT_A_USE,
     RESIDUE_JUDGED_ELSEWHERE,
     validateManifestPermissions,
+    validateManifestRoles,
+    syncPluginRoles,
+    listInstalledPluginIds,
+    listInstalledPluginIdsCached,
+    isPluginInstalled,
     KNOWN_PERMISSIONS,
     // Non-registry dependency specs (git/file/alias/URL) are refused — see dependencySpecProblem.
     validateManifestDependencies,

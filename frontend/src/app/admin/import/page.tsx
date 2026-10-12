@@ -242,7 +242,7 @@ export default function ImportPage() {
                 <div className="space-y-6">
                     <div className="rounded-2xl bg-green-50 border border-green-200 p-6">
                         <div className="flex items-center gap-3 mb-4">
-                            <div className="h-10 w-10 rounded-full bg-green-500 flex items-center justify-center text-white">
+                            <div className="h-10 w-10 shrink-0 rounded-full bg-green-500 flex items-center justify-center text-white">
                                 <i className="fa-solid fa-check"></i>
                             </div>
                             <div>

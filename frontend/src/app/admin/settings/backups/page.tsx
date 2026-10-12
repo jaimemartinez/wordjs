@@ -292,7 +292,7 @@ export default function BackupsPage() {
                             ) : backups.length === 0 ? (
                                 <tr>
                                     <td colSpan={4} className="p-12 text-center text-gray-400">
-                                        <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                                        <div className="w-16 h-16 shrink-0 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4">
                                             <i className="fa-solid fa-box-open text-2xl text-gray-300"></i>
                                         </div>
                                         <p className="font-medium">{t('backups.empty.title')}</p>
@@ -304,7 +304,7 @@ export default function BackupsPage() {
                                     <tr key={backup.filename} className="hover:bg-gray-50/50 transition-colors group">
                                         <td className="p-6 font-medium text-gray-700">
                                             <div className="flex items-center gap-3">
-                                                <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-500 flex items-center justify-center">
+                                                <div className="w-10 h-10 shrink-0 rounded-xl bg-blue-50 text-blue-500 flex items-center justify-center">
                                                     <i className="fa-solid fa-file-zipper"></i>
                                                 </div>
                                                 {backup.filename}

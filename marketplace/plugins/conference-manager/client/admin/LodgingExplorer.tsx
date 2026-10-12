@@ -37,11 +37,12 @@ import { Overlay } from "./Overlay";
 import {
     BOARD_CHIP_CAP, BOARD_DRAG_TYPE, DEFAULT_ROOM_FILTERS, POOL_FILTER,
     assignCandidates, candidateExclusions, dropBlock, dragBlock, fieldVal, fillVars, filterRooms, filtersActive,
-    frozenLocationIds, genderMismatch, groupUnassigned, hotelStats, indexOccupants, lodgingStatusMeta, moveBlock,
+    frozenLocationIds, genderKey, genderMismatch, groupUnassigned, hotelStats, indexOccupants, lodgingStatusMeta, moveBlock,
     nameFields, navStorageKey, neighbors, occupantsOf, overallStats, parseNav, personDisplayName,
     normalizeText, personLocationId, rawLocationId, reconcileNav, roomGender, roomLock, roomMatches, roomStats, sortRooms,
     stateCounts, unassignBlock, unassignedCount, withName,
 } from "../lib/lodgingView";
+import { hasGenderField } from "../lib/fields";
 
 // ---------------------------------------------------------------------------------------------
 // Small pure helpers (module level: nothing here is a component defined inside another one)
@@ -95,11 +96,11 @@ const BLOCK_FALLBACK: Record<string, string> = {
 const blockText = (tx, key: string | null) => (key ? tx(key, BLOCK_FALLBACK[key] || key) : '');
 
 const genderDot = (g: unknown) => {
-    const v = String(g || '').toUpperCase().charAt(0);
+    const v = genderKey(g);
     return v === 'F' ? 'bg-pink-500' : v === 'M' ? 'bg-blue-500' : 'bg-gray-300';
 };
 const genderLabel = (tx, g: unknown) => {
-    const v = String(g || '').toUpperCase().charAt(0);
+    const v = genderKey(g);
     return v === 'F' ? tx('female', 'Femenino') : v === 'M' ? tx('male', 'Masculino') : String(g || '');
 };
 const roomGenderLabel = (tx, g: 'M' | 'F' | 'Mixed') =>
@@ -188,7 +189,13 @@ export default function LodgingExplorer({
     const txn = makeTxn(tx);
     const { addToast } = useToast();
     const { confirm } = useModal();
-    const people = inscriptions || [];
+    // No «Género» field in the form (2.16.0: every field is optional) → no gender anywhere: no dots, labels or
+    // picker hints (a value left in the column by a deleted field is ignored) and no room-type filter.
+    const genderOn = hasGenderField(fields);
+    const people = useMemo(
+        () => (genderOn ? (inscriptions || []) : (inscriptions || []).map((p: any) => (p && p.gender ? { ...p, gender: null } : p))),
+        [inscriptions, genderOn],
+    );
     const hotelList = hotels || [];
     const locs = locations || [];
 
@@ -256,6 +263,9 @@ export default function LodgingExplorer({
     }, [runSummary]);
 
     const setFilters = (patch: Partial<typeof nav.filters>) => setNav(n => ({ ...n, filters: { ...n.filters, ...patch } }));
+    // The filters in force: a remembered room-type filter is dropped while the form has no «Género» field
+    // (its control is hidden then, so it could not be cleared).
+    const viewFilters = useMemo(() => (genderOn || !nav.filters.gender ? nav.filters : { ...nav.filters, gender: '' }), [nav.filters, genderOn]);
     const clearFilters = () => setNav(n => ({ ...n, filters: { ...DEFAULT_ROOM_FILTERS } }));
     const setUnassignedOpen = (open: boolean) => setNav(n => (n.unassignedOpen === open ? n : { ...n, unassignedOpen: open }));
 
@@ -289,7 +299,7 @@ export default function LodgingExplorer({
     const hotel = nav.hotelId == null ? null : hotelList.find(h => Number(h.id) === Number(nav.hotelId)) || null;
     const room = hotel && nav.roomId != null ? (hotel.rooms || []).find(r => Number(r.id) === Number(nav.roomId)) || null : null;
     const level = hotel ? (room ? 3 : 2) : 1;
-    const filteredRooms = useMemo(() => (hotel ? filterRooms(hotel.rooms, nav.filters, deps) : []), [hotel, nav.filters, deps]);
+    const filteredRooms = useMemo(() => (hotel ? filterRooms(hotel.rooms, viewFilters, deps) : []), [hotel, viewFilters, deps]);
     // Prev/next respect the filters; when the open room itself is filtered out, walk every room instead.
     const walkFiltered = room ? neighbors(filteredRooms, room.id) : null;
     const walkAll = room && walkFiltered && walkFiltered.index < 0 ? neighbors(sortRooms(hotel.rooms), room.id) : null;
@@ -308,8 +318,8 @@ export default function LodgingExplorer({
     const [search, setSearch] = useState('');
     const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set());
     const unassigned = useMemo(
-        () => groupUnassigned(people, locs, { q: search, location: nav.filters.location, nameOf }),
-        [people, locs, search, nav.filters.location, nameOf],
+        () => groupUnassigned(people, locs, { q: search, location: viewFilters.location, nameOf }),
+        [people, locs, search, viewFilters.location, nameOf],
     );
     const unassignedTotal = useMemo(() => unassignedCount(people), [people]);
     const toggleGroup = (key: string) => setCollapsedGroups(prev => {
@@ -523,9 +533,9 @@ export default function LodgingExplorer({
     }, []);
 
     // --- Render -----------------------------------------------------------------------------------
-    const env = { tx, txn, ctx, idx, nameOf, locNameOf, locationIdOf, roomLocName, roomLabel, fields, dnd, locById, filters: nav.filters, readOnly };
+    const env = { tx, txn, ctx, idx, nameOf, locNameOf, locationIdOf, roomLocName, roomLabel, fields, dnd, locById, filters: viewFilters, readOnly, genderOn };
     const overall = overallStats(hotelList, people, idx);
-    const locationOnly = { ...DEFAULT_ROOM_FILTERS, location: nav.filters.location };
+    const locationOnly = { ...DEFAULT_ROOM_FILTERS, location: viewFilters.location };
 
     const spinner = (
         <div className="p-12 text-center">
@@ -568,8 +578,8 @@ export default function LodgingExplorer({
                                 key={h.id}
                                 hotel={h}
                                 stats={hotelStats(h, idx, locs)}
-                                matching={nav.filters.location ? (h.rooms || []).filter(r => roomMatches(r, locationOnly, deps)).length : null}
-                                matchingPool={nav.filters.location === POOL_FILTER}
+                                matching={viewFilters.location ? (h.rooms || []).filter(r => roomMatches(r, locationOnly, deps)).length : null}
+                                matchingPool={viewFilters.location === POOL_FILTER}
                                 onOpen={() => openHotel(h.id)}
                                 env={env}
                             />
@@ -584,7 +594,7 @@ export default function LodgingExplorer({
                 hotel={hotel}
                 stats={hotelStats(hotel, idx, locs)}
                 rooms={filteredRooms}
-                counts={stateCounts(hotel.rooms, nav.filters, deps)}
+                counts={stateCounts(hotel.rooms, viewFilters, deps)}
                 total={(hotel.rooms || []).length}
                 setFilters={setFilters}
                 clearFilters={clearFilters}
@@ -646,7 +656,7 @@ export default function LodgingExplorer({
                     <label className="sr-only" htmlFor={`cm-explorer-loc-${conferenceId}`}>{tx('explorer.filter.location.label', 'Localidad')}</label>
                     <select
                         id={`cm-explorer-loc-${conferenceId}`}
-                        value={nav.filters.location}
+                        value={viewFilters.location}
                         onChange={e => setFilters({ location: e.target.value })}
                         className="min-h-[44px] border-2 border-gray-100 rounded-xl px-3 py-2 bg-white focus:border-indigo-500 transition-all outline-none text-gray-900 font-medium text-xs max-w-full"
                     >
@@ -1036,17 +1046,19 @@ function HotelLevel({ hotel, stats, rooms, counts, total, setFilters, clearFilte
                                 </button>
                             )}
                         </div>
-                        <select
-                            value={filters.gender}
-                            onChange={e => setFilters({ gender: e.target.value })}
-                            aria-label={tx('explorer.filter.gender.label', 'Tipo de habitación')}
-                            className="min-h-[44px] border-2 border-gray-100 rounded-xl px-3 py-2 bg-white focus:border-indigo-500 transition-all outline-none text-gray-900 font-medium text-sm"
-                        >
-                            <option value="">{tx('explorer.filter.gender.all', 'Hombres, mujeres y mixtas')}</option>
-                            <option value="M">{roomGenderLabel(tx, 'M')}</option>
-                            <option value="F">{roomGenderLabel(tx, 'F')}</option>
-                            <option value="Mixed">{roomGenderLabel(tx, 'Mixed')}</option>
-                        </select>
+                        {env.genderOn && (
+                            <select
+                                value={filters.gender}
+                                onChange={e => setFilters({ gender: e.target.value })}
+                                aria-label={tx('explorer.filter.gender.label', 'Tipo de habitación')}
+                                className="min-h-[44px] border-2 border-gray-100 rounded-xl px-3 py-2 bg-white focus:border-indigo-500 transition-all outline-none text-gray-900 font-medium text-sm"
+                            >
+                                <option value="">{tx('explorer.filter.gender.all', 'Hombres, mujeres y mixtas')}</option>
+                                <option value="M">{roomGenderLabel(tx, 'M')}</option>
+                                <option value="F">{roomGenderLabel(tx, 'F')}</option>
+                                <option value="Mixed">{roomGenderLabel(tx, 'Mixed')}</option>
+                            </select>
+                        )}
                     </div>
                     <div className="flex flex-wrap items-center gap-2" role="group" aria-label={tx('explorer.filter.state.label', 'Ocupación')}>
                         {pills.map(p => (
@@ -1281,7 +1293,7 @@ function RoomLevel({ hotel, room, walk, walkingAll, onOpenRoom, onMove, onUnassi
                     ))}
                     {Array.from({ length: slots }).map((_, i) => (
                         <div key={`slot-${i}`} className="rounded-3xl border-2 border-dashed border-gray-200 bg-gray-50/40 p-5 flex flex-col items-center justify-center text-center gap-3 min-h-[10rem]">
-                            <div className="w-12 h-12 rounded-2xl bg-white border border-gray-100 flex items-center justify-center text-gray-300 text-xl"><i className="fa-solid fa-bed"></i></div>
+                            <div className="w-12 h-12 shrink-0 rounded-2xl bg-white border border-gray-100 flex items-center justify-center text-gray-300 text-xl"><i className="fa-solid fa-bed"></i></div>
                             <div className="text-sm font-black text-gray-400 uppercase tracking-widest">{tx('explorer.room.free.bed', 'Cama libre')}</div>
                             {onAssign && <button
                                 type="button"

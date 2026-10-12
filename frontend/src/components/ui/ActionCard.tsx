@@ -38,12 +38,13 @@ export function ActionCard({ icon, title, description, onClick, href, color = "b
 
             {/* Content */}
             <div className="flex-1 min-w-0">
-                <h4 className="font-black text-lg text-gray-900 group-hover:text-blue-600 transition-colors italic tracking-tight">{title}</h4>
-                <p className="text-xs text-gray-400 font-medium mt-0.5 truncate">{description}</p>
+                <h4 className="font-black text-lg text-gray-900 group-hover:text-blue-600 transition-colors italic tracking-tight break-words">{title}</h4>
+                {/* Wraps instead of being cut («Agregar una nu…»); gray-500 meets AA (gray-400 was 2.6:1). */}
+                <p className="text-xs text-gray-500 font-medium mt-0.5 break-words" data-action-description="">{description}</p>
             </div>
 
             {/* Arrow on hover */}
-            <div className="opacity-0 group-hover:opacity-100 transition-opacity -translate-x-4 group-hover:translate-x-0 duration-300 pointer-events-none">
+            <div className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity -translate-x-4 group-hover:translate-x-0 duration-300 pointer-events-none">
                 <i className="fa-solid fa-arrow-right text-blue-400"></i>
             </div>
         </>

@@ -228,7 +228,7 @@ export default function TransportPage({ conferenceId, slug }: { conferenceId: nu
                 <div className="relative flex flex-col lg:flex-row lg:items-center justify-between gap-6">
                     <div>
                         <div className="flex items-center gap-3 mb-3">
-                            <div className="w-10 h-10 rounded-xl bg-sky-600 flex items-center justify-center text-white shadow-lg shadow-sky-200"><i className="fa-solid fa-bus"></i></div>
+                            <div className="w-10 h-10 shrink-0 rounded-xl bg-sky-600 flex items-center justify-center text-white shadow-lg shadow-sky-200"><i className="fa-solid fa-bus"></i></div>
                             <span className="text-[10px] font-bold text-sky-600 uppercase tracking-[0.2em]">{t('transport') || 'Transporte'}</span>
                         </div>
                         <h2 className="text-3xl font-black text-gray-900 italic tracking-tighter">{t('transport.title') || 'Buses y pasajes'}</h2>
@@ -262,7 +262,7 @@ export default function TransportPage({ conferenceId, slug }: { conferenceId: nu
             {/* Buses */}
             {buses.length === 0 ? (
                 <div className="flex flex-col justify-center items-center py-20 bg-gray-50/50 border-2 border-dashed border-gray-100 rounded-3xl text-center px-6">
-                    <div className="w-16 h-16 bg-white rounded-2xl flex items-center justify-center text-gray-300 text-2xl shadow-sm mb-4"><i className="fa-solid fa-bus"></i></div>
+                    <div className="w-16 h-16 shrink-0 bg-white rounded-2xl flex items-center justify-center text-gray-300 text-2xl shadow-sm mb-4"><i className="fa-solid fa-bus"></i></div>
                     <p className="text-gray-600 font-bold">{t('transport.empty') || 'Aún no hay buses.'}</p>
                     {canManage && <p className="text-xs text-gray-400 mt-1">{t('transport.empty.hint') || 'Crea un bus con su trayecto, salida, capacidad y precio para empezar a vender pasajes.'}</p>}
                 </div>
@@ -284,9 +284,9 @@ export default function TransportPage({ conferenceId, slug }: { conferenceId: nu
                                         </div>
                                     </div>
                                     <div className="flex gap-1.5 shrink-0">
-                                        {canExcel && <button onClick={() => excel(b.id)} title={t('transport.bus.excel') || 'Lista de pasajeros (Excel)'} className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-emerald-600 hover:bg-emerald-600 hover:text-white transition-all"><i className="fa-solid fa-file-excel text-xs"></i></button>}
-                                        {canManage && <button onClick={() => openEdit(b)} title={t('edit') || 'Editar'} className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white transition-all"><i className="fa-solid fa-pen text-xs"></i></button>}
-                                        {canManage && <button onClick={() => deleteBus(b)} title={t('delete') || 'Eliminar'} className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition-all"><i className="fa-solid fa-trash-can text-xs"></i></button>}
+                                        {canExcel && <button onClick={() => excel(b.id)} title={t('transport.bus.excel') || 'Lista de pasajeros (Excel)'} className="w-9 h-9 shrink-0 flex items-center justify-center rounded-xl bg-gray-50 text-emerald-600 hover:bg-emerald-600 hover:text-white transition-all"><i className="fa-solid fa-file-excel text-xs"></i></button>}
+                                        {canManage && <button onClick={() => openEdit(b)} title={t('edit') || 'Editar'} className="w-9 h-9 shrink-0 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white transition-all"><i className="fa-solid fa-pen text-xs"></i></button>}
+                                        {canManage && <button onClick={() => deleteBus(b)} title={t('delete') || 'Eliminar'} className="w-9 h-9 shrink-0 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition-all"><i className="fa-solid fa-trash-can text-xs"></i></button>}
                                     </div>
                                 </div>
                                 <div className="mt-5">
@@ -400,8 +400,8 @@ export default function TransportPage({ conferenceId, slug }: { conferenceId: nu
                                             <div className="text-xs font-black text-gray-700">{money(tk.amount_paid)} / {money(tk.price)}</div>
                                             <span className={`inline-block mt-0.5 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest border ${meta.cls}`}>{t(meta.key) || meta.fallback}</span>
                                         </div>
-                                        <button onClick={() => openPayments(tk)} title={t('transport.payments') || 'Pagos del pasaje'} className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-emerald-600 hover:text-white transition-all"><i className="fa-solid fa-money-bill-wave text-xs"></i></button>
-                                        {canManage && <button onClick={() => removePassenger(tk)} title={t('transport.passenger.remove') || 'Quitar del bus'} className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition-all"><i className="fa-solid fa-user-minus text-xs"></i></button>}
+                                        <button onClick={() => openPayments(tk)} title={t('transport.payments') || 'Pagos del pasaje'} className="w-9 h-9 shrink-0 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-emerald-600 hover:text-white transition-all"><i className="fa-solid fa-money-bill-wave text-xs"></i></button>
+                                        {canManage && <button onClick={() => removePassenger(tk)} title={t('transport.passenger.remove') || 'Quitar del bus'} className="w-9 h-9 shrink-0 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition-all"><i className="fa-solid fa-user-minus text-xs"></i></button>}
                                     </div>
                                 );
                             })}
@@ -426,7 +426,7 @@ export default function TransportPage({ conferenceId, slug }: { conferenceId: nu
                                     <div className="text-sm font-black text-gray-800">{money(p.amount)} <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">{p.method}</span></div>
                                     <div className="text-[10px] text-gray-400 font-bold">{fmtWhen(p.date)}{p.reference ? ` · ${p.reference}` : ''}</div>
                                 </div>
-                                {canManage && <button onClick={() => deletePayment(p)} title={t('delete') || 'Eliminar'} className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition-all"><i className="fa-solid fa-trash-can text-[10px]"></i></button>}
+                                {canManage && <button onClick={() => deletePayment(p)} title={t('delete') || 'Eliminar'} className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition-all"><i className="fa-solid fa-trash-can text-[10px]"></i></button>}
                             </div>
                         ))}
                     </div>

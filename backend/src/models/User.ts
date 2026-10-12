@@ -7,7 +7,7 @@ const { db, dbAsync } = require('../config/database');
 const bcrypt = require('bcryptjs');
 const config = require('../config/app');
 const { sanitizeTitle, currentTimeGMT } = require('../core/formatting');
-const { getRoles } = require('../core/roles');
+const { getRoles, getRoleCapabilities } = require('../core/roles');
 // One unique-violation predicate for all three drivers. This file used to carry its own, which knew
 // only SQLite and Postgres — see core/db-errors.ts for what that cost on MySQL.
 const { isUniqueViolation } = require('../core/db-errors');
@@ -224,8 +224,10 @@ class User {
         // fresh or imported install — which previously left an administrator with ZERO capabilities
         // (403 on every can() gate, and an empty capabilities list sent to the frontend).
         if (role === 'administrator') return ['*'];
-        const roles = getRoles();
-        return roles[role]?.capabilities || [];
+        // The EFFECTIVE capabilities (core/roles.ts getRoleCapabilities): for a role a plugin declared,
+        // only read/access_admin_panel plus that plugin's own namespaced capabilities — never whatever
+        // else the stored record might say. Core and custom roles confer exactly what they store.
+        return getRoleCapabilities(role);
     }
 
     can(capability: string) {

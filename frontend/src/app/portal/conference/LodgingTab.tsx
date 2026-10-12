@@ -237,7 +237,7 @@ export default function Hospedajes({ authHeaders, onLocationRefresh, storageScop
         }
         return (
             <Card className="border-rose-200 p-8 sm:p-10 text-center" data-testid="lodging-error">
-                <div className="w-14 h-14 bg-rose-50 rounded-2xl flex items-center justify-center text-rose-400 text-2xl shadow-sm mx-auto mb-4">
+                <div className="w-14 h-14 shrink-0 bg-rose-50 rounded-2xl flex items-center justify-center text-rose-400 text-2xl shadow-sm mx-auto mb-4">
                     <i className="fa-solid fa-triangle-exclamation"></i>
                 </div>
                 <p className="text-gray-800 font-bold">No se pudo cargar el hospedaje.</p>

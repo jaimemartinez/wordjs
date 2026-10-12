@@ -422,7 +422,7 @@ export default function ThemesPage() {
                                     ) : (
                                         <div className="w-full h-full bg-gradient-to-br from-indigo-50 via-white to-blue-50 flex items-center justify-center relative">
                                             <div className="absolute inset-0 opacity-[0.03] pattern-grid-lg"></div>
-                                            <div className="w-20 h-20 rounded-3xl bg-white shadow-xl flex items-center justify-center text-3xl text-blue-500 relative z-10 border border-blue-50 hover:rotate-12 transition-transform duration-500">
+                                            <div className="w-20 h-20 shrink-0 rounded-3xl bg-white shadow-xl flex items-center justify-center text-3xl text-blue-500 relative z-10 border border-blue-50 hover:rotate-12 transition-transform duration-500">
                                                 <i className="fa-solid fa-palette"></i>
                                             </div>
                                         </div>
@@ -529,7 +529,7 @@ export default function ThemesPage() {
                             >
                                 <div className="aspect-[4/3] overflow-hidden relative">
                                     <div className="w-full h-full bg-gradient-to-br from-indigo-50 via-white to-blue-50 flex items-center justify-center relative">
-                                        <div className="w-20 h-20 rounded-3xl bg-white shadow-xl flex items-center justify-center text-3xl text-blue-500 relative z-10 border border-blue-50 group-hover:rotate-12 transition-transform duration-500">
+                                        <div className="w-20 h-20 shrink-0 rounded-3xl bg-white shadow-xl flex items-center justify-center text-3xl text-blue-500 relative z-10 border border-blue-50 group-hover:rotate-12 transition-transform duration-500">
                                             <i className="fa-solid fa-palette"></i>
                                         </div>
                                     </div>

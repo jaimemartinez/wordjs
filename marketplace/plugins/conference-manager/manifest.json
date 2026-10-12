@@ -1,7 +1,7 @@
 {
     "id": "conference-manager",
     "name": "Conference Manager",
-    "version": "2.15.1",
+    "version": "2.17.0",
     "description": "Manage conference inscriptions, payments, and lodging assignments.",
     "author": "WordJS",
     "isolated": true,
@@ -44,6 +44,19 @@
             "scope": "users",
             "access": "read",
             "reason": "Required to find WordJS users to add to the conference team (staff roles)."
+        },
+        {
+            "scope": "roles",
+            "access": "declare",
+            "reason": "Declares the WordJS role «Equipo de conferencia» (conference_manager_team): accounts with it can open only the Conference Manager page (plus their own account), never the rest of the admin."
+        }
+    ],
+    "roles": [
+        {
+            "slug": "conference_manager_team",
+            "name": "Equipo de conferencia",
+            "description": "Members of the conference team: they can enter only the Conference Manager admin page (and their own account). What they see inside it is decided by their team role in Conference › Team & permissions.",
+            "capabilities": ["conference_manager_access"]
         }
     ]
 }

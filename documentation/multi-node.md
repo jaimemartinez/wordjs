@@ -212,9 +212,14 @@ void; when Redis returns, the bus reconnects and fan-out resumes without restart
   (`wordjs:cron`), so a due job (backup, ACME renewal, plugin job) executes on exactly **one** node.
   This is what keeps Let's Encrypt renewal from firing N concurrent orders.
 - **Role/permission edits** — propagated across nodes over Redis (`wordjs:option-changed`), so a
-  capability change on one node is reflected everywhere without a restart. (A plugin's grants and
+  capability change on one node is reflected everywhere without a restart. Every write of the roles map
+  (`POST`/`DELETE /roles`, a plugin role's registration, refresh or retirement, the boot sync) holds the
+  `wordjs:roles` lease, computes the new map on the one stored in the database — never on the node's
+  cached copy — and saves it only if the stored map is still the one it read, reading and computing again
+  otherwise; so a node that has not heard of another node's role change yet never writes it back over. (A plugin's grants and
   egress allowlist have their own propagation and re-sync — see "Plugin grant / egress-allowlist edits"
-  below.)
+  below. That includes `roles:declare`, which a plugin-declared role needs to confer anything: a revoke
+  stops the role conferring the plugin's capabilities on every node.)
 - **In-process (L1) cache invalidation** — every node keeps a small in-process cache in front of
   Redis, so a write must drop it on the *peers* too: `cache.del()`/`cache.flush()` broadcast the key
   (or `'*'`) on `wordjs:cache-del` and each node evicts its own L1. When Redis is configured, L1
@@ -339,7 +344,8 @@ Health probes (added for orchestration):
   background TTL refresh from clobbering a just-applied local edit. A node that misses a publish picks
   the change up when its roles cache refreshes: every `ROLES_CACHE_TTL_MS` (**10s**, in
   `core/roles.ts`), through the option cache, whose in-process entries live at most **30s** when Redis
-  is configured. Make role and capability changes while the writing node can reach Redis: a change
+  is configured. The delay is in what such a node reads: its own role writes start from the stored map,
+  not from its copy (see "Role/permission edits" above). Make role and capability changes while the writing node can reach Redis: a change
   saved while it cannot is published to no one, and with the object cache enabled the shared cache keeps
   the previous value until its entry expires (option entries are stored with `cache.set`'s default
   3600 s TTL), so save the change again once Redis is back. (Plugin grants and egress allowlists are

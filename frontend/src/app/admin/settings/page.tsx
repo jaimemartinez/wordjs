@@ -247,7 +247,7 @@ export default function SettingsPage() {
                             <div className="flex flex-col md:flex-row gap-8 items-start md:items-center">
                                 <div className="relative group">
                                     {settings.site_logo ? (
-                                        <div className="h-32 w-32 bg-white rounded-2xl shadow-inner border-2 border-dashed border-gray-200 flex items-center justify-center p-2 relative overflow-hidden group-hover:border-blue-400 transition-colors">
+                                        <div className="h-32 w-32 shrink-0 bg-white rounded-2xl shadow-inner border-2 border-dashed border-gray-200 flex items-center justify-center p-2 relative overflow-hidden group-hover:border-blue-400 transition-colors">
                                             <img
                                                 src={settings.site_logo}
                                                 alt={t('settings.site.logo')}
@@ -262,7 +262,7 @@ export default function SettingsPage() {
                                             </button>
                                         </div>
                                     ) : (
-                                        <div className="h-32 w-32 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200 flex flex-col items-center justify-center text-gray-400 group-hover:border-blue-400 group-hover:bg-blue-50/30 transition-all">
+                                        <div className="h-32 w-32 shrink-0 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200 flex flex-col items-center justify-center text-gray-400 group-hover:border-blue-400 group-hover:bg-blue-50/30 transition-all">
                                             <i className="fa-solid fa-image text-3xl mb-2"></i>
                                             <span className="text-[10px] uppercase font-bold tracking-widest">{t('settings.no.logo')}</span>
                                         </div>
@@ -286,7 +286,7 @@ export default function SettingsPage() {
                             <div className="flex flex-col md:flex-row gap-8 items-start md:items-center pt-8 border-t border-gray-50">
                                 <div className="relative group">
                                     {settings.site_icon ? (
-                                        <div className="h-20 w-20 bg-white rounded-2xl shadow-inner border-2 border-dashed border-gray-200 flex items-center justify-center p-2 relative overflow-hidden group-hover:border-purple-400 transition-colors">
+                                        <div className="h-20 w-20 shrink-0 bg-white rounded-2xl shadow-inner border-2 border-dashed border-gray-200 flex items-center justify-center p-2 relative overflow-hidden group-hover:border-purple-400 transition-colors">
                                             <img
                                                 src={settings.site_icon}
                                                 alt={t('settings.site.icon')}
@@ -301,7 +301,7 @@ export default function SettingsPage() {
                                             </button>
                                         </div>
                                     ) : (
-                                        <div className="h-20 w-20 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200 flex flex-col items-center justify-center text-gray-400 group-hover:border-purple-400 group-hover:bg-purple-50/30 transition-all">
+                                        <div className="h-20 w-20 shrink-0 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200 flex flex-col items-center justify-center text-gray-400 group-hover:border-purple-400 group-hover:bg-purple-50/30 transition-all">
                                             <i className="fa-solid fa-gem text-xl mb-1"></i>
                                             <span className="text-[8px] uppercase font-bold tracking-widest text-center">{t('settings.no.icon')}</span>
                                         </div>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
+import DialogLayer from "@/components/DialogLayer";
 import { useSearchParams } from "next/navigation";
 import { PageHeader } from "@/components/ui";
 import { useAuth } from "@/contexts/AuthContext";
@@ -78,11 +79,11 @@ function labelFor(t: T, prefix: string, value: string, fallback?: string): strin
 function Dialog({ title, t, onClose, children, wide = false }: { title: string; t: T; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
     const titleId = useId();
     return (
-        <div
-            className="fixed inset-0 z-[5500] flex items-center justify-center bg-gray-900/40 p-4"
+        <DialogLayer
+            className="flex items-center justify-center bg-gray-900/40 p-4"
             onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
         >
-            <div role="dialog" aria-modal="true" aria-labelledby={titleId} className={`w-full ${wide ? "max-w-2xl" : "max-w-lg"} max-h-[90vh] overflow-auto rounded-[32px] bg-white p-8 shadow-2xl`}>
+            <div role="dialog" aria-modal="true" aria-labelledby={titleId} className={`w-full ${wide ? "max-w-2xl" : "max-w-lg"} max-h-[90dvh] overflow-auto rounded-[32px] bg-white p-8 shadow-2xl`}>
                 <div className="mb-6 flex items-start justify-between gap-4">
                     <h2 id={titleId} className="text-lg font-bold text-gray-900">{title}</h2>
                     <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-700" aria-label={t("close")}>
@@ -91,7 +92,7 @@ function Dialog({ title, t, onClose, children, wide = false }: { title: string; 
                 </div>
                 {children}
             </div>
-        </div>
+        </DialogLayer>
     );
 }
 

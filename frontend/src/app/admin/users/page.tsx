@@ -7,6 +7,8 @@ import { useI18n } from "@/contexts/I18nContext";
 import { useModal } from "@/contexts/ModalContext";
 import { PageHeader, Button, EmptyState, StatusBadge } from "@/components/ui";
 import UserFormModal from "./UserFormModal";
+import { useRolesMap } from "@/lib/useRoleOptions";
+import { roleDisplayName, roleNameFrom } from "@/lib/roleOptions";
 
 export default function UsersPage() {
     const { t } = useI18n();
@@ -17,6 +19,8 @@ export default function UsersPage() {
     const [selectedUser, setSelectedUser] = useState<User | "new" | null>(null);
 
     const { alert, confirm } = useModal();
+    // Role names for the Role column (GET /roles; null for a non-administrator, who sees core names / slugs).
+    const roles = useRolesMap();
 
     useEffect(() => {
         loadUsers();
@@ -101,7 +105,7 @@ export default function UsersPage() {
                                     <tr key={user.id} className="group hover:bg-blue-50/5 transition-colors">
                                         <td className="px-8 py-6">
                                             <div className="flex items-center gap-4">
-                                                <div className="w-12 h-12 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl flex items-center justify-center text-white font-bold text-lg shadow-lg shadow-indigo-200 group-hover:scale-110 transition-transform">
+                                                <div className="w-12 h-12 shrink-0 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl flex items-center justify-center text-white font-bold text-lg shadow-lg shadow-indigo-200 group-hover:scale-110 transition-transform">
                                                     {user.displayName?.[0]?.toUpperCase() || user.username[0]?.toUpperCase()}
                                                 </div>
                                                 <div>
@@ -120,23 +124,25 @@ export default function UsersPage() {
                                             <span className="text-sm font-bold text-gray-500">{user.email}</span>
                                         </td>
                                         <td className="px-8 py-6">
+                                            {/* The role's name (lib/roleOptions.ts roleDisplayName), not its slug:
+                                                «conference_manager_team» for a plugin team member. */}
                                             <StatusBadge
                                                 status={user.role === "administrator" ? "success" : user.role === "editor" ? "info" : "neutral"}
-                                                label={user.role}
+                                                label={roleDisplayName({ role: user.role, roleName: roleNameFrom(roles, user.role) }, t)}
                                             />
                                         </td>
                                         <td className="px-8 py-6 text-right">
                                             <div className="flex items-center justify-end gap-2 opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity translate-x-0 [@media(hover:hover)]:translate-x-4 group-hover:translate-x-0 focus-within:translate-x-0 duration-300">
                                                 <button
                                                     onClick={() => setSelectedUser(user)}
-                                                    className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white flex items-center justify-center transition-all shadow-sm hover:shadow-blue-200"
+                                                    className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white flex items-center justify-center transition-all shadow-sm hover:shadow-blue-200"
                                                     title={t('users.edit')}
                                                 >
                                                     <i className="fa-solid fa-pen text-xs"></i>
                                                 </button>
                                                 <button
                                                     onClick={() => handleDelete(user.id)}
-                                                    className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all shadow-sm hover:shadow-red-200"
+                                                    className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all shadow-sm hover:shadow-red-200"
                                                     title="Delete"
                                                 >
                                                     <i className="fa-solid fa-trash text-xs"></i>

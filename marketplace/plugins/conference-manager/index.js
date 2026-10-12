@@ -3,8 +3,8 @@
  *
  * Runs in the child_process sandbox like every other plugin. It uses ONLY the injected `wordjs`
  * capability bridge (no direct require of express/core/dbAsync) and is granted Android-style
- * permissions (database:read, database:write, express:register_route, admin_menu:register, users:read) by
- * the admin. There is NO trusted bypass:
+ * permissions (database:read, database:write, express:register_route, admin_menu:register, users:read,
+ * roles:declare) by the admin. There is NO trusted bypass:
  *   - All tables live under the plugin's own prefix `wjp_conference_manager_` so they pass
  *     assertSqlAllowed's default-deny prefix check. Table names are built from wordjs.db.tablePrefix.
  *   - No PRAGMA / information_schema (denied for plugins). Schema is created idempotently with
@@ -22,7 +22,7 @@
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.15.1',
+    version: '2.17.0',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -64,15 +64,24 @@ exports.init = async function (wordjs) {
     // the table-attribution guard). PRAGMA / information_schema ARE denied (read verbs are select/with
     // only), so we can't introspect columns first — instead ADD COLUMN runs idempotently by swallowing
     // the "duplicate column" error (SQLite has no ADD COLUMN IF NOT EXISTS).
-    // Seeded onto every new conference so a working form exists out of the box (all map to real cols).
-    const DEFAULT_FIELDS = [
-        { name: 'first_name', label: 'Nombre', type: 'text', required: 1, order: 1, role: 'first_name' },
-        { name: 'last_name', label: 'Apellido', type: 'text', required: 1, order: 2, role: 'last_name' },
-        { name: 'gender', label: 'Género', type: 'select', options: 'M, F', required: 1, order: 3, role: 'gender' },
-        { name: 'email', label: 'Email', type: 'text', required: 0, order: 4, role: 'email' },
-        { name: 'phone', label: 'Teléfono', type: 'text', required: 0, order: 5, role: 'phone' },
-        { name: 'family_group', label: 'Grupo Familiar', type: 'text', required: 0, order: 6, role: 'family_group', is_group: 1 },
-    ];
+    //
+    // Field TEMPLATES (2.16.0). A new conference starts with NO field: the admin builds the whole form.
+    // These are the base fields other features look up by column NAME or by ROLE — the display name
+    // (role first_name / last_name), the lodging gender hints and the gender report (column `gender`), the
+    // portal's family groups (is_group) — and POST /fields { template } creates one with exactly this
+    // definition (only the label may be given). Every field, templated or not, can be edited and deleted
+    // while the form is unpublished; every feature copes with a base field that is absent. The location is
+    // NOT a field: it is the operational `location_id`, set by the coordinator's portal login or picked in
+    // the admin's inscription form from the conference's Localidades.
+    const FIELD_TEMPLATES = Object.freeze({
+        first_name: { name: 'first_name', label: 'Nombre', type: 'text', options: '', is_required: 1, role: 'first_name', is_group: 0 },
+        last_name: { name: 'last_name', label: 'Apellido', type: 'text', options: '', is_required: 1, role: 'last_name', is_group: 0 },
+        email: { name: 'email', label: 'Email', type: 'text', options: '', is_required: 0, role: 'email', is_group: 0 },
+        phone: { name: 'phone', label: 'Teléfono', type: 'text', options: '', is_required: 0, role: 'phone', is_group: 0 },
+        gender: { name: 'gender', label: 'Género', type: 'select', options: 'M, F', is_required: 1, role: 'gender', is_group: 0 },
+        // Grouping is a FLAG, not a role (the boot migration clears the legacy 'family_group' role).
+        family_group: { name: 'family_group', label: 'Grupo Familiar', type: 'text', options: '', is_required: 0, role: '', is_group: 1 },
+    });
 
     // Only a safe SQL identifier may go into ALTER TABLE ... ADD COLUMN <name>. Reject anything else.
     const isSafeColumn = (s) => typeof s === 'string' && /^[a-z_][a-z0-9_]{0,62}$/.test(s);
@@ -409,40 +418,13 @@ exports.init = async function (wordjs) {
         await createIndex(`${P}idx_rooms_hotel`, T.rooms, 'hotel_id');
         await createIndex(`${P}idx_hotels_conference`, T.hotels, 'conference_id');
 
-        // Seed a default conference (with a working default form) if none exists.
+        // Seed a default conference if none exists — with no form fields and no assignment rules, like every
+        // new conference since 2.16.0 (the admin adds the fields, from the templates or their own).
         const count = await db.get(`SELECT COUNT(*) as count FROM ${T.conferences}`);
         if (!count || count.count === 0) {
-            const r = await db.run(
+            await db.run(
                 `INSERT INTO ${T.conferences} (name, slug, status, description) VALUES (?, ?, ?, ?)`,
                 ['Default Conference', 'default-conf', 'active', 'Initial system conference']
-            );
-            await seedDefaultFields(r.lastID);
-            await seedDefaultRules(r.lastID);
-        }
-    }
-
-    // Insert the DEFAULT_FIELDS rows for a conference (used by the seed + POST /create). Column
-    // creation on inscriptions is handled by the migration/backfill below, so this only writes rows.
-    async function seedDefaultFields(conferenceId) {
-        for (const f of DEFAULT_FIELDS) {
-            await db.run(
-                `INSERT INTO ${T.fields} (conference_id, name, label, type, options, is_required, sort_order, role, is_group, is_unique) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                [conferenceId, f.name, f.label, f.type, f.options || '', f.required, f.order, f.role || '', f.is_group ? 1 : 0, f.is_unique ? 1 : 0]
-            );
-        }
-    }
-
-    // Seed the default room-assignment rules ONCE, at conference-creation time. Deliberately NOT
-    // re-seeded on "0 rules" (that resurrected them whenever the admin deleted them all + reloaded).
-    async function seedDefaultRules(conferenceId) {
-        const defaults = [
-            { name: 'Familias juntas', type: 'keep_together', priority: 90, config: 'family_group', params: {}, hard: 0 },
-            { name: 'Separar por género', type: 'separate_by', priority: 80, config: 'gender', params: {}, hard: 0 },
-        ];
-        for (const d of defaults) {
-            await db.run(
-                `INSERT INTO ${T.rules} (conference_id, name, type, enabled, priority, config, params, hard) VALUES (?, ?, ?, 1, ?, ?, ?, ?)`,
-                [conferenceId, d.name, d.type, d.priority, d.config, JSON.stringify(d.params || {}), d.hard ? 1 : 0]
             );
         }
     }
@@ -701,8 +683,9 @@ exports.init = async function (wordjs) {
     // ── schema-follows-form migration (idempotent) ───────────────────────────────────────────────
     // 1. Ensure the `role` column exists on the fields table (installs whose table predates it).
     // 2. Ensure every already-defined form field has its real column on the inscriptions table.
-    // 3. Backfill: seed default fields onto any conference that has NONE (e.g. the legacy Default
-    //    Conference created before form-seeding existed), so no conference is left with a broken form.
+    // (2.16.0: a conference with no field is a legitimate state — a new conference starts empty — so the
+    //  old boot backfill that seeded default fields onto such a conference is gone; it would bring them
+    //  back on every restart.)
     try {
         await addColumnIfMissing(T.fields, 'role', "TEXT DEFAULT ''");
         // Generic per-field feature flags (replaced the old fixed `role` mapping). Derive them ONCE from
@@ -767,10 +750,6 @@ exports.init = async function (wordjs) {
             await db.run(`UPDATE ${T.inscriptions} SET location_id = (SELECT MIN(l.id) FROM ${T.locations} l WHERE l.conference_id = ${T.inscriptions}.conference_id AND LOWER(l.name) = LOWER(${T.inscriptions}.location) ) WHERE location_id IS NULL AND location IS NOT NULL AND location != ''`);
         }
         await createIndex(`${P}idx_inscriptions_location`, T.inscriptions, 'conference_id, location_id');
-        const confsNoFields = await db.all(
-            `SELECT c.id FROM ${T.conferences} c WHERE NOT EXISTS (SELECT 1 FROM ${T.fields} f WHERE f.conference_id = c.id)`
-        );
-        for (const c of confsNoFields) await seedDefaultFields(c.id);
         // Every field name → a real inscriptions column (TEXT; SQLite is flexibly typed).
         const fieldNames = await db.all(`SELECT DISTINCT name FROM ${T.fields}`);
         const knownCols = new Set();
@@ -845,6 +824,11 @@ exports.init = async function (wordjs) {
     } catch (e) {
         console.warn('[conference-manager] meals hygiene skipped:', e.message);
     }
+    // (b3) Meals (2.16.0): what the delivery card shows — a JSON array of keys per conference (NULL = the
+    //      default, see mealDisplayOf). Its own idempotent ADD COLUMN, outside the migration block above:
+    //      addColumnIfMissing never throws, and a failure there must not leave this column out. Every read
+    //      of it tolerates its absence (the default applies), so a scan never fails over a display setting.
+    await addColumnIfMissing(T.conferences, 'meal_display_fields', 'TEXT');
     // (c) Registration codes (2.9.0): unique index + a code for every attendee that has none — run at
     //     the end of init (see below), once the code generator exists.
 
@@ -1027,11 +1011,22 @@ exports.init = async function (wordjs) {
     const BASE_RULE_FIELDS = ['first_name', 'last_name', 'gender', 'email', 'phone', 'document_number', 'family_group', 'location'];
     const PRED_OPS = new Set(['any', 'filled', 'empty', 'eq', 'neq', 'contains', 'gt', 'gte', 'lt', 'lte']);
     const RULE_PARAMS_MAX_CHARS = 4096, RULE_MAX_PREDICATES = 20, RULE_PRIORITY_MAX = 1000000;
-    // The allowed field-name set of a conference: defined fields ∪ BASE_RULE_FIELDS.
+    // The field names a rule of this conference may read: its form's fields plus the columns the server
+    // always fills (RULE_ALWAYS_FILLED: the location). 2.16.0 — every base field is a form field the admin
+    // may delete, so a base column the form does not have (gender, family_group…) is no longer offered:
+    // a rule on it could only read stale values.
+    const RULE_ALWAYS_FILLED = Object.freeze(['location']);
     async function ruleFieldNames(conferenceId) {
         const rows = await db.all(`SELECT name FROM ${T.fields} WHERE conference_id = ?`, [conferenceId]);
-        return new Set([...BASE_RULE_FIELDS, ...rows.map(r => r.name).filter(isFieldColumn)]);
+        return new Set([...RULE_ALWAYS_FILLED, ...rows.map(r => r.name).filter(isFieldColumn)]);
     }
+    // Every field a parsed rule (parseRuleRow) reads: its main field and its conditions' fields.
+    const ruleFieldsOf = (r) => [r.field, ...['when', 'subject', 'needs'].flatMap(k => (Array.isArray(r.params && r.params[k]) ? r.params[k].map(p => p && p.field) : []))]
+        .filter(f => typeof f === 'string' && f !== '');
+    // A rule reading a field the form no longer has (deleted while the form was unpublished) is SKIPPED by
+    // the assignment engine and the lodging audits — like a price rule on a deleted field — never run on
+    // whatever the column still holds. The admin's and the coordinators' pages flag it «no tiene efecto».
+    const ruleOnFormFields = (names) => (r) => ruleFieldsOf(r).every(f => names.has(f));
     // Body → { name, type, enabled, priority, config, params (object), hard } or throws 400.
     function normalizeRule(body, { conferenceId, fieldNames }) {
         const src = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
@@ -1131,8 +1126,19 @@ exports.init = async function (wordjs) {
             default: return false;
         }
     }
+    // A rule conditioned on a field the form no longer has (deleted while the form was unpublished) is
+    // SKIPPED, never evaluated against an always-empty value — where «≠» / «vacío» would match everyone.
+    // The Precios page flags such a rule. Unconditional rules (no field, or operator 'any') always apply,
+    // and so do rules on a column the server fills itself, whatever the form has (FEE_ALWAYS_FILLED: the
+    // attendee's location — client lib/fields.ts ALWAYS_THERE).
+    const FEE_ALWAYS_FILLED = Object.freeze(['location']);
     async function loadFeeRules(conferenceId) {
-        try { return await db.all(`SELECT * FROM ${T.feeRules} WHERE conference_id = ? AND enabled = 1 ORDER BY priority ASC, id ASC`, [conferenceId]); }
+        try {
+            const rules = await db.all(`SELECT * FROM ${T.feeRules} WHERE conference_id = ? AND enabled = 1 ORDER BY priority ASC, id ASC`, [conferenceId]);
+            if (!rules.length) return rules;
+            const names = new Set([...FEE_ALWAYS_FILLED, ...(await db.all(`SELECT name FROM ${T.fields} WHERE conference_id = ?`, [conferenceId])).map(f => f.name)]);
+            return rules.filter(r => !r.field_name || r.operator === 'any' || names.has(r.field_name));
+        }
         catch { return []; }
     }
     // Compute total_due from the conference base fee + its enabled rules (priority order). A 'set'
@@ -1157,11 +1163,24 @@ exports.init = async function (wordjs) {
     // Administrators always have every section at its highest level and alone manage the team; a role has
     // no conference / location scope (it applies to everything in its sections).
     //
-    // The host knows only { auth } / { admin } for isolated routes and forwards req.user without
-    // capabilities, so every admin-panel route is registered { auth: true } and GATES ITSELF as the first
-    // statement of its handler — `if (!await allow(req, res, section, level)) return;` (or allowAny /
-    // isStaff). A refusal is 403 { error: 'No tienes acceso a esta sección.' }. The coordinator portal
-    // (/portal/*: a location code) and the public form (/public/*) keep their own authentication.
+    // TEAM ROLE (2.16.0). The manifest declares ONE WordJS role, TEAM_ROLE («Equipo de conferencia»), whose
+    // only own capability is TEAM_CAPABILITY (the core adds `read` + `access_admin_panel`, nothing else):
+    // an account with that role reaches the admin shell, its own account page and THIS plugin's page —
+    // no other admin page. WHO may be on the team is decided by that CAPABILITY: the team role carries it,
+    // and an administrator may also give it to another role in Usuarios › Roles (an editor who also runs
+    // registrations keeps every editorial screen AND gets this one). The host tells the plugin the
+    // capability on both wires — req.user.pluginCapabilities and the users bridge's projection — and a host
+    // that sends neither (older than 2.16.0) is answered by the role alone. Only such accounts can join
+    // the team (POST /staff/members); a member whose account no longer has the capability (an editor added
+    // before 2.16.0, a role changed in Usuarios) keeps their row — flagged in the team list — but gets no
+    // section until it is given back. The team role (staff_roles) still decides WHAT each member sees.
+    //
+    // The host knows only { auth } / { admin } for isolated routes and forwards req.user without any core
+    // capability (at most this plugin's own, as pluginCapabilities), so every admin-panel route is
+    // registered { auth: true } and GATES ITSELF as the first statement of its handler —
+    // `if (!await allow(req, res, section, level)) return;` (or allowAny / isStaff). A refusal is
+    // 403 { error: 'No tienes acceso a esta sección.' }. The coordinator portal (/portal/*: a location code)
+    // and the public form (/public/*) keep their own authentication.
     //
     // ROUTE → PERMISSION (reads = view, writes = manage; «staff» = any active team member or administrator;
     // «a | b» = any of them; «admin» = administrators only, enforced by the host AND in the handler):
@@ -1169,7 +1188,10 @@ exports.init = async function (wordjs) {
     //   POST   /create                                 settings:manage
     //   PUT    /:id                                    settings:manage — a body that ONLY sets lodging_deadline
     //                                                  (the «plazos» of Localidades): locations:manage | settings:manage
-    //   DELETE /:id                                    settings:manage
+    //   DELETE /:id                                    settings:manage, plus manage on each section whose records
+    //                                                  the conference holds: inscriptions (attendees), payments
+    //                                                  (fee payments), transport (transport payments), accounting
+    //                                                  (ledger entries) — else 409 conference_has_records
     //   POST   /publish                                settings:manage
     //   GET    /fields                                 staff (context: names every attendee column)
     //   POST   /fields, DELETE /fields/:id             settings:manage
@@ -1214,12 +1236,16 @@ exports.init = async function (wordjs) {
     //   GET    /meals/people                           meals:view | meals_delivery:manage (manual delivery search)
     //   GET    /meals/inscriptions/:id                 meals:view
     //   PUT    /meals/inscriptions/:id/overrides       meals:manage
+    //   POST   /meals/check                            meals_delivery:manage (read-only: the confirmation card)
     //   POST   /meals/deliver                          meals_delivery:manage
+    //   GET    /meals/display-fields                   meals:view | meals_delivery:manage (what the card shows)
+    //   PUT    /meals/display-fields                   meals:manage
     //   DELETE /meals/deliveries/:id                   meals_delivery:manage
     //   GET    /meals/services/:id/stats               meals:view | meals_delivery:manage
     //   GET    /meals/services/:id/deliveries          meals:view | meals_delivery:manage (recent deliveries)
     //   GET    /meals/services/:id/report              meals:view
-    //   (every meals answer carries reg_code only with inscriptions:view, else null)
+    //   (every meals answer carries reg_code — and GET /meals/people the ID document, document_number — only
+    //   with inscriptions:view, else null; without it the people search matches a document only whole)
     //   GET    /staff/me                               any authenticated user (all `none` when not on the team)
     //   GET|POST /staff/roles, PUT|DELETE /staff/roles/:id       admin
     //   GET|POST /staff/members, PUT|DELETE /staff/members/:id   admin
@@ -1240,6 +1266,23 @@ exports.init = async function (wordjs) {
     ];
     const STAFF_LEVELS = new Map(STAFF_SECTIONS.map(s => [s.key, s.levels]));
     const NO_ACCESS = 'No tienes acceso a esta sección.';
+    // The WordJS role and capability the manifest declares (manifest.json › roles). Both carry the
+    // plugin's namespace prefix (`conference_manager_`), which the core requires of a plugin role.
+    const TEAM_ROLE = 'conference_manager_team';
+    const TEAM_CAPABILITY = 'conference_manager_access';
+    // Does this account (req.user, or a users-bridge projection) hold the team role?
+    const hasTeamRole = (u) => !!(u && u.role === TEAM_ROLE);
+    // May this account (req.user, or a users-bridge projection) work in the panel as a team member? It must
+    // hold TEAM_CAPABILITY — through the team role, or through another role an administrator gave it to.
+    // The host sends the account's own-namespace capabilities as `pluginCapabilities`; without that list (a
+    // host older than 2.16.0) the team role is the answer. An administrator who took the capability off the
+    // team role, or revoked the plugin's `roles:declare` permission, closes the panel to its holders.
+    const hasTeamAccess = (u) => !!u && (Array.isArray(u.pluginCapabilities)
+        ? u.pluginCapabilities.includes(TEAM_CAPABILITY)
+        : hasTeamRole(u));
+    const NOT_TEAM_ROLE = 'Solo pueden formar parte del equipo las cuentas cuyo rol de WordJS da acceso a «Conference»: el rol «Equipo de conferencia», '
+        + 'u otro rol al que un administrador haya dado el permiso «conference_manager_access» en Usuarios › Roles. '
+        + 'Cámbiale el rol en Usuarios (o da ese permiso a su rol) y vuelve a añadirla.';
     const ADMIN_PERMISSIONS = Object.freeze(Object.fromEntries(STAFF_SECTIONS.map(s => [s.key, s.levels[s.levels.length - 1]])));
     const NO_PERMISSIONS = Object.freeze(Object.fromEntries(STAFF_SECTIONS.map(s => [s.key, 'none'])));
     const levelRank = (lv) => (lv === 'manage' ? 2 : lv === 'view' ? 1 : 0);
@@ -1291,18 +1334,22 @@ exports.init = async function (wordjs) {
     const isAdminUser = (req) => !!(req && req.user && req.user.role === 'administrator');
     async function permsOf(req) {
         const u = req && req.user;
-        if (u && u.role === 'administrator') return { isAdmin: true, isStaff: true, permissions: ADMIN_PERMISSIONS, role: null };
+        if (u && u.role === 'administrator') return { isAdmin: true, isStaff: true, permissions: ADMIN_PERMISSIONS, role: null, member: false };
         const uid = u ? positiveInt(u.id) : null;
-        if (!uid) return { isAdmin: false, isStaff: false, permissions: NO_PERMISSIONS, role: null };
-        const key = String(uid), now = Date.now();
+        if (!uid) return { isAdmin: false, isStaff: false, permissions: NO_PERMISSIONS, role: null, member: false };
+        // The WordJS role is part of the key: the host forwards it on every request, so changing someone's
+        // role in Usuarios takes effect on their next request, not after the cache window.
+        const teamRole = hasTeamAccess(u);
+        const key = `${uid}:${teamRole ? 1 : 0}`, now = Date.now();
         const hit = staffCache.get(key);
         if (hit && hit.gen === staffGen && now - hit.at < STAFF_CACHE_MS) return hit.perms;
         const gen = staffGen;
         const row = await db.get(
             `SELECT m.id, m.active, m.role_id, r.name AS role_name, r.permissions FROM ${T.staffMembers} m JOIN ${T.staffRoles} r ON r.id = m.role_id WHERE m.user_id = ?`, [uid]);
-        const perms = row && Number(row.active) === 1
-            ? { isAdmin: false, isStaff: true, permissions: Object.freeze(normalizePermissions(row.permissions)), role: { id: row.role_id, name: row.role_name } }
-            : { isAdmin: false, isStaff: false, permissions: NO_PERMISSIONS, role: null };
+        // An active member WITHOUT the team role (see TEAM ROLE above) is not staff: no section, no context.
+        const perms = row && Number(row.active) === 1 && teamRole
+            ? { isAdmin: false, isStaff: true, permissions: Object.freeze(normalizePermissions(row.permissions)), role: { id: row.role_id, name: row.role_name }, member: true }
+            : { isAdmin: false, isStaff: false, permissions: NO_PERMISSIONS, role: null, member: !!row };
         if (gen === staffGen) {
             if (staffCache.size >= STAFF_CACHE_MAX) staffCache.clear();
             staffCache.set(key, { at: now, gen, perms });
@@ -1314,6 +1361,9 @@ exports.init = async function (wordjs) {
     const canSeeLocationCodes = (perms) => hasLevel(perms, 'locations', 'manage');
     // reg_code (the barcode payload) travels with inscriptions:view only.
     const maskRegCode = (obj, perms) => (obj && !canSeeRegCodes(perms) ? { ...obj, reg_code: null } : obj);
+    // So does the attendee's ID document (inscriptions.document_number): it is roster data, and the meals
+    // screens never show it — a kitchen role (meals_delivery:manage) cannot read the roster.
+    const canSeeDocuments = (perms) => hasLevel(perms, 'inscriptions', 'view');
 
     const denyAccess = (res) => { res.status(403).json({ error: NO_ACCESS }); return false; };
     async function gatePerms(req, res) {
@@ -1401,13 +1451,16 @@ exports.init = async function (wordjs) {
     const USERS_GRANT_MESSAGE = 'Para buscar usuarios, concede al plugin el permiso «users:read» en Plugins.';
     const isUsersGrantError = (e) => /without permission|security block|not granted|permission/i.test(String(e && e.message ? e.message : e));
     const usersBridge = () => (wordjs.users && typeof wordjs.users.findById === 'function' && typeof wordjs.users.search === 'function' ? wordjs.users : null);
-    // The host's SAFE projection → the wire shape { id, login, email, name, role }.
+    // The host's SAFE projection → the wire shape { id, login, email, name, role, team_role }. `role` is the
+    // account's WordJS role (slug); `team_role` = that role gives the account access to the panel (it holds
+    // TEAM_CAPABILITY — see hasTeamAccess), which is what joining the team requires.
     const wireUser = (u) => (u && u.id != null ? {
         id: u.id,
         login: u.userLogin || u.username || null,
         email: u.userEmail || null,
         name: u.displayName || u.userLogin || u.username || null,
         role: u.role || null,
+        team_role: hasTeamAccess(u),
     } : null);
     // Throws 503 (USERS_GRANT_MESSAGE) when the grant is missing.
     async function findWordjsUser(id) {
@@ -1446,7 +1499,8 @@ exports.init = async function (wordjs) {
     const parseFlag = (v) => (v === true || v === 1 || v === '1' || v === 'true' ? 1 : v === false || v === 0 || v === '0' || v === 'false' ? 0 : null);
 
     // What the caller may do here — the admin UI loads it at mount (200 with every section `none` for a
-    // logged-in user who is not on the team, so the page can explain how to get access).
+    // logged-in user who is not on the team, so the page can explain how to get access: `teamRole` = the
+    // account has the WordJS role «Equipo de conferencia», `member` = it is on the team list, active or not).
     http.route('get', '/staff/me', { auth: true }, async (req, res) => {
         try {
             const p = await permsOf(req);
@@ -1456,6 +1510,8 @@ exports.init = async function (wordjs) {
                 isStaff: p.isStaff,
                 permissions: { ...p.permissions },
                 role: p.role ? { id: p.role.id, name: p.role.name } : null,
+                teamRole: hasTeamAccess(u),
+                member: !!p.member,
                 user: { id: u.id == null ? null : u.id, name: String(u.userLogin || u.userEmail || (u.id != null ? `#${u.id}` : '')) },
             });
         } catch (e) { sendError(res, e); }
@@ -1540,6 +1596,10 @@ exports.init = async function (wordjs) {
 
     // The team, with each member's WordJS account when the users:read grant allows looking it up
     // (`user: null` otherwise, or when the account no longer exists; `users_read` says which).
+    // `roles_ready`: does the team role exist and open the panel right now? The host gives an administrator
+    // every capability this plugin's registered roles confer, so TEAM_CAPABILITY is missing from theirs
+    // exactly when the role is not registered (roles:declare not granted — an in-place update to 2.16.0
+    // keeps the old grants) or confers nothing (the permission revoked). null = the host does not say.
     http.route('get', '/staff/members', STAFF_ADMIN_ROUTE, async (req, res) => {
         if (!adminOnly(req, res)) return;
         try {
@@ -1555,14 +1615,19 @@ exports.init = async function (wordjs) {
                 members.push({
                     id: m.id, user_id: m.user_id, role_id: m.role_id, role_name: m.role_name || null,
                     active: Number(m.active) === 1, added_by: m.added_by || null, created_at: m.created_at || null, user,
+                    // false = the account no longer has the WordJS team role, so the member gets no section
+                    // (the list flags it); null = unknown (no users:read grant, or the account is gone).
+                    team_role: user ? user.team_role : null,
                 });
             }
-            res.json({ members, users_read: usersRead });
+            const caps = req.user && req.user.pluginCapabilities;
+            res.json({ members, users_read: usersRead, team_role: TEAM_ROLE, roles_ready: Array.isArray(caps) ? caps.includes(TEAM_CAPABILITY) : null });
         } catch (e) { sendError(res, e); }
     });
 
     // Add a WordJS user to the team: { user_id, role_id }. 400 unknown role / an administrator (they already
-    // have everything); 404 unknown user; 409 already on the team; 503 without the users:read grant.
+    // have everything) / an account whose WordJS role does not give access to the panel (hasTeamAccess);
+    // 404 unknown user; 409 already on the team; 503 without the users:read grant.
     http.route('post', '/staff/members', STAFF_ADMIN_ROUTE, async (req, res) => {
         if (!adminOnly(req, res)) return;
         try {
@@ -1575,6 +1640,7 @@ exports.init = async function (wordjs) {
             const user = await findWordjsUser(userId);
             if (!user || user.id == null) return res.status(404).json({ error: 'Usuario no encontrado.' });
             if (user.role === 'administrator') return res.status(400).json({ error: 'Los administradores ya tienen acceso a todo; no hace falta añadirlos al equipo.' });
+            if (!hasTeamAccess(user)) return res.status(400).json({ error: NOT_TEAM_ROLE, code: 'not_team_role' });
             const id = await withStaffLock(async () => {
                 if (!(await db.get(`SELECT id FROM ${T.staffRoles} WHERE id = ?`, [roleId]))) throw httpError(400, 'Rol desconocido.');
                 const dup = 'Esa persona ya forma parte del equipo.';
@@ -1593,7 +1659,11 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
 
-    // Change a member's role and/or (de)activate them: { role_id?, active? }. Effective at once.
+    // Change a member's role and/or (de)activate them: { role_id?, active? }. Effective at once. Changing the
+    // role or (re)activating needs the account's WordJS role to give access to the panel (400 otherwise,
+    // like POST); deactivating never does, so a member who lost it can always be switched off. Without the
+    // users:read grant the account cannot be looked up: the change is made anyway — the check only saves
+    // the administrator a pointless edit, it guards nothing (every request re-checks access, see permsOf).
     http.route('put', '/staff/members/:id', STAFF_ADMIN_ROUTE, async (req, res) => {
         if (!adminOnly(req, res)) return;
         try {
@@ -1608,6 +1678,22 @@ exports.init = async function (wordjs) {
             if (body.active !== undefined) {
                 active = parseFlag(body.active);
                 if (active === null) return res.status(400).json({ error: 'active debe ser verdadero o falso.' });
+            }
+            // A role change or a (re)activation that leaves the person ACTIVE on the team: same rule as POST.
+            // Switching someone off (even together with a role change), or changing the role of someone who
+            // stays switched off, never needs it.
+            const row = (roleId !== undefined || active === 1) && active !== 0 && id
+                ? await db.get(`SELECT user_id, active FROM ${T.staffMembers} WHERE id = ?`, [id]) : null;
+            if ((roleId !== undefined || active === 1) && active !== 0 && !row) return res.status(404).json({ error: 'Miembro no encontrado.' });
+            if (row && (active === 1 || Number(row.active) === 1)) {
+                let user;
+                let lookedUp = true;
+                try { user = await findWordjsUser(row.user_id); }
+                catch (e) { if (e && e.status === 503) lookedUp = false; else throw e; }
+                if (lookedUp) {
+                    if (!user || user.id == null) return res.status(404).json({ error: 'Usuario no encontrado: su cuenta de WordJS ya no existe; quítalo del equipo.' });
+                    if (!hasTeamAccess(user)) return res.status(400).json({ error: NOT_TEAM_ROLE, code: 'not_team_role' });
+                }
             }
             await withStaffLock(async () => {
                 const m = id ? await db.get(`SELECT id FROM ${T.staffMembers} WHERE id = ?`, [id]) : null;
@@ -1642,7 +1728,9 @@ exports.init = async function (wordjs) {
         try {
             const q = String(req.query.q == null ? '' : req.query.q).trim().slice(0, 100);
             const list = await searchWordjsUsers(q, 20);
-            res.json({ users: (Array.isArray(list) ? list : []).map(wireUser).filter(Boolean) });
+            // Each user carries `team_role` (its WordJS role gives access to the panel): only those can be added
+            // (the picker greys out the rest and says why).
+            res.json({ users: (Array.isArray(list) ? list : []).map(wireUser).filter(Boolean), team_role: TEAM_ROLE });
         } catch (e) { sendError(res, e); }
     });
 
@@ -1679,10 +1767,8 @@ exports.init = async function (wordjs) {
             );
             const conference_id = result.lastID;
 
-            // Seed the default form + default assignment rules (the admin can customize or delete both).
-            await seedDefaultFields(conference_id);
-            await seedDefaultRules(conference_id);
-
+            // 2.16.0: no default form and no default assignment rules — the admin builds the form in «Campos»
+            // (the base fields are offered as templates) and adds the rules in «Asignación».
             res.json({ success: true, id: conference_id });
         } catch (e) { sendError(res, e); }
     });
@@ -1737,15 +1823,56 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
 
+    // Deleting a conference deletes everything that hangs from it (the FKs cascade): its attendees, their fee
+    // payments, the transport payments of its buses and its accounting ledger. Each of those is another
+    // section's to erase (DELETE /inscriptions/:id, /payments/:id, /transport-payments/:id,
+    // /accounting/entries/:id), so the conference delete asks for the same: settings:manage, plus manage on
+    // every section below whose records the conference still holds — the rule DELETE /inscriptions/:id
+    // applies to an attendee's payments. An empty conference needs settings:manage only.
+    const CONFERENCE_DELETE_GUARDS = [
+        { section: 'inscriptions', what: 'inscripciones',
+            sql: `SELECT 1 FROM ${T.inscriptions} WHERE conference_id = ?`, args: 1 },
+        { section: 'payments', what: 'pagos de inscripción',
+            sql: `SELECT 1 FROM ${T.payments} p JOIN ${T.inscriptions} i ON i.id = p.inscription_id WHERE i.conference_id = ?`, args: 1 },
+        { section: 'transport', what: 'pagos de transporte',
+            sql: `SELECT 1 FROM ${T.transportPayments} tp JOIN ${T.tickets} t ON t.id = tp.ticket_id`
+                + ` WHERE t.bus_id IN (SELECT id FROM ${T.buses} WHERE conference_id = ?) OR t.inscription_id IN (SELECT id FROM ${T.inscriptions} WHERE conference_id = ?)`, args: 2 },
+        { section: 'accounting', what: 'movimientos de contabilidad',
+            sql: `SELECT 1 FROM ${T.ledger} WHERE conference_id = ?`, args: 1 },
+    ];
     http.route('delete', '/:id', { auth: true }, async (req, res) => {
-        if (!await allow(req, res, 'settings', 'manage')) return;
+        const perms = await allow(req, res, 'settings', 'manage');
+        if (!perms) return;
         try {
-            // Meals (2.14.0): the FKs cascade; the explicit deletes keep it so with foreign keys off too.
-            // Parent first, under the meals lock (see withMealsLock / deleteMealsOfConference).
-            await withMealsLock(async () => {
-                await db.run(`DELETE FROM ${T.conferences} WHERE id = ?`, [req.params.id]);
-                await deleteMealsOfConference(req.params.id);
-            });
+            const id = req.params.id;
+            const guards = CONFERENCE_DELETE_GUARDS.filter(g => !hasLevel(perms, g.section, 'manage'));
+            const argsOf = (g) => Array.from({ length: g.args }, () => id);
+            // Under the assignment lock (transport payments are recorded under it) and, inside it, the meals
+            // lock (see withMealsLock / deleteMealsOfConference: parent first). The checks are part of the
+            // DELETE itself (NOT EXISTS), so a record written between a check and the delete by a route that
+            // takes neither lock (a fee payment, a ledger entry) keeps the conference: it is never erased by
+            // a role that may not erase it. Meals (2.14.0): the FKs cascade; the explicit deletes keep it so
+            // with foreign keys off too.
+            const held = await withAssignmentLock(() => withMealsLock(async () => {
+                const r = await db.run(
+                    `DELETE FROM ${T.conferences} WHERE id = ?${guards.map(g => ` AND NOT EXISTS (${g.sql})`).join('')}`,
+                    [id, ...guards.flatMap(argsOf)]);
+                if (!(r && r.changes) && await db.get(`SELECT id FROM ${T.conferences} WHERE id = ?`, [id])) {
+                    const found = [];
+                    for (const g of guards) if (await db.get(g.sql, argsOf(g))) found.push(g);
+                    return found.length ? found : guards;
+                }
+                await deleteMealsOfConference(id);
+                return null;
+            }));
+            if (held) {
+                return res.status(409).json({
+                    error: `La conferencia tiene ${held.map(g => g.what).join(', ')}: eliminarla las borraría, y tu rol no las gestiona. `
+                        + 'Pide a quien las gestiona (o a un administrador) que la elimine, o archívala.',
+                    code: 'conference_has_records',
+                    sections: held.map(g => g.section),
+                });
+            }
             res.json({ success: true });
         } catch (e) { sendError(res, e); }
     });
@@ -1858,6 +1985,12 @@ exports.init = async function (wordjs) {
         const { conference_id, published } = req.body;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
+            // A form with no field would take registrations with no data at all (2.16.0: a conference starts
+            // empty). The page refuses too; this is the server's own rule. Unpublishing is always allowed.
+            if (published) {
+                const n = await db.get(`SELECT COUNT(*) AS n FROM ${T.fields} WHERE conference_id = ?`, [conference_id]);
+                if (!Number(n && n.n)) return res.status(400).json({ error: 'No puedes publicar un formulario sin campos: añade al menos uno.', code: 'form_empty' });
+            }
             await db.run(`UPDATE ${T.conferences} SET is_form_published = ? WHERE id = ?`, [published ? 1 : 0, conference_id]);
             res.json({ success: true });
         } catch (e) { sendError(res, e); }
@@ -1877,8 +2010,62 @@ exports.init = async function (wordjs) {
     // Closed allowlist of field types (the admin builder offers text/number/select/date; the rest are
     // accepted for API callers and render as text inputs on the portal).
     const FIELD_TYPES = new Set(['text', 'number', 'select', 'textarea', 'date', 'email', 'tel', 'notes']);
+    // Field creation is check-then-insert (a template refuses a duplicate): serialised in this process.
+    let fieldsLock = Promise.resolve();
+    const withFieldsLock = (fn) => {
+        const run = fieldsLock.then(fn, fn);
+        fieldsLock = run.then(() => {}, () => {});
+        return run;
+    };
+    // The next position at the END of a conference's form.
+    const nextFieldOrder = async (conferenceId) => {
+        const row = await db.get(`SELECT MAX(sort_order) AS m FROM ${T.fields} WHERE conference_id = ?`, [conferenceId]);
+        return (Number(row && row.m) || 0) + 1;
+    };
+
+    // POST /fields { conference_id, template, label? } — add one of FIELD_TEMPLATES with its exact definition.
+    // 400 unknown template / published form; 404 unknown conference; 409 the form already has that field
+    // (same column name, or another field with the same role).
+    async function createTemplateField(req, res) {
+        const body = req.body || {};
+        const conferenceId = positiveInt(body.conference_id);
+        if (!conferenceId) return res.status(400).json({ error: 'Missing conference_id' });
+        const key = typeof body.template === 'string' ? body.template : '';
+        const tpl = Object.prototype.hasOwnProperty.call(FIELD_TEMPLATES, key) ? FIELD_TEMPLATES[key] : null;
+        if (!tpl) return res.status(400).json({ error: 'Plantilla de campo desconocida.' });
+        const label = typeof body.label === 'string' && body.label.trim() ? body.label.trim() : tpl.label;
+        if (label.length > 120) return res.status(400).json({ error: 'La etiqueta del campo es demasiado larga (máximo 120 caracteres).' });
+        try {
+            const out = await withFieldsLock(async () => {
+                const conf = await db.get(`SELECT is_form_published FROM ${T.conferences} WHERE id = ?`, [conferenceId]);
+                if (!conf) throw httpError(404, 'Conferencia no encontrada.');
+                if (Number(conf.is_form_published)) throw httpError(400, 'No se pueden añadir campos después de publicar el formulario.');
+                const existing = await db.all(`SELECT id, name, label, role, is_group FROM ${T.fields} WHERE conference_id = ?`, [conferenceId]);
+                const clash = existing.find(f => f.name === tpl.name || (tpl.role && f.role === tpl.role));
+                if (clash) {
+                    const e = httpError(409, `El formulario ya tiene este campo: «${clash.label || clash.name}».`);
+                    e.code = 'field_exists';
+                    throw e;
+                }
+                // ONE grouping field per conference: a template never takes the flag away from another field.
+                const grp = tpl.is_group && !existing.some(f => Number(f.is_group)) ? 1 : 0;
+                await addColumnIfMissing(T.inscriptions, tpl.name, 'TEXT');
+                const r = await db.run(
+                    `INSERT INTO ${T.fields} (conference_id, name, label, type, options, is_required, sort_order, width, role, is_group, is_unique) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [conferenceId, tpl.name, label, tpl.type, tpl.options, tpl.is_required, await nextFieldOrder(conferenceId), 100, tpl.role, grp, 0]
+                );
+                return { id: r.lastID, name: tpl.name, is_group: grp };
+            });
+            res.json({ success: true, ...out });
+        } catch (e) {
+            if (e && e.code === 'field_exists') return res.status(409).json({ error: e.message, code: e.code });
+            sendError(res, e);
+        }
+    }
+
     http.route('post', '/fields', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'settings', 'manage')) return;
+        if (req.body && req.body.template !== undefined && !req.body.id) return createTemplateField(req, res);
         const { id, conference_id, name, label, type, options, is_required, sort_order, width, is_group, is_unique } = req.body;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         const cleanLabel = String(label || '').trim();
@@ -1926,9 +2113,11 @@ exports.init = async function (wordjs) {
                 if (clash) return res.status(409).json({ error: 'Ya existe un campo con ese nombre en este formulario.' });
                 if (grp) await db.run(`UPDATE ${T.fields} SET is_group = 0 WHERE conference_id = ?`, [conference_id]);
                 await addColumnIfMissing(T.inscriptions, colName, 'TEXT');
+                // A new field goes to the END of the form unless the caller places it (sort_order > 0).
+                const order = Number(sort_order) > 0 ? Number(sort_order) : await nextFieldOrder(conference_id);
                 await db.run(
                     `INSERT INTO ${T.fields} (conference_id, name, label, type, options, is_required, sort_order, width, is_group, is_unique) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                    [conference_id, colName, cleanLabel, type, opts, is_required ? 1 : 0, sort_order || 0, w, grp, uniq]
+                    [conference_id, colName, cleanLabel, type, opts, is_required ? 1 : 0, order, w, grp, uniq]
                 );
             }
             res.json({ success: true });
@@ -2950,7 +3139,34 @@ exports.init = async function (wordjs) {
         const source = mode === 'include' ? 'include' : mode === 'exclude' ? 'exclude' : planned ? 'location' : 'none';
         return { entitled: !isCancelled(status) && (source === 'include' || source === 'location'), source };
     }
-    const personName = (r) => `${r.first_name || ''} ${r.last_name || ''}`.trim() || `#${r.id}`;
+    // 2.16.0 — every form field is optional, so a conference may have no Nombre / Apellido. An attendee with
+    // neither is named (and found by the kitchen's search) by the first two filled values of the conference's
+    // OTHER form fields, in form order — the fallback the admin lists use (client lib/fields.ts
+    // isNameFallbackField) — and only then by their number. Only fields that are fit to stand in for a NAME:
+    // never a unique identifier (an ID document), a contact (email, phone) or free text (notes) — the meals
+    // screens show this name to a kitchen role that may not read the roster at all.
+    const NAME_FALLBACK_COLUMNS = 4;
+    const NAME_UNFIT_ROLES = new Set(['email', 'phone']);
+    const NAME_UNFIT_TYPES = new Set(['textarea', 'notes', 'email', 'tel']);
+    const isNameFallbackField = (f) => !!f && isFieldColumn(f.name) && f.name !== 'first_name' && f.name !== 'last_name'
+        && !Number(f.is_unique) && !NAME_UNFIT_ROLES.has(String(f.role || '')) && !NAME_UNFIT_TYPES.has(String(f.type || ''))
+        && !NAME_UNFIT_ROLES.has(f.name);
+    async function nameFallbackColumns(conferenceId) {
+        const rows = await db.all(`SELECT name, type, role, is_unique FROM ${T.fields} WHERE conference_id = ? ORDER BY sort_order ASC, id ASC`, [conferenceId]);
+        return rows.filter(isNameFallbackField).map(r => r.name).slice(0, NAME_FALLBACK_COLUMNS);
+    }
+    // `, i.col1, i.col2` for a SELECT (the columns are isFieldColumn-validated field names).
+    const nameColumnsSql = (cols) => (cols || []).map(c => `, i.${c}`).join('');
+    const fallbackName = (r, cols) => {
+        const parts = [];
+        for (const c of cols || []) {
+            const v = r ? r[c] : null;
+            if (v != null && String(v).trim() !== '') parts.push(String(v).trim());
+            if (parts.length === 2) break;
+        }
+        return parts.join(' ');
+    };
+    const personName = (r, cols) => `${r.first_name || ''} ${r.last_name || ''}`.trim() || fallbackName(r, cols) || `#${r.id}`;
     // The meals views show the LIVE location of location_id (what the plan and every per-location counter
     // use), never the stored text label alone: DELETE /locations/:id nulls location_id but keeps the label
     // for history, and showing it would put an attendee under a location that no longer feeds them.
@@ -2958,7 +3174,14 @@ exports.init = async function (wordjs) {
     const LOCATION_JOIN = ` LEFT JOIN ${T.locations} l ON l.id = i.location_id`;
     const PERSON_SQL = `SELECT i.id, i.conference_id, i.first_name, i.last_name, i.location, i.location_id, i.family_group, i.status, i.reg_code, l.name AS location_name FROM ${T.inscriptions} i${LOCATION_JOIN}`;
     const liveLocation = (r) => (r.location_id == null ? null : (r.location_name || r.location || null));
-    const personOf = (r) => ({ id: r.id, name: personName(r), location: liveLocation(r), location_id: r.location_id == null ? null : r.location_id, family_group: r.family_group || null, reg_code: r.reg_code || null });
+    const personOf = (r, cols) => ({ id: r.id, name: personName(r, cols), location: liveLocation(r), location_id: r.location_id == null ? null : r.location_id, family_group: r.family_group || null, reg_code: r.reg_code || null });
+    // One attendee row of PERSON_SQL → personOf, reading its name fallback columns when it has no name.
+    async function personWithName(r) {
+        if (`${r.first_name || ''}${r.last_name || ''}`.trim()) return personOf(r);
+        const cols = await nameFallbackColumns(r.conference_id);
+        const extra = cols.length ? await db.get(`SELECT ${cols.join(', ')} FROM ${T.inscriptions} WHERE id = ?`, [r.id]) : null;
+        return personOf({ ...(extra || {}), ...r }, cols);
+    }
     const deliveryFields = (d) => ({ delivery_id: d.id, delivered_at: d.delivered_at, delivered_by: d.delivered_by || null, method: d.method || null, note: d.note || null });
     const deliveryOf = (serviceId, inscriptionId) => db.get(`SELECT * FROM ${T.mealDeliveries} WHERE service_id = ? AND inscription_id = ?`, [serviceId, inscriptionId]);
     // Who delivered: actorOf (team section) — the acting user's login, administrator or team member.
@@ -3361,6 +3584,8 @@ exports.init = async function (wordjs) {
     // «Núñez»). A conference's non-cancelled attendees are a bounded set, read once with the columns needed.
     const foldText = (v) => String(v == null ? '' : v).normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
     const foldCompare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+    // A folded ID document without its separators ('12.345.678-9' → '123456789').
+    const docKeyOf = (folded) => folded.replace(/[^\p{L}\p{N}]/gu, '');
     http.route('get', '/meals/people', MEAL_ROUTE, async (req, res) => {
         const perms = await allowAny(req, res, [['meals', 'view'], ['meals_delivery', 'manage']]);
         if (!perms) return;
@@ -3377,22 +3602,31 @@ exports.init = async function (wordjs) {
                 else { const lid = positiveInt(rawLoc); if (lid) { where += ' AND i.location_id = ?'; params.push(lid); } else where += ' AND 1 = 0'; }
             }
             const words = String(req.query.q || '').trim().slice(0, 100).split(/\s+/).filter(Boolean).slice(0, 5);
+            const docsOk = canSeeDocuments(perms);
             const matchers = words.map(w => {
                 // A word that IS (part of) a code — only code letters, dashes allowed, 4+ of them — also
                 // matches reg_code; a name or a stray symbol never turns into a broad code match.
                 const code = normalizeScanCode(w);
                 // Only for whoever may see codes or scans them (the kitchen types a code into the search).
                 const codeOk = canSeeRegCodes(perms) || hasLevel(perms, 'meals_delivery', 'manage');
-                return { text: foldText(w), code: codeOk && code.length >= 4 && code === w.toUpperCase().replace(/-/g, '') ? code : null };
+                return { text: foldText(w), docKey: docKeyOf(foldText(w)), code: codeOk && code.length >= 4 && code === w.toUpperCase().replace(/-/g, '') ? code : null };
             });
+            // The ID document matches a part of it only for whoever may read it (inscriptions:view). Anyone
+            // else — the kitchen, which looks people up by the document they show — finds a person by the
+            // WHOLE document (dots, dashes and spaces aside), so the search cannot spell one out piece by piece.
+            const docMatches = (doc, docKey, m) => (docsOk ? doc.includes(m.text) : docKey !== '' && docKey === m.docKey);
+            const nameCols = await nameFallbackColumns(cid);
             const candidates = await db.all(
-                `SELECT i.id, i.first_name, i.last_name, i.location, i.location_id, i.family_group, i.document_number, i.reg_code, i.status, l.name AS location_name`
+                `SELECT i.id, i.first_name, i.last_name, i.location, i.location_id, i.family_group, i.document_number, i.reg_code, i.status, l.name AS location_name${nameColumnsSql(nameCols)}`
                 + ` FROM ${T.inscriptions} i${LOCATION_JOIN}${where}`, params);
             const hits = [];
             for (const r of candidates) {
-                const first = foldText(r.first_name), last = foldText(r.last_name), doc = foldText(r.document_number);
+                // No name fields: the fallback name is what is shown, searched and sorted by.
+                const unnamed = !`${r.first_name || ''}${r.last_name || ''}`.trim();
+                const first = unnamed ? foldText(fallbackName(r, nameCols)) : foldText(r.first_name), last = foldText(r.last_name), doc = foldText(r.document_number);
+                const docKey = docKeyOf(doc);
                 const reg = String(r.reg_code || '').toUpperCase();
-                if (matchers.every(m => first.includes(m.text) || last.includes(m.text) || doc.includes(m.text) || (m.code !== null && reg.includes(m.code)))) hits.push({ r, first, last });
+                if (matchers.every(m => first.includes(m.text) || last.includes(m.text) || docMatches(doc, docKey, m) || (m.code !== null && reg.includes(m.code)))) hits.push({ r, first, last });
             }
             hits.sort((a, b) => foldCompare(a.last, b.last) || foldCompare(a.first, b.first) || Number(a.r.id) - Number(b.r.id));
             const total = hits.length;
@@ -3415,7 +3649,7 @@ exports.init = async function (wordjs) {
                     if (mode === 'exclude') excludes++;
                     if (entitlementFrom(r.status, mode, r.location_id != null && plan.set.has(`${r.location_id}:${s.id}`)).entitled) entitled++;
                 }
-                return maskRegCode({ ...personOf(r), first_name: r.first_name || '', last_name: r.last_name || '', document_number: r.document_number || null, status: r.status || null, entitled, delivered: delBy.get(String(r.id)) || 0, includes, excludes }, perms);
+                return maskRegCode({ ...personOf(r, nameCols), first_name: r.first_name || '', last_name: r.last_name || '', document_number: docsOk ? r.document_number || null : null, status: r.status || null, entitled, delivered: delBy.get(String(r.id)) || 0, includes, excludes }, perms);
             });
             res.json({ people, total, limit, offset, services_count: services.length });
         } catch (e) { sendError(res, e); }
@@ -3446,7 +3680,7 @@ exports.init = async function (wordjs) {
             const id = positiveInt(req.params.id);
             const ins = id ? await db.get(`${PERSON_SQL} WHERE i.id = ?`, [id]) : null;
             if (!ins) return res.status(404).json({ error: 'Inscripción no encontrada.' });
-            res.json({ person: maskRegCode({ ...personOf(ins), status: ins.status || null, conference_id: ins.conference_id }, perms), services: await personMeals(ins) });
+            res.json({ person: maskRegCode({ ...(await personWithName(ins)), status: ins.status || null, conference_id: ins.conference_id }, perms), services: await personMeals(ins) });
         } catch (e) { sendError(res, e); }
     });
 
@@ -3487,13 +3721,210 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
 
+    // ── What the delivery card shows (2.16.0) ────────────────────────────────────────────────────────
+    // The confirmation card of the phone scanner and of «Entrega» shows the attendee's data the meals
+    // manager chose for the conference, in the chosen order: built-ins (keys starting with '@', which no
+    // column name can) and the registration form's own fields (by column name). Stored as a JSON array in
+    // conferences.meal_display_fields; NULL (never configured) = MEAL_DISPLAY_DEFAULT. Always resolved
+    // against the conference's CURRENT form: a stored key whose field was deleted is dropped, and when
+    // nothing is left the default applies. The full name ('@name') is ALWAYS the first entry (the card's
+    // heading: staff must see who they deliver to) — whatever is stored or sent. WHAT TRAVELS: person.fields
+    // of /meals/check and /meals/deliver carries the values of these keys only, so form answers, the
+    // payment status and the room reach the delivery device only when configured (the inscription row
+    // itself never travels). Next to it, `person` keeps the 2.15 projection (name, location, family group,
+    // masked code) — the same the delivery staff already get from the manual search (/meals/people), so
+    // the setting chooses what the card SHOWS, it does not hide the name or the location from them.
+    // '@reg_code' keeps the usual rule (only with inscriptions:view; otherwise its value is null and the
+    // entry says `hidden: true`).
+    const MEAL_DISPLAY_BUILTINS = [
+        { key: '@name', label: 'Nombre completo' },
+        { key: '@location', label: 'Localidad' },
+        { key: '@reg_code', label: 'Código de inscripción' },
+        { key: '@payment_status', label: 'Estado de pago' },
+        { key: '@room', label: 'Habitación' },
+    ];
+    const MEAL_DISPLAY_DEFAULT = Object.freeze(['@name', '@location']);
+    // The name first, once; the rest in their order.
+    const withMealName = (keys) => ['@name', ...keys.filter(k => k !== '@name')];
+    const MEAL_DISPLAY_MAX_KEYS = 200;      // body cap, before any validation
+    const MEAL_DISPLAY_VALUE_MAX = 200;     // characters of one value on the card
+    const parseDisplayKeys = (raw) => {
+        if (raw == null || raw === '') return null;
+        try { const v = JSON.parse(String(raw)); return Array.isArray(v) ? v : null; } catch { return null; }
+    };
+    // { available:[{ key, label, builtin, type? }], keys:[…effective, in order], configured } of a conference.
+    async function mealDisplayOf(cid) {
+        let stored = null;
+        try {
+            const row = await db.get(`SELECT meal_display_fields FROM ${T.conferences} WHERE id = ?`, [cid]);
+            stored = row ? parseDisplayKeys(row.meal_display_fields) : null;
+        } catch (e) { stored = null; /* the column is missing (a failed migration): the default */ }
+        const formFields = await db.all(`SELECT name, label, type FROM ${T.fields} WHERE conference_id = ? ORDER BY sort_order ASC, id ASC`, [cid]);
+        const available = [
+            ...MEAL_DISPLAY_BUILTINS.map(b => ({ key: b.key, label: b.label, builtin: true })),
+            ...formFields.filter(f => isFieldColumn(f.name)).map(f => ({ key: f.name, label: f.label || f.name, builtin: false, type: f.type || 'text' })),
+        ];
+        const known = new Set(available.map(f => f.key));
+        const keys = [];
+        for (const k of stored || []) if (typeof k === 'string' && known.has(k) && !keys.includes(k)) keys.push(k);
+        return { available, keys: keys.length ? withMealName(keys) : [...MEAL_DISPLAY_DEFAULT], configured: stored !== null };
+    }
+    const displayText = (v) => {
+        if (v == null) return null;
+        const s = String(v).trim();
+        return s ? s.slice(0, MEAL_DISPLAY_VALUE_MAX) : null;
+    };
+    // The configured entries of one attendee row (a PERSON_SQL row): [{ key, label, value, hidden? }].
+    // Reads only the columns the configuration names.
+    async function displayFieldsOf(ins, display, perms) {
+        const labels = new Map(display.available.map(f => [f.key, f.label]));
+        const cols = display.keys.filter(k => !k.startsWith('@') && isFieldColumn(k));
+        const wantsRow = cols.length > 0 || display.keys.includes('@payment_status') || display.keys.includes('@room');
+        let row = {};
+        if (wantsRow) {
+            const select = [...cols.map(c => `i.${c}`), 'i.payment_status', 'i.room_id'];
+            try { row = (await db.get(`SELECT ${select.join(', ')} FROM ${T.inscriptions} i WHERE i.id = ?`, [ins.id])) || {}; }
+            catch (e) {
+                // A form field whose column is missing (a failed ADD COLUMN): the card shows it empty — a
+                // display setting must never turn a scan into a 500.
+                console.warn('[conference-manager] delivery card fields unreadable:', e && e.message);
+                try { row = (await db.get(`SELECT i.* FROM ${T.inscriptions} i WHERE i.id = ?`, [ins.id])) || {}; } catch (e2) { row = {}; }
+            }
+        }
+        let room = null;
+        if (display.keys.includes('@room') && row.room_id != null) {
+            room = await db.get(`SELECT r.room_number, h.name AS hotel_name FROM ${T.rooms} r LEFT JOIN ${T.hotels} h ON h.id = r.hotel_id WHERE r.id = ?`, [row.room_id]);
+        }
+        const showCodes = canSeeRegCodes(perms);
+        // The name follows the same rule as everywhere else (personWithName: the form's name fields, else its
+        // name-fallback columns), so a form without first/last name still names the person on the card.
+        const fullName = display.keys.includes('@name') ? (await personWithName(ins)).name : null;
+        return display.keys.map((key) => {
+            const label = labels.get(key) || key;
+            switch (key) {
+                case '@name': return { key, label, value: fullName };
+                case '@location': return { key, label, value: liveLocation(ins) };
+                case '@reg_code': return showCodes ? { key, label, value: ins.reg_code || null } : { key, label, value: null, hidden: true };
+                case '@payment_status': return { key, label, value: displayText(row.payment_status) };
+                case '@room': return { key, label, value: room ? displayText([room.hotel_name, room.room_number].filter(Boolean).join(' · ')) : null };
+                default: return { key, label, value: displayText(row[key]) };
+            }
+        });
+    }
+
+    // Read endpoint for everyone who delivers or plans meals (the card and the configuration dialog).
+    http.route('get', '/meals/display-fields', MEAL_ROUTE, async (req, res) => {
+        if (!await allowAny(req, res, [['meals', 'view'], ['meals_delivery', 'manage']])) return;
+        const cid = positiveInt(req.query.conference_id);
+        if (!cid) return res.status(400).json({ error: 'Missing conference_id' });
+        try {
+            if (!(await conferenceExists(cid))) return res.status(404).json({ error: 'Conferencia no encontrada.' });
+            const d = await mealDisplayOf(cid);
+            res.json({ conference_id: cid, keys: d.keys, configured: d.configured, default_keys: [...MEAL_DISPLAY_DEFAULT], available: d.available });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // { conference_id, keys: [key…] (in display order) | null (back to the default) }. meals:manage — the
+    // same level that decides who eats what: which personal data the kitchen sees on every scan is a
+    // decision of whoever manages Alimentación, not of the delivery staff it is shown to. Every key must
+    // be offered by GET (400 otherwise); duplicates collapse; at least one key; '@name' is stored first
+    // (added when missing, moved up when elsewhere).
+    http.route('put', '/meals/display-fields', MEAL_ROUTE, async (req, res) => {
+        if (!await allow(req, res, 'meals', 'manage')) return;
+        try {
+            const body = req.body || {};
+            const cid = positiveInt(body.conference_id);
+            if (!cid) return res.status(400).json({ error: 'Missing conference_id' });
+            if (!(await conferenceExists(cid))) return res.status(404).json({ error: 'Conferencia no encontrada.' });
+            let stored = null;
+            if (body.keys !== null) {
+                if (!Array.isArray(body.keys)) return res.status(400).json({ error: 'keys debe ser una lista.' });
+                if (body.keys.length > MEAL_DISPLAY_MAX_KEYS) return res.status(400).json({ error: `Máximo ${MEAL_DISPLAY_MAX_KEYS} datos.` });
+                const known = new Set((await mealDisplayOf(cid)).available.map(f => f.key));
+                const keys = [];
+                for (const k of body.keys) {
+                    if (typeof k !== 'string' || !known.has(k)) return res.status(400).json({ error: `Dato desconocido para esta conferencia: «${String(k).slice(0, 40)}».` });
+                    if (!keys.includes(k)) keys.push(k);
+                }
+                if (!keys.length) return res.status(400).json({ error: 'Elige al menos un dato para mostrar.' });
+                stored = JSON.stringify(withMealName(keys));
+            }
+            await db.run(`UPDATE ${T.conferences} SET meal_display_fields = ? WHERE id = ?`, [stored, cid]);
+            const d = await mealDisplayOf(cid);
+            res.json({ success: true, conference_id: cid, keys: d.keys, configured: d.configured });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // ── The scan decision (2.16.0): ONE function for POST /meals/check and POST /meals/deliver ─────────
+    // Same lookup, same order of checks, so the confirmation card can never promise what the delivery then
+    // refuses (or the reverse). Never writes. Throws 400 when neither code nor inscription_id is sent;
+    // `code` wins over inscription_id when both come.
+    //   { result: 'unknown' | 'other_conference' }
+    //   { result: 'already', ins, prior }        a delivery exists (whoever recorded it)
+    //   { result: 'cancelled', ins }
+    //   { result: 'ready' | 'not_entitled', ins, ent, viaCode }
+    async function decideMealScan(svc, body) {
+        const hasCode = body.code !== undefined && body.code !== null;
+        const hasId = body.inscription_id !== undefined && body.inscription_id !== null && body.inscription_id !== '';
+        if (!hasCode && !hasId) throw httpError(400, 'Indica el código o la inscripción.');
+        let ins = null;
+        if (hasCode) ins = typeof body.code === 'string' || typeof body.code === 'number' ? await findByScanCode(body.code) : null;
+        else { const iid = positiveInt(body.inscription_id); ins = iid ? ((await db.get(`${PERSON_SQL} WHERE i.id = ?`, [iid])) || null) : null; }
+        if (!ins) return { result: 'unknown' };
+        if (Number(ins.conference_id) !== Number(svc.conference_id)) return { result: 'other_conference' };
+        const prior = await deliveryOf(svc.id, ins.id);
+        if (prior) return { result: 'already', ins, prior };
+        if (isCancelled(ins.status)) return { result: 'cancelled', ins };
+        const ent = await entitlementOf(ins, svc.id);
+        return { result: ent.entitled ? 'ready' : 'not_entitled', ins, ent, viaCode: hasCode };
+    }
+    // The service as the card names it (day, meal, label, window).
+    const scanServiceOf = (svc) => ({ id: svc.id, service_date: svc.service_date, meal: svc.meal, label: svc.label || null, start_time: svc.start_time || null, end_time: svc.end_time || null });
+    // The answer for every outcome that writes nothing — /meals/check answers it as is; /meals/deliver for
+    // everything but a delivery. `person` = the usual projection (personOf, reg_code masked) + `fields`.
+    async function scanAnswer(svc, d, perms) {
+        const base = { result: d.result, service_id: svc.id, service: scanServiceOf(svc) };
+        if (!d.ins) return base;
+        const person = { ...maskRegCode(await personWithName(d.ins), perms), fields: await displayFieldsOf(d.ins, await mealDisplayOf(svc.conference_id), perms) };
+        if (d.result === 'already') return { ...base, person, ...deliveryFields(d.prior) };
+        if (d.result === 'cancelled') return { ...base, person };
+        return { ...base, person, source: d.ent.source };
+    }
+    const SERVICE_GONE = 'Servicio de comida no encontrado.';
+
+    // The confirmation card (2.16.0): { service_id, code? | inscription_id? } → ALWAYS 200 with
+    //   { result: 'ready' | 'not_entitled' | 'already' | 'cancelled' | 'unknown' | 'other_conference',
+    //     service_id, service, person? { …, fields }, source?, delivery_id?, delivered_at?, delivered_by?,
+    //     method?, note? }
+    // READ-ONLY: it records nothing («Cancelar» on the card leaves the attendee pending, and the next scan
+    // asks again). 'ready' = /meals/deliver would deliver; 'not_entitled' = it needs force:true (an
+    // authorised override). 404 for an unknown service (also when it is deleted while this runs and the
+    // answer would offer a delivery), 400 when neither code nor inscription_id is sent.
+    http.route('post', '/meals/check', MEAL_ROUTE, async (req, res) => {
+        const perms = await allow(req, res, 'meals_delivery', 'manage');
+        if (!perms) return;
+        try {
+            const body = req.body || {};
+            const svc = await getService(body.service_id);
+            if (!svc) return res.status(404).json({ error: SERVICE_GONE });
+            const d = await decideMealScan(svc, body);
+            const answer = await scanAnswer(svc, d, perms);
+            // A service deleted meanwhile takes its plan with it (after the service row): still there now =
+            // the entitlement read above was intact.
+            if ((d.result === 'ready' || d.result === 'not_entitled') && !(await getService(svc.id))) return res.status(404).json({ error: SERVICE_GONE });
+            res.json(answer);
+        } catch (e) { sendError(res, e); }
+    });
+
     // The kitchen scan: { service_id, code? | inscription_id?, force?, note? } → ALWAYS 200 with
     //   { result: 'delivered' | 'already' | 'not_entitled' | 'cancelled' | 'unknown' | 'other_conference',
-    //     service_id, person?, delivered_at?, delivery_id?, delivered_by?, method?, note?, source? }
-    // (404 only for an unknown service, 400 when neither code nor inscription_id is sent). `code` wins over
-    // inscription_id when both come. force:true turns ONLY 'not_entitled' into a delivery (method
-    // 'override'). Two simultaneous scans of one person: the UNIQUE (service, attendee) index lets exactly
-    // one INSERT through; the other catches the constraint error, re-reads, and answers 'already'.
+    //     service_id, service, person? { …, fields }, delivered_at?, delivery_id?, delivered_by?, method?,
+    //     note?, source? }
+    // (404 only for an unknown service, 400 when neither code nor inscription_id is sent). The decision is
+    // decideMealScan's — the one /meals/check shows: 'ready' delivers, force:true turns ONLY 'not_entitled'
+    // into a delivery (method 'override'). Two simultaneous scans of one person: the UNIQUE (service,
+    // attendee) index lets exactly one INSERT through; the other catches the constraint error, re-reads,
+    // and answers 'already'.
     // Scans are not serialised with deletions (no transactions either), so after its INSERT — or when the
     // INSERT fails and no winning row exists (a foreign key refused it) — the route re-reads the service
     // and the attendee: if either was deleted meanwhile, its own row is removed and it answers 404 (service)
@@ -3510,34 +3941,26 @@ exports.init = async function (wordjs) {
         try {
             const body = req.body || {};
             const svc = await getService(body.service_id);
-            if (!svc) return res.status(404).json({ error: 'Servicio de comida no encontrado.' });
-            const hasCode = body.code !== undefined && body.code !== null;
-            const hasId = body.inscription_id !== undefined && body.inscription_id !== null && body.inscription_id !== '';
-            if (!hasCode && !hasId) return res.status(400).json({ error: 'Indica el código o la inscripción.' });
-            const verdict = (result, extra) => res.json({ result, service_id: svc.id, ...(extra || {}) });
-            let ins = null;
-            if (hasCode) ins = typeof body.code === 'string' || typeof body.code === 'number' ? await findByScanCode(body.code) : null;
-            else { const iid = positiveInt(body.inscription_id); ins = iid ? ((await db.get(`${PERSON_SQL} WHERE i.id = ?`, [iid])) || null) : null; }
-            if (!ins) return verdict('unknown');
-            if (Number(ins.conference_id) !== Number(svc.conference_id)) return verdict('other_conference');
-            const person = maskRegCode(personOf(ins), perms);
-            const prior = await deliveryOf(svc.id, ins.id);
-            if (prior) return verdict('already', { person, ...deliveryFields(prior) });
-            if (isCancelled(ins.status)) return verdict('cancelled', { person });
-            const ent = await entitlementOf(ins, svc.id);
-            let method = hasCode ? 'scan' : 'manual';
-            if (!ent.entitled) {
+            if (!svc) return res.status(404).json({ error: SERVICE_GONE });
+            const d = await decideMealScan(svc, body);
+            const answer = await scanAnswer(svc, d, perms);
+            if (d.result !== 'ready' && d.result !== 'not_entitled') return res.json(answer);
+            const ins = d.ins;
+            let method = d.viaCode ? 'scan' : 'manual';
+            if (d.result === 'not_entitled') {
                 if (body.force !== true) {
                     // A service deleted while this scan ran takes its plan rows with it (after the service
                     // row): if it is still there now, the plan read above was intact.
-                    if (!(await getService(svc.id))) return res.status(404).json({ error: 'Servicio de comida no encontrado.' });
-                    return verdict('not_entitled', { person, source: ent.source });
+                    if (!(await getService(svc.id))) return res.status(404).json({ error: SERVICE_GONE });
+                    return res.json(answer);
                 }
                 method = 'override';
             }
+            const { person, service } = answer;
+            const verdict = (result, extra) => res.json({ result, service_id: svc.id, service, ...(extra || {}) });
             const note = shortText(typeof body.note === 'string' ? body.note.trim() : null, 500);
             const stamp = utcStamp(), actor = actorOf(req);
-            const parentGone = (gone) => (gone === 'service' ? res.status(404).json({ error: 'Servicio de comida no encontrado.' }) : verdict('unknown'));
+            const parentGone = (gone) => (gone === 'service' ? res.status(404).json({ error: SERVICE_GONE }) : verdict('unknown'));
             let r;
             try {
                 r = await db.run(`INSERT INTO ${T.mealDeliveries} (service_id, inscription_id, delivered_at, delivered_by, method, note) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -3593,12 +4016,13 @@ exports.init = async function (wordjs) {
             const svc = await getService(req.params.id);
             if (!svc) return res.status(404).json({ error: 'Servicio de comida no encontrado.' });
             const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+            const nameCols = await nameFallbackColumns(svc.conference_id);
             const rows = await db.all(
-                `SELECT d.id AS delivery_id, d.inscription_id, d.delivered_at, d.delivered_by, d.method, d.note, i.first_name, i.last_name, i.location, i.location_id, i.family_group, i.reg_code, l.name AS location_name`
+                `SELECT d.id AS delivery_id, d.inscription_id, d.delivered_at, d.delivered_by, d.method, d.note, i.first_name, i.last_name, i.location, i.location_id, i.family_group, i.reg_code, l.name AS location_name${nameColumnsSql(nameCols)}`
                 + ` FROM ${T.mealDeliveries} d JOIN ${T.inscriptions} i ON d.inscription_id = i.id${LOCATION_JOIN} WHERE d.service_id = ? ORDER BY d.delivered_at DESC, d.id DESC LIMIT ?`, [svc.id, limit]);
             res.json({
                 service_id: svc.id,
-                deliveries: rows.map(r => ({ delivery_id: r.delivery_id, inscription_id: r.inscription_id, name: personName({ ...r, id: r.inscription_id }), location: liveLocation(r), location_id: r.location_id == null ? null : r.location_id, family_group: r.family_group || null, reg_code: showCodes ? (r.reg_code || null) : null, delivered_at: r.delivered_at, delivered_by: r.delivered_by || null, method: r.method || null, note: r.note || null })),
+                deliveries: rows.map(r => ({ delivery_id: r.delivery_id, inscription_id: r.inscription_id, name: personName({ ...r, id: r.inscription_id }, nameCols), location: liveLocation(r), location_id: r.location_id == null ? null : r.location_id, family_group: r.family_group || null, reg_code: showCodes ? (r.reg_code || null) : null, delivered_at: r.delivered_at, delivered_by: r.delivered_by || null, method: r.method || null, note: r.note || null })),
             });
         } catch (e) { sendError(res, e); }
     });
@@ -3615,9 +4039,10 @@ exports.init = async function (wordjs) {
             if (!svc) return res.status(404).json({ error: 'Servicio de comida no encontrado.' });
             const planned = new Set((await db.all(
                 `SELECT p.location_id FROM ${T.mealPlan} p JOIN ${T.locations} l ON p.location_id = l.id WHERE p.service_id = ? AND l.conference_id = ?`, [svc.id, svc.conference_id])).map(p => Number(p.location_id)));
+            const nameCols = await nameFallbackColumns(svc.conference_id);
             const list = await db.all(
                 `SELECT i.id, i.first_name, i.last_name, i.location, i.location_id, i.family_group, i.reg_code, i.status, o.mode,`
-                + ` d.id AS delivery_id, d.delivered_at, d.method, d.delivered_by, d.note, l.name AS location_name`
+                + ` d.id AS delivery_id, d.delivered_at, d.method, d.delivered_by, d.note, l.name AS location_name${nameColumnsSql(nameCols)}`
                 + ` FROM ${T.inscriptions} i${LOCATION_JOIN}`
                 + ` LEFT JOIN ${T.mealOverrides} o ON o.inscription_id = i.id AND o.service_id = ?`
                 + ` LEFT JOIN ${T.mealDeliveries} d ON d.inscription_id = i.id AND d.service_id = ?`
@@ -3628,7 +4053,7 @@ exports.init = async function (wordjs) {
                 const ent = entitlementFrom(r.status, r.mode || null, r.location_id != null && planned.has(Number(r.location_id)));
                 if (!ent.entitled && r.delivery_id == null) continue;
                 rows.push({
-                    inscription_id: r.id, name: personName(r), location: liveLocation(r), location_id: r.location_id == null ? null : r.location_id,
+                    inscription_id: r.id, name: personName(r, nameCols), location: liveLocation(r), location_id: r.location_id == null ? null : r.location_id,
                     family_group: r.family_group || null, reg_code: showCodes ? (r.reg_code || null) : null, status: r.status || null,
                     entitled: ent.entitled, source: ent.source, delivered: r.delivery_id != null,
                     delivery_id: r.delivery_id == null ? null : r.delivery_id, delivered_at: r.delivered_at || null, method: r.method || null, delivered_by: r.delivered_by || null, note: r.note || null,
@@ -3915,7 +4340,10 @@ exports.init = async function (wordjs) {
                        COALESCE(SUM(amount_paid), 0) as paid
                 FROM ${T.inscriptions} WHERE conference_id = ?
                 GROUP BY COALESCE(NULLIF(location, ''), '—') ORDER BY count DESC`, [conference_id]);
-            const byGender = await db.all(`
+            // The gender breakdown exists only while the form has a «Género» field (column `gender`); without
+            // one it is [] and the report hides it, instead of a single «—» bar for everybody.
+            const genderField = await db.get(`SELECT id FROM ${T.fields} WHERE conference_id = ? AND name = 'gender'`, [conference_id]);
+            const byGender = !genderField ? [] : await db.all(`
                 SELECT COALESCE(NULLIF(gender, ''), '—') as gender, COUNT(*) as count
                 FROM ${T.inscriptions} WHERE conference_id = ? GROUP BY COALESCE(NULLIF(gender, ''), '—')`, [conference_id]);
             if (totals) { totals.due = roundMoney(totals.due); totals.paid = roundMoney(totals.paid); }
@@ -3978,6 +4406,13 @@ exports.init = async function (wordjs) {
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
             // The admin's conference rules only; a location's own rules travel with its lodging view.
+            // `?all=1` adds every location's own rules, each with its `location_name` — what «Campos» needs
+            // to say which rules deleting a field switches off, the coordinators' included.
+            if (req.query.all === '1' || req.query.all === 'true') {
+                const all = await db.all(
+                    `SELECT r.*, l.name AS location_name FROM ${T.rules} r LEFT JOIN ${T.locations} l ON l.id = r.location_id WHERE r.conference_id = ? ORDER BY r.priority DESC, r.id ASC`, [conference_id]);
+                return res.json(all);
+            }
             const list = await db.all(`SELECT * FROM ${T.rules} WHERE conference_id = ? AND location_id IS NULL ORDER BY priority DESC, id ASC`, [conference_id]);
             res.json(list);
         } catch (e) { sendError(res, e); }
@@ -4164,7 +4599,7 @@ exports.init = async function (wordjs) {
         const ruleRows = isPool
             ? await db.all(`SELECT * FROM ${T.rules} WHERE conference_id = ? AND enabled = 1 AND location_id IS NULL ORDER BY priority DESC, id ASC`, [conferenceId])
             : await db.all(`SELECT * FROM ${T.rules} WHERE conference_id = ? AND enabled = 1 AND (location_id IS NULL OR location_id = ?) ORDER BY priority DESC, id ASC`, [conferenceId, locationId]);
-        const rules = rankRules(ruleRows.map(parseRuleRow));
+        const rules = rankRules(ruleRows.map(parseRuleRow).filter(ruleOnFormFields(await ruleFieldNames(conferenceId))));
         const keepRules = rules.filter(r => r.type === 'keep_together');
         const separateRules = rules.filter(r => r.type === 'separate_by');
         const splitRules = rules.filter(r => r.type === 'split_by');
@@ -4508,10 +4943,30 @@ exports.init = async function (wordjs) {
     // but is never listed. `lodging_reviewed_by` is never part of the result.
     async function loadLodging(location, { forAdmin = false } = {}) {
         const L = location, cid = L.conference_id;
-        const fieldRows = await db.all(`SELECT name, label, type FROM ${T.fields} WHERE conference_id = ? ORDER BY sort_order ASC, id ASC`, [cid]);
-        const fields = fieldRows.filter(f => isFieldColumn(f.name)).map(f => ({ name: f.name, label: f.label, type: f.type }));
+        const fieldRows = await db.all(`SELECT name, label, type, role, is_unique FROM ${T.fields} WHERE conference_id = ? ORDER BY sort_order ASC, id ASC`, [cid]);
+        // `role` names the display-name fields (first_name / last_name) wherever they sit in the form.
+        const fields = fieldRows.filter(f => isFieldColumn(f.name)).map(f => ({ name: f.name, label: f.label, type: f.type, role: f.role || '' }));
+        // Every attendee carries `display_name`, named the way the admin screens name them (personName with
+        // the same fallback fields): the fields tagged Nombre / Apellido, else the name columns, else the
+        // first two filled fields fit to stand in for a name — 2.16.0 forms may have no Nombre / Apellido,
+        // and the portal showed every such attendee as «#id».
+        const nameRoleCols = ['first_name', 'last_name'].map(r => fields.find(f => f.role === r)).filter(Boolean).map(f => f.name);
+        const nameFallbackCols = fieldRows.filter(isNameFallbackField).map(f => f.name).slice(0, NAME_FALLBACK_COLUMNS);
+        const displayNameOf = (p) => {
+            const named = nameRoleCols.map(c => (p[c] == null ? '' : String(p[c]).trim())).filter(Boolean).join(' ');
+            return named || personName(p, nameFallbackCols);
+        };
         const attendeeCols = [...new Set(['id', 'first_name', 'last_name', 'gender', 'family_group', ...(forAdmin ? ['status'] : []), ...fields.map(f => f.name)])];
-        const projectAttendee = (p) => { const o = {}; for (const c of attendeeCols) o[c] = p[c] === undefined ? null : p[c]; return o; };
+        // No «Género» field in the form (2.16.0: every field is optional) → no gender at all, so a value left
+        // in the column by a deleted field never drives the gender hints of the lodging boards.
+        const hasGender = fields.some(f => f.name === 'gender');
+        const projectAttendee = (p) => {
+            const o = {};
+            for (const c of attendeeCols) o[c] = p[c] === undefined ? null : p[c];
+            if (!hasGender) o.gender = null;
+            o.display_name = displayNameOf(p);
+            return o;
+        };
         const roomRows = await db.all(
             `SELECT r.*, h.name AS hotel_name, (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.room_id = r.id) AS occupied
              FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id
@@ -4541,7 +4996,9 @@ exports.init = async function (wordjs) {
             }
         }
         const auditRooms = roomRows.map(r => ({ id: r.id, room_number: r.room_number, capacity: r.capacity, occupied: r.occupied, occupants: occByRoom.get(Number(r.id)) || [] }));
-        const { violations, counts } = auditArrangement({ rooms: auditRooms, unassigned: unassignedRows, rules: ruleRows, placed_elsewhere: elsewhereRows });
+        const formNames = new Set([...RULE_ALWAYS_FILLED, ...fieldRows.map(f => f.name).filter(isFieldColumn)]);
+        const effectiveRules = ruleRows.map(parseRuleRow).filter(ruleOnFormFields(formNames));
+        const { violations, counts } = auditArrangement({ rooms: auditRooms, unassigned: unassignedRows, rules: effectiveRules, placed_elsewhere: elsewhereRows });
         counts.placed_elsewhere = elsewhereRows.length;
 
         const rooms = roomRows.map(r => {
@@ -4563,7 +5020,7 @@ exports.init = async function (wordjs) {
             },
             rooms,
             unassigned: unassignedRows.map(projectAttendee),
-            placed_elsewhere: elsewhereRows.map(p => ({ id: p.id, first_name: p.first_name, last_name: p.last_name, hotel_name: p.hotel_name, room_number: p.room_number })),
+            placed_elsewhere: elsewhereRows.map(p => ({ id: p.id, first_name: p.first_name, last_name: p.last_name, display_name: displayNameOf(p), hotel_name: p.hotel_name, room_number: p.room_number })),
             rules: ruleSplit,
             fields,
             violations,
@@ -4654,7 +5111,9 @@ exports.init = async function (wordjs) {
             if (!conf || !conf.is_form_published) {
                 return res.status(403).json({ error: 'El formulario de esta conferencia no está publicado.' });
             }
-            const list = await db.all(`SELECT name, label, type, options, is_required, width, is_group FROM ${T.fields} WHERE conference_id = ? ORDER BY sort_order ASC`, [conference_id]);
+            // `role` and `is_unique` let the coordinators' portal name people the way the admin does (the
+            // fields tagged Nombre / Apellido; never an ID document as a name).
+            const list = await db.all(`SELECT name, label, type, options, is_required, width, is_group, role, is_unique FROM ${T.fields} WHERE conference_id = ? ORDER BY sort_order ASC`, [conference_id]);
             res.json(list.filter(f => isFieldColumn(f.name)));
         } catch (e) { sendError(res, e); }
     });
@@ -5210,15 +5669,16 @@ exports.init = async function (wordjs) {
     });
 
     // === ADMIN MENU ===
-    // Team & permissions (2.15.0): every logged-in user who may open /admin sees the entry; the page asks
-    // GET /staff/me and shows only the sections the user's role allows (a user not on the team gets a
-    // friendly «no access» screen). The server gates every route itself (allow()).
+    // Team role (2.16.0): the entry needs this plugin's own capability, which only the WordJS role the
+    // manifest declares («Equipo de conferencia», TEAM_ROLE) holds — and administrators, who hold every
+    // capability. Editors, authors and subscribers no longer see it. The page then asks GET /staff/me and
+    // shows only the sections the person's team role allows; the server gates every route itself (allow()).
     adminMenu.add({
         href: '/admin/plugin/conference-manager',
         label: 'Conference',
         icon: 'fa-users',
         order: 50,
-        cap: 'access_admin_panel'
+        cap: TEAM_CAPABILITY
     });
 
     // Registration codes (2.9.0): one UNIQUE index (NULLs allowed while the backfill runs) and a code

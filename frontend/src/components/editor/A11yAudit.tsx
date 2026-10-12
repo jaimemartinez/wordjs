@@ -369,7 +369,7 @@ export function A11yPanel({
                     aria-label={trStr("Volver a analizar", language)}
                     disabled={running}
                     onClick={onRefresh}
-                    className={`verso-icon-button w-11 h-11 rounded-xl flex items-center justify-center transition-colors ${
+                    className={`verso-icon-button w-11 h-11 shrink-0 rounded-xl flex items-center justify-center transition-colors ${
                         running
                             ? "text-[var(--ed-outline-variant)] cursor-not-allowed"
                             : "text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)]"

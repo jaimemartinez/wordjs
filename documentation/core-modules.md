@@ -234,6 +234,19 @@ These WordPress-style core services back most CMS configuration.
 *   Roles + capabilities are **persisted in the `options` table** under `wordjs_user_roles` and cached in memory for synchronous access (`getRoles()` is used by `User.toJSON`).
 *   `loadRoles()` (boot) hydrates the cache; `setRole / removeRole / updateRoleCapabilities` persist changes; `syncRoles(configRoles)` reconciles missing roles/capabilities from config on startup.
 *   `getAllAvailableCapabilities()` unions role caps + core caps + capabilities registered by plugin admin menus.
+*   **Plugin-declared roles** (namespace rules in `backend/src/core/plugin-roles.ts`, see [plugins.md §12a](plugins.md#12a-declaring-user-roles-rolesdeclare)):
+    `registerPluginRoles(pluginId, manifest, { installedPluginIds })` registers/refreshes them all-or-nothing
+    (code `PLUGIN_ROLES_REFUSED`; `{ dryRun: true }` runs the same checks without writing — activation calls
+    it before spawning the plugin), `releasePluginRoles(pluginId)` retires them on plugin deletion (removed
+    when unheld, otherwise `orphaned`), `enforcePluginRoleNamespaces(ids)` trims nested- and
+    shared-namespace capabilities and orphans a role whose plugin is gone or whose slug another plugin's
+    longer namespace holds, `getRoleCapabilities(slug)` is the EFFECTIVE set `User.getCapabilities()` uses
+    (a content type's capability — `post-types.getContentTypeCapabilities()` — is never conferred by a
+    plugin role), and `pluginCapabilitiesFor(user, pluginId)` is what a plugin route receives as
+    `req.user.pluginCapabilities` (and the users bridge adds to each account). `setRole` keeps a plugin
+    role's provenance, refuses a capability outside its namespace and records an accepted edit as
+    `adminChanges`, which every refresh re-applies; `syncRoles` (boot) cuts what does not belong. Every
+    role write runs through one in-process write lock.
 
 ### Cron (`backend/src/core/cron.ts`)
 *   A wp-cron-style scheduler: `scheduleEvent / scheduleSingleEvent / unscheduleEvent / clearScheduledHook / nextScheduled`. Events are stored in the `cron` option keyed by timestamp; `startCron()` polls (default every 60s) and `runCron()` dispatches due events.

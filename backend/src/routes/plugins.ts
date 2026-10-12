@@ -17,7 +17,7 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { getAllPlugins, activatePlugin, deactivatePlugin, createSamplePlugin, isPluginActive, validatePluginPermissions, validateManifestPermissions, validateManifestDependencies, validateBrowserCapability, browserCodeSources, BROWSER_SCRIPT_TOKEN, listOrphanedPlugins, reclaimOrphanedPlugin, clearOrphanNotice, PLUGINS_DIR } = require('../core/plugins');
+const { getAllPlugins, activatePlugin, deactivatePlugin, createSamplePlugin, isPluginActive, validatePluginPermissions, validateManifestPermissions, validateManifestRoles, syncPluginRoles, validateManifestDependencies, validateBrowserCapability, browserCodeSources, BROWSER_SCRIPT_TOKEN, listOrphanedPlugins, reclaimOrphanedPlugin, clearOrphanNotice, PLUGINS_DIR } = require('../core/plugins');
 const { assertZipWithinBudget } = require('../core/zip-guard');
 // refusePluginGrantByToken: an API token may revoke a plugin's grants or narrow its egress, never add to
 // them — nor activate a plugin whose activation would seed its declared permissions. isHeadless puts a
@@ -582,6 +582,14 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
             // dialog asks about it. See core/plugins.ts BROWSER_SCRIPT_TOKEN.
             const browserProblems = validateBrowserCapability(installedDir, manifest);
             if (browserProblems.length) throw new Error(`Invalid permissions:\n- ${browserProblems.join('\n- ')}`);
+            // Declared roles must live in the plugin's own namespace (core/plugin-roles.ts) — refused at
+            // the door, before an administrator is ever asked to grant `roles:declare`.
+            const roleProblems = validateManifestRoles(pluginSlug, manifest);
+            if (roleProblems.length) throw new Error(`Invalid roles:\n- ${roleProblems.join('\n- ')}`);
+            // Two installed plugins never answer to the same /admin/plugin/<slug> (core/adminMenu.ts
+            // adminPageConflict): the admin layout opens a plugin page through the menu items pointing there.
+            const pageConflict = require('../core/adminMenu').adminPageConflict(pluginSlug, manifest);
+            if (pageConflict) throw new Error(`Invalid admin page: ${pageConflict}`);
             // Static AST scan in DECLARATION mode (the default) — deliberately NOT grant mode. Nothing is
             // granted at install time; this pass is what produces the requested-permission list the admin
             // approves from. The grant-aware pass runs at ACTIVATION (core/plugins.ts), which is where a
@@ -1093,7 +1101,12 @@ router.get('/active', asyncHandler(async (req: Request, res: Response) => {
  *           on disk, with no loadable files — are included with `broken: true`, `active: false`,
  *           `brokenReason` (missing | no-manifest | unreadable-manifest), `wasActive` and `removable`
  *           (its directory holds no code, so the deactivate route may delete it). They are NOT part of
- *           GET /plugins/active nor of the marketplace catalog's `installed` flag.
+ *           GET /plugins/active nor of the marketplace catalog's `installed` flag. Each role a plugin's
+ *           manifest declares (`roles`) carries `holders`: how many users already hold that role slug.
+ *           `activationSeedsGrants` says whether activating the plugin now would grant every permission
+ *           its manifest declares (it has no grant record, or an empty one no administrator decided);
+ *           false means activation changes no grant — after an administrator revoked every grant, the
+ *           plugin is activated with nothing granted.
  */
 router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     // Await getAllPlugins()
@@ -1101,7 +1114,7 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
     // Annotate each with its requested/granted permissions so the admin UI can render the per-permission
     // switches. `requestedPermissions` = what the manifest asks for ("scope:access"), the set of switches
     // to show; `grantedPermissions` = what the admin has granted (+ "network"). No trust tier exists.
-    const { getGrants } = require('../core/plugin-permissions');
+    const { getGrants, activationSeedsDeclaredGrants } = require('../core/plugin-permissions');
     // Live runtime health per isolate (running/crashed/crash-looping/restarting + rss/restarts) so the
     // admin sees the TRUE state, not just the persisted 'active' flag which can lie after a crash.
     const { getIsolateStatus } = require('../core/plugin-isolate');
@@ -1134,6 +1147,26 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
         wasActive: !!o.active,           // it was listed in active_plugins when we looked
         removable: !!o.residual,         // its directory holds no code, so cleanup may delete it
     }));
+    // How many users ALREADY hold each role a plugin declares: a role left behind by an earlier
+    // installation of the same plugin (orphaned, its holders kept) comes back to those users the moment
+    // `roles:declare` is granted again — the grant screen says so, next to the role.
+    const { countRoleHolders } = require('../core/roles');
+    const holdersOf = new Map<string, number>();
+    for (const p of plugins) {
+        for (const r of Array.isArray(p.roles) ? p.roles : []) {
+            const slug = r && typeof r.slug === 'string' ? r.slug : '';
+            if (!slug || holdersOf.has(slug) || !/^[a-z0-9_]{1,64}$/.test(slug)) continue;
+            try { holdersOf.set(slug, await countRoleHolders(slug)); } catch { /* unknown: not shown */ }
+        }
+    }
+    // What confirming the activation dialog grants: POST /:slug/activate stores the manifest's permissions
+    // only when shouldSeedDeclaredGrants() says so (no record, or an empty one no administrator decided) —
+    // so a plugin whose every grant an administrator revoked is activated with nothing granted, and the
+    // dialog must say that instead of listing the permissions as granted. Decided on the stored record, as
+    // the activation decides it. A read failure leaves the flag out (the dialog then reads the grants).
+    let seedsOnActivation: Record<string, boolean> = {};
+    try { seedsOnActivation = await activationSeedsDeclaredGrants(plugins.map((p: any) => p.slug)); }
+    catch (e: any) { console.warn('[plugins] could not read the stored grants for the activation dialog:', logSafe(e && e.message)); }
     res.json(orphanRows.concat(plugins.map((raw: any) => {
         // browser:script for a plugin that ships browser code WITHOUT declaring it — one installed before
         // the capability existed. Its manifest cannot be rewritten from here, but the administrator must
@@ -1156,6 +1189,9 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
             }
         } catch { /* unreadable manifest: nothing to project */ }
         const p = { ...raw, permissions };
+        const roles = (Array.isArray(p.roles) ? p.roles : []).map((r: any) => (r && typeof r === 'object' && holdersOf.has(r.slug)
+            ? { ...r, holders: holdersOf.get(r.slug) }
+            : r));
         const requested = Array.from(new Set((p.permissions || [])
             .map((perm: any) => (perm && perm.scope) ? (perm.scope === 'network' ? 'network' : `${perm.scope}:${perm.access || 'read'}`) : null)
             .filter(Boolean)));
@@ -1166,8 +1202,10 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
         try { hasTheme = !!themeProbe && fs.lstatSync(themeProbe).isDirectory(); } catch { /* none */ }
         return {
             ...p,
+            roles,
             requestedPermissions: requested,
             grantedPermissions: getGrants(p.slug),
+            ...(typeof seedsOnActivation[p.slug] === 'boolean' ? { activationSeedsGrants: seedsOnActivation[p.slug] } : {}),
             runtime: p.active ? (getIsolateStatus(p.slug) || null) : null,
             hasTheme,
             themeInstalled: hasTheme && fs.existsSync(path.join(THEMES_DIR, `${p.slug}-theme`)),
@@ -1498,6 +1536,12 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
  *                 deactivationReason:
  *                   type: string
  *                   nullable: true
+ *                 rolesError:
+ *                   type: string
+ *                   nullable: true
+ *                   description: >-
+ *                     Set when the plugin is running and declares roles that could not be registered after this
+ *                     change (the grant is stored regardless); null otherwise.
  *                 message:
  *                   type: string
  *       400:
@@ -1605,6 +1649,21 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
 
     await awaitPolicyAnnounced(announced, 'Permissions', slug);
 
+    // Plugin-declared roles follow the `roles:declare` grant of a RUNNING plugin: granting it registers the
+    // manifest's roles now (all or nothing); revoking it leaves them registered but inert (core/roles.ts
+    // confers a plugin role's own capabilities only while the grant stands). A refusal is reported, not
+    // thrown — the grant itself is already stored.
+    let rolesError: string | null = null;
+    if (!deactivationReason && await isPluginActive(slug)) {
+        try {
+            const manifestPath = pluginFile(slug, 'manifest.json');
+            if (manifestPath) await syncPluginRoles(slug, JSON.parse(fs.readFileSync(manifestPath, 'utf8')));
+        } catch (e: any) {
+            rolesError = String((e && e.message) || e);
+            console.warn("[Permissions] roles of '%s' not registered: %s", logSafe(slug), logSafe(rolesError));
+        }
+    }
+
     const granted = getGrants(slug);
     // THE SANDBOX REFUSED THE RESTART. reloadIsolatedPlugin stops the running child BEFORE it loads the
     // new one, so the plugin is now STOPPED - and "permissions updated, reactivate to fully apply" with a
@@ -1629,7 +1688,8 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
         reloaded,
         deactivated,
         deactivationReason,
-        message: `Permissions updated for '${slug}' (${granted.length} granted).${tail}`,
+        rolesError,
+        message: `Permissions updated for '${slug}' (${granted.length} granted).${tail}${rolesError ? ` Its roles were NOT registered: ${rolesError}` : ''}`,
     });
 }));
 
@@ -2525,6 +2585,15 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request,
         // old, possibly-revoked grants) + crash strikes; only DROP the plugin's data tables when the
         // admin explicitly asked (dropData) — WordPress-parity: keep data by default on delete.
         const cleanup = await uninstallPluginData(slug, { dropTables: !!dropData });
+
+        // The roles this plugin declared go with it: removed when nobody holds them, otherwise kept as
+        // ORPHANED (their holders keep only read/access_admin_panel). Deliberately here and not in
+        // uninstallPluginData, which an in-place update also runs — an update must not strip the team.
+        try {
+            cleanup.roles = await require('../core/roles').releasePluginRoles(slug);
+        } catch (e: any) {
+            console.warn('[plugin-delete %s] could not release its roles: %s', logSafe(slug), logSafe(e && e.message));
+        }
 
         // Drop the origin binding too. Leaving it behind is not cosmetic: the record says "this slug may
         // only be updated from source X", so a slug re-installed later from somewhere else inherits a

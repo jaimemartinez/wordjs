@@ -5,6 +5,7 @@ import { useEffect, useRef } from "react";
 import { MediaItem } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
 import MSym from "./editor/MSym";
+import DialogLayer from "./DialogLayer";
 
 // The plugin host exposes this modal from pluginBundleLoader. Keep the media grid in its own client
 // chunk so importing the host surface does not eagerly evaluate next/image on SSR, workers or the
@@ -82,8 +83,11 @@ export default function MediaPickerModal({ isOpen, onClose, onSelect }: MediaPic
 
     if (!isOpen) return null;
 
+    // dialogOver (components/DialogLayer.tsx): the picker opens over a form — the settings screen, a
+    // plugin's own overlay, the editor. Its `verso-dialog-layer` z-index only existed where the editor's
+    // stylesheet was loaded; on the settings screen it sat under the admin shell.
     return (
-        <div className="verso-editor-ui verso-dialog-layer fixed inset-0 flex items-center justify-center p-0 sm:p-4">
+        <DialogLayer layer="dialogOver" className="verso-editor-ui verso-dialog-layer flex items-center justify-center p-0 sm:p-4">
             {/* Backdrop isolates the foreground without becoming an extra stop in the tab order. */}
             <div
                 className="absolute inset-0 bg-black/55 backdrop-blur-sm"
@@ -107,7 +111,7 @@ export default function MediaPickerModal({ isOpen, onClose, onSelect }: MediaPic
                     </h3>
                     <p className="text-xs text-[var(--ed-on-surface-variant)]">{t('media.select')}</p>
                     </div>
-                    <button type="button" onClick={onClose} aria-label={t('common.close')} className="verso-icon-button w-11 h-11 rounded-xl text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)] flex items-center justify-center transition-colors">
+                    <button type="button" onClick={onClose} aria-label={t('common.close')} className="verso-icon-button w-11 h-11 shrink-0 rounded-xl text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)] flex items-center justify-center transition-colors">
                         <MSym name="close" size={20} />
                     </button>
                 </div>
@@ -131,6 +135,6 @@ export default function MediaPickerModal({ isOpen, onClose, onSelect }: MediaPic
                     </button>
                 </div>
             </div>
-        </div>
+        </DialogLayer>
     );
 }

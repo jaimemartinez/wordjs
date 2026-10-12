@@ -827,6 +827,22 @@ async function hasAdminGrantDecision(slug: string): Promise<boolean> {
     return hasAdminDecisionIn(stored, slug);
 }
 
+/**
+ * For each of `slugs`: would activating it now store the grants its manifest declares
+ * (shouldSeedDeclaredGrants, on the record as stored now — one read for all of them)? The plugins screen
+ * shows it in the activation dialog, so the dialog says what confirming grants: nothing, for a plugin
+ * whose every grant an administrator revoked. A database error is thrown.
+ */
+async function activationSeedsDeclaredGrants(slugs: string[]): Promise<Record<string, boolean>> {
+    const { stored } = await readPolicyOption('plugin_grants');
+    const out: Record<string, boolean> = Object.create(null);
+    for (const slug of slugs) {
+        if (!isSafeSlugKey(slug)) continue;
+        out[slug] = shouldSeedDeclaredGrants(slug, grantRecordIn(stored, slug), hasAdminDecisionIn(stored, slug));
+    }
+    return out;
+}
+
 // Distinguishes "policy loaded successfully" from "load failed / not yet loaded" (audit F-06). A DB/options
 // failure while reading plugin_egress_hosts must NOT silently widen a network-granted plugin from its
 // configured host set to allow-all-public: when this is false, the spawn path (plugin-isolate) ships a
@@ -990,6 +1006,6 @@ module.exports = {
     adoptStoredPolicy, policyFingerprint, NETWORK_TOKEN, _setGrantsInMemory, _setEgressAllowlistInMemory,
     loadEgressHosts, isEgressPolicyLoaded, getEgressAllowlist, setEgressAllowlist, applyEgressAllowlist,
     PLUGIN_SLUG, FORBIDDEN_KEYS, isSafeSlugKey, writeSlugKey,
-    getHostMarker, setHostMarker, HOST_RECORD_KEY, hasAdminGrantDecision, ADMIN_DECISIONS_MARKER,
+    getHostMarker, setHostMarker, HOST_RECORD_KEY, hasAdminGrantDecision, activationSeedsDeclaredGrants, ADMIN_DECISIONS_MARKER,
     grantsAddedTo, egressHostsAddedTo, EGRESS_EVERY_PUBLIC_HOST,
 };

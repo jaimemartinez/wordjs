@@ -90,7 +90,7 @@ Two enforcement gates live on the host (`backend/src/core/plugin-isolate.ts`):
 | `wordjs` member | IPC kind | Host-side gate (a capability here means manifest-declared AND admin-granted) |
 | --- | --- | --- |
 | `hooks.addAction(hook, cb, priority)` / `hooks.addFilter(...)` | `register` | Hook access policy (`core/hook-access.ts`): raw-HTML hooks (`wordjs_head`/`wordjs_footer`/`wp_head`/`wp_footer`/`dynamic_sidebar`), host-only hooks and unclassified core-namespace names denied to **every** plugin; data hooks need the matching grant (`comments:read`, `posts:read`, `notifications:read`, `settings:read`) and every delivery is re-checked and minimized (commenter email/IP/agent only with `comments:pii`; no post passwords, notification tokens or protected option values); capped per-plugin (`MAX_HOOKS`) and per-hook-name (`MAX_PER_HOOK`); each shim runs with a 2 s timeout. |
-| `http.route(method, routePath, opts, handler)` | `register-route` | **`express:register_route` grant** — checked first (default-deny; not implied by `admin`); without it the registration is logged and dropped (no route is mounted). Then: per-plugin route cap (`MAX_ROUTES`); HTTP verb allowlisted (`get/post/put/patch/delete/options/head/all`); `routePath` restricted to static segments, `:params` and at most two `*` wildcards (≤ 200 chars, no regex metacharacters, `::` or `..`); `opts.auth`/`opts.admin` apply the real `authenticate`/`isAdmin` middleware; `opts.multipart` parsed host-side by multer (single file, `fileSize` capped at `config.uploads.maxFileSize` — the site's configured `maxFileSize`, 10 MB by default; the temp file is unlinked when the response finishes). Always namespaced under `/api/v1/plugin/<slug>`, auth/session cookies stripped, Set-Cookie/CSP/HSTS/Location dropped, plugin cookies namespaced + path-confined. (No absolute-path mode.) The handler may reply with `res.sendPrivateMedia(mediaId, { filename })`: with the **`media:private_read` grant** the host streams that PRIVATE media item itself (`Content-Disposition: attachment`, nosniff, sandbox CSP, `Cache-Control: private, no-store`; plugin headers ignored; 404 for anything that is not a private attachment), without it the reply is `403`. File bytes never cross the IPC channel. A plugin route sits behind the global CSRF gate like every other API route: a cookie-authenticated `POST`/`PUT`/`PATCH`/`DELETE` must carry an `X-CSRF-Token` header equal to the caller's `wjs_csrf` cookie or it is refused with `403 rest_csrf_token`; `Bearer` callers are exempt. |
+| `http.route(method, routePath, opts, handler)` | `register-route` | **`express:register_route` grant** — checked first (default-deny; not implied by `admin`); without it the registration is logged and dropped (no route is mounted). Then: per-plugin route cap (`MAX_ROUTES`); HTTP verb allowlisted (`get/post/put/patch/delete/options/head/all`); `routePath` restricted to static segments, `:params` and at most two `*` wildcards (≤ 200 chars, no regex metacharacters, `::` or `..`); `opts.auth`/`opts.admin` apply the real `authenticate`/`isAdmin` middleware, and the handler's `req.user` is `{ id, role, userEmail, userLogin, hasProfessionalMailbox, pluginCapabilities }` (`pluginCapabilities`: the caller's capabilities in the plugin's own namespace — [plugins.md §12a](plugins.md#12a-declaring-user-roles-rolesdeclare)); `opts.multipart` parsed host-side by multer (single file, `fileSize` capped at `config.uploads.maxFileSize` — the site's configured `maxFileSize`, 10 MB by default; the temp file is unlinked when the response finishes). Always namespaced under `/api/v1/plugin/<slug>`, auth/session cookies stripped, Set-Cookie/CSP/HSTS/Location dropped, plugin cookies namespaced + path-confined. (No absolute-path mode.) The handler may reply with `res.sendPrivateMedia(mediaId, { filename })`: with the **`media:private_read` grant** the host streams that PRIVATE media item itself (`Content-Disposition: attachment`, nosniff, sandbox CSP, `Cache-Control: private, no-store`; plugin headers ignored; 404 for anything that is not a private attachment), without it the reply is `403`. File bytes never cross the IPC channel. A plugin route sits behind the global CSRF gate like every other API route: a cookie-authenticated `POST`/`PUT`/`PATCH`/`DELETE` must carry an `X-CSRF-Token` header equal to the caller's `wjs_csrf` cookie or it is refused with `403 rest_csrf_token`; `Bearer` callers are exempt. |
 | `shortcodes.add(tag, handler)` | `register-shortcode` | Capped per-plugin; handler resolves HTML over RPC (`doShortcodeAsync`). |
 | `provideMail(handler)` | `register-mail-provider` | `email:provider` grant — becomes the host-wide mail sender (sandboxed). |
 | `notify.registerTransport(name, handler)` | `register-notify-transport` | `notifications:provider` grant — registers a core notification transport (sandboxed). |
@@ -169,7 +169,7 @@ A complete SMTP server and email manager. Allows sending and receiving emails di
 ---
 
 ## 5. Conference Manager 🎟️
-**ID:** `conference-manager` | **Version:** 2.15.1
+**ID:** `conference-manager` | **Version:** 2.17.0
 
 Complex business logic for managing church conferences.
 
@@ -177,7 +177,20 @@ Complex business logic for managing church conferences.
     *   Inscription/Registration management: admin CRUD plus a **dynamic registration form** whose fields are
         defined per conference (schema-follows-form — each field is a real column on the inscriptions table,
         with `required`/`unique` flags). Dynamic values are canonicalised server-side (`"0030"` → `"30"`), so the
-        admin form and the coordinator portal store the same representation.
+        admin form and the coordinator portal store the same representation. A new conference starts with
+        **no field** (and no assignment rule); the base fields — Nombre, Apellido, Email, Teléfono, Género, Grupo
+        familiar — are **templates** (`POST /fields { conference_id, template, label? }`) created with the
+        exact column, type, options and role the other features read (`409 field_exists` for a second copy).
+        Every field can be edited and deleted while the form is unpublished (a published form stays locked),
+        and every feature works without the base fields: names fall back to the other form fields fit for a
+        name — never a unique field (an ID document), a contact (email, phone) or notes — or the attendee's
+        number (everywhere: admin lists, exports, meals, the portal's `display_name`); a price rule or an
+        assignment rule on a deleted field is skipped (a new assignment rule on it is refused); the lodging
+        gender hints, the portal's gender and the gender report need a «Género» field (column `gender`). The
+        location is not a form field (the portal login sets it; the admin picks it from Localidades), and
+        rules on it keep applying. A form with no field cannot be published (`400 form_empty`). On a phone
+        the field list's actions are visible without hover, with ↑ / ↓ to reorder (drag and drop needs a
+        mouse).
     *   **Fee rules** (`/fee-rules`): the base fee plus ordered `set`/`add` rules matched against form values, in
         integer cents. `POST /public/quote` returns the fee for a set of values (the portal shows it live while
         registering); `POST /reprice` re-applies the current rules to every inscription of a conference.
@@ -205,10 +218,74 @@ Complex business logic for managing church conferences.
         overrides, and deliveries recorded by scanning the attendee's barcode — on a phone, «Modo escáner» reads
         with `BarcodeDetector` where the browser has it and with the plugin's own reader otherwise (Code 128,
         EAN-13/8, UPC-A, UPC-E number system 0, Code 39), and shows whatever it reads that is not a registration code).
+    *   **Delivery confirmation** (2.16.0): by default a scan does not record anything by itself. The phone
+        scanner and the «Entrega» tab first call `POST /meals/check` `{ service_id, code? | inscription_id? }`
+        (`meals_delivery:manage`, **read-only**), which runs the same lookup and decision as `/meals/deliver`
+        and always answers 200 with `result` = `ready` (would deliver) | `not_entitled` (needs an authorised
+        override) | `already` (with `delivered_at`, `delivered_by`, `method`) | `cancelled` | `unknown` |
+        `other_conference`, plus `service` (`id`, `service_date`, `meal`, `label`, `start_time`, `end_time`) and
+        `person` (`id`, `name`, `location`, `location_id`, `family_group`, `reg_code` — masked without
+        `inscriptions:view` — and `fields: [{ key, label, value, hidden? }]`); 404 for an unknown service, 400
+        without code or inscription. A confirmation card shows the meal, those fields and the status: «Entregar»
+        (`/meals/deliver` with the same body) or «Cancelar» for `ready`, «Entregar sin derecho (autorizar)»
+        (`force: true`) or «Cancelar» for `not_entitled`, «Cerrar» otherwise. «Cancelar» records nothing — the
+        person stays pending and the next scan shows the card again. In «Entrega», Enter on the empty scan
+        input = «Entregar» (never the override), Esc = «Cancelar», and a code scanned while a card is open is
+        queued behind it; Enter only answers a card on screen for at least 500 ms and ignores a held-down key
+        and an Enter within 300 ms of the previous key (a CR+LF scanner suffix); the queue waits while
+        «Entregado» shows (1.2 s) and, after any other delivery result, until Enter, Esc or a click; a person
+        picked by name replaces the open card. In «Entrega» whatever appears under the scan input
+        («Comprobando…», the card, a delivery's result) is scrolled into view (instantly with reduced motion)
+        and the card is capped to the visible area, so the meal, the name and the buttons are on screen
+        together. Decoding pauses on the phone while a card is open; afterwards
+        the badge must leave the camera for 3 s (not after a service change or a failed request; after
+        «Cancelar» the badge shown again says so). Card buttons ignore taps for 400 ms after the card appears,
+        and the «Entregado» card that follows «Entregar» for 600 ms. The «Confirmar antes de entregar» switch
+        (per device, on by default) restores the immediate delivery. `/meals/deliver` keeps its contract and
+        adds the same `service` and `person.fields`.
+    *   **What the delivery card shows** (2.16.0): `GET /meals/display-fields?conference_id=` (`meals:view` |
+        `meals_delivery:manage`) returns `keys` (the effective list, in order), `configured`, `default_keys` and
+        `available` (built-ins `@name`, `@location`, `@reg_code`, `@payment_status`, `@room`, then every field of
+        the conference's registration form); `PUT /meals/display-fields` `{ conference_id, keys: [...] | null }`
+        (`meals:manage`) stores the choice in `conferences.meal_display_fields` (an idempotent `ADD COLUMN`;
+        `null` = back to the default, name + location). Keys are validated against the conference's current
+        form (400 otherwise); a field deleted later is ignored. `@name` is always the first key: it is added
+        when a choice leaves it out and moved up when it is elsewhere (also for a stored list). `person.fields`
+        of `/meals/check` and `/meals/deliver` carries the configured values only, so form answers, the payment
+        status and the room reach the delivery device only when configured; `person` itself keeps the 2.15
+        projection (name, location, family group, masked code), which delivery staff also get from
+        `/meals/people` (whose `document_number`, the attendee's ID document, is null without
+        `inscriptions:view`, like `reg_code`; without it the search matches a document only when it is typed
+        whole). Configured from «Entrega» › «Qué se muestra al entregar», with a live preview of the
+        card; «Restablecer» refills the form with the default and «Guardar» stores it (saving the default
+        stores `null`).
     *   **Team & per-section permissions** (`/staff/*`, administrators only): roles give each section
         (dashboard, inscriptions, payments, locations, lodging, transport, accounting, meals, meal delivery,
         reports, settings) `none`, `view` or `manage`; members are WordJS users (found via `users:read`).
         Every admin-panel route checks the caller's level on the server; WordJS administrators keep full access.
+        Deleting a conference (`DELETE /:id`) takes its attendees, fee payments, transport payments and ledger
+        with it, so it needs `settings:manage` plus `manage` on each of inscriptions, payments, transport and
+        accounting whose records the conference still holds (`409 conference_has_records`, with `sections`,
+        otherwise); an empty conference needs `settings:manage` only.
+    *   **Team WordJS role** (2.17.0): the manifest declares the role «Equipo de conferencia»
+        (`conference_manager_team`, through `roles:declare`; see [plugins.md §12a](plugins.md#12a-declaring-user-roles-rolesdeclare))
+        whose only capability is `conference_manager_access` — the capability the «Conference» menu entry
+        requires. An account with that role reaches the admin shell, its own account page and this plugin's
+        page, and no other admin page. What lets an account work in the panel is the CAPABILITY: the team role
+        carries it, and an administrator may also give it to another role in Users › Roles (an editor who
+        also runs registrations keeps the editorial screens and gets this one). Only such accounts can join
+        the team: `POST /staff/members` answers `400 not_team_role` for any other, and a role change or
+        reactivation through `PUT /staff/members/:id` that leaves the member active follows the same rule
+        (deactivating, removing, and — without the `users:read` grant — any change never need it). A member
+        whose account lacks the capability (added before 2.17.0, or whose role was changed in Users) is kept
+        but gets no section, and the team list flags it (`team_role: false`). The plugin reads the
+        capability on every request from `req.user.pluginCapabilities`, and for any other account from the
+        users bridge's projection, so revoking `roles:declare` closes the panel to the team at once (an older
+        host that sends no list is judged on the role alone). `GET /staff/members` reports `roles_ready`:
+        `false` when the team role is not registered or confers nothing (an in-place update to 2.17.0 keeps
+        the old grants) — the team screen then asks for the `roles:declare` grant. The flow: create the
+        account in Users with the role «Equipo de conferencia», then add it to the team in «Equipo y permisos»
+        and choose its team role.
     *   **Coordinator portal** (`/portal/login`, `/portal/me`, `/portal/inscriptions`, `/portal/groups`,
         `/portal/payments/bulk`, `/portal/lodging*`) surfaced at `/portal/conference` on the frontend. A per-location 6-digit
         access code is required; there is **no anonymous public registration**. Each coordinator's view is
@@ -220,7 +297,7 @@ Complex business logic for managing church conferences.
 *   **Documented caps** (a request over a cap answers `400` instead of running unbounded): 200 people per
     bulk payment, 20 000 inscriptions per `/reprice`, 5 000 unassigned attendees per `/assignment/run`,
     500 passengers per bus operation, 60 dates per bulk meal-service creation.
-*   **Requested capabilities:** `database` (read/write — its own `wjp_conference_manager_` tables), `express` (register_route — namespaced routes), `admin_menu` (register — sidebar item, gated on `access_admin_panel`; the page then shows only the sections the user's team role allows), `users` (read — find WordJS users to add to the conference team).
+*   **Requested capabilities:** `database` (read/write — its own `wjp_conference_manager_` tables), `express` (register_route — namespaced routes), `admin_menu` (register — sidebar item, gated on `conference_manager_access`, which administrators and the team role hold; the page then shows only the sections the user's team role allows), `users` (read — find WordJS users to add to the conference team), `roles` (declare — the team role «Equipo de conferencia»).
 *   **Sandbox:** isolated, like every plugin — no trust bypass. Default-deny: activation grants its declared
     capabilities (admin-approved in the activation dialog, refinable/revocable in `/admin/plugins`). It
     stores its data in its own prefixed tables (no unscoped/core-table access — that capability no longer
@@ -327,7 +404,7 @@ Test Schema are bundled with core):
 | `bookings` | Appointment booking: services, weekly availability, race-safe slot reservations, email confirmations, admin agenda | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
 | `breadcrumbs` | Breadcrumbs Verso block with optional BreadcrumbList JSON-LD | `browser:script` only (frontend-only) |
 | `card-gallery` | Event/promo cards as an alternating-alignment ("zigzag") stack via the `CardGalleryVerso` block | `settings` r/w, `database` write, routes, admin menu |
-| `conference-manager` | Conference inscriptions/registration with per-location capacity and forms of payment, hotel & room auto-assignment plus per-location lodging, registration barcodes, payments, transport, accounting, meals, team roles, coordinator portal, reports + CSV/Excel export | `database` r/w, routes, admin menu, `users` read |
+| `conference-manager` | Conference inscriptions/registration with per-location capacity and forms of payment, hotel & room auto-assignment plus per-location lodging, registration barcodes, payments, transport, accounting, meals, team roles (own WordJS role), coordinator portal, reports + CSV/Excel export | `database` r/w, routes, admin menu, `users` read, `roles:declare` |
 | `contact-forms` | Form builder with a Verso embed block, submissions inbox, CSV export, email notification | `database` r/w, routes, admin menu, `email:admin` |
 | `cookie-consent` | GDPR cookie banner, anonymous consent logging, version-based re-consent | `database` r/w, `settings` r/w, routes, admin menu, `assets:write` |
 | `digital-downloads` | Sell/give away downloadable products (each file a PRIVATE media item) with expiring, limited-use token-gated downloads streamed by the host — no file URL is ever revealed. 1.1.0 migration: products created earlier keep their public `file_url` working but are flagged in the admin until their file is re-selected as private | `database` r/w, `settings` r/w, routes, admin menu, `email:admin`, `media:private_read` |

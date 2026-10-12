@@ -57,6 +57,8 @@ export interface LvField {
     name: string;
     label?: string;
     role?: string | null;
+    type?: string | null;
+    is_unique?: number | boolean | null;
 }
 
 /** i18n keys of the reasons a move is refused (the same keys the old accommodation board used). */
@@ -110,15 +112,29 @@ export const fieldVal = (person: LvPerson | null | undefined, field: Pick<LvFiel
 const filled = (v: unknown) => v !== '' && v !== null && v !== undefined;
 
 /**
+ * May this field stand in for a person's NAME when the form has no Nombre / Apellido? Never a unique
+ * identifier (an ID document), a contact (email, phone) or free text (notes). Copy of lib/fields.ts
+ * isNameFallbackField (this file imports nothing — see the header); a test keeps the two equal.
+ */
+export function isNameFallbackField(f: Partial<LvField> | null | undefined): boolean {
+    if (!f || !f.name || f.name === 'first_name' || f.name === 'last_name') return false;
+    if (Number(f.is_unique)) return false;
+    const role = String(f.role || '');
+    if (role === 'email' || role === 'phone' || f.name === 'email' || f.name === 'phone') return false;
+    return !['textarea', 'notes', 'email', 'tel'].includes(String(f.type || ''));
+}
+
+/**
  * The form fields that make up an attendee's display name: the fields tagged with the name roles when
- * they hold a value, otherwise the first 1-2 filled form fields.
+ * they hold a value, otherwise the first 1-2 filled form fields fit to stand in for a name (lib/fields.ts
+ * isNameFallbackField: never an ID document, a contact or notes).
  */
 export const nameFields = (person: LvPerson | null | undefined, fields: LvField[] | null | undefined): LvField[] => {
     const fl = fields || [];
     const named = ['first_name', 'last_name']
         .map(role => fl.find(f => f.role === role))
         .filter((f): f is LvField => !!f && filled(fieldVal(person, f)));
-    return named.length ? named : fl.filter(f => filled(fieldVal(person, f))).slice(0, 2);
+    return named.length ? named : fl.filter(f => isNameFallbackField(f) && filled(fieldVal(person, f))).slice(0, 2);
 };
 
 export const personDisplayName = (person: LvPerson | null | undefined, fields: LvField[] | null | undefined): string => {
@@ -321,8 +337,23 @@ export interface CandidateOpts {
 export function genderMismatch(room: LvRoom, p: LvPerson): boolean {
     const rg = roomGender(room);
     if (rg === 'Mixed') return false;
-    const pg = String(p.gender || '').trim().toUpperCase().charAt(0);
-    return (pg === 'M' || pg === 'F') && pg !== rg;
+    const pg = genderKey(p.gender);
+    return pg !== '' && pg !== rg;
+}
+
+const FEMALE = new Set(['f', 'fem', 'femenino', 'femenina', 'female', 'mujer', 'woman', 'w', 'feminino', 'mulher']);
+const MALE = new Set(['m', 'masc', 'masculino', 'male', 'hombre', 'man', 'h', 'varon', 'homem']);
+/**
+ * An attendee's gender as 'F' / 'M' / '' (unknown) — the «Género» field's options are editable (2.16.0), so
+ * read the word, not its first letter: «Mujer» is F although it starts with an M. Mirror of the portal's
+ * genderKey (frontend/src/app/portal/conference/lodgingView.ts).
+ */
+export function genderKey(v: unknown): 'M' | 'F' | '' {
+    const s = normalizeText(v);
+    if (!s) return '';
+    if (FEMALE.has(s) || s.startsWith('fem') || s.startsWith('muj')) return 'F';
+    if (MALE.has(s) || s.startsWith('masc') || s.startsWith('homb') || s.startsWith('var')) return 'M';
+    return '';
 }
 
 /**

@@ -495,7 +495,7 @@ export default function TagsPage() {
                                                                             onClick={() => (editing ? cancelEdit() : startEdit(tag))}
                                                                             title={editing ? t("tags.cancel") : t("tags.edit")}
                                                                             aria-label={editing ? t("tags.cancel") : t("tags.edit")}
-                                                                            className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white flex items-center justify-center transition-all shadow-sm"
+                                                                            className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white flex items-center justify-center transition-all shadow-sm"
                                                                         >
                                                                             <i className={`fa-solid ${editing ? "fa-xmark" : "fa-pen"} text-xs`}></i>
                                                                         </button>
@@ -504,7 +504,7 @@ export default function TagsPage() {
                                                                             disabled={deletingId === tag.id}
                                                                             title={t("tags.deleteTitle")}
                                                                             aria-label={t("tags.deleteTitle")}
-                                                                            className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all shadow-sm hover:shadow-red-200 disabled:opacity-50"
+                                                                            className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all shadow-sm hover:shadow-red-200 disabled:opacity-50"
                                                                         >
                                                                             <i className={`fa-solid ${deletingId === tag.id ? "fa-spinner fa-spin" : "fa-trash"} text-xs`}></i>
                                                                         </button>

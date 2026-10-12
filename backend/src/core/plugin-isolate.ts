@@ -514,6 +514,45 @@ function listIsolates(): string[] {
 }
 
 /**
+ * The caller as a plugin route handler sees it (`req.user` inside the isolate), rebuilt per request so a
+ * revoked grant or a changed role denies the very next request.
+ *
+ * `pluginCapabilities` is the caller's capabilities that belong to THIS plugin — those in its own
+ * namespace (`conference_manager_*` for conference-manager), from a core or custom role or from a role
+ * this plugin itself declared (core/roles.ts pluginCapabilitiesFor). Never a core capability, never
+ * another plugin's, so a plugin can gate its routes on its own roles without learning anything else
+ * about the account. An administrator receives every capability the plugin's own roles confer.
+ */
+function projectRouteUser(user: any, slug: string): any {
+    if (!user) return null;
+    return {
+        id: user.id, role: user.role, userEmail: user.userEmail, userLogin: user.userLogin,
+        hasProfessionalMailbox: hasProfessionalMailbox(user),
+        pluginCapabilities: pluginCapabilitiesOf(user, slug),
+    };
+}
+
+/**
+ * `user`'s capabilities that belong to plugin `slug` (core/roles.ts pluginCapabilitiesFor) — what the
+ * plugin is told on BOTH wires that describe an account to it: a route's req.user (projectRouteUser) and
+ * the users bridge (core/plugin-api.ts), so a plugin can tell which accounts its screens are open to.
+ * Nested namespaces are decided against the INSTALLED plugins (as registration and the roles API decide
+ * them), not only the running ones: plugin `conference` must not be told about `conference_manager_access`
+ * while conference-manager is installed but deactivated. Fails closed ([]).
+ */
+function pluginCapabilitiesOf(user: any, slug: string): string[] {
+    if (!user) return [];
+    try {
+        const installed: string[] = require('./plugins').listInstalledPluginIdsCached();
+        const others = Array.from(new Set([...installed, ...listIsolates().filter((s) => !s.startsWith('theme:'))]));
+        return require('./roles').pluginCapabilitiesFor(user, slug, others);
+    } catch (e: any) {
+        console.warn(`[Isolate ${logSafe(slug)}] could not resolve an account's plugin capabilities: ${logSafe(e && e.message)}`);
+        return [];
+    }
+}
+
+/**
  * Wait (bounded) until NO load for this slug is in flight — the companion to listIsolates() for anyone
  * who intends to RETIRE what it enumerates.
  *
@@ -2815,10 +2854,8 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                         // projected as a boolean so a plugin route gate reads the FACT instead of
                         // re-deriving it from userEmail, which the account itself can write. Rebuilt per
                         // request from req.user, so revoking the grant denies the very next request.
-                        user: req.user ? {
-                            id: req.user.id, role: req.user.role, userEmail: req.user.userEmail, userLogin: req.user.userLogin,
-                            hasProfessionalMailbox: hasProfessionalMailbox(req.user)
-                        } : null
+                        // `pluginCapabilities` — see projectRouteUser.
+                        user: projectRouteUser(req.user, slug)
                     };
                     try {
                         const r = await invokeRoute(msg.routeId, reqData);
@@ -3245,6 +3282,9 @@ module.exports = {
     // The policy fingerprint the RUNNING child of `slug` was spawned with (undefined when none is running).
     spawnPolicyFingerprint: (slug: string) => (isolates.has(slug) ? spawnPolicies.get(slug) : undefined),
     listIsolates,
+    // What a plugin route handler receives as req.user (incl. its own pluginCapabilities).
+    projectRouteUser,
+    pluginCapabilitiesOf,
     getLivePids, awaitIsolateStopped, awaitIsolateSettled,
     getIsolateStatus, getAllIsolateStatuses,
     assignProcessToJobObject, probeJobObjectCap, getSandboxHardeningState,

@@ -222,7 +222,7 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
                                     </td>
                                     <td className="px-6 py-6">
                                         <div className="flex items-center gap-3">
-                                            <div className="w-8 h-8 rounded-xl bg-gray-100 flex items-center justify-center text-xs font-bold text-gray-500">
+                                            <div className="w-8 h-8 shrink-0 rounded-xl bg-gray-100 flex items-center justify-center text-xs font-bold text-gray-500">
                                                 {post.author?.displayName?.[0] || 'U'}
                                             </div>
                                             <span className="text-sm font-bold text-gray-600">{post.author?.displayName || "Unknown"}</span>
@@ -237,22 +237,22 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
                                     <td className="px-6 py-6 text-right">
                                         <div className="flex items-center justify-end gap-2 opacity-100 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity translate-x-0 [@media(hover:hover)]:translate-x-4 group-hover:translate-x-0 group-focus-within:translate-x-0 duration-300">
                                             <a href={viewHref(post)} target="_blank" rel="noopener noreferrer"
-                                                className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-emerald-600 hover:text-white flex items-center justify-center transition-all shadow-sm"
+                                                className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-emerald-600 hover:text-white flex items-center justify-center transition-all shadow-sm"
                                                 title={post.status === 'publish' ? 'View' : 'Preview draft'}>
                                                 <i className="fa-solid fa-eye text-xs"></i>
                                             </a>
                                             <button onClick={() => handleDuplicate(post)} disabled={busy}
-                                                className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-amber-500 hover:text-white flex items-center justify-center transition-all shadow-sm disabled:opacity-50"
+                                                className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-amber-500 hover:text-white flex items-center justify-center transition-all shadow-sm disabled:opacity-50"
                                                 title="Duplicate">
                                                 <i className="fa-solid fa-copy text-xs"></i>
                                             </button>
                                             <Link href={`${basePath}/${post.id}`}
-                                                className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white flex items-center justify-center transition-all shadow-sm"
+                                                className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white flex items-center justify-center transition-all shadow-sm"
                                                 title={t('edit')}>
                                                 <i className="fa-solid fa-pen text-xs"></i>
                                             </Link>
                                             <button onClick={() => handleDelete([post.id])} disabled={busy}
-                                                className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all shadow-sm disabled:opacity-50"
+                                                className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all shadow-sm disabled:opacity-50"
                                                 title={t('delete')}>
                                                 <i className="fa-solid fa-trash text-xs"></i>
                                             </button>

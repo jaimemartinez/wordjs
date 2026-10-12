@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef } from "react";
+import DialogLayer from "./DialogLayer";
 
 interface ConfirmationModalProps {
     isOpen: boolean;
@@ -53,9 +54,13 @@ export default function ConfirmationModal({
 
     if (!isOpen) return null;
 
+    // dialogOver: a confirmation opens over whatever asked for it — a page dialog, the media lightbox, a
+    // plugin's own overlay (6010-6090) — and used to sit at z-50, UNDER all of them and under the admin
+    // shell (components/DialogLayer.tsx).
     return (
-        <div
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+        <DialogLayer
+            layer="dialogOver"
+            className="flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
             onClick={onClose}
         >
             <div
@@ -67,7 +72,7 @@ export default function ConfirmationModal({
             >
                 <div className="p-6">
                     <div className="flex items-center gap-3 mb-4">
-                        <div className={`w-10 h-10 rounded-full flex items-center justify-center ${isDanger ? "bg-red-100 text-red-600" : "bg-blue-100 text-blue-600"}`}>
+                        <div className={`w-10 h-10 shrink-0 rounded-full flex items-center justify-center ${isDanger ? "bg-red-100 text-red-600" : "bg-blue-100 text-blue-600"}`}>
                             <i className={`fa-solid ${isDanger ? "fa-triangle-exclamation" : "fa-circle-info"} text-lg`}></i>
                         </div>
                         <h3 id={titleId} className="text-xl font-bold text-gray-900">{title}</h3>
@@ -100,6 +105,6 @@ export default function ConfirmationModal({
                     </div>
                 </div>
             </div>
-        </div>
+        </DialogLayer>
     );
 }

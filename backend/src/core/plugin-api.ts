@@ -44,6 +44,14 @@ function projectUser(u: any): any {
     };
 }
 
+/** projectUser + the account's capabilities in plugin `slug`'s own namespace (see the `users` bridge). */
+function projectUserFor(u: any, slug: string): any {
+    const projected = projectUser(u);
+    if (!projected) return projected;
+    projected.pluginCapabilities = require('./plugin-isolate').pluginCapabilitiesOf(u, slug);
+    return projected;
+}
+
 const ROOT_DIR = path.resolve(__dirname, '../../');
 const PLUGINS_DIR = path.join(ROOT_DIR, 'plugins');
 const UPLOADS_DIR = path.join(ROOT_DIR, 'uploads');
@@ -804,14 +812,19 @@ function createPluginApi(slug: string) {
         // (id/login/email/displayName/role), NEVER user_pass / tokens / meta. Replaces a plugin doing
         // raw `SELECT * FROM users` (which leaked password hashes). The host writes the query (core User
         // model); the plugin passes only a key/term.
+        //
+        // Each projection also carries `pluginCapabilities`: the account's capabilities in THIS plugin's own
+        // namespace — exactly what a route handler gets as req.user.pluginCapabilities (core/plugin-isolate.ts
+        // pluginCapabilitiesOf), never a core capability nor another plugin's. With it a plugin can tell
+        // which accounts its own screens are open to (conference-manager: who may join its team).
         users: {
-            async findByEmail(email: string) { verifyPermission('users', 'read'); return projectUser(await require('../models/User').findByEmail(email)); },
-            async findByLogin(login: string) { verifyPermission('users', 'read'); return projectUser(await require('../models/User').findByLogin(login)); },
-            async findById(id: any) { verifyPermission('users', 'read'); return projectUser(await require('../models/User').findById(id)); },
+            async findByEmail(email: string) { verifyPermission('users', 'read'); return projectUserFor(await require('../models/User').findByEmail(email), slug); },
+            async findByLogin(login: string) { verifyPermission('users', 'read'); return projectUserFor(await require('../models/User').findByLogin(login), slug); },
+            async findById(id: any) { verifyPermission('users', 'read'); return projectUserFor(await require('../models/User').findById(id), slug); },
             async search(term: string, limit = 50) {
                 verifyPermission('users', 'read');
                 const list = await require('../models/User').findAll({ search: String(term || ''), limit: Math.min(Number(limit) || 50, 200) });
-                return (Array.isArray(list) ? list : []).map(projectUser);
+                return (Array.isArray(list) ? list : []).map((u: any) => projectUserFor(u, slug));
             },
         },
 

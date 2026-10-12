@@ -1,9 +1,13 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
+import { useDropdownPlacement } from '@/lib/useDropdownPlacement';
+import { ADMIN_Z } from '@/lib/adminLayers';
 
 interface Option {
     value: string | number;
     label: string;
+    /** Optional heading: consecutive options with the same group are listed under it. */
+    group?: string;
 }
 
 interface ModernSelectProps extends Omit<React.HTMLAttributes<HTMLDivElement>, 'onChange' | 'value'> {
@@ -17,9 +21,23 @@ interface ModernSelectProps extends Omit<React.HTMLAttributes<HTMLDivElement>, '
     disabled?: boolean;
 }
 
-// Fixed-position coords for the portalled menu, so it escapes any `overflow-hidden` ancestor
-// (e.g. a rounded card) that would otherwise clip the options list.
-interface Coords { left: number; width: number; top?: number; bottom?: number; maxHeight: number; }
+/**
+ * An option's label WRAPS instead of being truncated: on a phone «Equipo de conferencia · plugin
+ * conference-manager» was cut to «… plugin confe…», and the open list is the one place the whole label
+ * is shown. The check mark keeps its size beside a two-line label. Exported for the unit test.
+ */
+export const OPTION_LABEL_CLASS = 'min-w-0 flex-1 whitespace-normal break-words';
+
+/**
+ * The heading over each group of options («ROLES DEL SISTEMA», «ROLES DE PLUGINS») is gray-600: it was
+ * gray-400, 2.5:1 on the menu's white. The menu is 95 % white over whatever is behind it (a dimmed page,
+ * the dark sidebar under a dialog's scrim), and gray-500 drops under AA there (4.3:1); gray-600 keeps
+ * ≥ 6.9:1 even over black — so does the menu's empty-list line. The trigger's placeholder (gray-400 too)
+ * is gray-500, on the trigger's solid gray-50. Exported for the unit test.
+ */
+export const GROUP_HEADING_CLASS = 'px-4 pt-3 pb-1 text-[10px] font-black uppercase tracking-widest text-gray-600 break-words';
+export const EMPTY_LIST_CLASS = 'px-4 py-3 text-sm text-gray-600 italic';
+export const PLACEHOLDER_CLASS = 'text-gray-500';
 
 const ModernSelect: React.FC<ModernSelectProps> = ({
     label,
@@ -35,33 +53,21 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
 }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [highlight, setHighlight] = useState(0);
-    const [coords, setCoords] = useState<Coords | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
+    const labelRef = useRef<HTMLLabelElement>(null);
     const triggerRef = useRef<HTMLDivElement>(null);
     const dropdownRef = useRef<HTMLDivElement>(null);
     const listRef = useRef<HTMLDivElement>(null);
 
+    // The portalled menu is position: fixed (so no `overflow-hidden` ancestor — a rounded card, a dialog
+    // body — clips it) and placed by lib/dropdownPlacement.ts: ALWAYS inside the visible viewport and whole
+    // whenever it can be — below the field, else above its label (in a dialog, scrolling the dialog's body
+    // a little when that makes it fit), else over the label; it scrolls inside only when nothing fits.
+    const { coords, update: updateCoords } = useDropdownPlacement(isOpen, { trigger: triggerRef, list: listRef, label: labelRef }, options.length);
+
     // Get current label
     const selectedOption = options.find(opt => String(opt.value) === String(value));
     const displayLabel = selectedOption ? selectedOption.label : placeholder;
-
-    const updateCoords = useCallback(() => {
-        const el = triggerRef.current;
-        if (!el) return;
-        const rect = el.getBoundingClientRect();
-        const gap = 8;
-        const spaceBelow = window.innerHeight - rect.bottom - gap;
-        const spaceAbove = rect.top - gap;
-        const openUp = spaceBelow < 180 && spaceAbove > spaceBelow;
-        const maxHeight = Math.max(120, Math.min(260, Math.floor(openUp ? spaceAbove : spaceBelow)));
-        setCoords({
-            left: rect.left,
-            width: rect.width,
-            top: openUp ? undefined : Math.round(rect.bottom + gap),
-            bottom: openUp ? Math.round(window.innerHeight - rect.top + gap) : undefined,
-            maxHeight,
-        });
-    }, []);
 
     // Outside click — check the trigger AND the portalled menu (which lives outside the container).
     useEffect(() => {
@@ -75,19 +81,6 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, [isOpen]);
-
-    // Reposition while open (capture catches inner scroll containers).
-    useEffect(() => {
-        if (!isOpen) return;
-        updateCoords();
-        const onScroll = () => updateCoords();
-        window.addEventListener('scroll', onScroll, true);
-        window.addEventListener('resize', onScroll);
-        return () => {
-            window.removeEventListener('scroll', onScroll, true);
-            window.removeEventListener('resize', onScroll);
-        };
-    }, [isOpen, updateCoords]);
 
     // When opening, highlight the currently-selected option.
     useEffect(() => {
@@ -110,7 +103,7 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
 
     const handleToggle = () => {
         if (disabled) return;
-        isOpen ? setIsOpen(false) : open();
+        if (isOpen) setIsOpen(false); else open();
     };
 
     const handleSelect = (val: string | number) => {
@@ -141,7 +134,7 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
     return (
         <div className={`space-y-2 ${containerClassName}`} ref={containerRef} {...props}>
             {label && (
-                <label className="text-sm font-bold text-gray-700 flex items-center gap-2">
+                <label ref={labelRef} className="text-sm font-bold text-gray-700 flex items-center gap-2">
                     {icon && <i className={`${icon} text-blue-500/70`}></i>}
                     {label}
                 </label>
@@ -166,36 +159,47 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                         ${className}
                     `}
                 >
-                    <span className={`truncate ${!selectedOption ? 'text-gray-400' : ''}`}>
+                    <span className={`truncate ${!selectedOption ? PLACEHOLDER_CLASS : ''}`}>
                         {displayLabel}
                     </span>
                     <i className={`fa-solid fa-chevron-down text-[10px] transition-transform duration-300 text-gray-400 ${isOpen ? 'rotate-180 text-blue-500' : ''}`}></i>
                 </button>
 
-                {/* Dropdown Menu — portalled to <body> so it never gets clipped by an overflow-hidden card. */}
+                {/* Dropdown Menu — portalled to <body>, above any dialog it is opened from (lib/adminLayers.ts). */}
                 {isOpen && coords && typeof document !== 'undefined' && createPortal(
                     <div
                         ref={dropdownRef}
+                        data-dropdown-side={coords.side}
                         style={{
                             position: 'fixed',
                             left: coords.left,
                             width: coords.width,
                             top: coords.top,
                             bottom: coords.bottom,
-                            zIndex: 6000,
+                            zIndex: ADMIN_Z.popover,
                         }}
                         className="bg-white/95 backdrop-blur-xl border border-gray-100 shadow-2xl rounded-2xl overflow-hidden animate-in fade-in duration-150"
                     >
-                        <div ref={listRef} className="py-1 overflow-y-auto custom-scrollbar" style={{ maxHeight: coords.maxHeight }} role="listbox">
+                        <div ref={listRef} className="py-1 overflow-y-auto overscroll-contain custom-scrollbar" style={{ maxHeight: coords.maxHeight }} role="listbox">
                             {options.length === 0 ? (
-                                <div className="px-4 py-3 text-sm text-gray-400 italic">No options available</div>
+                                <div className={EMPTY_LIST_CLASS}>No options available</div>
                             ) : (
                                 options.map((opt, i) => {
                                     const isSelected = String(opt.value) === String(value);
                                     const isHighlighted = i === highlight;
+                                    // A heading before the first option of each group (not an option:
+                                    // keyboard navigation still walks the options only).
+                                    const heading = opt.group && (i === 0 || options[i - 1].group !== opt.group)
+                                        ? (
+                                            <div role="presentation" className={GROUP_HEADING_CLASS} data-option-group="">
+                                                {opt.group}
+                                            </div>
+                                        )
+                                        : null;
                                     return (
+                                        <React.Fragment key={opt.value}>
+                                        {heading}
                                         <button
-                                            key={opt.value}
                                             type="button"
                                             role="option"
                                             aria-selected={isSelected}
@@ -203,7 +207,7 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                                             onMouseEnter={() => setHighlight(i)}
                                             onClick={() => handleSelect(opt.value)}
                                             className={`
-                                                    w-full text-left px-4 py-2.5 text-sm transition-all duration-200 flex items-center justify-between
+                                                    w-full text-left px-4 py-2.5 text-sm transition-all duration-200 flex items-center justify-between gap-3
                                                     ${isSelected
                                                     ? 'bg-blue-50 text-blue-700 font-bold'
                                                     : isHighlighted
@@ -211,9 +215,10 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                                                         : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'}
                                                 `}
                                         >
-                                            <span className="truncate">{opt.label}</span>
-                                            {isSelected && <i className="fa-solid fa-check text-xs"></i>}
+                                            <span className={OPTION_LABEL_CLASS}>{opt.label}</span>
+                                            {isSelected && <i className="fa-solid fa-check text-xs shrink-0"></i>}
                                         </button>
+                                        </React.Fragment>
                                     );
                                 })
                             )}

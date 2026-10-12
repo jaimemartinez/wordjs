@@ -116,7 +116,7 @@ export default function AccountingPage({ conferenceId, slug }: { conferenceId: n
                 <div className="relative flex flex-col lg:flex-row lg:items-center justify-between gap-6">
                     <div>
                         <div className="flex items-center gap-3 mb-3">
-                            <div className="w-10 h-10 rounded-xl bg-emerald-600 flex items-center justify-center text-white shadow-lg shadow-emerald-200"><i className="fa-solid fa-scale-balanced"></i></div>
+                            <div className="w-10 h-10 shrink-0 rounded-xl bg-emerald-600 flex items-center justify-center text-white shadow-lg shadow-emerald-200"><i className="fa-solid fa-scale-balanced"></i></div>
                             <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-[0.2em]">{t('accounting') || 'Contabilidad'}</span>
                         </div>
                         <h2 className="text-3xl font-black text-gray-900 italic tracking-tighter">{t('accounting.title') || 'Ingresos y egresos'}</h2>
@@ -191,8 +191,8 @@ export default function AccountingPage({ conferenceId, slug }: { conferenceId: n
                                                     <span title={t('accounting.readonly') || 'Se gestiona desde los pagos de la inscripción o del pasaje'} className="text-gray-300"><i className="fa-solid fa-lock text-xs"></i></span>
                                                 ) : (
                                                     <div className="flex justify-end gap-1.5 opacity-0 group-hover/row:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity">
-                                                        <button onClick={() => openEdit(e)} title={t('edit') || 'Editar'} className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white transition-all"><i className="fa-solid fa-pen text-[10px]"></i></button>
-                                                        <button onClick={() => remove(e)} title={t('delete') || 'Eliminar'} className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition-all"><i className="fa-solid fa-trash-can text-[10px]"></i></button>
+                                                        <button onClick={() => openEdit(e)} title={t('edit') || 'Editar'} className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white transition-all"><i className="fa-solid fa-pen text-[10px]"></i></button>
+                                                        <button onClick={() => remove(e)} title={t('delete') || 'Eliminar'} className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition-all"><i className="fa-solid fa-trash-can text-[10px]"></i></button>
                                                     </div>
                                                 )}
                                             </td>

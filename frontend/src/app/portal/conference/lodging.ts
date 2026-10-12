@@ -26,6 +26,8 @@ export type LodgingAttendee = {
     id: number;
     first_name?: string | null;
     last_name?: string | null;
+    /** conference-manager 2.16.0: the name the admin screens show (the form may have no Nombre / Apellido). */
+    display_name?: string | null;
     gender?: string | null;
     family_group?: string | null;
     /** The conference's dynamic field columns travel flat on the row (same projection as /portal/inscriptions). */
@@ -48,6 +50,7 @@ export type PlacedElsewhere = {
     id: number;
     first_name?: string | null;
     last_name?: string | null;
+    display_name?: string | null;
     hotel_name?: string | null;
     room_number?: string | number | null;
 };
@@ -73,7 +76,7 @@ export type LodgingCounts = {
     placed_elsewhere?: number | null;
 };
 
-export type LodgingField = { name: string; label: string; type?: string };
+export type LodgingField = { name: string; label: string; type?: string; role?: string | null };
 
 /** The payload of `GET /portal/lodging`. Every collection is optional so an older plugin never crashes the tab. */
 export type LodgingData = {
@@ -322,11 +325,28 @@ export const fmtTimestamp = (v: unknown, locale = 'es'): string => {
 // Display
 // ---------------------------------------------------------------------------------------------------
 
-/** `Nombre Apellido`, or `#id` when the projection carries neither. */
-export const attendeeName = (a: { id?: number; first_name?: unknown; last_name?: unknown } | null | undefined): string => {
+/**
+ * `Nombre Apellido`; else the server's `display_name` (conference-manager 2.16.0: a form may have no
+ * Nombre / Apellido — the server names such an attendee from other form fields, as the admin screens do);
+ * else `#id`. Every card, picker, search and confirmation of the portal names people through this.
+ */
+export const attendeeName = (a: { id?: number; first_name?: unknown; last_name?: unknown; display_name?: unknown } | null | undefined): string => {
     const name = [a?.first_name, a?.last_name].map((v) => (v == null ? '' : String(v).trim())).filter(Boolean).join(' ');
-    return name || `#${a?.id ?? ''}`;
+    const shown = a?.display_name == null ? '' : String(a.display_name).trim();
+    return name || shown || `#${a?.id ?? ''}`;
 };
+
+/**
+ * Does the conference collect gender? Its form has a field named `gender` — or, from a server older than
+ * conference-manager 2.16.0 (whose fields list may not say), some attendee carries one. A 2.16.0 server
+ * sends no gender at all when the form has no «Género» field, so then the portal shows none.
+ */
+export const formHasGender = (
+    fields: ReadonlyArray<{ name?: unknown }> | null | undefined,
+    people: ReadonlyArray<{ gender?: unknown } | null | undefined> = [],
+): boolean =>
+    (Array.isArray(fields) ? fields : []).some((f) => f && f.name === 'gender')
+    || people.some((p) => !!p && p.gender != null && String(p.gender).trim() !== '');
 
 /** `Hotel Sol · 101`, or just the room number when the hotel is unknown. */
 export const roomLabel = (room: { hotel_name?: unknown; room_number?: unknown } | null | undefined): string => {
@@ -360,7 +380,12 @@ export const PRED_OPS: ReadonlyArray<{ v: string; label: string }> = [
 
 export const opNeedsNoValue = (op: string): boolean => op === 'filled' || op === 'empty' || op === 'any';
 
-/** The attendee columns every rule may reference besides the conference's own fields (server: BASE_RULE_FIELDS). */
+/**
+ * Labels of the attendee columns a rule may name (server: BASE_RULE_FIELDS). Offered for a NEW rule only when
+ * the conference's form has that field — conference-manager 2.16.0 lets the admin delete any of them, and a
+ * rule on a field the form lacks has no effect (the server refuses it, the engine skips it) — except the
+ * location, which the server always fills. Every one of them still labels an existing rule's summary.
+ */
 export const BASE_RULE_FIELDS: ReadonlyArray<LodgingField> = [
     { name: 'first_name', label: 'Nombre' },
     { name: 'last_name', label: 'Apellido' },
@@ -372,18 +397,21 @@ export const BASE_RULE_FIELDS: ReadonlyArray<LodgingField> = [
     { name: 'location', label: 'Localidad' },
 ];
 
-/** The conference's fields first, then the base columns the form does not already define. */
+/** Columns the server fills itself: a rule may read them whatever the form has. */
+const ALWAYS_FILLED_RULE_FIELDS = new Set(['location']);
+
+/** What a NEW rule may read: the conference's fields first, then the location (always filled). */
 export const ruleFieldOptions = (fields: LodgingField[] | null | undefined): LodgingField[] => {
     const own = (Array.isArray(fields) ? fields : []).filter((f) => f && typeof f.name === 'string' && f.name.trim() !== '');
     const seen = new Set(own.map((f) => f.name));
-    return [...own.map((f) => ({ name: f.name, label: f.label || f.name })), ...BASE_RULE_FIELDS.filter((b) => !seen.has(b.name))];
+    return [...own.map((f) => ({ name: f.name, label: f.label || f.name })), ...BASE_RULE_FIELDS.filter((b) => ALWAYS_FILLED_RULE_FIELDS.has(b.name) && !seen.has(b.name))];
 };
 
-/** The label of a field name, for read-only rule summaries. */
+/** The label of a field name, for read-only rule summaries (a base column the form lost keeps its name). */
 export const fieldLabelOf = (name: unknown, fields: LodgingField[] | null | undefined): string => {
     const n = name == null ? '' : String(name);
     if (!n) return '';
-    return ruleFieldOptions(fields).find((f) => f.name === n)?.label || n;
+    return ruleFieldOptions(fields).find((f) => f.name === n)?.label || BASE_RULE_FIELDS.find((b) => b.name === n)?.label || n;
 };
 
 export type RuleForm = {

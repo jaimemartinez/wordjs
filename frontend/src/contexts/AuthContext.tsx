@@ -22,6 +22,8 @@ interface User {
     email: string;
     displayName: string;
     role: string;
+    /** The role's display name (GET /auth/me): a custom or plugin role's own name; null when unknown. */
+    roleName?: string | null;
     capabilities: string[];
     personalEmail?: string | null;
     mfa?: MfaStatus;
@@ -359,5 +361,10 @@ export function useAuth() {
         throw new Error("useAuth must be used within an AuthProvider");
     }
     return context;
+}
+
+/** useAuth() for a component that may also render outside the provider: null there (no viewer is known). */
+export function useOptionalAuth(): AuthContextType | null {
+    return useContext(AuthContext) ?? null;
 }
 

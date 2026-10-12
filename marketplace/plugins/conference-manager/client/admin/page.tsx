@@ -21,16 +21,22 @@ import { StatCard } from "../../../../../frontend/src/components/ui/StatCard";
 import { ActionCard } from "../../../../../frontend/src/components/ui/ActionCard";
 import { Overlay } from "./Overlay";
 import { canAutoFocus } from "../lib/overlay";
+// Phones (2.16.0): the shell scrolls with the page; the tab strip reveals the active tab.
+import { DECO_LAYER_CLASS, HERO_HEAD_CLASS, SHELL_CSS, STAT_GRID_CLASS, TAB_STRIP_CSS } from "../lib/phoneLayout";
+import { useStripOverflow, useRevealActive, stripMoreAttrs } from "../lib/useStripOverflow";
 // Lodging explorer (2.13.0) and the pure helpers it shares with this page (status meta, display
 // names, field values, {placeholder} filling) — they live in lib/lodgingView.ts so the explorer never
 // imports this file.
 import LodgingExplorer from "./LodgingExplorer";
-import { fieldVal, fillVars, lodgingStatusMeta, personDisplayName, withName, indexOccupants } from "../lib/lodgingView";
+import { fieldVal, fillVars, genderKey, lodgingStatusMeta, personDisplayName, withName, indexOccupants } from "../lib/lodgingView";
 // Staff & permissions (2.15.0): who sees which view and which controls (perms.tsx); «Equipo y permisos».
 import { PermsProvider, usePerms, hasAnySection, ReadOnlyNotice, canReadRoster, canReadHotels } from "./perms";
 import type { Perms } from "./perms";
 import StaffPage from "./StaffPage";
 import { useTx } from "./MealScanner";
+// Form fields (2.16.0): templates for the base fields, what a deletion switches off, rules on deleted fields.
+import { fieldDependents, isOrphanFeeRule, missingRuleFields, moveItem, publishRefusal, templateStates, TEMPLATE_OPEN_CLASS, TEMPLATE_DONE_CLASS, TEMPLATE_DESC_CLASS } from "../lib/fields";
+import { NO_ACCESS_TEXT, noAccessReason } from "../lib/team";
 
 // Register plugin translations
 registerTranslations(translations);
@@ -120,6 +126,14 @@ function ConferenceManagerContent() {
     const shown: View = viewAllowed(view, perms) ? view : firstView;
     const openStaff = perms.isAdmin ? () => setView('staff') : undefined;
 
+    // A phone shows three of the twelve tabs: bring the active one into the strip's view, clear of its edge
+    // fade (after a reload the saved «Campos» was off-screen; tapped at the edge it stayed under the fade).
+    // Scrolls the strip only, never the page.
+    const tabStripRef = useRef<HTMLDivElement | null>(null);
+    useRevealActive(tabStripRef, '[aria-current="page"]', [shown, !!currentConference]);
+    // Which sides of the strip have more tabs: it fades out there (lib/phoneLayout.ts TAB_STRIP_CSS).
+    const stripMore = useStripOverflow(tabStripRef, [shown, !!currentConference]);
+
     if (shown === 'list') {
         return <ConferenceList onManage={handleManageConference} onOpenStaff={openStaff} />;
     }
@@ -155,9 +169,12 @@ function ConferenceManagerContent() {
         { name: tx('staff', 'Equipo y permisos'), view: 'staff' as View, icon: 'fa-user-shield' },
     ].filter(tab => viewAllowed(tab.view, perms));
 
+    // On a phone (lib/phoneLayout.ts SHELL_CSS) the shell takes its natural height and scrolls with the page;
+    // from 768 px wide and 600 px high it stays the fixed panel below.
     return (
-        <div className="h-full flex flex-col overflow-hidden">
-            <div className="flex-shrink-0 p-6 pb-0">
+        <div className="h-full flex flex-col overflow-hidden" data-cm-shell="">
+            <style>{SHELL_CSS}</style>
+            <div className="flex-shrink-0 p-6 pb-0" data-cm-shell-head="">
                 <div className="mb-8">
                     <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
                         <div>
@@ -181,13 +198,16 @@ function ConferenceManagerContent() {
                     </div>
                 </div>
 
-                <div className="flex border-b border-gray-200 mb-6 overflow-x-auto">
+                <style>{TAB_STRIP_CSS}</style>
+                <div ref={tabStripRef} className="flex border-b border-gray-200 mb-6 overflow-x-auto" data-cm-shell-tabs=""
+                    {...stripMoreAttrs(stripMore)}>
                     {tabs.map((tab) => {
                         const isActive = shown === tab.view;
                         return (
                             <button
                                 key={tab.view}
                                 onClick={() => setView(tab.view)}
+                                aria-current={isActive ? 'page' : undefined}
                                 className={`flex items-center gap-2 px-6 py-3 border-b-2 font-medium text-sm transition-colors whitespace-nowrap
                                     ${isActive
                                         ? 'border-blue-600 text-blue-600'
@@ -202,8 +222,8 @@ function ConferenceManagerContent() {
                 </div>
             </div>
 
-            <div className="flex-1 px-6 pb-6 overflow-hidden min-h-0">
-                <div className="h-full bg-white rounded-xl shadow-sm border border-gray-200 p-6 overflow-auto flex flex-col">
+            <div className="flex-1 px-6 pb-6 overflow-hidden min-h-0" data-cm-shell-body="">
+                <div className="h-full bg-white rounded-xl shadow-sm border border-gray-200 p-6 overflow-auto flex flex-col" data-cm-shell-panel="">
                     {shown === 'dashboard' && <ConferenceDashboard conferenceId={currentConference.id} onNavigate={setView} />}
                     {shown === 'inscriptions' && <InscriptionsPage conferenceId={currentConference.id} />}
                     {shown === 'lodging' && <LodgingPage conferenceId={currentConference.id} onOpenExplorer={openLodgingExplorer} />}
@@ -248,14 +268,18 @@ function PermsGate() {
             </div>
         );
     }
-    if (!perms.isAdmin && (!perms.isStaff || !hasAnySection(perms))) {
+    // Why there is nothing to show (2.16.0): no WordJS team role, not on the team, deactivated, or a team
+    // role that opens no section — each says what to ask the administrator for.
+    const reason = noAccessReason(perms, hasAnySection(perms));
+    if (reason) {
+        const text = NO_ACCESS_TEXT[reason];
         return (
-            <div className="max-w-xl mx-auto text-center py-20 px-6" data-no-access="">
-                <div className="w-20 h-20 mx-auto mb-6 rounded-3xl bg-gray-50 border border-gray-100 flex items-center justify-center text-gray-300 text-3xl">
+            <div className="max-w-xl mx-auto text-center py-20 px-6" data-no-access={reason}>
+                <div className="w-20 h-20 shrink-0 mx-auto mb-6 rounded-3xl bg-gray-50 border border-gray-100 flex items-center justify-center text-gray-300 text-3xl">
                     <i className="fa-solid fa-user-lock"></i>
                 </div>
                 <h2 className="text-2xl font-black text-gray-900 italic tracking-tighter mb-3">{tx('perm.noaccess.title', 'Sin acceso')}</h2>
-                <p className="text-base font-medium text-gray-600 leading-relaxed">{tx('perm.noaccess', 'No tienes acceso a este módulo. Pide al administrador que te añada al equipo.')}</p>
+                <p className="text-base font-medium text-gray-600 leading-relaxed">{tx(text.key, text.fallback)}</p>
             </div>
         );
     }
@@ -381,11 +405,11 @@ function ConferenceList({ onManage, onOpenStaff }: { onManage: (conf: Conference
     }
 
     return (
-        <div className="p-10 space-y-10 animate-in fade-in duration-500">
+        <div className="p-10 max-sm:px-4 max-sm:py-6 space-y-10 animate-in fade-in duration-500">
             <div className="flex flex-wrap justify-between items-end gap-4 mb-8">
                 <div>
                     <h2 className="text-4xl font-black text-gray-900 italic tracking-tighter mb-2">{t('conference.list')}</h2>
-                    <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">{t('conference.manager.description')}</p>
+                    <p className="text-sm font-bold text-gray-500 uppercase tracking-widest">{t('conference.manager.description')}</p>
                 </div>
                 {onOpenStaff && (
                     <button
@@ -415,11 +439,12 @@ function ConferenceList({ onManage, onOpenStaff }: { onManage: (conf: Conference
                     <div className="absolute bottom-0 left-0 w-48 h-48 bg-purple-500 opacity-20 rounded-full blur-[60px]"></div>
 
                     <div className="relative z-10 flex flex-col items-center">
-                        <div className="w-20 h-20 rounded-3xl bg-white/10 backdrop-blur-md flex items-center justify-center mb-6 shadow-inner border border-white/20 group-hover:scale-110 group-hover:bg-white/20 transition-all duration-500">
+                        <div className="w-20 h-20 shrink-0 rounded-3xl bg-white/10 backdrop-blur-md flex items-center justify-center mb-6 shadow-inner border border-white/20 group-hover:scale-110 group-hover:bg-white/20 transition-all duration-500">
                             <i className="fa-solid fa-plus text-3xl"></i>
                         </div>
                         <span className="font-black text-2xl italic tracking-tight">{t('create.conference')}</span>
-                        <span className="mt-2 text-xs font-bold uppercase tracking-widest text-blue-200 group-hover:text-white transition-colors">Comenzar nuevo evento</span>
+                        {/* White: blue-200 on this blue→indigo gradient was 3.7–4.7:1 (AA asks 4.5:1 for text this size). */}
+                        <span className="mt-2 text-xs font-bold uppercase tracking-widest text-white" data-create-subtitle="">{tx('conference.create.start', 'Comenzar nuevo evento')}</span>
                     </div>
                 </div>}
 
@@ -439,7 +464,7 @@ function ConferenceList({ onManage, onOpenStaff }: { onManage: (conf: Conference
                             `}
                         >
                             {/* Decorative background element - Status Based */}
-                            <div className={`absolute top-0 right-0 -mr-16 -mt-16 w-48 h-48 rounded-full opacity-0 group-hover:opacity-100 transition-opacity blur-[60px] duration-700
+                            <div className={`absolute top-0 right-0 -mr-16 -mt-16 w-48 h-48 rounded-full opacity-0 group-hover:opacity-100 transition-opacity blur-[60px] duration-700 pointer-events-none
                                 ${conf.status === 'active' ? 'bg-emerald-100' :
                                     conf.status === 'draft' ? 'bg-gray-100' :
                                         'bg-orange-100'}
@@ -457,7 +482,8 @@ function ConferenceList({ onManage, onOpenStaff }: { onManage: (conf: Conference
                                     <div className="flex gap-2">
                                         {canManageSettings && <button
                                             onClick={(e) => { e.stopPropagation(); handleDeleteConference(conf.id); }}
-                                            className="w-10 h-10 flex items-center justify-center rounded-2xl text-gray-300 hover:bg-rose-50 hover:text-rose-600 transition-all duration-300 opacity-0 group-hover:opacity-100 transform translate-x-4 group-hover:translate-x-0"
+                                            aria-label={t('delete')} title={t('delete')}
+                                            className="w-10 h-10 shrink-0 flex items-center justify-center rounded-2xl text-gray-500 hover:bg-rose-50 hover:text-rose-600 transition-all duration-300 transform opacity-100 translate-x-0 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:translate-x-4 group-hover:opacity-100 group-hover:translate-x-0 focus-visible:opacity-100 focus-visible:translate-x-0"
                                             disabled={isDeleting}
                                         >
                                             {isDeleting ? <i className="fa-solid fa-spinner animate-spin"></i> : <i className="fa-solid fa-trash-can"></i>}
@@ -486,14 +512,16 @@ function ConferenceList({ onManage, onOpenStaff }: { onManage: (conf: Conference
                                     </div>
 
                                     {conf.description && (
-                                        <p className="text-sm text-gray-400 font-medium line-clamp-2 mb-4 leading-relaxed">{conf.description}</p>
+                                        <p className="text-sm text-gray-500 font-medium line-clamp-2 mb-4 leading-relaxed">{conf.description}</p>
                                     )}
                                 </div>
                             </div>
 
-                            <div className="flex items-end justify-between mt-auto relative z-10 pt-6 border-t border-gray-50">
+                            {/* Wraps: in a narrow card (three columns beside the sidebar) «Estadísticas» and «Gestionar»
+                                did not fit side by side and the button ran into the label and out of the card. */}
+                            <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-3 mt-auto relative z-10 pt-6 border-t border-gray-50" data-card-footer="">
                                 <div className={`space-y-1.5 ${canCountPeople || canCountHotels ? '' : 'invisible'}`}>
-                                    <div className="text-gray-300 text-[9px] font-black uppercase tracking-[0.2em]">{t('stats') || 'ESTADISTICAS'}</div>
+                                    <div className="text-gray-500 text-[9px] font-black uppercase tracking-[0.2em] whitespace-nowrap" data-card-stats-label="">{t('stats') || 'ESTADISTICAS'}</div>
                                     <div className="flex items-center gap-4 text-xs font-bold text-gray-600">
                                         {canCountPeople && <span className="flex items-center gap-1.5" title={t('inscription.plural')}>
                                             <i className="fa-solid fa-users text-blue-400"></i>
@@ -508,7 +536,7 @@ function ConferenceList({ onManage, onOpenStaff }: { onManage: (conf: Conference
 
                                 <button
                                     onClick={() => onManage(conf)}
-                                    className="px-6 py-3 bg-gray-900 text-white text-[10px] font-black uppercase tracking-widest rounded-2xl hover:bg-blue-600 hover:shadow-xl hover:shadow-blue-500/30 transition-all duration-300 flex items-center gap-2 transform active:scale-95"
+                                    className="ml-auto shrink-0 whitespace-nowrap px-6 py-3 bg-gray-900 text-white text-[10px] font-black uppercase tracking-widest rounded-2xl hover:bg-blue-600 hover:shadow-xl hover:shadow-blue-500/30 transition-all duration-300 flex items-center gap-2 transform active:scale-95"
                                 >
                                     {t('manage')} <i className="fa-solid fa-arrow-right-long text-[10px]"></i>
                                 </button>
@@ -609,7 +637,7 @@ function ConferenceList({ onManage, onOpenStaff }: { onManage: (conf: Conference
                                     />
                                 </div>
                             </div>
-                            <div className="pt-6 flex gap-4 border-t border-gray-50">
+                            <div className="pt-6 flex gap-4 border-t border-gray-50" data-cm-sheet-foot="">
                                 <button
                                     type="button"
                                     onClick={() => setShowCreateModal(false)}
@@ -709,7 +737,7 @@ function ConferenceDashboard({ conferenceId, onNavigate }: { conferenceId: numbe
                 <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
                     <div>
                         <div className="flex items-center gap-3 mb-3">
-                            <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-lg shadow-blue-200">
+                            <div className="w-10 h-10 shrink-0 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-lg shadow-blue-200">
                                 <i className="fa-solid fa-gauge-high"></i>
                             </div>
                             <span className="text-[10px] font-bold text-blue-600 uppercase tracking-[0.2em]">{t('dashboard')}</span>
@@ -726,11 +754,13 @@ function ConferenceDashboard({ conferenceId, onNavigate }: { conferenceId: numbe
                                     </span>
                                 </div>
                             )}
-                            <div className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border-2 shadow-sm ${currentConference.status === 'active' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
-                                currentConference.status === 'draft' ? 'bg-gray-50 text-gray-500 border-gray-100' :
-                                    'bg-amber-50 text-amber-600 border-amber-100'
-                                }`}>
-                                {currentConference.status}
+                            {/* The status in the admin's language (it showed the raw «ACTIVE»), like the conference list,
+                                in colours that meet WCAG AA on their tint (the -600 shades did not). */}
+                            <div className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border-2 shadow-sm ${currentConference.status === 'active' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
+                                currentConference.status === 'draft' ? 'bg-gray-50 text-gray-600 border-gray-100' :
+                                    'bg-amber-50 text-amber-700 border-amber-100'
+                                }`} data-cm-conference-status={currentConference.status}>
+                                {t(currentConference.status)}
                             </div>
                         </div>
                     </div>
@@ -747,8 +777,10 @@ function ConferenceDashboard({ conferenceId, onNavigate }: { conferenceId: numbe
                 </div>
             </div>
 
-            {/* Stats Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-6">
+            {/* Stats Grid — as many columns as fit cards of 15rem (icon, gap and a label like «INSCRIPCIONES»).
+                It was xl:grid-cols-6 by the WINDOW's width: at 1280 px the panel beside the sidebar is ~860 px,
+                six cards of ~120 px squeezed the icons into pills and clipped the labels («INSCRIP», «HOTELE»). */}
+            <div className={STAT_GRID_CLASS} data-cm-stat-grid="">
                 <StatCard icon="fa-users" label={t('inscriptions')} value={stats.inscriptions} color="blue" />
                 <StatCard icon="fa-bed" label={t('hotels')} value={stats.hotels} color="purple" />
                 <StatCard icon="fa-door-open" label={t('rooms')} value={stats.rooms} color="indigo" />
@@ -1393,7 +1425,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                     }`}
                             >
                                 <div className="flex items-center gap-3">
-                                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${selectedLocations.size > 0 ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-400'
+                                    <div className={`w-8 h-8 shrink-0 rounded-lg flex items-center justify-center transition-colors ${selectedLocations.size > 0 ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-400'
                                         }`}>
                                         <i className="fa-solid fa-location-dot text-xs"></i>
                                     </div>
@@ -1438,7 +1470,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                         <div className="max-h-[300px] overflow-y-auto p-2 scrollbar-thin">
                                             {allLocations.length === 0 ? (
                                                 <div className="px-4 py-8 text-center">
-                                                    <div className="w-12 h-12 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-3">
+                                                    <div className="w-12 h-12 shrink-0 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-3">
                                                         <i className="fa-solid fa-map-pin text-gray-300"></i>
                                                     </div>
                                                     <div className="text-xs font-bold text-gray-400 italic">{t('no.locations')}</div>
@@ -1530,11 +1562,11 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                             <div className="flex items-center gap-5 flex-1">
                                                 <button
                                                     onClick={toggleCollapse}
-                                                    className="group/btn w-10 h-10 rounded-xl bg-gray-50 hover:bg-blue-50 text-gray-400 hover:text-blue-600 transition-all flex items-center justify-center border border-transparent hover:border-blue-100"
+                                                    className="group/btn w-10 h-10 shrink-0 rounded-xl bg-gray-50 hover:bg-blue-50 text-gray-400 hover:text-blue-600 transition-all flex items-center justify-center border border-transparent hover:border-blue-100"
                                                 >
                                                     <i className={`fa-solid fa-chevron-${isCollapsed ? 'down' : 'up'} text-[10px] group-hover/btn:scale-125 transition-transform`}></i>
                                                 </button>
-                                                <div className="w-12 h-12 rounded-2xl bg-blue-600 flex items-center justify-center text-white shadow-lg shadow-blue-100">
+                                                <div className="w-12 h-12 shrink-0 rounded-2xl bg-blue-600 flex items-center justify-center text-white shadow-lg shadow-blue-100">
                                                     <i className="fa-solid fa-map-marker-alt"></i>
                                                 </div>
                                                 <div>
@@ -1640,21 +1672,21 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                                 <div className="flex justify-end gap-2 opacity-0 group-hover/row:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity">
                                                                     {canAssign && <button
                                                                         onClick={() => openAssign(person)}
-                                                                        className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-emerald-600 hover:text-white transition-all shadow-sm border border-transparent hover:border-emerald-400"
+                                                                        className="w-9 h-9 shrink-0 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-emerald-600 hover:text-white transition-all shadow-sm border border-transparent hover:border-emerald-400"
                                                                         title={t('assign.room') || 'Asignar habitación'}
                                                                     >
                                                                         <i className="fa-solid fa-bed text-xs"></i>
                                                                     </button>}
                                                                     {canManage && <button
                                                                         onClick={() => openEdit(person)}
-                                                                        className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white transition-all shadow-sm border border-transparent hover:border-blue-400"
+                                                                        className="w-9 h-9 shrink-0 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white transition-all shadow-sm border border-transparent hover:border-blue-400"
                                                                         title={t('edit')}
                                                                     >
                                                                         <i className="fa-solid fa-pen text-xs"></i>
                                                                     </button>}
                                                                     {canManage && <button
                                                                         onClick={() => handleDelete(person)}
-                                                                        className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition-all shadow-sm border border-transparent hover:border-rose-400"
+                                                                        className="w-9 h-9 shrink-0 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition-all shadow-sm border border-transparent hover:border-rose-400"
                                                                         title={t('delete')}
                                                                     >
                                                                         <i className="fa-solid fa-trash text-xs"></i>
@@ -1762,7 +1794,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                 </div>
                             )}
 
-                            <div className="pt-6 flex justify-end gap-3 border-t border-gray-50">
+                            <div className="pt-6 flex justify-end gap-3 border-t border-gray-50" data-cm-sheet-foot="">
                                 <button type="button" onClick={() => { setShowAddModal(false); setEditId(null); setFormOriginal(null); }} className="px-6 py-2.5 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition">{t('cancel')}</button>
                                 {fields.length > 0 && (
                                     <button type="submit" disabled={saving} className="px-8 py-2.5 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition disabled:opacity-50">{saving ? (t('saving') || 'Guardando…') : t('save')}</button>
@@ -1839,12 +1871,12 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                 {canPayManage && (() => { const can = paymentActions(payment.status); return (
                                                 <div className="shrink-0 flex items-center gap-1">
                                                     {can.validate && (
-                                                        <button type="button" onClick={() => handleValidatePayment(payment)} title="Validar pago" className="w-8 h-8 flex items-center justify-center rounded-lg text-emerald-600 hover:text-white hover:bg-emerald-600 border border-emerald-100 transition">
+                                                        <button type="button" onClick={() => handleValidatePayment(payment)} title="Validar pago" className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg text-emerald-600 hover:text-white hover:bg-emerald-600 border border-emerald-100 transition">
                                                             <i className="fa-solid fa-check text-xs"></i>
                                                         </button>
                                                     )}
                                                     {can.reject && (
-                                                        <button type="button" onClick={() => handleRejectPayment(payment)} title="Rechazar pago" className="w-8 h-8 flex items-center justify-center rounded-lg text-amber-600 hover:text-white hover:bg-amber-600 border border-amber-100 transition">
+                                                        <button type="button" onClick={() => handleRejectPayment(payment)} title="Rechazar pago" className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg text-amber-600 hover:text-white hover:bg-amber-600 border border-amber-100 transition">
                                                             <i className="fa-solid fa-ban text-xs"></i>
                                                         </button>
                                                     )}
@@ -1853,7 +1885,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                             type="button"
                                                             onClick={() => handleVoidPayment(payment)}
                                                             title={t('void.payment') || 'Anular pago'}
-                                                            className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-300 hover:text-rose-600 hover:bg-rose-50 transition"
+                                                            className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg text-gray-300 hover:text-rose-600 hover:bg-rose-50 transition"
                                                         >
                                                             <i className="fa-solid fa-trash-can text-xs"></i>
                                                         </button>
@@ -2163,12 +2195,12 @@ function LodgingRoomTile({ room, names, selecting, selected, onActivate, onDelet
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
                         {selecting && (
-                            <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[8px] border-2 ${selected ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-gray-200 text-transparent'}`} aria-hidden="true">
+                            <div className={`w-5 h-5 shrink-0 rounded-full flex items-center justify-center text-[8px] border-2 ${selected ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-gray-200 text-transparent'}`} aria-hidden="true">
                                 <i className="fa-solid fa-check"></i>
                             </div>
                         )}
                         {room.notes && (
-                            <div className="w-5 h-5 rounded-full bg-blue-50 flex items-center justify-center text-blue-400 group-hover/room:bg-blue-100 transition-colors" title={room.notes}>
+                            <div className="w-5 h-5 shrink-0 rounded-full bg-blue-50 flex items-center justify-center text-blue-400 group-hover/room:bg-blue-100 transition-colors" title={room.notes}>
                                 <i className="fa-solid fa-info text-[8px]" aria-hidden="true"></i>
                             </div>
                         )}
@@ -2451,7 +2483,7 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
 
                     <div className="relative p-8 border-b border-gray-50 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
                         <div className="flex items-center gap-6">
-                            <div className="w-20 h-20 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl shadow-inner flex items-center justify-center text-blue-600 text-3xl group-hover:scale-110 transition-transform duration-500">
+                            <div className="w-20 h-20 shrink-0 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl shadow-inner flex items-center justify-center text-blue-600 text-3xl group-hover:scale-110 transition-transform duration-500">
                                 <i className="fa-solid fa-hotel"></i>
                             </div>
                             <div>
@@ -2489,14 +2521,14 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                                 onClick={() => hotelReport(hotel.id)}
                                 disabled={reportBusy !== null}
                                 title={t('excel.hotel.one') || 'Excel de este hotel'}
-                                className="w-11 h-11 flex items-center justify-center rounded-xl bg-white border-2 border-gray-100 text-emerald-600 hover:border-emerald-400 hover:bg-emerald-600 hover:text-white transition-all disabled:opacity-50"
+                                className="w-11 h-11 shrink-0 flex items-center justify-center rounded-xl bg-white border-2 border-gray-100 text-emerald-600 hover:border-emerald-400 hover:bg-emerald-600 hover:text-white transition-all disabled:opacity-50"
                             >
                                 <i className={`fa-solid ${reportBusy === hotel.id ? 'fa-spinner animate-spin' : 'fa-file-excel'} text-xs`}></i>
                             </button>}
                             {canManage && <button
                                 onClick={() => handleDeleteHotel(hotel)}
                                 title={t('delete.hotel') || 'Eliminar hotel'}
-                                className="w-11 h-11 flex items-center justify-center rounded-xl bg-white border-2 border-gray-100 text-gray-400 hover:border-rose-400 hover:bg-rose-600 hover:text-white transition-all shadow-sm"
+                                className="w-11 h-11 shrink-0 flex items-center justify-center rounded-xl bg-white border-2 border-gray-100 text-gray-400 hover:border-rose-400 hover:bg-rose-600 hover:text-white transition-all shadow-sm"
                             >
                                 <i className="fa-solid fa-trash-can text-xs"></i>
                             </button>}
@@ -2640,7 +2672,7 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                                     onChange={e => setHotelForm({ ...hotelForm, capacity: Number(e.target.value) })}
                                 />
                             </div>
-                            <div className="flex gap-4 pt-6">
+                            <div className="flex gap-4 pt-6" data-cm-sheet-foot="">
                                 <button
                                     type="button"
                                     onClick={() => setShowHotelModal(false)}
@@ -2787,7 +2819,7 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                                     onChange={e => setRoomForm({ ...roomForm, notes: e.target.value })}
                                 />
                             </div>
-                            <div className="flex gap-4 pt-6">
+                            <div className="flex gap-4 pt-6" data-cm-sheet-foot="">
                                 <button
                                     type="button"
                                     onClick={() => setShowRoomModal(null)}
@@ -2826,6 +2858,7 @@ const FEE_OPERATORS = [
 ];
 
 function PricingPage({ conferenceId }: { conferenceId: number }) {
+    const tx = useTx();
     const { addToast } = useToast();
     const { confirm } = useModal();
     // Configuración › gestionar = base fee, rules and the re-pricing; «ver» only reads them.
@@ -2954,13 +2987,19 @@ function PricingPage({ conferenceId }: { conferenceId: number }) {
                                                 : <>Si <span className="font-bold text-gray-700">{fieldLabel(r.field_name)}</span> {opLabel(r.operator)} {opNeedsValue(r.operator) && <span className="font-mono bg-gray-100 px-1.5 py-0.5 rounded">{r.value}</span>}</>}
                                             <span className="ml-2 text-gray-300">· prioridad {r.priority}</span>
                                         </div>
+                                        {isOrphanFeeRule(r, fields) && (
+                                            <div className="mt-1.5 inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-50 border border-amber-200 text-[11px] font-bold text-amber-700" data-fee-rule-orphan={r.id}>
+                                                <i className="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
+                                                {tx('fee.rule.missing.field', 'El campo «{field}» ya no está en el formulario: esta regla no se aplica.', { field: r.field_name })}
+                                            </div>
+                                        )}
                                     </div>
                                     <div className="flex items-center gap-2 shrink-0">
                                         <button onClick={() => toggleRule(r)} disabled={!canManage} title={r.enabled ? 'Desactivar' : 'Activar'} className={`w-11 h-6 rounded-full relative transition disabled:cursor-not-allowed disabled:opacity-60 ${r.enabled ? 'bg-emerald-500' : 'bg-gray-200'}`}>
                                             <span className={`absolute top-1 w-4 h-4 bg-white rounded-full transition ${r.enabled ? 'left-6' : 'left-1'}`}></span>
                                         </button>
-                                        {canManage && <button onClick={() => openEdit(r)} title="Editar" className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white transition"><i className="fa-solid fa-pen text-xs"></i></button>}
-                                        {canManage && <button onClick={() => delRule(r)} title="Eliminar" className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition"><i className="fa-solid fa-trash text-xs"></i></button>}
+                                        {canManage && <button onClick={() => openEdit(r)} title="Editar" className="w-9 h-9 shrink-0 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white transition"><i className="fa-solid fa-pen text-xs"></i></button>}
+                                        {canManage && <button onClick={() => delRule(r)} title="Eliminar" className="w-9 h-9 shrink-0 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition"><i className="fa-solid fa-trash text-xs"></i></button>}
                                     </div>
                                 </div>
                             ))}
@@ -3021,7 +3060,7 @@ function PricingPage({ conferenceId }: { conferenceId: number }) {
                                 <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1.5">Prioridad (menor = primero)</label>
                                 <input type="number" value={form.priority} onChange={e => setForm({ ...form, priority: Number(e.target.value) || 0 })} className="w-32 border-2 border-gray-100 rounded-xl px-3 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 outline-none font-medium" />
                             </div>
-                            <div className="flex justify-end gap-3 pt-4 border-t border-gray-50">
+                            <div className="flex justify-end gap-3 pt-4 border-t border-gray-50" data-cm-sheet-foot="">
                                 <button type="button" onClick={() => { setShowModal(false); setForm(null); }} className="px-6 py-2.5 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition">Cancelar</button>
                                 <button type="submit" className="px-8 py-2.5 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition">Guardar regla</button>
                             </div>
@@ -3141,7 +3180,7 @@ function ReportsPage({ conferenceId }: { conferenceId: number }) {
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                     {statCards.map((c) => (
                         <div key={c.label} className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
-                            <div className={`w-10 h-10 rounded-xl ${c.bg} ${c.color} flex items-center justify-center mb-3`}>
+                            <div className={`w-10 h-10 shrink-0 rounded-xl ${c.bg} ${c.color} flex items-center justify-center mb-3`}>
                                 <i className={`fa-solid ${c.icon}`}></i>
                             </div>
                             <div className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">{c.label}</div>
@@ -3203,8 +3242,15 @@ function ReportsPage({ conferenceId }: { conferenceId: number }) {
 }
 
 // Fields Component
+// 2.16.0: a new conference starts with NO field. «Añadir campo» offers the base fields as TEMPLATES (created by
+// the server with the exact name / type / options / role the other features look them up by) next to a
+// custom field; every field can be edited and deleted while the form is unpublished (the server keeps the
+// published-form lock). Deleting a field other features read asks first, naming what stops working — an
+// inline two-step confirm (the shared useModal dialog is z-50, under this page's z-[100] modal).
+const EMPTY_FIELD: Partial<ConferenceField> = { name: '', label: '', type: 'text', options: '', is_required: 0, sort_order: 0, width: 100, is_group: 0, is_unique: 0 };
 function FieldsPage({ conferenceId }: { conferenceId: number }) {
     const { t } = useI18n();
+    const tx = useTx();
     const { addToast } = useToast();
     // Configuración › gestionar = add / edit / delete / reorder fields and publish the form.
     const canManage = usePerms().can('settings', 'manage');
@@ -3212,10 +3258,14 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
     const [conference, setConference] = useState<Conference | null>(null);
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
-    const [formData, setFormData] = useState<Partial<ConferenceField>>({
-        name: '', label: '', type: 'text', options: '', is_required: 0, sort_order: 0, width: 100, is_group: 0, is_unique: 0
-    });
+    const [formData, setFormData] = useState<Partial<ConferenceField>>({ ...EMPTY_FIELD });
     const [openSelect, setOpenSelect] = useState<'type' | 'required' | null>(null);
+    // The rules that read a field (named in the delete confirmation). A list the role may not read stays [].
+    const [feeRules, setFeeRules] = useState<any[]>([]);
+    const [assignmentRules, setAssignmentRules] = useState<any[]>([]);
+    const [deleteAsk, setDeleteAsk] = useState<number | null>(null);
+    const [deleteBusy, setDeleteBusy] = useState(false);
+    const [templateBusy, setTemplateBusy] = useState<string | null>(null);
 
     const FIELD_TYPES = [
         { value: 'text', label: t('type.text'), icon: 'fa-font', color: 'text-blue-500', bg: 'bg-blue-50' },
@@ -3227,14 +3277,18 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
     const loadData = async () => {
         setLoading(true);
         try {
-            const [fieldsData, locData] = await Promise.all([
+            const [fieldsData, locData, feeData, ruleData] = await Promise.all([
                 conferenceApi.getFields(conferenceId),
-                conferenceApi.getLocations(conferenceId)
+                conferenceApi.getLocations(conferenceId),
+                conferenceApi.getFeeRules(conferenceId).catch(() => []),
+                conferenceApi.getAssignmentRules(conferenceId, { all: true }).catch(() => []),
             ]);
             setFields(fieldsData);
             setConference(locData.conference);
+            setFeeRules(Array.isArray(feeData) ? feeData : []);
+            setAssignmentRules(Array.isArray(ruleData) ? ruleData : []);
         } catch (e) {
-            addToast('Error loading fields', 'error');
+            addToast(tx('fields.load.error', 'No se pudieron cargar los campos.'), 'error');
         } finally {
             setLoading(false);
         }
@@ -3243,6 +3297,30 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
     useEffect(() => { loadData(); }, [conferenceId]);
 
     const { confirm } = useModal();
+
+    // «Publicar» on an empty form is refused next to the button (not in a toast): a toast stayed on screen
+    // over the «Nuevo campo» dialog the user opened to fix it, covering its «O un campo propio» field on a
+    // phone. The notice goes away when that dialog opens or the form gets a field.
+    const [publishRefused, setPublishRefused] = useState(false);
+    useEffect(() => { if (fields.length > 0) setPublishRefused(false); }, [fields.length]);
+
+    const openNewField = () => { setPublishRefused(false); setFormData({ ...EMPTY_FIELD }); setOpenSelect(null); setShowModal(true); };
+
+    // A base field from its template: the server fixes name / type / options / role and refuses a duplicate.
+    const addTemplate = async (key: string, label: string) => {
+        setTemplateBusy(key);
+        try {
+            await conferenceApi.addFieldTemplate(conferenceId, key, label);
+            addToast(tx('fields.template.added', 'Campo «{label}» añadido', { label }), 'success');
+            setShowModal(false);
+            setFormData({ ...EMPTY_FIELD });
+        } catch (e: any) {
+            addToast(e?.message || tx('fields.save.error', 'No se pudo guardar el campo.'), 'error');
+        } finally {
+            setTemplateBusy(null);
+            loadData();
+        }
+    };
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -3254,23 +3332,27 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                 dataToSave.name = `f_${Date.now().toString().slice(-6)}_${randomPart}`;
             }
             await conferenceApi.saveField(dataToSave);
-            addToast('Field saved', 'success');
+            addToast(tx('fields.saved', 'Campo guardado'), 'success');
             setShowModal(false);
-            setFormData({ name: '', label: '', type: 'text', options: '', is_required: 0, sort_order: 0, width: 100, is_group: 0, is_unique: 0 });
+            setFormData({ ...EMPTY_FIELD });
             loadData();
         } catch (e: any) {
-            addToast(e?.message || 'Error saving field', 'error');
+            addToast(e?.message || tx('fields.save.error', 'No se pudo guardar el campo.'), 'error');
         }
     };
 
-    const handleDelete = async (id: number) => {
-        if (!await confirm('Delete this field?', 'Delete Field', true)) return;
+    // Second step of the inline confirm (the first one is the trash button, which opens it).
+    const handleDelete = async (field: ConferenceField) => {
+        setDeleteBusy(true);
         try {
-            await conferenceApi.deleteField(id);
-            addToast('Field deleted', 'success');
+            await conferenceApi.deleteField(field.id);
+            addToast(tx('fields.deleted', 'Campo «{label}» eliminado', { label: field.label }), 'success');
+            setDeleteAsk(null);
             loadData();
         } catch (e: any) {
-            addToast(e?.message || 'Error deleting field', 'error');
+            addToast(e?.message || tx('fields.delete.error', 'No se pudo eliminar el campo.'), 'error');
+        } finally {
+            setDeleteBusy(false);
         }
     };
 
@@ -3295,26 +3377,44 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
         setDraggedIndex(idx);
     };
 
+    // Saves the order on screen (drag & drop with a mouse, or the ↑ / ↓ buttons — a phone has no drag).
+    const [reorderBusy, setReorderBusy] = useState(false);
+    const saveOrder = async (ordered: ConferenceField[]) => {
+        setReorderBusy(true);
+        try {
+            await Promise.all(ordered.map((f, i) =>
+                conferenceApi.saveField({ ...f, sort_order: i, conference_id: conferenceId })
+            ));
+            addToast(tx('fields.order.saved', 'Orden actualizado'), 'success');
+        } catch (e) {
+            addToast(tx('fields.order.error', 'Error al guardar el nuevo orden'), 'error');
+            loadData();
+        } finally {
+            setReorderBusy(false);
+        }
+    };
+
     const handleDragEnd = async () => {
         if (isPublished || !canManage) return;
         setDraggedIndex(null);
-        try {
-            await Promise.all(fields.map((f, i) =>
-                conferenceApi.saveField({ ...f, sort_order: i, conference_id: conferenceId })
-            ));
-            addToast('Orden actualizado', 'success');
-        } catch (e) {
-            addToast('Error al guardar el nuevo orden', 'error');
-            loadData();
-        }
+        await saveOrder(fields);
+    };
+
+    const moveField = async (idx: number, delta: number) => {
+        if (isPublished || !canManage || reorderBusy) return;
+        const next = moveItem(fields, idx, idx + delta);
+        if (next === fields) return;
+        setFields(next);
+        await saveOrder(next);
     };
 
     const handlePublish = async () => {
         const currentlyPublished = !!conference?.is_form_published;
-        if (!currentlyPublished && fields.length === 0) {
-            addToast("No puedes publicar un formulario sin campos.", "error");
+        if (publishRefusal(fields.length, currentlyPublished)) {
+            setPublishRefused(true);
             return;
         }
+        setPublishRefused(false);
 
         const msg = currentlyPublished
             ? "¿Seguro que quieres despublicar el formulario?"
@@ -3335,23 +3435,26 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
         <div className="space-y-10 animate-in fade-in duration-500">
             <ReadOnlyNotice section="settings" />
             {/* Premium Publisher Card */}
-            <div className={`group relative overflow-hidden rounded-[40px] p-10 border-2 transition-all duration-500 shadow-2xl ${isPublished
+            <div className={`group relative overflow-hidden rounded-[40px] p-10 max-sm:p-6 border-2 transition-all duration-500 shadow-2xl ${isPublished
                 ? 'bg-emerald-50/50 border-emerald-100 shadow-emerald-100/30'
                 : 'bg-white border-gray-100 shadow-gray-200/50'
                 }`}>
-                <div className={`absolute -right-20 -top-20 w-80 h-80 rounded-full blur-[100px] opacity-30 transition-all duration-1000 group-hover:scale-125 ${isPublished ? 'bg-emerald-400' : 'bg-blue-400'
-                    }`}></div>
-                <div className={`absolute -left-20 -bottom-20 w-64 h-64 rounded-full blur-[100px] opacity-20 ${isPublished ? 'bg-teal-300' : 'bg-indigo-300'
-                    }`}></div>
+                {/* The blobs in their own clipped layer: the card itself has nothing to scroll (lib/phoneLayout.ts). */}
+                <div aria-hidden="true" className={DECO_LAYER_CLASS} data-cm-deco="">
+                    <div className={`absolute -right-20 -top-20 w-80 h-80 rounded-full blur-[100px] opacity-30 transition-all duration-1000 group-hover:scale-125 ${isPublished ? 'bg-emerald-400' : 'bg-blue-400'
+                        }`}></div>
+                    <div className={`absolute -left-20 -bottom-20 w-64 h-64 rounded-full blur-[100px] opacity-20 ${isPublished ? 'bg-teal-300' : 'bg-indigo-300'
+                        }`}></div>
+                </div>
 
-                <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-10">
+                <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-10 max-sm:gap-6">
                     <div className="flex-1">
-                        <div className="flex items-center gap-4 mb-5">
-                            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl shadow-xl transition-transform duration-500 group-hover:scale-110 ${isPublished ? 'bg-emerald-500 text-white shadow-emerald-200' : 'bg-blue-600 text-white shadow-blue-200'
+                        <div className={HERO_HEAD_CLASS} data-cm-hero-head="">
+                            <div className={`w-14 h-14 shrink-0 rounded-2xl flex items-center justify-center text-2xl shadow-xl transition-transform duration-500 group-hover:scale-110 ${isPublished ? 'bg-emerald-500 text-white shadow-emerald-200' : 'bg-blue-600 text-white shadow-blue-200'
                                 }`}>
                                 <i className={`fa-solid ${isPublished ? 'fa-check-double' : 'fa-wand-magic-sparkles'}`}></i>
                             </div>
-                            <div>
+                            <div className="min-w-0">
                                 <h3 className={`font-black text-3xl italic tracking-tighter ${isPublished ? 'text-emerald-900' : 'text-gray-900'}`}>
                                     {t('visual.form.builder') || 'Visual Form Builder'}
                                 </h3>
@@ -3365,11 +3468,19 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                 )}
                             </div>
                         </div>
-                        <p className={`text-base font-medium leading-relaxed max-w-xl ${isPublished ? 'text-emerald-800/70' : 'text-gray-500'}`}>
+                        {/* Layout-neutral: the preview is beside the fields on a desktop and BELOW them on a phone. */}
+                        <p className={`text-base font-medium leading-relaxed max-w-xl ${isPublished ? 'text-emerald-800/70' : 'text-gray-500'}`} data-builder-intro="">
                             {isPublished
-                                ? 'El formulario está activo y recibiendo inscripciones. Los campos están bloqueados para mantener la integridad de los datos.'
-                                : 'Crea una experiencia de registro única. Diseña el formulario y observa los cambios instantáneamente en el simulador a la derecha.'}
+                                ? tx('fields.builder.live', 'El formulario está activo y recibiendo inscripciones. Los campos están bloqueados para mantener la integridad de los datos.')
+                                : tx('fields.builder.intro', 'Crea una experiencia de registro única. Diseña el formulario y observa los cambios al instante en la vista previa.')}
                         </p>
+                        {publishRefused && !isPublished && (
+                            <div className="mt-4 max-w-xl rounded-2xl border-2 border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700 flex items-start gap-3" role="alert" data-publish-refused="">
+                                <i className="fa-solid fa-circle-exclamation mt-0.5" aria-hidden="true"></i>
+                                <span className="flex-1">{tx('fields.publish.empty', 'No puedes publicar un formulario sin campos: añade al menos uno con «Nuevo campo».')}</span>
+                                <button type="button" onClick={() => setPublishRefused(false)} className="text-rose-600 hover:text-rose-800" data-publish-refused-close="" aria-label={tx('close', 'Cerrar')}><i className="fa-solid fa-xmark" aria-hidden="true"></i></button>
+                            </div>
+                        )}
                     </div>
 
                     {canManage && <div className="flex flex-wrap items-center gap-4">
@@ -3385,7 +3496,8 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                         </button>
                         {!isPublished && (
                             <button
-                                onClick={() => setShowModal(true)}
+                                onClick={openNewField}
+                                data-add-field=""
                                 className="bg-gray-900 text-white px-8 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-blue-600 transition-all duration-500 shadow-xl hover:shadow-blue-500/30 flex items-center gap-3 transform active:scale-95 translate-y-0 hover:-translate-y-1"
                             >
                                 <i className="fa-solid fa-plus text-[8px]"></i> {t('add.field')}
@@ -3398,39 +3510,39 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
                 {/* Left: Management List */}
                 <div className="space-y-4">
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
                         <h4 className="font-bold text-gray-700 text-sm uppercase tracking-wider">Estructura de Campos</h4>
                         <span className="text-xs text-gray-400">{fields.length} campos definidos</span>
                     </div>
 
                     <div className="space-y-3">
                         {loading ? (
-                            <div className="p-20 text-center bg-white border border-gray-100 rounded-3xl">
+                            <div className="p-20 max-sm:px-6 max-sm:py-12 text-center bg-white border border-gray-100 rounded-3xl">
                                 <div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
                                 <p className="text-gray-400 mt-4 text-xs font-bold uppercase tracking-widest">Cargando campos...</p>
                             </div>
                         ) : fields.length === 0 ? (
-                            <div className="p-20 text-center bg-gray-50/50 border-2 border-dashed border-gray-100 rounded-3xl">
+                            <div className="p-20 max-sm:px-6 max-sm:py-12 text-center bg-gray-50/50 border-2 border-dashed border-gray-100 rounded-3xl" data-fields-empty="">
                                 <i className="fa-solid fa-layer-group text-4xl text-gray-200 mb-4"></i>
-                                <p className="text-gray-400 text-xs font-bold uppercase tracking-widest">No hay campos configurados</p>
-                                <p className="text-[10px] text-gray-400 mt-2">Los campos que añadas aparecerán aquí.</p>
+                                <p className="text-gray-400 text-xs font-bold uppercase tracking-widest">{tx('fields.empty.title', 'Este formulario todavía no tiene campos')}</p>
+                                <p className="text-[11px] text-gray-400 mt-2 max-w-sm mx-auto">{tx('fields.empty.hint', 'Pulsa «Nuevo campo»: puedes empezar por los básicos (nombre, apellido, correo…) desde las plantillas o crear los tuyos.')}</p>
                             </div>
                         ) : fields.map((field, idx) => (
+                            <React.Fragment key={field.id}>
                             <div
-                                key={field.id}
                                 draggable={!isPublished && canManage}
                                 onDragStart={() => handleDragStart(idx)}
                                 onDragOver={(e) => handleDragOver(e, idx)}
                                 onDragEnd={handleDragEnd}
-                                className={`bg-white border-2 rounded-2xl p-4 flex items-center justify-between group transition-all duration-300 shadow-sm ${draggedIndex === idx ? 'opacity-50 border-blue-500 scale-95 shadow-inner' : 'border-gray-50 hover:border-blue-500 hover:shadow-xl hover:-translate-y-1'} ${!isPublished && canManage ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                                className={`bg-white border-2 rounded-2xl p-4 flex items-center justify-between max-sm:flex-wrap max-sm:gap-3 group transition-all duration-300 shadow-sm ${draggedIndex === idx ? 'opacity-50 border-blue-500 scale-95 shadow-inner' : 'border-gray-50 hover:border-blue-500 hover:shadow-xl hover:-translate-y-1'} ${!isPublished && canManage ? 'cursor-grab active:cursor-grabbing' : ''}`}
                             >
                                 <div className="flex items-center gap-4">
-                                    <div className="w-10 h-10 rounded-xl bg-gray-50 text-gray-300 group-hover:bg-blue-50 group-hover:text-blue-500 flex items-center justify-center transition-colors">
+                                    <div className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-300 group-hover:bg-blue-50 group-hover:text-blue-500 flex items-center justify-center transition-colors">
                                         <i className="fa-solid fa-grip-vertical"></i>
                                     </div>
                                     <div>
-                                        <div className="font-black text-gray-900 italic tracking-tight">{field.label}</div>
-                                        <div className="flex items-center gap-2 mt-0.5">
+                                        <div className="font-black text-gray-900 italic tracking-tight break-words">{field.label}</div>
+                                        <div className="flex items-center gap-2 mt-0.5 max-sm:flex-wrap">
                                             <span className="text-[10px] text-blue-600 font-bold uppercase bg-blue-50 px-2 py-0.5 rounded shadow-sm">{field.type}</span>
                                             {field.is_required ? (
                                                 <span className="text-[10px] text-rose-500 font-bold uppercase bg-rose-50 px-2 py-0.5 rounded shadow-sm">Obligatorio</span>
@@ -3446,13 +3558,51 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                         </div>
                                     </div>
                                 </div>
-                                {canManage && <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-all duration-300 translate-x-2 group-hover:translate-x-0">
-                                    <button onClick={() => { setFormData(field); setShowModal(true); }} className="w-9 h-9 flex items-center justify-center bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white rounded-xl transition-all shadow-sm" title="Editar"><i className="fa-solid fa-pen text-xs"></i></button>
-                                    {!isPublished && !['first_name', 'last_name', 'email', 'phone', 'gender', 'location', 'family_group'].includes(field.name) && (
-                                        <button onClick={() => handleDelete(field.id)} className="w-9 h-9 flex items-center justify-center bg-rose-50 text-rose-600 hover:bg-rose-600 hover:text-white rounded-xl transition-all shadow-sm" title="Eliminar"><i className="fa-solid fa-trash text-xs"></i></button>
+                                {canManage && <div className="flex flex-wrap justify-end gap-2 max-sm:ml-auto opacity-100 translate-x-0 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:translate-x-2 group-hover:opacity-100 focus-within:opacity-100 transition-all duration-300 group-hover:translate-x-0 focus-within:translate-x-0" data-field-actions={field.name}>
+                                    {!isPublished && (
+                                        <>
+                                            <button type="button" onClick={() => moveField(idx, -1)} disabled={idx === 0 || reorderBusy} data-move-field-up={field.name}
+                                                className="w-9 h-9 shrink-0 flex items-center justify-center bg-gray-50 text-gray-500 hover:bg-gray-900 hover:text-white rounded-xl transition-all shadow-sm disabled:opacity-30 disabled:pointer-events-none"
+                                                title={tx('fields.move.up', 'Subir')} aria-label={tx('fields.move.up.aria', 'Subir el campo {label}', { label: field.label })}><i className="fa-solid fa-arrow-up text-xs" aria-hidden="true"></i></button>
+                                            <button type="button" onClick={() => moveField(idx, 1)} disabled={idx === fields.length - 1 || reorderBusy} data-move-field-down={field.name}
+                                                className="w-9 h-9 shrink-0 flex items-center justify-center bg-gray-50 text-gray-500 hover:bg-gray-900 hover:text-white rounded-xl transition-all shadow-sm disabled:opacity-30 disabled:pointer-events-none"
+                                                title={tx('fields.move.down', 'Bajar')} aria-label={tx('fields.move.down.aria', 'Bajar el campo {label}', { label: field.label })}><i className="fa-solid fa-arrow-down text-xs" aria-hidden="true"></i></button>
+                                        </>
+                                    )}
+                                    <button onClick={() => { setFormData(field); setOpenSelect(null); setShowModal(true); }} className="w-9 h-9 shrink-0 flex items-center justify-center bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white rounded-xl transition-all shadow-sm" title={tx('fields.edit', 'Editar')} aria-label={tx('fields.edit.aria', 'Editar el campo {label}', { label: field.label })}><i className="fa-solid fa-pen text-xs"></i></button>
+                                    {!isPublished && deleteAsk !== field.id && (
+                                        <button onClick={() => setDeleteAsk(field.id)} data-delete-field={field.name} className="w-9 h-9 shrink-0 flex items-center justify-center bg-rose-50 text-rose-600 hover:bg-rose-600 hover:text-white rounded-xl transition-all shadow-sm" title={tx('fields.delete', 'Eliminar')} aria-label={tx('fields.delete.aria', 'Eliminar el campo {label}', { label: field.label })}><i className="fa-solid fa-trash text-xs"></i></button>
                                     )}
                                 </div>}
                             </div>
+                            {deleteAsk === field.id && !isPublished && canManage && (() => {
+                                const deps = fieldDependents(field, { feeRules, assignmentRules });
+                                return (
+                                    <div className="rounded-2xl bg-rose-50 border-2 border-rose-100 px-4 py-3 space-y-2" role="alertdialog" aria-label={tx('fields.delete.confirm', '¿Eliminar el campo «{label}»?', { label: field.label })} data-delete-confirm={field.name}>
+                                        <p className="text-sm font-black text-rose-800">{tx('fields.delete.confirm', '¿Eliminar el campo «{label}»?', { label: field.label })}</p>
+                                        {deps.length > 0 && (
+                                            <div className="text-xs text-rose-800 space-y-1">
+                                                <p className="font-bold">{tx('fields.delete.stops', 'Dejará de funcionar:')}</p>
+                                                <ul className="list-disc pl-5 space-y-0.5">
+                                                    {deps.map((d) => <li key={d.key}>{tx(d.key, d.fallback, d.vars)}</li>)}
+                                                </ul>
+                                            </div>
+                                        )}
+                                        <p className="text-[11px] text-rose-700">{tx('fields.delete.data', 'Los datos ya guardados no se borran, pero dejan de verse en el formulario. Podrás volver a añadirlo mientras el formulario no esté publicado.')}</p>
+                                        <div className="flex flex-wrap gap-2 pt-1">
+                                            <button type="button" disabled={deleteBusy} onClick={() => handleDelete(field)} autoFocus
+                                                className="px-4 py-2.5 rounded-xl bg-rose-600 text-white hover:bg-rose-700 font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50">
+                                                {deleteBusy ? tx('saving', 'Guardando…') : tx('fields.delete.yes', 'Eliminar campo')}
+                                            </button>
+                                            <button type="button" onClick={() => setDeleteAsk(null)}
+                                                className="px-4 py-2.5 rounded-xl bg-white border-2 border-gray-100 text-gray-700 hover:border-blue-400 font-black text-[10px] uppercase tracking-widest transition-all">
+                                                {tx('cancel', 'Cancelar')}
+                                            </button>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
+                            </React.Fragment>
                         ))}
                     </div>
                 </div>
@@ -3475,7 +3625,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-6 bg-gray-900 rounded-b-2xl z-20"></div>
 
                         <div className="bg-gradient-to-br from-blue-600 to-indigo-700 p-8 pt-12 text-white text-center relative overflow-hidden">
-                            <div className="absolute -right-10 -top-10 w-32 h-32 bg-white/10 rounded-full blur-2xl"></div>
+                            <div aria-hidden="true" className={DECO_LAYER_CLASS} data-cm-deco=""><div className="absolute -right-10 -top-10 w-32 h-32 bg-white/10 rounded-full blur-2xl"></div></div>
                             <h5 className="font-black text-2xl italic tracking-tight relative z-10">Inscripción</h5>
                             <p className="text-xs font-bold uppercase tracking-widest opacity-60 mt-1 relative z-10">{conference?.name || 'Nombre de la Conferencia'}</p>
                         </div>
@@ -3532,18 +3682,57 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                     <h3 className="font-bold text-xl text-gray-900">{formData.id ? 'Editar Campo' : 'Nuevo Campo'}</h3>
                                     <p className="text-xs text-gray-500 mt-0.5">Configura las propiedades de este campo personalizado</p>
                                 </div>
-                                <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-gray-600 transition-colors p-2 hover:bg-gray-100 rounded-lg">
+                                <button onClick={() => setShowModal(false)} className="text-gray-500 hover:text-gray-700 transition-colors p-2 hover:bg-gray-100 rounded-lg" aria-label={tx('close', 'Cerrar')}>
                                     <i className="fa-solid fa-xmark text-lg"></i>
                                 </button>
                             </div>
 
+                            {!formData.id && (() => {
+                                const groupedBy = fields.find(f => Number(f.is_group));
+                                return (
+                                    <div className="px-8 pt-6 space-y-3" data-field-templates="">
+                                        <div>
+                                            <h4 className="text-xs font-black text-gray-500 uppercase tracking-widest">{tx('fields.templates.title', 'Campos básicos')}</h4>
+                                            <p className="text-[11px] text-gray-500 mt-0.5" data-field-templates-hint="">{tx('fields.templates.hint', 'Plantillas con la configuración que usan el hospedaje, las comidas, las exportaciones y el portal. Después podrás editarlos o eliminarlos como cualquier otro campo.')}</p>
+                                        </div>
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                            {templateStates(fields).map(({ template, existing }) => {
+                                                const label = tx(template.labelKey, template.fallback);
+                                                return (
+                                                    <button key={template.key} type="button" disabled={!!existing || templateBusy != null}
+                                                        onClick={() => addTemplate(template.key, label)} data-template={template.key}
+                                                        title={existing ? tx('fields.template.exists', 'Ya está en el formulario como «{label}»', { label: existing.label || existing.name }) : tx(template.hintKey, template.hint)}
+                                                        className={`flex items-start gap-3 p-3 rounded-xl border-2 border-gray-100 text-left transition-all disabled:cursor-not-allowed ${existing ? TEMPLATE_DONE_CLASS : TEMPLATE_OPEN_CLASS}`} data-template-state={existing ? 'exists' : 'open'}>
+                                                        <span className={`w-8 h-8 rounded-lg border flex items-center justify-center shrink-0 ${existing ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-white border-gray-100 text-blue-500'}`}><i className={`fa-solid ${existing ? 'fa-check' : template.icon} text-xs`} aria-hidden="true"></i></span>
+                                                        <span className="min-w-0">
+                                                            <span className="block text-sm font-bold text-gray-800">{templateBusy === template.key ? tx('saving', 'Guardando…') : label}</span>
+                                                            <span className={`block text-[10px] leading-snug ${TEMPLATE_DESC_CLASS}`} data-template-desc="">
+                                                                {existing ? tx('fields.template.exists', 'Ya está en el formulario como «{label}»', { label: existing.label || existing.name }) : tx(template.hintKey, template.hint)}
+                                                            </span>
+                                                        </span>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                        {groupedBy && !fields.some(f => f.name === 'family_group') && (
+                                            <p className="text-[10px] text-gray-600" data-field-templates-note="">{tx('fields.template.group.taken', '«{label}» ya agrupa a los inscritos: «Grupo familiar» se añadiría sin agrupar (solo un campo puede hacerlo).', { label: groupedBy.label })}</p>
+                                        )}
+                                        <p className="text-[10px] text-gray-600 flex items-start gap-1.5" data-field-templates-note=""><i className="fa-solid fa-location-dot mt-0.5" aria-hidden="true"></i><span>{tx('fields.template.location', 'La localidad no es un campo del formulario: la fija el acceso del encargado en el portal, o la eliges al inscribir desde aquí (pestaña «Localidades»).')}</span></p>
+                                        <div className="flex items-center gap-3 pt-2">
+                                            <div className="h-px bg-gray-100 flex-1"></div>
+                                            <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">{tx('fields.custom.title', 'O un campo propio')}</span>
+                                            <div className="h-px bg-gray-100 flex-1"></div>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
                             <form onSubmit={handleSubmit} className="p-8 space-y-5 overflow-visible pb-20">
                                 <div className="space-y-1.5">
-                                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider ml-1">{t('field.label')}</label>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider ml-1">{t('field.label')}</label>
                                     <div className="relative group">
                                         <input
                                             required
-                                            className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none text-gray-900 placeholder:text-gray-300 font-medium"
+                                            className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none text-gray-900 placeholder:text-gray-500 font-medium"
                                             value={formData.label}
                                             onChange={e => setFormData({ ...formData, label: e.target.value })}
                                             placeholder="Ej: ¿Cuál es su talle de camisa?"
@@ -3553,7 +3742,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
 
                                 {formData.id && (
                                     <div className="space-y-1.5 opacity-60">
-                                        <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider ml-1">ID del Sistema</label>
+                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider ml-1">ID del Sistema</label>
                                         <div className="flex items-center gap-2 bg-gray-50 px-4 py-2 rounded-xl border border-gray-100">
                                             <i className="fa-solid fa-code text-xs text-gray-400"></i>
                                             <span className="text-xs font-mono text-gray-500">{formData.name}</span>
@@ -3563,7 +3752,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
 
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
                                     <div className="space-y-1.5 relative">
-                                        <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider ml-1">{t('field.type')}</label>
+                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider ml-1">{t('field.type')}</label>
                                         <button
                                             type="button"
                                             onClick={() => setOpenSelect(openSelect === 'type' ? null : 'type')}
@@ -3574,7 +3763,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                                     const current = FIELD_TYPES.find(t => t.value === formData.type);
                                                     return (
                                                         <>
-                                                            <div className={`w-6 h-6 rounded-lg ${current?.bg} flex items-center justify-center`}>
+                                                            <div className={`w-6 h-6 shrink-0 rounded-lg ${current?.bg} flex items-center justify-center`}>
                                                                 <i className={`fa-solid ${current?.icon} text-xs ${current?.color}`}></i>
                                                             </div>
                                                             <span className="text-gray-900">{current?.label}</span>
@@ -3594,7 +3783,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                                         onClick={() => { setFormData({ ...formData, type: type.value as any }); setOpenSelect(null); }}
                                                         className={`w-full flex items-center gap-4 p-3 rounded-xl transition-colors ${formData.type === type.value ? 'bg-blue-50/50 text-blue-700' : 'hover:bg-gray-50 text-gray-600'}`}
                                                     >
-                                                        <div className={`w-8 h-8 rounded-xl ${type.bg} flex items-center justify-center group-hover:scale-110 transition-transform`}>
+                                                        <div className={`w-8 h-8 shrink-0 rounded-xl ${type.bg} flex items-center justify-center group-hover:scale-110 transition-transform`}>
                                                             <i className={`fa-solid ${type.icon} text-sm ${type.color}`}></i>
                                                         </div>
                                                         <div className="text-left">
@@ -3607,14 +3796,14 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                     </div>
 
                                     <div className="space-y-1.5 relative">
-                                        <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider ml-1">{t('field.required')}</label>
+                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider ml-1">{t('field.required')}</label>
                                         <button
                                             type="button"
                                             onClick={() => setOpenSelect(openSelect === 'required' ? null : 'required')}
                                             className={`w-full flex items-center justify-between border-2 rounded-xl px-4 py-3 transition-all outline-none font-medium ${openSelect === 'required' ? 'bg-white border-blue-500 ring-4 ring-blue-500/10' : 'bg-gray-50/30 border-gray-100 hover:border-gray-200'}`}
                                         >
                                             <div className="flex items-center gap-3">
-                                                <div className={`w-6 h-6 rounded-lg ${formData.is_required ? 'bg-rose-50' : 'bg-emerald-50'} flex items-center justify-center`}>
+                                                <div className={`w-6 h-6 shrink-0 rounded-lg ${formData.is_required ? 'bg-rose-50' : 'bg-emerald-50'} flex items-center justify-center`}>
                                                     <i className={`fa-solid ${formData.is_required ? 'fa-asterisk text-rose-500' : 'fa-check text-emerald-500'} text-[10px]`}></i>
                                                 </div>
                                                 <span className="text-gray-900">{formData.is_required ? 'Obligatorio' : 'Opcional'}</span>
@@ -3629,7 +3818,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                                     onClick={() => { setFormData({ ...formData, is_required: 1 }); setOpenSelect(null); }}
                                                     className={`w-full flex items-center gap-4 p-3 rounded-xl transition-colors ${formData.is_required === 1 ? 'bg-rose-50/50 text-rose-700' : 'hover:bg-gray-50 text-gray-600'}`}
                                                 >
-                                                    <div className="w-8 h-8 rounded-xl bg-rose-50 flex items-center justify-center">
+                                                    <div className="w-8 h-8 shrink-0 rounded-xl bg-rose-50 flex items-center justify-center">
                                                         <i className="fa-solid fa-asterisk text-xs text-rose-500"></i>
                                                     </div>
                                                     <div className="font-bold text-sm">Obligatorio</div>
@@ -3639,7 +3828,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                                     onClick={() => { setFormData({ ...formData, is_required: 0 }); setOpenSelect(null); }}
                                                     className={`w-full flex items-center gap-4 p-3 rounded-xl transition-colors ${formData.is_required === 0 ? 'bg-emerald-50/50 text-emerald-700' : 'hover:bg-gray-50 text-gray-600'}`}
                                                 >
-                                                    <div className="w-8 h-8 rounded-xl bg-emerald-50 flex items-center justify-center">
+                                                    <div className="w-8 h-8 shrink-0 rounded-xl bg-emerald-50 flex items-center justify-center">
                                                         <i className="fa-solid fa-check text-xs text-emerald-500"></i>
                                                     </div>
                                                     <div className="font-bold text-sm">Opcional</div>
@@ -3650,7 +3839,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                 </div>
 
                                 <div className="space-y-1.5 overflow-visible">
-                                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider ml-1">Ancho del Campo</label>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider ml-1">Ancho del Campo</label>
                                     <div className="grid grid-cols-2 gap-3">
                                         <button
                                             type="button"
@@ -3680,7 +3869,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                     fixed person attribute. Editable anytime (they don't alter the column). Separate
                                     "by gender / by any field" for lodging lives in the Assignment tab as a rule. */}
                                 <div className="space-y-2.5">
-                                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider ml-1">Comportamiento del campo</label>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider ml-1">Comportamiento del campo</label>
                                     <label className="flex items-start gap-3 p-3 rounded-xl border-2 border-gray-100 bg-gray-50/30 cursor-pointer hover:border-blue-200 transition-all">
                                         <input
                                             type="checkbox"
@@ -3690,7 +3879,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                         />
                                         <span>
                                             <span className="block text-sm font-semibold text-gray-800">Agrupar inscritos por este campo</span>
-                                            <span className="block text-[11px] text-gray-400">Activa los grupos en el portal (p. ej. grupo familiar, delegación). Solo un campo puede agrupar.</span>
+                                            <span className="block text-[11px] text-gray-500">Activa los grupos en el portal (p. ej. grupo familiar, delegación). Solo un campo puede agrupar.</span>
                                         </span>
                                     </label>
                                     <label className="flex items-start gap-3 p-3 rounded-xl border-2 border-gray-100 bg-gray-50/30 cursor-pointer hover:border-blue-200 transition-all">
@@ -3702,25 +3891,25 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                         />
                                         <span>
                                             <span className="block text-sm font-semibold text-gray-800">No permitir valores duplicados</span>
-                                            <span className="block text-[11px] text-gray-400">Rechaza la inscripción si otro inscrito ya tiene el mismo valor (p. ej. documento, email).</span>
+                                            <span className="block text-[11px] text-gray-500">Rechaza la inscripción si otro inscrito ya tiene el mismo valor (p. ej. documento, email).</span>
                                         </span>
                                     </label>
                                 </div>
 
                                 {formData.type === 'select' && (
                                     <div className="space-y-1.5 animate-in slide-in-from-top-2 duration-300">
-                                        <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider ml-1">{t('field.options')}</label>
+                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider ml-1">{t('field.options')}</label>
                                         <input
-                                            className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 placeholder:text-gray-300 font-medium"
+                                            className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 placeholder:text-gray-500 font-medium"
                                             value={formData.options}
                                             onChange={e => setFormData({ ...formData, options: e.target.value })}
                                             placeholder="Pequeña, Mediana, Grande"
                                         />
-                                        <p className="text-[10px] text-gray-400 px-1 italic">* Separa las opciones por comas</p>
+                                        <p className="text-[10px] text-gray-500 px-1 italic">* Separa las opciones por comas</p>
                                     </div>
                                 )}
 
-                                <div className="flex items-center justify-end gap-3 pt-6">
+                                <div className="flex items-center justify-end gap-3 pt-6" data-cm-sheet-foot="">
                                     <button
                                         type="button"
                                         onClick={() => setShowModal(false)}
@@ -3800,6 +3989,7 @@ function PredicateEditor({ fields, value, onChange, label }: any) {
 // hotel (and room) once — see ConferenceManagerContent.openLodgingExplorer.
 function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId: number; focus?: { hotelId: number; roomId?: number | null } | null; onFocusConsumed?: () => void }) {
     const { t } = useI18n();
+    const tx = useTx();
     const { addToast } = useToast();
     // Hospedaje › gestionar = run / reset the engine, edit its rules, and move people in the explorer
     // (drag & drop and pickers); «ver» explores who sleeps where without changing anything.
@@ -3851,8 +4041,8 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
 
             setFields(fieldsData);
 
-            // Default rules are seeded ONCE at conference-creation time (backend), NOT here — seeding
-            // on "0 rules" would resurrect them every time the admin deletes them all and reloads.
+            // No rule is seeded, here or by the backend (2.16.0: a new conference starts with none) — the
+            // admin adds them in this page.
             setRules(rulesData);
 
             setInscriptions(inscriptionsData || []);
@@ -4029,7 +4219,7 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
                 <div className="relative flex flex-col lg:flex-row lg:items-center justify-between gap-8">
                     <div className="flex-1">
                         <div className="flex items-center gap-3 mb-3">
-                            <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white shadow-lg shadow-indigo-200">
+                            <div className="w-10 h-10 shrink-0 rounded-xl bg-indigo-600 flex items-center justify-center text-white shadow-lg shadow-indigo-200">
                                 <i className="fa-solid fa-wand-magic-sparkles"></i>
                             </div>
                             <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-[0.2em]">{t('assignment')}</span>
@@ -4170,7 +4360,7 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
                         </div>
                     ) : rules.length === 0 ? (
                         <div className="p-20 text-center">
-                            <div className="w-16 h-16 rounded-3xl bg-gray-50 flex items-center justify-center text-gray-300 mx-auto mb-4">
+                            <div className="w-16 h-16 shrink-0 rounded-3xl bg-gray-50 flex items-center justify-center text-gray-300 mx-auto mb-4">
                                 <i className="fa-solid fa-list-check text-2xl"></i>
                             </div>
                             <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">No hay reglas configuradas</p>
@@ -4178,7 +4368,7 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
                     ) : rules.map(rule => (
                         <div key={rule.id} className="group p-6 flex items-center justify-between hover:bg-indigo-50/30 transition-all">
                             <div className="flex items-center gap-5">
-                                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-xl shadow-lg transition-all ${rule.enabled
+                                <div className={`w-14 h-14 shrink-0 rounded-2xl flex items-center justify-center text-xl shadow-lg transition-all ${rule.enabled
                                     ? 'bg-indigo-600 text-white shadow-indigo-100'
                                     : 'bg-white text-gray-300 border border-gray-100 shadow-none'
                                     }`}>
@@ -4202,6 +4392,12 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
                                                 {fields.find(f => f.name === rule.config)?.label || rule.config}
                                             </span>
                                         )}
+                                        {missingRuleFields(rule, fields).length > 0 && (
+                                            <span className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-50 border border-amber-200 text-[10px] font-bold text-amber-700" data-rule-missing-field={rule.id}>
+                                                <i className="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
+                                                {tx('rule.missing.field', 'Usa un campo que ya no está en el formulario ({fields}): no tiene efecto.', { fields: missingRuleFields(rule, fields).join(', ') })}
+                                            </span>
+                                        )}
                                     </div>
                                 </div>
                             </div>
@@ -4213,10 +4409,10 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
                                 >
                                     <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all shadow-sm ${rule.enabled ? 'left-7' : 'left-1'}`}></div>
                                 </button>
-                                {canManage && <button onClick={() => openEditRule(rule)} title={t('edit') || 'Editar'} className="w-10 h-10 rounded-xl bg-white border border-gray-100 text-gray-400 hover:text-indigo-600 hover:border-indigo-100 hover:bg-indigo-50 transition-all flex items-center justify-center">
+                                {canManage && <button onClick={() => openEditRule(rule)} title={t('edit') || 'Editar'} className="w-10 h-10 shrink-0 rounded-xl bg-white border border-gray-100 text-gray-400 hover:text-indigo-600 hover:border-indigo-100 hover:bg-indigo-50 transition-all flex items-center justify-center">
                                     <i className="fa-solid fa-pen text-sm"></i>
                                 </button>}
-                                {canManage && <button onClick={() => handleDeleteRule(rule)} title={t('delete')} className="w-10 h-10 rounded-xl bg-white border border-gray-100 text-gray-400 hover:text-rose-600 hover:border-rose-100 hover:bg-rose-50 transition-all flex items-center justify-center group/del">
+                                {canManage && <button onClick={() => handleDeleteRule(rule)} title={t('delete')} className="w-10 h-10 shrink-0 rounded-xl bg-white border border-gray-100 text-gray-400 hover:text-rose-600 hover:border-rose-100 hover:bg-rose-50 transition-all flex items-center justify-center group/del">
                                     <i className="fa-solid fa-trash-can text-sm group-hover/del:scale-110 transition-transform"></i>
                                 </button>}
                             </div>
@@ -4625,29 +4821,33 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
         const d = new Date(sql ? `${sql[1]}T${sql[2]}Z` : s);
         return isNaN(d.getTime()) ? s : d.toLocaleString();
     };
-    const occupantName = (p: any) => `${p.first_name || ''} ${p.last_name || ''}`.trim() || `#${p.id}`;
+    // The form's name fields (role first_name / last_name); without them, the first filled form fields
+    // (2.16.0: the form may have no name field at all), then the attendee's number.
+    const occupantName = (p: any) => `${p.first_name || ''} ${p.last_name || ''}`.trim() || personDisplayName(p, review?.fields || []);
 
     return (
         <div className="space-y-10 animate-in fade-in duration-500">
             <ReadOnlyNotice section="locations" alsoManage={['settings']} />
             {/* Premium Public Link Card */}
-            <div className={`group relative overflow-hidden rounded-[40px] p-10 border-2 transition-all duration-500 shadow-2xl ${isPublished
+            <div className={`group relative overflow-hidden rounded-[40px] p-10 max-sm:p-6 border-2 transition-all duration-500 shadow-2xl ${isPublished
                 ? 'bg-emerald-50/50 border-emerald-100 shadow-emerald-100/30'
                 : 'bg-white border-gray-100 shadow-gray-100/50'
                 }`}>
-                <div className={`absolute -right-20 -top-20 w-80 h-80 rounded-full blur-[100px] opacity-30 transition-all duration-1000 group-hover:scale-125 ${isPublished ? 'bg-emerald-400' : 'bg-orange-400'
-                    }`}></div>
-                <div className={`absolute -left-20 -bottom-20 w-64 h-64 rounded-full blur-[100px] opacity-20 ${isPublished ? 'bg-teal-300' : 'bg-amber-100'
-                    }`}></div>
+                <div aria-hidden="true" className={DECO_LAYER_CLASS} data-cm-deco="">
+                    <div className={`absolute -right-20 -top-20 w-80 h-80 rounded-full blur-[100px] opacity-30 transition-all duration-1000 group-hover:scale-125 ${isPublished ? 'bg-emerald-400' : 'bg-orange-400'
+                        }`}></div>
+                    <div className={`absolute -left-20 -bottom-20 w-64 h-64 rounded-full blur-[100px] opacity-20 ${isPublished ? 'bg-teal-300' : 'bg-amber-100'
+                        }`}></div>
+                </div>
 
-                <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-10">
+                <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-10 max-sm:gap-6">
                     <div className="flex-1">
-                        <div className="flex items-center gap-4 mb-5">
-                            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl shadow-xl transition-transform duration-500 group-hover:scale-110 ${isPublished ? 'bg-emerald-500 text-white shadow-emerald-200' : 'bg-orange-500 text-white shadow-orange-200/50'
+                        <div className={HERO_HEAD_CLASS} data-cm-hero-head="">
+                            <div className={`w-14 h-14 shrink-0 rounded-2xl flex items-center justify-center text-2xl shadow-xl transition-transform duration-500 group-hover:scale-110 ${isPublished ? 'bg-emerald-500 text-white shadow-emerald-200' : 'bg-orange-500 text-white shadow-orange-200/50'
                                 }`}>
                                 <i className={`fa-solid ${isPublished ? 'fa-link' : 'fa-link-slash'}`}></i>
                             </div>
-                            <div>
+                            <div className="min-w-0">
                                 <h3 className={`font-black text-3xl italic tracking-tighter ${isPublished ? 'text-emerald-900' : 'text-gray-900'}`}>
                                     {t('public.portal.link') || 'Link del Portal Público'}
                                 </h3>
@@ -4767,7 +4967,7 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                 </div>
             ) : locations.length === 0 ? (
                 <div className="flex-1 flex flex-col justify-center items-center py-20 bg-gray-50/50 border-2 border-dashed border-gray-100 rounded-3xl">
-                    <div className="w-20 h-20 bg-white rounded-3xl shadow-sm flex items-center justify-center text-gray-200 text-3xl mb-4">
+                    <div className="w-20 h-20 shrink-0 bg-white rounded-3xl shadow-sm flex items-center justify-center text-gray-200 text-3xl mb-4">
                         <i className="fa-solid fa-map-location-dot"></i>
                     </div>
                     <p className="text-gray-400 text-xs font-bold uppercase tracking-widest">{t('no.locations.list')}</p>
@@ -4778,12 +4978,14 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                         {locations.map(loc => (
                             <div key={loc.id} className="group bg-white p-8 rounded-[32px] border-2 border-gray-50 shadow-sm hover:border-blue-500 hover:shadow-2xl hover:-translate-y-2 transition-all duration-500 relative overflow-hidden">
-                                <div className="absolute -right-10 -bottom-10 w-32 h-32 bg-blue-600 opacity-[0.03] rounded-full group-hover:scale-150 transition-transform duration-700"></div>
-                                <div className="absolute -left-10 -top-10 w-24 h-24 bg-indigo-600 opacity-[0.02] rounded-full group-hover:scale-150 transition-transform duration-700"></div>
+                                <div aria-hidden="true" className={DECO_LAYER_CLASS} data-cm-deco="">
+                                    <div className="absolute -right-10 -bottom-10 w-32 h-32 bg-blue-600 opacity-[0.03] rounded-full group-hover:scale-150 transition-transform duration-700"></div>
+                                    <div className="absolute -left-10 -top-10 w-24 h-24 bg-indigo-600 opacity-[0.02] rounded-full group-hover:scale-150 transition-transform duration-700"></div>
+                                </div>
 
                                 <div className="flex justify-between items-start mb-8 relative z-10">
                                     <div className="flex items-center gap-4">
-                                        <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-50 to-indigo-50 text-blue-600 flex items-center justify-center text-xl shadow-inner group-hover:scale-110 transition-transform duration-500">
+                                        <div className="w-14 h-14 shrink-0 rounded-2xl bg-gradient-to-br from-blue-50 to-indigo-50 text-blue-600 flex items-center justify-center text-xl shadow-inner group-hover:scale-110 transition-transform duration-500">
                                             <i className="fa-solid fa-map-location-dot"></i>
                                         </div>
                                         <div>
@@ -4796,7 +4998,7 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                     </div>
                                     {canManage && <button
                                         onClick={() => handleDelete(loc.id)}
-                                        className="w-10 h-10 flex items-center justify-center rounded-xl bg-gray-50 text-gray-300 hover:bg-rose-50 hover:text-rose-600 transition-all duration-300 opacity-0 group-hover:opacity-100 transform translate-x-4 group-hover:translate-x-0"
+                                        className="w-10 h-10 shrink-0 flex items-center justify-center rounded-xl bg-gray-50 text-gray-300 hover:bg-rose-50 hover:text-rose-600 transition-all duration-300 transform opacity-100 translate-x-0 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:translate-x-4 group-hover:opacity-100 group-hover:translate-x-0 focus-visible:opacity-100 focus-visible:translate-x-0"
                                     >
                                         <i className="fa-solid fa-trash-can text-sm"></i>
                                     </button>}
@@ -4823,7 +5025,7 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                                 {canManage && <button
                                                     onClick={() => handleRotateCode(loc)}
                                                     title={t('rotate.code') || 'Rotar código'}
-                                                    className="w-9 h-9 flex items-center justify-center rounded-xl bg-white text-gray-400 hover:bg-amber-500 hover:text-white transition-all shadow-sm"
+                                                    className="w-9 h-9 shrink-0 flex items-center justify-center rounded-xl bg-white text-gray-400 hover:bg-amber-500 hover:text-white transition-all shadow-sm"
                                                 >
                                                     <i className="fa-solid fa-rotate text-xs"></i>
                                                 </button>}
@@ -4841,7 +5043,7 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                             return (
                                                 <div className={`p-3 bg-white rounded-xl border shadow-sm transition-colors ${full ? 'border-rose-200' : 'border-gray-50 group-hover:border-blue-100'}`}>
                                                     <div className="flex items-center gap-4">
-                                                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm ${full ? 'bg-rose-50 text-rose-500' : 'bg-emerald-50 text-emerald-500'}`}>
+                                                        <div className={`w-8 h-8 shrink-0 rounded-lg flex items-center justify-center text-sm ${full ? 'bg-rose-50 text-rose-500' : 'bg-emerald-50 text-emerald-500'}`}>
                                                             <i className="fa-solid fa-users"></i>
                                                         </div>
                                                         <div className="flex-1 min-w-0">
@@ -4870,7 +5072,7 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                                             <button
                                                                 onClick={() => setCapacityEdit({ id: loc.id, value: cap === null ? String(Math.max(1, inscribed)) : String(cap) })}
                                                                 title={t('edit.capacity') || 'Editar cupo'}
-                                                                className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white transition-all shadow-sm"
+                                                                className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white transition-all shadow-sm"
                                                             >
                                                                 <i className="fa-solid fa-pen text-xs"></i>
                                                             </button>
@@ -4886,7 +5088,7 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                         })()}
                                         <div className="p-3 bg-white rounded-xl border border-gray-50 shadow-sm group-hover:border-blue-100 transition-colors">
                                             <div className="flex items-center gap-4">
-                                                <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-500 flex items-center justify-center text-sm">
+                                                <div className="w-8 h-8 shrink-0 rounded-lg bg-amber-50 text-amber-500 flex items-center justify-center text-sm">
                                                     <i className="fa-solid fa-money-bill-wave"></i>
                                                 </div>
                                                 <div className="flex-1 min-w-0">
@@ -4920,7 +5122,7 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                             return (
                                                 <div className={`p-3 bg-white rounded-xl border shadow-sm transition-colors ${loc.lodging_status === 'submitted' ? 'border-amber-200' : 'border-gray-50 group-hover:border-blue-100'}`}>
                                                     <div className="flex items-center gap-4">
-                                                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm ${loc.lodging_status === 'submitted' ? 'bg-amber-50 text-amber-500' : loc.lodging_status === 'validated' ? 'bg-emerald-50 text-emerald-500' : 'bg-purple-50 text-purple-400'}`}>
+                                                        <div className={`w-8 h-8 shrink-0 rounded-lg flex items-center justify-center text-sm ${loc.lodging_status === 'submitted' ? 'bg-amber-50 text-amber-500' : loc.lodging_status === 'validated' ? 'bg-emerald-50 text-emerald-500' : 'bg-purple-50 text-purple-400'}`}>
                                                             <i className="fa-solid fa-bed"></i>
                                                         </div>
                                                         <div className="flex-1 min-w-0">
@@ -4976,7 +5178,7 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                             return (
                                                 <div className={`p-3 bg-white rounded-xl border shadow-sm transition-colors ${active ? 'border-emerald-100' : 'border-gray-50 group-hover:border-blue-100'}`} data-testid={`lodging-permission-${loc.id}`}>
                                                     <div className="flex items-center gap-4">
-                                                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm ${active ? 'bg-emerald-50 text-emerald-500' : passed ? 'bg-rose-50 text-rose-400' : 'bg-gray-50 text-gray-400'}`}>
+                                                        <div className={`w-8 h-8 shrink-0 rounded-lg flex items-center justify-center text-sm ${active ? 'bg-emerald-50 text-emerald-500' : passed ? 'bg-rose-50 text-rose-400' : 'bg-gray-50 text-gray-400'}`}>
                                                             <i className={`fa-solid ${active ? 'fa-unlock' : 'fa-lock'}`}></i>
                                                         </div>
                                                         <div className="flex-1 min-w-0">
@@ -5035,7 +5237,7 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                             );
                                         })()}
                                         <div className="flex items-center gap-4 p-3 bg-white rounded-xl border border-gray-50 shadow-sm group-hover:border-blue-100 transition-colors">
-                                            <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-400 flex items-center justify-center text-sm">
+                                            <div className="w-8 h-8 shrink-0 rounded-lg bg-blue-50 text-blue-400 flex items-center justify-center text-sm">
                                                 <i className="fa-solid fa-user-tie"></i>
                                             </div>
                                             <div>
@@ -5044,7 +5246,7 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                             </div>
                                         </div>
                                         <div className="flex items-center gap-4 p-3 bg-white rounded-xl border border-gray-50 shadow-sm group-hover:border-blue-100 transition-colors">
-                                            <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-400 flex items-center justify-center text-sm">
+                                            <div className="w-8 h-8 shrink-0 rounded-lg bg-indigo-50 text-indigo-400 flex items-center justify-center text-sm">
                                                 <i className="fa-solid fa-phone"></i>
                                             </div>
                                             <div>
@@ -5229,7 +5431,7 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                                                     <ul className="space-y-1">
                                                                         {room.occupants.map((p: any) => (
                                                                             <li key={p.id} className="text-xs text-gray-700 flex items-center gap-2">
-                                                                                <i className={`fa-solid ${p.gender === 'F' ? 'fa-venus text-pink-400' : p.gender === 'M' ? 'fa-mars text-blue-400' : 'fa-user text-gray-300'} text-[9px]`}></i>
+                                                                                <i className={`fa-solid ${genderKey(p.gender) === 'F' ? 'fa-venus text-pink-400' : genderKey(p.gender) === 'M' ? 'fa-mars text-blue-400' : 'fa-user text-gray-300'} text-[9px]`}></i>
                                                                                 <span className="truncate">{occupantName(p)}</span>
                                                                                 {p.family_group && <span className="text-[8px] font-black uppercase tracking-widest text-indigo-500 bg-indigo-50 px-1.5 rounded">{p.family_group}</span>}
                                                                             </li>
@@ -5397,7 +5599,7 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                 <p className="text-xs text-blue-700/80 font-medium leading-relaxed">{t('location.code')} {t('slug.help')}</p>
                             </div>
 
-                            <div className="flex justify-end gap-3 pt-4 border-t border-gray-50">
+                            <div className="flex justify-end gap-3 pt-4 border-t border-gray-50" data-cm-sheet-foot="">
                                 <button
                                     onClick={() => setShowModal(false)}
                                     className="px-6 py-3 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition-all"

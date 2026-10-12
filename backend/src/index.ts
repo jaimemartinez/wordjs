@@ -1572,7 +1572,9 @@ async function initialize() {
         // Sync roles to ensure capabilities are up to date
         const { loadRoles, syncRoles } = require('./core/roles');
         await loadRoles();
-        await syncRoles(config.roles);
+        // The installed plugin ids let the sync also cut a plugin role's capability that sits inside
+        // ANOTHER installed plugin's (nested) namespace — see core/plugin-roles.ts.
+        await syncRoles(config.roles, require('./core/plugins').listInstalledPluginIds());
 
         // Initialize Core Admin Menus
         const { initCoreMenus } = require('./core/adminMenu');

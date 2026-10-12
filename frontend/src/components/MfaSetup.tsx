@@ -131,7 +131,7 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
     return (
         <div className="bg-white border border-gray-100 rounded-3xl p-8 shadow-sm">
             <div className="flex items-center gap-3 mb-2">
-                <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-indigo-50 to-blue-50 flex items-center justify-center text-indigo-600">
+                <div className="w-11 h-11 shrink-0 rounded-2xl bg-gradient-to-br from-indigo-50 to-blue-50 flex items-center justify-center text-indigo-600">
                     <i className="fa-solid fa-shield-halved"></i>
                 </div>
                 <div>

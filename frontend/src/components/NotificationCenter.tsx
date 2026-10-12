@@ -286,7 +286,7 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
                 {unreadCount > 0 && (
                     <span className={`absolute -top-1 -right-1 flex ${variant === 'floating' ? 'h-6 w-6' : 'h-4 w-4'}`}>
                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-                        <span className={`relative inline-flex rounded-full bg-rose-500 text-white font-bold items-center justify-center border-2 border-white ${variant === 'floating' ? 'h-6 w-6 text-[10px]' : 'h-4 w-4 text-[7px]'}`}>
+                        <span className={`relative inline-flex shrink-0 rounded-full bg-rose-500 text-white font-bold items-center justify-center border-2 border-white ${variant === 'floating' ? 'h-6 w-6 text-[10px]' : 'h-4 w-4 text-[7px]'}`}>
                             {unreadCount > 9 ? '9+' : unreadCount}
                         </span>
                     </span>
@@ -312,7 +312,7 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
                                 onClick={markAllRead}
                                 title={t('notif.markAllRead')}
                                 aria-label={t('notif.markAllRead')}
-                                className="w-11 h-11 flex items-center justify-center rounded-2xl text-gray-400 hover:text-blue-600 hover:bg-blue-50/50 transition-all active:scale-95 group"
+                                className="w-11 h-11 shrink-0 flex items-center justify-center rounded-2xl text-gray-400 hover:text-blue-600 hover:bg-blue-50/50 transition-all active:scale-95 group"
                             >
                                 <i className="fa-solid fa-check-double text-sm transition-transform group-hover:scale-110"></i>
                             </button>
@@ -320,14 +320,14 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
                                 onClick={() => fetchNotifications()}
                                 title={t('notif.refresh')}
                                 aria-label={t('notif.refresh')}
-                                className={`w-11 h-11 flex items-center justify-center rounded-2xl text-gray-400 hover:text-blue-600 hover:bg-blue-50/50 transition-all active:scale-95 group ${isRefreshing ? 'animate-spin text-blue-500' : ''}`}
+                                className={`w-11 h-11 shrink-0 flex items-center justify-center rounded-2xl text-gray-400 hover:text-blue-600 hover:bg-blue-50/50 transition-all active:scale-95 group ${isRefreshing ? 'animate-spin text-blue-500' : ''}`}
                             >
                                 <i className="fa-solid fa-arrows-rotate text-sm transition-transform group-hover:rotate-45"></i>
                             </button>
                             {variant === 'inline' && (
                                 <button
                                     onClick={() => setIsOpen(false)}
-                                    className="w-11 h-11 flex items-center justify-center rounded-2xl bg-gray-50 text-gray-400 hover:text-red-500 hover:bg-red-50 transition-all active:scale-95 border border-gray-100/50 shadow-sm"
+                                    className="w-11 h-11 shrink-0 flex items-center justify-center rounded-2xl bg-gray-50 text-gray-400 hover:text-red-500 hover:bg-red-50 transition-all active:scale-95 border border-gray-100/50 shadow-sm"
                                     title={t('notif.close')}
                                     aria-label={t('notif.close')}
                                 >
@@ -341,7 +341,7 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
                         {notifications.length === 0 ? (
                             <div className="h-full flex flex-col items-center justify-center text-center px-10">
                                 <div className="relative mb-10">
-                                    <div className="w-32 h-32 bg-gradient-to-tr from-gray-50 to-white rounded-[40px] shadow-sm flex items-center justify-center relative z-10">
+                                    <div className="w-32 h-32 shrink-0 bg-gradient-to-tr from-gray-50 to-white rounded-[40px] shadow-sm flex items-center justify-center relative z-10">
                                         <i className="fa-solid fa-bell-slash text-5xl text-gray-200"></i>
                                     </div>
                                     <div className="absolute -inset-4 bg-blue-50/30 rounded-[48px] blur-2xl -z-0"></div>
@@ -367,7 +367,7 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
                                         >
                                             <div className="flex gap-5">
                                                 <div className="shrink-0">
-                                                    <div className={`w-14 h-14 rounded-[22px] flex items-center justify-center text-xl shadow-inner ${getColorStyles(n)}`}>
+                                                    <div className={`w-14 h-14 shrink-0 rounded-[22px] flex items-center justify-center text-xl shadow-inner ${getColorStyles(n)}`}>
                                                         <i className={`fa-solid ${getIcon(n)}`}></i>
                                                     </div>
                                                 </div>

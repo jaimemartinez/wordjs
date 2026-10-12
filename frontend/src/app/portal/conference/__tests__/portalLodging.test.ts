@@ -152,15 +152,18 @@ describe("display helpers", () => {
 });
 
 describe("rule fields", () => {
-    it("lists the conference's fields first, then the base columns the form does not define", () => {
+    it("lists the conference's fields first, then the location — never a base column the form does not have", () => {
+        // conference-manager 2.16.0: every base field is deletable; a rule on one the form lacks would have no
+        // effect (the server refuses a new one and the engine skips an old one).
         const opts = ruleFieldOptions([{ name: 'edad', label: 'Edad' }, { name: 'gender', label: 'Sexo' }, { name: '', label: 'x' }]);
         expect(opts.slice(0, 2)).toEqual([{ name: 'edad', label: 'Edad' }, { name: 'gender', label: 'Sexo' }]);
         expect(opts.filter((o) => o.name === 'gender')).toHaveLength(1);
-        expect(opts.map((o) => o.name)).toEqual(['edad', 'gender', ...BASE_RULE_FIELDS.filter((b) => b.name !== 'gender').map((b) => b.name)]);
+        expect(opts.map((o) => o.name)).toEqual(['edad', 'gender', 'location']);
+        expect(BASE_RULE_FIELDS.map((b) => b.name)).toContain('family_group');
     });
 
-    it("works with no fields at all and resolves labels", () => {
-        expect(ruleFieldOptions(undefined).map((o) => o.name)).toEqual(BASE_RULE_FIELDS.map((b) => b.name));
+    it("works with no fields at all and resolves labels (a base column the form lost keeps its name)", () => {
+        expect(ruleFieldOptions(undefined).map((o) => o.name)).toEqual(['location']);
         expect(fieldLabelOf('family_group', [])).toBe('Grupo familiar');
         expect(fieldLabelOf('edad', [{ name: 'edad', label: 'Edad' }])).toBe('Edad');
         expect(fieldLabelOf('desconocido', [])).toBe('desconocido');

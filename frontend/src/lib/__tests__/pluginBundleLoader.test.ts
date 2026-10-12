@@ -8,6 +8,22 @@ import { renderToStaticMarkup } from "react-dom/server";
 // the loader imports next/dynamic.
 vi.mock("next/dynamic", () => ({ default: (loader: unknown) => loader }));
 
+// The withheld-UI notice (components/PluginScriptNotGranted) reads its viewer and language from the admin
+// shell's contexts. Here it is read by an administrator using the English admin — who its grant
+// instructions are for; what a plugin team member reads instead is pinned in
+// components/__tests__/pluginScriptNotGranted.test.tsx.
+vi.mock("@/contexts/AuthContext", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("@/contexts/AuthContext")>()),
+    useOptionalAuth: () => ({ user: { role: "administrator", capabilities: ["*"] } }),
+}));
+vi.mock("@/contexts/I18nContext", async (importOriginal) => {
+    const { t } = await import("@/lib/i18n");
+    return {
+        ...(await importOriginal<typeof import("@/contexts/I18nContext")>()),
+        useOptionalI18n: () => ({ language: "en", setLanguage: () => undefined, t: (k: string) => t(k, "en") }),
+    };
+});
+
 /**
  * Regression cover for the runtime plugin loader's FAILURE semantics.
  *

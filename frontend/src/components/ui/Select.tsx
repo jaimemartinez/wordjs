@@ -1,5 +1,7 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
+import { useDropdownPlacement } from '@/lib/useDropdownPlacement';
+import { ADMIN_Z } from '@/lib/adminLayers';
 
 interface SelectOption {
     value: string;
@@ -14,39 +16,20 @@ interface SelectProps {
     className?: string;
 }
 
-// Fixed-position coordinates for the portalled dropdown, so it escapes any `overflow-hidden`
-// ancestor (e.g. a rounded card) that would otherwise clip the options.
-interface Coords { left: number; width: number; top?: number; bottom?: number; maxHeight: number; }
-
 export function Select({ value, onChange, options, disabled, className }: SelectProps) {
     const [isOpen, setIsOpen] = useState(false);
     const [highlight, setHighlight] = useState(0);
-    const [coords, setCoords] = useState<Coords | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const dropdownRef = useRef<HTMLDivElement>(null);
     const listRef = useRef<HTMLDivElement>(null);
 
     const selectedLabel = options.find(o => o.value === value)?.label || value;
 
-    // Measure the trigger and decide whether the menu opens downward or (when there isn't room)
-    // upward. Runs on open and on scroll/resize so the menu stays pinned to the trigger.
-    const updateCoords = useCallback(() => {
-        const el = containerRef.current;
-        if (!el) return;
-        const rect = el.getBoundingClientRect();
-        const gap = 8;
-        const spaceBelow = window.innerHeight - rect.bottom - gap;
-        const spaceAbove = rect.top - gap;
-        const openUp = spaceBelow < 180 && spaceAbove > spaceBelow;
-        const maxHeight = Math.max(120, Math.min(260, Math.floor(openUp ? spaceAbove : spaceBelow)));
-        setCoords({
-            left: rect.left,
-            width: rect.width,
-            top: openUp ? undefined : Math.round(rect.bottom + gap),
-            bottom: openUp ? Math.round(window.innerHeight - rect.top + gap) : undefined,
-            maxHeight,
-        });
-    }, []);
+    // The portalled dropdown is position: fixed (no `overflow-hidden` ancestor clips it) and placed by
+    // lib/dropdownPlacement.ts — the same rule as ModernSelect: always inside the visible viewport, whole
+    // whenever it can be (below the trigger, else above it; in a dialog its body may scroll a little to make
+    // room), scrolling inside only when neither side fits.
+    const { coords, update: updateCoords } = useDropdownPlacement(isOpen, { trigger: containerRef, list: listRef }, options.length);
 
     // Close on outside click — checking BOTH the trigger and the portalled menu, since the menu
     // lives outside the container in the DOM tree.
@@ -61,19 +44,6 @@ export function Select({ value, onChange, options, disabled, className }: Select
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, [isOpen]);
-
-    // Reposition while open; use capture so inner scroll containers are caught too.
-    useEffect(() => {
-        if (!isOpen) return;
-        updateCoords();
-        const onScroll = () => updateCoords();
-        window.addEventListener('scroll', onScroll, true);
-        window.addEventListener('resize', onScroll);
-        return () => {
-            window.removeEventListener('scroll', onScroll, true);
-            window.removeEventListener('resize', onScroll);
-        };
-    }, [isOpen, updateCoords]);
 
     // When opening, highlight the currently-selected option.
     useEffect(() => {
@@ -146,13 +116,14 @@ export function Select({ value, onChange, options, disabled, className }: Select
                         width: coords.width,
                         top: coords.top,
                         bottom: coords.bottom,
-                        zIndex: 6000,
+                        zIndex: ADMIN_Z.popover,
                     }}
+                    data-dropdown-side={coords.side}
                     className="bg-white rounded-xl shadow-xl border border-gray-100 overflow-hidden animate-in fade-in duration-150"
                 >
                     <div
                         ref={listRef}
-                        className="p-1 overflow-y-auto custom-scrollbar"
+                        className="p-1 overflow-y-auto overscroll-contain custom-scrollbar"
                         style={{ maxHeight: coords.maxHeight }}
                         role="listbox"
                     >
@@ -168,7 +139,7 @@ export function Select({ value, onChange, options, disabled, className }: Select
                                     data-idx={i}
                                     onMouseEnter={() => setHighlight(i)}
                                     className={`
-                                        w-full flex items-center justify-between px-3 py-2.5 text-sm rounded-lg transition-colors mb-0.5
+                                        w-full flex items-center justify-between gap-3 text-left px-3 py-2.5 text-sm rounded-lg transition-colors mb-0.5
                                         ${isSelected
                                             ? 'bg-blue-50 text-blue-600 font-bold'
                                             : isHighlighted
@@ -177,8 +148,8 @@ export function Select({ value, onChange, options, disabled, className }: Select
                                     `}
                                     onClick={() => handleSelect(option.value)}
                                 >
-                                    <span>{option.label}</span>
-                                    {isSelected && <i className="fa-solid fa-check text-blue-500 text-xs"></i>}
+                                    <span className="min-w-0 flex-1 whitespace-normal break-words">{option.label}</span>
+                                    {isSelected && <i className="fa-solid fa-check text-blue-500 text-xs shrink-0"></i>}
                                 </button>
                             );
                         })}

@@ -218,7 +218,7 @@ export default function ChromeEditorPage() {
             <div className="h-20 flex items-center justify-between bg-white/80 backdrop-blur-md px-6 md:px-8 shrink-0 z-20 relative border-b border-gray-100 shadow-sm gap-6">
                 <div className="flex items-center gap-6 min-w-0">
                     <div className="flex items-center gap-3 text-gray-900">
-                        <div className="w-10 h-10 bg-gradient-to-br from-indigo-600 to-blue-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-indigo-500/20">
+                        <div className="w-10 h-10 shrink-0 bg-gradient-to-br from-indigo-600 to-blue-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-indigo-500/20">
                             <i className="fa-solid fa-window-maximize text-lg"></i>
                         </div>
                         <div className="hidden md:block">

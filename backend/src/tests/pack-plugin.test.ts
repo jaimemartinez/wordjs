@@ -155,6 +155,12 @@ test('pack:plugin refuses what the installer would refuse, and writes nothing', 
         ['no-name', { isolated: true }, OK_INDEX, /name/],
         ['wrong-id', { id: 'other', name: 'X', isolated: true }, OK_INDEX, /does not match/],
         ['blocked', MANIFEST, "require('child_process').execSync('id');\n", /child_process/],
+        // A declared role reaching outside the plugin's namespace (core/plugin-roles.ts).
+        ['bad-roles', {
+            ...MANIFEST,
+            permissions: [{ scope: 'roles', access: 'declare' }],
+            roles: [{ slug: 'bad_roles_team', name: 'Team', capabilities: ['bad_roles_access', 'manage_options'] }],
+        }, OK_INDEX, /Invalid roles:.*"manage_options" must start with "bad_roles_"/],
     ];
     for (const [slug, manifest, indexJs, reason] of cases) {
         const f = fixture(slug, manifest, indexJs);

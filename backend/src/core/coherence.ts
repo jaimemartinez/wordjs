@@ -25,7 +25,9 @@
  * allowlist, deny-all) differs from the current one is respawned, since its network/allowlist cfg is
  * baked in at spawn. Without this a revoke on node A left every OTHER node running the plugin with the
  * OLD grants and the OLD allowlist — including the dns bridge, the exfiltration path the allowlist
- * exists to stop — until it restarted.
+ * exists to stop — until it restarted. The same grants map decides what a plugin-declared role confers
+ * (its capabilities count only while its plugin holds the `roles:declare` grant), so the re-read also
+ * carries a `roles:declare` grant or revoke to every node.
  *
  * Pub/sub delivery is NOT guaranteed (a Redis blip, a subscriber reconnect, the boot window before this
  * node subscribes all drop messages silently), so the bus is only the fast path. The bound is a periodic
@@ -186,7 +188,9 @@ function handlePluginChange(msg: string): void {
 // Handle a 'wordjs:option-changed' message. Exported for unit testing. Refreshes the in-process state a
 // node keeps OUTSIDE the (already-invalidated) option cache: the roles cache, the Redis master switch,
 // and the plugin grant / egress-allowlist maps the host security gates read synchronously — and, for
-// the latter, respawns any running isolate whose spawn-time policy is no longer current.
+// the latter, respawns any running isolate whose spawn-time policy is no longer current. The grants map
+// also decides what a plugin-declared role confers (its capabilities count only while the plugin holds
+// `roles:declare`), so a revoke on node A must reach node B's map, not wait for a restart.
 async function handleOptionChange(name: string): Promise<void> {
     try {
         if (name === 'wordjs_user_roles') {

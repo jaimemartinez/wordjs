@@ -7,7 +7,8 @@
  * backend/plugins, or in a repository of its own — had no equivalent, and the documented path was
  * "compress the folder by hand". This does what that step needs, the same way the catalog does it:
  *
- *   1. checks the manifest the installer will check (valid JSON, id == folder, a name, "isolated": true);
+ *   1. checks the manifest the installer will check (valid JSON, id == folder, a name, "isolated": true,
+ *      a `roles` block inside the plugin's own namespace);
  *   2. compiles the frontend entries with build-plugin.js (skipped for a backend-only plugin), including
  *      the Tailwind classes its UI uses (plugin-stylesheet.js);
  *   3. copies the plugin into a staging folder with the catalog's rules (core/plugin-package-files.ts,
@@ -262,6 +263,11 @@ function pack(opts) {
 
     const installer = loadInstaller();
     checkDependencySpecs(manifest, installer, 'manifest.json');
+
+    // Declared roles must stay inside the plugin's namespace (backend/src/core/plugin-roles.ts) — the upload
+    // route refuses the whole roles block otherwise, so refuse it here, before anything is built.
+    const roleProblems = installer.validateManifestRoles(slug, manifest);
+    if (roleProblems.length) fail(`the installer would refuse this plugin: Invalid roles: ${roleProblems.join(' ')}`);
 
     if (manifest.frontend) {
         console.log('🛠️  Compiling the frontend entries…');

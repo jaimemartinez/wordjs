@@ -40,6 +40,10 @@ export type Perms = {
     error: string | null;
     isAdmin: boolean;
     isStaff: boolean;
+    /** 2.16.0: the account has the WordJS role «Equipo de conferencia» (undefined from an older backend). */
+    teamRole?: boolean;
+    /** 2.16.0: the account is on the team list, active or not. */
+    member?: boolean;
     permissions: StaffPermissions;
     user: { id: number; name: string } | null;
     /** `level` defaults to 'view'. Administrators can everything. */
@@ -55,7 +59,7 @@ const ADMIN_PERMS: Perms = {
 const PermsContext = createContext<Perms | null>(null);
 
 export function PermsProvider({ children }: { children: React.ReactNode }) {
-    const [state, setState] = useState<{ loading: boolean; error: string | null; isAdmin: boolean; isStaff: boolean; permissions: StaffPermissions; user: any }>(
+    const [state, setState] = useState<{ loading: boolean; error: string | null; isAdmin: boolean; isStaff: boolean; teamRole?: boolean; member?: boolean; permissions: StaffPermissions; user: any }>(
         { loading: true, error: null, isAdmin: false, isStaff: false, permissions: normalizePermissions(null), user: null },
     );
     const [seq, setSeq] = useState(0);
@@ -68,6 +72,8 @@ export function PermsProvider({ children }: { children: React.ReactNode }) {
                 const isAdmin = !!me?.isAdmin;
                 setState({
                     loading: false, error: null, isAdmin, isStaff: !!me?.isStaff,
+                    teamRole: typeof me?.teamRole === 'boolean' ? me.teamRole : undefined,
+                    member: typeof me?.member === 'boolean' ? me.member : undefined,
                     permissions: isAdmin ? fullPermissions() : normalizePermissions(me?.permissions),
                     user: me?.user || null,
                 });

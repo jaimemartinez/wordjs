@@ -197,6 +197,8 @@ export function createScanGate(ms = 3000) {
             seen.set(code, at);
             return !known;
         },
+        /** Counts as a sighting now (2.16.0): the code passes again only after `ms` out of view. */
+        touch(code: string, at: number = Date.now()) { if (code) seen.set(code, at); },
         reset() { seen.clear(); },
     };
 }
@@ -224,6 +226,8 @@ export function classifyRead(raw: unknown, format = ''): ScanRead | null {
 
 export type ReadRoute =
     | { action: 'submit'; code: string }
+    /** 2.16.0: a badge whose card was just cancelled, still (or again) in view — say why nothing opens. */
+    | { action: 'held'; code: string; fresh: boolean }
     | { action: 'show'; value: string; format: string; fresh: boolean };
 
 /**
@@ -235,17 +239,33 @@ export type ReadRoute =
 export function createReadRouter(ms = 3000) {
     const regGate = createScanGate(ms);
     const otherGate = createScanGate(ms);
+    /** Codes held after «Cancelar» → whether the «aparta el código» hint was already given. */
+    const hinted = new Map<string, boolean>();
     return {
         route(raw: unknown, format: string, busy: boolean, at: number = Date.now()): ReadRoute | null {
             const r = classifyRead(raw, format);
             if (!r) return null;
             if (r.kind === 'reg') {
-                if (busy || !regGate.accept(r.code, at)) return null;
-                return { action: 'submit', code: r.code };
+                if (busy) return null;
+                if (regGate.accept(r.code, at)) { hinted.delete(r.code); return { action: 'submit', code: r.code }; }
+                // Held after «Cancelar»: every sighting keeps the hint alive; the first one shows it.
+                if (hinted.has(r.code)) { const fresh = !hinted.get(r.code); hinted.set(r.code, true); return { action: 'held', code: r.code, fresh }; }
+                return null;
             }
             return { action: 'show', value: r.value, format: r.format, fresh: otherGate.accept(`${r.format}\n${r.value}`, at) };
         },
-        reset() { regGate.reset(); otherGate.reset(); },
+        /**
+         * The confirmation card of this code just closed (2.16.0: delivered, «Cancelar», «Cerrar»). The badge
+         * usually still sits under the camera: it must leave the view for `ms` before it opens a card again
+         * — «Cancelar» would otherwise bring the same card straight back. `hint` (after «Cancelar»): while it
+         * is held, route() answers 'held' instead of staying silent.
+         */
+        hold(code: string, at: number = Date.now(), hint = false) {
+            if (!code) return;
+            regGate.touch(code, at);
+            if (hint) hinted.set(code, false); else hinted.delete(code);
+        },
+        reset() { regGate.reset(); otherGate.reset(); hinted.clear(); },
     };
 }
 

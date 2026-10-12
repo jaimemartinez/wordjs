@@ -269,7 +269,7 @@ export interface ConferenceField {
     is_required: number;
     sort_order: number;
     width?: number;
-    role?: string;            // legacy; superseded by the flags below
+    role?: string;            // what a base field is for (first_name / last_name / email / phone / gender); set by the templates
     is_group?: number;        // this field groups attendees (one per conference)
     is_unique?: number;       // this field's value must be unique within the conference
 }
@@ -369,12 +369,22 @@ export type MealPersonDetail = {
     person: { id: number; name: string; location: string | null; location_id: number | null; family_group: string | null; reg_code: string | null; status: string; conference_id: number };
     services: MealPersonService[];
 };
-export type MealVerdictPerson = { id: number; name: string; location: string | null; location_id: number | null; family_group: string | null; reg_code: string | null };
+/** 2.16.0: `fields` = the conference's configured delivery-card entries (only those values travel). */
+export type MealVerdictPerson = { id: number; name: string; location: string | null; location_id: number | null; family_group: string | null; reg_code: string | null; fields?: MealDisplayField[] };
+export type MealDisplayField = { key: string; label: string; value: string | null; hidden?: boolean };
+export type MealVerdictService = { id: number; service_date: string; meal: string; label: string | null; start_time: string | null; end_time: string | null };
 export type MealVerdict = {
     result: 'delivered' | 'already' | 'not_entitled' | 'cancelled' | 'unknown' | 'other_conference';
     service_id: number;
+    service?: MealVerdictService;
     person?: MealVerdictPerson;
     delivery_id?: number; delivered_at?: string; delivered_by?: string | null; method?: string | null; note?: string | null; source?: string;
+};
+/** POST /meals/check (2.16.0, read-only): what /meals/deliver would do — 'ready' delivers, 'not_entitled' needs force. */
+export type MealCheck = Omit<MealVerdict, 'result'> & { result: 'ready' | 'not_entitled' | 'already' | 'cancelled' | 'unknown' | 'other_conference' };
+export type MealDisplaySettings = {
+    conference_id: number; keys: string[]; configured: boolean; default_keys: string[];
+    available: { key: string; label: string; builtin: boolean; type?: string }[];
 };
 export type MealDeliveryRow = {
     delivery_id: number; inscription_id: number; name: string; location: string | null; location_id: number | null;
@@ -408,6 +418,10 @@ export interface StaffMe {
     isStaff: boolean;
     /** Every section present; an administrator gets the highest level of each. */
     permissions: StaffPermissions;
+    /** 2.16.0: the account has the WordJS role «Equipo de conferencia» (the only one that may be on the team). */
+    teamRole?: boolean;
+    /** 2.16.0: the account is on the team list (active or not). */
+    member?: boolean;
     user: { id: number; name: string };
 }
 export interface StaffRole {
@@ -418,7 +432,8 @@ export interface StaffRole {
     created_at?: string;
     updated_at?: string;
 }
-export interface StaffUser { id: number; login: string; email: string; name: string; role: string }
+/** `role` = the WordJS role slug; `team_role` = it is «Equipo de conferencia», the only role that may join (2.16.0). */
+export interface StaffUser { id: number; login: string; email: string; name: string; role: string; team_role?: boolean }
 export interface StaffMember {
     id: number;
     user_id: number;
@@ -429,6 +444,8 @@ export interface StaffMember {
     created_at?: string;
     /** null when the WordJS user no longer exists (or the users:read grant is missing). */
     user: StaffUser | null;
+    /** 2.16.0: false = the account lost the WordJS team role (no section until it is given back); null = unknown. */
+    team_role?: boolean | null;
 }
 
 export const conferenceApi = {
@@ -443,7 +460,8 @@ export const conferenceApi = {
         apiPut<{ success: boolean }>(`/plugin/conference-manager/staff/roles/${id}`, data),
     /** 409 while the role still has members (the message says how many). */
     deleteStaffRole: (id: number) => apiDelete<{ success: boolean }>(`/plugin/conference-manager/staff/roles/${id}`),
-    getStaffMembers: () => apiGet<{ members: StaffMember[] }>('/plugin/conference-manager/staff/members'),
+    // roles_ready: the team role exists and opens the panel (false = roles:declare not granted); null = unknown.
+    getStaffMembers: () => apiGet<{ members: StaffMember[]; users_read?: boolean; roles_ready?: boolean | null }>('/plugin/conference-manager/staff/members'),
     /** 409 already a member; 400 an administrator / unknown role; 404 unknown user; 503 users:read not granted. */
     addStaffMember: (data: { user_id: number; role_id: number }) =>
         apiPost<{ success: boolean; id: number }>('/plugin/conference-manager/staff/members', data),
@@ -522,7 +540,8 @@ export const conferenceApi = {
     rejectPayment: (paymentId: number) => apiPost(`/plugin/conference-manager/payments/${paymentId}/reject`, {}),
 
     // Assignment
-    getAssignmentRules: (conferenceId: number) => apiGet<AssignmentRule[]>(`/plugin/conference-manager/assignment/rules?conference_id=${conferenceId}`),
+    // all: also every location's own rules (each with location_name) — for the delete-field warning.
+    getAssignmentRules: (conferenceId: number, opts: { all?: boolean } = {}) => apiGet<AssignmentRule[]>(`/plugin/conference-manager/assignment/rules?conference_id=${conferenceId}${opts.all ? '&all=1' : ''}`),
     saveAssignmentRule: (data: Partial<AssignmentRule>) => apiPost('/plugin/conference-manager/assignment/rules', data),
     deleteAssignmentRule: (id: number) => apiDelete(`/plugin/conference-manager/assignment/rules/${id}`),
     runAssignment: (conferenceId: number) => apiPost<AssignmentRunReport>('/plugin/conference-manager/assignment/run', { conference_id: conferenceId }),
@@ -532,6 +551,9 @@ export const conferenceApi = {
     // Fields
     getFields: (conferenceId: number) => apiGet<ConferenceField[]>(`/plugin/conference-manager/fields?conference_id=${conferenceId}`),
     saveField: (data: Partial<ConferenceField>) => apiPost('/plugin/conference-manager/fields', data),
+    /** 2.16.0: add a base field from its template (lib/fields.ts FIELD_TEMPLATES). 409 = the form already has it. */
+    addFieldTemplate: (conferenceId: number, template: string, label?: string) =>
+        apiPost<{ success: boolean; id: number; name: string; is_group: number }>('/plugin/conference-manager/fields', { conference_id: conferenceId, template, label }),
     deleteField: (id: number) => apiDelete(`/plugin/conference-manager/fields/${id}`),
     publishForm: (conferenceId: number, published: boolean) => apiPost('/plugin/conference-manager/publish', { conference_id: conferenceId, published }),
 
@@ -592,6 +614,14 @@ export const conferenceApi = {
     /** Always 200 with a verdict for normal outcomes; 404 = the service no longer exists. Send the RAW scanned text as `code`. */
     deliverMeal: (data: { service_id: number; code?: string; inscription_id?: number; force?: boolean; note?: string }) =>
         apiPost<MealVerdict>('/plugin/conference-manager/meals/deliver', data),
+    /** Read-only (2.16.0): the confirmation card's verdict, service and configured person fields. Records nothing. */
+    checkMeal: (data: { service_id: number; code?: string; inscription_id?: number }) =>
+        apiPost<MealCheck>('/plugin/conference-manager/meals/check', data),
+    /** What the delivery card shows for a conference (2.16.0). */
+    getMealDisplayFields: (conferenceId: number) => apiGet<MealDisplaySettings>(`/plugin/conference-manager/meals/display-fields?conference_id=${conferenceId}`),
+    /** `keys` in display order; null = back to the default (name + location). Needs Alimentación › gestionar. */
+    setMealDisplayFields: (conferenceId: number, keys: string[] | null) =>
+        apiPut<{ success: boolean; conference_id: number; keys: string[]; configured: boolean }>('/plugin/conference-manager/meals/display-fields', { conference_id: conferenceId, keys }),
     undoMealDelivery: (deliveryId: number) => apiDelete<{ success: boolean }>(`/plugin/conference-manager/meals/deliveries/${deliveryId}`),
     getMealServiceStats: (serviceId: number) => apiGet<{ service_id: number; entitled: number; delivered: number; pending: number; overrides_delivered: number; by_location: any[] }>(`/plugin/conference-manager/meals/services/${serviceId}/stats`),
     getMealServiceDeliveries: (serviceId: number, limit = 20) => apiGet<{ service_id: number; deliveries: MealDeliveryRow[] }>(`/plugin/conference-manager/meals/services/${serviceId}/deliveries?limit=${limit}`),

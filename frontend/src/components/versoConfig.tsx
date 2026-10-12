@@ -595,7 +595,7 @@ export const RichTextEditor = React.memo(({ value, onChange, onSave, onCancel, t
                 handleMouseDown(e);
                 onClick(e);
             }}
-            className={`w-8 h-8 flex items-center justify-center rounded-md transition-all duration-200 ${active
+            className={`w-8 h-8 shrink-0 flex items-center justify-center rounded-md transition-all duration-200 ${active
                 ? 'bg-blue-50 text-blue-600'
                 : 'text-gray-500 hover:bg-gray-100 hover:text-gray-900'
                 }`}
@@ -657,7 +657,7 @@ export const RichTextEditor = React.memo(({ value, onChange, onSave, onCancel, t
 
                 <div className="flex bg-white rounded-lg border border-gray-100 p-0.5 shadow-sm">
                     <div
-                        className="relative w-8 h-8 flex items-center justify-center hover:bg-gray-50 rounded cursor-pointer group/color"
+                        className="relative w-8 h-8 shrink-0 flex items-center justify-center hover:bg-gray-50 rounded cursor-pointer group/color"
                         onMouseDown={(e) => {
                             // Don't preventDefault here as we need the color picker to open
                             // but do stop propagation to keep the editor away

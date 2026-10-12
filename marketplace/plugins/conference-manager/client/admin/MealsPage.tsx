@@ -17,8 +17,20 @@
  * Staff roles (2.15.0): Plan / Por persona / Reporte need Alimentación › ver (editing the plan and the
  * per-person adjustments needs › gestionar); Entrega and «Modo escáner» need Entrega de comidas › operar
  * — the kitchen can deliver without seeing (or touching) the plan. Administrators see everything.
+ *
+ * 2.16.0: «Entrega» confirms before recording (per device, «Confirmar antes de entregar», default ON): a
+ * scan opens the confirmation card (meal + the person's configured data + status) — Enter = Entregar,
+ * Esc = Cancelar (records nothing); a code scanned while a card waits is QUEUED, never applied to it. Enter
+ * only answers a card that has been on screen for a moment and is never a held-down key or the second Enter
+ * of a scanner's CR+LF suffix; the queue also waits until the delivery's result has been seen («Entregado»
+ * for a moment; anything else until Enter / Esc / a click). A person picked by name replaces the open card.
+ * «Qué se muestra al entregar» (Alimentación › gestionar) chooses and orders the data on that card.
+ * Whatever appears under the scan input (the check on its way, the card, a delivery's result) is brought
+ * into view at once — on common desktop sizes it opened below the fold — and the card is capped to the
+ * visible band, so its meal, name and buttons are on screen together; the counter tiles share a row only
+ * where their words fit (Counters.tsx).
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "../../../../../frontend/src/contexts/I18nContext";
 import { useToast } from "../../../../../frontend/src/contexts/ToastContext";
 import { useModal } from "@/contexts/ModalContext";
@@ -29,8 +41,18 @@ import {
     MEALS, DEFAULT_WINDOWS, buildMealReportWorkbook, chunk, columnState, dateRange, filterReportRows, groupByDay,
     normalizeCode, pickCurrentService, planKey, planSet, rowState, serviceWindow, sortServices, stampDayTime, stampTime,
 } from "../lib/meals";
-import { MealScanner, PersonSearch, VerdictCard, MEAL_ICON, dayLabel, mealName, serviceName, servedLine, isOffline, useMealDelivery, useTx, makeTxn, createFeedback, primeScannerAudio } from "./MealScanner";
+import {
+    MealScanner, PersonSearch, VerdictCard, MEAL_ICON, dayLabel, mealName, serviceName, servedLine, isOffline, useMealDelivery, useTx, makeTxn, createFeedback, primeScannerAudio,
+    CheckingCard, ConfirmCard, ConfirmToggle, displayLabelsOf, useConfirmFlow, useConfirmPref,
+} from "./MealScanner";
+import {
+    DEFAULT_DISPLAY_KEYS, REVEAL_FIT_VAR, REVEAL_MARGIN_PX, VERDICT_TAP_ARM_MS, canMoveDisplayKey, cardKeyAction, decisionSlotKey, displayLabel, displayOptions, displaySaveKeys,
+    moveDisplayKey, previewDisplayFields, revealSlot, toggleDisplayKey, withName,
+} from "../lib/mealConfirm";
 import { Overlay } from "./Overlay";
+import { Counter, Counters } from "./Counters";
+import { TAB_STRIP_CSS } from "../lib/phoneLayout";
+import { useStripOverflow, useRevealActive, stripMoreAttrs } from "../lib/useStripOverflow";
 import { usePerms, ReadOnlyNotice } from "./perms";
 
 type Tab = 'plan' | 'people' | 'delivery' | 'report';
@@ -70,13 +92,6 @@ const Spinner = ({ label }: any) => (
     <div className="text-center py-16">
         <div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-3"></div>
         <p className="text-gray-400 text-xs font-bold uppercase tracking-widest">{label}</p>
-    </div>
-);
-
-const Counter = ({ label, value, tone = 'text-gray-900', icon }: any) => (
-    <div className="bg-gray-50/80 px-4 py-3 rounded-2xl border border-gray-100">
-        <div className="text-[9px] font-black text-gray-400 uppercase tracking-widest">{icon && <i className={`fa-solid ${icon} mr-1`} aria-hidden="true"></i>}{label}</div>
-        <div className={`text-2xl font-black italic tracking-tighter mt-0.5 tabular-nums ${tone}`}>{value}</div>
     </div>
 );
 
@@ -126,6 +141,12 @@ export default function MealsPage({ conferenceId, slug, conference }: { conferen
         if (!lostRef.current) setServiceId(pickCurrentService(services)?.id ?? null);
     }, [data, services, serviceId]);
 
+    // The sub-tab strip fades out on the side that has more tabs (lib/useStripOverflow.ts); it mounts with the
+    // data. The active sub-tab is kept clear of that fade (useRevealActive), like the conference tabs.
+    const subTabsRef = useRef<HTMLDivElement | null>(null);
+    const subTabsMore = useStripOverflow(subTabsRef, [!!data, allowedTabs.length, shownTab]);
+    useRevealActive(subTabsRef, '[aria-selected="true"]', [!!data, allowedTabs.length, shownTab]);
+
     if (!data) return loadFailed
         ? <div className="text-center py-16 space-y-3"><p className="text-sm font-bold text-gray-600">{tx('meals.load.failed', 'No se pudo cargar la alimentación.')}</p><button className={btnGhost} onClick={reload}>{tx('meals.retry', 'Reintentar')}</button></div>
         : <Spinner label={tx('loading', 'Cargando…')} />;
@@ -147,7 +168,7 @@ export default function MealsPage({ conferenceId, slug, conference }: { conferen
                 <div className="relative flex flex-col lg:flex-row lg:items-center justify-between gap-6">
                     <div>
                         <div className="flex items-center gap-3 mb-3">
-                            <div className="w-10 h-10 rounded-xl bg-orange-500 flex items-center justify-center text-white shadow-lg shadow-orange-200"><i className="fa-solid fa-utensils"></i></div>
+                            <div className="w-10 h-10 shrink-0 rounded-xl bg-orange-500 flex items-center justify-center text-white shadow-lg shadow-orange-200"><i className="fa-solid fa-utensils"></i></div>
                             <span className="text-[10px] font-bold text-orange-600 uppercase tracking-[0.2em]">{tx('meals', 'Alimentación')}</span>
                         </div>
                         <h2 className="text-3xl font-black text-gray-900 italic tracking-tighter">{tx('meals.title', 'Comidas y entregas')}</h2>
@@ -158,15 +179,17 @@ export default function MealsPage({ conferenceId, slug, conference }: { conferen
                         <i className="fa-solid fa-mobile-screen-button mr-2" aria-hidden="true"></i>{tx('meals.scanner.open', 'Modo escáner (celular)')}
                     </button>}
                 </div>
-                <div className="relative grid grid-cols-3 gap-3 mt-6">
+                <Counters cols={3} gap={12} className="relative mt-6">
                     <Counter label={tx('meals.count.services', 'Servicios')} value={services.length} icon="fa-utensils" />
                     <Counter label={tx('meals.count.entitled.all', 'Raciones con derecho')} value={totals.entitled} icon="fa-users" />
                     <Counter label={tx('meals.count.delivered.all', 'Raciones entregadas')} value={totals.delivered} tone="text-emerald-600" icon="fa-circle-check" />
-                </div>
+                </Counters>
             </div>
 
-            {/* Sub-tabs (only the ones the role may open) */}
-            <div className="flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label={tx('meals', 'Alimentación')}>
+            {/* Sub-tabs (only the ones the role may open). On a phone they scroll sideways: the strip fades out on
+                the side that has more (lib/phoneLayout.ts TAB_STRIP_CSS). */}
+            <style>{TAB_STRIP_CSS}</style>
+            <div ref={subTabsRef} className="flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label={tx('meals', 'Alimentación')} data-cm-scroll-strip="" {...stripMoreAttrs(subTabsMore)}>
                 {allowedTabs.map((k) => (
                     <button key={k} type="button" role="tab" aria-selected={shownTab === k} onClick={() => setTab(k)}
                         className={`flex items-center gap-2 px-5 py-3 rounded-2xl border-2 font-black text-[11px] uppercase tracking-widest whitespace-nowrap transition-all ${shownTab === k ? 'border-orange-400 bg-orange-50 text-orange-700' : 'border-gray-100 bg-white text-gray-500 hover:border-gray-300'}`}>
@@ -776,6 +799,10 @@ function DeliveryTab({ conferenceId, services, locations, serviceId, setServiceI
     searchingRef.current = searching;
     const pausedRef = useRef(paused);
     pausedRef.current = paused;
+    /** «Qué se muestra al entregar» is open: nothing here takes the focus or a key from it. */
+    const [displayOpen, setDisplayOpen] = useState(false);
+    const displayOpenRef = useRef(displayOpen);
+    displayOpenRef.current = displayOpen;
 
     const refresh = useCallback(async () => {
         const sid = serviceId;
@@ -798,9 +825,11 @@ function DeliveryTab({ conferenceId, services, locations, serviceId, setServiceI
     }, [refresh]);
 
     // The scan input keeps the focus (a USB / Bluetooth scanner types into whatever is focused) — except
-    // while the name search is open or the phone scanner covers this screen.
-    const focusInput = () => { if (!searchingRef.current && !pausedRef.current && alive.current) inputRef.current?.focus(); };
-    useEffect(() => { focusInput(); }, [serviceId, searching, paused]);
+    // while the name search is open, the phone scanner covers this screen or a dialog is open. While the slot
+    // shows something to decide or read, taking the focus back never scrolls it out of view.
+    const slotKeyRef = useRef<string | null>(null);
+    const focusInput = () => { if (!searchingRef.current && !pausedRef.current && !displayOpenRef.current && alive.current) inputRef.current?.focus(slotKeyRef.current ? { preventScroll: true } : undefined); };
+    useEffect(() => { focusInput(); }, [serviceId, searching, paused, displayOpen]);
 
     // The page header's totals: one GET /meals a moment after a burst of scans, not one per scan.
     const reloadTimer = useRef<any>(null);
@@ -810,6 +839,18 @@ function DeliveryTab({ conferenceId, services, locations, serviceId, setServiceI
     // previous request is still running, and no code may be dropped.
     const queue = useRef<Promise<void>>(Promise.resolve());
     const pending = useRef(0);
+    // A delivery's verdict on screen (immediate mode, «Entregar» of the confirmation card, the inline
+    // «Entregar de todas formas»): sound, the card, the counters.
+    const showOutcome = async (o: any, sid: number) => {
+        if (!alive.current) return;
+        if (o.result === 'delivered') feedback.current.ok(); else feedback.current.bad();
+        // The service changed while this scan was queued: its verdict would read as the new one's.
+        if (sid !== sidRef.current) { if (o.result === 'delivered') scheduleReload(); return; }
+        setOutcome(o);
+        if (o.result === 'no_service') { await reload(); return; }   // the parent then asks for a service
+        if (o.result === 'delivered') scheduleReload();
+        refreshRef.current();
+    };
     const run = (body: any) => {
         if (!serviceId) return;
         const sid = serviceId;
@@ -817,25 +858,103 @@ function DeliveryTab({ conferenceId, services, locations, serviceId, setServiceI
         queue.current = queue.current.then(async () => {
             try {
                 const o = await deliver({ service_id: sid, ...body });
-                if (!alive.current) return;
-                if (o.result === 'delivered') feedback.current.ok(); else feedback.current.bad();
-                // The service changed while this scan was queued: its verdict would read as the new one's.
-                if (sid !== sidRef.current) { if (o.result === 'delivered') scheduleReload(); return; }
-                setOutcome(o);
-                if (o.result === 'no_service') { await reload(); return; }   // the parent then asks for a service
-                if (o.result === 'delivered') scheduleReload();
-                refreshRef.current();
+                await showOutcome(o, sid);
             } finally {
                 if (--pending.current === 0 && alive.current) { setBusy(false); setTimeout(focusInput, 0); }
             }
         });
     };
-    const submit = (e?: any) => {
-        e?.preventDefault?.();
+
+    // ── 2.16.0: confirm before delivering (per device, default ON; OFF = `run`, today's immediate delivery) ──
+    const [confirmOn, setConfirmOn] = useConfirmPref();
+    const confirmRef = useRef(confirmOn);
+    confirmRef.current = confirmOn;
+    const [flow, confirm] = useConfirmFlow({
+        // A USB wedge never waits: a code scanned while a card asks for a decision is queued behind it — and
+        // the queue also waits until the delivery's result has been seen («Entregado» for a moment; any other
+        // result until Enter / Esc / a click: a delivery that was NOT recorded must never be hidden).
+        queue: true,
+        onCheck: (card) => {
+            if (!alive.current) return;
+            // The previous delivery's verdict belongs to someone else: it must not come back after «Cancelar».
+            setOutcome(null);
+            if (card.result === 'ready') feedback.current.attention(); else feedback.current.bad();
+            if (card.result === 'no_service') reload();
+        },
+        onResult: (o, card) => { showOutcome(o, card.serviceId); },
+        onClose: () => { setTimeout(focusInput, 0); },
+    });
+    const flowRef = useRef(flow);
+    flowRef.current = flow;
+    // Another service, or the confirmation switched off: the open card and the queue belong to the old state.
+    useEffect(() => { flow.reset(); }, [serviceId, confirmOn, flow]);
+    // The decision is always in view (lib/mealConfirm revealSlot): whatever newly appears in the slot — the
+    // check on its way, a card, a delivery's result — is capped to the visible band and scrolled into view
+    // before it is painted; again when the window is resized. A layout effect: it runs (and its resize
+    // listener is registered) before the card's own measuring effect, which then sees the capped height.
+    const slotRef = useRef<HTMLDivElement>(null);
+    const slotKey = decisionSlotKey({ confirmOn, card: confirm.card, checking: confirm.checking, outcome, held: confirm.held });
+    slotKeyRef.current = slotKey;
+    useLayoutEffect(() => {
+        if (!slotKey) return;
+        const reveal = () => { revealSlot(slotRef.current, window); };
+        reveal();
+        window.addEventListener('resize', reveal);
+        return () => window.removeEventListener('resize', reveal);
+    }, [slotKey]);
+    /** What a key answers: the open card, or the delivery result that holds the queue. */
+    const keyTarget = (st: any) => (st.card ? st.card.result : st.held ? 'held' : null);
+    /** The result on screen was seen (Enter / Esc / a click): «Cerrar» an informative card, or let the queue go on. */
+    const ack = () => { if (flowRef.current.close()) setOutcome(null); };
+    const ackRef = useRef(ack);
+    ackRef.current = ack;
+    // Esc = «Cancelar» (records nothing) / «Cerrar» — wherever the focus is, unless the phone scanner or a
+    // dialog is on top (they have their own Esc). A held-down Esc does nothing.
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key !== 'Escape' || pausedRef.current || displayOpenRef.current || !confirmRef.current) return;
+            const f = flowRef.current;
+            const a = cardKeyAction('Escape', keyTarget(f.state()), '', { now: Date.now(), repeat: e.repeat });
+            if (a === 'cancel') { e.preventDefault(); f.cancel(); }
+            else if (a === 'close') { e.preventDefault(); ackRef.current(); }
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, []);
+    // A code (scanned or typed) or a person picked. Confirmation ON: the card — or the queue behind an
+    // open one; never «Entregar» for the card on screen. A person picked by name (`manual`) is the
+    // operator's choice NOW: it replaces the open card, like on the phone (flow.pick).
+    const scanBody = (body: any, manual = false) => {
+        if (!serviceId) return;
+        if (!confirmRef.current) { run(body); return; }
+        const r = manual ? flow.pick(serviceId, body) : flow.scan(serviceId, body);
+        if (r === 'checking') setOutcome(null);
+        else if (r === 'ignored') feedback.current.bad();
+    };
+    /** The previous keydown in the scan input: an Enter right after it is part of the same burst. */
+    const lastKeyAt = useRef<number | null>(null);
+    // Enter in the scan input (keydown, so a held-down key and a CR+LF burst can be told apart).
+    const onScanKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        const at = Date.now();
+        const prev = lastKeyAt.current;
+        lastKeyAt.current = at;
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        submit({ now: at, lastKeyAt: prev, repeat: e.repeat });
+    };
+    const submit = (key?: { now: number; lastKeyAt: number | null; repeat?: boolean }) => {
         const raw = code;
         setCode('');
+        if (confirmRef.current) {
+            // Enter on an EMPTY input answers the card on screen (a wedge's Enter always follows a code,
+            // which makes it a new scan instead) — once the card has been seen, never as a repeat or burst.
+            const st = flow.state();
+            const a = cardKeyAction('Enter', keyTarget(st), raw, { now: key?.now ?? Date.now(), lastKeyAt: key ? key.lastKeyAt : lastKeyAt.current, repeat: !!key?.repeat, shownAt: st.card ? st.card.shownAt : st.heldAt });
+            if (a === 'deliver') { flow.deliver(); return; }
+            if (a === 'close') { ack(); return; }
+        }
         if (!normalizeCode(raw)) return;      // Enter on an empty / garbage input is ignored
-        run({ code: raw });
+        scanBody({ code: raw });
     };
     // Called by the VerdictCard after its inline confirmation.
     const force = (o: any) => {
@@ -869,17 +988,36 @@ function DeliveryTab({ conferenceId, services, locations, serviceId, setServiceI
                             <ServiceSelect id="md-service" services={services} serviceId={serviceId} setServiceId={setServiceId} /></div>
                         <button type="button" onClick={onScanner} className="px-4 py-3 rounded-xl bg-gray-900 text-white font-black text-[10px] uppercase tracking-widest"><i className="fa-solid fa-camera mr-1.5" aria-hidden="true"></i>{tx('meals.scanner.camera', 'Usar la cámara')}</button>
                     </div>
-                    <form onSubmit={submit} className="space-y-2">
+                    {/* Enter is handled on keydown (onScanKey); the submit is the fallback of a virtual keyboard's «Ir». */}
+                    <form onSubmit={(e) => { e.preventDefault(); submit(); }} className="space-y-2">
                         <label htmlFor="md-code" className={labelCls}>{tx('meals.delivery.scan', 'Escanea el código (o escríbelo y pulsa Enter)')}</label>
-                        <input id="md-code" ref={inputRef} value={code} onChange={(e) => setCode(e.target.value)} autoFocus autoComplete="off" spellCheck={false} autoCapitalize="characters"
+                        <input id="md-code" ref={inputRef} value={code} onChange={(e) => setCode(e.target.value)} onKeyDown={onScanKey} autoFocus autoComplete="off" spellCheck={false} autoCapitalize="characters"
                             className="w-full border-4 border-orange-200 focus:border-orange-500 rounded-3xl px-6 py-5 text-3xl font-mono font-black tracking-[0.2em] text-gray-900 outline-none bg-orange-50/30"
                             placeholder="▌▌▌ ▌▌ ▌▌▌" disabled={!serviceId} data-scan-input="" />
                     </form>
-                    <div className="min-h-[96px]">
-                        {outcome
-                            ? <VerdictCard outcome={outcome} service={service} busy={busy} language={language}
-                                onForce={outcome.result === 'not_entitled' ? force : undefined} onUndo={undo} onDismiss={() => { setOutcome(null); focusInput(); }} />
-                            : <div className="h-full rounded-3xl border-2 border-dashed border-gray-100 flex items-center justify-center text-sm font-bold text-gray-400 py-8"><i className="fa-solid fa-barcode mr-2" aria-hidden="true"></i>{tx('meals.delivery.waiting', 'Esperando un código…')}</div>}
+                    <div className="min-h-[96px]" ref={slotRef} data-decision-slot="" style={{ scrollMarginTop: REVEAL_MARGIN_PX, scrollMarginBottom: REVEAL_MARGIN_PX }}>
+                        {confirm.card
+                            // Capped to the visible band (REVEAL_FIT_VAR, set by revealSlot): the middle scrolls, the meal,
+                            // the name and the buttons stay on screen.
+                            ? <div data-confirm-fit="" style={{ display: 'flex', flexDirection: 'column', maxHeight: `var(${REVEAL_FIT_VAR}, none)` }}>
+                                <ConfirmCard card={confirm.card} service={service} language={language} delivering={confirm.delivering} waiting={confirm.waiting} keyHints
+                                    onDeliver={() => flow.deliver()}
+                                    onAuthorize={() => flow.authorize(tx('meals.force.note.kitchen', 'Autorizado en la entrega'))}
+                                    onCancel={() => flow.cancel()}
+                                    onClose={() => flow.close()} />
+                            </div>
+                            : confirm.checking ? <CheckingCard />
+                                : outcome
+                                    ? <VerdictCard outcome={outcome} service={service} busy={busy || confirm.delivering} language={language} armMs={confirmOn ? VERDICT_TAP_ARM_MS : 0}
+                                        onForce={outcome.result === 'not_entitled' ? force : undefined} onUndo={undo} onDismiss={() => { setOutcome(null); flow.close(); focusInput(); }} />
+                                    : <div className="h-full rounded-3xl border-2 border-dashed border-gray-100 flex items-center justify-center text-sm font-bold text-gray-400 py-8"><i className="fa-solid fa-barcode mr-2" aria-hidden="true"></i>{tx('meals.delivery.waiting', 'Esperando un código…')}</div>}
+                        {/* The queue waits behind a delivery's result: say so, and how to go on. */}
+                        {confirmOn && !confirm.card && !confirm.checking && (confirm.held || confirm.waiting > 0) && (
+                            <div data-confirm-queue={confirm.held ? 'held' : 'waiting'} className="mt-2 text-xs font-black text-gray-600" role="status">
+                                {[confirm.waiting > 0 ? txn('meals.confirm.waiting', '{n} códigos en espera', '{n} código en espera', confirm.waiting) : '',
+                                    confirm.held ? tx('meals.confirm.held', 'Revisa el resultado: Enter o Esc para continuar') : ''].filter(Boolean).join(' · ')}
+                            </div>
+                        )}
                     </div>
                     <div>
                         {!searching
@@ -887,19 +1025,30 @@ function DeliveryTab({ conferenceId, services, locations, serviceId, setServiceI
                             : <div className="rounded-2xl border border-gray-100 p-4 space-y-3">
                                 <div className="flex items-center justify-between"><span className={labelCls}>{tx('meals.scanner.search', 'Buscar por nombre')}</span>
                                     <button type="button" className="text-gray-400 hover:text-gray-600 p-1" onClick={() => setSearching(false)} aria-label={tx('close', 'Cerrar')}><i className="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
-                                <PersonSearch conferenceId={conferenceId} busy={busy} onPick={(p) => { setSearching(false); run({ inscription_id: p.id }); }} />
+                                <PersonSearch conferenceId={conferenceId} busy={busy || confirm.delivering} action={confirmOn ? tx('meals.confirm.pick', 'Elegir') : undefined}
+                                    onPick={(p) => { setSearching(false); scanBody({ inscription_id: p.id }, true); }} />
                             </div>}
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-start">
+                        <ConfirmToggle on={confirmOn} onChange={(v) => { setConfirmOn(v); setTimeout(focusInput, 0); }} />
+                        {canPlanEdit && (
+                            <button type="button" className={`${btnGhost} w-full min-h-[52px]`} onClick={() => setDisplayOpen(true)} data-display-open="">
+                                <i className="fa-solid fa-id-card mr-1.5" aria-hidden="true"></i>{tx('meals.display.open', 'Qué se muestra al entregar')}
+                            </button>
+                        )}
                     </div>
                 </div>
             </div>
+            {displayOpen && canPlanEdit && <DisplayFieldsDialog conferenceId={conferenceId} service={service} locations={locations} onClose={() => { setDisplayOpen(false); }} />}
 
             <div className="space-y-5">
                 <div className={`${card} p-5 space-y-3`}>
-                    <div className="grid grid-cols-3 gap-2">
+                    {/* A third of a desktop, the whole width of a phone: the tiles share a row only where they fit. */}
+                    <Counters cols={3} gap={8}>
                         <Counter label={tx('meals.count.delivered', 'Entregados')} value={stats?.delivered ?? '—'} tone="text-emerald-600" />
                         <Counter label={tx('meals.count.entitled', 'Con derecho')} value={stats?.entitled ?? '—'} />
                         <Counter label={tx('meals.count.pending', 'Pendientes')} value={stats?.pending ?? '—'} tone="text-orange-600" />
-                    </div>
+                    </Counters>
                     {stats?.overrides_delivered > 0 && <p className="text-[11px] font-bold text-amber-700">{txn('meals.count.overrides', '{n} entregadas sin derecho (autorizadas)', '{n} entregada sin derecho (autorizada)', stats.overrides_delivered)}</p>}
                     {(stats?.by_location || []).length > 0 && (
                         <ul className="divide-y divide-gray-50 text-sm">
@@ -945,6 +1094,101 @@ function DeliveryTab({ conferenceId, services, locations, serviceId, setServiceI
                 </div>
             </div>
         </div>
+    );
+}
+
+/// «Qué se muestra al entregar» (2.16.0, Alimentación › gestionar): which of the person's data the delivery
+// card shows, in which order — a checkbox list with up/down buttons (always visible, touch-sized) and a live
+// preview of the card. The full name is LOCKED first (staff must see who they deliver to; the server
+// enforces it too). «Restablecer» only puts the default back in the form (review it in the preview, then
+// «Guardar»); saving the default stores «not configured». The server validates every key against the
+// conference's current form.
+function DisplayFieldsDialog({ conferenceId, service, locations, onClose }: any) {
+    const tx = useTx();
+    const { language } = useI18n();
+    const { addToast } = useToast();
+    const [d, setD] = useState<any>(null);
+    const [failed, setFailed] = useState(false);
+    const [selected, setSelected] = useState<string[]>([]);
+    const [busy, setBusy] = useState(false);
+    useEffect(() => {
+        let alive = true;
+        conferenceApi.getMealDisplayFields(conferenceId)
+            .then((r) => { if (alive) { setD(r); setSelected(withName(r.keys || [])); } })
+            .catch((e) => { if (alive) { setFailed(true); addToast(e?.message || 'Error', 'error'); } });
+        return () => { alive = false; };
+    }, [conferenceId]);
+    const L = displayLabelsOf(tx);
+    const labelOf = (f: any) => displayLabel(f, L);
+    const options = d ? displayOptions(d.available || [], selected) : [];
+    const sample = (f: any) => (f.key === '@name' ? tx('meals.display.sample.name', 'María Pérez')
+        : f.key === '@location' ? ((locations || [])[0]?.name || labelOf(f))
+            : f.key === '@reg_code' ? 'ABCD234XYZ'
+                : f.key === '@payment_status' ? 'paid'
+                    : f.key === '@room' ? tx('meals.display.sample.room', 'Hotel Central · 204')
+                        : tx('meals.display.sample', 'Ejemplo'));
+    const preview = d ? {
+        seq: 0, serviceId: service?.id || 0, body: {}, result: 'ready',
+        verdict: { service: service || null, person: { id: 0, name: '', fields: previewDisplayFields(selected, d.available || [], sample) } },
+    } : null;
+    const save = async (keys: string[] | null) => {
+        setBusy(true);
+        try {
+            await conferenceApi.setMealDisplayFields(conferenceId, keys);
+            addToast(tx('meals.display.saved', 'Datos de la entrega guardados'), 'success');
+            onClose();
+        } catch (e: any) { addToast(e?.message || 'Error', 'error'); }
+        finally { setBusy(false); }
+    };
+    const arrow = 'w-11 h-11 shrink-0 rounded-xl border-2 border-gray-100 bg-white text-gray-700 flex items-center justify-center disabled:opacity-30';
+    return (
+        <Modal wide title={tx('meals.display.open', 'Qué se muestra al entregar')} subtitle={tx('meals.display.subtitle', 'Elige y ordena los datos de la persona que verá quien entrega la comida. El nombre siempre aparece, arriba.')} onClose={onClose}
+            footer={<>
+                <button type="button" className={btnGhost} disabled={busy || !d} onClick={() => setSelected(withName(d?.default_keys || DEFAULT_DISPLAY_KEYS))} data-display-reset="">{tx('meals.display.reset', 'Restablecer')}</button>
+                <button type="button" onClick={onClose} className="px-6 py-3 text-gray-500 font-bold hover:bg-gray-100 rounded-xl">{tx('cancel', 'Cancelar')}</button>
+                <button type="button" onClick={() => save(displaySaveKeys(selected, d?.default_keys))} disabled={busy || !d || !selected.length} className={btnPrimary} data-display-save="">{tx('save', 'Guardar')}</button>
+            </>}>
+            {!d ? (failed
+                ? <p className="text-sm font-bold text-rose-600" role="alert">{tx('meals.display.load.failed', 'No se pudo cargar la configuración.')}</p>
+                : <Spinner label={tx('loading', 'Cargando…')} />)
+                : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="space-y-2">
+                            <ul className="space-y-2" data-display-options="">
+                                {options.map((f) => (
+                                    <li key={f.key} data-display-option={f.key} data-on={f.on ? '1' : '0'} data-locked={f.locked ? '1' : undefined}
+                                        className={`flex items-center gap-2 rounded-2xl border-2 px-3 py-1.5 ${f.on ? 'border-emerald-300 bg-emerald-50/50' : 'border-gray-100 bg-white'}`}>
+                                        <label className={`flex items-center gap-3 flex-1 min-w-0 py-2 ${f.locked ? '' : 'cursor-pointer'}`}>
+                                            <input type="checkbox" className="w-5 h-5 accent-emerald-600 shrink-0" checked={f.on} disabled={f.locked} onChange={() => setSelected((s) => toggleDisplayKey(s, f.key))} />
+                                            <span className="min-w-0">
+                                                <span className="block text-base font-black text-gray-900 break-words">{labelOf(f)}</span>{' '}
+                                                <span className="block text-[10px] font-black uppercase tracking-widest text-gray-400">{f.locked ? tx('meals.display.name.locked', 'Siempre se muestra, arriba') : f.builtin ? tx('meals.display.builtin', 'Del sistema') : tx('meals.display.form', 'Del formulario')}</span>
+                                            </span>
+                                        </label>
+                                        {f.on && !f.locked && <>
+                                            <button type="button" className={arrow} disabled={!canMoveDisplayKey(selected, f.key, -1)} onClick={() => setSelected((s) => moveDisplayKey(s, f.key, -1))}
+                                                aria-label={tx('meals.display.up', 'Subir «{label}»', { label: labelOf(f) })} data-display-up={f.key}><i className="fa-solid fa-arrow-up" aria-hidden="true"></i></button>
+                                            <button type="button" className={arrow} disabled={!canMoveDisplayKey(selected, f.key, 1)} onClick={() => setSelected((s) => moveDisplayKey(s, f.key, 1))}
+                                                aria-label={tx('meals.display.down', 'Bajar «{label}»', { label: labelOf(f) })} data-display-down={f.key}><i className="fa-solid fa-arrow-down" aria-hidden="true"></i></button>
+                                        </>}
+                                    </li>
+                                ))}
+                            </ul>
+                            {!selected.length && <p className="text-xs font-bold text-rose-600" role="alert">{tx('meals.display.none', 'Elige al menos un dato.')}</p>}
+                            <p className="text-[11px] text-gray-500">{tx('meals.display.default', 'Por defecto: nombre completo y localidad.')}</p>
+                            <p className="text-[11px] text-gray-500" data-display-note="">{tx('meals.display.note', 'Las respuestas del formulario, el estado de pago y la habitación solo se envían a la tarjeta si los eliges aquí. El nombre y la localidad también aparecen en la búsqueda por nombre de quien entrega.')}</p>
+                            {selected.includes('@reg_code') && <p className="text-[11px] text-gray-500">{tx('meals.display.reg_code.hint', 'El código solo se ve con permiso para ver inscripciones.')}</p>}
+                        </div>
+                        <div className="space-y-2">
+                            <div className={labelCls}>{tx('meals.display.preview', 'Vista previa')}</div>
+                            {/* A picture of the card: its buttons do nothing here (inert). */}
+                            <div data-display-preview="" inert>
+                                <ConfirmCard card={preview} service={service} language={language} />
+                            </div>
+                        </div>
+                    </div>
+                )}
+        </Modal>
     );
 }
 
@@ -998,12 +1242,12 @@ function ReportTab({ services, serviceId, setServiceId, slug }: any) {
             {loading && !report && <Spinner label={tx('loading', 'Cargando…')} />}
             {report && (
                 <>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <Counters cols={4} gap={12}>
                         <Counter label={tx('meals.count.entitled', 'Con derecho')} value={t.entitled} />
                         <Counter label={tx('meals.count.delivered', 'Entregados')} value={t.delivered} tone="text-emerald-600" />
                         <Counter label={tx('meals.count.pending', 'Pendientes')} value={t.pending} tone="text-orange-600" />
                         <Counter label={tx('meals.count.overrides.short', 'Sin derecho (autorizados)')} value={t.overrides_delivered} tone="text-amber-600" />
-                    </div>
+                    </Counters>
                     <div className={`${card} overflow-hidden`}>
                         <table className="w-full text-sm">
                             <thead className="bg-gray-50 text-[10px] font-black uppercase tracking-widest text-gray-500">

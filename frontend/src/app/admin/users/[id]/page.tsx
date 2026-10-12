@@ -9,6 +9,7 @@ import { PluginHook, pluginHooks } from "@/lib/plugin-hooks";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
 import UserMfaReset from "../UserMfaReset";
+import { useRoleOptions } from "@/lib/useRoleOptions";
 
 export default function UserEditorPage() {
     const { t } = useI18n();
@@ -43,6 +44,8 @@ export default function UserEditorPage() {
     const [, setHookTick] = useState(0);
 
     const { alert } = useModal();
+    // Every role the site has (core, custom, plugin-provided), grouped — not a hardcoded four.
+    const roleOptions = useRoleOptions(formData.role);
 
     useEffect(() => {
         if (userId) loadUser();
@@ -114,7 +117,7 @@ export default function UserEditorPage() {
                 <div>
                     <button
                         onClick={() => router.back()}
-                        className="flex items-center gap-2 text-gray-400 hover:text-gray-600 transition-colors mb-4 group"
+                        className="flex items-center gap-2 text-gray-500 hover:text-gray-700 transition-colors mb-4 group" data-user-edit-back=""
                     >
                         <i className="fa-solid fa-arrow-left group-hover:-translate-x-1 transition-transform"></i>
                         <span className="text-sm font-medium">{t('user.edit.back')}</span>
@@ -122,7 +125,7 @@ export default function UserEditorPage() {
                     <h1 className="text-4xl md:text-5xl font-black text-gray-900 italic tracking-tighter">
                         {isNew ? t('user.edit.titleNew') : t('user.edit.titleEdit')}
                     </h1>
-                    <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mt-1">
+                    <p className="text-xs font-bold uppercase tracking-widest text-gray-500 mt-1">
                         {isNew ? t('user.edit.subtitleNew') : t('user.edit.subtitleEdit')}
                     </p>
                 </div>
@@ -131,7 +134,7 @@ export default function UserEditorPage() {
             <form onSubmit={handleSubmit} className="bg-white rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 p-8 max-w-2xl">
                 <div className="space-y-6">
                     <div>
-                        <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">{t('user.edit.username')}</label>
+                        <label className="block text-[10px] font-black uppercase tracking-widest text-gray-500 mb-2">{t('user.edit.username')}</label>
                         <input
                             type="text"
                             value={formData.username}
@@ -143,7 +146,7 @@ export default function UserEditorPage() {
                     </div>
                     <PluginHook name="user_form_before_email" data={{ formData, setFormData, isNew }} />
                     <div>
-                        <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">{t('user.edit.email')}</label>
+                        <label className="block text-[10px] font-black uppercase tracking-widest text-gray-500 mb-2">{t('user.edit.email')}</label>
                         <input
                             type="email"
                             value={formData.email}
@@ -156,7 +159,7 @@ export default function UserEditorPage() {
                         />
                     </div>
                     <div>
-                        <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">{t('user.edit.personalEmail') || 'Personal / Recovery Email'}</label>
+                        <label className="block text-[10px] font-black uppercase tracking-widest text-gray-500 mb-2">{t('user.edit.personalEmail') || 'Personal / Recovery Email'}</label>
                         <input
                             type="email"
                             value={formData.personalEmail}
@@ -164,10 +167,10 @@ export default function UserEditorPage() {
                             placeholder="name@gmail.com"
                             className="w-full px-4 py-4 bg-gray-50/50 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium"
                         />
-                        <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">{t('user.edit.personalEmail.help') || 'External address for password recovery & notifications — independent of the professional mailbox.'}</p>
+                        <p className="text-[11px] text-gray-600 mt-2 leading-relaxed">{t('user.edit.personalEmail.help') || 'External address for password recovery & notifications — independent of the professional mailbox.'}</p>
                     </div>
                     <div>
-                        <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">{t('user.edit.displayName')}</label>
+                        <label className="block text-[10px] font-black uppercase tracking-widest text-gray-500 mb-2">{t('user.edit.displayName')}</label>
                         <input
                             type="text"
                             value={formData.displayName}
@@ -179,15 +182,10 @@ export default function UserEditorPage() {
                         label={t('user.edit.role')}
                         value={formData.role}
                         onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-                        options={[
-                            { value: "subscriber", label: t('user.edit.roleSubscriber') },
-                            { value: "author", label: t('user.edit.roleAuthor') },
-                            { value: "editor", label: t('user.edit.roleEditor') },
-                            { value: "administrator", label: t('user.edit.roleAdministrator') },
-                        ]}
+                        options={roleOptions}
                     />
                     <div>
-                        <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">
+                        <label className="block text-[10px] font-black uppercase tracking-widest text-gray-500 mb-2">
                             {isNew ? t('user.edit.password') : t('user.edit.newPassword')}
                         </label>
                         <input
@@ -202,7 +200,7 @@ export default function UserEditorPage() {
                         the backend asks for the password exactly then. */}
                     {needsCurrentPassword && (
                         <div data-testid="self-current-password">
-                            <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">{t('account.currentPassword')}</label>
+                            <label className="block text-[10px] font-black uppercase tracking-widest text-gray-500 mb-2">{t('account.currentPassword')}</label>
                             <input
                                 type="password"
                                 value={currentPassword}
