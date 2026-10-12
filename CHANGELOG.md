@@ -68,6 +68,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   writing into it, and it refuses to write through a symbolic link planted in the existing install.
   Installs made by earlier versions keep their `0666` files until the next `create-wordjs upgrade`, or
   `find <site> -type f -perm -o+w -exec chmod go-w {} +`.
+- **Handlebars 4.7.10 for the advisories published against 4.0.0–4.7.9.** The CI audit gate blocked every
+  pull request on GHSA-8r5x-fm3f-whwj and GHSA-p8wg-vrv2-v86f (critical: JavaScript injection through
+  `compile`) and GHSA-xw65-4hp5-5hc7 (medium: precompiled templates embedded inline). The backend's
+  `handlebars` range is now `^4.7.10`.
 - **Next.js 16.3.8 for the advisories published against 16.0.0–16.3.7.** The CI audit gate blocked every
   pull request on GHSA-cjq9-62q9-8jv4 (high: server-side request forgery in Image Optimization). The same
   release fixes cache poisoning of SSG/ISR pages in self-hosted applications (GHSA-4jqv-mc3x-m676,
