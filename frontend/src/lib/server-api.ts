@@ -260,6 +260,21 @@ interface ServerFetchOptions {
  * render a not-found / fallback state instead of throwing a 500 for the whole page.
  */
 export async function serverFetch<T>(endpoint: string, options: ServerFetchOptions = {}): Promise<T | null> {
+    const res = await serverResponse(endpoint, options);
+    if (!res || !res.ok) return null;
+    try {
+        return (await res.json()) as T;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * The backend's Response to an SSR request — serverFetch without the "any failure is null" collapse, for
+ * the few callers that must tell "the backend said no" (a status) from "no answer" (null: unreachable,
+ * or an endpoint that escaped the API root). Same destination, headers and caching rules as serverFetch.
+ */
+export async function serverResponse(endpoint: string, options: ServerFetchOptions = {}): Promise<Response | null> {
     // Destination first, and only the destination: the URL is resolved and contained BEFORE any of
     // the request is assembled, so nothing below can influence where this goes.
     const url = backendUrl(resolveServerBase(), endpoint);
@@ -314,14 +329,42 @@ export async function serverFetch<T>(endpoint: string, options: ServerFetchOptio
         : ({ next: { revalidate: options.revalidate, tags: options.tags } } as RequestInit);
 
     try {
-        const res = await fetch(url, { headers, ...cacheInit });
-        if (!res.ok) return null;
-        return (await res.json()) as T;
+        return await fetch(url, { headers, ...cacheInit });
     } catch {
         // Backend unreachable during SSR — caller decides how to degrade.
         return null;
     }
 }
+
+/** What a plugin portal page (/portal/<slug>, manifest frontend.portalPage) puts in its <head>. */
+export interface PortalPageInfo {
+    slug: string;
+    title?: string;
+    themeColor?: string;
+    viewportFit?: 'auto' | 'cover' | 'contain';
+}
+
+/**
+ * Does an active plugin serve the portal `/portal/<slug>`? Asks GET /plugins/<slug>/portal (the backend
+ * applies the same active + browser:script gate as the portal's bundle). 'missing' is the backend's 404 —
+ * the page answers a real 404; 'unavailable' is no usable answer (backend down, 5xx), where the page
+ * still renders and lets the client report it, instead of claiming the portal does not exist.
+ */
+export const getPortalPage = cache(async (slug: string): Promise<
+    { status: 'served'; info: PortalPageInfo } | { status: 'missing' } | { status: 'unavailable' }
+> => {
+    const res = await serverResponse(`/plugins/${encodeURIComponent(slug)}/portal`);
+    if (!res) return { status: 'unavailable' };
+    if (res.status === 404) return { status: 'missing' };
+    if (!res.ok) return { status: 'unavailable' };
+    try {
+        const body = await res.json();
+        if (!body || typeof body !== 'object' || body.slug !== slug) return { status: 'unavailable' };
+        return { status: 'served', info: body as PortalPageInfo };
+    } catch {
+        return { status: 'unavailable' };
+    }
+});
 
 /**
  * True when the backend is up but NOT yet installed (it answers every API call with

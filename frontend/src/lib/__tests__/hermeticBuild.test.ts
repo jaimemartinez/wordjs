@@ -232,6 +232,7 @@ describe('plugin registries under WORDJS_HERMETIC_BUILD=1', () => {
         { script: 'generate-plugin-registry.js', out: 'src/lib/pluginRegistry.ts' },
         { script: 'generate-admin-plugin-registry.js', out: 'src/app/admin/plugin/[slug]/page.tsx' },
         { script: 'generate-verso-plugin-registry.js', out: 'src/lib/versoPluginRegistry.ts' },
+        { script: 'generate-portal-plugin-registry.js', out: 'src/lib/portalPluginRegistry.ts' },
     ];
 
     /**
@@ -259,7 +260,7 @@ for (const mod of [require('http'), require('https')]) {
         expect(r.status, `git ${args.join(' ')}: ${r.stderr}`).toBe(0);
     }
 
-    /** A plugin with an admin page, a frontend component and a Verso block — one entry per registry. */
+    /** A plugin with an admin page, a frontend component, a Verso block and a portal — one entry per registry. */
     function writePlugin(root: string, slug: string, pascal: string): void {
         const dir = path.join(root, 'backend', 'plugins', slug);
         const files: Record<string, string> = {
@@ -269,10 +270,12 @@ for (const mod of [require('http'), require('https')]) {
                     components: [{ entry: './client/Widget.tsx' }],
                     adminPage: { entry: './client/admin/Page.tsx', slug },
                     versoComponents: { entry: `client/verso/${pascal}Verso.tsx` },
+                    portalPage: { entry: 'client/portal/Page.tsx', slug },
                 },
             }),
             'client/Widget.tsx': 'export default function Widget() { return null; }\n',
             'client/admin/Page.tsx': 'export default function Page() { return null; }\n',
+            'client/portal/Page.tsx': 'export default function Portal() { return null; }\n',
             [`client/verso/${pascal}Verso.tsx`]:
                 'export const versoComponentDef = { category: "c", fields: {}, defaultProps: {} };\n' +
                 'export default function Block() { return null; }\n',
@@ -306,7 +309,7 @@ for (const mod of [require('http'), require('https')]) {
         return root;
     }
 
-    /** Run the three real generators, as the frontend prebuild does, and collect what they wrote. */
+    /** Run the real generators, as the frontend prebuild does, and collect what they wrote. */
     function generate(root: string, env: Record<string, string>) {
         const httpLog = path.join(root, 'http.log');
         const base: NodeJS.ProcessEnv = { ...process.env };

@@ -16,6 +16,25 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   resolved by reading the channel's page. For the full upload history (up to 500 videos), add a Data API
   key.
 
+### Added
+
+- **Plugins can ship a public portal page at `/portal/<slug>`.** A plugin declares
+  `frontend.portalPage { entry, slug, title?, themeColor?, viewportFit? }` in its manifest and gets a
+  standalone page — no theme chrome, no admin shell — for people who are not WordJS users (coordinators,
+  vendors, a field team opening a QR link); the query string and hash reach the plugin's component
+  untouched. It works like the other frontend entries: `browser:script` is required, `build-plugin.js`
+  compiles `dist/portal.bundle.js` and its Tailwind classes into `dist/portal.bundle.css`, a plugin present
+  at build time is compiled in (`frontend/scripts/generate-portal-plugin-registry.js`, wired into
+  `predev`/`prebuild`, CI and the release build) and one installed at runtime is loaded from its bundle.
+  The new anonymous `GET /api/v1/plugins/:slug/portal` tells the frontend whether an active, granted
+  plugin serves the portal (otherwise the page is a real `404`) and returns only its optional head details;
+  it and `GET /api/v1/plugins/:slug/bundle{,/css}?type=portal` resolve the **portal** slug alone and
+  answer every refusal with the same `404`. Upload and activation refuse a malformed declaration or a
+  portal slug another installed plugin already declares. Portal pages get `ModalProvider`,
+  `I18nProvider` and `ToastProvider`, are always `noindex`, and plugin bundles may now import
+  `@/lib/csrf`. A static route under `frontend/src/app/portal/` (today `/portal/conference`) keeps
+  precedence. See `documentation/plugins.md` §10.6.
+
 ### Fixed
 
 - **YouTube Videos (1.0.2) shows the configured channel, not one it links to.** Without a Data API key,

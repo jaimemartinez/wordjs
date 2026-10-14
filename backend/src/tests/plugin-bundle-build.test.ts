@@ -126,6 +126,44 @@ test('plugin builds a hooks bundle from frontend.hooks (a STRING entry) exportin
     }
 });
 
+test('plugin builds a portal bundle (and its stylesheet) from frontend.portalPage.entry', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-bundle-'));
+    try {
+        const slug = 'fixture-portal';
+        const dir = path.join(root, slug);
+        fs.mkdirSync(path.join(dir, 'client', 'portal'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({
+            id: slug, name: slug, version: '1.0.0', isolated: true,
+            frontend: { portalPage: { entry: 'client/portal/page.tsx', slug: 'fixture' } },
+        }));
+        // A portal posts with its own fetch (its visitors have no WordJS session to lean on api() for), so
+        // lib/csrf must be a host module.
+        fs.writeFileSync(path.join(dir, 'client', 'portal', 'page.tsx'), `
+            import { useState } from 'react';
+            import { csrfHeaders } from '@/lib/csrf';
+            export default function Portal({ slug }: { slug: string }) {
+                const [n] = useState(0);
+                return <button className="bg-black/80 w-[82%]" onClick={() => { void csrfHeaders(); void slug; }}>{n}</button>;
+            }
+        `);
+        const r = build(root, slug);
+        assert.equal(r.status, 0, `build failed: ${r.out}`);
+        const out = path.join(dir, 'dist', 'portal.bundle.js');
+        assert.ok(fs.existsSync(out), 'portal.bundle.js must be produced from frontend.portalPage.entry');
+        const code = fs.readFileSync(out, 'utf8');
+        assert.ok(code.includes('"lib/csrf"'), 'csrfHeaders resolves to the HOST module');
+        assert.ok(!/from\s*["'](react|react-dom|@\/)/.test(code), 'portal bundle has no bare react/@ specifiers');
+        // Its Tailwind classes, compiled for a runtime install whose classes are in no host stylesheet.
+        const css = path.join(dir, 'dist', 'portal.bundle.css');
+        assert.ok(fs.existsSync(css), "dist/portal.bundle.css must carry the portal's compiled utilities");
+        const sheet = fs.readFileSync(css, 'utf8');
+        assert.ok(sheet.includes('wordjs:plugin-utilities'), 'the compiled-utilities block is present');
+        assert.ok(sheet.includes('82%'), 'a class only the portal uses (w-[82%]) is compiled');
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
 test('plugin bundle build FAILS when the manifest declares a frontend entry that does not exist', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-bundle-'));
     try {

@@ -68,7 +68,7 @@ function toPascalCase(slug) {
 }
 
 /**
- * Compile a plugin's frontend entries (adminPage/component/hooks) into <plugin>/dist/*.bundle.js by
+ * Compile a plugin's frontend entries (adminPage/component/hooks/portalPage) into <plugin>/dist/*.bundle.js by
  * running build-plugin.js against the MARKETPLACE source tree. No-op for backend-only plugins. Failing
  * to build is fatal: shipping a zip whose admin page can never load is worse than failing loudly.
  *

@@ -313,7 +313,9 @@ const PLUGIN_HOST_FILES = ['manifest.json', PLUGIN_ADMIN_STYLESHEET, ...PLUGIN_S
 // public/. The named files below stay as the list the bundle routes resolve against, so "what the
 // route may serve" and "what the plugin may not write" remain one declaration.
 const PLUGIN_BUNDLE_DIR = 'dist';
-const PLUGIN_BUNDLE_TYPES = ['admin', 'component', 'hooks'];
+// 'portal': the standalone public page a plugin may declare (frontend.portalPage → /portal/<slug>,
+// core/portal-pages.ts).
+const PLUGIN_BUNDLE_TYPES = ['admin', 'component', 'hooks', 'portal'];
 const PLUGIN_BUNDLE_FILES = new Set<string>([
     ...PLUGIN_BUNDLE_TYPES.map(t => `${PLUGIN_BUNDLE_DIR}/${t}.bundle.js`),
     ...PLUGIN_BUNDLE_TYPES.map(t => `${PLUGIN_BUNDLE_DIR}/${t}.bundle.css`),

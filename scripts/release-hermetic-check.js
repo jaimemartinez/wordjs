@@ -58,6 +58,7 @@ const PLUGIN_REGISTRIES = [
     'src/lib/pluginRegistry.ts',
     'src/lib/versoPluginRegistry.ts',
     'src/app/admin/plugin/[slug]/page.tsx',
+    'src/lib/portalPluginRegistry.ts',
 ];
 
 /** The extensions a registry's extension-less import specifier can resolve to. */

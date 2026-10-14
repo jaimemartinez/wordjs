@@ -15,8 +15,8 @@ const PLUGINS_DIR = path.resolve(__dirname, '../../plugins');
 
 // Allow-listed bundle types. The `type` query param is interpolated into the on-disk path, so an
 // unvalidated value (e.g. '../../..') is a path-traversal primitive even with the fixed '.bundle.js'
-// suffix. Only these three bundles are produced by the build pipeline and requested by the frontend
-// (pluginBundleLoader: 'admin' | 'component' | 'hooks').
+// suffix. Only these bundles are produced by the build pipeline and requested by the frontend
+// (pluginBundleLoader: 'admin' | 'component' | 'hooks' | 'portal').
 //
 // (#3, verification) THESE ROUTES ARE THE OTHER PUBLIC SINK FOR A PLUGIN'S FILES. They are mounted
 // under /api/v1/plugins (routes/plugins.ts) WITHOUT `authenticate`, and they hand out files from
@@ -123,13 +123,26 @@ function bundlePathFor(folder: string, bundleType: string): string | null {
 }
 
 /**
- * The folder whose build output may be served for `slug`, or null: an ACTIVE plugin (resolvePluginDir)
- * that is granted browser:script (core/plugin-serving browserCodeServable — the gate the static
- * /plugins/<folder>/dist/component.bundle.css applies too). Every refusal below is the SAME 404 as
- * "no such plugin", so it says nothing about what is installed.
+ * Resolve a PORTAL slug (manifest frontend.portalPage.slug — the `<slug>` of /portal/<slug>) to the
+ * folder of the one ACTIVE plugin that declares it (core/portal-pages.ts). Never by folder name: the
+ * portal URL is the only name the frontend has for a plugin installed at runtime, and a folder that
+ * happens to share a portal's name must not answer for it.
  */
-async function servableBundleFolder(slug: string): Promise<string | null> {
-    const folder = await resolvePluginDir(slug);
+async function resolvePortalDir(slug: string): Promise<string | null> {
+    const { getActivePlugins } = require('../core/plugins');
+    let active: unknown;
+    try { active = await getActivePlugins(); } catch { return null; }
+    return require('../core/portal-pages').portalPageFolder(slug, active, readManifest);
+}
+
+/**
+ * The folder whose build output may be served for `slug`, or null: an ACTIVE plugin (resolvePluginDir,
+ * or resolvePortalDir for the portal bundle) that is granted browser:script (core/plugin-serving
+ * browserCodeServable — the gate the static /plugins/<folder>/dist/component.bundle.css applies too).
+ * Every refusal below is the SAME 404 as "no such plugin", so it says nothing about what is installed.
+ */
+async function servableBundleFolder(slug: string, bundleType: string = 'admin'): Promise<string | null> {
+    const folder = bundleType === 'portal' ? await resolvePortalDir(slug) : await resolvePluginDir(slug);
     if (!folder) return null;
     return (await pluginServing.browserCodeServable(folder)) ? folder : null;
 }
@@ -151,7 +164,7 @@ const NOT_SERVED = { error: 'Bundle not found' };
  * /plugins/{slug}/bundle:
  *   get:
  *     summary: Download a plugin pre-compiled frontend bundle
- *     description: Serves plugins/<folder>/dist/<type>.bundle.js - ONLY while the plugin is active and the administrator has granted it the browser:script capability (the bundle runs in the admin origin with the viewer's session); otherwise 404. Unauthenticated, because the public site loads Verso block bundles too. The slug may be either the on-disk folder or the admin page slug declared in the manifest of an ACTIVE plugin (inactive plugins are not candidates, so a slug alias never reveals an installed but inactive plugin); anything outside the character allowlist, and any bundle type outside the allowlist, is refused rather than joined into a path. The URL is unversioned, so the response carries a weak ETag and Cache-Control no-cache - send If-None-Match to get a 304.
+ *     description: Serves plugins/<folder>/dist/<type>.bundle.js - ONLY while the plugin is active and the administrator has granted it the browser:script capability (the bundle runs in the admin origin with the viewer's session); otherwise 404. Unauthenticated, because the public site loads Verso block bundles and plugin portal pages too. The slug may be either the on-disk folder or the admin page slug declared in the manifest of an ACTIVE plugin (inactive plugins are not candidates, so a slug alias never reveals an installed but inactive plugin); for type=portal it is the portal slug an active plugin declares (frontend.portalPage.slug), and only that; anything outside the character allowlist, and any bundle type outside the allowlist, is refused rather than joined into a path. The URL is unversioned, so the response carries a weak ETag and Cache-Control no-cache - send If-None-Match to get a 304.
  *     tags: [Plugins]
  *     security: []
  *     parameters:
@@ -167,7 +180,7 @@ const NOT_SERVED = { error: 'Bundle not found' };
  *         description: Which published bundle to serve. Defaults to admin.
  *         schema:
  *           type: string
- *           enum: [admin, component, hooks]
+ *           enum: [admin, component, hooks, portal]
  *       - in: header
  *         name: If-None-Match
  *         required: false
@@ -203,9 +216,10 @@ router.get('/:slug/bundle', asyncHandler(async (req: Request, res: Response) => 
         return res.status(400).json({ error: 'Invalid bundle type' });
     }
 
-    // Map the ADMIN slug to the on-disk folder (they differ for most plugins) — among ACTIVE plugins
-    // only — and apply the browser:script gate. Not installed, inactive and not granted are ONE answer.
-    const folder = await servableBundleFolder(slug);
+    // Map the ADMIN slug (or, for the portal bundle, the PORTAL slug) to the on-disk folder (they differ
+    // for most plugins) — among ACTIVE plugins only — and apply the browser:script gate. Not installed,
+    // inactive and not granted are ONE answer.
+    const folder = await servableBundleFolder(slug, String(bundleType));
     if (!folder) return res.status(404).json(NOT_SERVED);
     const bundlePath = bundlePathFor(folder, String(bundleType));
 
@@ -270,7 +284,7 @@ router.get('/:slug/bundle', asyncHandler(async (req: Request, res: Response) => 
  *                   type: array
  *                   items:
  *                     type: string
- *                     enum: [admin.bundle.js, component.bundle.js, hooks.bundle.js]
+ *                     enum: [admin.bundle.js, component.bundle.js, hooks.bundle.js, portal.bundle.js]
  *       400:
  *         description: Invalid plugin slug
  *       404:
@@ -320,7 +334,7 @@ router.get('/:slug/bundle/manifest', asyncHandler(async (req: Request, res: Resp
  * /plugins/{slug}/bundle/css:
  *   get:
  *     summary: Download the stylesheet that goes with a plugin bundle
- *     description: Same slug mapping, allowlist, containment proof and active + browser:script gate as the JavaScript bundle. A served plugin with no stylesheet is not an error - the response is 200 with an empty body, so the loader can always issue the request. A slug that is not installed, inactive or not granted is the same 404. Cached by ETag revalidation, like the bundle.
+ *     description: Same slug mapping (the portal slug for type=portal), allowlist, containment proof and active + browser:script gate as the JavaScript bundle. A served plugin with no stylesheet is not an error - the response is 200 with an empty body, so the loader can always issue the request. A slug that is not installed, inactive or not granted is the same 404. Cached by ETag revalidation, like the bundle.
  *     tags: [Plugins]
  *     security: []
  *     parameters:
@@ -336,7 +350,7 @@ router.get('/:slug/bundle/manifest', asyncHandler(async (req: Request, res: Resp
  *         description: Which published bundle stylesheet to serve. Defaults to admin.
  *         schema:
  *           type: string
- *           enum: [admin, component, hooks]
+ *           enum: [admin, component, hooks, portal]
  *       - in: header
  *         name: If-None-Match
  *         required: false
@@ -379,7 +393,7 @@ router.get('/:slug/bundle/css', asyncHandler(async (req: Request, res: Response)
     // And "no such plugin" is the SAME 404: it used to fall through to the 200-empty answer below while
     // an installed-but-inactive plugin got a 404, so the status code alone told an anonymous caller
     // which slugs were installed.
-    const folder = await servableBundleFolder(slug);
+    const folder = await servableBundleFolder(slug, String(bundleType));
     if (!folder) return res.status(404).json(NOT_SERVED);
     const cssPath = resolveBundleFile(folder, `${bundleType}.bundle.css`);
 
@@ -402,6 +416,64 @@ router.get('/:slug/bundle/css', asyncHandler(async (req: Request, res: Response)
 
     const stream = fs.createReadStream(cssPath);
     stream.pipe(res);
+}));
+
+// ═══ A PLUGIN PORTAL PAGE — anonymous, like the bundles ═══════════════════════════════════════════
+//
+// /portal/<slug> (frontend src/app/portal/[slug]) is the standalone public page a plugin declares in
+// frontend.portalPage (core/portal-pages.ts). Its server page asks this route first: a portal no active,
+// granted plugin declares is a 404 there (a real HTTP 404, not a blank page), and a served one gets the
+// few <head> details its manifest sets. Same resolution and gate as GET /:slug/bundle?type=portal, so
+// the page and its bundle cannot disagree about whether the portal exists.
+
+const PORTAL_NOT_FOUND = { error: 'Portal not found' };
+
+/**
+ * @swagger
+ * /plugins/{slug}/portal:
+ *   get:
+ *     summary: Describe a plugin portal page
+ *     description: For the portal slug an ACTIVE plugin declares in frontend.portalPage.slug, and only while the administrator has granted it browser:script, returns the optional head details of /portal/{slug} (title, themeColor, viewportFit). Anything else - an unknown slug, an inactive plugin, a plugin not granted browser:script - is the same 404. Unauthenticated, because a portal's visitors are not WordJS users.
+ *     tags: [Plugins]
+ *     security: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *           pattern: '^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$'
+ *     responses:
+ *       200:
+ *         description: The portal is served
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               required: [slug]
+ *               properties:
+ *                 slug:
+ *                   type: string
+ *                 title:
+ *                   type: string
+ *                 themeColor:
+ *                   type: string
+ *                 viewportFit:
+ *                   type: string
+ *                   enum: [auto, cover, contain]
+ *       404:
+ *         description: No active plugin granted browser:script declares this portal
+ */
+router.get('/:slug/portal', asyncHandler(async (req: Request, res: Response) => {
+    const { slug } = req.params as { slug: string };
+    const portalPages = require('../core/portal-pages');
+    // Shape first: nothing outside one lowercase URL segment is looked up at all.
+    if (!portalPages.PORTAL_SLUG_RE.test(slug)) return res.status(404).json(PORTAL_NOT_FOUND);
+    const folder = await servableBundleFolder(slug, 'portal');
+    if (!folder) return res.status(404).json(PORTAL_NOT_FOUND);
+    // Presentation of a public page — but per-install state (activation, grants), so never stored.
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ slug, ...portalPages.portalPageHead(readManifest(folder)) });
 }));
 
 // ═══ THE ADMIN PAGE'S STYLING — signed-in sessions only ════════════════════════════════════════════

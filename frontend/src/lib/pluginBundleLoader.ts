@@ -24,6 +24,7 @@ import * as h_api from '@/lib/api';
 import * as h_i18n from '@/lib/i18n';
 import * as h_pluginHooks from '@/lib/plugin-hooks';
 import * as h_sanitize from '@/lib/sanitize';
+import * as h_csrf from '@/lib/csrf';
 import * as h_modalContext from '@/contexts/ModalContext';
 import * as h_i18nContext from '@/contexts/I18nContext';
 import * as h_toastContext from '@/contexts/ToastContext';
@@ -43,6 +44,9 @@ const HOST_MODULES: Record<string, unknown> = {
     // the ONE audited, mutation-XSS-safe sanitizer instead of vendoring its own. Client-safe: the
     // server-only sanitize-html require sits behind a `typeof window` guard the bundler drops.
     'lib/sanitize': h_sanitize,
+    // The double-submit CSRF header (lib/csrf.ts) — what a plugin's own fetch() must send with a mutating,
+    // cookie-carrying request, e.g. a portal page that does not go through lib/api.
+    'lib/csrf': h_csrf,
     'contexts/ModalContext': h_modalContext,
     'contexts/I18nContext': h_i18nContext,
     'contexts/ToastContext': h_toastContext,
@@ -99,6 +103,12 @@ const loadingPromises: Map<string, Promise<React.ComponentType<any>>> = new Map(
  */
 export type PluginBundleFailure = 'not-granted' | 'not-found' | 'failed';
 
+/**
+ * The bundles build-plugin.js publishes (backend core/io-guard PLUGIN_BUNDLE_TYPES). For 'portal' the slug
+ * is the PORTAL slug of /portal/<slug> (manifest frontend.portalPage.slug), never a folder or admin slug.
+ */
+export type PluginBundleType = 'admin' | 'component' | 'hooks' | 'portal';
+
 export class PluginBundleError extends Error {
     readonly slug: string;
     readonly bundleType: string;
@@ -139,7 +149,7 @@ export class PluginBundleError extends Error {
  */
 export async function loadPluginBundle(
     slug: string,
-    bundleType: 'admin' | 'component' | 'hooks' = 'admin'
+    bundleType: PluginBundleType = 'admin'
 ): Promise<React.ComponentType<any>> {
     const cacheKey = `${slug}:${bundleType}`;
 
@@ -237,7 +247,7 @@ export function remotePluginFailureComponent(err: unknown, fallback: ComponentTy
  */
 export function loadRemotePluginModule(
     slug: string,
-    bundleType: 'admin' | 'component' | 'hooks',
+    bundleType: PluginBundleType,
     fallback: ComponentType<any>,
 ): Promise<{ default: ComponentType<any> }> {
     return loadPluginBundle(slug, bundleType).then(
@@ -255,7 +265,7 @@ export function loadRemotePluginModule(
  */
 export function createRemotePluginComponent(
     slug: string,
-    bundleType: 'admin' | 'component' | 'hooks' = 'admin',
+    bundleType: PluginBundleType = 'admin',
     fallback: ComponentType<any> = () => null
 ): ComponentType<any> {
     return dynamic(

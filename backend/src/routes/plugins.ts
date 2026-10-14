@@ -95,7 +95,8 @@ function regenerateRegistry() {
     const scripts = [
         'generate-plugin-registry.js',         // Frontend components
         'generate-admin-plugin-registry.js',   // Admin pages
-        'generate-verso-plugin-registry.js'    // Verso block components
+        'generate-verso-plugin-registry.js',   // Verso block components
+        'generate-portal-plugin-registry.js'   // Portal pages (/portal/<slug>)
     ];
 
     // Resolve the authoritative active list IN-PROCESS and hand it to the generators via env.
@@ -590,6 +591,9 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
             // adminPageConflict): the admin layout opens a plugin page through the menu items pointing there.
             const pageConflict = require('../core/adminMenu').adminPageConflict(pluginSlug, manifest);
             if (pageConflict) throw new Error(`Invalid admin page: ${pageConflict}`);
+            // Same for its public portal page (/portal/<slug>, core/portal-pages.ts).
+            const portalConflict = require('../core/portal-pages').portalPageConflict(pluginSlug, manifest);
+            if (portalConflict) throw new Error(`Invalid portal page: ${portalConflict}`);
             // Static AST scan in DECLARATION mode (the default) — deliberately NOT grant mode. Nothing is
             // granted at install time; this pass is what produces the requested-permission list the admin
             // approves from. The grant-aware pass runs at ACTIVATION (core/plugins.ts), which is where a
