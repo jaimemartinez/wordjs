@@ -2,7 +2,7 @@
  * THE HOST CONFIRM/ALERT DIALOG SPEAKS THE ADMIN'S LANGUAGE.
  *
  * Live finding: every `useModal().confirm(message, title, isDanger)` in a Spanish admin — core pages and
- * plugin admin pages alike (conference-manager, sala-de-comando) — showed «Confirm» / «Cancel» next to a
+ * plugin admin pages such as conference-manager — showed «Confirm» / «Cancel» next to a
  * Spanish message, and `alert()` showed «OK». ModalProvider passed hard-coded English labels to
  * ConfirmationModal, whose own defaults were English too. ModalProvider is mounted in app/layout.tsx, ABOVE
  * the admin's and the portals' I18nProvider, so the dialog reads the language every provider reads and
