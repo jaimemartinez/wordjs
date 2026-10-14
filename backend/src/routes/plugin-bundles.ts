@@ -420,7 +420,7 @@ router.get('/:slug/bundle/css', asyncHandler(async (req: Request, res: Response)
 
 // ═══ A PLUGIN PORTAL PAGE — anonymous, like the bundles ═══════════════════════════════════════════
 //
-// /portal/<slug> (frontend src/app/portal/[slug]) is the standalone public page a plugin declares in
+// /portal/<slug> (frontend src/app/portal/[slug]/[[...path]]) is the standalone public page a plugin declares in
 // frontend.portalPage (core/portal-pages.ts). Its server page asks this route first: a portal no active,
 // granted plugin declares is a 404 there (a real HTTP 404, not a blank page), and a served one gets the
 // few <head> details its manifest sets. Same resolution and gate as GET /:slug/bundle?type=portal, so

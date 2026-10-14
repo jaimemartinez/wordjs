@@ -22,7 +22,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   `frontend.portalPage { entry, slug, title?, themeColor?, viewportFit? }` in its manifest and gets a
   standalone page — no theme chrome, no admin shell — for people who are not WordJS users (coordinators,
   vendors, a field team opening a QR link); the query string and hash reach the plugin's component
-  untouched. It works like the other frontend entries: `browser:script` is required, `build-plugin.js`
+  untouched, and so do sub-paths (`/portal/<slug>/a/b` arrives as `path: ["a", "b"]`). It works like the
+  other frontend entries: `browser:script` is required, `build-plugin.js`
   compiles `dist/portal.bundle.js` and its Tailwind classes into `dist/portal.bundle.css`, a plugin present
   at build time is compiled in (`frontend/scripts/generate-portal-plugin-registry.js`, wired into
   `predev`/`prebuild`, CI and the release build) and one installed at runtime is loaded from its bundle.

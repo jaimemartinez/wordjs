@@ -796,14 +796,17 @@ coordinators, a vendor, a field team opening a QR link. Declare it in the manife
 }
 ```
 
-- **`slug`** (required) — the page is served at `/portal/<slug>`. One lowercase URL segment
+- **`slug`** (required) — the page is served at `/portal/<slug>` and every path below it. One lowercase URL segment
   (`a-z`, `0-9`, inner hyphens, at most 64 characters). It belongs to **one** installed plugin: the upload
   and the activation refuse a slug another installed plugin already declares (`Invalid portal page`).
 - **`entry`** (required) — a `.tsx`/`.ts`/`.jsx`/`.js` file under `client/`, starting with `"use client"`
   like an admin page (§2 Step 3). Its default export is a
-  React component; it receives `{ slug }` and reads everything else of the URL itself — the query string
-  and the hash reach it untouched (`window.location.search`, e.g. `/portal/my-portal?code=123456` for a
-  QR link). `next/navigation` is not available to a runtime bundle; use `window.location`.
+  React component; it receives `{ slug, path }` — `path` being the segments after the slug, so
+  `/portal/my-portal/rsvp` renders the same component with `path: ["rsvp"]` (`[]` at the portal root) and
+  the plugin can keep sub-pages under its slug. It reads the rest of the URL itself — the query string and
+  the hash reach it untouched (`window.location.search`, e.g. `/portal/my-portal?code=123456` for a QR
+  link). `next/navigation` is not available to a runtime bundle; use `window.location`. An unknown
+  sub-path is the plugin's to answer.
 - **`title`**, **`themeColor`**, **`viewportFit`** (optional) — the page's `<title>`, `<meta
   name="theme-color">` (a hex colour) and `viewport-fit` (`auto`, `cover` or `contain`). Use `cover` only
   if your page pads itself with `env(safe-area-inset-*)`: it lets the page draw under a phone's notch.
