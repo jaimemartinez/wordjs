@@ -67,13 +67,13 @@ function entries(source: string): Record<string, string> {
 describe('generate-portal-plugin-registry', () => {
     it('maps an active plugin\'s portal slug to its entry, as a client module', () => {
         const src = generate([
-            { folder: 'sala-de-comando', portalPage: { entry: 'client/portal/page.tsx', slug: 'sala-de-comando' } },
+            { folder: 'field-portal', portalPage: { entry: 'client/portal/page.tsx', slug: 'field-portal' } },
             { folder: 'conference-manager', portalPage: { entry: './client/portal/page.tsx', slug: 'conference' } },
-        ], ['sala-de-comando', 'conference-manager']);
+        ], ['field-portal', 'conference-manager']);
         expect(src.startsWith('"use client";')).toBe(true);
         expect(entries(src)).toEqual({
             conference: '../../../backend/plugins/conference-manager/client/portal/page',
-            'sala-de-comando': '../../../backend/plugins/sala-de-comando/client/portal/page',
+            'field-portal': '../../../backend/plugins/field-portal/client/portal/page',
         });
     });
 

@@ -6,16 +6,6 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
-### Changed
-
-- **YouTube Videos (1.0.3) takes its keyless list from the channel's RSS feed only.** Without a Data API
-  key the plugin first tried to scrape the channel's public Videos tab and fell back to the RSS feed when
-  that failed. On YouTube's current markup the scraper finds no videos, so every keyless site has been
-  showing the RSS feed all along: the latest 15 uploads, live streams included, with their publication
-  dates. The scraper is removed, and those sites keep showing the same list. A keyless `@handle` is still
-  resolved by reading the channel's page. For the full upload history (up to 500 videos), add a Data API
-  key.
-
 ### Added
 
 - **Plugins can ship a public portal page at `/portal/<slug>`.** A plugin declares
@@ -35,6 +25,16 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   `I18nProvider` and `ToastProvider`, are always `noindex`, and plugin bundles may now import
   `@/lib/csrf`. A static route under `frontend/src/app/portal/` (today `/portal/conference`) keeps
   precedence. See `documentation/plugins.md` §10.6.
+
+### Changed
+
+- **YouTube Videos (1.0.3) takes its keyless list from the channel's RSS feed only.** Without a Data API
+  key the plugin first tried to scrape the channel's public Videos tab and fell back to the RSS feed when
+  that failed. On YouTube's current markup the scraper finds no videos, so every keyless site has been
+  showing the RSS feed all along: the latest 15 uploads, live streams included, with their publication
+  dates. The scraper is removed, and those sites keep showing the same list. A keyless `@handle` is still
+  resolved by reading the channel's page. For the full upload history (up to 500 videos), add a Data API
+  key.
 
 ### Fixed
 

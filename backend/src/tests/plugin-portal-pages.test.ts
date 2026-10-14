@@ -112,9 +112,9 @@ describe('frontend.portalPage: the declaration', () => {
 
     it('accepts a well-formed declaration, and no declaration at all', () => {
         assert.deepStrictEqual(portalPages.validatePortalPage({}), []);
-        assert.deepStrictEqual(portalPages.validatePortalPage(withPage({ entry: 'client/portal/page.tsx', slug: 'sala-de-comando' })), []);
+        assert.deepStrictEqual(portalPages.validatePortalPage(withPage({ entry: 'client/portal/page.tsx', slug: 'field-portal' })), []);
         assert.deepStrictEqual(portalPages.validatePortalPage(withPage({
-            entry: './client/portal/page.tsx', slug: 'conference', title: 'Sala de Comando — Equipos', themeColor: '#2563eb', viewportFit: 'cover',
+            entry: './client/portal/page.tsx', slug: 'conference', title: 'Field portal — Teams', themeColor: '#2563eb', viewportFit: 'cover',
         })), []);
     });
 

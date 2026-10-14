@@ -31,13 +31,13 @@ afterEach(() => {
 
 describe("getPortalPage", () => {
     it("asks GET /plugins/<slug>/portal and returns the head details of a served portal", async () => {
-        const calls = backendAnswers(200, { slug: "sala-de-comando", title: "Sala", themeColor: "#2563eb", viewportFit: "cover" });
-        await expect(getPortalPage("sala-de-comando")).resolves.toEqual({
+        const calls = backendAnswers(200, { slug: "field-portal", title: "Field portal", themeColor: "#2563eb", viewportFit: "cover" });
+        await expect(getPortalPage("field-portal")).resolves.toEqual({
             status: "served",
-            info: { slug: "sala-de-comando", title: "Sala", themeColor: "#2563eb", viewportFit: "cover" },
+            info: { slug: "field-portal", title: "Field portal", themeColor: "#2563eb", viewportFit: "cover" },
         });
         expect(calls).toHaveLength(1);
-        expect(calls[0]).toMatch(/\/api\/v1\/plugins\/sala-de-comando\/portal$/);
+        expect(calls[0]).toMatch(/\/api\/v1\/plugins\/field-portal\/portal$/);
     });
 
     it("the backend's 404 is 'missing'", async () => {
