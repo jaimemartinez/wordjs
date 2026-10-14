@@ -356,7 +356,7 @@ The output is deterministic — rebuilding unchanged sources gives the same byte
 ### 🛑 Critical: The React Singleton
 WordJS is highly sophisticated about how it handles React. 
 - **The Core Problem:** If your plugin bundles its own copy of React, Hooks will fail (Singleton violation).
-- **The WordJS Solution:** The build script never lets React into your bundle. `react`, `react-dom`, `react-dom/client` and the JSX runtimes — plus a fixed list of host modules (`HOST_MODULES` in `backend/scripts/build-plugin.js`: `@/lib/api`, `@/lib/i18n`, `@/lib/plugin-hooks`, `@/lib/sanitize`, `@/lib/csrf`, the Modal/I18n/Toast/Auth contexts, `@/components/MediaPickerModal`, the `StatCard`/`PageHeader`/`Card`/`ActionCard` UI components, and the `DatePicker` calendar) — are **rewritten to the `WordJS.*` runtime globals** that `frontend/src/lib/pluginBundleLoader.ts` populates. They are deliberately **not** left as plain esbuild `external`: a bare `import … from "react"` cannot be resolved by the blob-URL module the loader evaluates. Any **other** `@/*` import — or a relative path into `frontend/src/` — is a **build error** naming the module (`Plugin imports host module "…" which is not exposed to plugin bundles`), not an external. `next/*` imports are left as plain externals, which a runtime-loaded bundle cannot resolve, so do not rely on them (read `window.location` instead of `next/navigation`, §10.6).
+- **The WordJS Solution:** The build script never lets React into your bundle. `react`, `react-dom`, `react-dom/client` and the JSX runtimes — plus a fixed list of host modules (`HOST_MODULES` in `backend/scripts/build-plugin.js`: `@/lib/api`, `@/lib/i18n`, `@/lib/plugin-hooks`, `@/lib/sanitize`, `@/lib/csrf`, the Modal/I18n/Toast/Auth contexts, `@/components/MediaPickerModal`, the `StatCard`/`PageHeader`/`Card`/`ActionCard` UI components, the `DatePicker` calendar, the `@/components/map/MapView` map and the `@/lib/qr` QR encoder) — are **rewritten to the `WordJS.*` runtime globals** that `frontend/src/lib/pluginBundleLoader.ts` populates. They are deliberately **not** left as plain esbuild `external`: a bare `import … from "react"` cannot be resolved by the blob-URL module the loader evaluates. Any **other** `@/*` import — or a relative path into `frontend/src/` — is a **build error** naming the module (`Plugin imports host module "…" which is not exposed to plugin bundles`), not an external. `next/*` imports are left as plain externals, which a runtime-loaded bundle cannot resolve, so do not rely on them (read `window.location` instead of `next/navigation`, §10.6).
 - **Runtime Injection:** WordJS injects its own unified React instance into the plugin bundle at runtime. **Never try to bundle React yourself.**
 
 ---
@@ -540,6 +540,17 @@ Avoid raw `div` containers for main content. Use the `Card` component, which han
     `ActionCard` and `DatePicker` (the `HOST_MODULES` list in §4). `Input`, `Select` and the rest of
     `@/components/ui` are host-only; importing one fails the build, so style your own controls with the
     same Tailwind classes instead.
+*   **Maps and QR codes come from the host too.** `import MapView from "@/components/map/MapView"` gives a
+    declarative Leaflet map (OpenStreetMap tiles by default): `markers` (`pin`/`dot`/`badge`/`vertex`/`pulse`,
+    optional accuracy circle, draggable) and `lines` (solid or dashed) are diffed by `id`, so a poll can hand
+    new arrays every few seconds without flicker (a line whose `points` array is the same object as last
+    time is not even redrawn); `onMapClick`, `fitPoints` + `fitKey` (+ `fitPadding`), `interactive={false}`
+    for a static preview and a ref handle (`fitTo`, `setView`, `getCenter`, `getZoom`, `invalidateSize`)
+    cover editing and following. Until the user pans or zooms, the map re-fits its points when its box
+    changes size. Labels, tooltips, colours and the tile attribution are escaped or allowlisted by the
+    component, and only `https://` tile templates with `{z}/{x}/{y}` are accepted.
+    `import { qrDataUrl, qrSvg } from "@/lib/qr"` draws a QR code in the browser. Do not bundle a map or QR
+    library of your own: the host's copy is the one that is loaded once and kept up to date.
 *   **Dates: use the admin's calendar, not `<input type="date">`.** The native input draws the browser's
     own calendar (different per browser and OS, in the browser's language, deaf to the admin palette and
     to the editor's dark mode). Import it one file at a time like the other host components:
@@ -1497,7 +1508,7 @@ Blocks render inside the public site **and** the editor iframe — both load `wo
 }
 ```
 
-Two reminders for committed plugin client files: start every `.tsx` with `// @ts-nocheck` (the frontend CI type-checks the generated registries, which import these files directly from `backend/plugins/`), and mark interactive blocks `"use client"`.
+Two reminders for committed plugin client files: the frontend type-checks the generated registries, which import these files directly from `backend/plugins/`, so either start every `.tsx` with `// @ts-nocheck` or write the plugin in strict TypeScript that passes the frontend's `tsc` (React and React DOM resolve to the frontend's copies from any folder — `frontend/tsconfig.json` maps them); and mark interactive blocks `"use client"`.
 
 > **Scaffold all of this:** `node backend/cli/wordjs.js create plugin my-plugin` generates a working single-block Verso component wired to the manifest — see `documentation/cli.md` §3.
 

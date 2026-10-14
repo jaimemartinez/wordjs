@@ -37,6 +37,8 @@ import * as h_pageHeader from '@/components/ui/PageHeader';
 import * as h_card from '@/components/ui/Card';
 import * as h_actionCard from '@/components/ui/ActionCard';
 import * as h_datePicker from '@/components/ui/DatePicker';
+import * as h_mapView from '@/components/map/MapView';
+import * as h_qr from '@/lib/qr';
 
 const HOST_MODULES: Record<string, unknown> = {
     'lib/api': h_api,
@@ -62,6 +64,10 @@ const HOST_MODULES: Record<string, unknown> = {
     // The admin's own calendar: a plugin's date fields look and behave like the core's (es/en/pt,
     // the site's first day of the week, the editor's palette when opened inside Verso).
     'components/ui/DatePicker': h_datePicker,
+    // A slippy map (Leaflet, loaded on first mount) and a QR encoder, so a plugin draws maps and scannable
+    // links with the host's one copy of each instead of bundling its own.
+    'components/map/MapView': h_mapView,
+    'lib/qr': h_qr,
 };
 
 // ============================================

@@ -173,7 +173,10 @@ const nextConfig: NextConfig = {
           // user. ONE value for every route on purpose: a document keeps the policy it was LOADED with,
           // and the admin is usually reached by a client-side navigation (/login → /admin), so an
           // /admin-only value would not apply until the next full reload.
-          { key: 'Permissions-Policy', value: 'camera=(self), microphone=(self), geolocation=(), browsing-topics=()' },
+          // geolocation=(self) on the same reasoning: a plugin page may show the user's own position on a map
+          // (navigator.geolocation), which `()` made Chromium refuse without a prompt. `self` still keeps
+          // embedded third-party frames out, and the browser still asks the user.
+          { key: 'Permissions-Policy', value: 'camera=(self), microphone=(self), geolocation=(self), browsing-topics=()' },
         ],
       },
       {

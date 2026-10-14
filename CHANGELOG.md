@@ -6,6 +6,21 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+- **Maps and QR codes for plugins.** Two host modules plugin bundles may import:
+  `@/components/map/MapView` — a declarative Leaflet map (OpenStreetMap tiles by default; markers and lines
+  diffed by id; labels, tooltips, colours and the attribution escaped or allowlisted; only `https://` tile
+  templates) — and `@/lib/qr` (`qrDataUrl`, `qrSvg`). Leaflet 1.9.4 (BSD-2-Clause) is a new frontend
+  dependency.
+
+### Changed
+- **The site may ask for the visitor's location.** `Permissions-Policy` now has `geolocation=(self)`, as the
+  camera and the microphone already had: with `geolocation=()` every Chromium browser refused a page's
+  position without asking. `self` keeps embedded third-party frames out and the browser still asks the visitor.
+- **Plugin client code outside `frontend/` resolves the frontend's React types**, so a plugin written in
+  strict TypeScript (without `// @ts-nocheck`) type-checks when its admin page is compiled into the frontend
+  (`frontend/tsconfig.json` maps `react` and `react-dom` to the frontend's own copies).
+
 ## [2.11.22] - 2026-10-28
 
 ### Fixed
