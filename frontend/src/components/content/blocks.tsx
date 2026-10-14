@@ -1135,6 +1135,22 @@ export function FlexRowBlock({ justify, align, gap, wrap, direction, css, slot, 
     );
 }
 
+/**
+ * The Columns track list. Each width is the author's percentage, emitted as a FLEX factor of
+ * `width / 100` instead of as `width%`: a percentage track resolves against the whole container,
+ * so `54% 46%` plus a gap was always `gap` wider than the block and pushed the last column past
+ * its edge (horizontal page scroll). An `fr` track only shares what is left AFTER the gaps.
+ *
+ * `minmax(0, …)` keeps the floor a percentage track had — it never grew to fit its content, and a
+ * bare `fr` would (its minimum is `auto`). Dividing by 100 rather than emitting `54fr` keeps widths
+ * that sum to LESS than 100 rendering as they did: flex factors summing below 1 take only that
+ * share of the free space, so `[40, 40]` still leaves a fifth of the row empty. A sum of 100 —
+ * everything ColumnDistributionControl writes — fills the row exactly, as it always did.
+ */
+function columnsTemplate(widths: number[]): string {
+    return widths.map((w) => `minmax(0, ${w / 100}fr)`).join(' ');
+}
+
 export function ColumnsBlock({ distribution, columnStyles, gap, minHeight, bg, radius, elementId, css, slots, tag, className }: any) {
     const Tag = containerTag(tag, 'div');
     const dist = distribution || { columnCount: 2, widths: [50, 50] };
@@ -1151,7 +1167,7 @@ export function ColumnsBlock({ distribution, columnStyles, gap, minHeight, bg, r
             className={cx(bc('columns'), extraClass(className))}
             style={{
                 ...blockVars('columns', {
-                    template: widths.slice(0, columnCount).map((w: number) => `${w}%`).join(' '),
+                    template: columnsTemplate(widths.slice(0, columnCount)),
                     gap: unit(gap),
                     'min-height': unit(minHeight),
                     bg,
