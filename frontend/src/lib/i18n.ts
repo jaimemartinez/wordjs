@@ -25,6 +25,16 @@ export const translations: Record<Language, Record<string, string>> = {
         'close': 'Cerrar',
         'language': 'Idioma',
 
+        // Host dialogs (useModal() alert/confirm, ConfirmationModal, the unsaved-changes guard)
+        'dialog.ok': 'Aceptar',
+        'dialog.confirm': 'Confirmar',
+        'dialog.cancel': 'Cancelar',
+        'dialog.alert.title': 'Aviso',
+        'dialog.confirm.title': 'Confirmar',
+        'dialog.unsaved.title': 'Cambios sin guardar',
+        'dialog.unsaved.message': 'Tienes cambios sin guardar. ¿Seguro que quieres salir? Se perderán tus cambios.',
+        'dialog.unsaved.leave': 'Salir de la página',
+
         // Navigation
         'nav.dashboard': 'Panel',
         'nav.posts': 'Publicaciones',
@@ -1273,6 +1283,16 @@ export const translations: Record<Language, Record<string, string>> = {
         'close': 'Close',
         'language': 'Language',
 
+        // Host dialogs (useModal() alert/confirm, ConfirmationModal, the unsaved-changes guard)
+        'dialog.ok': 'OK',
+        'dialog.confirm': 'Confirm',
+        'dialog.cancel': 'Cancel',
+        'dialog.alert.title': 'Alert',
+        'dialog.confirm.title': 'Confirm',
+        'dialog.unsaved.title': 'Unsaved Changes',
+        'dialog.unsaved.message': 'You have unsaved changes. Are you sure you want to leave? Your changes will be lost.',
+        'dialog.unsaved.leave': 'Leave Page',
+
         // Navigation
         'nav.dashboard': 'Dashboard',
         'nav.posts': 'Posts',
@@ -2519,6 +2539,16 @@ export const translations: Record<Language, Record<string, string>> = {
         'confirm': 'Confirmar',
         'close': 'Fechar',
         'language': 'Idioma',
+
+        // Host dialogs (useModal() alert/confirm, ConfirmationModal, the unsaved-changes guard)
+        'dialog.ok': 'OK',
+        'dialog.confirm': 'Confirmar',
+        'dialog.cancel': 'Cancelar',
+        'dialog.alert.title': 'Aviso',
+        'dialog.confirm.title': 'Confirmar',
+        'dialog.unsaved.title': 'Alterações não salvas',
+        'dialog.unsaved.message': 'Você tem alterações não salvas. Tem certeza de que deseja sair? Elas serão perdidas.',
+        'dialog.unsaved.leave': 'Sair da página',
 
         // Navigation
         'nav.dashboard': 'Painel',
@@ -3771,12 +3801,20 @@ export function registerTranslations(newTranslations: Record<string, Record<stri
 }
 
 /**
- * Get language from localStorage or default to Spanish
+ * Get language from localStorage or default to Spanish.
+ * Never throws and never returns a language without translations: the root-mounted host dialog
+ * (contexts/ModalContext.tsx) reads it outside any I18nProvider, where a blocked storage or a
+ * stale value such as 'fr' would otherwise crash t() for every confirm() on the site.
  */
 export function getStoredLanguage(): Language {
     if (typeof window === 'undefined') return 'es';
-    const stored = localStorage.getItem('wordjs-lang');
-    return (stored as Language) || 'es';
+    let stored: string | null = null;
+    try {
+        stored = localStorage.getItem('wordjs-lang');
+    } catch {
+        // Storage blocked (sandboxed frame, privacy mode): fall back to the default.
+    }
+    return stored && Object.prototype.hasOwnProperty.call(translations, stored) ? (stored as Language) : 'es';
 }
 
 /**

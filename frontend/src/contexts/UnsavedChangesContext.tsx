@@ -3,6 +3,7 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import ConfirmationModal from "@/components/ConfirmationModal";
+import { useI18n } from "@/contexts/I18nContext";
 
 interface UnsavedChangesContextType {
     isDirty: boolean;
@@ -16,6 +17,7 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
     const [isDirty, setIsDirty] = useState(false);
     const [pendingNavigation, setPendingNavigation] = useState<string | null>(null);
     const router = useRouter();
+    const { t } = useI18n();
 
     // Handle browser close / refresh
     useEffect(() => {
@@ -57,9 +59,10 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
                 isOpen={!!pendingNavigation}
                 onClose={cancelNavigation}
                 onConfirm={confirmNavigation}
-                title="Unsaved Changes"
-                message="You have unsaved changes. Are you sure you want to leave? Your changes will be lost."
-                confirmText="Leave Page"
+                title={t("dialog.unsaved.title")}
+                message={t("dialog.unsaved.message")}
+                confirmText={t("dialog.unsaved.leave")}
+                cancelText={t("dialog.cancel")}
                 isDanger={true}
             />
         </UnsavedChangesContext.Provider>

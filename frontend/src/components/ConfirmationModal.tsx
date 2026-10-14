@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useRef } from "react";
 import DialogLayer from "./DialogLayer";
+import { getStoredLanguage, t } from "@/lib/i18n";
 
 interface ConfirmationModalProps {
     isOpen: boolean;
@@ -20,8 +21,8 @@ export default function ConfirmationModal({
     onConfirm,
     title,
     message,
-    confirmText = "Confirm",
-    cancelText = "Cancel",
+    confirmText,
+    cancelText,
     isDanger = false
 }: ConfirmationModalProps) {
     const titleId = useId();
@@ -53,6 +54,10 @@ export default function ConfirmationModal({
     }, [isOpen]);
 
     if (!isOpen) return null;
+
+    // Default labels in the stored admin language: this dialog also renders outside any I18nProvider
+    // (useModal()'s, mounted in app/layout.tsx), so it reads what I18nProvider reads ('wordjs-lang').
+    const lang = getStoredLanguage();
 
     // dialogOver: a confirmation opens over whatever asked for it — a page dialog, the media lightbox, a
     // plugin's own overlay (6010-6090) — and used to sit at z-50, UNDER all of them and under the admin
@@ -88,7 +93,7 @@ export default function ConfirmationModal({
                             onClick={onClose}
                             className="px-5 py-2.5 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors"
                         >
-                            {cancelText}
+                            {cancelText ?? t("dialog.cancel", lang)}
                         </button>
                         <button
                             onClick={() => {
@@ -100,7 +105,7 @@ export default function ConfirmationModal({
                                     : "bg-blue-600 hover:bg-blue-700"
                                 }`}
                         >
-                            {confirmText}
+                            {confirmText ?? t("dialog.confirm", lang)}
                         </button>
                     </div>
                 </div>
