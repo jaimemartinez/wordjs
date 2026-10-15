@@ -5,6 +5,7 @@
 
 import type { Request, Response } from 'express';
 const express = require('express');
+const log = require('../core/module-logger').moduleLogger('routes/media');
 const router = express.Router();
 const multer = require('multer');
 const path = require('path');
@@ -202,7 +203,7 @@ async function encodeModernDerivatives(
                     filesize: info.size,
                 };
             } catch (err: any) {
-                console.warn(`Media upload: ${format.key} derivative failed for ${file} — keeping the original format only:`, err?.message || err);
+                log.warn({ err }, `Media upload: ${format.key} derivative failed for ${file} — keeping the original format only`);
                 try { if (fs.existsSync(target)) fs.unlinkSync(target); } catch { /* best effort */ }
             } finally {
                 activeModernEncodes--;
@@ -214,7 +215,7 @@ async function encodeModernDerivatives(
     // and a line per (size x format) pair would bury it under its own repetition.
     const skipped = queue.length - next;
     if (skipped > 0) {
-        console.warn(`Media upload: skipped ${skipped} modern derivative encode(s) — the host was already at its encode budget (${MODERN_ENCODE_CONCURRENCY} concurrent). The upload keeps its original-format sizes.`);
+        log.warn({ skipped }, `Media upload: skipped ${skipped} modern derivative encode(s) — the host was already at its encode budget (${MODERN_ENCODE_CONCURRENCY} concurrent). The upload keeps its original-format sizes.`);
     }
 }
 
@@ -780,7 +781,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
         }
 
     } catch (err) {
-        console.error("Security check failed:", err);
+        log.error({ err }, 'Security check failed');
         // FAIL-CLOSED: if the magic-byte/sanitization step threw for a type that MUST carry a
         // verifiable signature, do not let the unverified file through.
         if (requiresSignature) {
@@ -956,7 +957,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
                 }
             }
         } catch (err) {
-            console.error("Image processing failed:", err);
+            log.error({ err }, 'Image processing failed');
         }
     }
 

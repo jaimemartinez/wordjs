@@ -11,6 +11,7 @@ import type { Request, Response, NextFunction } from 'express';
 import type {} from 'multer';
 
 const express = require('express');
+const log = require('../core/module-logger').moduleLogger('routes/fonts');
 const router = express.Router();
 const multer = require('multer');
 const path = require('path');
@@ -398,7 +399,7 @@ router.delete('/:filename', authenticate, can('manage_options'), asyncHandler(as
             }
 
         } catch (dbError) {
-            console.error('Error checking font usage:', dbError);
+            log.error({ err: dbError }, 'Error checking font usage');
             // Fail safe: If we can't check usage, warn but maybe allow? 
             // Better to block if unsure to preserve integrity.
             return res.status(500).json({ error: 'Database error while checking font usage.' });

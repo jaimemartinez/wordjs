@@ -5,6 +5,7 @@
 
 import type { Request, Response, CookieOptions } from 'express';
 const express = require('express');
+const log = require('../core/module-logger').moduleLogger('routes/auth');
 const router = express.Router();
 const User = require('../models/User');
 // issueSessionCookie is the ONE door that mints the interactive session cookie: it refuses a request
@@ -754,7 +755,7 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
                 });
             }
         } catch (error) {
-            console.warn('[register] a registration past the identity checks did not complete:', error && error.message);
+            log.warn({ err: error }, '[register] a registration past the identity checks did not complete');
         }
 
         // No session cookie and no `user`: the body is the one an already-registered address gets.

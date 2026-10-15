@@ -21,7 +21,7 @@ function init(options: any = {}) {
         // Lazy load to avoid crashing if not installed
         const Database = require('better-sqlite3');
         dbInstance = new Database(dbPath, {
-            verbose: config.nodeEnv === 'development' ? console.log : null
+            verbose: config.nodeEnv === 'development' ? (sql: unknown) => log.debug({ sql }, 'sqlite statement') : null
         });
 
         // Performance optimizations

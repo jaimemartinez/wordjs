@@ -12,6 +12,7 @@ import type {
 } from '../generated/content-dtos.generated';
 
 const express = require('express');
+const log = require('../core/module-logger').moduleLogger('routes/posts');
 const router = express.Router();
 
 interface ContentRouteUser {
@@ -1554,7 +1555,7 @@ router.put('/:id', authenticate, asyncHandler(async (req: AuthenticatedRequest<I
         });
     } catch (error: any) {
         if (!error?.contentRevisionFailure) throw error;
-        console.error('Failed to save revision before update:', error);
+        log.error({ err: error }, 'Failed to save revision before update');
         return res.status(500).json({
             code: 'rest_revision_failed',
             message: 'Could not snapshot the current version; the write was not applied.',
@@ -1868,7 +1869,7 @@ router.post('/:id/meta', authenticate, asyncHandler(async (req: AuthenticatedReq
         });
     } catch (error: any) {
         if (!error?.contentRevisionFailure) throw error;
-        console.error('Failed to save revision before meta write:', error);
+        log.error({ err: error }, 'Failed to save revision before meta write');
         return res.status(500).json({
             code: 'rest_revision_failed',
             message: 'Could not snapshot the current version; the write was not applied.',

@@ -11,6 +11,7 @@ import type { Request, Response } from 'express';
 import type { FileFilterCallback } from 'multer';
 
 const express = require('express');
+const log = require('../core/module-logger').moduleLogger('routes/plugins');
 const router = express.Router();
 const AdmZip = require('adm-zip');
 const multer = require('multer');
@@ -111,14 +112,14 @@ function regenerateRegistry() {
             const scriptPath = path.join(scriptsDir, script);
 
             if (!fs.existsSync(scriptPath)) {
-                console.log('⚠️  Script not found: %s', script);
+                log.info({ script }, `⚠️  Script not found: ${script}`);
                 continue;
             }
 
             // SECURITY: Use execFile instead of exec to prevent command injection
             execFile('node', [scriptPath], { env }, (error: Error | null, stdout: string, stderr: string) => {
                 if (error) {
-                    console.error('❌ Failed to run %s:', script, error.message);
+                    log.error({ script, err: error }, `❌ Failed to run ${script}`);
                     return;
                 }
                 if (process.env.NODE_ENV !== 'production') {
@@ -128,7 +129,7 @@ function regenerateRegistry() {
                 }
             });
         }
-    }).catch((e: any) => console.error('regenerateRegistry: could not resolve active plugins:', e && e.message));
+    }).catch((e: any) => log.error({ err: e }, 'regenerateRegistry: could not resolve active plugins'));
 }
 
 /**
@@ -242,7 +243,7 @@ function logSafe(v: any): string {
  */
 async function awaitPolicyAnnounced(announced: Promise<void>, tag: string, slug: string): Promise<void> {
     try { await announced; }
-    catch (e: any) { console.warn("[%s] '%s': the change is in effect; an updated_option subscriber failed:", tag, logSafe(slug), e && e.message); }
+    catch (e: any) { log.warn({ tag, slug: logSafe(slug), err: e }, `[${tag}] '${logSafe(slug)}': the change is in effect; an updated_option subscriber failed`); }
 }
 
 // How long DELETE waits for the slug's child process to actually be gone before it refuses to remove
@@ -494,7 +495,7 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
             let removedResidue = false;
             if (orphan.residual && fs.existsSync(installedDir)) {
                 try { removePluginDirPreservingData(installedDir); removedResidue = true; }
-                catch (e: any) { console.warn('[plugins] residue of orphaned %s could not be removed: %s', logSafe(intendedSlug), logSafe(e && e.message)); }
+                catch (e: any) { log.warn({ intendedSlug: logSafe(intendedSlug), err: e }, `[plugins] residue of orphaned ${logSafe(intendedSlug)} could not be removed`); }
             }
             await recordAudit(actorId, 'plugin.orphan_reclaim', 'plugin', intendedSlug, {
                 via: 'install', reason: orphan.reason,
@@ -618,7 +619,7 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
     } catch (error: any) {
         // Cleanup temp file on error
         discardZip();
-        console.error('[plugins] install failed:', error);
+        log.error({ err: error }, '[plugins] install failed');
         return { ok: false, status: 500, body: { error: publicErrorText(error, 'Failed to install plugin.') } };
     }
 }
@@ -741,7 +742,7 @@ async function runPluginUpdate(
     // stored record is adopted into it before every (re)activation here.
     const adoptStoredPolicy = async (): Promise<boolean> => {
         try { await perms.adoptStoredPolicy(slug); return true; }
-        catch (e: any) { console.warn('[plugin-update %s] the stored grants could not be read: %s', logSafe(slug), logSafe(e && e.message)); return false; }
+        catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[plugin-update ${logSafe(slug)}] the stored grants could not be read`); return false; }
     };
     // Put the previous version back exactly: partial new code out (data/ kept), stashed code in,
     // reactivated if it had been running — with the stored grants, and not at all when they cannot be
@@ -755,7 +756,7 @@ async function runPluginUpdate(
         if (stashDir) { try { moveEntriesInto(stashDir, installedDir); fs.rmSync(stashDir, { recursive: true, force: true }); } catch { /* */ } stashDir = null; }
         if (!wasActive) return true;
         if (!(await adoptStoredPolicy())) return false;
-        try { await core.activatePlugin(slug); return true; } catch (e: any) { console.warn('[plugin-update %s] rollback reactivate failed: %s', logSafe(slug), logSafe(e && e.message)); return false; }
+        try { await core.activatePlugin(slug); return true; } catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[plugin-update ${logSafe(slug)}] rollback reactivate failed`); return false; }
     };
 
     try {
@@ -855,7 +856,7 @@ async function runPluginUpdate(
     } catch (e: any) {
         if (stashDir) { try { await rollback(); } catch { /* */ } }
         cleanupZip();
-        console.error("[plugins] update of '%s' failed:", logSafe(slug), e);
+        log.error({ slug: logSafe(slug), err: e }, `[plugins] update of '${logSafe(slug)}' failed`);
         return { ok: false, status: e.status || 500, body: e.body || { error: publicErrorText(e, `Failed to update plugin '${slug}'.`) } };
     } finally {
         try { await lease.release(); } catch { /* */ }
@@ -884,18 +885,18 @@ async function recoverInterruptedPluginUpdates(): Promise<void> {
         let installedDir: string;
         try { installedDir = resolveSafePluginDir(slug); } catch { continue; }
         const lease = await distLock.acquireBlocking(`wordjs:plugin-op:${slug}`, { ttlMs: 60000, renewMs: 20000, timeoutMs: 1500 });
-        if (!lease.held) { console.warn("[plugin-update] '%s' stash owned by another node — skipping recovery here.", logSafe(slug)); continue; }
+        if (!lease.held) { log.warn({ slug: logSafe(slug) }, `[plugin-update] '${logSafe(slug)}' stash owned by another node — skipping recovery here.`); continue; }
         try {
             if (fs.existsSync(path.join(installedDir, 'manifest.json'))) {
                 fs.rmSync(stashDir, { recursive: true, force: true });
-                console.log("[plugin-update] discarded a completed update's stash for '%s'.", logSafe(slug));
+                log.info({ slug: logSafe(slug) }, `[plugin-update] discarded a completed update's stash for '${logSafe(slug)}'.`);
             } else {
                 moveEntriesInto(stashDir, installedDir);
                 fs.rmSync(stashDir, { recursive: true, force: true });
-                console.log("[plugin-update] recovered an interrupted update for '%s' — restored the previous version.", logSafe(slug));
+                log.info({ slug: logSafe(slug) }, `[plugin-update] recovered an interrupted update for '${logSafe(slug)}' — restored the previous version.`);
             }
         } catch (e: any) {
-            console.warn("[plugin-update] recovery failed for '%s': %s", logSafe(slug), logSafe(e && e.message));
+            log.warn({ slug: logSafe(slug), err: e }, `[plugin-update] recovery failed for '${logSafe(slug)}'`);
         } finally {
             try { await lease.release(); } catch { /* */ }
         }
@@ -1054,7 +1055,7 @@ router.get('/registry', optionalAuth, asyncHandler(async (req: Request, res: Res
             try {
                 manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
             } catch (err) {
-                console.warn('Failed to read manifest for %s:', logSafe(plugin.slug), err.message);
+                log.warn({ slug: logSafe(plugin.slug), err }, `Failed to read manifest for ${logSafe(plugin.slug)}`);
             }
         }
         if (!manifest || typeof manifest !== 'object') {
@@ -1170,7 +1171,7 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
     // the activation decides it. A read failure leaves the flag out (the dialog then reads the grants).
     let seedsOnActivation: Record<string, boolean> = {};
     try { seedsOnActivation = await activationSeedsDeclaredGrants(plugins.map((p: any) => p.slug)); }
-    catch (e: any) { console.warn('[plugins] could not read the stored grants for the activation dialog:', logSafe(e && e.message)); }
+    catch (e: any) { log.warn({ err: e }, '[plugins] could not read the stored grants for the activation dialog'); }
     res.json(orphanRows.concat(plugins.map((raw: any) => {
         // browser:script for a plugin that ships browser code WITHOUT declaring it — one installed before
         // the capability existed. Its manifest cannot be rewritten from here, but the administrator must
@@ -1434,14 +1435,14 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
         declared = Array.from(new Set(((p && p.permissions) || [])
             .map((perm: any) => (perm && perm.scope) ? (perm.scope === 'network' ? 'network' : `${perm.scope}:${perm.access || 'read'}`) : null)
             .filter(Boolean))) as string[];
-    } catch (e: any) { console.warn("[Permissions] grant-on-activate (seed) for '%s' failed:", logSafe(slug), e && e.message); }
+    } catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[Permissions] grant-on-activate (seed) for '${logSafe(slug)}' failed`); }
     let seededDeclared: string[] | null = null;
     if (isHeadless(req)) {
         const stored = await adoptStoredPolicy(slug);
         if (declared.length && stored.seedsDeclaredGrants && refusePluginGrantByToken(req, res, declared)) return;
     } else if (declared.length) {
         try { if (await seedGrants(slug, declared, { adminDecision: true })) seededDeclared = declared; }
-        catch (e: any) { console.warn("[Permissions] grant-on-activate (seed) for '%s' failed:", logSafe(slug), e && e.message); }
+        catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[Permissions] grant-on-activate (seed) for '${logSafe(slug)}' failed`); }
     }
 
     let result;
@@ -1450,7 +1451,7 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
     } catch (e: any) {
         // Activation failed (scan/test/init) — drop the grant record seeded above, so a failed-activation
         // plugin holds no grants (in memory or in the database).
-        if (seededDeclared) { try { await clearGrants(slug); } catch (ce: any) { console.warn("[Permissions] grant-on-activate (rollback) for '%s' failed:", logSafe(slug), ce && ce.message); } }
+        if (seededDeclared) { try { await clearGrants(slug); } catch (ce: any) { log.warn({ slug: logSafe(slug), err: ce }, `[Permissions] grant-on-activate (rollback) for '${logSafe(slug)}' failed`); } }
         // A STRUCTURED validation failure (AST scan) carries a fixable-vs-blocked split. Surface it as a
         // 400 with `details` so the admin UI can show a rejection panel instead of one mangled string.
         if (e && e.code === 'PLUGIN_VALIDATION_FAILED') {
@@ -1620,10 +1621,10 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
             if (valErr && valErr.code === 'PLUGIN_VALIDATION_FAILED') {
                 deactivationReason = (valErr.missingPermissions || []).join('; ') || valErr.message;
                 try { await deactivatePlugin(slug); deactivated = true; }
-                catch (e: any) { console.warn("[Permissions] deactivation of '%s' after revoke failed:", logSafe(slug), e && e.message); }
+                catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[Permissions] deactivation of '${logSafe(slug)}' after revoke failed`); }
             } else {
                 // A read/parse problem is not evidence of a violation — leave the plugin running and log.
-                console.warn("[Permissions] post-grant re-validation of '%s' could not run:", logSafe(slug), valErr && valErr.message);
+                log.warn({ slug: logSafe(slug), err: valErr }, `[Permissions] post-grant re-validation of '${logSafe(slug)}' could not run`);
             }
         }
     }
@@ -1640,7 +1641,7 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
             const { reloadIsolatedPlugin, isIsolated } = require('../core/plugin-isolate');
             if (isIsolated(slug)) { await reloadIsolatedPlugin(slug); reloaded = true; }
         } catch (e: any) {
-            console.warn("[Permissions] reload of '%s' after grant change failed:", logSafe(slug), e && e.message);
+            log.warn({ slug: logSafe(slug), err: e }, `[Permissions] reload of '${logSafe(slug)}' after grant change failed`);
             reloadRefusal = findSandboxUnavailable(e);
         }
     }
@@ -1664,7 +1665,7 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
             if (manifestPath) await syncPluginRoles(slug, JSON.parse(fs.readFileSync(manifestPath, 'utf8')));
         } catch (e: any) {
             rolesError = String((e && e.message) || e);
-            console.warn("[Permissions] roles of '%s' not registered: %s", logSafe(slug), logSafe(rolesError));
+            log.warn({ slug: logSafe(slug), err: rolesError }, `[Permissions] roles of '${logSafe(slug)}' not registered`);
         }
     }
 
@@ -1838,7 +1839,7 @@ router.post('/:slug/egress-hosts', authenticate, isAdmin, asyncHandler(async (re
         const { reloadIsolatedPlugin, isIsolated } = require('../core/plugin-isolate');
         if (isIsolated(slug)) { await reloadIsolatedPlugin(slug); reloaded = true; }
     } catch (e: any) {
-        console.warn("[EgressHosts] reload of '%s' after egress change failed:", logSafe(slug), e && e.message);
+        log.warn({ slug: logSafe(slug), err: e }, `[EgressHosts] reload of '${logSafe(slug)}' after egress change failed`);
         reloadRefusal = findSandboxUnavailable(e);
     }
     // Multi-node: propagate so every OTHER node reloads its egress-allowlist map and respawns its isolate.
@@ -2393,7 +2394,7 @@ router.post('/:slug/deactivate', authenticate, isAdmin, asyncHandler(async (req:
                 const dir = resolveSafePluginDir(slug);
                 if (fs.existsSync(dir)) { removePluginDirPreservingData(dir); residueRemoved = true; }
             } catch (e: any) {
-                console.warn('[plugins] residue of orphaned %s could not be removed: %s', logSafe(slug), logSafe(e && e.message));
+                log.warn({ slug: logSafe(slug), err: e }, `[plugins] residue of orphaned ${logSafe(slug)} could not be removed`);
             }
         }
         await clearOrphanNotice(slug);
@@ -2533,10 +2534,10 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request,
     // 409 below means a process really is still alive, not that a Map entry lingered.
     const isolate = require('../core/plugin-isolate');
     if (isolate.isIsolated(slug)) {
-        console.warn('[plugin %s] delete: a child process is still registered although the plugin is not listed active (orphaned isolate) — stopping it before removing the directory.', logSafe(slug));
+        log.warn({ slug: logSafe(slug) }, `[plugin ${logSafe(slug)}] delete: a child process is still registered although the plugin is not listed active (orphaned isolate) — stopping it before removing the directory.`);
     }
     try { isolate.unloadIsolatedPlugin(slug); }
-    catch (e: any) { console.error('[plugin %s] delete: could not stop the isolate / cancel its pending restart: %s', logSafe(slug), logSafe(e && e.message)); }
+    catch (e: any) { log.error({ slug: logSafe(slug), err: e }, `[plugin ${logSafe(slug)}] delete: could not stop the isolate / cancel its pending restart`); }
     //
     // THE WAIT IS BOUNDED, AND THE REFUSAL CAN BE PERMANENT — an accepted trade, new here (main deleted
     // unconditionally). A pid enters the live set at spawn and leaves it in the child's OWN 'exit'
@@ -2559,7 +2560,7 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request,
     // directly, and gives the restart as the guaranteed way out.
     if (!(await isolate.awaitIsolateStopped(slug, DELETE_STOP_TIMEOUT_MS))) {
         const stuckPids: number[] = (typeof isolate.getLivePids === 'function' && isolate.getLivePids(slug)) || [];
-        console.error('[plugin %s] delete REFUSED: a child process was still alive %sms after it was told to stop (pid %s) — the plugin directory was left untouched.', logSafe(slug), logSafe(DELETE_STOP_TIMEOUT_MS), logSafe(stuckPids.join(', ') || 'unknown'));
+        log.error({ slug: logSafe(slug), stopTimeoutMs: logSafe(DELETE_STOP_TIMEOUT_MS) }, `[plugin ${logSafe(slug)}] delete REFUSED: a child process was still alive ${logSafe(DELETE_STOP_TIMEOUT_MS)}ms after it was told to stop (pid ${logSafe(stuckPids.join(', ') || 'unknown')}) — the plugin directory was left untouched.`);
         return res.status(409).json({
             message: `'${slug}' still has a running process${stuckPids.length ? ` (pid ${stuckPids.join(', ')})` : ''} that did not stop within ${DELETE_STOP_TIMEOUT_MS}ms. Nothing was deleted. End that process, or restart the server, then delete the plugin again.`,
             stillRunning: true,
@@ -2596,7 +2597,7 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request,
         try {
             cleanup.roles = await require('../core/roles').releasePluginRoles(slug);
         } catch (e: any) {
-            console.warn('[plugin-delete %s] could not release its roles: %s', logSafe(slug), logSafe(e && e.message));
+            log.warn({ slug: logSafe(slug), err: e }, `[plugin-delete ${logSafe(slug)}] could not release its roles`);
         }
 
         // Drop the origin binding too. Leaving it behind is not cosmetic: the record says "this slug may
@@ -2606,7 +2607,7 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request,
         try {
             await require('../core/plugin-origins').removePluginOrigin(slug);
         } catch (e: any) {
-            console.warn('[plugin-delete %s] could not clear origin binding: %s', logSafe(slug), logSafe(e && e.message));
+            log.warn({ slug: logSafe(slug), err: e }, `[plugin-delete ${logSafe(slug)}] could not clear origin binding`);
         }
 
         // Regenerate registry to remove traces

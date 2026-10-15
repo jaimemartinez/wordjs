@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 const express = require('express');
+const log = require('../core/module-logger').moduleLogger('routes/health');
 const router = express.Router();
 const SystemHealth = require('../core/system-health');
 const database = require('../config/database');
@@ -373,7 +374,7 @@ router.get('/details', authenticate, isAdmin, async (req: Request, res: Response
         const fullStatus = await SystemHealth.getFullStatus();
         res.json(withDegradationFields(fullStatus));
     } catch (err) {
-        console.error('[health] /details failed:', err);
+        log.error({ err }, '[health] /details failed');
         res.status(500).json({ error: publicErrorText(err, 'The system health report could not be produced.') });
     }
 });

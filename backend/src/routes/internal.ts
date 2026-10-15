@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 const express = require('express');
+const log = require('../core/module-logger').moduleLogger('routes/internal');
 const router = express.Router();
 const crypto = require('crypto');
 const { saveConfig, getConfig } = require('../core/configManager');
@@ -131,7 +132,7 @@ router.post('/gateway-update', (req: Request, res: Response) => {
         return res.json({ success: true, message: 'Gateway configuration already up to date.' });
     }
 
-    console.log(`[Backend] 🔄 Received Gateway Configuration Update: Port ${parsedPort}`);
+    log.info({ parsedPort }, `[Backend] 🔄 Received Gateway Configuration Update: Port ${parsedPort}`);
 
     // Update Config
     const success = saveConfig({
@@ -143,7 +144,7 @@ router.post('/gateway-update', (req: Request, res: Response) => {
 
         // Trigger Restart (Supervisor/Server.js will respawn us)
         setTimeout(() => {
-            console.log('[Backend] 🛑 Restarting process to apply new Gateway config...');
+            log.info('[Backend] 🛑 Restarting process to apply new Gateway config...');
             process.exit(0);
         }, 1000);
     } else {

@@ -9,6 +9,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const log = require('./core/module-logger').moduleLogger('index');
 
 // Load environment variables
 require('dotenv').config();
@@ -17,10 +18,10 @@ require('dotenv').config();
 const config = require('./config/app');
 
 // STRUCTURED LOGGING — installed immediately after the config that decides its level, and before any
-// other module in this file has had a chance to print. The bridge routes the backend's existing
-// console.log/info/warn/error/debug calls through core/logger, so boot output is JSON with a level and
-// a timestamp from the very first line, without editing 802 call sites in this change (they are marked
-// `legacy: true` and migrated in a follow-up). See documentation/observability.md.
+// other module in this file has had a chance to print. Backend modules log through core/module-logger;
+// the bridge routes what is left on console.log/info/warn/error/debug (the allowlisted call sites and
+// anything a dependency prints) through core/logger too, marked `legacy: true`, so boot output is JSON
+// with a level and a timestamp from the very first line. See documentation/observability.md.
 //
 // NOT under `node --test`: the unit suites read node:test's own output off this stream, and turning
 // every console line into JSON makes a failing assertion unreadable. NODE_ENV is not set to 'test' by
@@ -199,6 +200,7 @@ app.use(hostPolicy.hostGateFactory({
     // stages an installed site by replacing configManager.isInstalled reaches the gate too.
     isInstalled: () => require('./core/configManager').isInstalled(),
     onNotice: raiseSiteAddressNotice,
+    logger: require('./core/module-logger').moduleLogger('core/host-policy'),
 }));
 // The same provider, published for the monolith's edge check (phase 2): it must judge the address
 // with the policy the backend applies, not a copy built from another read of the config.
@@ -293,7 +295,7 @@ function limiterStore(prefix: string): any {
         const { RedisStore } = require('rate-limit-redis');
         return new RedisStore({ sendCommand: (...args: any[]) => client.call(...args), prefix });
     } catch (e: any) {
-        console.warn('[rate-limit] Redis store unavailable, using in-memory:', e && e.message);
+        log.warn({ err: e }, '[rate-limit] Redis store unavailable, using in-memory');
         return undefined;
     }
 }
@@ -798,7 +800,7 @@ if (process.env.WORDJS_QUERY_STATS === '1') {
         const start = (globalThis as any).__wjsQueryCount || 0;
         res.on('finish', () => {
             const n = ((globalThis as any).__wjsQueryCount || 0) - start;
-            console.log(`${new Date().toISOString()} ${logSafe(req.method)} ${logSafe(req.path)} → ${n} queries`);
+            log.info({ method: logSafe(req.method), path: logSafe(req.path), queries: n }, `${logSafe(req.method)} ${logSafe(req.path)} → ${n} queries`);
         });
         next();
     });
@@ -807,7 +809,7 @@ if (process.env.WORDJS_QUERY_STATS === '1') {
 // Request logging in development
 if (config.nodeEnv === 'development' && process.env.WORDJS_QUERY_STATS !== '1') {
     app.use((req: Request, res: Response, next: NextFunction) => {
-        console.log(`${new Date().toISOString()} ${logSafe(req.method)} ${logSafe(req.path)}`);
+        log.debug({ method: logSafe(req.method), path: logSafe(req.path) }, `${logSafe(req.method)} ${logSafe(req.path)}`);
         next();
     });
 }
@@ -1131,8 +1133,8 @@ require('./core/db-admin').register(app);
  * Initialize the application
  */
 async function initialize() {
-    console.log('🚀 Starting WordJS...');
-    console.log(`   Environment: ${config.nodeEnv}`);
+    log.info('🚀 Starting WordJS...');
+    log.info(`   Environment: ${config.nodeEnv}`);
 
     // On-demand frontend cache purge. Registered UNCONDITIONALLY and FIRST: a fresh boot goes
     // through the uninstalled branch and then installs IN-PROCESS, so the installer's option/post
@@ -1203,7 +1205,7 @@ async function initialize() {
                 cn = cert && cert.subject ? cert.subject.CN : undefined;
             } catch { cn = undefined; }
             if (!ALLOWED_PEER_CNS.has(String(cn))) {
-                console.warn(`🛡️  mTLS: rejected direct peer CN='${cn}' — only the gateway may address the backend.`);
+                log.warn(`🛡️  mTLS: rejected direct peer CN='${cn}' — only the gateway may address the backend.`);
                 try { tlsSocket.destroy(); } catch { /* already gone */ }
             }
         });
@@ -1222,14 +1224,13 @@ async function initialize() {
     server.keepAliveTimeout = 65000;
     server.headersTimeout = 66000;
     server.listen(config.port, bindHost, () => {
-        console.log('');
-        console.log(`✅ WordJS Backend is running via ${serverProtocol.toUpperCase()}!`);
+        log.info(`✅ WordJS Backend is running via ${serverProtocol.toUpperCase()}!`);
         if (serverProtocol === 'https') {
-            console.log('   🛡️  Security: mTLS (Identity Enforcement) is ACTIVE');
-            console.log(`   🪪  Identity: backend`);
+            log.info('   🛡️  Security: mTLS (Identity Enforcement) is ACTIVE');
+            log.info('   🪪  Identity: backend');
         }
-        console.log(`   🌐 URL: ${serverProtocol}://${config.host}:${config.port}`);
-        console.log(`   📡 API: ${serverProtocol}://${config.host}:${config.port}${config.api.prefix}`);
+        log.info({ serverProtocol }, `   🌐 URL: ${serverProtocol}://${config.host}:${config.port}`);
+        log.info({ serverProtocol }, `   📡 API: ${serverProtocol}://${config.host}:${config.port}${config.api.prefix}`);
 
         // Register with Gateway
         // Register with Gateway with Auto-Discovery (Zero Config)
@@ -1256,7 +1257,7 @@ async function initialize() {
                     return;
                 }
                 if (!announcedMtls) {
-                    console.log('   🛂 mTLS: Using client certificates for Gateway registration...');
+                    log.info('   🛂 mTLS: Using client certificates for Gateway registration...');
                     announcedMtls = true;
                 }
                 clientOpts = {
@@ -1321,7 +1322,7 @@ async function initialize() {
                     }, (res: any) => {
                         if (res.statusCode === 200) {
                             const actualProto = useMtls ? 'HTTPS (mTLS)' : protocolName.toUpperCase();
-                            console.log(`✅ ${serviceData.name} Registered with Gateway via ${actualProto}`);
+                            log.info(`✅ ${serviceData.name} Registered with Gateway via ${actualProto}`);
                             resolve(protocolName);
                         } else {
                             reject(new Error(`Status ${res.statusCode}`));
@@ -1384,14 +1385,14 @@ async function initialize() {
                                         await siteAddress.noteGatewaySiteUrl(info.siteUrl);
                                     }
                                 } catch (e) {
-                                    console.warn('[Sync] Could not compare the gateway\'s site address:', e.message);
+                                    log.warn({ err: e }, '[Sync] Could not compare the gateway\'s site address');
                                 }
                             }
                             resolve();
                         });
                     });
                     req.on('error', (e: any) => {
-                        console.warn('[Sync] Could not reach Gateway for URL sync:', e.message);
+                        log.warn({ err: e }, '[Sync] Could not reach Gateway for URL sync');
                         resolve();
                     });
                     req.end();
@@ -1413,7 +1414,7 @@ async function initialize() {
                             await tryRegister(fallbackProto, service);
                             preferredProto = fallbackProto;
                         } catch (e2) {
-                            console.warn(`⏳ Waiting for Gateway to register ${service.name}...`);
+                            log.warn({ name: service.name }, `⏳ Waiting for Gateway to register ${service.name}...`);
                             allSuccess = false;
                         }
                     }
@@ -1424,7 +1425,7 @@ async function initialize() {
                     _regAttempt++;
                     setTimeout(registerAll, Math.min(5000, [250, 1000, 2000][_regAttempt - 1] ?? 5000));
                 } else {
-                    console.log('🏁 All services successfully registered with Gateway.');
+                    log.info('🏁 All services successfully registered with Gateway.');
                     await syncFromGateway();
                     // Arm the gateway's address check with the addresses this backend answers (core/
                     // site-address): the push at the end of the boot reconcile may have run before the
@@ -1450,34 +1451,20 @@ async function initialize() {
         // public port), and the retry loop POSTs /register at ourselves every 5s forever.
         if (process.env.WORDJS_MODE !== 'mono') registerWithGateway();
 
-        console.log('');
-        console.log('📖 API Endpoints:');
-        console.log(`   POST   ${config.api.prefix}/auth/register`);
-        console.log(`   POST   ${config.api.prefix}/auth/login`);
-        console.log(`   GET    ${config.api.prefix}/posts`);
-        console.log(`   GET    ${config.api.prefix}/users`);
-        console.log(`   GET    ${config.api.prefix}/categories`);
-        console.log(`   GET    ${config.api.prefix}/tags`);
-        console.log(`   GET    ${config.api.prefix}/comments`);
-        console.log(`   GET    ${config.api.prefix}/media`);
-        console.log(`   GET    ${config.api.prefix}/settings`);
-        console.log(`   GET    ${config.api.prefix}/plugins`);
-        console.log(`   GET    ${config.api.prefix}/themes`);
-        console.log('');
+        log.info({ apiPrefix: config.api.prefix }, `📖 API Endpoints under ${config.api.prefix}: auth/register, auth/login, posts, users, categories, tags, comments, media, settings, plugins, themes`);
         // `config.site` is {url,name,description} — it has no frontendUrl, so this printed a literal
         // "undefined/admin" on every split/separate boot. The public origin lives at the top level.
         const publicUrl = config.frontendUrl || config.siteUrl || config.site?.url;
         if (publicUrl) {
-            console.log(`🎨 Admin Panel: ${publicUrl}/admin`);
-            console.log(`🏠 Public Site: ${publicUrl}`);
+            log.info(`🎨 Admin Panel: ${publicUrl}/admin`);
+            log.info(`🏠 Public Site: ${publicUrl}`);
         }
-        console.log('');
     });
     }
 
     if (isInstalled()) {
         // Initialize Database
-        console.log('📦 Initializing database...');
+        log.info('📦 Initializing database...');
         // The driver manager automatically loads the correct driver from config
         const { init, initializeDatabase } = require('./config/database');
         await init();
@@ -1498,7 +1485,7 @@ async function initialize() {
         await initializeDatabase();
 
         // Initialize default options
-        console.log('⚙️  Setting up default options...');
+        log.info('⚙️  Setting up default options...');
         await initDefaultOptions(config);
 
         // Initialize cache setting now that the DB and options are ready
@@ -1508,7 +1495,7 @@ async function initialize() {
         // Prime the L1 option cache with every autoload row in one query — /settings and the other
         // hot option readers then serve from memory instead of one SELECT per option per request.
         const preloaded = await require('./core/options').preloadAutoloadedOptions();
-        if (preloaded) console.log(`⚡ Option cache primed: ${preloaded} autoloaded options`);
+        if (preloaded) log.info(`⚡ Option cache primed: ${preloaded} autoloaded options`);
 
         // The site's addresses: bring wordjs-config.json (the master) and the `siteurl`/`home` mirrors
         // into agreement — the legacy upgrade, a change `npm run site` made while the server was down —
@@ -1517,10 +1504,10 @@ async function initialize() {
         try {
             const siteAddress = require('./core/site-address');
             const { state } = await siteAddress.reconcileAtBoot();
-            if (state !== 'ok') console.log(`🌐 Site address: ${state}`);
+            if (state !== 'ok') log.info(`🌐 Site address: ${state}`);
             siteAddress.startWatching();
         } catch (e: any) {
-            console.error(`❌ Site address reconciliation failed: ${e && e.message}`);
+            log.error({ err: e }, '❌ Site address reconciliation failed');
         }
 
         // Load the per-plugin permission grants (Android-style, default-deny). Then a non-breaking
@@ -1551,7 +1538,7 @@ async function initialize() {
             // grants an administrator has decided. See core/plugins.ts migrateBrowserCapabilityGrants.
             await require('./core/plugins').migrateBrowserCapabilityGrants();
         } catch (e: any) {
-            console.warn('[PluginPermissions] load/backfill skipped:', e && e.message);
+            log.warn({ err: e }, '[PluginPermissions] load/backfill skipped');
         }
 
         // Initialize Analytics Table
@@ -1598,7 +1585,7 @@ async function initialize() {
             // base64url of 24 bytes: no shell-hostile characters, ~192 bits.
             const password = nodeCrypto.randomBytes(24).toString('base64url');
 
-            console.log('👤 No users found — creating the bootstrap administrator...');
+            log.info('👤 No users found — creating the bootstrap administrator...');
             await User.create({
                 username: 'admin',
                 email: 'admin@example.com',
@@ -1651,7 +1638,7 @@ async function initialize() {
         const categoryCount = await Term.count({ taxonomy: 'category' });
 
         if (categoryCount === 0) {
-            console.log('📁 Creating default category...');
+            log.info('📁 Creating default category...');
             // Await so the insert completes INSIDE the boot-lock critical section (matching the awaited
             // User.create above). On Postgres multi-node the boot lock serializes default seeding; if the
             // lease were released (line below) before this insert committed, a second node could pass its
@@ -1686,20 +1673,16 @@ async function initialize() {
         const { verifyDefaultTheme, defaultThemeNeedsAttention, isActiveThemeMissing, getCurrentTheme } = require('./core/themes');
         const defaultTheme = verifyDefaultTheme();
         if (defaultThemeNeedsAttention(defaultTheme)) {
-            console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            console.warn(`⚠️  The bundled default theme is missing ${defaultTheme.missing.join(', ')}: ${defaultTheme.dir}`);
-            console.warn('   An incomplete theme directory is not something WordJS creates — restore it with:');
-            console.warn('     POST /api/v1/themes/default   (admin — "Restore default theme")');
-            console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            log.warn(`⚠️  The bundled default theme is missing ${defaultTheme.missing.join(', ')}: ${defaultTheme.dir}`);
+            log.warn('   An incomplete theme directory is not something WordJS creates — restore it with:');
+            log.warn('     POST /api/v1/themes/default   (admin — "Restore default theme")');
         }
         if (await isActiveThemeMissing()) {
             const slug = await getCurrentTheme();
-            console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            console.warn(`⚠️  The active theme "${slug}" is NOT installed — no theme.json was found for it.`);
-            console.warn('   The public site is rendering with the framework default tokens only.');
-            console.warn('   Activate an installed theme (POST /api/v1/themes/:slug/activate) or restore');
-            console.warn('   the bundled default (POST /api/v1/themes/default).');
-            console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            log.warn(`⚠️  The active theme "${slug}" is NOT installed — no theme.json was found for it.`);
+            log.warn('   The public site is rendering with the framework default tokens only.');
+            log.warn('   Activate an installed theme (POST /api/v1/themes/:slug/activate) or restore');
+            log.warn('   the bundled default (POST /api/v1/themes/default).');
         }
 
         // Seeding done — release the boot guard (stops the heartbeat + frees the lease) so waiting
@@ -1713,19 +1696,19 @@ async function initialize() {
             const { recoverInterruptedPluginUpdates } = require('./routes/plugins');
             await recoverInterruptedPluginUpdates();
         } catch (e: any) {
-            console.warn('[boot] plugin-update recovery skipped:', e && e.message);
+            log.warn({ err: e }, '[boot] plugin-update recovery skipped');
         }
 
 
         // Load active plugins
-        console.log('🔌 Loading plugins...');
+        log.info('🔌 Loading plugins...');
         const { loadActivePlugins } = require('./core/plugins');
         await loadActivePlugins();
         // Plugin routes registered above sit BEHIND the 404/error handlers (which are now installed
         // before this point so the server could start listening early) — push those two back to the
         // end of the stack, exactly as runtime activation already does.
         try { require('./core/plugins').fixMiddlewareOrder(); } catch (e: any) {
-            console.warn('[boot] middleware reorder skipped:', e && e.message);
+            log.warn({ err: e }, '[boot] middleware reorder skipped');
         }
         pluginsReady.markPluginsReady();
 
@@ -1737,17 +1720,15 @@ async function initialize() {
         try {
             const { isEmailProviderAvailable } = require('./core/mail-provider');
             if (!isEmailProviderAvailable()) {
-                console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-                console.warn('⚠️  No email provider is registered — WordJS core cannot send email on its own.');
-                console.warn('   Self-service PASSWORD RECOVERY is therefore unavailable: /auth/forgot-password');
-                console.warn('   fails closed and users cannot reset their own passwords.');
-                console.warn('   Install and activate a mail plugin (e.g. mail-server) and grant it the');
-                console.warn('   email:provider permission. Visible to admins on GET /api/v1/settings/all');
-                console.warn('   (email_provider_available).');
-                console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+                log.warn('⚠️  No email provider is registered — WordJS core cannot send email on its own.');
+                log.warn('   Self-service PASSWORD RECOVERY is therefore unavailable: /auth/forgot-password');
+                log.warn('   fails closed and users cannot reset their own passwords.');
+                log.warn('   Install and activate a mail plugin (e.g. mail-server) and grant it the');
+                log.warn('   email:provider permission. Visible to admins on GET /api/v1/settings/all');
+                log.warn('   (email_provider_available).');
             }
         } catch (e: any) {
-            console.warn('[boot] email-provider check skipped:', e && e.message);
+            log.warn({ err: e }, '[boot] email-provider check skipped');
         }
 
         // DEV hot-reload: watch each active isolated plugin's dir and re-spawn its child process
@@ -1757,7 +1738,7 @@ async function initialize() {
             const { startPluginDevWatch } = require('./core/plugin-dev-watch');
             await startPluginDevWatch();
         } catch (e: any) {
-            console.warn('[plugin-dev-watch] not started:', e && e.message);
+            log.warn({ err: e }, '[plugin-dev-watch] not started');
         }
 
         // Plugin-sandbox hardening: run the kernel-hardening probe at boot (fire-and-forget) and LOG the
@@ -1770,14 +1751,14 @@ async function initialize() {
                 // What the banner may say about plugins depends on the launch posture: REFUSED under the
                 // default fail-closed policy, unconfined only when that policy is off or exempt.
                 const banner = iso.sandboxBootBanner(iso.getSandboxHardeningState(), iso.isolatedLaunchPosture());
-                for (const l of banner.lines) (banner.level === 'warn' ? console.warn : console.log)(l);
+                for (const l of banner.lines) log[banner.level === 'warn' ? 'warn' : 'info'](l);
                 // The privilege the backend ITSELF was started with (root, AmbientCapabilities=). Logged
                 // after the probe settles, because what the warning may truthfully say about
                 // plugins depends on whether the sandbox is active. No-op off Linux and when nothing is held.
                 try { require('./core/host-privilege').warnHostPrivilegeAtBoot(); } catch { /* diagnostic only */ }
             }).catch(() => { /* the probe never throws; guard anyway so boot is unaffected */ });
         } catch (e: any) {
-            console.warn('[boot] sandbox hardening probe skipped:', e && e.message);
+            log.warn({ err: e }, '[boot] sandbox hardening probe skipped');
         }
 
         // Start cron system
@@ -1792,7 +1773,7 @@ async function initialize() {
                 await scheduleEvent(Date.now(), 'daily', ANALYTICS_PRUNE_HOOK);
             }
         } catch (e: any) {
-            console.error('Failed to schedule the analytics retention prune:', e && e.message);
+            log.error({ err: e }, 'Failed to schedule the analytics retention prune');
         }
         startCron();
 
@@ -1819,7 +1800,7 @@ async function initialize() {
         global.wordjs.nextScheduled = nextScheduled;
 
         // Initialize Robust Theme Engine
-        console.log('🎨 Initializing Theme Engine...');
+        log.info('🎨 Initializing Theme Engine...');
         const themeEngine = require('./core/theme-engine');
         await themeEngine.init();
 
@@ -1835,14 +1816,14 @@ async function initialize() {
         try {
             await require('./core/themes').syncActiveThemeLayout();
         } catch (e: any) {
-            console.warn(`⚠️  Could not reconcile the active theme layout: ${e && e.message}`);
+            log.warn({ err: e }, '⚠️  Could not reconcile the active theme layout');
         }
 
         // Fire init action
         await doAction('init');
     } else {
-        console.log('⚠️  WordJS is NOT installed. Starting in SETUP MODE.');
-        console.log('   Waiting for interactive installation via Frontend...');
+        log.info('⚠️  WordJS is NOT installed. Starting in SETUP MODE.');
+        log.info('   Waiting for interactive installation via Frontend...');
 
         // SECURITY: mint + print the one-time install token. The pre-install setup endpoints
         // (/setup/install, /setup/test-db) require it, so a not-yet-installed instance can't be
@@ -1864,24 +1845,24 @@ async function initialize() {
 
 // Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
-    console.error('Uncaught Exception:', error);
+    log.error({ err: error }, 'Uncaught Exception');
     process.exit(1);
 });
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (reason, promise) => {
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    log.error({ err: reason }, 'Unhandled Rejection');
 });
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
-    console.log('SIGTERM received. Shutting down gracefully...');
+    log.info('SIGTERM received. Shutting down gracefully...');
     saveDatabase();
     process.exit(0);
 });
 
 process.on('SIGINT', () => {
-    console.log('\nSIGINT received. Shutting down gracefully...');
+    log.info('SIGINT received. Shutting down gracefully...');
     saveDatabase();
     process.exit(0);
 });
@@ -1889,7 +1870,7 @@ process.on('SIGINT', () => {
 // Start the application — only when run directly (split mode via backend/server.js). When required by
 // the monolith (WORDJS_EMBEDDED=1), the entrypoint calls initialize() itself after mounting.
 if (require.main === module && !EMBEDDED) initialize().catch((error) => {
-    console.error('❌ Failed to initialize:', error);
+    log.error({ err: error }, '❌ Failed to initialize');
 
     // Auto-Fallback Logic
     const fs = require('fs');
@@ -1900,18 +1881,18 @@ if (require.main === module && !EMBEDDED) initialize().catch((error) => {
     const backupFile = configFile.replace(/\.json$/, '.backup.json');
 
     if (fs.existsSync(backupFile)) {
-        console.warn('⚠️  Startup Failed! Attempting automatic fallback to previous configuration...');
+        log.warn('⚠️  Startup Failed! Attempting automatic fallback to previous configuration...');
         try {
             // Restore config
             fs.copyFileSync(backupFile, configFile);
-            console.log('✅ Configuration restored from backup.');
+            log.info('✅ Configuration restored from backup.');
 
             // Force Restart by touching this file
             const time = new Date();
             fs.utimesSync(__filename, time, time);
-            console.log('🔄 Triggering server restart...');
+            log.info('🔄 Triggering server restart...');
         } catch (e) {
-            console.error('❌ Fallback failed:', e);
+            log.error({ err: e }, '❌ Fallback failed');
         }
     }
 

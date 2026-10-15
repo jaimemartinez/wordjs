@@ -47,6 +47,7 @@ const siteHostPolicy: PolicyProvider = hostPolicy.createPolicyProvider({
     getConfig: () => require('../core/configManager').getConfig(),
     nodeEnv: () => config.nodeEnv,
     ownAddresses: () => require('../core/site-address').publicOwnAddresses(),
+    logger: require('../core/module-logger').moduleLogger('core/host-policy'),
 });
 
 
