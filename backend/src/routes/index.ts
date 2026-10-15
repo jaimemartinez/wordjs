@@ -196,7 +196,17 @@ router.use('/', exportRoutes);
  */
 router.get('/pages', (req: Request, res: Response, next: NextFunction) => {
     req.query.type = 'page';
-    postsRoutes.handle(req, res, next);
+    // The posts router matches on req.url, which is still '/pages' here: left as is it routed to
+    // `/:id` and answered 404 rest_post_invalid_id. Point it at the list route (the query string is
+    // kept for completeness; req.query is already parsed) and put the URL back if the posts router
+    // hands the request on.
+    const url = req.url;
+    const queryStart = url.indexOf('?');
+    req.url = queryStart === -1 ? '/' : `/${url.slice(queryStart)}`;
+    postsRoutes.handle(req, res, (err?: unknown) => {
+        req.url = url;
+        next(err);
+    });
 });
 
 const { authenticate, CSRF_COOKIE, CSRF_HEADER } = require('../middleware/auth');
