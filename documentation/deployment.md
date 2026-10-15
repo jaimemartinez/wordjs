@@ -724,7 +724,9 @@ WordJS stores media URLs as **relative paths** (e.g., `/uploads/image.jpg`) rath
 
 - ✅ **Seamless migration** — No database updates needed when changing domains
 - ✅ **Multi-environment support** — Same database works in dev/staging/production
-- ✅ **CDN flexibility** — Easy to add or change CDN prefixes
+- ✅ **CDN flexibility** — Easy to add or change CDN prefixes: with media offload ([media-storage.md](media-storage.md))
+  the files live in an S3-compatible bucket and pages are served CDN URLs, while the database keeps the same
+  relative paths
 
 If you have legacy content with absolute URLs, you may need to run a migration script to convert them to relative paths.
 

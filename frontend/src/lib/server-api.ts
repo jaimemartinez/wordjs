@@ -401,7 +401,15 @@ export const checkSetupRequired = cache(async (): Promise<boolean> => {
 // Site settings change rarely and are read on EVERY page (title, theme, menus, SEO, chrome) — the single
 // hottest read. Cache 60s + tag so the ~N-per-render backend calls collapse to one until it changes.
 export const getSettings = cache((): Promise<Record<string, string> | null> =>
-    serverFetch<Record<string, string>>('/settings', { revalidate: 60, tags: ['settings'] })
+    serverFetch<Record<string, string>>('/settings', { revalidate: 60, tags: ['settings'] }).then((settings) => {
+        // The media/CDN origin, published process-wide for the custom server's CSP amendment
+        // (frontend/media-csp.js): the build-time header cannot know where this site's media lives.
+        if (settings && typeof settings === 'object') {
+            const origin = (settings as Record<string, unknown>).media_cdn_origin;
+            (globalThis as Record<string, unknown>).__WORDJS_MEDIA_CDN_ORIGIN__ = typeof origin === 'string' ? origin : '';
+        }
+        return settings;
+    })
 );
 
 export interface PublicAssets {

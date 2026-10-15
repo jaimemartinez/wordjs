@@ -2,6 +2,7 @@ import { cache } from "react";
 import { getPostPool, getPostById, getMenuByRef, getSettings, type MenuItem } from "@/lib/server-api";
 import type { Post } from "@/lib/api";
 import { toResolved, filterByCategory, type ResolvedPost } from "@/lib/resolvedPost";
+import { mediaBaseFromSettings, rewriteMediaUrls } from "@/lib/mediaDelivery";
 
 /**
  * Fill the dynamic blocks with REAL posts before the page renders.
@@ -415,6 +416,11 @@ async function injectPostContext<T>(data: T, post: Post): Promise<T> {
  * leak into another's.
  */
 export async function withResolvedBlocks<T extends Post>(post: T): Promise<T> {
+    const withBlocks = await resolveBlocksOf(post);
+    return withMediaDelivery(withBlocks);
+}
+
+async function resolveBlocksOf<T extends Post>(post: T): Promise<T> {
     const versoData = (post as unknown as { meta?: Record<string, unknown> }).meta?._puck_data;
     if (!versoData) return post;
     const resolved = await resolveDynamicBlocks(versoData);
@@ -422,4 +428,23 @@ export async function withResolvedBlocks<T extends Post>(post: T): Promise<T> {
     if (withCtx === versoData) return post;
     const meta = { ...(post as unknown as { meta: Record<string, unknown> }).meta, _puck_data: withCtx };
     return { ...post, meta } as T;
+}
+
+/**
+ * MEDIA OFFLOAD (lib/mediaDelivery). Once the backend reports the library is served from a bucket/CDN,
+ * the page's block data and HTML body point at it directly. Applied AFTER the dynamic blocks resolved,
+ * so the posts they pulled in (featured images) are covered too. Copies, never mutates — same reason
+ * as above.
+ */
+async function withMediaDelivery<T extends Post>(post: T): Promise<T> {
+    const base = mediaBaseFromSettings(await getSettings());
+    if (!base) return post;
+    const p = post as unknown as { content?: unknown; meta?: Record<string, unknown> };
+    const content = typeof p.content === "string" ? rewriteMediaUrls(p.content, base) : p.content;
+    const versoData = p.meta?._puck_data;
+    const nextData = versoData ? rewriteMediaUrls(versoData, base) : versoData;
+    if (content === p.content && nextData === versoData) return post;
+    const out = { ...post, content } as T;
+    if (nextData !== versoData) (out as unknown as { meta: Record<string, unknown> }).meta = { ...p.meta, _puck_data: nextData };
+    return out;
 }

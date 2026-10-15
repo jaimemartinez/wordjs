@@ -34,6 +34,12 @@ function statusesForVisibility(visibility: unknown): string[] {
  */
 const REMOTE_SOURCE_META_KEY = '_wxr_remote_url';
 
+// core/media-storage is required lazily: it pulls in config/app + the S3 signer, and nothing on the
+// plain local path should pay for (or cycle through) it.
+const mediaStorageMod = () => require('../core/media-storage');
+/** post_meta key marking an attachment whose files live in the s3 media store (core/media-storage). */
+const mediaStorageMetaKey = (): string => mediaStorageMod().STORAGE_META_KEY;
+
 class Media {
     /**
      * Create a media attachment
@@ -62,7 +68,10 @@ class Media {
             alt = '',
             // PRIVATE MEDIA: the caller has ALREADY stored the file under config.uploads.privateDir.
             // The row is marked with post_status 'private', which every public media query excludes.
-            isPrivate = false
+            isPrivate = false,
+            // MEDIA OFFLOAD: the caller has ALREADY written every file to the s3 media store and
+            // verified it (core/media-storage). Only the marker is recorded — never a bucket URL.
+            offloaded = false
         } = data;
 
         // Create attachment post
@@ -96,6 +105,9 @@ class Media {
 
         if (alt) {
             await Post.updateMeta(attachment.id, '_wp_attachment_image_alt', alt);
+        }
+        if (offloaded && !isPrivate) {
+            await Post.updateMeta(attachment.id, mediaStorageMetaKey(), 's3');
         }
 
         return await Media.findById(attachment.id);
@@ -183,6 +195,16 @@ class Media {
         // Build absolute URL for API response (a linked attachment is already absolute, and elsewhere)
         const absoluteUrl = (!isPrivate && remoteUrl) || `${config.site.url}${relativePath}`;
 
+        // WHERE THE BYTES ARE SERVED FROM. `sourceUrl` stays the relative /uploads path (what editors
+        // persist into content, so content never names a bucket or CDN host); `deliveryUrl` is the URL a
+        // client should fetch: the CDN/bucket URL for an offloaded item, the same relative path otherwise.
+        let deliveryUrl = relativePath;
+        const offloaded = !isPrivate && !remoteUrl && allMeta[mediaStorageMetaKey()] === 's3';
+        if (offloaded && relativePath.startsWith('/uploads/')) {
+            const ms = mediaStorageMod();
+            deliveryUrl = ms.publicUrlFor(ms.resolveMediaStorage(), relativePath.slice('/uploads/'.length)) || relativePath;
+        }
+
         return {
             id: post.id,
             date: post.postDate,
@@ -206,6 +228,8 @@ class Media {
             guid: absoluteUrl,      // RSS requires absolute URLs (globally unique)
             sourceUrl: relativePath, // Use relative path (e.g. /uploads/file.jpg) for internal app flexibility
             relativePath,           // Explicit relative path
+            deliveryUrl,            // Where to fetch it from (CDN when offloaded) - never stored
+            storage: offloaded ? 's3' : 'local',
             mediaDetails: {
                 width: metadata.width || 0,
                 height: metadata.height || 0,
@@ -362,14 +386,25 @@ class Media {
         // Resolve targets while metadata still exists, but unlink only AFTER the database commits.
         // A rollback must never leave a live attachment row pointing at a file we already removed.
         if (mayUnlink) {
+            const root = privateMedia.uploadsRootFor(media.visibility === 'private');
             const targets = Media._deletableFiles(
-                media.mediaDetails.file, media.mediaDetails.sizes, media.mediaDetails.sources,
-                privateMedia.uploadsRootFor(media.visibility === 'private')
+                media.mediaDetails.file, media.mediaDetails.sizes, media.mediaDetails.sources, root
             );
+            // An offloaded item's objects go too - after the commit, like the local unlink, so a rollback
+            // never leaves a live row pointing at objects already removed.
+            const ms = media.storage === 's3' ? mediaStorageMod() : null;
+            const store = ms ? ms.resolveMediaStorage() : null;
+            const remoteRels = ms ? targets.map((t: string) => ms.relativeTo(root, t)).filter((r: any) => r && ms.isOffloadablePath(r)) : [];
+            if (ms && store.driver !== 's3') {
+                console.warn(`Media.delete: attachment ${id} is in the media bucket, but no s3 media storage is configured now - its objects are left in the bucket.`);
+            }
             database.afterCommit(() => {
                 for (const target of targets) {
                     try { if (fs.existsSync(target)) fs.unlinkSync(target); }
                     catch (error: any) { console.warn(`Media.delete: post-commit unlink failed for ${target}: ${error?.message || error}`); }
+                }
+                if (ms && store.driver === 's3' && remoteRels.length) {
+                    void ms.removeFiles(ms.getMediaStorage(store), remoteRels);
                 }
             });
         }
@@ -404,6 +439,29 @@ class Media {
         const toRoot = privateMedia.uploadsRootFor(!isPrivate);
         const fromFiles = Media._deletableFiles(details.file, details.sizes, details.sources, fromRoot);
         const toFiles = Media._deletableFiles(details.file, details.sizes, details.sources, toRoot);
+
+        // MEDIA OFFLOAD. Private media never lives in the bucket, so an offloaded item is first brought
+        // back to this node's disk (the move below then works on local files, as it always has) and its
+        // objects are removed once the row is private. Making an item public with an s3 store configured
+        // sends its files to the bucket afterwards (best effort: a refusal leaves it served locally, and
+        // `npm run media -- offload` picks it up later).
+        const ms = mediaStorageMod();
+        const store = ms.resolveMediaStorage();
+        const wasOffloaded = media.storage === 's3';
+        if (makePrivate && wasOffloaded) {
+            if (store.driver !== 's3') {
+                const err: any = new Error('This attachment is stored in the media bucket, but no s3 media storage is configured to fetch it from.');
+                err.code = 'media_file_missing';
+                throw err;
+            }
+            const adapter = ms.getMediaStorage(store);
+            const present: string[] = [];
+            for (const f of fromFiles) {
+                const rel = ms.relativeTo(fromRoot, f);
+                if (f === fromFiles[0] || (rel && ms.isOffloadablePath(rel) && (await adapter.head(rel)) !== null)) present.push(f);
+            }
+            await ms.pullFiles(adapter, fromRoot, present);
+        }
         if (!fromFiles.length || fromFiles.length !== toFiles.length || !fs.existsSync(fromFiles[0])) {
             const err: any = new Error('The stored file for this attachment could not be found.');
             err.code = 'media_file_missing';
@@ -430,6 +488,20 @@ class Media {
             // Drop any AVIF/WebP the negotiation middleware cached for these files in the public tree.
             const publicRoot = privateMedia.publicUploadsRoot();
             privateMedia.purgeNegotiationCache(fromFiles.map((f: string) => path.relative(publicRoot, f)));
+            if (wasOffloaded) {
+                await Post.deleteMeta(id, mediaStorageMetaKey());
+                const rels = fromFiles.map((f: string) => ms.relativeTo(fromRoot, f)).filter((r: any) => r && ms.isOffloadablePath(r));
+                await ms.removeFiles(ms.getMediaStorage(store), rels);
+            }
+        } else if (store.driver === 's3') {
+            try {
+                const present = toFiles.filter((f: string) => fs.existsSync(f));
+                await ms.pushFiles(ms.getMediaStorage(store), toRoot, present);
+                await Post.updateMeta(id, mediaStorageMetaKey(), 's3');
+                if (!store.keepLocalCopy) for (const f of present) { try { fs.unlinkSync(f); } catch { /* best effort */ } }
+            } catch (e: any) {
+                console.warn(`Media.setVisibility: attachment ${id} stays on local disk - the media bucket refused it: ${e?.message || e}`);
+            }
         }
         return await Media.findById(id);
     }
