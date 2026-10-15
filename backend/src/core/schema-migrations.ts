@@ -354,6 +354,22 @@ const MIGRATIONS: Migration[] = [
                     post_title, post_content, content='posts', content_rowid='id', tokenize='unicode61'
                 )`);
             } catch (e: any) {
+                // Strict driver mode (dbStrictDriver / WORDJS_DB_STRICT) refuses this degradation the same
+                // way config/database.ts refuses the 'sqlite-legacy' fallback: a native SQLite build without
+                // FTS5 is a boot error, not a quiet switch to LIKE. An EXPLICITLY configured 'sqlite-legacy'
+                // is exempt — no FTS5 is a documented property of the driver the operator chose, not a
+                // degradation of it (and a fallback to it never gets this far in strict mode).
+                if (ctx.driverName !== 'sqlite-legacy' && require('../config/app').dbStrictDriver === true) {
+                    throw new Error(
+                        `Strict database driver mode is on (WORDJS_DB_STRICT / "dbStrictDriver"), and this ` +
+                        `SQLite build has no FTS5 (${e && e.message}), so ranked full-text search cannot be ` +
+                        `enabled. To fix it, use a SQLite build with FTS5 (the better-sqlite3 prebuilt binaries ` +
+                        `include it: run \`npm rebuild better-sqlite3\` in backend/ without a custom ` +
+                        `SQLite), then restart. To accept LIKE search instead, unset WORDJS_DB_STRICT and ` +
+                        `remove "dbStrictDriver" from backend/wordjs-config.json.`,
+                        { cause: e }
+                    );
+                }
                 console.warn(`   [migration 0008] FTS5 unavailable (${e && e.message}) — search keeps using LIKE.`);
                 return;
             }
