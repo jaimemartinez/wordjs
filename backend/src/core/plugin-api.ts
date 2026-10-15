@@ -30,6 +30,37 @@ const HMAC_ALGORITHMS: ReadonlySet<string> = new Set(['sha256', 'sha1', 'sha512'
 /** crypto.hmac: the largest payload it signs (well above any provider's webhook body). */
 const HMAC_MAX_DATA = 2 * 1024 * 1024;
 
+/** posts.get: a published, public, unprotected entry for a plugin with posts:read (host context). */
+async function readPublishedPost(n: number): Promise<any> {
+    const Post = require('../models/Post');
+    const post = await Post.findById(n);
+    if (!post || post.postStatus !== 'publish') return null;
+    const { readPolicyForType, isPasswordProtected, isInternalPostType, publicPostMeta } = require('./post-capabilities');
+    if (isInternalPostType(post.postType) || !readPolicyForType(post.postType).publiclyReadable) return null;
+    if (isPasswordProtected(post)) return null;
+    const meta = await Post.getAllMeta(post.id);
+    const base = String((await require('./site-address').linkBase()) || '').replace(/\/+$/, '');
+    const pathName = `/${post.postName || post.id}`;
+    return {
+        id: post.id,
+        type: post.postType,
+        status: post.postStatus,
+        title: post.postTitle || '',
+        slug: post.postName || '',
+        path: pathName,
+        url: base + pathName,
+        date: post.postDate,
+        authorId: post.authorId,
+        // The author's OWN excerpt only — never one derived from the body (it may be gated).
+        excerpt: post.postExcerpt || '',
+        content: post.postContent || '',
+        accessLevel: require('./content-access').requiredLevel(meta),
+        // Unprefixed keys only (what an author writes for plugins to read, e.g. newsletter_audience) —
+        // not even the public `_puck_data` tree: `content` is the body this bridge hands over.
+        meta: Object.fromEntries(Object.entries(publicPostMeta(meta)).filter(([k]) => !k.startsWith('_'))),
+    };
+}
+
 function projectUser(u: any): any {
     if (!u) return null;
     return {
@@ -849,10 +880,30 @@ function createPluginApi(slug: string) {
             async findByEmail(email: string) { verifyPermission('users', 'read'); return projectUserFor(await require('../models/User').findByEmail(email), slug); },
             async findByLogin(login: string) { verifyPermission('users', 'read'); return projectUserFor(await require('../models/User').findByLogin(login), slug); },
             async findById(id: any) { verifyPermission('users', 'read'); return projectUserFor(await require('../models/User').findById(id), slug); },
-            async search(term: string, limit = 50) {
+            // `offset` pages through the whole list (ordered by id) — a plugin that mails its members has to
+            // reach every account, not the first 200.
+            async search(term: string, limit = 50, offset = 0) {
                 verifyPermission('users', 'read');
-                const list = await require('../models/User').findAll({ search: String(term || ''), limit: Math.min(Number(limit) || 50, 200) });
+                const skip = Math.max(0, Math.floor(Number(offset) || 0));
+                const list = await require('../models/User').findAll({ search: String(term || ''), limit: Math.min(Number(limit) || 50, 200), offset: skip });
                 return (Array.isArray(list) ? list : []).map((u: any) => projectUserFor(u, slug));
+            },
+        },
+
+        // PUBLISHED ENTRIES (grant: posts:read — the grant that already delivers post bodies through the
+        // wp_insert_post / post_updated hooks). get(id) answers a published entry of a publicly readable
+        // type, with its FULL body and its access level (core/content-access): a plugin that mails or
+        // syndicates content decides itself what each recipient may receive, so it is handed what it needs
+        // to make that decision and nothing about unpublished, private or non-public entries (null).
+        posts: {
+            async get(id: any) {
+                verifyPermission('posts', 'read');
+                const n = Number(id);
+                if (!Number.isInteger(n) || n < 1) return null;
+                // The HOST's own read of core tables, not the plugin's (same as media.getPrivate): run it
+                // outside the plugin context so it is not judged against the plugin's database grants.
+                const { runAsHost } = require('./plugin-context');
+                return runAsHost(() => readPublishedPost(n));
             },
         },
 

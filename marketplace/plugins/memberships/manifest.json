@@ -1,8 +1,8 @@
 {
     "id": "memberships",
     "name": "Memberships",
-    "version": "1.0.0",
-    "description": "Members-only content for WordJS: free and paid tiers, a paywall block that ends a post's free teaser, Stripe Checkout subscriptions verified by signed webhooks, tier changes and cancellation by the member, and complimentary memberships granted by the admin. Members are the site's own user accounts.",
+    "version": "1.1.0",
+    "description": "Members-only content for WordJS: free and paid tiers, a paywall block that ends a post's free teaser, Stripe Checkout subscriptions verified by signed webhooks, tier changes and cancellation by the member, complimentary memberships granted by the admin, and newsletters that email published posts to members by tier with one-click unsubscribe. Members are the site's own user accounts.",
     "author": "WordJS",
     "license": "MIT",
     "repository": "https://github.com/jaimemartinez/wordjs/tree/main/marketplace/plugins/memberships",
@@ -17,6 +17,11 @@
         },
         "versoComponents": {
             "entry": "client/verso/MembershipsVerso.tsx"
+        },
+        "portalPage": {
+            "entry": "client/portal/page.tsx",
+            "slug": "memberships",
+            "title": "Preferencias de correo"
         }
     },
     "adminMenu": {
@@ -55,6 +60,16 @@
             "scope": "users",
             "access": "read",
             "reason": "Tell the content-access filter which levels a signed-in account holds, and find an account by e-mail or login when the admin grants a complimentary membership."
+        },
+        {
+            "scope": "posts",
+            "access": "read",
+            "reason": "Know when a post is published (the post hooks) and read it to email it to members — the full body only to members who hold its access level, the teaser to everyone else."
+        },
+        {
+            "scope": "email",
+            "access": "admin",
+            "reason": "Send newsletters to members through the site's mail provider (queued, rate-limited); nothing is sent without one."
         },
         {
             "scope": "express",

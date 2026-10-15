@@ -31,12 +31,16 @@
  * the admin (absent = keep, '' = clear, value = replace) and are never echoed back.
  *
  * Money is integer cents throughout; prices come from the tier rows, never from the client.
- * Newsletter sending is out of scope (see the docs' follow-ups).
+ * Newsletters — emailing a published post to members, with the same full/teaser rule per recipient —
+ * live in lib/newsletter.js.
  */
+
+const { initNewsletter } = require('./lib/newsletter');
+let newsletter = null;
 
 exports.metadata = {
     name: 'Memberships',
-    version: '1.0.0',
+    version: '1.1.0',
     description: 'Members-only content: free and paid tiers, paywall block, Stripe subscriptions, complimentary memberships.',
     author: 'WordJS',
 };
@@ -47,6 +51,9 @@ const CONFIG_DEFAULTS = {
     currencySymbol: '$',
     // Every signed-in account counts as a free member (holds the `members` level).
     freeSignup: true,
+    // Newsletters (lib/newsletter.js): the editor field and the publish trigger, and the send rate.
+    newsletterEnabled: true,
+    newsletterRate: 60, // mails per minute
 };
 
 const LEVEL_MEMBERS = 'members';
@@ -835,6 +842,12 @@ exports.init = async function (wordjs) {
         }
         if (typeof body.currencySymbol === 'string') next.currencySymbol = body.currencySymbol.trim().slice(0, 8) || '$';
         if (typeof body.freeSignup === 'boolean') next.freeSignup = body.freeSignup;
+        if (typeof body.newsletterEnabled === 'boolean') next.newsletterEnabled = body.newsletterEnabled;
+        if (body.newsletterRate !== undefined) {
+            const rate = toInt(body.newsletterRate);
+            if (!Number.isInteger(rate) || rate < 1 || rate > 600) return res.status(400).json({ error: 'El ritmo de envío debe estar entre 1 y 600 correos por minuto.' });
+            next.newsletterRate = rate;
+        }
         if (typeof body.stripeKey === 'string') {
             const k = body.stripeKey.trim();
             if (k && keyMode(k) !== 'test') {
@@ -853,6 +866,12 @@ exports.init = async function (wordjs) {
         res.json({ ...next, hasStripeKey: !!sk, stripeMode: keyMode(sk), hasWebhookSecret: !!(await getSetting('stripe_whsec')) });
     });
 
+    // ---- newsletters ------------------------------------------------------------------------------
+    newsletter = await initNewsletter({
+        wordjs, db, P, getConfig, grantsForUser, getSetting, setSetting,
+        quietly: (what, handler) => quietly(what, handler),
+    });
+
     adminMenu.add({
         href: '/admin/plugin/memberships',
         label: 'Membresías',
@@ -865,6 +884,7 @@ exports.init = async function (wordjs) {
 };
 
 exports.deactivate = function () {
-    // Nothing to tear down: no timers, no servers. Core keeps gated posts gated (fail closed) while the
-    // plugin is inactive; editors still read them in full.
+    // The newsletter queue timer is the only thing to stop; queued deliveries stay in the table and resume
+    // on the next activation. Core keeps gated posts gated (fail closed) while the plugin is inactive.
+    if (newsletter) { newsletter.stop(); newsletter = null; }
 };
