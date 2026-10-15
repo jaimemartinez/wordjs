@@ -4,6 +4,7 @@
  */
 
 const { escAttr, escUrl } = require('./formatting');
+const log = require('./module-logger').moduleLogger('core/shortcodes');
 
 // Registered shortcodes
 const shortcodes = new Map();
@@ -33,7 +34,7 @@ function addShortcode(tag: string, callback: (...args: any[]) => any) {
         // Same owner may re-register (update); core (owner=null) may always (re)claim a tag. But a plugin
         // must NOT overwrite a tag owned by core or by a DIFFERENT plugin.
         if (owner !== null && existing !== owner) {
-            console.warn(`[Security Block] Plugin '${owner}' tried to override shortcode '[${tag}]' owned by '${existing ?? 'core'}' — refused.`);
+            log.warn({ owner, tag }, `[Security Block] Plugin '${owner}' tried to override shortcode '[${tag}]' owned by '${existing ?? 'core'}' — refused.`);
             return;
         }
     }
@@ -57,7 +58,7 @@ function removeShortcode(tag: string) {
     // another plugin's / core's shortcode.
     const owner = currentOwner();
     if (owner !== null && shortcodes.has(tag) && (shortcodeOwners.get(tag) ?? null) !== owner) {
-        console.warn(`[Security Block] Plugin '${owner}' tried to remove shortcode '[${tag}]' owned by '${shortcodeOwners.get(tag) ?? 'core'}' — refused.`);
+        log.warn({ owner, tag }, `[Security Block] Plugin '${owner}' tried to remove shortcode '[${tag}]' owned by '${shortcodeOwners.get(tag) ?? 'core'}' — refused.`);
         return;
     }
     shortcodes.delete(tag);

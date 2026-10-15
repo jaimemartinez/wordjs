@@ -7,6 +7,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const log = require('./module-logger').moduleLogger('core/crash-guard');
 
 const LOCK_FILE = path.resolve(__dirname, '../../data/plugin_boot.lock');
 const STRIKE_FILE = path.resolve(__dirname, '../../data/plugin_strikes.json');
@@ -51,7 +52,7 @@ function readStrikeMap(label: string): Map<string, number> {
             if (isStrikeSlug(k) && Number.isFinite(Number(v))) m.set(k, Number(v));
         }
     } catch (e) {
-        console.error(`[CrashGuard] Failed to parse strike file (${label}):`, e.message);
+        log.error({ label, err: e }, `[CrashGuard] Failed to parse strike file (${label})`);
     }
     return m;
 }
@@ -60,7 +61,7 @@ function writeStrikeMap(m: Map<string, number>) {
     try {
         fs.writeFileSync(STRIKE_FILE, JSON.stringify(Object.fromEntries(m), null, 2), 'utf8');
     } catch (e) {
-        console.error('[CrashGuard] Failed to write strike file:', e.message);
+        log.error({ err: e }, '[CrashGuard] Failed to write strike file');
     }
 }
 
@@ -110,7 +111,7 @@ function startLoading(slug: string) {
         };
         fs.writeFileSync(LOCK_FILE, JSON.stringify(data), 'utf8');
     } catch (e) {
-        console.error('[CrashGuard] Failed to write lock file:', e.message);
+        log.error({ err: e }, '[CrashGuard] Failed to write lock file');
     }
 }
 
@@ -126,7 +127,7 @@ function finishLoading(slug: string) {
         // Successful load clears strikes
         clearStrikes(slug);
     } catch (e) {
-        console.error('[CrashGuard] Failed to clear lock file:', e.message);
+        log.error({ err: e }, '[CrashGuard] Failed to clear lock file');
     }
 }
 
@@ -147,16 +148,16 @@ function checkPreviousCrash() {
             // Add a strike
             const strikes = addStrike(slug);
 
-            console.log(`⚠️ [CrashGuard] Crash detected during load of '${slug}'. Strike ${strikes}/${MAX_STRIKES}`);
+            log.info({ strikes }, `⚠️ [CrashGuard] Crash detected during load of '${slug}'. Strike ${strikes}/${MAX_STRIKES}`);
 
             // Clear the lock for next attempt
             fs.unlinkSync(LOCK_FILE);
 
             if (strikes >= MAX_STRIKES) {
-                console.error(`🚨 [CrashGuard] 3 STRIKES! Plugin '${slug}' will be disabled.`);
+                log.error(`🚨 [CrashGuard] 3 STRIKES! Plugin '${slug}' will be disabled.`);
                 return { slug, strikes, shouldDisable: true };
             } else {
-                console.log(`🔄 [CrashGuard] Will retry loading '${slug}' (${MAX_STRIKES - strikes} attempts remaining)`);
+                log.info(`🔄 [CrashGuard] Will retry loading '${slug}' (${MAX_STRIKES - strikes} attempts remaining)`);
                 return { slug, strikes, shouldDisable: false };
             }
         }
@@ -167,14 +168,14 @@ function checkPreviousCrash() {
             const data = JSON.parse(content);
             const slug = data.plugin;
 
-            console.error(`🚨 [CrashGuard] Runtime crash blamed on '${slug}': ${data.error}`);
+            log.error({ err: data.error }, `🚨 [CrashGuard] Runtime crash blamed on '${slug}'`);
 
             // Runtime crashes are immediate disable (already past boot)
             fs.unlinkSync(RUNTIME_BLAME_FILE);
             return { slug, strikes: MAX_STRIKES, shouldDisable: true };
         }
     } catch (e) {
-        console.error('[CrashGuard] Error reading lock file:', e.message);
+        log.error({ err: e }, '[CrashGuard] Error reading lock file');
     }
     return null;
 }
@@ -224,9 +225,9 @@ function blamePlugin(slug: string, error: any) {
             timestamp: Date.now()
         };
         fs.writeFileSync(RUNTIME_BLAME_FILE, JSON.stringify(data, null, 2), 'utf8');
-        console.error(`🔥 [CrashGuard] Runtime crash blamed on plugin '${slug}'. Will disable on restart.`);
+        log.error({ slug }, `🔥 [CrashGuard] Runtime crash blamed on plugin '${slug}'. Will disable on restart.`);
     } catch (e) {
-        console.error('[CrashGuard] Failed to write blame file:', e.message);
+        log.error({ err: e }, '[CrashGuard] Failed to write blame file');
     }
 }
 
@@ -237,13 +238,13 @@ function blamePlugin(slug: string, error: any) {
 function installRuntimeBlameHandlers() {
     // Handle uncaught exceptions
     process.on('uncaughtException', (error) => {
-        console.error('💥 Uncaught Exception:', error);
+        log.error({ err: error }, '💥 Uncaught Exception');
 
         const slug = extractPluginFromStack(error.stack);
         if (slug) {
             blamePlugin(slug, error);
         } else {
-            console.error('[CrashGuard] Could not identify culprit plugin from stack trace.');
+            log.error('[CrashGuard] Could not identify culprit plugin from stack trace.');
         }
 
         // Give time for file write, then exit
@@ -252,7 +253,7 @@ function installRuntimeBlameHandlers() {
 
     // Handle unhandled promise rejections
     process.on('unhandledRejection', (reason, promise) => {
-        console.error('💥 Unhandled Rejection:', reason);
+        log.error({ err: reason }, '💥 Unhandled Rejection');
 
         // ATTRIBUTION CAVEAT: a non-Error rejection (a thrown string, number, or plain object) carries
         // NO stack from the original throw site. We synthesize an Error here, but its stack points at
@@ -271,7 +272,7 @@ function installRuntimeBlameHandlers() {
         // But log the blame for potential future crash
     });
 
-    console.log('🛡️ [CrashGuard] Runtime blame handlers installed.');
+    log.info('🛡️ [CrashGuard] Runtime blame handlers installed.');
 }
 
 /**
@@ -286,7 +287,7 @@ function clear() {
             fs.unlinkSync(RUNTIME_BLAME_FILE);
         }
     } catch (e) {
-        console.error('[CrashGuard] Failed to clear locks:', e.message);
+        log.error({ err: e }, '[CrashGuard] Failed to clear locks');
     }
 }
 

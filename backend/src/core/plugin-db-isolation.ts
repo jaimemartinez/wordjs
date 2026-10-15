@@ -19,6 +19,7 @@
  */
 const config = require('../config/app');
 const crypto = require('crypto');
+const log = require('./module-logger').moduleLogger('core/plugin-db-isolation');
 
 // Slugs whose DB principal is provisioned in THIS process → their DML/SELECT routes through it.
 const provisioned = new Set<string>();
@@ -87,7 +88,7 @@ async function provision(slug: string): Promise<void> {
             provisioned.add(slug);
         } catch (e: any) {
             provisioned.delete(slug);
-            console.warn(`[plugin-db-roles] could not provision role for '${clean(slug)}' (falling back to the SQL text-guard): ${clean(e && e.message)}`);
+            log.warn({ slug: clean(slug), err: e }, `[plugin-db-roles] could not provision role for '${clean(slug)}' (falling back to the SQL text-guard)`);
         }
         return;
     }
@@ -103,7 +104,7 @@ async function provision(slug: string): Promise<void> {
         } catch (e: any) {
             provisioned.delete(slug);
             pluginPasswords.delete(slug);
-            console.warn(`[plugin-db-users] could not provision user for '${clean(slug)}' (falling back to the SQL text-guard): ${clean(e && e.message)}`);
+            log.warn({ slug: clean(slug), err: e }, `[plugin-db-users] could not provision user for '${clean(slug)}' (falling back to the SQL text-guard)`);
         }
     }
     // SQLite → text-guard only.
@@ -122,13 +123,13 @@ async function deprovision(slug: string): Promise<void> {
     const pg = pgDriver();
     if (pg) {
         try { await pg.dropPluginRole(roleName(slug)); }
-        catch (e: any) { console.warn(`[plugin-db-roles] drop role for '${clean(slug)}' failed: ${clean(e && e.message)}`); }
+        catch (e: any) { log.warn({ slug: clean(slug), err: e }, `[plugin-db-roles] drop role for '${clean(slug)}' failed`); }
         return;
     }
     const my = mysqlDriver();
     if (my) {
         try { await my.dropPluginUser(userName(slug)); }
-        catch (e: any) { console.warn(`[plugin-db-users] drop user for '${clean(slug)}' failed: ${clean(e && e.message)}`); }
+        catch (e: any) { log.warn({ slug: clean(slug), err: e }, `[plugin-db-users] drop user for '${clean(slug)}' failed`); }
     }
 }
 
@@ -139,13 +140,13 @@ async function grantNewTable(slug: string, table: string): Promise<void> {
     const pg = pgDriver();
     if (pg) {
         try { await pg.grantPluginTable(roleName(slug), tbl); }
-        catch (e: any) { console.warn(`[plugin-db-roles] grant new table '${clean(table)}' to '${clean(slug)}' failed: ${clean(e && e.message)}`); }
+        catch (e: any) { log.warn({ table: clean(table), slug: clean(slug), err: e }, `[plugin-db-roles] grant new table '${clean(table)}' to '${clean(slug)}' failed`); }
         return;
     }
     const my = mysqlDriver();
     if (my) {
         try { await my.grantPluginTableToUser(userName(slug), tbl); }
-        catch (e: any) { console.warn(`[plugin-db-users] grant new table '${clean(table)}' to '${clean(slug)}' failed: ${clean(e && e.message)}`); }
+        catch (e: any) { log.warn({ table: clean(table), slug: clean(slug), err: e }, `[plugin-db-users] grant new table '${clean(table)}' to '${clean(slug)}' failed`); }
     }
 }
 

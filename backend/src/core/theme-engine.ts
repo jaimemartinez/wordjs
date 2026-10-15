@@ -14,6 +14,7 @@ const path = require('path');
 const Handlebars = require('handlebars');
 const { getOption } = require('./options');
 const { doAction, applyFilters } = require('./hooks');
+const log = require('./module-logger').moduleLogger('core/theme-engine');
 
 const THEMES_DIR = path.resolve('./themes');
 
@@ -62,14 +63,14 @@ async function unloadThemeIsolates(incomingIsoSlug: string): Promise<void> {
     try {
         iso = require('./plugin-isolate');
     } catch (e: any) {
-        console.error('[Theme] cannot reach the isolate layer to retire theme isolates:', e && e.message);
+        log.error({ err: e }, '[Theme] cannot reach the isolate layer to retire theme isolates');
         return;
     }
     let slugs: string[];
     try {
         slugs = iso.listIsolates();
     } catch (e: any) {
-        console.error('[Theme] failed to enumerate loaded isolates — a previous theme child may survive this switch:', e && e.message);
+        log.error({ err: e }, '[Theme] failed to enumerate loaded isolates — a previous theme child may survive this switch');
         return;
     }
     for (const slug of Array.isArray(slugs) ? slugs : []) {
@@ -78,15 +79,15 @@ async function unloadThemeIsolates(incomingIsoSlug: string): Promise<void> {
             // Let a load that is still in flight finish before retiring it (see the note above). Bounded:
             // on timeout we unload what IS registered rather than block the switch, and say so.
             if (typeof iso.awaitIsolateSettled === 'function' && !(await iso.awaitIsolateSettled(slug))) {
-                console.error(`[Theme] isolate '${slug}' is still loading after the wait — retiring what is registered; a child of it may survive this switch.`);
+                log.error({ slug }, `[Theme] isolate '${slug}' is still loading after the wait — retiring what is registered; a child of it may survive this switch.`);
             }
             await iso.unloadIsolatedPlugin(slug);
-            if (slug !== incomingIsoSlug) console.log(`🎨 Theme switch: retired the outgoing theme isolate '${slug}'.`);
+            if (slug !== incomingIsoSlug) log.info({ slug }, `🎨 Theme switch: retired the outgoing theme isolate '${slug}'.`);
         } catch (e: any) {
             // BEST-EFFORT, BUT LOUD. A teardown that fails must not stop the incoming theme from loading
             // (the site would be left with no theme logic at all), yet it means a theme child may still be
             // alive and serving stale hooks — a silent catch here is precisely how this bug stayed hidden.
-            console.error(`[Theme] failed to retire theme isolate '${slug}' — it may still be running and serving stale hooks/shortcodes:`, e && e.message);
+            log.error({ slug, err: e }, `[Theme] failed to retire theme isolate '${slug}' — it may still be running and serving stale hooks/shortcodes`);
         }
     }
 }
@@ -205,17 +206,17 @@ class ThemeEngine {
         // to run arbitrary in-process code from outside THEMES_DIR. Require a single safe path segment and
         // re-assert the resolved path stays under THEMES_DIR before doing anything with it.
         if (!/^[a-zA-Z0-9._-]+$/.test(themeSlug) || themeSlug === '.' || themeSlug === '..') {
-            console.error(`❌ Theme slug '${themeSlug}' is not a safe single path segment — refusing to load.`);
+            log.error({ themeSlug }, `❌ Theme slug '${themeSlug}' is not a safe single path segment — refusing to load.`);
             return;
         }
         const themePath = path.join(THEMES_DIR, themeSlug);
         if (!path.resolve(themePath).startsWith(path.resolve(THEMES_DIR) + path.sep)) {
-            console.error(`❌ Theme path '${themePath}' escaped the themes dir — refusing to load.`);
+            log.error(`❌ Theme path '${themePath}' escaped the themes dir — refusing to load.`);
             return;
         }
 
         if (!fs.existsSync(themePath)) {
-            console.error(`❌ Theme ${themeSlug} not found at ${themePath}`);
+            log.error({ themeSlug }, `❌ Theme ${themeSlug} not found at ${themePath}`);
             return;
         }
 
@@ -270,13 +271,13 @@ class ThemeEngine {
             const manifestPath = path.join(this.activeTheme.path, 'manifest.json');
             if (fs.existsSync(manifestPath)) {
                 try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); }
-                catch (e) { console.warn(`[Theme] Failed to parse manifest for ${themeSlug}:`, e.message); }
+                catch (e) { log.warn({ err: e }, `[Theme] Failed to parse manifest for ${themeSlug}`); }
             }
             try {
                 validatePluginPermissions(themeSlug, this.activeTheme.path, manifest);
             } catch (securityError) {
-                console.error(`🚨 Security Block: Theme '${themeSlug}' contains unsafe code and was blocked.`);
-                console.error(securityError.message);
+                log.error(`🚨 Security Block: Theme '${themeSlug}' contains unsafe code and was blocked.`);
+                log.error(securityError);
                 return; // STOP loading
             }
 
@@ -293,7 +294,7 @@ class ThemeEngine {
             const { loadIsolatedPlugin } = require('./plugin-isolate');
             await loadIsolatedPlugin(isoSlug, logicPath);
         } catch (e) {
-            console.error(`❌ Error loading theme functions.js (isolated):`, (e as any) && (e as any).message);
+            log.error({ err: e }, '❌ Error loading theme functions.js (isolated)');
         }
     }
 
@@ -305,7 +306,7 @@ class ThemeEngine {
         // outgoing-isolate teardown covers it too — there is no second place to fix.
         const currentOption = await getOption('template', 'default');
         if (!this.activeTheme || this.activeTheme.slug !== currentOption) {
-            console.log(`🎨 Theme engine reloading: ${this.activeTheme?.slug} -> ${currentOption}`);
+            log.info(`🎨 Theme engine reloading: ${this.activeTheme?.slug} -> ${currentOption}`);
             await this.init();
         }
 

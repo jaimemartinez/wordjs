@@ -18,6 +18,8 @@
  * has granted (default-deny). No plugin bypasses DB scoping, io-guard, or these grants.
  */
 
+const log = require('./module-logger').moduleLogger('core/plugin-permissions');
+
 // slug -> set of granted tokens: "scope:access" (e.g. "database:write") and/or the literal "network".
 const grants = new Map<string, Set<string>>();
 let loaded = false;
@@ -169,7 +171,7 @@ function cleanGrantTokens(slug: string, tokens: string[]): string[] {
     const clean = requested.filter(isValidGrantToken);
     if (clean.length !== requested.length) {
         const dropped = requested.filter(t => !isValidGrantToken(t));
-        console.warn("[PluginPermissions] Not storing malformed grant token(s) %s for plugin '%s' (a grant is 'network' or 'scope:access').", JSON.stringify(dropped), logSafeKey(slug));
+        log.warn({ grantTokens: JSON.stringify(dropped), slug: logSafeKey(slug) }, `[PluginPermissions] Not storing malformed grant token(s) ${logSafeKey(JSON.stringify(dropped))} for plugin '${logSafeKey(slug)}' (a grant is 'network' or 'scope:access').`);
     }
     return clean;
 }
@@ -183,11 +185,11 @@ function normalizeEgressHosts(hosts: string[]): string[] {
 // repeat the same warning forever. Report each distinct one once per process. Capped: the blobs are
 // admin-written and small, but a set that only ever grows is not something to leave in a server.
 const reportedMalformed = new Set<string>();
-function warnMalformedOnce(key: string, message: string, ...args: unknown[]): void {
+function warnMalformedOnce(key: string, fields: Record<string, unknown>, message: string): void {
     if (reportedMalformed.has(key)) return;
     if (reportedMalformed.size >= 1000) reportedMalformed.clear();
     reportedMalformed.add(key);
-    console.warn(message, ...args);
+    log.warn(fields, message);
 }
 
 /**
@@ -201,7 +203,7 @@ function grantRecordOf(slug: string, list: unknown): string[] | null {
     for (const raw of list) {
         const t = String(raw).toLowerCase().trim();
         if (isValidGrantToken(t)) clean.push(t);
-        else warnMalformedOnce(`grants\u0000${slug}\u0000${String(raw)}`, "[PluginPermissions] Dropping malformed grant token %s for plugin '%s' from plugin_grants.", JSON.stringify(String(raw)), slug);
+        else warnMalformedOnce(`grants\u0000${slug}\u0000${String(raw)}`, { grantToken: JSON.stringify(String(raw)), slug: logSafeKey(slug) }, `[PluginPermissions] Dropping malformed grant token ${logSafeKey(JSON.stringify(String(raw)))} for plugin '${logSafeKey(slug)}' from plugin_grants.`);
     }
     return clean;
 }
@@ -219,7 +221,7 @@ function egressRecordOf(slug: string, list: unknown): string[] | null {
     for (const raw of list) {
         const h = String(raw).toLowerCase().trim();
         if (isValidEgressHost(h)) clean.push(h);
-        else warnMalformedOnce(`egress\u0000${slug}\u0000${String(raw)}`, "[PluginPermissions] Dropping malformed egress host %s for plugin '%s' from plugin_egress_hosts.", JSON.stringify(String(raw)), slug);
+        else warnMalformedOnce(`egress\u0000${slug}\u0000${String(raw)}`, { egressHost: JSON.stringify(String(raw)), slug: logSafeKey(slug) }, `[PluginPermissions] Dropping malformed egress host ${logSafeKey(JSON.stringify(String(raw)))} for plugin '${logSafeKey(slug)}' from plugin_egress_hosts.`);
     }
     return clean;
 }
@@ -466,7 +468,7 @@ async function loadGrantsUnlocked(): Promise<void> {
             // any path other than setGrants) must not be able to install a grant record under a magic
             // name. Unsafe key ⇒ the plugin simply has no grants — default-deny, fail closed.
             if (!isSafeSlugKey(slug)) {
-                warnMalformedOnce(`grants-key\u0000${String(slug)}`, "[PluginPermissions] Dropping grant record under an unsafe plugin key '%s' from plugin_grants.", logSafeKey(slug));
+                warnMalformedOnce(`grants-key\u0000${String(slug)}`, { slug: logSafeKey(slug) }, `[PluginPermissions] Dropping grant record under an unsafe plugin key '${logSafeKey(slug)}' from plugin_grants.`);
                 continue;
             }
             const record = grantRecordOf(slug, list);
@@ -474,7 +476,7 @@ async function loadGrantsUnlocked(): Promise<void> {
         }
         loaded = true;
     } catch (e: any) {
-        console.warn('[PluginPermissions] Failed to load plugin_grants option (the grants already in memory stay in force):', e && e.message);
+        log.warn({ err: e }, '[PluginPermissions] Failed to load plugin_grants option (the grants already in memory stay in force)');
     }
 }
 
@@ -712,7 +714,7 @@ async function backfillActive(entries: Array<{ slug: string; requested: string[]
     // unread (a database error at boot) every plugin would look unrecorded, and the declared sets would
     // be written over what administrators stored.
     if (!loaded) {
-        console.warn('[PluginPermissions] Grant backfill skipped: plugin_grants could not be read.');
+        log.warn('[PluginPermissions] Grant backfill skipped: plugin_grants could not be read.');
         return [];
     }
     const done: string[] = [];
@@ -737,7 +739,7 @@ async function backfillActive(entries: Array<{ slug: string; requested: string[]
             () => { grants.set(slug, new Set(existing !== null ? existing : clean)); }));
         if (existing === null) done.push(slug);
     }
-    if (done.length) console.log(`[PluginPermissions] Backfilled manifest grants for already-active plugins: ${done.join(', ')} (default-deny applies to new activations).`);
+    if (done.length) log.info(`[PluginPermissions] Backfilled manifest grants for already-active plugins: ${done.join(', ')} (default-deny applies to new activations).`);
     return done;
 }
 
@@ -873,7 +875,7 @@ async function loadEgressHostsUnlocked(): Promise<void> {
         egressHosts.clear();
         for (const [slug, list] of Object.entries(stored)) {
             if (!isSafeSlugKey(slug)) {
-                warnMalformedOnce(`egress-key\u0000${String(slug)}`, "[PluginPermissions] Dropping egress record under an unsafe plugin key '%s' from plugin_egress_hosts.", logSafeKey(slug));
+                warnMalformedOnce(`egress-key\u0000${String(slug)}`, { slug: logSafeKey(slug) }, `[PluginPermissions] Dropping egress record under an unsafe plugin key '${logSafeKey(slug)}' from plugin_egress_hosts.`);
                 continue;
             }
             const record = egressRecordOf(slug, list);
@@ -883,9 +885,9 @@ async function loadEgressHostsUnlocked(): Promise<void> {
     } catch (e: any) {
         // Not touched here: still FALSE if no load ever succeeded (fail CLOSED — the spawn path denies
         // egress for network plugins until a re-sync loads it), still the last-known-good policy otherwise.
-        console.warn(egressPolicyLoaded
+        log.warn({ err: e }, egressPolicyLoaded
             ? '[PluginPermissions] Failed to re-read plugin_egress_hosts (the allowlists already in memory stay in force):'
-            : '[PluginPermissions] Failed to load plugin_egress_hosts option (egress fails CLOSED for network-granted plugins until it loads):', e && e.message);
+            : '[PluginPermissions] Failed to load plugin_egress_hosts option (egress fails CLOSED for network-granted plugins until it loads):');
     }
 }
 
