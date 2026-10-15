@@ -38,9 +38,12 @@ import {
   IX_PROP_KEYS,
   IX_REPEAT_MAX,
   IX_STAGGER_MAX,
+  ixCtxFromSite,
+  ixPresetSave,
   normalizeIxSpec,
   resolveIxBody,
   type IxBreakpoint,
+  type IxCatalog,
   type IxClipDir,
   type IxColorPropKey,
   type IxColorToken,
@@ -269,7 +272,26 @@ const blankStep = (at: number): IxStep => ({ at, set: { opacity: 1 }, ease: "out
 export interface IxPanelPresetOption {
   value: string;
   label: string;
+  /** Grupo del desplegable: cuándo se dispara (sistema) o «Del sitio». Sin él, opción suelta. */
+  group?: string;
 }
+
+/**
+ * Grupos del desplegable por CUÁNDO se dispara el preajuste: 27 preajustes en una lista plana
+ * ordenada por nombre mezclaban «Paralaje con el puntero» con «Aparecer subiendo»; quien busca algo
+ * «con el scroll» no tiene por qué leerlos todos. Orden de los grupos = orden de este mapa.
+ */
+const IX_PRESET_GROUPS: Record<string, string> = {
+  view: "Al entrar en pantalla",
+  load: "Al entrar en pantalla",
+  scrub: "Con el scroll",
+  pointer: "Con el puntero",
+  hover: "Al interactuar",
+  click: "Al interactuar",
+  event: "Al interactuar",
+};
+const IX_PRESET_GROUP_ORDER = ["Al entrar en pantalla", "Con el scroll", "Con el puntero", "Al interactuar", "Otros"];
+export const IX_SITE_PRESET_GROUP = "Del sitio";
 
 export interface IxPanelState {
   /** Hay interacción utilizable (la referencia a un preset borrado NO cuenta: fail-open). */
@@ -384,14 +406,22 @@ export function ixSummary(
  */
 export function ixPresetOptions(ctx?: IxCompileCtx): IxPanelPresetOption[] {
   const presets = ctx?.presets ?? {};
+  const groupOf = (id: string): string => {
+    if (!id.startsWith("sys:")) return IX_SITE_PRESET_GROUP;
+    const on = (presets[id] as IxPreset).trigger?.on;
+    return (on && IX_PRESET_GROUPS[on]) || "Otros";
+  };
   const toOption = (id: string): IxPanelPresetOption => ({
     value: id,
     label: (presets[id] as IxPreset).name || id,
+    group: groupOf(id),
   });
   const byLabel = (a: IxPanelPresetOption, b: IxPanelPresetOption): number =>
     a.label.localeCompare(b.label, "es") || a.value.localeCompare(b.value);
+  const byGroupThenLabel = (a: IxPanelPresetOption, b: IxPanelPresetOption): number =>
+    IX_PRESET_GROUP_ORDER.indexOf(a.group ?? "Otros") - IX_PRESET_GROUP_ORDER.indexOf(b.group ?? "Otros") || byLabel(a, b);
   const ids = Object.keys(presets);
-  const sys = ids.filter((id) => id.startsWith("sys:")).map(toOption).sort(byLabel);
+  const sys = ids.filter((id) => id.startsWith("sys:")).map(toOption).sort(byGroupThenLabel);
   const site = ids.filter((id) => !id.startsWith("sys:")).map(toOption).sort(byLabel);
   return [
     { value: IX_PANEL_NONE, label: "Ninguna" },
@@ -447,6 +477,39 @@ export function setPresetChoice(raw: unknown, choice: string, ctx?: IxCompileCtx
   // que elegir un preset diese un resultado distinto según lo que hubiera antes. `off` y `amt` SÍ
   // se conservan: son del bloque (dónde corre y con qué fuerza), no del movimiento elegido.
   return withSpecExtras(raw, { v: 1, preset: choice });
+}
+
+/**
+ * «Guardar como preajuste» desde el BLOQUE: el movimiento que el autor acaba de diseñar pasa al
+ * catálogo del sitio con el nombre dado, y el bloque queda ENLAZADO a él (guarda solo el id, como al
+ * elegirlo en el desplegable). `off`/`amt` siguen en el bloque: son suyos, no del movimiento.
+ *
+ * Puro: recibe el catálogo de sitio RECIÉN LEÍDO (el llamador lo relee antes, para no pisar lo que
+ * otra pestaña de Ajustes hubiera guardado) y devuelve el catálogo a persistir, el contexto nuevo y
+ * el valor `ix` del bloque. Las reglas (nombre, tope, `sys:`, id libre) son las de `ixPresetSave`.
+ */
+export function saveBlockIxAsPreset(
+  site: IxCatalog,
+  name: string,
+  raw: unknown,
+  ctx?: IxCompileCtx,
+):
+  | { ok: true; catalog: IxCatalog; id: string; ctx: IxCompileCtx; ix: IxWrite }
+  | { ok: false; error: string } {
+  const state = ixPanelState(raw, ctx);
+  if (!state.active || state.tracks.length === 0) {
+    return { ok: false, error: "Este bloque no tiene ninguna interacción que guardar." };
+  }
+  const result = ixPresetSave(site, { name, trigger: state.trigger, tracks: state.tracks });
+  if (!result.ok) return result;
+  const nextCtx = ixCtxFromSite(result.catalog);
+  return {
+    ok: true,
+    catalog: result.catalog,
+    id: result.id,
+    ctx: nextCtx,
+    ix: setPresetChoice(raw, result.id, nextCtx),
+  };
 }
 
 /** "Desvincular del preajuste": copia el cuerpo a `tracks` y borra la referencia. Sin vuelta atrás. */

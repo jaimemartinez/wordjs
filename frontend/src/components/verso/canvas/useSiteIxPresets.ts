@@ -16,7 +16,10 @@
  *     presets del SISTEMA. Un preajuste de sitio que no se puede listar es una opción que falta en
  *     un desplegable; un editor que no arranca por eso sería un fallo de verdad.
  *  3. **Sin polling ni reintentos.** Los presets cambian cuando un admin los edita en Ajustes, no
- *     solos. Recargar el editor los trae; un temporizador por editor abierto no compra nada.
+ *     solos. Un temporizador por editor abierto no compra nada; lo que sí se hace es releer UNA vez
+ *     cuando la pestaña vuelve a primer plano (el autor suele crear el preajuste en Ajustes, en otra
+ *     pestaña, y volver) y cuando el propio editor guarda uno («Guardar como preajuste» del dock,
+ *     `setSiteIxCtx`). Sin eso, el desplegable mentía hasta recargar el editor.
  */
 import { useEffect, useState } from "react";
 import { settingsApi } from "@/lib/api";
@@ -27,11 +30,38 @@ export const SYS_ONLY_IX_CTX: IxCompileCtx = { presets: SYS_IX_PRESETS };
 
 let pending: Promise<IxCompileCtx> | null = null;
 let resolved: IxCompileCtx | null = null;
+/** Montajes vivos del hook: un catálogo nuevo les llega a todos (panel, dock y motor del canvas). */
+const listeners = new Set<(ctx: IxCompileCtx) => void>();
 
 /** Solo para tests: olvida la caché de módulo. */
 export function resetSiteIxPresetsCache(): void {
   pending = null;
   resolved = null;
+}
+
+/** Publica un catálogo ya conocido (p. ej. el que acaba de guardar el editor) a todos los montajes. */
+export function setSiteIxCtx(ctx: IxCompileCtx): void {
+  resolved = ctx;
+  pending = null;
+  for (const l of listeners) l(ctx);
+}
+
+/** Relee el ajuste y lo publica. Fail-open como la primera lectura: un fallo deja lo que había. */
+let refreshing: Promise<IxCompileCtx> | null = null;
+export function refreshSiteIxPresets(): Promise<IxCompileCtx> {
+  // Varias llamadas a la vez (un montaje por consumidor oye el mismo visibilitychange) comparten UNA.
+  if (refreshing) return refreshing;
+  resolved = null;
+  pending = null;
+  refreshing = loadSiteIxCtx()
+    .then((ctx) => {
+      for (const l of listeners) l(ctx);
+      return ctx;
+    })
+    .finally(() => {
+      refreshing = null;
+    });
+  return refreshing;
 }
 
 function loadSiteIxCtx(): Promise<IxCompileCtx> {
@@ -64,11 +94,20 @@ export function useSiteIxPresets(): IxCompileCtx {
 
   useEffect(() => {
     let cancelled = false;
-    void loadSiteIxCtx().then((next) => {
+    const apply = (next: IxCompileCtx) => {
       if (!cancelled) setCtx((prev) => (prev === next ? prev : next));
-    });
+    };
+    listeners.add(apply);
+    void loadSiteIxCtx().then(apply);
+    // Volver a la pestaña relee; los demás montajes que oyen el mismo evento comparten la lectura.
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refreshSiteIxPresets();
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       cancelled = true;
+      listeners.delete(apply);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
 

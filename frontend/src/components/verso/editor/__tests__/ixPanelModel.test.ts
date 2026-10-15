@@ -35,6 +35,7 @@ import {
   ixPanelState,
   ixPresetChoice,
   ixPresetOptions,
+  saveBlockIxAsPreset,
   rangeEditable,
   removeStep,
   resetRange,
@@ -166,12 +167,24 @@ describe("ixPresetOptions — el desplegable del nivel 1", () => {
     expect(values).toContain("sys:fade-up");
   });
 
-  it("dentro de cada grupo, por NOMBRE — que es lo que el autor lee, no el id", () => {
+  it("sistema agrupado por CUÁNDO se dispara; dentro de cada grupo, por NOMBRE (no por id)", () => {
     const sys = ixPresetOptions(CTX).filter((o) => o.value.startsWith("sys:"));
-    const labels = sys.map((o) => o.label);
-    expect(labels).toEqual([...labels].sort((a, b) => a.localeCompare(b, "es")));
-    // Y no por id: por id, "sys:blur" (Desenfocar) iría primero.
-    expect(labels[0]).not.toBe("Desenfocar");
+    // Cada grupo es un tramo contiguo (el <optgroup> del select se arma con tramos).
+    const groups = sys.map((o) => o.group);
+    const runs = groups.filter((g, i) => i === 0 || g !== groups[i - 1]);
+    expect(new Set(runs).size).toBe(runs.length);
+    expect(runs[0]).toBe("Al entrar en pantalla");
+    for (const g of runs) {
+      const labels = sys.filter((o) => o.group === g).map((o) => o.label);
+      expect(labels).toEqual([...labels].sort((a, b) => a.localeCompare(b, "es")));
+    }
+    // Un preajuste de scroll no cae entre los de entrada.
+    expect(sys.find((o) => o.label === "Paralaje")?.group).toBe("Con el scroll");
+  });
+
+  it("los del sitio van en su propio grupo «Del sitio»", () => {
+    const site = ixPresetOptions(CTX).filter((o) => o.value === "aparecer-tarjetas");
+    expect(site[0]?.group).toBe("Del sitio");
   });
 
   it("orden estable entre llamadas (no depende del orden de claves del ajuste)", () => {
@@ -838,5 +851,25 @@ describe("invariante de escritura", () => {
       expect(out).toEqual({ v: 1, preset: id });
       assertWritable(out);
     }
+  });
+});
+
+describe("saveBlockIxAsPreset — «Guardar como preajuste» desde el dock", () => {
+  it("guarda el movimiento propio del bloque y lo deja ENLAZADO por id", () => {
+    const own = setPresetChoice(undefined, IX_PANEL_CUSTOM, CTX);
+    const res = saveBlockIxAsPreset({}, "Mi entrada", own, CTX);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.id).toBe("mi-entrada");
+    expect(res.catalog["mi-entrada"]?.name).toBe("Mi entrada");
+    expect((res.ix as { preset?: string }).preset).toBe("mi-entrada");
+    // El contexto nuevo lo conoce: el desplegable puede mostrarlo ya, sin recargar.
+    expect(ixPanelState(res.ix, res.ctx).presetId).toBe("mi-entrada");
+  });
+
+  it("sin interacción, o sin nombre, no guarda nada", () => {
+    expect(saveBlockIxAsPreset({}, "X", undefined, CTX).ok).toBe(false);
+    const own = setPresetChoice(undefined, IX_PANEL_CUSTOM, CTX);
+    expect(saveBlockIxAsPreset({}, "   ", own, CTX).ok).toBe(false);
   });
 });

@@ -595,7 +595,7 @@ export default function VersoEditor({
         if (!onCancel) return;
         if (hasChanges && onSave) {
             const leave = await confirm(
-                trStr("Tienes cambios sin guardar. ¿Salir del editor y descartarlos?", language),
+                trStr("Tienes cambios sin guardar. ¿Salir del editor sin guardarlos?", language),
                 trStr("Salir sin guardar", language),
                 true,
             );
