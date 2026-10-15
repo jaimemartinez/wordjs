@@ -27,7 +27,7 @@
 import React, { useMemo, useState } from "react";
 import MSym from "@/components/editor/MSym";
 import { useI18n } from "@/contexts/I18nContext";
-import { trStr } from "@/lib/editorI18n";
+import { humanizeFieldKey, localizeField, trStr } from "@/lib/editorI18n";
 import { BLOCK_META } from "@/lib/blockCatalog";
 import type { EditorHandle } from "@/lib/verso/store";
 import type { BlockRegistry, VersoField } from "@/lib/verso/registry";
@@ -35,6 +35,7 @@ import type { VersoEditorState } from "@/lib/verso/types";
 import { useStoreSlice } from "../render/context";
 import VersoFieldControl, { type RenderExternalPicker } from "../fields/VersoFieldControl";
 import { partitionFieldEntries, tabAvailability, type PanelTab } from "./panelTabs";
+import { ancestorChain } from "./outlineModel";
 
 const selectState = (s: VersoEditorState) => s;
 
@@ -51,7 +52,8 @@ export interface VersoPropertiesPanelProps {
 
 /** Las tres secciones del inspector, en orden. Icono Material Symbol por sección. */
 const SECTIONS: { key: PanelTab; icon: string; label: string }[] = [
-    { key: "content", icon: "edit_note", label: "Contenido" },
+    // "edit", no "edit_note": ese glifo no está en el subset de la fuente y se pintaba como texto «_NOTE».
+    { key: "content", icon: "edit", label: "Contenido" },
     { key: "style", icon: "palette", label: "Estilo" },
     { key: "advanced", icon: "tune", label: "Avanzado" },
 ];
@@ -69,9 +71,18 @@ export default function PropertiesPanel({ handle, registry, rootFields, renderEx
         ? (def?.label ? trStr(def.label, language) : node.type)
         : trStr("Página", language);
     const blockId = node?.props.id as string | undefined;
+    // Ruta de la selección (Página › Sección › … › bloque): cada eslabón selecciona su contenedor.
+    const crumbs = node ? ancestorChain(state.doc, registry, node.id) : [];
 
     const fields: Record<string, VersoField> = def?.fields ?? rootFields;
     const parts = useMemo(() => partitionFieldEntries(fields), [fields]);
+    // Copias traducidas UNA vez por (campos, idioma): identidad estable entre renders, que es lo que
+    // esperan los controles custom en sus dependencias. Los `custom` pasan intactos (su render manda).
+    const localized = useMemo(() => {
+        const out: Record<string, VersoField> = {};
+        for (const [key, f] of Object.entries(fields)) out[key] = f.type === "custom" ? f : localizeField(f, language);
+        return out;
+    }, [fields, language]);
     // Las interacciones y la animación de entrada viven en el DOCK inferior de movimiento
     // (IxDock + DOCK_FIELD_KEYS): el inspector ya no fuerza Avanzado — sección vacía, sección fuera.
     const avail = useMemo(() => tabAvailability(fields), [fields]);
@@ -112,8 +123,17 @@ export default function PropertiesPanel({ handle, registry, rootFields, renderEx
         );
     };
 
+    // Los slots no se editan aquí (se arrastra en el lienzo): un aviso por slot repetía lo mismo
+    // tres veces —incluido «Col 2» en unas Columnas de dos—. Se quitan del reparto y, si el bloque
+    // es contenedor, queda UNA pista al principio de Contenido.
+    const visibleParts = useMemo(() => {
+        const keep = (entries: typeof parts.content) => entries.filter(([, f]) => f.type !== "slot");
+        return { content: keep(parts.content), style: keep(parts.style), advanced: keep(parts.advanced) };
+    }, [parts]);
+    const isContainer = parts.content.some(([, f]) => f.type === "slot");
+
     /** ¿Esta sección tiene algo que mostrar? Solo si el reparto le da campos. */
-    const hasSection = (k: PanelTab) => parts[k].length > 0;
+    const hasSection = (k: PanelTab) => visibleParts[k].length > 0 || (k === "content" && isContainer);
 
     return (
         <aside
@@ -135,6 +155,7 @@ export default function PropertiesPanel({ handle, registry, rootFields, renderEx
                     <p
                         className="text-[10px] leading-3 text-[var(--ed-outline)] truncate"
                         style={{ fontFamily: "var(--ed-font-family-monospaced)" }}
+                        title={blockId}
                     >
                         {blockId ? `ID: ${blockId}` : t('editor.properties')}
                     </p>
@@ -150,6 +171,43 @@ export default function PropertiesPanel({ handle, registry, rootFields, renderEx
                     <MSym name="close" size={18} className="xl:hidden" />
                 </button>
             </header>
+
+            {node && (
+                <nav
+                    aria-label={trStr("Ruta de la selección", language)}
+                    data-verso-breadcrumb=""
+                    className="shrink-0 px-3 py-1.5 flex items-center gap-0.5 overflow-x-auto scrollbar-hide whitespace-nowrap border-b border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-low)] text-[11px]"
+                >
+                    <button
+                        type="button"
+                        onClick={() => handle.select(null)}
+                        className="shrink-0 px-1.5 py-0.5 rounded text-[var(--ed-on-surface-variant)] hover:text-[var(--ed-primary)] hover:bg-[var(--ed-surface-container)] transition-colors"
+                    >
+                        {trStr("Página", language)}
+                    </button>
+                    {crumbs.map((c, i) => {
+                        const current = i === crumbs.length - 1;
+                        return (
+                            <React.Fragment key={c.id}>
+                                <MSym name="chevron_right" size={12} className="shrink-0 text-[var(--ed-outline)]" />
+                                {current ? (
+                                    <span aria-current="true" className="shrink-0 px-1.5 py-0.5 font-semibold text-[var(--ed-on-surface)]">
+                                        {trStr(c.label, language)}
+                                    </span>
+                                ) : (
+                                    <button
+                                        type="button"
+                                        onClick={() => handle.select(c.id)}
+                                        className="shrink-0 px-1.5 py-0.5 rounded text-[var(--ed-on-surface-variant)] hover:text-[var(--ed-primary)] hover:bg-[var(--ed-surface-container)] transition-colors"
+                                    >
+                                        {trStr(c.label, language)}
+                                    </button>
+                                )}
+                            </React.Fragment>
+                        );
+                    })}
+                </nav>
+            )}
 
             <div className="relative flex-1 min-h-0">
                 {/* Cuerpo: secciones plegables (el reparto de 3 vías, aquí como acordeón). */}
@@ -181,12 +239,20 @@ export default function PropertiesPanel({ handle, registry, rootFields, renderEx
                                 </button>
                                 {open && (
                                     <div className="px-4 pb-4 flex flex-col gap-4">
-                                        {parts[s.key].map(([key, field]) => (
+                                        {s.key === "content" && isContainer && (
+                                            <p className="flex items-start gap-2 rounded-lg bg-[var(--ed-surface-container-low)] px-3 py-2 text-[12px] leading-5 text-[var(--ed-on-surface-variant)]">
+                                                <MSym name="info" size={16} className="shrink-0 mt-0.5" />
+                                                {trStr("Arrastra bloques dentro de este contenedor en el lienzo.", language)}
+                                            </p>
+                                        )}
+                                        {visibleParts[s.key].map(([key, field]) => (
                                             <VersoFieldControl
                                                 key={`${blockId ?? "root"}:${key}`}
-                                                field={field}
+                                                // Opciones y etiquetas anidadas en el idioma del editor
+                                                // (los valores no se tocan); sin label, nunca la clave cruda.
+                                                field={localized[key] ?? field}
                                                 name={key}
-                                                label={field.label ? trStr(field.label, language) : undefined}
+                                                label={field.label ? trStr(field.label, language) : humanizeFieldKey(key, language)}
                                                 value={values[key]}
                                                 onChange={(v) => onFieldChange(key, v)}
                                                 renderExternalPicker={renderExternalPicker}

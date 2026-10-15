@@ -10,6 +10,8 @@
  */
 import React from "react";
 import MSym from "@/components/editor/MSym";
+import { useOptionalI18n } from "@/contexts/I18nContext";
+import { trStr } from "@/lib/editorI18n";
 import type { EditorHandle } from "@/lib/verso/store";
 import type { BlockRegistry } from "@/lib/verso/registry";
 import type { BlockRect } from "./GeometryStore";
@@ -19,6 +21,7 @@ import {
     editSelectedInline,
     moveSelected,
     removeSelected,
+    selectParent,
 } from "./actionBarCommands";
 
 const BAR_BTN_CLS =
@@ -31,65 +34,89 @@ export interface ActionBarProps {
     rect: BlockRect;
 }
 
+/**
+ * Escala visual del lienzo, leída de la propia capa overlay (hermana del iframe dentro del
+ * contenedor transformado): ancho pintado / ancho CSS — la misma derivación que toFramePoint en
+ * dnd/driverCore.ts. 1 fuera de un lienzo escalado.
+ */
+function useCanvasScale(ref: React.RefObject<HTMLDivElement | null>): { scale: number; hostWidth: number; barWidth: number } {
+    const [m, setM] = React.useState({ scale: 1, hostWidth: 0, barWidth: 0 });
+    React.useLayoutEffect(() => {
+        const bar = ref.current;
+        const host = bar?.parentElement;
+        if (!bar || !host) return;
+        const measure = () => {
+            const css = host.offsetWidth;
+            const scale = css > 0 ? host.getBoundingClientRect().width / css || 1 : 1;
+            const next = { scale, hostWidth: css, barWidth: bar.offsetWidth };
+            setM((prev) =>
+                Math.abs(prev.scale - next.scale) < 1e-3 && prev.hostWidth === next.hostWidth && prev.barWidth === next.barWidth
+                    ? prev
+                    : next,
+            );
+        };
+        measure();
+        const ro = new ResizeObserver(measure);
+        ro.observe(host);
+        ro.observe(bar);
+        return () => ro.disconnect();
+    }, [ref]);
+    return m;
+}
+
 export default function ActionBar({ handle, registry, nodeId, rect }: ActionBarProps) {
+    const barRef = React.useRef<HTMLDivElement | null>(null);
+    const { scale, hostWidth, barWidth } = useCanvasScale(barRef);
+    // Opcional: la barra también vive en el Verso Lab y en el editor de chrome; fuera del provider, ES.
+    const language = useOptionalI18n()?.language ?? "es";
     const model = actionBarModel(handle.getDoc(), registry, nodeId);
     if (!model) return null;
+    // El overlay vive DENTRO del lienzo escalado (escritorio a 1280 px en un área de ~600 → ×0,45):
+    // sin compensar, la barra se encogía con él hasta botones de 12 px. Se contra-escala (1/s) para
+    // pintarse a tamaño real; las distancias en coordenadas del lienzo se dividen por s.
+    const inv = 1 / scale;
+    const tr = (s: string) => trStr(s, language);
+    // Botón con su atajo en el tooltip (title) y el nombre de la acción, sin atajo, para el lector.
+    const btn = (icon: string, size: number, name: string, tip: string, onClick: () => void, disabled = false) => (
+        <button
+            type="button"
+            className={BAR_BTN_CLS}
+            aria-label={tr(name)}
+            title={tr(tip)}
+            disabled={disabled}
+            onClick={onClick}
+        >
+            <MSym name={icon} size={size} />
+        </button>
+    );
     // Encima del bloque; si no cabe (borde superior del canvas), dentro del bloque.
     const BAR_H = 34;
-    const top = rect.y >= BAR_H + 2 ? rect.y - BAR_H - 2 : rect.y + 2;
+    const top = rect.y >= (BAR_H + 2) * inv ? rect.y - (BAR_H + 2) * inv : rect.y + 2 * inv;
+    // Sin salirse por la derecha del lienzo (la capa recorta): ancho pintado = barWidth en px reales.
+    const maxLeft = hostWidth > 0 ? Math.max(0, hostWidth - barWidth * inv) : Infinity;
+    const left = Math.min(Math.max(0, rect.x), maxLeft);
     return (
         <div
+            ref={barRef}
             data-wjs-actionbar=""
             role="toolbar"
-            aria-label={`Acciones del bloque ${model.label}`}
+            aria-label={`${trStr("Acciones del bloque", language)}: ${trStr(model.label, language)}`}
             className="pointer-events-auto absolute flex items-center gap-0.5 rounded-lg bg-[var(--ed-primary-solid,var(--ed-primary,#2563eb))] px-1.5 py-1 shadow-lg ring-1 ring-white/15"
-            style={{ left: Math.max(0, rect.x), top: Math.max(0, top) }}
+            style={{
+                left,
+                top: Math.max(0, top),
+                ...(scale !== 1 ? { transform: `scale(${inv})`, transformOrigin: "0 0" } : {}),
+            }}
         >
-            <span className="max-w-32 truncate px-1 text-[11px] font-medium text-white">{model.label}</span>
-            <button
-                type="button"
-                className={BAR_BTN_CLS}
-                aria-label="Subir bloque"
-                disabled={!model.canMoveUp}
-                onClick={() => moveSelected(handle, nodeId, -1)}
-            >
-                <MSym name="arrow_upward" size={16} />
-            </button>
-            <button
-                type="button"
-                className={BAR_BTN_CLS}
-                aria-label="Bajar bloque"
-                disabled={!model.canMoveDown}
-                onClick={() => moveSelected(handle, nodeId, 1)}
-            >
-                <MSym name="arrow_downward" size={16} />
-            </button>
-            <button
-                type="button"
-                className={BAR_BTN_CLS}
-                aria-label="Duplicar bloque"
-                onClick={() => duplicateSelected(handle, nodeId)}
-            >
-                <MSym name="content_copy" size={15} />
-            </button>
-            {model.canEditInline && (
-                <button
-                    type="button"
-                    className={BAR_BTN_CLS}
-                    aria-label="Editar contenido del bloque"
-                    onClick={() => editSelectedInline(handle, registry, nodeId)}
-                >
-                    <MSym name="edit" size={16} />
-                </button>
-            )}
-            <button
-                type="button"
-                className={BAR_BTN_CLS}
-                aria-label="Eliminar bloque"
-                onClick={() => removeSelected(handle, nodeId)}
-            >
-                <MSym name="delete" size={16} />
-            </button>
+            {model.parentId &&
+                btn("expand_less", 18, "Seleccionar contenedor", "Seleccionar contenedor (Esc)", () => selectParent(handle, nodeId))}
+            <span className="max-w-32 truncate px-1 text-[11px] font-medium text-white">{tr(model.label)}</span>
+            {btn("arrow_upward", 16, "Subir bloque", "Subir bloque (Ctrl+Shift+↑)", () => moveSelected(handle, nodeId, -1), !model.canMoveUp)}
+            {btn("arrow_downward", 16, "Bajar bloque", "Bajar bloque (Ctrl+Shift+↓)", () => moveSelected(handle, nodeId, 1), !model.canMoveDown)}
+            {btn("content_copy", 15, "Duplicar bloque", "Duplicar bloque (Ctrl+D)", () => duplicateSelected(handle, nodeId))}
+            {model.canEditInline &&
+                btn("edit", 16, "Editar texto", "Editar texto (doble clic)", () => editSelectedInline(handle, registry, nodeId))}
+            {btn("delete", 16, "Eliminar bloque", "Eliminar bloque (Supr)", () => removeSelected(handle, nodeId))}
         </div>
     );
 }

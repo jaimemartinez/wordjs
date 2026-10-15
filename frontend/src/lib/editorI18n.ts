@@ -418,6 +418,54 @@ const CHROME_STRINGS: Tri[] = [
     { es: "Marcar como resuelto", en: "Mark as resolved", pt: "Marcar como resolvido" },
     { es: "Escribe un comentario…", en: "Write a comment…", pt: "Escreva um comentário…" },
     { es: "Añadir comentario", en: "Add comment", pt: "Adicionar comentário" },
+    // Fallback labels for block fields that declare none (humanizeFieldKey) — keyed by prop name.
+    { es: "Tema", en: "Theme", pt: "Tema" },
+    { es: "Icono", en: "Icon", pt: "Ícone" },
+    { es: "Color", en: "Color", pt: "Cor" },
+    { es: "Fondo", en: "Background", pt: "Fundo" },
+    { es: "Tamaño", en: "Size", pt: "Tamanho" },
+    { es: "Variante", en: "Variant", pt: "Variante" },
+    { es: "Texto alternativo", en: "Alt text", pt: "Texto alternativo" },
+    { es: "Autor", en: "Author", pt: "Autor" },
+    { es: "Cargo", en: "Role", pt: "Cargo" },
+    { es: "Precio", en: "Price", pt: "Preço" },
+    { es: "Nombre", en: "Name", pt: "Nome" },
+    { es: "Cita", en: "Quote", pt: "Citação" },
+    { es: "Destino del enlace", en: "Link target", pt: "Destino do link" },
+    // Selection breadcrumb, action bar and keyboard shortcuts.
+    { es: "Ruta de la selección", en: "Selection path", pt: "Caminho da seleção" },
+    { es: "Seleccionar contenedor", en: "Select parent", pt: "Selecionar contêiner" },
+    { es: "Editar texto", en: "Edit text", pt: "Editar texto" },
+    { es: "Seleccionar contenedor (Esc)", en: "Select parent (Esc)", pt: "Selecionar contêiner (Esc)" },
+    { es: "Subir bloque (Ctrl+Shift+↑)", en: "Move block up (Ctrl+Shift+↑)", pt: "Mover bloco para cima (Ctrl+Shift+↑)" },
+    { es: "Bajar bloque (Ctrl+Shift+↓)", en: "Move block down (Ctrl+Shift+↓)", pt: "Mover bloco para baixo (Ctrl+Shift+↓)" },
+    { es: "Duplicar bloque (Ctrl+D)", en: "Duplicate block (Ctrl+D)", pt: "Duplicar bloco (Ctrl+D)" },
+    { es: "Editar texto (doble clic)", en: "Edit text (double-click)", pt: "Editar texto (clique duplo)" },
+    { es: "Eliminar bloque (Supr)", en: "Delete block (Del)", pt: "Excluir bloco (Del)" },
+    { es: "Acciones del bloque", en: "Block actions", pt: "Ações do bloco" },
+    { es: "Deshacer", en: "Undo", pt: "Desfazer" },
+    { es: "Rehacer", en: "Redo", pt: "Refazer" },
+    { es: "Supr", en: "Del", pt: "Del" },
+    { es: "Atajos de teclado", en: "Keyboard shortcuts", pt: "Atalhos de teclado" },
+    { es: "Atajos de teclado (?)", en: "Keyboard shortcuts (?)", pt: "Atalhos de teclado (?)" },
+    { es: "General", en: "General", pt: "Geral" },
+    { es: "Bloque seleccionado", en: "Selected block", pt: "Bloco selecionado" },
+    { es: "Guardar o publicar", en: "Save or publish", pt: "Salvar ou publicar" },
+    { es: "Buscar bloques y acciones", en: "Search blocks and actions", pt: "Buscar blocos e ações" },
+    { es: "Mostrar esta ayuda", en: "Show this help", pt: "Mostrar esta ajuda" },
+    { es: "Copiar / pegar bloque", en: "Copy / paste block", pt: "Copiar / colar bloco" },
+    { es: "Mover con las flechas (modo mover)", en: "Move with the arrow keys (move mode)", pt: "Mover com as setas (modo mover)" },
+    { es: "Seleccionar el contenedor; otra vez, deseleccionar", en: "Select the parent; again, deselect", pt: "Selecionar o contêiner; de novo, desmarcar" },
+    { es: "Editar el texto del bloque", en: "Edit the block's text", pt: "Editar o texto do bloco" },
+    { es: "Doble clic", en: "Double-click", pt: "Clique duplo" },
+    { es: "Buscar bloques o acciones…", en: "Search blocks or actions…", pt: "Buscar blocos ou ações…" },
+    { es: "Usa ↑↓ para navegar · ↵ para ejecutar", en: "Use ↑↓ to navigate · ↵ to run", pt: "Use ↑↓ para navegar · ↵ para executar" },
+    { es: "Contraer", en: "Collapse", pt: "Recolher" },
+    { es: "Expandir", en: "Expand", pt: "Expandir" },
+    { es: "Tienes cambios sin guardar. ¿Salir del editor y descartarlos?", en: "You have unsaved changes. Leave the editor and discard them?", pt: "Você tem alterações não salvas. Sair do editor e descartá-las?" },
+    { es: "Salir sin guardar", en: "Leave without saving", pt: "Sair sem salvar" },
+    { es: "Arrastra bloques dentro de este contenedor en el lienzo.", en: "Drag blocks into this container on the canvas.", pt: "Arraste blocos para dentro deste contêiner na tela." },
+    { es: "Estado de publicación", en: "Publication status", pt: "Status de publicação" },
 ];
 
 const TRIPLES: Tri[] = [...BLOCKS_CATEGORIES, ...FIELD_STRINGS, ...CHROME_STRINGS];
@@ -456,6 +504,57 @@ function walk(node: any, lang: Language): any {
         return out;
     }
     return node;
+}
+
+/** Copy of ONE field definition with its label/placeholder/option labels translated (same rules as walk). */
+export function localizeField<T>(field: T, lang: Language): T {
+    return walk(field, lang);
+}
+
+// Spanish source label for the prop names blocks most often leave unlabelled. trStr then renders it
+// in the UI language; a key not listed here is split on camelCase/_/- and capitalised instead, so the
+// inspector never shows a raw `titleSize` or `description`.
+const FIELD_KEY_LABELS: Record<string, string> = {
+    title: "Título",
+    subtitle: "Subtítulo",
+    description: "Descripción",
+    text: "Texto",
+    content: "Contenido",
+    label: "Etiqueta",
+    theme: "Tema",
+    icon: "Icono",
+    color: "Color",
+    bg: "Fondo",
+    background: "Fondo",
+    size: "Tamaño",
+    variant: "Variante",
+    align: "Alineación",
+    alignment: "Alineación",
+    href: "Enlace",
+    link: "Enlace",
+    url: "URL",
+    src: "Imagen",
+    image: "Imagen",
+    alt: "Texto alternativo",
+    items: "Elementos",
+    author: "Autor",
+    role: "Cargo",
+    price: "Precio",
+    name: "Nombre",
+    quote: "Cita",
+    target: "Destino del enlace",
+};
+
+/** Readable label for a field that declares none — never the raw prop key. */
+export function humanizeFieldKey(key: string, lang: Language): string {
+    const known = FIELD_KEY_LABELS[key];
+    if (known) return trStr(known, lang);
+    const words = key
+        .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+        .replace(/[_-]+/g, " ")
+        .trim()
+        .toLowerCase();
+    return words ? words.charAt(0).toUpperCase() + words.slice(1) : key;
 }
 
 /** Return a copy of a block config with all editor-chrome strings translated to `lang`. */

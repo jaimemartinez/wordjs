@@ -35,6 +35,7 @@ vi.mock("../../render/context", () => ({
 }));
 
 import PropertiesPanel from "../PropertiesPanel";
+import { humanizeFieldKey } from "@/lib/editorI18n";
 import { withSharedVersoFields } from "@/lib/verso/sharedFields";
 import type { BlockRegistry, VersoField } from "@/lib/verso/registry";
 
@@ -129,5 +130,62 @@ describe("PropertiesPanel — rediseño de acordeón", () => {
     it("durante un drag, el panel se bloquea con su aviso", () => {
         const html = panelFor({ ...blockState, dragPreview: { some: "preview" } });
         expect(html).toContain("Panel bloqueado");
+    });
+});
+
+describe("PropertiesPanel — ruta, contenedores y etiquetas", () => {
+    const COLS_DEF = {
+        label: "Columnas",
+        fields: {
+            "col-0": { type: "slot" },
+            "col-1": { type: "slot" },
+            gap: { type: "text" },
+        },
+        defaultProps: {},
+        render: () => null,
+    };
+    const CARD_DEF = { label: "Tarjeta", fields: { title: { type: "text" } }, defaultProps: {}, render: () => null };
+    const reg = {
+        get: (type: string) => (type === "Columns" ? COLS_DEF : type === "Card" ? CARD_DEF : undefined),
+    } as unknown as BlockRegistry;
+    const nested = (selected: string) => ({
+        selection: { nodeId: selected },
+        doc: {
+            nodes: {
+                c1: { id: "c1", type: "Columns", parentId: "verso:root", props: { id: "c1" }, slots: { "col-0": ["k1"], "col-1": [] } },
+                k1: { id: "k1", type: "Card", parentId: "c1", props: { id: "k1", title: "Hola" }, slots: {} },
+            },
+            root: { props: {} },
+        },
+        dragPreview: null,
+    });
+    const render = (state: unknown) =>
+        renderToStaticMarkup(
+            <PropertiesPanel handle={{ __state: state, transact: () => true } as never} registry={reg} rootFields={{}} onClose={() => {}} />,
+        );
+
+    it("la ruta enseña Página › contenedores › bloque, con el bloque actual marcado", () => {
+        const html = render(nested("k1"));
+        expect(html).toContain("data-verso-breadcrumb");
+        const crumb = html.slice(html.indexOf("data-verso-breadcrumb"));
+        expect(crumb.indexOf("Página")).toBeLessThan(crumb.indexOf("Columnas"));
+        expect(crumb.indexOf("Columnas")).toBeLessThan(crumb.indexOf("Tarjeta"));
+        expect(crumb).toMatch(/aria-current="true"[^>]*>Tarjeta</);
+    });
+
+    it("un contenedor: sin un aviso por slot, una sola pista; los demás campos siguen", () => {
+        const html = render(nested("c1"));
+        expect(html).not.toContain('data-field="col-0"');
+        expect(html).not.toContain('data-field="col-1"');
+        expect(html).toContain('data-field="gap"');
+        expect(html.match(/Arrastra bloques dentro de este contenedor/g)).toHaveLength(1);
+    });
+
+    it("humanizeFieldKey: etiqueta legible y traducida, nunca la clave cruda", () => {
+        expect(humanizeFieldKey("title", "es")).toBe("Título");
+        expect(humanizeFieldKey("title", "en")).toBe("Title");
+        expect(humanizeFieldKey("theme", "pt")).toBe("Tema");
+        expect(humanizeFieldKey("titleSize", "es")).toBe("Title size");
+        expect(humanizeFieldKey("button_text", "es")).toBe("Button text");
     });
 });

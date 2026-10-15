@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { createEditor } from "@/lib/verso/store";
 import { createBlockRegistry, makeSlotResolver, type BlockDefinition } from "@/lib/verso/registry";
-import { outlineRows } from "../outlineModel";
+import { ancestorChain, outlineRows, visibleOutlineRows } from "../outlineModel";
 
 const defs: BlockDefinition[] = [
     {
@@ -77,5 +77,33 @@ describe("outlineRows", () => {
         registry.register(defs);
         const handle = createEditor({ initialData: { content: [], root: {} }, isSlot: makeSlotResolver(registry) });
         expect(outlineRows(handle.getDoc(), registry)).toEqual([]);
+    });
+});
+
+describe("plegado del outline y ruta de la selección", () => {
+    it("childCount cuenta los hijos directos de todos los slots", () => {
+        const { registry, handle } = makeHandle();
+        const byId = Object.fromEntries(outlineRows(handle.getDoc(), registry).map((r) => [r.id, r.childCount]));
+        expect(byId).toEqual({ s1: 2, h1: 0, m1: 0, h2: 0 });
+    });
+
+    it("visibleOutlineRows omite los descendientes de un nodo plegado, no a sus hermanos", () => {
+        const { registry, handle } = makeHandle();
+        const rows = outlineRows(handle.getDoc(), registry);
+        expect(visibleOutlineRows(rows, new Set()).map((r) => r.id)).toEqual(["s1", "h1", "m1", "h2"]);
+        expect(visibleOutlineRows(rows, new Set(["s1"])).map((r) => r.id)).toEqual(["s1", "h2"]);
+        // Plegar una hoja no hace nada.
+        expect(visibleOutlineRows(rows, new Set(["h1"])).map((r) => r.id)).toEqual(["s1", "h1", "m1", "h2"]);
+    });
+
+    it("ancestorChain va de la raíz al nodo, con labels del registry", () => {
+        const { registry, handle } = makeHandle();
+        const doc = handle.getDoc();
+        expect(ancestorChain(doc, registry, "m1")).toEqual([
+            { id: "s1", label: "Sección" },
+            { id: "m1", label: "MysteryBlock" },
+        ]);
+        expect(ancestorChain(doc, registry, "h2")).toEqual([{ id: "h2", label: "Encabezado" }]);
+        expect(ancestorChain(doc, registry, "nope")).toEqual([]);
     });
 });

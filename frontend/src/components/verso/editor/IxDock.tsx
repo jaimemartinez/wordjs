@@ -51,6 +51,7 @@ import type { IxPropKey } from "@/lib/verso/interactions";
 import { dockFieldEntries } from "./panelTabs";
 
 const selectState = (s: VersoEditorState) => s;
+const MOTION_DOCK_KEY = "verso_motion_dock";
 
 export interface IxDockProps {
     handle: EditorHandle;
@@ -68,12 +69,31 @@ export default function IxDock({ handle, registry }: IxDockProps) {
 
     // Plegado LOCAL del dock: no roba lienzo cuando todavía no hay una selección. La selección
     // puede llegar DESPUÉS del montaje (la ruta nueva arranca vacía), así que debe sincronizar el
-    // estado: un bloque nuevo abre Movimiento; deseleccionar vuelve a plegarlo. El gesto manual se
-    // conserva mientras no cambie la selección.
+    // estado: un bloque nuevo abre Movimiento; deseleccionar vuelve a plegarlo.
+    // Quien lo PLIEGA con un bloque seleccionado lo quiere plegado: esa preferencia se recuerda
+    // (localStorage `verso_motion_dock`) y las selecciones siguientes ya no lo reabren — 280 px de
+    // lienzo en cada clic, para editar textos que no tienen nada que ver con el movimiento, era
+    // el peaje de no recordarlo. Desplegarlo a mano vuelve al comportamiento por defecto.
     const [open, setOpen] = useState(() => Boolean(node));
     useEffect(() => {
-        setOpen(Boolean(selectedId));
+        let keepClosed = false;
+        try {
+            keepClosed = localStorage.getItem(MOTION_DOCK_KEY) === "closed";
+        } catch {
+            /* almacenamiento bloqueado: comportamiento por defecto */
+        }
+        setOpen(Boolean(selectedId) && !keepClosed);
     }, [selectedId]);
+    const toggleOpen = () => {
+        const next = !open;
+        setOpen(next);
+        if (!selectedId) return; // plegar el estado vacío no dice nada de la preferencia
+        try {
+            localStorage.setItem(MOTION_DOCK_KEY, next ? "open" : "closed");
+        } catch {
+            /* almacenamiento bloqueado: la preferencia dura lo que la sesión */
+        }
+    };
 
     return (
         <section
@@ -102,7 +122,7 @@ export default function IxDock({ handle, registry }: IxDockProps) {
                         // terminó; límpialo antes de mostrar los controles, nunca un panel falso
                         // de “Suelta el bloque”.
                         if (state.dragPreview) handle.setDragPreview(null);
-                        setOpen((o) => !o);
+                        toggleOpen();
                     }}
                     aria-expanded={open}
                     aria-controls="verso-motion-dock-body"

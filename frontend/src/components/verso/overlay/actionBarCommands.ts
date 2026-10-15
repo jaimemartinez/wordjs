@@ -22,6 +22,8 @@ export interface ActionBarModel {
     canMoveDown: boolean;
     /** true si el registry declara edición inline para este type. */
     canEditInline: boolean;
+    /** Contenedor del bloque, o null si vive en la raíz (no hay "padre" que seleccionar). */
+    parentId: string | null;
 }
 
 /** Hermanos del nodo en su slot actual (rootChildren para los de primer nivel). */
@@ -48,7 +50,19 @@ export function actionBarModel(
         canMoveUp: index > 0,
         canMoveDown: index !== -1 && index < siblings.length - 1,
         canEditInline: !!def?.inline,
+        parentId: node.parentId === ROOT_ID ? null : node.parentId,
     };
+}
+
+/**
+ * Sube la selección un nivel: al contenedor del bloque o, desde un bloque de la raíz, a nada
+ * (el inspector cae a los ajustes de página). false si el nodo no existe.
+ */
+export function selectParent(handle: EditorHandle, nodeId: string): boolean {
+    const node = handle.getDoc().nodes[nodeId];
+    if (!node) return false;
+    handle.select(node.parentId === ROOT_ID ? null : node.parentId);
+    return true;
 }
 
 /**
