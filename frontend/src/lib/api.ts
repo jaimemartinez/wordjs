@@ -1413,9 +1413,14 @@ export interface WebhookDelivery {
     createdAt: string;
     payload?: string;
 }
+/** The event catalogue grouped by the entity each event concerns (GET /webhooks/events). */
+export interface WebhookEventGroup {
+    entity: string;
+    events: string[];
+}
 export const webhooksApi = {
     list: () => apiGet<{ webhooks: Webhook[] }>("/webhooks"),
-    events: () => apiGet<{ events: string[] }>("/webhooks/events"),
+    events: () => apiGet<{ events: string[]; groups?: WebhookEventGroup[]; optIn?: string[] }>("/webhooks/events"),
     create: (data: { name?: string; url: string; events?: string[]; active?: boolean }) =>
         apiPost<Webhook & { secret: string; message: string }>("/webhooks", data),
     update: (id: number, data: { name?: string; url?: string; events?: string[]; active?: boolean }) =>
@@ -1426,6 +1431,9 @@ export const webhooksApi = {
     deliveries: (id: number) => apiGet<{ deliveries: WebhookDelivery[] }>(`/webhooks/${id}/deliveries`),
     redeliver: (deliveryId: number) =>
         apiPost<{ requeued: boolean; id: number }>(`/webhooks/deliveries/${deliveryId}/redeliver`, {}),
+    /** Send the signed `ping` test delivery to one endpoint; it is attempted at once. */
+    ping: (id: number) =>
+        apiPost<{ delivered: boolean; delivery: WebhookDelivery | null }>(`/webhooks/${id}/ping`, {}),
 };
 
 // ── Form submissions (Webflow "Forms + submissions" parity) ────────────────────────────────────────

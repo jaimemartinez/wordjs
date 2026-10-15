@@ -36,9 +36,8 @@ const AUDIT_ACTIONS = Object.freeze({
     LOGIN_SUCCESS: 'auth.login.success',
     LOGIN_FAILURE: 'auth.login.failure',
     LOGOUT: 'auth.logout',
-    // Reserved for the self-service password change, whose handler is routes/users.ts (PUT /users/me
-    // and PUT /users/:id). The name is fixed HERE so that call site adopts this one instead of
-    // inventing 'user.password_change' next to the 'user.*' names that surround it.
+    // A new password stored through a profile write (routes/users.ts PUT /users/me and PUT /users/:id).
+    // Kept under `auth.` rather than as a `user.update` field, so "who changed whose password" is one query.
     PASSWORD_CHANGE: 'auth.password.change',
     PASSWORD_RESET: 'auth.password.reset',
     MFA_ENABLE: 'auth.mfa.enable',
@@ -49,6 +48,8 @@ const AUDIT_ACTIONS = Object.freeze({
 
     // ── Users (already recorded before this batch — names preserved verbatim) ────────────────────────
     USER_CREATE: 'user.create',
+    // A profile write: {fields} names what the request wrote (never values, never the password).
+    USER_UPDATE: 'user.update',
     USER_DELETE: 'user.delete',
     USER_ROLE_CHANGE: 'user.role_change',
     USER_SESSIONS_REVOKED: 'user.sessions_revoked',
@@ -63,6 +64,24 @@ const AUDIT_ACTIONS = Object.freeze({
     POST_TRASH: 'post.trash',
     POST_RESTORE: 'post.restore',
     POST_DELETE: 'post.delete',
+    // Comment moderation, one row per write naming the most specific transition ({from, to} statuses).
+    COMMENT_UPDATE: 'comment.update',
+    COMMENT_APPROVE: 'comment.approve',
+    COMMENT_SPAM: 'comment.spam',
+    COMMENT_TRASH: 'comment.trash',
+    COMMENT_DELETE: 'comment.delete',
+    // The media library (routes/media.ts).
+    MEDIA_UPLOAD: 'media.upload',
+    MEDIA_UPDATE: 'media.update',
+    MEDIA_DELETE: 'media.delete',
+    // Categories and tags ({taxonomy}).
+    TERM_CREATE: 'term.create',
+    TERM_UPDATE: 'term.update',
+    TERM_DELETE: 'term.delete',
+    // Navigation menus. Item and location changes are `menu.update` with a {change} naming which.
+    MENU_CREATE: 'menu.create',
+    MENU_UPDATE: 'menu.update',
+    MENU_DELETE: 'menu.delete',
 
     // ── Backups (a restore is the most destructive operation the product offers) ─────────────────────
     BACKUP_CREATE: 'backup.create',
@@ -72,6 +91,9 @@ const AUDIT_ACTIONS = Object.freeze({
     // ── Extensions ──────────────────────────────────────────────────────────────────────────────────
     MARKETPLACE_INSTALL: 'marketplace.install',
     MARKETPLACE_UPDATE: 'marketplace.update',
+    // A plugin installed from an uploaded zip (the marketplace path records `marketplace.install`).
+    PLUGIN_INSTALL: 'plugin.install',
+    PLUGIN_UNINSTALL: 'plugin.uninstall',
     PLUGIN_ACTIVATE: 'plugin.activate',
     PLUGIN_DEACTIVATE: 'plugin.deactivate',
     // An ORPHANED slug reclaimed: `active_plugins` named it while its files were not loadable, so the
@@ -181,6 +203,32 @@ function sanitizeDetail(detail: any): Record<string, any> {
 }
 
 /**
+ * IN-PROCESS OBSERVERS of recorded events — host-only, never the plugin hook bus. An audit row marks
+ * the moment a mutation committed, with its actor and target, so it is the one seam that already covers
+ * every lifecycle moment the product records; core/webhooks derives outgoing events from it instead of
+ * scattering emit calls next to every recordAudit. An observer receives the SANITIZED detail (the same
+ * secret-free, bounded object that is stored), runs after the mutation's transaction commits, and can
+ * never affect the mutation: a throwing or rejecting observer is logged and ignored.
+ */
+type AuditEvent = { actorId: number | null; action: string; targetType: string; targetId: string; detail: Record<string, any> };
+type AuditObserver = (event: AuditEvent) => any;
+const _observers: AuditObserver[] = [];
+
+/** Register an observer; returns a function that removes it. */
+function onAuditRecorded(fn: AuditObserver): () => void {
+    _observers.push(fn);
+    return () => { const i = _observers.indexOf(fn); if (i !== -1) _observers.splice(i, 1); };
+}
+
+async function notifyObservers(event: AuditEvent): Promise<void> {
+    for (const fn of _observers.slice()) {
+        try { await fn(event); } catch (e: any) {
+            console.warn(`[audit] observer failed for '${event.action}' (non-fatal): ${e && e.message}`);
+        }
+    }
+}
+
+/**
  * Record one audit event. Never throws.
  * @param actorId  acting user's id, or null/undefined for a system action.
  * @param action   one of AUDIT_ACTIONS, e.g. 'user.role_change', 'auth.login.failure'.
@@ -189,24 +237,36 @@ function sanitizeDetail(detail: any): Record<string, any> {
  * @param detail   optional small object; sanitized before storage.
  */
 async function recordAudit(actorId: any, action: AuditAction, targetType: string, targetId: any, detail?: any): Promise<void> {
+    let event: AuditEvent | null = null;
     try {
         const actor = (actorId === null || actorId === undefined || actorId === '') ? null : Number(actorId);
         const clean = sanitizeDetail(detail);
+        event = {
+            actorId: Number.isFinite(actor) ? actor : null,
+            action: String(action || ''),
+            targetType: String(targetType || ''),
+            targetId: targetId === null || targetId === undefined ? '' : String(targetId),
+            detail: clean
+        };
         await dbAsync.run(
             `INSERT INTO audit_log (actor_id, action, target_type, target_id, detail) VALUES (?, ?, ?, ?, ?)`,
-            [
-                Number.isFinite(actor) ? actor : null,
-                String(action || ''),
-                String(targetType || ''),
-                targetId === null || targetId === undefined ? '' : String(targetId),
-                JSON.stringify(clean)
-            ]
+            [event.actorId, event.action, event.targetType, event.targetId, JSON.stringify(clean)]
         );
     } catch (e: any) {
         // Log-and-continue: the mutation already happened (or is about to answer) — auditing must not
         // change its outcome.
         console.warn(`[audit] failed to record '${action}': ${e && e.message}`);
     }
+    // The mutation happened whether or not its row could be written, so observers hear about it either
+    // way. Inside a pinned transaction they run only after COMMIT (the same rule as hooks.doAction): an
+    // outgoing webhook must never announce a write that is then rolled back.
+    if (!event || !_observers.length) return;
+    const ev = event;
+    try {
+        const database = require('../config/database');
+        if (database.afterCommit(() => notifyObservers(ev))) return;
+    } catch { /* database still bootstrapping — notify immediately */ }
+    await notifyObservers(ev);
 }
 
 /**
@@ -397,7 +457,7 @@ async function runAuditRetention(): Promise<number> {
 }
 
 module.exports = {
-    recordAudit, listAudit, sanitizeDetail,
+    recordAudit, listAudit, sanitizeDetail, onAuditRecorded,
     AUDIT_ACTIONS,
     pruneAuditLog, runAuditRetention, auditRetentionState, auditRetentionDays,
     AUDIT_PRUNE_HOOK, DEFAULT_AUDIT_RETENTION_DAYS,

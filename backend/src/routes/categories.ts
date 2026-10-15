@@ -8,6 +8,7 @@ import type { Request, Response } from 'express';
 const express = require('express');
 const router = express.Router();
 const Term = require('../models/Term');
+const { recordAudit } = require('../core/audit');
 const { authenticate, optionalAuth } = require('../middleware/auth');
 const { can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
@@ -184,6 +185,7 @@ router.post('/', authenticate, can('manage_categories'), asyncHandler(async (req
             parent: parent ? parseInt(parent, 10) : 0
         });
 
+        await recordAudit(req.user.id, 'term.create', 'term', term.termId, { taxonomy: TAXONOMY });
         res.status(201).json(term.toJSON());
     } catch (error) {
         if (error.message.includes('already exists')) {
@@ -252,6 +254,7 @@ router.put('/:id', authenticate, can('manage_categories'), asyncHandler(async (r
         parent: parent !== undefined ? parseInt(parent, 10) : undefined
     });
 
+    await recordAudit(req.user.id, 'term.update', 'term', termId, { taxonomy: TAXONOMY });
     res.json(updated.toJSON());
 }));
 
@@ -288,6 +291,7 @@ router.delete('/:id', authenticate, can('manage_categories'), asyncHandler(async
     }
 
     await Term.delete(termId, TAXONOMY);
+    await recordAudit(req.user.id, 'term.delete', 'term', termId, { taxonomy: TAXONOMY, name: term.name, slug: term.slug });
     res.json({ deleted: true, previous: term.toJSON() });
 }));
 

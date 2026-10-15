@@ -13,17 +13,32 @@ const { dbAsync } = require('../config/database');
 const crypto = require('crypto');
 const egress = require('../core/egress-guard');
 
-// The canonical catalog of events a webhook can subscribe to. Kept here (the model) so both the routes
-// (validation/UI) and the dispatcher agree on one source of truth. '*' subscribes to everything; a
-// trailing '.*' (e.g. 'post.*') subscribes to a family.
-const WEBHOOK_EVENTS = [
-    'post.created',
-    'post.published',
-    'post.updated',
-    'post.deleted',
-    'comment.created',
-    'comment.deleted'
-];
+// The canonical catalog of events a webhook can subscribe to, grouped by the entity they concern. Kept
+// here (the model) so the routes (validation/UI), the dispatcher and the docs agree on one source of
+// truth. '*' subscribes to everything; a trailing '.*' (e.g. 'post.*') subscribes to a family. The
+// payload of every event is documented in documentation/webhooks.md.
+const WEBHOOK_EVENT_GROUPS: ReadonlyArray<{ entity: string; events: readonly string[] }> = Object.freeze([
+    { entity: 'post', events: ['post.created', 'post.published', 'post.updated', 'post.scheduled', 'post.unpublished', 'post.trashed', 'post.restored', 'post.deleted'] },
+    { entity: 'comment', events: ['comment.created', 'comment.updated', 'comment.approved', 'comment.spam', 'comment.trashed', 'comment.deleted'] },
+    { entity: 'user', events: ['user.created', 'user.updated', 'user.deleted', 'user.login'] },
+    { entity: 'media', events: ['media.uploaded', 'media.updated', 'media.deleted'] },
+    { entity: 'term', events: ['term.created', 'term.updated', 'term.deleted'] },
+    { entity: 'menu', events: ['menu.updated'] },
+    { entity: 'plugin', events: ['plugin.installed', 'plugin.activated', 'plugin.deactivated', 'plugin.uninstalled'] },
+    { entity: 'theme', events: ['theme.activated'] },
+    { entity: 'settings', events: ['settings.updated'] }
+].map((g) => Object.freeze({ entity: g.entity, events: Object.freeze(g.events.slice()) })));
+
+const WEBHOOK_EVENTS: string[] = WEBHOOK_EVENT_GROUPS.flatMap((g) => g.events.slice());
+
+// OPT-IN events: delivered only to an endpoint that names them EXACTLY. A wildcard ('*', 'user.*') does
+// not include them — a sign-in is high-volume and personal, so an endpoint registered for "everything"
+// before this event existed must not silently start receiving every login.
+const OPT_IN_EVENTS: readonly string[] = Object.freeze(['user.login']);
+
+// The test delivery an administrator sends from the admin (POST /webhooks/:id/ping). Never fanned out
+// and not subscribable: it goes to exactly the one endpoint it was sent to.
+const PING_EVENT = 'ping';
 
 const SECRET_PREFIX = 'whsec_';
 
@@ -82,11 +97,15 @@ function normalizeEvents(input: any): string[] {
     return Array.from(out);
 }
 
-/** Does a webhook subscribed to `events` want `event`? Supports '*' and family wildcards ('post.*'). */
+/**
+ * Does a webhook subscribed to `events` want `event`? Supports '*' and family wildcards ('post.*'). An
+ * OPT-IN event (user.login) matches only its exact name, never a wildcard.
+ */
 function eventMatches(events: string[], event: string): boolean {
+    if (events.includes(event)) return true;
+    if (OPT_IN_EVENTS.includes(event)) return false;
     for (const e of events) {
         if (e === '*') return true;
-        if (e === event) return true;
         if (e.endsWith('.*') && event.startsWith(e.slice(0, -1))) return true;
     }
     return false;
@@ -113,6 +132,9 @@ const AUTO_DISABLE_AFTER = 20;
 
 class Webhook {
     static EVENTS = WEBHOOK_EVENTS;
+    static EVENT_GROUPS = WEBHOOK_EVENT_GROUPS;
+    static OPT_IN_EVENTS = OPT_IN_EVENTS;
+    static PING_EVENT = PING_EVENT;
     static eventMatches = eventMatches;
     static normalizeEvents = normalizeEvents;
     static validateUrl = validateUrl;

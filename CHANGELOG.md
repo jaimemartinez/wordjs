@@ -4,6 +4,39 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [Unreleased]
+
+### Added
+
+- **Webhooks cover the whole site lifecycle, not just six content events.** The catalogue grows from 6 to
+  31 events, grouped by entity: posts and pages (`post.scheduled`, `post.unpublished`, `post.trashed`,
+  `post.restored` next to the existing four), comments (`comment.updated`, `comment.approved`,
+  `comment.spam`, `comment.trashed`), users (`user.created`, `user.updated`, `user.deleted`, and
+  `user.login`, which is opt-in: no wildcard includes it), media (`media.uploaded/updated/deleted`),
+  categories and tags (`term.created/updated/deleted`), menus (`menu.updated`, naming what changed),
+  plugins (`plugin.installed/activated/deactivated/uninstalled`), themes (`theme.activated`) and settings
+  (`settings.updated`, key names only). The events come from the hooks core already fires and from a new
+  host-only observer of the audit trail (`onAuditRecorded`), so there are no emit calls scattered through
+  the routes; signing, retries, the SSRF guard and the delivery log are unchanged, and existing
+  subscriptions (`*`, `post.*`, …) keep their format and simply receive the new events in their scope.
+  Every payload is built by an allowlisted per-entity serializer, so no password hash, MFA secret, token,
+  email address, option value or private-media URL can reach a receiver. `POST /webhooks/:id/ping` sends a
+  signed test delivery to one endpoint, and the admin page gets an event picker grouped by entity (with a
+  per-entity "All") and a **Send test** button. Every event and its payload is documented in
+  `documentation/webhooks.md`.
+
+- **The audit trail records media, taxonomy, menu, comment-moderation and plugin install/uninstall
+  changes, profile saves and self-registrations.** New actions: `media.upload/update/delete`,
+  `term.create/update/delete`, `menu.create/update/delete`, `comment.approve/spam/trash/update/delete`,
+  `plugin.install` (zip upload), `plugin.uninstall`, `user.update` (field names only) and
+  `auth.password.change`; a self-registration now records `user.create`. This closes the two call sites
+  `documentation/security.md` listed as missing (the media routes and the profile password change).
+
+### Fixed
+
+- **`comment.created` webhook payloads now carry the comment's id.** The serializer read a field the
+  comment model does not have, so `data.id` was always missing.
+
 ## [2.5.0] - 2026-10-15
 
 ### Added
