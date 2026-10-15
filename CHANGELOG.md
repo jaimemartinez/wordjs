@@ -4,9 +4,21 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
-## [Unreleased]
+## [2.5.0] - 2026-10-15
 
 ### Added
+
+- **A fresh install opens on a showcase home page, and the default theme (2.1.0) can carry it.** The
+  install wizard's starter page used to be a heading, a paragraph and three cards. It is now twelve
+  sections built only from core blocks and the interaction engine: an animated hero, marquee ribbons,
+  stats, a feature grid, a pinned scroll scene, a swipeable carousel, tabs, a pricing table, the latest
+  posts, an FAQ with a working contact form, a call to action and social links. That is 26 interactions,
+  within Verso's 30-per-page budget, plus two sample posts and a menu in the header and footer. The
+  default theme adds design hooks by element-ID prefix (`gradient`, `outline`, `marquee`, and a Grid
+  holding a `carousel…` block becomes a scroll-snap carousel), all honouring `prefers-reduced-motion`. It
+  also fixes outline buttons that wore the primary gradient, lets per-block Heading colour and weight
+  apply, gives posts without an image a brand gradient, and ships a composed footer. See
+  `documentation/themes.md`.
 
 - **Plugins can ship a public portal page at `/portal/<slug>`.** A plugin declares
   `frontend.portalPage { entry, slug, title?, themeColor?, viewportFit? }` in its manifest and gets a
@@ -27,6 +39,27 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   precedence. See `documentation/plugins.md` §10.6.
 
 ### Changed
+
+- **Verso editor UX pass.** At 1280–1366 px with both panels open, the "Desktop" viewport rendered the
+  site's mobile layout; the chosen device now renders at its real width, scaled. The block action bar
+  keeps its real size inside the scaled canvas and gains *select parent*. The inspector shows a
+  selection path (Page › Columns › Heading) and readable, translated labels for unlabelled fields.
+  Backspace deletes a block, Esc selects the parent, and `?` opens a shortcuts dialog. The structure
+  tree collapses and follows the canvas selection. Leaving with unsaved changes now asks first instead
+  of discarding them. Publishing a draft works from 1280 px laptops. The motion dock can save a block's
+  motion as a preset, groups presets by trigger and switches to tabs below 760 px. On touch screens a
+  swipe scrolls instead of dragging the block; a block drags only after a still long-press.
+
+- **The Verso inspector is translated into English and Portuguese.** About 245 field labels, hints and
+  option labels of the core blocks and the page settings had only a Spanish text, so English and
+  Portuguese editors saw a Spanish inspector. A test now fails when a core block field has no entry in
+  the editor dictionary.
+
+- **Dependencies.** multer 2.4 (the 1.x line carries denial-of-service advisories), dotenv 18 in the
+  backend and the gateway, c8 12, qrcode-generator 2, and the weekly minor and patch groups for the
+  backend and the frontend. Dependabot no longer proposes majors that need Node 22 or newer
+  (better-sqlite3 13, dnsbl 6, vitest 5) while the supported floor is Node 20.9, nor TypeScript 7, which
+  `@typescript-eslint` 8 cannot install alongside. Their minor and patch updates still arrive.
 
 - **The backend CI runs its unit suite in four parallel shards.** The suite (~310 files, run one file at
   a time on purpose) took ~16 of the Backend job's ~18 minutes, and the coverage ratchet ran it again
@@ -50,6 +83,17 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   key.
 
 ### Fixed
+
+- **The confirm and alert dialogs speak the admin's language.** The host dialog that core pages and
+  plugin admin pages open through `useModal()` had English buttons and titles next to a Spanish message,
+  and the unsaved-changes guard was entirely English. Labels now follow the language the admin chose
+  (es/en/pt), with or without an `I18nProvider` above the dialog, and `confirm()` / `alert()` accept
+  optional custom labels.
+
+- **Public-site interface strings follow the site language.** The motion pause control and the Form
+  block's empty option, sending state and default submit, success and error texts were hard-coded in
+  Spanish, so English sites showed them to visitors. They now follow `WPLANG` (es/en/pt, English when
+  unset). Text the author wrote in a form is never changed, and Spanish sites render as before.
 
 - **YouTube Videos (1.0.2) shows the configured channel, not one it links to.** Without a Data API key,
   an `@handle` was resolved by reading the channel's public page and taking the first `"channelId"` on
