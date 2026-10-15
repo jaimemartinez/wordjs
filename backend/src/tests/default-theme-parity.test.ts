@@ -42,6 +42,12 @@ describe('default theme: shipped stylesheet vs the copy the restore path writes'
         assert.deepStrictEqual(missing, [], `restoring the default theme would drop ${missing.length} token(s): ${missing.slice(0, 8).join(', ')}`);
     });
 
+    it('writes the same composed footer the theme ships', () => {
+        const { DEFAULT_THEME_FOOTER } = require('../core/default-theme-chrome');
+        const shipped = JSON.parse(fs.readFileSync(path.join(REPO_BACKEND, 'themes', 'default', 'chrome', 'footer.json'), 'utf8'));
+        assert.deepStrictEqual(DEFAULT_THEME_FOOTER, shipped, 'core/default-theme-chrome.ts drifted from themes/default/chrome/footer.json');
+    });
+
     it('is byte-identical to the shipped stylesheet', () => {
         assert.strictEqual(
             normalize(embeddedStylesheet()),

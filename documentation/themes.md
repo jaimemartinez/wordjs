@@ -104,7 +104,7 @@ other three are declarative themes that exercise the whole contract — seeds, t
 
 | Theme               | Aesthetic          | Key Features                                |
 | ------------------- | ------------------ | ------------------------------------------- |
-| **default** (WordJS)| Clean, Modern      | Indigo `#4f46e5` on near-white, Space Grotesk over Inter, 12px radius. Hand-authored; the only theme with `functions.js`. |
+| **default** (WordJS)| Clean, Modern      | Indigo `#4f46e5` on near-white, Space Grotesk over Inter, 12px radius. Hand-authored; the only theme with `functions.js`. Ships a composed footer and the [design hooks](#default-theme-design-hooks) the install wizard's showcase home page uses. |
 | **circuito**        | Dark terminal      | Cyan `#22d3ee` + violet on near-black `#070b14`, JetBrains Mono headings, `--wjs-shadow: none` with cyan hover glows, `color-scheme: dark` |
 | **gaceta**          | Editorial broadsheet | Deep red `#b91c1c` on cream `#faf6ef`, Georgia headlines, no shadows, 2px corners. `archetype: "editorial"` |
 | **vergel**          | Organic portfolio  | Sage `#4d7c5f` + blush on pale green-white, Space Grotesk headings, `1.25rem` radius and pill buttons. `archetype: "organic"` |
@@ -117,9 +117,30 @@ other three are declarative themes that exercise the whole contract — seeds, t
 > [`theming.md`](./theming.md). The three declarative themes compile their whole `:root` from
 > `theme.json` — `circuito` **109** tokens, `gaceta` **97**, `vergel` **49** (of which the
 > `theme.json` `tokens` map itself declares 94, 84 and 34; the rest are derived from the four seeds
-> or resolved out of a `styles` key). The hand-authored bundled `default` declares **75**, including
+> or resolved out of a `styles` key). The hand-authored bundled `default` declares **76**, including
 > the `--wjs-color-on-*` contrast set. The **default** theme's `:root` is entirely `--wjs-*` (no
 > older bare `--primary`/`--text` aliases remain). Copy any theme as a starting point.
+
+### Default theme design hooks
+
+The default theme lets a page switch on a few effects from the editor with no code: give a Heading,
+Text or Image an **ID / Anchor** that *starts with* one of these words. Under any other theme the same
+blocks render plainly — nothing breaks, the effect is simply absent.
+
+| ID starts with     | Effect |
+| ------------------ | ------ |
+| `gradient`         | Text filled with the indigo → violet → pink gradient, slowly drifting. |
+| `outline`          | Hollow letters with an indigo stroke. |
+| `marquee`          | The text scrolls sideways forever; `marquee-reverse` runs the other way. Put the text in **twice** (two identical halves) so the loop is seamless, and make each half wider than about 1.5 screens. |
+| `carousel`         | On a block inside the **first card of a Grid**: the Grid becomes a swipeable carousel — 4 cards per page on desktop, 2 on tablets, 1 (with the next peeking) on phones, with native CSS arrows where the browser supports `::scroll-button`. |
+
+Every motion respects `prefers-reduced-motion`. The theme also makes pages built with the visual editor
+full-bleed (each Section picks its own *Max width*) and gives every card in a Grid row the same height.
+
+The **install wizard's starter content** (`backend/src/core/starter-showcase.ts`) is a working tour of
+all of this plus the interaction engine: word reveals, a hero that recedes on scroll, marquee ribbons,
+a feature grid that flips in, a pinned scroll scene, the carousel, a pointer-tilt card, tabs, a
+pricing table, the latest posts, an FAQ and a real form.
 
 ## The WordJS UI Framework
 
