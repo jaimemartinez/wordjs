@@ -396,7 +396,7 @@ class Media {
             const store = ms ? ms.resolveMediaStorage() : null;
             const remoteRels = ms ? targets.map((t: string) => ms.relativeTo(root, t)).filter((r: any) => r && ms.isOffloadablePath(r)) : [];
             if (ms && store.driver !== 's3') {
-                console.warn(`Media.delete: attachment ${id} is in the media bucket, but no s3 media storage is configured now - its objects are left in the bucket.`);
+                console.warn(`Media.delete: attachment ${Number(id)} is in the media bucket, but no s3 media storage is configured now - its objects are left in the bucket.`);
             }
             database.afterCommit(() => {
                 for (const target of targets) {
@@ -500,7 +500,7 @@ class Media {
                 await Post.updateMeta(id, mediaStorageMetaKey(), 's3');
                 if (!store.keepLocalCopy) for (const f of present) { try { fs.unlinkSync(f); } catch { /* best effort */ } }
             } catch (e: any) {
-                console.warn(`Media.setVisibility: attachment ${id} stays on local disk - the media bucket refused it: ${e?.message || e}`);
+                console.warn(`Media.setVisibility: attachment ${Number(id)} stays on local disk - the media bucket refused it: ${require('../core/log-safe').logSafeError(e)}`);
             }
         }
         return await Media.findById(id);

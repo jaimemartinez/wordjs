@@ -318,17 +318,44 @@ describe('offloaded uploads over the real routes and a fake S3 bucket', () => {
         assert.strictEqual((await request(app).get('/api/v1/media-storage')).status, 401);
     });
 
-    test('the connection test writes, reads, fetches publicly and deletes a probe', async () => {
+    test('the connection test writes, reads and deletes a probe; the server never fetches the public URL', async () => {
         const { testConnection } = require('../routes/media-storage');
         const keys = new Set(objects.keys());
+        const anonGets = () => log.filter((l) => l.method === 'GET').length;
+        const getsBefore = anonGets();
         const r = await testConnection(mediaStorage.resolveMediaStorage());
         assert.strictEqual(r.ok, true, JSON.stringify(r.steps));
-        assert.deepStrictEqual(r.steps.map((s: any) => s.step), ['write', 'read', 'public', 'delete']);
+        assert.deepStrictEqual(r.steps.map((s: any) => s.step), ['write', 'read', 'delete']);
         assert.deepStrictEqual(new Set(objects.keys()), keys, 'probe removed');
+        assert.strictEqual(anonGets(), getsBefore, 'no GET of the public URL from the server');
         const bad = mediaStorage.resolveMediaStorage({ ...process.env, WORDJS_MEDIA_S3_SECRET_ACCESS_KEY: 'x', WORDJS_MEDIA_S3_ACCESS_KEY_ID: 'WRONGKEY' });
         const failed = await testConnection(bad);
         assert.strictEqual(failed.ok, false);
         assert.strictEqual(failed.steps[0].ok, false);
+    });
+
+    test('POST /media-storage/test keeps the probe for the browser, then deletes exactly that probe', async () => {
+        const first = await asAdmin('post', '/media-storage/test').send({});
+        assert.strictEqual(first.status, 200, JSON.stringify(first.body));
+        assert.deepStrictEqual(first.body.steps.map((s: any) => s.step), ['write', 'read']);
+        assert.match(first.body.probe, /^\.wordjs-connection-test-[0-9a-f]{12}\.png$/);
+        assert.strictEqual(first.body.publicUrl, `${BASE}/${first.body.probe}`);
+        // What the admin's browser does: load it anonymously from the public URL — a real PNG.
+        const pub = await fetch(first.body.publicUrl);
+        assert.strictEqual(pub.status, 200);
+        const meta = await sharp(Buffer.from(await pub.arrayBuffer())).metadata();
+        assert.strictEqual(meta.format, 'png');
+        const second = await asAdmin('post', '/media-storage/test').send({ probe: first.body.probe });
+        assert.strictEqual(second.status, 200);
+        assert.deepStrictEqual(second.body.steps.map((s: any) => s.step), ['delete']);
+        assert.ok(!objects.has(`uploads/${first.body.probe}`), 'probe deleted');
+        // The cleanup call deletes probes and nothing else.
+        const rel = offloaded.mediaDetails.file;
+        for (const probe of [rel, '../uploads/x.png', '.wordjs-connection-test-zz.png', `.wordjs-connection-test-${'a'.repeat(12)}.png/../x`]) {
+            const r = await asAdmin('post', '/media-storage/test').send({ probe });
+            assert.strictEqual(r.status, 400, probe);
+        }
+        assert.ok(objects.has(`uploads/${rel}`), 'a media object can never be deleted through the probe cleanup');
     });
 
     test('making an offloaded item private pulls it back and removes its objects', async () => {

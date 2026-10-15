@@ -18,8 +18,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   directly. The page CSP gains exactly the configured media origin in `img-src` and `media-src`, at
   response time. `npm run media -- offload | restore | status | test` (and buttons on the screen) move an
   existing library to the bucket and back, idempotent and resumable, one run at a time across the
-  cluster. The screen has a "Test connection" button that writes, reads, publicly fetches and deletes a
-  probe object; credentials are write-only (only a four-character hint is ever returned). With offload
+  cluster. The screen has a "Test connection" button: the server writes and reads a probe object, the
+  admin's browser loads it from the public URL, and the server deletes it; credentials are write-only (only a four-character hint is ever returned). With offload
   on, backend nodes no longer need a shared uploads directory for media. Private media stays on local
   disk. See `documentation/media-storage.md`.
 

@@ -989,7 +989,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
             await mediaStorage.pushFiles(mediaStorage.getMediaStorage(store), storedRoot, files);
             offloaded = true;
         } catch (err: any) {
-            console.error('Media upload: the media bucket refused the upload:', err?.message || err);
+            console.error(`Media upload: the media bucket refused the upload: ${require('../core/log-safe').logSafeError(err)}`);
             for (const f of files) { try { fs.unlinkSync(f); } catch { /* best effort */ } }
             return res.status(502).json({
                 code: 'rest_media_storage_unavailable',

@@ -6,7 +6,8 @@
  *
  *   status                         the effective configuration (credentials masked), the library state
  *                                  and the last migration's progress
- *   test                           write, read, publicly fetch and delete a probe object
+ *   test                           write, read and delete a probe object (the public-URL check runs
+ *                                  from a browser: Settings → Media storage → Test connection)
  *   offload [--delete-local] [--restart] [--limit N]
  *                                  copy every public attachment's files to the bucket; with
  *                                  --delete-local, remove each local copy once its object verified
@@ -29,7 +30,7 @@ const USAGE = [
     'Usage: npm run media -- <command> [options]',
     '',
     '  status                                   configuration, state and progress',
-    '  test                                     probe the bucket and the public URL',
+    '  test                                     write, read and delete a probe object in the bucket',
     '  offload [--delete-local] [--restart] [--limit N]',
     '  restore [--restart] [--limit N]',
 ].join('\n');
@@ -71,6 +72,7 @@ const mod = (rel) => useDist ? require(path.join(BACKEND, 'dist', rel + '.js')) 
             const { testConnection } = mod('routes/media-storage');
             const r = await testConnection(store);
             for (const s of r.steps) console.log(`${s.ok ? 'ok  ' : 'FAIL'} ${s.step.padEnd(7)} ${s.detail}`);
+            console.log(`Public URL: ${store.publicBase} — check it from a browser (Settings → Media storage → Test connection).`);
             process.exit(r.ok ? 0 : 1);
         }
         const { init } = mod('config/database');

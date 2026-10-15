@@ -45,6 +45,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { URL } = require('url');
 const s3offload = require('./s3-offload');
+const { logSafe, logSafeError } = require('./log-safe');
 
 export type MediaStorageSource = 'file' | 'env' | 'default';
 
@@ -413,7 +414,7 @@ async function pullFiles(adapter: MediaStorageAdapter, root: string, files: stri
 /** Remove every relative path from the store, never throwing (each failure is logged). */
 async function removeFiles(adapter: MediaStorageAdapter, rels: string[]): Promise<void> {
     for (const rel of rels) {
-        try { await adapter.remove(rel); } catch (e: any) { console.warn(`media storage: could not remove ${rel}: ${e?.message || e}`); }
+        try { await adapter.remove(rel); } catch (e: any) { console.warn(`media storage: could not remove ${logSafe(rel)}: ${logSafeError(e)}`); }
     }
 }
 

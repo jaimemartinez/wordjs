@@ -64,6 +64,48 @@ export interface MediaStorageForm {
 export interface MediaStorageTestResult {
     ok: boolean;
     steps: Array<{ step: "write" | "read" | "public" | "delete"; ok: boolean; detail: string }>;
+    /** First call only: the probe object the browser must load, then ask to delete. */
+    probe?: string;
+    publicUrl?: string;
+}
+
+/**
+ * Can THIS browser load `url` as an image? The public check of the connection test runs here, in the
+ * viewer's network, rather than on the server: it is what every visitor's browser will do, and the
+ * server never has to fetch an operator-typed URL. Resolves false on error or after `timeoutMs`.
+ */
+export function browserLoadsImage(url: string, timeoutMs = 15000): Promise<boolean> {
+    return new Promise((resolve) => {
+        const img = new Image();
+        const timer = setTimeout(() => { img.src = ""; resolve(false); }, timeoutMs);
+        img.onload = () => { clearTimeout(timer); resolve(img.naturalWidth > 0); };
+        img.onerror = () => { clearTimeout(timer); resolve(false); };
+        img.src = `${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`;
+    });
+}
+
+/**
+ * The whole connection test: the server writes and reads a probe, this browser loads it from the
+ * public URL, and the server deletes it. Steps come back in that order.
+ */
+export async function runConnectionTest(form: MediaStorageForm): Promise<MediaStorageTestResult> {
+    const body = writeBody({ ...form, driver: "s3" });
+    const first = await apiPost<MediaStorageTestResult>("/media-storage/test", body);
+    if (!first.probe || !first.publicUrl) return first;
+    const loaded = await browserLoadsImage(first.publicUrl);
+    const steps = [...first.steps, {
+        step: "public" as const,
+        ok: loaded,
+        detail: loaded ? first.publicUrl : `${first.publicUrl} (not loadable from this browser)`,
+    }];
+    let cleanup: MediaStorageTestResult;
+    try {
+        cleanup = await apiPost<MediaStorageTestResult>("/media-storage/test", { ...body, probe: first.probe });
+    } catch (e: any) {
+        cleanup = { ok: false, steps: [{ step: "delete", ok: false, detail: e?.message || String(e) }] };
+    }
+    steps.push(...cleanup.steps);
+    return { ok: steps.every((s) => s.ok), steps };
 }
 
 /** Form state from a view. The access key id and secret start EMPTY: they are write-only. */
@@ -110,7 +152,7 @@ export function progressPercent(p: MediaStorageProgress | null): number {
 export const mediaStorageApi = {
     get: () => apiGet<MediaStorageView>("/media-storage"),
     save: (form: MediaStorageForm) => apiPut<MediaStorageView>("/media-storage", writeBody(form)),
-    test: (form: MediaStorageForm) => apiPost<MediaStorageTestResult>("/media-storage/test", writeBody({ ...form, driver: "s3" })),
+    test: (form: MediaStorageForm) => runConnectionTest(form),
     migrate: (direction: "offload" | "restore", opts: { deleteLocal?: boolean; restart?: boolean } = {}) =>
         apiPost<MediaStorageView>("/media-storage/migrate", { direction, ...opts }),
 };

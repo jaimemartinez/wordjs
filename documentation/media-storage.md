@@ -85,9 +85,12 @@ The public URL of an object is `<publicUrl>/<prefix>/<rel>`. Objects must be **p
 configuration (a bucket without keys, an unusable public URL, a prefix with `..`) counts as **not
 configured**: the effective driver stays `local` and the screen says which fields are missing.
 
-**Test connection** writes a small probe object, reads it back, fetches it from the public URL without
-credentials, and deletes it, reporting each step — using the unsaved values on screen merged over the
-stored ones.
+**Test connection** has the server write a small PNG probe object and read it back (using the unsaved
+values on screen merged over the stored ones); then **your browser** loads the probe from the public URL
+— from the viewer's network, exactly as visitors will fetch media — and the server deletes it, reporting
+each step. The server never fetches the operator-typed public URL itself. (A plain-`http://` CDN that is
+not saved yet is not in the admin page's CSP, so save first and test again.) `npm run media -- test`
+does the server half: write, read, delete.
 
 ## Moving an existing library
 
@@ -97,7 +100,7 @@ CLI:
 
 ```bash
 npm run media -- status
-npm run media -- test
+npm run media -- test                     # write, read and delete a probe object
 npm run media -- offload                  # copy every public attachment's files to the bucket
 npm run media -- offload --delete-local   # …and delete each local copy once its object verified
 npm run media -- restore                  # copy them back to local disk (nothing is deleted from the bucket)
