@@ -17,6 +17,7 @@
 
 const { dbAsync } = require('../config/database');
 const { updateOption } = require('./options');
+const log = require('./module-logger').moduleLogger('core/starter-content');
 
 async function upsertContent(opts: {
     title: string; slug: string; type: 'post' | 'page'; html: string;
@@ -123,7 +124,7 @@ async function seedStarterContent(authorId: number, siteName: string): Promise<{
             html: HOME_HTML, puckData: showcaseHomeData(safeName)
         });
         if (out.homeId) await updateOption('homepage_id', String(out.homeId));
-    } catch (e: any) { console.warn('[starter-content] home page failed:', e && e.message); }
+    } catch (e: any) { log.warn({ err: e }, '[starter-content] home page failed'); }
 
     try {
         out.postId = await upsertContent({
@@ -131,17 +132,17 @@ async function seedStarterContent(authorId: number, siteName: string): Promise<{
             html: WELCOME_POST_HTML,
             excerpt: 'Your install works — here is a two-minute tour of what to do next.'
         });
-    } catch (e: any) { console.warn('[starter-content] welcome post failed:', e && e.message); }
+    } catch (e: any) { log.warn({ err: e }, '[starter-content] welcome post failed'); }
 
     for (const sample of SAMPLE_POSTS) {
         try {
             await upsertContent({ title: sample.title, slug: sample.slug, type: 'post', authorId, html: sample.html, excerpt: sample.excerpt });
-        } catch (e: any) { console.warn(`[starter-content] sample post ${sample.slug} failed:`, e && e.message); }
+        } catch (e: any) { log.warn({ slug: sample.slug, err: e }, `[starter-content] sample post ${sample.slug} failed`); }
     }
 
     try {
         out.aboutId = await upsertContent({ title: 'About', slug: 'about', type: 'page', authorId, html: ABOUT_HTML });
-    } catch (e: any) { console.warn('[starter-content] about page failed:', e && e.message); }
+    } catch (e: any) { log.warn({ err: e }, '[starter-content] about page failed'); }
 
     try {
         const { Menu, MenuItem } = require('../models/Menu');
@@ -166,7 +167,7 @@ async function seedStarterContent(authorId: number, siteName: string): Promise<{
             await Menu.setLocation('footer', menuId);
             out.menu = true;
         }
-    } catch (e: any) { console.warn('[starter-content] menu failed:', e && e.message); }
+    } catch (e: any) { log.warn({ err: e }, '[starter-content] menu failed'); }
 
     return out;
 }

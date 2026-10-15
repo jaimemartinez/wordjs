@@ -16,6 +16,7 @@
 
 const Redis = require('ioredis');
 const config = require('../config/app');
+const log = require('./module-logger').moduleLogger('core/cache');
 
 /**
  * Cache state is derived from committed database state. During a pinned transaction every read must
@@ -90,8 +91,7 @@ function setEnabled(val: any) {
  */
 function busRetryStrategy(times: number): number {
     if (times === 4) {
-        console.warn(
-            '[Cache] Redis unreachable — the cache falls back to the DB, but the CLUSTER BUS ' +
+        log.warn('[Cache] Redis unreachable — the cache falls back to the DB, but the CLUSTER BUS ' +
             '(coherence, notifications, realtime fan-out) is DEGRADED until it reconnects. ' +
             'Retrying in the background.');
     }
@@ -148,12 +148,12 @@ if (config.redis && config.redis.enabled !== false) {
             const now = Date.now();
             if (now - lastRedisErrorLog > 30_000) {
                 lastRedisErrorLog = now;
-                console.warn('[Cache] Redis Error:', err.message);
+                log.warn({ err }, '[Cache] Redis Error');
             }
             redisAvailable = false;
         });
     } catch (e) {
-        console.error('[Cache] Failed to initialize Redis:', e.message);
+        log.error({ err: e }, '[Cache] Failed to initialize Redis');
     }
 }
 
@@ -269,7 +269,7 @@ const busReadyHandlers = new Set<() => void>();
 let lastSubscribe: Promise<unknown> = Promise.resolve();
 
 function runBusReadyHandler(h: () => void): void {
-    try { h(); } catch (e: any) { console.warn('[Cache] bus-ready handler error:', e && e.message); }
+    try { h(); } catch (e: any) { log.warn({ err: e }, '[Cache] bus-ready handler error'); }
 }
 
 function redisConfigured(): boolean { return !!(config.redis && config.redis.enabled !== false); }
@@ -311,7 +311,7 @@ async function publish(channel: string, payload: any): Promise<boolean> {
         // the cache: the 30 s in-process cap, or the shared entry's TTL when this node's del() could not
         // reach Redis either — documentation/multi-node.md, "Known limitations").
         if (redisConfigured()) {
-            console.warn(`[Cache] publish('${channel}') skipped: Redis unavailable — cross-node coherence DEGRADED until reconnect (other nodes catch up only when their caches expire or re-sync).`);
+            log.warn({ channel }, `[Cache] publish('${channel}') skipped: Redis unavailable — cross-node coherence DEGRADED until reconnect (other nodes catch up only when their caches expire or re-sync).`);
         }
         return false;
     }
@@ -319,7 +319,7 @@ async function publish(channel: string, payload: any): Promise<boolean> {
         await redis.publish(channel, typeof payload === 'string' ? payload : JSON.stringify(payload));
         return true;
     } catch (e: any) {
-        console.warn(`[Cache] publish('${channel}') failed: ${e && e.message} — cross-node coherence DEGRADED for this event.`);
+        log.warn({ channel, err: e }, `[Cache] publish('${channel}') failed: ${e && e.message} — cross-node coherence DEGRADED for this event.`);
         return false;
     }
 }
@@ -339,16 +339,16 @@ function subscribe(channel: string, handler: (message: string) => void): void {
         });
         subscriber.on('message', (ch: string, msg: string) => {
             const hs = subHandlers.get(ch);
-            if (hs) for (const h of hs) { try { h(msg); } catch (e: any) { console.warn('[Cache] sub handler error:', e && e.message); } }
+            if (hs) for (const h of hs) { try { h(msg); } catch (e: any) { log.warn({ err: e }, '[Cache] sub handler error'); } }
         });
-        subscriber.on('error', (e: any) => console.warn('[Cache] Subscriber error:', e.message));
+        subscriber.on('error', (e: any) => log.warn({ err: e }, '[Cache] Subscriber error'));
         // ioredis emits 'ready' at the top of its ready handler and writes the automatic re-SUBSCRIBE right
         // after, synchronously; deferring a turn lets that go out before a handler starts its re-read.
         subscriber.on('ready', () => setImmediate(() => {
             for (const h of busReadyHandlers) runBusReadyHandler(h);
         }));
     }
-    lastSubscribe = subscriber.subscribe(channel).catch((e: any) => console.warn('[Cache] subscribe failed:', e.message));
+    lastSubscribe = subscriber.subscribe(channel).catch((e: any) => log.warn({ err: e }, '[Cache] subscribe failed'));
 }
 
 /**

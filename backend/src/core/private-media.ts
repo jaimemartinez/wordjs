@@ -29,6 +29,7 @@ const path = require('path');
 const crypto = require('crypto');
 const config = require('../config/app');
 const { resolveWithin } = require('./safe-path');
+const log = require('./module-logger').moduleLogger('core/private-media');
 
 /** The post_status that marks an attachment as private. */
 const PRIVATE_ATTACHMENT_STATUS = 'private';
@@ -140,7 +141,7 @@ function moveAttachmentFiles(pairs: Array<[string, string]>): void {
         }
     } catch (e) {
         for (const [from, to] of moved.reverse()) {
-            try { moveFile(to, from); } catch (err: any) { console.error(`[private-media] rollback failed for ${to}: ${err?.message || err}`); }
+            try { moveFile(to, from); } catch (err: any) { log.error({ to, err }, `[private-media] rollback failed for ${to}`); }
         }
         throw e;
     }

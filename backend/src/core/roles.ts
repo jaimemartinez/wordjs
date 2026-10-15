@@ -6,6 +6,7 @@
 
 const { getOption } = require('./options');
 const config = require('../config/app');
+const log = require('./module-logger').moduleLogger('core/roles');
 
 const ROLES_OPTION_NAME = 'wordjs_user_roles';
 
@@ -96,7 +97,7 @@ async function loadRoles() {
         try {
             await withRolesWriteLock(() => writeRoles(async (current) => ({ next: current, result: undefined })));
         } catch (e: any) {
-            console.warn('Could not persist default roles:', e?.message);
+            log.warn({ err: e }, 'Could not persist default roles');
         }
     }
     _rolesCacheLoadedAt = Date.now(); // stamp freshness on every (re)load
@@ -138,7 +139,7 @@ function maybeRefreshStaleRoles() {
             // defaults) untouched — matching loadRoles()'s "never return an empty map" guarantee. We do
             // NOT re-seed/backfill the option here; the startup loadRoles() owns that.
         })
-        .catch((e: any) => console.warn('[roles] background TTL refresh failed:', e && e.message))
+        .catch((e: any) => log.warn({ err: e }, '[roles] background TTL refresh failed'))
         .finally(() => { _rolesRefreshInFlight = false; });
 }
 
@@ -586,7 +587,7 @@ function enforcePluginRoleNamespaces(installedPluginIds: string[]): Promise<stri
             }
             return { next: trimmed.length ? next : null, result: trimmed };
         });
-        if (changed.length) console.warn(`[roles] plugin roles trimmed back into their own namespace: ${changed.join(', ')}`);
+        if (changed.length) log.warn(`[roles] plugin roles trimmed back into their own namespace: ${changed.join(', ')}`);
         return changed;
     });
 }
@@ -736,7 +737,7 @@ function getAllAvailableCapabilities() {
         const pluginCaps = getAllRegisteredCapabilities();
         pluginCaps.forEach((cap: any) => caps.add(cap));
     } catch (err) {
-        console.warn('Could not load plugin capabilities:', err.message);
+        log.warn({ err }, 'Could not load plugin capabilities');
     }
 
     return Array.from(caps);
@@ -772,7 +773,7 @@ function syncRoleMap(dbRoles: Record<string, any>, configRoles: any, installedPl
 
         // If DB is missing access_admin_panel but the effective definition has it, FORCE update
         if (!dbCaps.includes('access_admin_panel') && effCaps.includes('access_admin_panel')) {
-            console.log('🔄 Syncing Subscriber roles: Adding access_admin_panel');
+            log.info('🔄 Syncing Subscriber roles: Adding access_admin_panel');
             dbRoles.subscriber.capabilities = effCaps;
             changed = true;
         }
@@ -782,7 +783,7 @@ function syncRoleMap(dbRoles: Record<string, any>, configRoles: any, installedPl
     // predates them).
     for (const [slug, role] of Object.entries(effective)) {
         if (!dbRoles[slug]) {
-            console.log(`➕ Adding missing role: ${slug}`);
+            log.info({ slug }, `➕ Adding missing role: ${slug}`);
             dbRoles[slug] = role;
             changed = true;
         }
@@ -800,7 +801,7 @@ function syncRoleMap(dbRoles: Record<string, any>, configRoles: any, installedPl
             if ('source' in role || 'plugin' in role || 'orphaned' in role || 'adminChanges' in role) {
                 const { source: _s, plugin: _p, orphaned: _o, adminChanges: _a, ...rest } = role;
                 dbRoles[slug] = rest;
-                console.warn(`[roles] core role '${slug}' carried plugin provenance — removed.`);
+                log.warn({ slug }, `[roles] core role '${slug}' carried plugin provenance — removed.`);
                 changed = true;
             }
             continue;
@@ -809,7 +810,7 @@ function syncRoleMap(dbRoles: Record<string, any>, configRoles: any, installedPl
         const clean = sanitizePluginRole(slug, role, installedPluginIds);
         if (clean !== role) {
             dbRoles[slug] = clean;
-            console.warn(`[roles] plugin role '${slug}' held capabilities outside its plugin's namespace — removed.`);
+            log.warn({ slug }, `[roles] plugin role '${slug}' held capabilities outside its plugin's namespace — removed.`);
             changed = true;
         }
     }

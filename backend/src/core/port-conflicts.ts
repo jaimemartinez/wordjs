@@ -18,6 +18,7 @@
  */
 const { execFile } = require('child_process');
 const { promisify } = require('util');
+const log = require('./module-logger').moduleLogger('core/port-conflicts');
 const execFileAsyncReal = promisify(execFile);
 
 // Known distro MTAs we are willing to disable after explicit admin confirmation. Keyed by the
@@ -213,7 +214,7 @@ async function freeClaimedPort(port: number, deps: Deps = {}): Promise<{ freed: 
         err.status = 502;
         throw err;
     }
-    console.log(`🔓 [port-conflicts] Disabled ${service} (was holding port ${port}) with admin consent — permanent (systemctl disable --now).`);
+    log.info({ port }, `🔓 [port-conflicts] Disabled ${service} (was holding port ${port}) with admin consent — permanent (systemctl disable --now).`);
 
     // The unit stops asynchronously; poll until the kernel actually releases the socket.
     const sleepMs = deps.sleepMs !== undefined ? deps.sleepMs : 500;

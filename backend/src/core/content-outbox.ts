@@ -11,6 +11,7 @@
 const { AsyncLocalStorage } = require('async_hooks');
 const { randomUUID } = require('crypto');
 const database = require('../config/database');
+const log = require('./module-logger').moduleLogger('core/content-outbox');
 const { dbAsync } = database;
 
 const EVENT_TYPES = new Set(['post.created', 'post.updated', 'post.deleted']);
@@ -234,7 +235,7 @@ async function dispatchOne(id: number): Promise<boolean> {
                  WHERE id = ? AND status = 'processing' AND claim_token = ?`,
                 [message, id, token]
             );
-            console.error(`[content-outbox] event ${row.event_id} is DEAD after ${attempts} attempts: ${message}`);
+            log.error({ attempts }, `[content-outbox] event ${row.event_id} is DEAD after ${attempts} attempts: ${message}`);
         } else {
             await dbAsync.run(
                 `UPDATE content_outbox
@@ -298,7 +299,7 @@ async function pump(): Promise<void> {
             await pruneProcessed(now);
         }
     }
-    catch (error: any) { console.warn(`[content-outbox] pump failed: ${error?.message || error}`); }
+    catch (error: any) { log.warn({ err: error }, '[content-outbox] pump failed'); }
     finally { pumping = false; }
 }
 

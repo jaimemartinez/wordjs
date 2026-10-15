@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const log = require('./module-logger').moduleLogger('core/configManager');
 
 const CONFIG_FILE = path.resolve('wordjs-config.json');
 
@@ -45,7 +46,7 @@ function getConfig() {
     const f = readConfigFile();
     if (!f.exists) return null;
     if (f.parseError) {
-        console.error('Failed to read config file: unreadable or malformed JSON');
+        log.error('Failed to read config file: unreadable or malformed JSON');
         return null;
     }
     return f.parsed;
@@ -296,11 +297,11 @@ function updateConfig(
     try {
         locked = withConfigLock(() => updateConfigLocked(mutate, opts));
     } catch (e) {
-        console.error('Failed to lock the config file:', e);
+        log.error({ err: e }, 'Failed to lock the config file');
         return { ok: false, reason: 'write-failed', error: e };
     }
     if (!locked.ok) {
-        console.error(`Refusing to write ${CONFIG_FILE}: another process kept it locked for ${LOCK_WAIT_MS / 1000} s.`);
+        log.error(`Refusing to write ${CONFIG_FILE}: another process kept it locked for ${LOCK_WAIT_MS / 1000} s.`);
         return { ok: false, reason: 'write-failed', error: new Error('the config file is locked') };
     }
     return locked.value;
@@ -312,7 +313,7 @@ function updateConfigLocked(
 ): ConfigUpdate {
     const before = readConfigFresh();
     if (before.exists && before.parseError) {
-        console.error(`Refusing to write ${CONFIG_FILE}: the file exists but cannot be read as JSON, and rewriting it from scratch would erase the install.`);
+        log.error(`Refusing to write ${CONFIG_FILE}: the file exists but cannot be read as JSON, and rewriting it from scratch would erase the install.`);
         return { ok: false, reason: 'unreadable' };
     }
     const current = before.exists ? before.parsed : {};
@@ -327,7 +328,7 @@ function updateConfigLocked(
             return { ok: false, reason: 'stale', currentRev: now.parseError ? undefined : siteAddressRev(now.parsed) };
         }
     } catch (e) {
-        console.error('Failed to write config file:', e);
+        log.error({ err: e }, 'Failed to write config file');
         return { ok: false, reason: 'write-failed', error: e };
     }
     invalidateConfigCache();
@@ -346,7 +347,7 @@ function restoreConfigText(text: string | null, opts: { expectRev: number; reloa
         const locked = withConfigLock(() => restoreConfigTextLocked(text, opts));
         return locked.ok && locked.value;
     } catch (e) {
-        console.error('Failed to lock the config file:', e);
+        log.error({ err: e }, 'Failed to lock the config file');
         return false;
     }
 }
@@ -360,7 +361,7 @@ function restoreConfigTextLocked(text: string | null, opts: { expectRev: number;
         try {
             fs.rmSync(real);
         } catch (e) {
-            console.error('Failed to remove config file:', e);
+            log.error({ err: e }, 'Failed to remove config file');
             return false;
         }
         invalidateConfigCache();
@@ -372,7 +373,7 @@ function restoreConfigTextLocked(text: string | null, opts: { expectRev: number;
     try {
         if (writeFileAtomic(CONFIG_FILE, text, now.text) === 'changed') return false;
     } catch (e) {
-        console.error('Failed to restore config file:', e);
+        log.error({ err: e }, 'Failed to restore config file');
         return false;
     }
     invalidateConfigCache();

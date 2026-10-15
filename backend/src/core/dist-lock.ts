@@ -43,6 +43,7 @@
 
 const os = require('os');
 const crypto = require('crypto');
+const log = require('./module-logger').moduleLogger('core/dist-lock');
 
 // Unique identity for THIS process across the cluster (host:pid alone collides under containers).
 const HOLDER = `${os.hostname()}:${process.pid}:${crypto.randomBytes(4).toString('hex')}`;
@@ -134,7 +135,7 @@ async function ensureLockTable(): Promise<void> {
     } catch (e: any) {
         // Concurrent CREATE TABLE IF NOT EXISTS can rarely race — harmless to ignore.
         lockTableFailedAt = Date.now();
-        console.warn('[dist-lock] ensureLockTable:', e && e.message);
+        log.warn({ err: e }, '[dist-lock] ensureLockTable');
     }
 }
 
@@ -248,7 +249,7 @@ function warnThrottled(key: string, line: string): void {
     // grow with them. Forgetting everything only costs one extra warning line per key.
     if (lastWarnAt.size > 256) lastWarnAt.clear();
     lastWarnAt.set(key, now);
-    console.warn(line);
+    log.warn(line);
 }
 
 /**
@@ -295,7 +296,7 @@ async function renew(name: string, ttlMs: number): Promise<boolean> {
         );
         return !!(res && (res.changes || 0) > 0);
     } catch (e: any) {
-        console.warn('[dist-lock] renew:', e && e.message);
+        log.warn({ err: e }, '[dist-lock] renew');
         return false;
     }
 }
@@ -310,7 +311,7 @@ async function release(name: string): Promise<void> {
     try {
         await db().run('UPDATE wordjs_locks SET locked_until = 0 WHERE lock_name = ? AND holder = ?', [name, HOLDER]);
     } catch (e: any) {
-        console.warn('[dist-lock] release:', e && e.message);
+        log.warn({ err: e }, '[dist-lock] release');
     }
 }
 
@@ -340,8 +341,7 @@ async function acquireBlocking(
     // core/plugins.ts already handle (restart / refuse the non-atomic write). Answering "granted"
     // here is what let two MySQL replicas seed the same database at the same time.
     if (mode !== 'postgres' && mode !== 'mysql') {
-        console.warn(
-            `[dist-lock] '${logSafe(name)}' NOT granted: no lock implementation for the active database ` +
+        log.warn(`[dist-lock] '${logSafe(name)}' NOT granted: no lock implementation for the active database ` +
             'driver. Multi-node deployments require postgres or mysql/mariadb.');
         return { held: false, release: async () => { } };
     }
@@ -360,8 +360,7 @@ async function acquireBlocking(
         if (r.failure) {
             fallosSeguidos++;
             if (r.structural || fallosSeguidos >= MAX_TRANSIENT_FAILURES) {
-                console.warn(
-                    `[dist-lock] '${logSafe(name)}' NOT granted after ${logSafe(Date.now() - start)}ms: ` +
+                log.warn(`[dist-lock] '${logSafe(name)}' NOT granted after ${logSafe(Date.now() - start)}ms: ` +
                     `the lock table is unusable, and waiting cannot fix it — ${logSafe(r.failure && r.failure.message)}`);
                 return { held: false, release: async () => { } };
             }
@@ -370,7 +369,7 @@ async function acquireBlocking(
         }
         await sleep(pollMs);
     }
-    console.warn(`[dist-lock] '${logSafe(name)}' acquire timed out after ${logSafe(timeoutMs)}ms.`);
+    log.warn({ name: logSafe(name), timeoutMs: logSafe(timeoutMs) }, `[dist-lock] '${logSafe(name)}' acquire timed out after ${logSafe(timeoutMs)}ms.`);
     return { held: false, release: async () => { } };
 }
 
@@ -388,8 +387,7 @@ async function runAsLeader<T>(
     const mode = lockMode();
     if (mode === 'single-host') return fn();
     if (mode !== 'postgres' && mode !== 'mysql') {
-        console.warn(
-            `[dist-lock] '${logSafe(name)}' SKIPPED: no lock implementation for the active database driver.`);
+        log.warn({ name: logSafe(name) }, `[dist-lock] '${logSafe(name)}' SKIPPED: no lock implementation for the active database driver.`);
         return undefined;
     }
     const ttlMs = opts.ttlMs ?? 90000;

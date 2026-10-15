@@ -19,6 +19,7 @@ const migration = require('./migration');
 // deleted the live one on request — so it takes the same gate: an interactive session at the main address.
 const { authenticate, accountAuthorityOnly } = require('../../middleware/auth');
 const { can } = require('../../middleware/permissions');
+const log = require('../module-logger').moduleLogger('core/db-admin/index');
 
 /**
  * Mount the DB-admin API on the given Express app. The admin menu item is a core entry in the
@@ -39,7 +40,7 @@ function register(app) {
 
     app.use('/api/v1/db-migration', router);
 
-    console.log('✅ DB Admin (core) loaded.');
+    log.info('✅ DB Admin (core) loaded.');
 }
 
 module.exports = { register };

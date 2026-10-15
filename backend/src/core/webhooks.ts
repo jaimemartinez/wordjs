@@ -27,6 +27,7 @@ const Webhook = require('../models/Webhook');
 const WebhookDelivery = require('../models/WebhookDelivery');
 const Post = require('../models/Post');
 const Comment = require('../models/Comment');
+const log = require('./module-logger').moduleLogger('core/webhooks');
 
 const nowSec = () => Math.floor(Date.now() / 1000);
 
@@ -270,7 +271,7 @@ async function onCommentDeleted(id: number): Promise<void> {
 }
 
 function warn(hook: string, e: any): void {
-    try { console.warn(`[webhooks] listener ${hook} failed (non-fatal): ${(e && e.message) || e}`); } catch { /* */ }
+    try { log.warn({ hook, err: e }, `[webhooks] listener ${hook} failed (non-fatal)`); } catch { /* */ }
 }
 
 const LISTENERS: Array<[string, (...a: any[]) => any]> = [
@@ -300,7 +301,7 @@ function stopPoller(): void {
 /** Boot entry: wire the content listeners and start the delivery poller. */
 function initWebhooks(opts: { startPoller?: boolean } = {}): void {
     if (allowPrivateTargets()) {
-        console.warn('⚠️  [webhooks] SSRF defense for PRIVATE targets is DISABLED (WORDJS_WEBHOOK_ALLOW_PRIVATE_TARGETS_UNSAFE is set in a non-production env). Webhook delivery can reach loopback/RFC1918/cloud-metadata. NEVER enable this in production.');
+        log.warn('⚠️  [webhooks] SSRF defense for PRIVATE targets is DISABLED (WORDJS_WEBHOOK_ALLOW_PRIVATE_TARGETS_UNSAFE is set in a non-production env). Webhook delivery can reach loopback/RFC1918/cloud-metadata. NEVER enable this in production.');
     }
     registerListeners();
     if (opts.startPoller !== false) startPoller();

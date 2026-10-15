@@ -12,6 +12,7 @@ const { Menu, MenuItem } = require('../models/Menu');
 const { getOption, updateOption } = require('./options');
 // The writable post statuses, which an imported status is folded onto (see canonicalImportedPostStatus).
 const { canonicalImportedPostStatus } = require('./post-capabilities');
+const log = require('./module-logger').moduleLogger('core/import-export');
 
 /**
  * Export all site content
@@ -187,7 +188,7 @@ async function exportSite(options: Record<string, any> = {}) {
                 });
             }
         } catch (e) {
-            console.warn('⚠️ Failed to export custom tables:', e.message);
+            log.warn({ err: e }, '⚠️ Failed to export custom tables');
         }
     }
 

@@ -14,6 +14,7 @@ const {
 } = require('./content-schema');
 const { getBuiltinContentSchemas } = require('./content-schemas-builtins');
 import type { ContentTypeSchemaV1 } from './content-schema';
+const log = require('./module-logger').moduleLogger('core/post-types');
 
 // Registered post types
 const postTypes = new Map();
@@ -361,7 +362,7 @@ async function initTaxonomies() {
             try {
                 registerTaxonomy(tax && tax.name, tax);
             } catch (e: any) {
-                console.warn(`Skipping invalid custom taxonomy: ${e && e.message ? e.message : e}`);
+                log.warn({ err: e }, 'Skipping invalid custom taxonomy');
             }
         });
     }
@@ -427,7 +428,7 @@ async function initPostTypes() {
             try {
                 registerContentType(schema);
             } catch (e: any) {
-                console.warn(`Skipping invalid custom content schema: ${e && e.message ? e.message : e}`);
+                log.warn({ err: e }, 'Skipping invalid custom content schema');
             }
         });
     }
@@ -440,7 +441,7 @@ async function initPostTypes() {
             try {
                 registerPostType(type.name, type);
             } catch (e: any) {
-                console.warn(`Skipping invalid legacy custom post type: ${e && e.message ? e.message : e}`);
+                log.warn({ err: e }, 'Skipping invalid legacy custom post type');
             }
         });
     }

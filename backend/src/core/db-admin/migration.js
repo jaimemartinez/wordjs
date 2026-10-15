@@ -6,6 +6,7 @@ const dbManager = require('../../config/database');
 // THE one TEXT→MySQL-type rule, shared with drivers/mysql.ts. Dependency-free on purpose (it does not
 // pull in mysql2), so requiring it here keeps migration.js loadable on an install that has no MySQL.
 const { rewriteTextForMysql } = require('../../drivers/mysql-text-rule');
+const log = require('../module-logger').moduleLogger('core/db-admin/migration');
 
 let globalStatus = { step: 'idle', progress: 0, currentTable: '', totalTables: 0, warnings: [] };
 let targetEncoding = 'UTF8';
@@ -443,27 +444,27 @@ exports.runMigration = async (req, res) => {
     }
 
     try {
-        console.log(`🚀 Migration Started: ${currentDriver} -> ${targetDriver}`);
+        log.info(`🚀 Migration Started: ${currentDriver} -> ${targetDriver}`);
         globalStatus = { step: 'initializing', progress: 0, currentTable: '', totalTables: 0, warnings: [] };
 
         // 0. Auto-Install Dependencies (Zero Config)
         if (targetDriver === 'sqlite-native') {
             try { require.resolve('better-sqlite3'); } catch (e) {
-                console.log('📦 Installing Native Driver (better-sqlite3)...');
+                log.info('📦 Installing Native Driver (better-sqlite3)...');
                 const { execSync } = require('child_process');
                 execSync('npm install better-sqlite3 --save', { cwd: path.resolve(__dirname, '../../../../'), stdio: 'inherit' });
             }
         }
         if (targetDriver === 'postgres') {
             try { require.resolve('pg'); } catch (e) {
-                console.log('📦 Installing Postgres Driver (pg)...');
+                log.info('📦 Installing Postgres Driver (pg)...');
                 const { execSync } = require('child_process');
                 execSync('npm install pg --save', { cwd: path.resolve(__dirname, '../../../../'), stdio: 'inherit' });
             }
         }
         if (targetDriver === 'mysql') {
             try { require.resolve('mysql2'); } catch (e) {
-                console.log('📦 Installing MySQL Driver (mysql2)...');
+                log.info('📦 Installing MySQL Driver (mysql2)...');
                 const { execSync } = require('child_process');
                 execSync('npm install mysql2 --save', { cwd: path.resolve(__dirname, '../../../../'), stdio: 'inherit' });
             }
@@ -569,7 +570,7 @@ exports.runMigration = async (req, res) => {
                 if (fs.existsSync(tempTargetFile + '-wal')) await forceDelete(tempTargetFile + '-wal');
                 if (fs.existsSync(tempTargetFile + '-shm')) await forceDelete(tempTargetFile + '-shm');
             } catch (e) {
-                console.error('❌ Failed to clean up temp files:', e.message);
+                log.error({ err: e }, '❌ Failed to clean up temp files');
                 throw new Error(`Temp file locked: ${e.message}`);
             }
         }
@@ -592,7 +593,7 @@ exports.runMigration = async (req, res) => {
                 try {
                     const encRes = await targetDriverModule.all("SELECT pg_encoding_to_char(encoding) as enc FROM pg_database WHERE datname = current_database()");
                     targetEncoding = encRes[0]?.enc || 'UTF8';
-                    console.log(`   Target Encoding: ${targetEncoding}`);
+                    log.info({ targetEncoding }, `   Target Encoding: ${targetEncoding}`);
                 } catch (encErr) {
                     // Can't verify the encoding → can't guarantee it's UTF8 → fail closed rather than
                     // risk silently mangling non-Latin1 content into '?' on a WIN1252 target.
@@ -627,7 +628,7 @@ exports.runMigration = async (req, res) => {
         //    driver's dialect (module-global driverName) and TRANSLATED at the target driver's boundary
         //    — the MySQL driver rewrites sqlite/postgres DDL to MySQL, so this works for any source.
         await dbManager.initializeSchema(isAsyncTarget ? targetDriverModule : targetWrapper, isAsyncTarget);
-        console.log('   Schema initialized on target.');
+        log.info('   Schema initialized on target.');
 
         // 5. Copy ALL user data — complete (every table, dynamically enumerated, NOT a hardcoded list),
         //    atomic (one pinned connection via the driver's transaction()), and FAIL-CLOSED (a row-count
@@ -639,7 +640,7 @@ exports.runMigration = async (req, res) => {
         //  BEFORE the target connected — see the pre-read block — so an aliased re-migration can't read
         //  the empty target here.)
         globalStatus.totalTables = allTables.length;
-        console.log(`   Copying ${allTables.length} table(s); ${nonCore.length} non-core to recreate: ${nonCore.join(', ') || 'none'}.`);
+        log.info(`   Copying ${allTables.length} table(s); ${nonCore.length} non-core to recreate: ${nonCore.join(', ') || 'none'}.`);
 
         const totalRows = await copyAllTables({
             tables: allTables,
@@ -665,9 +666,9 @@ exports.runMigration = async (req, res) => {
         });
 
         // Close Source DB now that we are done reading.
-        try { if (dbManager.closeDatabase) await dbManager.closeDatabase(); } catch (e) { console.warn('Could not close source DB:', e.message); }
+        try { if (dbManager.closeDatabase) await dbManager.closeDatabase(); } catch (e) { log.warn({ err: e }, 'Could not close source DB'); }
 
-        console.log(`✅ Data copied: ${totalRows} row(s) across ${allTables.length} table(s).`);
+        log.info(`✅ Data copied: ${totalRows} row(s) across ${allTables.length} table(s).`);
 
         // 6. Persist & Close Target
         if (targetDriverModule.save) targetDriverModule.save();
@@ -677,7 +678,7 @@ exports.runMigration = async (req, res) => {
         let finalPath = targetFile;
 
         if (tempTargetFile) {
-            console.log('   Stats: Swapping temporary database to final location...');
+            log.info('   Stats: Swapping temporary database to final location...');
             try {
                 // Inline retry delete
                 const retryDelete = async (f) => {
@@ -695,7 +696,7 @@ exports.runMigration = async (req, res) => {
 
                 fs.renameSync(tempTargetFile, targetFile);
             } catch (e) {
-                console.warn(`⚠️ Swap Failed (File Locked). Using temporary file '${path.basename(tempTargetFile)}' as the new active database.`);
+                log.warn(`⚠️ Swap Failed (File Locked). Using temporary file '${path.basename(tempTargetFile)}' as the new active database.`);
                 // If we can't write to the standard filename, we stick with the temp file
                 // This ensures the user doesn't lose data, even if the filename is ugly.
                 finalPath = tempTargetFile;
@@ -739,7 +740,7 @@ exports.runMigration = async (req, res) => {
         });
 
         setTimeout(() => {
-            console.log('🔄 Restarting server...');
+            log.info('🔄 Restarting server...');
 
             // Trigger a restart so the new DB config is picked up. In dev (`node --watch`) this means
             // touching the ACTUAL entry node is running — process.argv[1] is src/index.ts under ts-node
@@ -756,20 +757,20 @@ exports.runMigration = async (req, res) => {
                 try {
                     const t = new Date();
                     fs.utimesSync(f, t, t);
-                    console.log(`🔄 Touched ${f} to trigger watch restart.`);
+                    log.info({ f }, `🔄 Touched ${f} to trigger watch restart.`);
                     touched = true;
                     break;
                 } catch (err) { /* not this one — try the next candidate */ }
             }
             if (!touched) {
-                console.warn('🔄 Could not touch an entry file to trigger a watch restart; relying on process exit (the supervisor restarts in production).');
+                log.warn('🔄 Could not touch an entry file to trigger a watch restart; relying on process exit (the supervisor restarts in production).');
             }
 
             process.exit(0);
         }, 1000);
 
     } catch (e) {
-        console.error('Migration Failed:', e);
+        log.error({ err: e }, 'Migration Failed');
 
         // Attempt to cleanup driver connection to release locks
         if (targetDriverModule) {

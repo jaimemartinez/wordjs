@@ -4,8 +4,9 @@
  * The option name can come from a request: routes/widgets.ts reads `widget_<id>` with the id taken
  * from the URL or the body. getOption used to put the name inside the console FORMAT string and pass
  * the error text as a second argument, so a name carrying '%s' swallowed that argument, and a name
- * carrying a line break wrote a second, made-up log line. The format string is now a constant and the
- * name and the error go in as arguments, each reduced to one line by core/log-safe.
+ * carrying a line break wrote a second, made-up log line. The line is now a structured record: a
+ * constant message, the name in its own `option` field (reduced to one line by core/log-safe) and the
+ * error under `err` — what is asserted is the record the real logger emitted, read through its sink.
  */
 
 const { test } = require('node:test');
@@ -21,36 +22,34 @@ config.dbDriver = 'sqlite-native';
 const cache = require('../core/cache');
 const { getOption } = require('../core/options');
 
-/** Run `fn` with process.stderr captured (and kept off the real stream); returns what it wrote. */
-async function captureStderr(fn: () => Promise<any>): Promise<{ result: any; text: string }> {
-    const chunks: string[] = [];
-    const realWrite = process.stderr.write;
-    (process.stderr as any).write = (chunk: any, ...rest: any[]) => {
-        chunks.push(String(chunk));
-        const done = rest.find((a) => typeof a === 'function');
-        if (done) done();
-        return true;
-    };
+/** Run `fn` and return the log records the real logger emitted meanwhile. */
+async function captureLog(fn: () => Promise<any>): Promise<{ result: any; records: any[] }> {
+    const { addLogSink } = require('../core/logger');
+    const records: any[] = [];
+    const remove = addLogSink((line: string) => records.push(JSON.parse(line)));
     try {
         const result = await fn();
-        return { result, text: chunks.join('') };
+        return { result, records };
     } finally {
-        (process.stderr as any).write = realWrite;
+        remove();
     }
 }
 
 test('an option name with a format directive and a line break is logged literally, on one line', async () => {
     const realGet = cache.get;
     cache.get = async () => { throw new Error('cache unavailable'); };
-    let captured: { result: any; text: string };
+    let captured: { result: any; records: any[] };
     try {
-        captured = await captureStderr(() => getOption('widget_evil%s\nFORGED ENTRY', 'fallback'));
+        captured = await captureLog(() => getOption('widget_evil%s\nFORGED ENTRY', 'fallback'));
     } finally {
         cache.get = realGet;
     }
 
     assert.strictEqual(captured.result, 'fallback', 'a failed read still answers the default');
-    const lines = captured.text.split('\n').filter((line) => line.length > 0);
-    assert.deepStrictEqual(lines, ['Error getting option widget_evil%sFORGED ENTRY: cache unavailable'],
-        'one line: the name keeps its %s, loses its line break, and the error text is not consumed');
+    const records = captured.records.filter((r) => r.mod === 'core/options');
+    assert.strictEqual(records.length, 1, 'one record');
+    assert.strictEqual(records[0].msg, 'Error getting option');
+    assert.strictEqual(records[0].option, 'widget_evil%sFORGED ENTRY',
+        'the name keeps its %s and loses its line break');
+    assert.strictEqual(records[0].err.message, 'cache unavailable', 'the error text is not consumed');
 });
