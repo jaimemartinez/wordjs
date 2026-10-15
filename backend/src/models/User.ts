@@ -530,6 +530,9 @@ class User {
             // NOT on logout (which stamps the epoch separately): logging out of a browser must not kill a
             // user's headless CI tokens.
             try { await require('./ApiToken').revokeAllForUser(id); } catch { /* best-effort; the JWT epoch still applies */ }
+            // Same for AI agent connections bound to this account: they act AS the user, so compromise
+            // recovery must cut them off too.
+            try { await require('./AgentConnection').revokeAllForUser(id); } catch { /* best-effort, as above */ }
         }
 
         // Update meta if provided
@@ -587,6 +590,9 @@ class User {
     static async delete(id: number) {
         await dbAsync.run('DELETE FROM user_meta WHERE user_id = ?', [id]);
         await dbAsync.run('DELETE FROM users WHERE id = ?', [id]);
+        // A deleted account's agent connections must never resolve again (user ids are not reused, but a
+        // revoked row is also what the admin audit view expects to find).
+        try { await require('./AgentConnection').revokeAllForUser(id); } catch { /* table may predate migration 0016 */ }
         await require('../core/cache').del(`user:${id}`);
         return true;
     }

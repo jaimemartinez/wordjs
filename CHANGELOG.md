@@ -4,6 +4,34 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [Unreleased]
+
+### Added
+
+- **AI agents can work on a site through a built-in MCP server, with the plugin permission model.**
+  `POST /api/v1/mcp` speaks the Model Context Protocol (Streamable HTTP, stateless, JSON responses, via the
+  official `@modelcontextprotocol/sdk`), so Claude Code, Claude Desktop and other MCP clients can list,
+  search and read content, create and edit drafts, submit them for review, publish, upload media, create
+  categories and tags, moderate comments and read the site's public identity. Each client authenticates
+  with a dedicated **agent connection** token (`Bearer wja_…`) bound to one user. The connection
+  **requests** capabilities (`content:read`, `content:draft`, `content:publish`, `media:upload`,
+  `taxonomy:write`, `comments:moderate`, `settings:read`) and an **administrator grants** a subset; every
+  call then runs as the bound user with its capabilities narrowed to the grant, so an agent can never do
+  more than its user (a contributor's agent granted `content:publish` still cannot publish) and no grant
+  reaches deletion, users, roles, plugins, themes, settings writes, tokens or backups. Tools run through
+  the REST router in-process, so every REST rule, hook and audit row applies; new content is always a
+  draft; site content returned to the model is labelled untrusted data. Agent tokens are refused by the
+  REST API and `/mcp` refuses API tokens and session cookies. A new admin screen, **AI agents**
+  (`/admin/agents`), creates connections, reviews and grants requested capabilities (showing grants the
+  user cannot exercise as inert), revokes them, shows each agent's audit trail and copies ready-made
+  client configuration. New audit actions: `agent.create`, `agent.grant`, `agent.revoke`, `agent.write`
+  (every agent write, success or refusal) and `agent.denied`. Rate limits: 240 requests/min per agent
+  token, plus 120 tool calls and 30 writes per minute per agent. New routes `GET/POST /api/v1/agents`,
+  `PUT /api/v1/agents/:id/grant`, `DELETE /api/v1/agents/:id`, `GET /api/v1/agents/:id/audit`; migration
+  `0016_create_agent_connections`. A password change/reset or account deletion revokes the user's agent
+  connections, and agent tokens follow the MFA policy's `enforceForApiTokens` like API tokens. See
+  `documentation/ai-agents.md`.
+
 ## [2.5.0] - 2026-10-15
 
 ### Added

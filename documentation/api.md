@@ -725,6 +725,20 @@ Write responses are `{ rev, warnings, unchanged? }` (a no-op answers `200 { unch
 
 `POST /api/v1/system/certs/config` (§6.5) additionally returns `canonicalUpgraded` (the same host moved from http to https and the main address followed) or `suggestCanonical` (the gateway now reports another address; the certificates page opens the Change dialog prefilled with it).
 
+
+### 6.23 AI agents & MCP 🤖
+Operator guide and the full model: [ai-agents.md](ai-agents.md). An **agent connection** is a `Bearer wja_…` token bound to one user; it **requests** capabilities (`content:read`, `content:draft`, `content:publish`, `media:upload`, `taxonomy:write`, `comments:moderate`, `settings:read`), an administrator **grants** a subset, and every call runs as the bound user with capabilities **narrowed** to the grant (`backend/src/core/agent-capabilities.ts`) — never wider than the user. Audited as `agent.create` / `.grant` / `.revoke` / `.write` / `.denied`.
+
+| Method | Endpoint | Auth | Description |
+| :----- | :------- | :--- | :---------- |
+| `GET`    | `/agents` | Session + `manage_api_tokens` | Connections (administrators: all; others: their own), the capability vocabulary, `canGrant`, and `mcpUrl` |
+| `POST`   | `/agents` | Session + `manage_api_tokens` | Create a **pending** connection. Body `{ name?, requested[], userId? (administrators only), expiresInDays? }`; the raw `wja_…` token is returned **once** (`201`). `400 rest_invalid_capability` / `rest_missing_param` / `rest_invalid_param` / `rest_agent_limit` (25 live per user); `403 rest_token_bound_session` from a session on a secondary address |
+| `PUT`    | `/agents/:id/grant` | Session + administrator | Replace the grant `{ granted[] }` — a subset of the request (`400 rest_grant_exceeds_request`); empty → pending; a revoked connection answers `409 rest_agent_revoked` |
+| `DELETE` | `/agents/:id` | Session (owner or administrator) | Revoke — immediate and terminal |
+| `GET`    | `/agents/:id/audit` | Session (owner or administrator) | The connection's audit trail, newest first (`page`, `per_page`) |
+| `POST`   | `/mcp` | `Bearer wja_…` only | MCP Streamable HTTP endpoint (JSON-RPC 2.0), stateless, JSON responses; clients send `Accept: application/json, text/event-stream`. `401` with `WWW-Authenticate: Bearer` for a missing/invalid/revoked token; `GET`/`DELETE` answer `405` |
+
+A `wja_` token is refused by every REST route (the REST `authenticate` does not know the prefix), and a `wjt_` API token or a session cookie is refused by `/mcp`. Someone else's connection answers `404 rest_agent_not_found`. Agent tool calls run through the REST router in-process (`backend/src/core/rest-dispatch.ts`), so every REST rule, hook and audit row applies to them.
 ---
 
 ## 8. Cron System ⏰

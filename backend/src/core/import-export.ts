@@ -161,7 +161,7 @@ async function exportSite(options: Record<string, any> = {}) {
         'comments', 'comment_meta',
         'terms', 'term_taxonomy', 'term_relationships',
         'options', 'links', 'notifications',
-        'schema_migrations', 'api_tokens', 'audit_log', 'webhooks', 'webhook_deliveries',
+        'schema_migrations', 'api_tokens', 'agent_connections', 'audit_log', 'webhooks', 'webhook_deliveries',
         'form_submissions', 'collab_docs', 'collab_members', 'collab_ops', 'content_outbox',
         'sqlite_sequence', 'migrations' // exclusions
     ];
@@ -511,7 +511,7 @@ async function importSite(data: any, options: Record<string, any> = {}) {
             'comments', 'comment_meta',
             'terms', 'term_taxonomy', 'term_relationships',
             'options', 'links', 'notifications',
-            'schema_migrations', 'api_tokens', 'audit_log', 'webhooks', 'webhook_deliveries',
+            'schema_migrations', 'api_tokens', 'agent_connections', 'audit_log', 'webhooks', 'webhook_deliveries',
             'form_submissions', 'collab_docs', 'collab_members', 'collab_ops', 'content_outbox',
             'sqlite_sequence', 'migrations'
         ];

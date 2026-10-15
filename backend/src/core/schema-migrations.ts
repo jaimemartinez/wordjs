@@ -801,6 +801,42 @@ const MIGRATIONS: Migration[] = [
                 console.warn(`⚠️  [migration 0015] author-slug backfill skipped (non-fatal — authors stay addressable by user id): ${e && e.message}`);
             }
         }
+    },
+    {
+        // AI AGENT CONNECTIONS (the MCP server, core/mcp-server). An agent connection is a dedicated `wja_` token
+        // bound to ONE user, carrying TWO capability sets: what the connection REQUESTED and what an administrator
+        // GRANTED (always a subset of the requested set — the same "the manifest requests, the admin grants" model
+        // plugins follow). The effective authority of every call is grants ∩ the bound user's live capabilities,
+        // resolved at request time (core/agent-capabilities), so nothing stored here can widen a user.
+        //   - token_hash: sha256 of the token, exactly like api_tokens — the plaintext is shown once, never stored.
+        //   - requested_caps / granted_caps: comma lists of the agent vocabulary (content:read, content:draft, …).
+        //   - status: 'pending' (nothing granted yet) | 'active' | 'revoked'. Revocation is a terminal state.
+        //   - expires_at / last_used_at / granted_at: epoch SECONDS, same convention as api_tokens (0002).
+        // Registered by name in the CORE table lists (import-export, mysql) so an export never dumps the hashes.
+        id: '0016_create_agent_connections',
+        up: async (ctx: MigrationCtx) => {
+            const INT_PK = ctx.isPostgres ? 'SERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT';
+            const TS = ctx.isPostgres ? 'TIMESTAMP' : 'DATETIME';
+            await ctx.exec(
+                `CREATE TABLE IF NOT EXISTS agent_connections (` +
+                `id ${INT_PK}, ` +
+                `user_id INTEGER NOT NULL, ` +
+                `name TEXT NOT NULL DEFAULT '', ` +
+                `token_hash TEXT NOT NULL, ` +
+                `token_prefix TEXT NOT NULL DEFAULT '', ` +
+                `requested_caps TEXT NOT NULL DEFAULT '', ` +
+                `granted_caps TEXT NOT NULL DEFAULT '', ` +
+                `status TEXT NOT NULL DEFAULT 'pending', ` +
+                `created_by INTEGER, ` +
+                `granted_by INTEGER, ` +
+                `granted_at INTEGER, ` +
+                `last_used_at INTEGER, ` +
+                `expires_at INTEGER, ` +
+                `created_at ${TS} DEFAULT CURRENT_TIMESTAMP)`
+            );
+            await ctx.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_connections_hash ON agent_connections (token_hash)');
+            await ctx.exec('CREATE INDEX IF NOT EXISTS idx_agent_connections_user ON agent_connections (user_id)');
+        }
     }
 ];
 

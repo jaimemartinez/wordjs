@@ -1387,6 +1387,41 @@ export const tokensApi = {
     revoke: (id: number) => apiDelete<{ revoked: boolean; id: number }>(`/auth/tokens/${id}`),
 };
 
+// ── AI agent connections (MCP) ─────────────────────────────────────────────────────────────────────
+// The connection REQUESTS capabilities, an administrator GRANTS a subset; every call runs as the bound
+// user narrowed by the grant (backend core/agent-capabilities). The `wja_` token is shown once.
+export type AgentCapability =
+    | "content:read" | "content:draft" | "content:publish" | "media:upload"
+    | "taxonomy:write" | "comments:moderate" | "settings:read";
+export interface AgentConnection {
+    id: number;
+    userId: number;
+    name: string;
+    tokenPrefix: string;
+    requested: AgentCapability[];
+    granted: AgentCapability[];
+    /** Granted AND backed by a capability the bound user really holds — the rest is inert. */
+    effective: AgentCapability[];
+    status: "pending" | "active" | "revoked";
+    expired: boolean;
+    createdBy: number | null;
+    grantedBy: number | null;
+    grantedAt: number | null;
+    lastUsedAt: number | null;
+    expiresAt: number | null;
+    createdAt: string | null;
+    user: { id: number; login: string; displayName: string; role: string } | null;
+}
+export const agentsApi = {
+    list: () => apiGet<{ connections: AgentConnection[]; capabilities: AgentCapability[]; canGrant: boolean; mcpUrl: string }>("/agents"),
+    create: (data: { name: string; requested: AgentCapability[]; userId?: number; expiresInDays?: number | null }) =>
+        apiPost<{ token: string; connection: AgentConnection; mcpUrl: string }>("/agents", data),
+    grant: (id: number, granted: AgentCapability[]) => apiPut<{ connection: AgentConnection }>(`/agents/${id}/grant`, { granted }),
+    revoke: (id: number) => apiDelete<{ revoked: boolean; id: number }>(`/agents/${id}`),
+    audit: (id: number, page = 1) =>
+        apiGet<{ entries: AuditEntry[]; total: number; page: number; perPage: number }>(`/agents/${id}/audit?page=${page}&per_page=50`),
+};
+
 // ── Outgoing webhooks ──────────────────────────────────────────────────────────────────────────────
 export interface Webhook {
     id: number;

@@ -100,6 +100,19 @@ const AUDIT_ACTIONS = Object.freeze({
     // tick): {from, to, revisions}, one row per run of consecutive revisions. Never silently skipped.
     SITE_ADDRESS_GAP: 'site.address.gap',
 
+    // ── AI agent connections (models/AgentConnection, routes/agents, core/mcp-server) ──────────────
+    // Every row of an agent's own trail is keyed target_type 'agent' / target_id <connection id>, so the
+    // admin screen's "what did this agent do" is one indexed-by-PK walk with a WHERE on two columns.
+    AGENT_CREATE: 'agent.create',
+    AGENT_GRANT: 'agent.grant',
+    AGENT_REVOKE: 'agent.revoke',
+    // One row per agent tool call that WRITES (create/update draft, submit, publish, upload, term,
+    // moderation), success or refusal, with {tool, objectType, objectId, status, ok}. The REST handler the
+    // call ran through records its own row too (post.create, …) under the bound user.
+    AGENT_WRITE: 'agent.write',
+    // A tool call refused because the connection lacks the grant (or is still pending): {tool, needs}.
+    AGENT_DENIED: 'agent.denied',
+
     // ── The log about the log ───────────────────────────────────────────────────────────────────────
     AUDIT_PRUNE: 'audit.prune'
 } as const);
@@ -234,6 +247,37 @@ async function listAudit(opts: { limit?: any; offset?: any } = {}): Promise<any>
             createdAt: r.created_at
         })),
         total,
+        limit,
+        offset
+    };
+}
+
+/**
+ * The trail of ONE target (e.g. an agent connection), newest first. Admin-only at the route layer.
+ */
+async function listAuditForTarget(targetType: string, targetId: any, opts: { limit?: any; offset?: any } = {}): Promise<any> {
+    const limit = Math.min(Math.max(parseInt(String(opts.limit), 10) || 50, 1), 200);
+    const offset = Math.max(parseInt(String(opts.offset), 10) || 0, 0);
+    const tid = targetId === null || targetId === undefined ? '' : String(targetId);
+    const rows = (await dbAsync.all(
+        `SELECT id, actor_id, action, target_type, target_id, detail, created_at
+         FROM audit_log WHERE target_type = ? AND target_id = ? ORDER BY id DESC LIMIT ? OFFSET ?`,
+        [String(targetType), tid, limit, offset]
+    )) || [];
+    const totalRow = await dbAsync.get(
+        `SELECT COUNT(*) AS c FROM audit_log WHERE target_type = ? AND target_id = ?`, [String(targetType), tid]
+    );
+    return {
+        rows: rows.map((r: any) => ({
+            id: r.id,
+            actorId: r.actor_id,
+            action: r.action,
+            targetType: r.target_type,
+            targetId: r.target_id,
+            detail: safeParse(r.detail),
+            createdAt: r.created_at
+        })),
+        total: totalRow ? Number(totalRow.c) || 0 : 0,
         limit,
         offset
     };
@@ -397,7 +441,7 @@ async function runAuditRetention(): Promise<number> {
 }
 
 module.exports = {
-    recordAudit, listAudit, sanitizeDetail,
+    recordAudit, listAudit, listAuditForTarget, sanitizeDetail,
     AUDIT_ACTIONS,
     pruneAuditLog, runAuditRetention, auditRetentionState, auditRetentionDays,
     AUDIT_PRUNE_HOOK, DEFAULT_AUDIT_RETENTION_DAYS,
