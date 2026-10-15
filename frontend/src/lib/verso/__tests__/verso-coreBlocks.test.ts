@@ -30,7 +30,9 @@ import {
   sharedFieldDefaults,
   withSharedVersoFields,
 } from "../sharedFields";
-import { createBlockRegistry, makeSlotResolver, type BlockDefinition } from "../registry";
+import { createBlockRegistry, makeSlotResolver, type BlockDefinition, type VersoField } from "../registry";
+import { editorStringMatches, humanizeFieldKey, trStr } from "@/lib/editorI18n";
+import { withRecordRootFields } from "@/lib/editorRootFields";
 import { postConfig, pageConfig } from "@/components/versoConfig";
 import { GENERATED_CORE_BLOCK_REGISTRY } from "@/generated/verso-registry.generated";
 
@@ -316,5 +318,77 @@ describe("coreBlocks — rootFieldsPost / rootFieldsPage", () => {
       expect(rootFieldsPost[key]).toBeDefined();
       expect(rootFieldsPage[key]).toBeDefined();
     }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 7. i18n del inspector: toda etiqueta tiene entrada { es, en, pt }.   */
+/* ------------------------------------------------------------------ */
+
+describe("coreBlocks — field labels are translated (editorI18n)", () => {
+  // Not translatable on purpose: brand names, heading levels, ratios, counts, separators, and words
+  // that are spelled the same in es/en/pt.
+  const UNTRANSLATED = new Set([
+    "", "H1", "H2", "H3", "H4", "H5", "H6", "1", "2", "3", "4", "5", "6", "16:9", "4:3", "1:1", "›", "/", "—",
+    "Facebook", "Instagram", "X (Twitter)", "LinkedIn", "YouTube", "TikTok", "GitHub", "WhatsApp",
+    "Normal", "Black", "Horizontal", "Vertical",
+  ]);
+
+  /** label/placeholder/title strings (field labels + option labels) of a field tree, defaultProps excluded. */
+  function collect(node: unknown, where: string, out: Map<string, string>): void {
+    if (Array.isArray(node)) return node.forEach((n) => collect(n, where, out));
+    if (!node || typeof node !== "object" || (node as { $$typeof?: unknown }).$$typeof) return;
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      if (k === "defaultProps") continue;
+      if ((k === "label" || k === "placeholder" || k === "title") && typeof v === "string") {
+        if (!out.has(v)) out.set(v, where);
+      } else collect(v, where, out);
+    }
+  }
+
+  const strings = new Map<string, string>();
+  const sources: [string, Record<string, VersoField>][] = [
+    ...coreBlockDefinitions.map((d) => [d.type, withSharedVersoFields(d).fields ?? {}] as [string, Record<string, VersoField>]),
+    ["root(post)", rootFieldsPost],
+    ["root(page)", rootFieldsPage],
+    // What the editor actually mounts: + featured image, excerpt, category/tags selects and page SEO.
+    ["root(post, editor)", withRecordRootFields(rootFieldsPost, { categories: [], tags: [], seo: true })],
+    ["root(page, editor)", withRecordRootFields(rootFieldsPage, { seo: true })],
+  ];
+  for (const [type, fields] of sources) {
+    collect(fields, type, strings);
+    // Unlabelled fields show humanizeFieldKey(key) in the inspector — that fallback must translate too.
+    for (const [key, f] of Object.entries(fields)) {
+      if (!f.label && f.type !== "slot") strings.set(humanizeFieldKey(key, "es"), `${type}.${key} (fallback)`);
+    }
+  }
+
+  it("collects the inspector strings (sanity)", () => {
+    expect(strings.size).toBeGreaterThan(300);
+  });
+
+  it("every label, placeholder and option label has a { es, en, pt } entry", () => {
+    const missing = [...strings].filter(([s]) => !UNTRANSLATED.has(s) && editorStringMatches(s).length === 0);
+    expect(missing.map(([s, where]) => `${where}: ${JSON.stringify(s)}`)).toEqual([]);
+  });
+
+  // The lookup is first-match-wins; a label shared with another entry (font weight "Media" vs the
+  // "Medios"/"Media" library) is fine only if the winning entry is the one whose Spanish source it is.
+  it("an inspector string shared by two entries resolves to the one it is the Spanish source of", () => {
+    const conflicts = [...strings].filter(([s]) => {
+      const hits = editorStringMatches(s);
+      const differ = hits.some((h) => h.es !== hits[0].es || h.en !== hits[0].en || h.pt !== hits[0].pt);
+      return differ && hits[0].es !== s;
+    });
+    expect(conflicts.map(([s, where]) => `${where}: ${JSON.stringify(s)} → ${JSON.stringify(editorStringMatches(s))}`)).toEqual([]);
+  });
+
+  it("English and Portuguese differ from the Spanish source for translated labels (spot check)", () => {
+    expect(trStr("Grosor", "en")).toBe("Weight");
+    expect(trStr("Media", "en")).toBe("Medium");
+    expect(trStr("Redondeo (p. ej. 16)", "en")).toBe("Corner radius (e.g. 16)");
+    expect(trStr("Redondeo (p. ej. 16)", "pt")).toBe("Arredondamento (ex. 16)");
+    expect(humanizeFieldKey("level", "en")).toBe("Level");
+    expect(humanizeFieldKey("level", "es")).toBe("Nivel");
   });
 });
