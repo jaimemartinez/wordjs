@@ -91,7 +91,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   only through the gateway's pre-install route until the frontend was restarted. It now re-reads them
   on every attempt, waits for the certificate instead of sending requests that cannot succeed, and
   registers in the scheme its server actually listens with (plain HTTP on loopback until its first
-  restart, HTTPS with mutual TLS after).
+  restart, HTTPS with mutual TLS after). The gateway replaces a node's earlier registration at the same
+  host and port in the other scheme, so the persisted plain-HTTP entry cannot outlive that restart.
 
 - **The confirm and alert dialogs speak the admin's language.** The host dialog that core pages and
   plugin admin pages open through `useModal()` had English buttons and titles next to a Spanish message,
