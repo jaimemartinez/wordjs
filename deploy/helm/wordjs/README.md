@@ -14,14 +14,14 @@ emit a reference that cannot pull.
 
 ```bash
 # 1. Build and push the image.
-docker build -t <registry>/wordjs:2.4.0 .
-docker push <registry>/wordjs:2.4.0
+docker build -t <registry>/wordjs:2.5.0 .
+docker push <registry>/wordjs:2.5.0
 
 # 2. Install.
 helm install wordjs deploy/helm/wordjs \
   --namespace wordjs --create-namespace \
   --set image.repository=<registry>/wordjs \
-  --set image.tag=2.4.0 \
+  --set image.tag=2.5.0 \
   --set siteUrl=https://cms.example.com \
   --set installToken.value="$(openssl rand -hex 24)"
 
