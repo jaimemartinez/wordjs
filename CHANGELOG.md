@@ -4,6 +4,16 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [Unreleased]
+
+### Changed
+
+- **The WordPress import API downloads attachments by default, like the importer and the admin screen.**
+  A `POST /api/v1/import/wordpress` that sent neither `media` nor the legacy `importAttachments` switch
+  used to skip every attachment, while the core importer and the admin screen both default to
+  `download`. The route now uses `download` too; `media=skip` and `importAttachments=0` still opt out, and
+  `importAttachments=1` still means `download`. The OpenAPI description documents the default.
+
 ## [2.5.0] - 2026-10-15
 
 ### Added
