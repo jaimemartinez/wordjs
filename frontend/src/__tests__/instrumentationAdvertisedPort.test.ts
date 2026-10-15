@@ -16,7 +16,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { advertisedPort } from '@/instrumentation';
+import { advertisedPort, advertisedUrl } from '@/instrumentation';
 
 describe('instrumentation: the port this node registers with the gateway', () => {
     it('is the port the server listens on (PORT, set by scripts/start-frontend.js)', () => {
@@ -34,9 +34,50 @@ describe('instrumentation: the port this node registers with the gateway', () =>
 
     it('never comes from frontendUrl, the public origin', () => {
         const source = fs.readFileSync(path.join(__dirname, '..', 'instrumentation.ts'), 'utf8');
-        const register = source.slice(source.indexOf('const registerWithGateway'));
+        const register = source.slice(source.indexOf('const readRegistrationContext'));
         expect(register).toMatch(/const port = advertisedPort\(process\.env\.PORT, frontendPort\);/);
         expect(register).not.toMatch(/url\.port/);
-        expect(register).toMatch(/url: `https:\/\/\$\{hostname\}:\$\{port\}`/);
+        expect(register).toMatch(/url: advertisedUrl\(process\.env\.WORDJS_FRONTEND_LISTENER, hostname, port\)/);
+    });
+});
+
+/**
+ * A SPLIT INSTALL REGISTERS ITS FRONTEND WITHOUT A RESTART.
+ *
+ * Split mode starts the frontend before the wizard has written any config or certificate. The loop read
+ * both ONCE, at boot, so it kept POSTing `/register` to the gateway's PUBLIC port with no identity (a 405
+ * every 5 s, for the life of the process) and the frontend never registered — every cache purge after the
+ * install was dropped ("no frontend node registered") until the frontend was restarted. And once it could
+ * register, advertising `https://` would have pointed the gateway's TLS at a socket still listening in
+ * plain HTTP.
+ *
+ * MUTATION PROOF: hoist `readRegistrationContext()` out of `attempt` and the per-attempt assertion fails;
+ * restore the plain-HTTP POST to `gatewayPort` and the no-identity assertion fails; make advertisedUrl
+ * ignore the listener, or advertise the configured host over plain HTTP, and the first case fails; drop
+ * the env assignment in server.js, or move it into `app.prepare().then`, and the last case fails.
+ */
+describe('instrumentation: registering after the install wrote the certificates', () => {
+    it('advertises the scheme the server listens with, and plain HTTP only on loopback', () => {
+        expect(advertisedUrl('https', 'example.org', '3001')).toBe('https://example.org:3001');
+        expect(advertisedUrl(undefined, 'localhost', '3001')).toBe('https://localhost:3001');
+        expect(advertisedUrl('http', 'example.org', '3001')).toBe('http://127.0.0.1:3001');
+        expect(advertisedUrl('http', '10.0.0.5', '4321')).toBe('http://127.0.0.1:4321');
+    });
+
+    it('reads config and certificates on every attempt, and sends nothing without an identity', () => {
+        const source = fs.readFileSync(path.join(__dirname, '..', 'instrumentation.ts'), 'utf8');
+        const attempt = source.slice(source.indexOf('const attempt = () =>'), source.indexOf('gatewayReq.write(data)'));
+        expect(attempt).toMatch(/= readRegistrationContext\(\);/);
+        expect(attempt).toMatch(/if \(Object\.keys\(clientOpts\)\.length === 0\) \{[\s\S]*?retry\(\);\s*return;/);
+        expect(source).not.toMatch(/gatewayPort/);
+        expect(source).not.toMatch(/await import\('http'\)/);
+    });
+
+    it('server.js publishes its listener choice before Next starts', () => {
+        const server = fs.readFileSync(path.join(__dirname, '..', '..', 'server.js'), 'utf8');
+        const set = server.indexOf("process.env.WORDJS_FRONTEND_LISTENER = hasIdentity ? 'https' : 'http';");
+        expect(set).toBeGreaterThan(-1);
+        expect(set).toBeLessThan(server.indexOf('app.prepare()'));
+        expect(server).toMatch(/if \(hasIdentity\) \{/);
     });
 });

@@ -52,17 +52,17 @@ function groupOwner(route, cn) {
 function applyRegistration(registry, targetOwner, service, cn) {
     const url = service.url;
     const routes = Array.isArray(service.routes) ? service.routes : [];
+    const twins = schemeTwins(url, targetOwner, cn);
 
     // Deleting an emptied route IS right here, unlike in the health sweep: a registration is an
     // authenticated, owner-checked declaration of what this node now serves, so a route it no
     // longer declares must stop existing rather than 502 forever. (And routing is owner-aware, so
     // a deleted '/api' still cannot be inherited by the frontend's '/'.)
     registry.forEach((group, route) => {
-        if (group.targets.has(url)) {
-            group.targets.delete(url);
-            if (group.targets.size === 0) registry.delete(route);
-        }
+        for (const stale of [url, ...twins]) group.targets.delete(stale);
+        if (group.targets.size === 0) registry.delete(route);
     });
+    for (const stale of twins) targetOwner.delete(stale);
 
     routes.forEach((route) => {
         if (!registry.has(route)) {
@@ -78,4 +78,30 @@ function applyRegistration(registry, targetOwner, service, cn) {
     if (cn) targetOwner.set(url, String(cn));
 }
 
-module.exports = { groupOwner, applyRegistration };
+/**
+ * The same peer's targets at the SAME host and port in the OTHER scheme — which a new registration
+ * replaces rather than joins.
+ *
+ * A single-host split install starts the frontend before setup, so it listens in plain HTTP and
+ * registers `http://127.0.0.1:3001` once the installer issues its certificate; after its first restart
+ * it listens with mTLS on that very socket and registers `https://127.0.0.1:3001`. The registry is
+ * persisted, so without this both stayed in the group and round-robin sent every other request as
+ * plain HTTP into a TLS socket (502 ECONNRESET) until the health sweep evicted the dead one. Only a
+ * target the SAME authenticated identity owns is replaced: one node can never displace another's.
+ */
+function schemeTwins(url, targetOwner, cn) {
+    if (!cn) return [];
+    let parsed;
+    try { parsed = new URL(url); } catch { return []; }
+    const twins = [];
+    for (const [other, owner] of targetOwner) {
+        if (other === url || owner !== String(cn)) continue;
+        try {
+            const o = new URL(other);
+            if (o.host === parsed.host && o.protocol !== parsed.protocol) twins.push(other);
+        } catch { /* an unparsable stale entry is left to the health sweep */ }
+    }
+    return twins;
+}
+
+module.exports = { groupOwner, applyRegistration, schemeTwins };

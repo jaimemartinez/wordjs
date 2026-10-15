@@ -112,3 +112,45 @@ test('a re-registration that drops a route removes it instead of leaving a ghost
     assert.deepStrictEqual([...registry.keys()], ['/api'], 'the route it no longer declares is gone');
     assert.strictEqual(routing.resolveTarget(workerView(registry), '/api/v1/posts'), BACKEND_NODE);
 });
+
+/*
+ * A frontend that booted before setup registers in plain HTTP; after its first restart the SAME socket
+ * listens with mTLS and registers in HTTPS. The registry is persisted, so the new registration must
+ * replace the old one — otherwise round-robin sends every other request as plain HTTP into a TLS socket.
+ *
+ * MUTATION PROOF: return [] from schemeTwins and the first test fails; drop its owner comparison and the
+ * second fails; drop its host comparison and the third fails.
+ */
+const FRONTEND_PLAIN = 'http://127.0.0.1:3001';
+const FRONTEND_TLS = 'https://127.0.0.1:3001';
+const FE_ROUTES = ['/', '/admin', '/_next'];
+
+test('a registration in the other scheme replaces the same node\'s target at that host and port', () => {
+    const registry = new Map();
+    const targetOwner = new Map();
+    registration.applyRegistration(registry, targetOwner, { url: FRONTEND_PLAIN, routes: FE_ROUTES }, 'frontend');
+    registration.applyRegistration(registry, targetOwner, { url: FRONTEND_TLS, routes: FE_ROUTES }, 'frontend');
+    for (const route of FE_ROUTES) {
+        assert.deepStrictEqual([...registry.get(route).targets], [FRONTEND_TLS], `${route} keeps only the new scheme`);
+    }
+    assert.strictEqual(targetOwner.has(FRONTEND_PLAIN), false, 'the replaced target loses its owner entry');
+    assert.strictEqual(targetOwner.get(FRONTEND_TLS), 'frontend');
+});
+
+test('another identity\'s target at the same host and port is never displaced', () => {
+    const registry = new Map();
+    const targetOwner = new Map();
+    registration.applyRegistration(registry, targetOwner, { url: FRONTEND_PLAIN, routes: ['/'] }, 'frontend');
+    registration.applyRegistration(registry, targetOwner, { url: FRONTEND_TLS, routes: ['/'] }, 'backend');
+    assert.deepStrictEqual([...registry.get('/').targets].sort(), [FRONTEND_PLAIN, FRONTEND_TLS]);
+    assert.strictEqual(targetOwner.get(FRONTEND_PLAIN), 'frontend');
+});
+
+test('the same node on another port, or a registration without an identity, replaces nothing', () => {
+    const registry = new Map();
+    const targetOwner = new Map();
+    registration.applyRegistration(registry, targetOwner, { url: FRONTEND_PLAIN, routes: ['/'] }, 'frontend');
+    registration.applyRegistration(registry, targetOwner, { url: 'https://127.0.0.1:3002', routes: ['/'] }, 'frontend');
+    assert.deepStrictEqual([...registry.get('/').targets].sort(), [FRONTEND_PLAIN, 'https://127.0.0.1:3002']);
+    assert.deepStrictEqual(registration.schemeTwins(FRONTEND_TLS, targetOwner, undefined), []);
+});
