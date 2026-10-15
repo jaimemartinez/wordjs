@@ -46,8 +46,8 @@
  *    popup-builder, cookie-consent: one site-wide (or per-form) window -> one client 429s everyone.
  *  - bookings, job-board: an INSERT ... WHERE NOT EXISTS / COUNT guard is not atomic on Postgres.
  *  - youtube-videos:      a handle resolved to the first "channelId" on its channel page (often a
- *                         featured channel's), and the scraper took a video from anywhere on the
- *                         page -> another channel's videos were shown.
+ *                         featured channel's) -> another channel's videos were shown; without an API
+ *                         key the list comes from the channel's own RSS feed, never a scraped page.
  *
  * Concurrency: route handlers run concurrently in the plugin isolate, and every db call is an await.
  * The burst tests fire requests with Promise.all, so all of them interleave at each await exactly as
@@ -1842,8 +1842,6 @@ interface YtPage {
     tabBrowseId?: string;
     /** The Videos tab's grid. */
     grid?: any[];
-    /** Extra keys in the page header. */
-    header?: any;
     /** Replaces ytInitialData with this raw script. */
     rawScript?: string;
 }
@@ -1861,7 +1859,6 @@ function ytChannelPage(o: YtPage): string {
         header: {
             ...(o.headerChannelId ? { c4TabbedHeaderRenderer: { channelId: o.headerChannelId } } : {}),
             pageHeaderRenderer: { pageTitle: 'Synthetic', subscribeButton: { subscribeButtonRenderer: { channelId: YT_OWN } } },
-            ...(o.header || {}),
         },
     };
     if (o.externalId) data.metadata = { channelMetadataRenderer: { title: 'Synthetic', externalId: o.externalId } };
@@ -1877,7 +1874,6 @@ function ytChannelPage(o: YtPage): string {
  */
 async function withYoutube<T>(pages: Record<string, any>, fn: (fetched: string[]) => Promise<T>): Promise<T> {
     const real = globalThis.fetch;
-    const warn = console.warn;
     const fetched: string[] = [];
     (globalThis as any).fetch = async (url: string) => {
         fetched.push(String(url));
@@ -1885,8 +1881,7 @@ async function withYoutube<T>(pages: Record<string, any>, fn: (fetched: string[]
         if (body === undefined) return { ok: false, status: 404, text: async () => 'Not Found', json: async () => ({}) };
         return { ok: true, status: 200, text: async () => (typeof body === 'string' ? body : JSON.stringify(body)), json: async () => body };
     };
-    console.warn = () => { /* "Scraper failed, falling back to RSS" */ };
-    try { return await fn(fetched); } finally { (globalThis as any).fetch = real; console.warn = warn; }
+    try { return await fn(fetched); } finally { (globalThis as any).fetch = real; }
 }
 
 /** Save `body` the way the admin page does; returns the cache the refresh wrote and the public list. */
@@ -1947,26 +1942,33 @@ test('youtube-videos: a channel page that does not say which channel it is is re
     }
 });
 
-test('youtube-videos: the scraper reads only the Videos grid of the channel\'s own page', async () => {
-    // Configured by id, so no handle resolution is involved: this is the scraper on its own.
-    const videosUrl = `https://www.youtube.com/channel/${YT_OWN}/videos`;
-    const videos = (o: YtPage) => ytChannelPage({ tab: 'videos', tabBrowseId: YT_OWN, grid: [ytVideo('ownVideo003'), ytVideo('ownVideo004')], ...o });
-    const cases: Array<[string, string, string, string[]]> = [
-        // A video outside the grid (here: in the header) is not one of the channel's uploads.
-        ['its own Videos tab', videos({ canonical: YT_OWN, externalId: YT_OWN, header: { featuredVideo: ytVideo('shelfVideo1', YT_SHELF) } }), 'scraper', ['ownVideo003', 'ownVideo004']],
-        // /videos answered with the Home tab (a channel without a Videos tab): its shelves hold other channels' videos.
-        ['a Home tab served instead', ytChannelPage({ canonical: YT_OWN, externalId: YT_OWN, tabBrowseId: YT_OWN }), 'rss', ['ownVideo001', 'ownVideo002']],
-        // The Videos tab of another channel.
-        ['another channel\'s page', videos({ canonical: YT_SHELF, externalId: YT_SHELF, tabBrowseId: YT_SHELF, grid: [ytVideo('shelfVideo2')] }), 'rss', ['ownVideo001', 'ownVideo002']],
-        ['a page that does not say whose it is', videos({ tabBrowseId: undefined }), 'rss', ['ownVideo001', 'ownVideo002']],
+test('youtube-videos: without an API key the list is the channel\'s RSS feed, never its Videos tab', async () => {
+    // The Videos tab is served — the channel's own, holding videos in the legacy shape and in the
+    // lockup shape youtube.com uses now — and must not be read: its markup is not an interface (the
+    // scraper that read it found nothing once the lockup shape replaced the old one), and it has no dates.
+    const lockup = (contentId: string) => ({ lockupViewModel: { contentId, contentType: 'LOCKUP_CONTENT_TYPE_VIDEO',
+        metadata: { lockupMetadataViewModel: { title: { content: `Video ${contentId}` } } } } });
+    const videosTab = ytChannelPage({ tab: 'videos', canonical: YT_OWN, externalId: YT_OWN, tabBrowseId: YT_OWN,
+        grid: [ytVideo('ownVideo003'), lockup('ownVideo004')] });
+    const pages = {
+        [YT_HOME_URL]: ytChannelPage({ canonical: YT_OWN, externalId: YT_OWN, tabBrowseId: YT_OWN }),
+        [`${YT_HOME_URL}/videos`]: videosTab,
+        [`https://www.youtube.com/channel/${YT_OWN}/videos`]: videosTab,
+        ...YT_FEEDS,
+    };
+    const cases: Array<[string, string[]]> = [
+        [YT_OWN, [ytFeedUrl(YT_OWN)]],
+        [YT_HANDLE, [YT_HOME_URL, ytFeedUrl(YT_OWN)]], // the channel page only resolves the handle
     ];
-    for (const [label, page, expectMode, expectIds] of cases) {
+    for (const [channel, expectFetched] of cases) {
         await withPlugin('youtube-videos', async (p) => {
-            await withYoutube({ [videosUrl]: page, ...YT_FEEDS }, async () => {
-                const { cache, ids, mode } = await configureYoutube(p, { channel: YT_OWN });
-                assert.strictEqual(cache.channelId, YT_OWN, label);
-                assert.strictEqual(mode, expectMode, label);
-                assert.deepStrictEqual(ids, expectIds, `${label}: showed videos that are not the channel's`);
+            await withYoutube(pages, async (fetched) => {
+                const { cache, ids, mode } = await configureYoutube(p, { channel });
+                assert.strictEqual(cache.error, null, `${channel}: ${cache.error}`);
+                assert.strictEqual(mode, 'rss', channel);
+                assert.deepStrictEqual(ids, ['ownVideo001', 'ownVideo002'], channel);
+                assert.ok(cache.videos.every((v: any) => !Number.isNaN(Date.parse(v.publishedAt))), `${channel}: a video without a date`);
+                assert.deepStrictEqual([...new Set(fetched)], expectFetched, `${channel}: read a page the list does not come from`);
             });
         });
     }

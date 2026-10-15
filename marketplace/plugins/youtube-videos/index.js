@@ -8,6 +8,9 @@
  *  - RSS (no configuration beyond the channel): youtube.com/feeds/videos.xml — the latest 15 videos.
  *  - Data API v3 (admin adds an API key): the FULL upload history via the channel's uploads
  *    playlist, paginated 50 at a time (capped — see MAX_API_VIDEOS).
+ * The channel's public pages are read only to resolve an @handle without a key, never for the
+ * list: their markup is not an interface (a scraper of the Videos tab stopped finding any video when
+ * YouTube changed it), and they give dates only as relative text such as "6 days ago".
  *
  * Secret handling: the API key is stored in the plugin's OWN wjp_ table, NOT in options — options
  * share one global namespace readable by any plugin holding settings:read, and the host blocks
@@ -17,7 +20,7 @@
 
 exports.metadata = {
     name: 'YouTube Videos',
-    version: '1.0.2',
+    version: '1.0.3',
     description: 'Channel video list (links, thumbnails, titles) + Verso carousel block',
     author: 'WordJS',
 };
@@ -172,67 +175,6 @@ exports.init = async function (wordjs) {
         return videos;
     };
 
-    /**
-     * Scraper mode: fetch the channel's public Videos tab and parse ytInitialData JSON for keyless
-     * high-res videos. Only the grid of the tab the page opened is read, and only when that tab is
-     * the Videos tab of `channelId` itself: the rest of the page (the header, a Home tab served
-     * instead) can carry trailers and shelves of other channels' videos.
-     */
-    const fetchViaScraper = async (channelId, channelHandle) => {
-        const targetUrl = channelHandle
-            ? `https://www.youtube.com/@${encodeURIComponent(channelHandle.replace('@', ''))}/videos`
-            : `https://www.youtube.com/channel/${encodeURIComponent(channelId)}/videos`;
-
-        const html = await fetchText(targetUrl);
-        const data = readInitialData(html);
-        if (!data) {
-            throw new Error("No se encontró ytInitialData en la página pública de YouTube");
-        }
-        const pageChannelId = ownChannelId(html, data);
-        if (pageChannelId !== channelId) {
-            throw new Error(`La página pública de YouTube es de otro canal (${pageChannelId || 'sin identificar'}), no de ${channelId}`);
-        }
-        const tab = selectedTab(data);
-        const tabUrl = (tab && tab.endpoint && tab.endpoint.commandMetadata && tab.endpoint.commandMetadata.webCommandMetadata
-            && tab.endpoint.commandMetadata.webCommandMetadata.url) || '';
-        if (!tab || !tab.content || !/\/videos\/?$/.test(tabUrl)) {
-            throw new Error("La página pública de YouTube no abrió la pestaña Videos del canal");
-        }
-        const list = [];
-        const findVideos = (obj) => {
-            if (!obj || typeof obj !== 'object') return;
-            if (obj.videoId && obj.title) {
-                const titleText = obj.title.runs ? obj.title.runs[0].text : (obj.title.simpleText || '');
-                const thumbnails = (obj.thumbnail && obj.thumbnail.thumbnails) || [];
-                const thumbUrl = thumbnails.length > 0 ? thumbnails[thumbnails.length - 1].url : `https://i.ytimg.com/vi/${obj.videoId}/maxresdefault.jpg`;
-                list.push({
-                    id: obj.videoId,
-                    title: titleText || 'YouTube Video',
-                    url: `https://www.youtube.com/watch?v=${obj.videoId}`,
-                    thumb: thumbUrl,
-                    publishedAt: obj.publishedTimeText ? obj.publishedTimeText.simpleText : ''
-                });
-                return;
-            }
-            for (const key of Object.keys(obj)) {
-                findVideos(obj[key]);
-            }
-        };
-        findVideos(tab.content);
-        const videos = [];
-        const seenIds = new Set();
-        for (const v of list) {
-            if (!seenIds.has(v.id)) {
-                seenIds.add(v.id);
-                videos.push(v);
-            }
-        }
-        if (videos.length === 0) {
-            throw new Error("No se encontraron videos en la página de YouTube");
-        }
-        return videos;
-    };
-
     /** API mode: full history via the uploads playlist ("UU" + channel id tail), paginated. */
     const fetchViaApi = async (channelId, apiKey) => {
         const ch = await fetchJson(`https://www.googleapis.com/youtube/v3/channels?part=contentDetails&id=${encodeURIComponent(channelId)}&key=${encodeURIComponent(apiKey)}`);
@@ -269,22 +211,8 @@ exports.init = async function (wordjs) {
             const prev = (await options.get(OPT_CACHE, null)) || {};
             try {
                 const channelId = await resolveChannelId(channel, apiKey);
-                let videos;
-                let mode = 'rss';
-                if (apiKey) {
-                    videos = await fetchViaApi(channelId, apiKey);
-                    mode = 'api';
-                } else {
-                    try {
-                        const handle = channel.includes('@') ? channel.match(/@([\w.-]+)/)?.[1] : null;
-                        videos = await fetchViaScraper(channelId, handle);
-                        mode = 'scraper';
-                    } catch (scraperErr) {
-                        console.warn(`Scraper failed, falling back to RSS: ${scraperErr.message}`);
-                        videos = await fetchViaRss(channelId);
-                        mode = 'rss';
-                    }
-                }
+                const mode = apiKey ? 'api' : 'rss';
+                const videos = apiKey ? await fetchViaApi(channelId, apiKey) : await fetchViaRss(channelId);
                 const cache = { videos, channelId, mode, fetchedAt: Date.now(), error: null };
                 await options.set(OPT_CACHE, cache);
                 return cache;
