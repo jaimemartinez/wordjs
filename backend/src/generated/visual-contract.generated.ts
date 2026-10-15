@@ -863,6 +863,7 @@ export const STYLE_SECURITY = deepFreeze({
     "wjnb-close",
     "wjpb-close",
     "wjpb-overlay",
+    "wjs-block-grid__items",
     "wjs-block-hero-overlay",
     "wjs-block-hero__overlay",
     "wjs-block-particle-field",
