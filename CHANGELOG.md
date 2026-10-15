@@ -4,6 +4,25 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [Unreleased]
+
+### Security
+
+- **API tokens and the MFA-by-role policy: a deliberate, visible choice.** Personal API tokens (`wjt_…`)
+  stay exempt from the two-factor compliance gate by default, so existing integrations keep working, but
+  the trade-off is no longer silent. A user whose role requires 2FA can now create a token only from a
+  session that signed in with the second factor, or by confirming a current authenticator or backup
+  code when creating it (`mfaCode` on `POST /auth/tokens`; otherwise `403 rest_mfa_step_up_required`, and
+  a wrong code is `400 rest_mfa_invalid`). Sessions issued by a two-factor sign-in carry an `amr: ["mfa"]`
+  claim, which `/auth/refresh` keeps. Roles outside the policy create tokens exactly as before. The
+  `auth.token.create` audit row now records how the second factor was proven (`mfa`: `session`,
+  `step_up` or `not_required`), a failed step-up writes `auth.token.create_refused`, and policy changes
+  write `auth.mfa.policy_update`. `GET /auth/mfa/policy` also returns `tokenExposure`: how many active
+  tokens belong to users in a required role, and how many of their owners have not enrolled. The
+  Security screen shows a notice with those numbers while the policy requires 2FA and tokens are
+  exempt, and explains the "Also enforce for personal API tokens" switch. The API tokens screen asks for
+  the code when it is needed. The switch is still off by default.
+
 ## [2.5.0] - 2026-10-15
 
 ### Added

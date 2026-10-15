@@ -44,7 +44,11 @@ const AUDIT_ACTIONS = Object.freeze({
     MFA_ENABLE: 'auth.mfa.enable',
     MFA_DISABLE: 'auth.mfa.disable',
     MFA_BACKUP_CODES: 'auth.mfa.backup_codes',
+    // Which roles must have a second factor, the grace window, and whether API tokens are held to it.
+    MFA_POLICY_UPDATE: 'auth.mfa.policy_update',
     TOKEN_CREATE: 'auth.token.create',
+    // A mint refused because the step-up code a required-2FA role must present was wrong.
+    TOKEN_CREATE_REFUSED: 'auth.token.create_refused',
     TOKEN_REVOKE: 'auth.token.revoke',
 
     // ── Users (already recorded before this batch — names preserved verbatim) ────────────────────────

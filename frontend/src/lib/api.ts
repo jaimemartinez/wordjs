@@ -1382,7 +1382,9 @@ export interface ApiTokenCreated {
 }
 export const tokensApi = {
     list: () => apiGet<{ tokens: ApiToken[] }>("/auth/tokens"),
-    create: (data: { name: string; scopes: string; expiresInDays?: number | null }) =>
+    // `mfaCode` is the step-up code: required only when the caller's role requires 2FA and the session was
+    // not signed in with the second factor (the backend answers 403 `rest_mfa_step_up_required` first).
+    create: (data: { name: string; scopes: string; expiresInDays?: number | null; mfaCode?: string }) =>
         apiPost<ApiTokenCreated>("/auth/tokens", data),
     revoke: (id: number) => apiDelete<{ revoked: boolean; id: number }>(`/auth/tokens/${id}`),
 };
@@ -1551,6 +1553,12 @@ export interface MfaPolicy {
     // predates the field, so headless clients keep working until an admin deliberately turns it on.
     enforceForApiTokens: boolean;
 }
+// What the policy means for EXISTING API tokens (counts only) — returned next to the policy.
+export interface MfaTokenExposure {
+    requiredRoleTokens: number;      // active tokens owned by users whose role requires 2FA
+    unenrolledOwnerTokens: number;   // ...of which the owner has not enrolled
+    unenrolledOwners: number;        // distinct owners behind those
+}
 /**
  * Enrolment is SUDO-GATED on the backend (routes/auth.ts): both /auth/mfa/setup — the call that hands
  * out the TOTP secret — and /auth/mfa/enable — the call that actually locks the account — demand the
@@ -1577,8 +1585,8 @@ export const mfaApi = {
         apiPost<{ enabled: boolean; backupCodes: string[]; message: string }>("/auth/mfa/enable", { code, currentPassword: requireCurrentPassword(currentPassword) }),
     disable: (code: string) => apiPost<{ disabled: boolean }>("/auth/mfa/disable", { code }),
     regenerateBackupCodes: (code: string) => apiPost<{ backupCodes: string[]; message: string }>("/auth/mfa/backup-codes", { code }),
-    getPolicy: () => apiGet<{ policy: MfaPolicy }>("/auth/mfa/policy"),
-    savePolicy: (policy: { requiredRoles: string[]; graceDays: number; enforceForApiTokens: boolean }) => apiPut<{ policy: MfaPolicy }>("/auth/mfa/policy", policy),
+    getPolicy: () => apiGet<{ policy: MfaPolicy; tokenExposure?: MfaTokenExposure }>("/auth/mfa/policy"),
+    savePolicy: (policy: { requiredRoles: string[]; graceDays: number; enforceForApiTokens: boolean }) => apiPut<{ policy: MfaPolicy; tokenExposure?: MfaTokenExposure }>("/auth/mfa/policy", policy),
     /**
      * Administrative two-factor reset — the way OUT of a 2FA lockout, and the reason enrolment above can
      * be password-gated without creating an unrecoverable state. It lives under the USERS router

@@ -276,9 +276,33 @@ async function evaluate(user: any): Promise<{ required: boolean; enabled: boolea
     return { required: true, enabled: false, enforced: !withinGrace, withinGrace, graceDeadline };
 }
 
+/**
+ * What the policy means for EXISTING API tokens — the numbers behind the admin notice that tokens are
+ * exempt from the compliance gate unless `enforceForApiTokens` is on. Counts active tokens owned by users
+ * whose role the policy requires, and how many of those belong to an owner who has NOT enrolled: with the
+ * flag off, each of those is a working credential for a required role that never passes a second factor.
+ * Metadata only (counts), and read-only.
+ */
+async function tokenExposure(): Promise<{ requiredRoleTokens: number; unenrolledOwnerTokens: number; unenrolledOwners: number }> {
+    const policy = await getPolicy();
+    const out = { requiredRoleTokens: 0, unenrolledOwnerTokens: 0, unenrolledOwners: 0 };
+    if (!policy.requiredRoles.length) return out;
+    const ApiToken = require('../models/ApiToken');
+    for (const { userId, count } of await ApiToken.activeCountsByOwner()) {
+        const role = (await User.getMeta(userId, 'role')) || 'subscriber';
+        if (!policy.requiredRoles.includes(role)) continue;
+        out.requiredRoleTokens += count;
+        if (!(await isEnabled(userId))) {
+            out.unenrolledOwnerTokens += count;
+            out.unenrolledOwners += 1;
+        }
+    }
+    return out;
+}
+
 module.exports = {
     META, N_BACKUP,
     signChallenge, verifyChallenge, isEnabled, verifyLoginCode,
     beginEnroll, completeEnroll, regenerateBackupCodes, disable, backupCount, hashBackup,
-    getPolicy, setPolicy, evaluate, POLICY_OPTION, DEFAULT_POLICY
+    getPolicy, setPolicy, evaluate, tokenExposure, POLICY_OPTION, DEFAULT_POLICY
 };

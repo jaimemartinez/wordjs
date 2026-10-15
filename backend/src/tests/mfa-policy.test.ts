@@ -30,6 +30,7 @@ config.dbDriver = 'sqlite-native';
 const database = require('../config/database');
 const roles = require('../core/roles');
 const mfa = require('../core/mfa');
+const totp = require('../core/totp');
 const ApiToken = require('../models/ApiToken');
 const User = require('../models/User');
 const { csrfProtection, mfaComplianceGate } = require('../middleware/auth');
@@ -48,6 +49,28 @@ app.use('/api/v1', require('../routes'));
 
 const U: Record<string, number> = {};
 let dbAsync: any;
+
+// A session JWT that signed in WITH a second factor (the `amr` claim POST /auth/mfa stamps), and one that did not.
+const mfaSession = (persona: string) => jwt.sign({ userId: U[persona], amr: ['mfa'] }, SECRET, { algorithm: 'HS256', expiresIn: '1h' });
+const plainSession = (persona: string) => jwt.sign({ userId: U[persona] }, SECRET, { algorithm: 'HS256', expiresIn: '1h' });
+
+// The newest audit row for an action, with its detail parsed.
+async function lastAudit(action: string) {
+    const row = await dbAsync.get('SELECT * FROM audit_log WHERE action = ? ORDER BY id DESC LIMIT 1', [action]);
+    return row ? { ...row, detail: typeof row.detail === 'string' ? JSON.parse(row.detail) : row.detail } : null;
+}
+
+// Enroll a persona for real (secret + replay counter + backup codes) without the sudo-gated HTTP flow;
+// returns the TOTP secret and the plaintext backup codes.
+async function enrollDirect(persona: string) {
+    const secret = totp.generateSecret();
+    const codes = ['AAAAA-BBBBB', 'CCCCC-DDDDD', 'EEEEE-FFFFF'];
+    await User.updateMeta(U[persona], mfa.META.lastStep, '-1');
+    await User.updateMeta(U[persona], mfa.META.secret, secret);
+    await User.updateMeta(U[persona], mfa.META.backup, JSON.stringify(codes.map((c) => mfa.hashBackup(c))));
+    await User.updateMeta(U[persona], mfa.META.enabled, '1');
+    return { secret, codes };
+}
 
 // A session COOKIE (no `purpose` — a real login token) for a persona.
 const cookie = (persona: string) => `wordjs_token=${jwt.sign({ userId: U[persona] }, SECRET, { algorithm: 'HS256', expiresIn: '1h' })}`;
@@ -325,10 +348,11 @@ test('token minting is refused for a required-role un-enrolled user, EVEN within
     assert.strictEqual(blocked.status, 403);
     assert.strictEqual(blocked.body.code, 'rest_mfa_required_for_tokens');
 
-    // After enrolling, minting works again.
+    // After enrolling, minting works again — from a session that signed in WITH the second factor (`amr`;
+    // the step-up tests below cover a session that did not).
     await User.updateMeta(U.boss, mfa.META.enabled, '1');
     const ok = await request(app).post('/api/v1/auth/tokens')
-        .set('Authorization', `Bearer ${jwtBearer}`).send({ name: 'ok-now', scopes: 'read' });
+        .set('Authorization', `Bearer ${mfaSession('boss')}`).send({ name: 'ok-now', scopes: 'read' });
     assert.strictEqual(ok.status, 201);
     await User.deleteMeta(U.boss, mfa.META.enabled);
     await policyOff();
@@ -344,4 +368,154 @@ test('GET /auth/mfa/policy is admin-only', async () => {
     const editor = await request(app).get('/api/v1/auth/mfa/policy').set('Cookie', cookie('ed'));
     assert.strictEqual(editor.status, 403);
     assert.notStrictEqual(editor.body.code, 'mfa_enrollment_required'); // an isAdmin denial, not the gate
+});
+
+// ── Step-up at token creation: a required-2FA role mints only from an MFA-verified session or with a code ──
+test('an enrolled required-role user whose session did NOT sign in with 2FA must step up to mint a token', async () => {
+    await mfa.setPolicy({ requiredRoles: ['administrator'], graceDays: 3650 });
+    const { codes } = await enrollDirect('boss');
+    const before = (await ApiToken.listForUser(U.boss)).length;
+
+    // No code → refused with a dedicated code the UI can turn into a prompt; nothing minted.
+    const bare = await request(app).post('/api/v1/auth/tokens')
+        .set('Authorization', `Bearer ${plainSession('boss')}`).send({ name: 'no-step-up', scopes: 'read' });
+    assert.strictEqual(bare.status, 403);
+    assert.strictEqual(bare.body.code, 'rest_mfa_step_up_required');
+
+    // Wrong code → 400 rest_mfa_invalid, and the refusal is in the audit log.
+    const wrong = await request(app).post('/api/v1/auth/tokens')
+        .set('Authorization', `Bearer ${plainSession('boss')}`).send({ name: 'bad-code', scopes: 'read', mfaCode: '000000' });
+    assert.strictEqual(wrong.status, 400);
+    assert.strictEqual(wrong.body.code, 'rest_mfa_invalid');
+    const refused = await lastAudit('auth.token.create_refused');
+    assert.ok(refused, 'a failed step-up leaves an audit row');
+    assert.strictEqual(Number(refused.actor_id), U.boss);
+    assert.strictEqual(refused.detail.reason, 'mfa_step_up_failed');
+    assert.strictEqual((await ApiToken.listForUser(U.boss)).length, before, 'no token minted on a refused step-up');
+
+    // A valid (backup) code → minted, and the audit row says how the second factor was proven.
+    const stepped = await request(app).post('/api/v1/auth/tokens')
+        .set('Authorization', `Bearer ${plainSession('boss')}`).send({ name: 'stepped-up', scopes: 'read', mfaCode: codes[0] });
+    assert.strictEqual(stepped.status, 201, JSON.stringify(stepped.body));
+    const created = await lastAudit('auth.token.create');
+    assert.strictEqual(Number(created.target_id), stepped.body.id);
+    assert.strictEqual(created.detail.mfa, 'step_up');
+
+    // The backup code was consumed: replaying it is refused.
+    const replay = await request(app).post('/api/v1/auth/tokens')
+        .set('Authorization', `Bearer ${plainSession('boss')}`).send({ name: 'replay', scopes: 'read', mfaCode: codes[0] });
+    assert.strictEqual(replay.status, 400);
+    assert.strictEqual(replay.body.code, 'rest_mfa_invalid');
+
+    await mfa.disable(U.boss);
+    await policyOff();
+});
+
+test('a session that signed in with 2FA mints without a code, and the audit row records it', async () => {
+    await mfa.setPolicy({ requiredRoles: ['administrator'], graceDays: 3650 });
+    await enrollDirect('boss');
+    const res = await request(app).post('/api/v1/auth/tokens')
+        .set('Authorization', `Bearer ${mfaSession('boss')}`).send({ name: 'from-mfa-session', scopes: 'read' });
+    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+    assert.strictEqual((await lastAudit('auth.token.create')).detail.mfa, 'session');
+    await mfa.disable(U.boss);
+    await policyOff();
+});
+
+test('roles outside the policy mint exactly as before (no code), recorded as not_required', async () => {
+    // Only administrators hold manage_api_tokens by default, so put the policy on ANOTHER role.
+    await mfa.setPolicy({ requiredRoles: ['editor'], graceDays: 0 });
+    const res = await request(app).post('/api/v1/auth/tokens')
+        .set('Authorization', `Bearer ${plainSession('boss')}`).send({ name: 'admin-ci', scopes: 'read' });
+    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+    assert.strictEqual((await lastAudit('auth.token.create')).detail.mfa, 'not_required');
+    await policyOff();
+
+    // ...and with no policy at all, nobody is asked for anything (the pre-existing behaviour).
+    const none = await request(app).post('/api/v1/auth/tokens')
+        .set('Authorization', `Bearer ${plainSession('boss')}`).send({ name: 'no-policy', scopes: 'read' });
+    assert.strictEqual(none.status, 201);
+    assert.strictEqual((await lastAudit('auth.token.create')).detail.mfa, 'not_required');
+});
+
+// The session JWT a response set as the `wordjs_token` cookie (or returned in the body).
+function sessionFrom(res: any): string | undefined {
+    const set = (res.headers['set-cookie'] || []).find((c: string) => c.startsWith('wordjs_token='));
+    return set ? decodeURIComponent(set.split(';')[0].slice('wordjs_token='.length)) : res.body && res.body.token;
+}
+
+test('POST /auth/mfa issues a session marked as 2FA-verified, and /auth/refresh keeps the mark', async () => {
+    await policyOff();
+    const { secret } = await enrollDirect('boss');
+    // POST /auth/mfa is the pre-session second step (no credential yet), so drive it on an app without the
+    // CSRF layer, the way mfa.test.ts does; the refresh calls below are Bearer and pass CSRF anyway.
+    const bare = express();
+    bare.use(express.json());
+    bare.use(cookieParser());
+    bare.use('/api/v1', require('../routes'));
+    const done = await request(bare).post('/api/v1/auth/mfa')
+        .send({ mfaToken: mfa.signChallenge(U.boss), code: totp.totp(secret) });
+    assert.strictEqual(done.status, 200, JSON.stringify(done.body));
+    const session = sessionFrom(done);
+    assert.ok(session, 'the completed 2FA login issues a session');
+    assert.deepStrictEqual(jwt.decode(session).amr, ['mfa'], 'a 2FA login stamps amr');
+
+    // Refresh inherits the assurance of the session presented — neither drops nor invents it.
+    const refreshed = await request(app).post('/api/v1/auth/refresh').set('Authorization', `Bearer ${session}`);
+    assert.strictEqual(refreshed.status, 200, JSON.stringify(refreshed.body));
+    const rTok = sessionFrom(refreshed);
+    assert.ok(rTok, 'refresh returned a session');
+    assert.deepStrictEqual(jwt.decode(rTok).amr, ['mfa']);
+
+    const plainRefresh = await request(app).post('/api/v1/auth/refresh').set('Authorization', `Bearer ${plainSession('boss')}`);
+    const pTok = sessionFrom(plainRefresh);
+    assert.ok(pTok);
+    assert.strictEqual(jwt.decode(pTok).amr, undefined, 'refreshing a password-only session does not upgrade it');
+    await mfa.disable(U.boss);
+});
+
+test('GET /auth/mfa/policy reports how many active tokens the exemption leaves un-gated', async () => {
+    await mfa.disable(U.boss);
+    await dbAsync.run('UPDATE api_tokens SET revoked = 1');
+    await policyOff();
+    await ApiToken.generate({ userId: U.boss, name: 'legacy-1', scopes: 'read' });
+    await ApiToken.generate({ userId: U.boss, name: 'legacy-2', scopes: 'read' });
+    await ApiToken.generate({ userId: U.ed, name: 'editor', scopes: 'read' });
+    const expired = await ApiToken.generate({ userId: U.boss, name: 'old', scopes: 'read', expiresInDays: 1 });
+    await dbAsync.run('UPDATE api_tokens SET expires_at = 1 WHERE id = ?', [expired.id]);
+
+    // No role required → nothing to report.
+    const off = await request(app).get('/api/v1/auth/mfa/policy').set('Authorization', `Bearer ${plainSession('boss')}`);
+    assert.strictEqual(off.status, 200);
+    assert.deepStrictEqual(off.body.tokenExposure, { requiredRoleTokens: 0, unenrolledOwnerTokens: 0, unenrolledOwners: 0 });
+
+    // Administrators required, boss not enrolled: boss's two active tokens are the exposure; the editor's
+    // token (role not required) and the expired one are not counted.
+    await mfa.setPolicy({ requiredRoles: ['administrator'], graceDays: 3650 });
+    const on = await request(app).get('/api/v1/auth/mfa/policy').set('Authorization', `Bearer ${plainSession('boss')}`);
+    assert.strictEqual(on.status, 200);
+    assert.deepStrictEqual(on.body.tokenExposure, { requiredRoleTokens: 2, unenrolledOwnerTokens: 2, unenrolledOwners: 1 });
+
+    // Once the owner enrolls, the tokens are still in a required role but no longer un-enrolled.
+    await User.updateMeta(U.boss, mfa.META.enabled, '1');
+    assert.deepStrictEqual(await mfa.tokenExposure(), { requiredRoleTokens: 2, unenrolledOwnerTokens: 0, unenrolledOwners: 0 });
+    await User.deleteMeta(U.boss, mfa.META.enabled);
+    await dbAsync.run('UPDATE api_tokens SET revoked = 1');
+    await policyOff();
+});
+
+test('PUT /auth/mfa/policy records who changed the policy, including the API-token choice', async () => {
+    await policyOff();
+    const res = await request(app).put('/api/v1/auth/mfa/policy')
+        .set('Authorization', `Bearer ${plainSession('boss')}`)
+        .send({ requiredRoles: ['administrator'], graceDays: 3650, enforceForApiTokens: true });
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.body.tokenExposure, 'the save answer carries the fresh exposure counts');
+    const row = await lastAudit('auth.mfa.policy_update');
+    assert.ok(row, 'policy change audited');
+    assert.strictEqual(Number(row.actor_id), U.boss);
+    assert.deepStrictEqual(row.detail.requiredRoles, ['administrator']);
+    assert.strictEqual(row.detail.graceDays, 3650);
+    assert.strictEqual(row.detail.apiClientsEnforced, true);
+    await policyOff();
 });
