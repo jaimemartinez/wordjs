@@ -28,6 +28,17 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   is refused with an error on the plugin's admin page instead of being guessed at. UC ids, channel URLs
   and handles resolved through the Data API work as before.
 
+- **Network-granted isolated plugins lost all network on Node 25.** Node 25 extended its permission
+  model to the network: with `--permission` on, every DNS lookup, connect, listen and UDP send is refused
+  with `ERR_ACCESS_DENIED` unless the process is started with `--allow-net`. The isolate launcher never
+  passed that flag (on Node 20–24 it is a bad option that aborts the child), so a plugin holding the
+  network grant failed every outbound call, allowlisted hosts included (for example
+  `getaddrinfo ERR_ACCESS_DENIED www.youtube.com` from youtube-videos). The launcher now probes once
+  whether this Node gates the network and which flags restore it, and adds `--allow-net` only for a
+  plugin that holds the network grant; plugins without it keep zero network. The flag takes no host list,
+  so the egress guard is still what decides which hosts a granted plugin may reach. The production Docker
+  image (Node 22) was not affected.
+
 ## [2.4.0] - 2026-10-12
 
 ### Security

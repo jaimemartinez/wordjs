@@ -57,7 +57,8 @@ WordJS implements a "Defense in Depth" security model for its plugin ecosystem, 
 > Unix uid drop — the guarantee is **equivalent authority reduction**, not identical primitives. The
 > **Node permission model** (every compiled platform, default-on, probe-gated) sits under all of it as an
 > additional C++ capability floor — filesystem access scoped, `child_process`, `worker_threads`, native
-> addons and WASI never granted, no network policy — and the JavaScript guards of §1.2 remain
+> addons and WASI never granted, no per-host network policy (on Node 25+ all network is denied unless
+> `--allow-net` is passed, which only a network-granted plugin receives) — and the JavaScript guards of §1.2 remain
 > defense-in-depth on top. Live state is reported as
 > `sandbox.kernel`, `sandbox.network`, `sandbox.permission` and (Linux) `sandbox.hostPrivilege` on admin
 > `GET /health/details`; verify the
