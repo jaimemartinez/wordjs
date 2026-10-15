@@ -854,6 +854,7 @@ Every call is permission-checked on the host against your manifest.
 | `wordjs.mail(msg)` | `email:admin` | Sends via the active mail provider. (Distinct from `email:provider`, which only `wordjs.provideMail` needs.) |
 | `wordjs.provideMail(handler)` | `email:provider` | Become the host-wide mail sender (sandboxed; needs the `email:provider` grant). |
 | `wordjs.notify(n)` | `notifications:send` | Push an admin notification. |
+| `wordjs.ai.complete({ prompt, system?, maxTokens? })` | `ai:use` | Text completion through the site's AI provider → `{ text, model }`. The key never reaches the plugin; 30 calls/minute (`ai-provider.md` §4). |
 | `wordjs.notify.registerTransport(name, handler)` | `notifications:provider` | Register a notification transport (sandboxed; needs the `notifications:provider` grant). |
 | `wordjs.adminMenu.add(item)` | `admin_menu:register` | Declarative sidebar item. Gated host-side like every other bridge call: the manifest must declare `admin_menu:register` **and** the admin must grant it, or the call throws a `Security Block` (`scope: "admin"` does not imply it). `item.href` must be a same-origin relative path (a single leading `/`, no scheme, no `//` — e.g. `/admin/plugin/<slug>`) or the item is dropped with a warning; capped at 50 items per plugin. |
 | `wordjs.cron.schedule(ts, recurrence, hook, args)` | — | Host fires the hook back into the child process — only **your** callbacks, never core's. `recurrence` is a registered schedule name (`'hourly'`, `'twicedaily'`, `'daily'`, `'weekly'`, `'off'`); pass `false` for a one-off event at `ts`. An unregistered name is stored with a 0 interval, so it never repeats. |
@@ -928,7 +929,8 @@ the capability is BOTH declared in the manifest AND granted.
 non-secret options), `filesystem` (read/write — own dir), `users:read` (the safe user projection, with the
 account's capabilities in your own namespace — §12a),
 `assets:write` (enqueue own scripts/styles on public pages), `email:admin` (send through the active mail
-provider) / `email:provider` (*become* the provider), `notifications:send` / `notifications:provider`,
+provider) / `email:provider` (*become* the provider), `notifications:send` / `notifications:provider`, `ai:use` (text completions through the site's AI provider — the key
+never reaches the plugin),
 `express:register_route`, `admin_menu:register`, `browser:script` (serve and run the plugin's compiled
 frontend bundles in the browser — **not sandboxed**, see `security.md` §1.3b), `roles:declare` (register the user roles of
 the manifest's `roles` block — §12a), and **`network`** (outbound access to **public IPs only**

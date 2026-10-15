@@ -131,6 +131,8 @@ router.use('/seo', seoRoutes);
 router.use('/hooks', hooksRoutes);
 router.use('/webhooks', require('./webhooks'));
 router.use('/audit', require('./audit'));
+// The AI provider layer: admin-held provider settings and the editor's suggestions (core/ai-provider).
+router.use('/ai', require('./ai'));
 router.use('/forms', require('./forms'));
 router.use('/presence', require('./presence'));
 // Colaboración en tiempo real de Verso (SSE de bajada + POST de subida). Distinta de `/presence`,

@@ -1387,6 +1387,29 @@ export const tokensApi = {
     revoke: (id: number) => apiDelete<{ revoked: boolean; id: number }>(`/auth/tokens/${id}`),
 };
 
+// ── AI provider layer ──────────────────────────────────────────────────────────────────────────────
+// Backend routes/ai.ts. The provider key is write-only: settings come back with `hasKey`/`keyHint` only.
+export type AiProviderId = "" | "anthropic" | "openai-compatible";
+export type AiSuggestTask = "excerpt" | "seo_description" | "alt_text";
+export interface AiSettings {
+    provider: AiProviderId;
+    model: string;
+    baseUrl: string;
+    hasKey: boolean;
+    keyHint: string;
+    providers: Exclude<AiProviderId, "">[];
+    anthropicModels: string[];
+}
+export const aiApi = {
+    status: () => apiGet<{ enabled: boolean; tasks: AiSuggestTask[] }>("/ai/status"),
+    getSettings: () => apiGet<AiSettings>("/ai/settings"),
+    saveSettings: (data: { provider: AiProviderId; model?: string; baseUrl?: string; apiKey?: string; clearKey?: boolean }) =>
+        apiPut<AiSettings>("/ai/settings", data),
+    test: () => apiPost<{ ok: boolean; provider: string; model: string; ms: number }>("/ai/test", {}),
+    suggest: (data: { task: AiSuggestTask; title?: string; content?: string; mediaId?: number; language?: string }) =>
+        apiPost<{ suggestion: string; model: string }>("/ai/suggest", data),
+};
+
 // ── Outgoing webhooks ──────────────────────────────────────────────────────────────────────────────
 export interface Webhook {
     id: number;

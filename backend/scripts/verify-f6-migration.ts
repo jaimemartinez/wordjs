@@ -62,8 +62,9 @@ const MAX_UNTYPED_BOUNDARY_FILES = 0;
  * Boundary files that are FULLY migrated: at least one typed `req` and not one `req: any` left.
  * 44, not 45: the 45th was routes/frontend.ts, the never-mounted legacy page renderer, which was DELETED
  * (tests/route-modules-mounted.test.ts) rather than un-migrated. Every file that remains is still counted.
+ * 45: routes/ai.ts (the AI provider settings and editor suggestions) arrived fully typed.
  */
-const MIN_FULLY_TYPED_BOUNDARY_FILES = 44;
+const MIN_FULLY_TYPED_BOUNDARY_FILES = 45;
 /**
  * Does this workflow actually HAND `needle` to a runner, inside a `run:` step?
  *

@@ -1692,6 +1692,8 @@ const ALLOWED_BRIDGE_METHODS = new Set([
     // Private media description (gated host-side on media:private_read). Streaming the BYTES is not a
     // bridge call: it is a route reply (`res.sendPrivateMedia`), so file contents never cross the IPC.
     'media.getPrivate',
+    // Text completion through the AI provider of the site (gated host-side on ai:use; the key stays host-side).
+    'ai.complete',
     // Host-mediated DNS (network-gated + private-IP-filtered host-side; see api.dns in plugin-api.ts).
     // The raw dns.resolve* surface is denied inside the isolate, so an MTA reaches MX/TXT records here.
     'dns.resolveMx', 'dns.resolveTxt', 'dns.resolve4', 'dns.resolve6', 'dns.resolve',

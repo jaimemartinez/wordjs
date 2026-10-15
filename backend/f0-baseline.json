@@ -2,16 +2,16 @@
   "schemaVersion": 1,
   "snapshot": {
     "restSource": {
-      "routeFiles": 39,
-      "endpointDeclarations": 243,
-      "mountDeclarations": 84,
-      "semanticSha256": "b92ec9de2ca4dbf18adb8f65d218d2e5fe5bc8fb02c8b8d49fdabac587beea99"
+      "routeFiles": 40,
+      "endpointDeclarations": 248,
+      "mountDeclarations": 85,
+      "semanticSha256": "98b0b2c71965a92bfad8ad4b9debae5101d7475a40ab1bb8df3170e9e5b6ad6f"
     },
     "openapi": {
-      "paths": 190,
-      "operations": 240,
-      "coverage": 0.9877,
-      "semanticSha256": "9917b91952e26e486acb3509122d4ffbab1ab375d223b3f95c4f80bf56c15c4c"
+      "paths": 194,
+      "operations": 245,
+      "coverage": 0.9879,
+      "semanticSha256": "a121d97355c2a2f01ebea54d373806b479eee8834052bfdc14507d835c45f0cd"
     },
     "typingDebt": {
       "requestAny": {
@@ -27,6 +27,8 @@
       "exportedSymbols": [
         "WordJS",
         "WordJSAdminMenuItem",
+        "WordJSAiCompleteRequest",
+        "WordJSAiCompleteResult",
         "WordJSDbType",
         "WordJSMailMessage",
         "WordJSNotification",
@@ -40,10 +42,10 @@
         "WordJSSafeUser",
         "WordJSUploadedFile"
       ],
-      "semanticSha256": "dd4150cbbf70aa15c90992d91c4954c7d0502e27ca6901eef6c717dcc4f33c8e"
+      "semanticSha256": "87f51ab4748622ae57f9f4dbd8f5457ed88c7e311cba6bfaae401e77b6b3dfb1"
     },
     "verificationSurface": {
-      "backendTestFiles": 310,
+      "backendTestFiles": 311,
       "frontendTestFiles": 242,
       "sandboxWorkflowSemanticSha256": "6589c490e047c52e4330eed83db22c91501686ccf6f30ba7ce030938c995a913",
       "performanceBudgetsSha256": "5a608e783d98267030d14c9ce70edb7cc9f5354cbf006c31353648425d7a7556"

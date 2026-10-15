@@ -550,6 +550,9 @@ const KNOWN_PERMISSIONS: Record<string, string[]> = {
     // Register the roles the manifest's `roles` block declares (core/plugin-roles.ts). Every such role and
     // capability lives in the plugin's own namespace; the grant cannot reach a core capability.
     roles: ['declare'],
+    // ai:use — ask the site's AI provider (core/ai-provider) for a text completion through wordjs.ai.complete.
+    // The plugin gets text back, never the provider's key or settings. A special verb: `admin` never implies it.
+    ai: ['use'],
     network: [], // scope-only: {scope:'network'} carries no access token
 };
 

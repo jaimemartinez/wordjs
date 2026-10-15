@@ -35,6 +35,7 @@ import { useUnsavedChanges } from "@/contexts/UnsavedChangesContext";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { trStr } from "@/lib/editorI18n";
+import { withAiSuggestions } from "@/components/verso/fields/AiSuggestField";
 
 // Paginación de la carga de etiquetas: el backend tapa `per_page` a 100, y el tope de páginas evita
 // que un sitio con miles de etiquetas dispare decenas de peticiones al abrir el editor. Las
@@ -480,13 +481,13 @@ export default function PostEditorPage() {
     // sustituida por el select por ID (que es lo que Post.setTerms espera). Memorizado para no
     // reconstruir el objeto en cada pulsación.
     const rootFields = useMemo(
-        () => withRecordRootFields(rootFieldsPost, {
+        () => withAiSuggestions(withRecordRootFields(rootFieldsPost, {
             categories,
             currentCategory: rootCategory,
             recordCategories,
             tags: allTags,
             recordTags,
-        }),
+        })),
         [categories, rootCategory, recordCategories, allTags, recordTags],
     );
 

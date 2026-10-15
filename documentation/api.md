@@ -725,6 +725,17 @@ Write responses are `{ rev, warnings, unchanged? }` (a no-op answers `200 { unch
 
 `POST /api/v1/system/certs/config` (§6.5) additionally returns `canonicalUpgraded` (the same host moved from http to https and the main address followed) or `suggestCanonical` (the gateway now reports another address; the certificates page opens the Change dialog prefilled with it).
 
+
+### 6.23 AI provider 🧠
+Base path `/api/v1/ai` (`backend/src/routes/ai.ts`, `core/ai-provider.ts`). Operator guide: [ai-provider.md](ai-provider.md). The provider's API key is **write-only** — no route returns it.
+
+| Method | Endpoint | Auth | Description |
+| :----- | :------- | :--- | :---------- |
+| `GET`  | `/status` | Signed in | `{ enabled, tasks }` — whether suggestions are available |
+| `GET`  | `/settings` | Session + administrator | `{ provider, model, baseUrl, hasKey, keyHint, providers, anthropicModels }` |
+| `PUT`  | `/settings` | Session + administrator | `{ provider: '' \| 'anthropic' \| 'openai-compatible', model?, baseUrl?, apiKey?, clearKey? }`; an empty `apiKey` keeps the stored key. `400 rest_invalid_param` for an unknown provider/model, credentials in the URL, or plain http to a non-loopback host. Audited as `ai.settings.update` (never the key) |
+| `POST` | `/test` | Session + administrator | One tiny round trip: `{ ok, provider, model, ms }`, or the provider error |
+| `POST` | `/suggest` | `edit_posts`/`edit_pages` (text tasks); `upload_files` + edit rights on the image (`alt_text`) | `{ task: 'excerpt' \| 'seo_description' \| 'alt_text', title?, content?, mediaId?, language? }` → `{ suggestion, model }`. Saves nothing. `409 ai_not_configured`, `422 ai_refused`, `429 ai_rate_limited` (20/min per user), `502 ai_provider_*` |
 ---
 
 ## 8. Cron System ⏰

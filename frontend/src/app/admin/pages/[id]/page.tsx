@@ -30,13 +30,14 @@ import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { trStr } from "@/lib/editorI18n";
 import { useAuth } from "@/contexts/AuthContext";
+import { withAiSuggestions } from "@/components/verso/fields/AiSuggestField";
 
 /**
  * Campos ROOT del inspector de PÁGINAS: los del registro más imagen destacada y extracto. No depende
  * de nada del componente, así que se calcula UNA vez — el panel de propiedades recibe siempre la
  * misma referencia.
  */
-const PAGE_ROOT_FIELDS = withRecordRootFields(rootFieldsPage, { seo: true });
+const PAGE_ROOT_FIELDS = withAiSuggestions(withRecordRootFields(rootFieldsPage, { seo: true }));
 
 export default function PageEditorPage() {
     const { t, language } = useI18n();

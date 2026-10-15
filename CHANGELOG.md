@@ -4,6 +4,28 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [Unreleased]
+
+### Added
+
+- **An AI provider layer, with editor suggestions and an `ai:use` plugin permission.** Administrators
+  connect a provider under **Settings → AI** (`/admin/settings/ai`): **Anthropic** (Claude — default model
+  `claude-sonnet-5-5`, also `claude-haiku-5-5` and `claude-opus-5-5`, through the official
+  `@anthropic-ai/sdk`) or any **OpenAI-compatible** server (OpenAI, Ollama, LM Studio, vLLM…; https unless
+  loopback), with a connection test. The API key is write-only: no route returns it (the screen shows
+  only that one is stored and its last four characters), it is never logged or audited, and plugins can
+  neither read it nor redirect the provider (`ai_provider` and `ai_provider_api_key` are protected
+  options). The editor gets **Suggest with AI** under a post's or page's excerpt and meta description
+  (it reads the live canvas, unsaved edits included) and under an image's alt text in the media library
+  (the image is read server-side behind the same rule as editing it and downscaled before it leaves the
+  site). A suggestion is only ever shown — Use / Try again / Dismiss — and nothing is saved until the user
+  accepts it; the material is sent as data the model is told not to obey, and the answer is reduced to a
+  single line of plain text with a length cap. Plugins get `wordjs.ai.complete({ prompt, system?,
+  maxTokens? })` → `{ text, model }`, gated on the new `ai:use` permission that a manifest requests and
+  an administrator grants (30 calls/minute per plugin). New routes `GET /api/v1/ai/status`,
+  `GET`/`PUT /api/v1/ai/settings`, `POST /api/v1/ai/test` and `POST /api/v1/ai/suggest` (20/minute per
+  user); new audit action `ai.settings.update`. See `documentation/ai-provider.md`.
+
 ## [2.5.0] - 2026-10-15
 
 ### Added

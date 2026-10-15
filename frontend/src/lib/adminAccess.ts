@@ -79,6 +79,8 @@ export const CORE_MENU_ITEMS: AdminMenuItem[] = [
     // las entradas añadidas después del corte de traducciones. Va DESPUÉS del índice 7, así que cae
     // en la sección de gestión junto a Ajustes — no mueve el reparto de secciones.
     { href: "/admin/settings/interactions", label: "Interacciones", icon: "fa-wand-magic-sparkles", cap: "manage_options" },
+    // Proveedor de IA (backend routes/ai.ts): el backend lo gatea con isAdmin + sesión interactiva.
+    { href: "/admin/settings/ai", label: "nav.ai", icon: "fa-brain", cap: "manage_options" },
     // Herramientas: exportación JSON/WXR (la mitad que faltaba de importar/exportar). El backend la
     // gatea con isAdmin, que mira el ROL; `manage_options` es lo más cerca que la barra puede afinar
     // con capabilities, y la propia página vuelve a comprobar el rol antes de ofrecer nada.

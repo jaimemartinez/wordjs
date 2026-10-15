@@ -83,6 +83,10 @@ const AUDIT_ACTIONS = Object.freeze({
 
     // ── Configuration ───────────────────────────────────────────────────────────────────────────────
     SETTINGS_UPDATE: 'settings.update',
+    // The AI provider (core/ai-provider): {provider, model, baseUrlHost, previousProvider, keyChanged,
+    // keyCleared}. Where the site's prompts — and its provider key — are sent is security-relevant on its
+    // own; the key itself is never in the row.
+    AI_SETTINGS_UPDATE: 'ai.settings.update',
 
     // ── The site's addresses (core/site-address) ─────────────────────────────────────────────────────
     // Each change of where the site lives is recorded with {from, to, added, removed, via, force, rev}
