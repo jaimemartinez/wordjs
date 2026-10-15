@@ -4,6 +4,8 @@
     "version": "1.0.0",
     "description": "Members-only content for WordJS: free and paid tiers, a paywall block that ends a post's free teaser, Stripe Checkout subscriptions verified by signed webhooks, tier changes and cancellation by the member, and complimentary memberships granted by the admin. Members are the site's own user accounts.",
     "author": "WordJS",
+    "license": "MIT",
+    "repository": "https://github.com/jaimemartinez/wordjs/tree/main/marketplace/plugins/memberships",
     "isolated": true,
     "backend": {
         "entry": "index.js"
