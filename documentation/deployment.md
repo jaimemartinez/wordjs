@@ -540,7 +540,7 @@ node backend/scripts/verify-sandbox-parity.mjs --json=sandbox-parity-report.json
 
 ### `config.sandbox.usePermissionModel` — common capability floor (default-on / opt-out)
 
-Each compiled child also uses Node's C++ permission model. Reads and writes are scoped to the same zones as the native sandbox, while `child_process`, `worker_threads`, native addons and WASI are never granted. It is probe-gated and defense-in-depth; it is not a replacement for Landlock, AppContainer or Seatbelt and it does not implement network policy.
+Each compiled child also uses Node's C++ permission model. Reads and writes are scoped to the same zones as the native sandbox, while `child_process`, `worker_threads`, native addons and WASI are never granted. It is probe-gated and defense-in-depth; it is not a replacement for Landlock, AppContainer or Seatbelt and it does not implement per-host network policy. Before Node 25 it does not cover the network at all; from Node 25 it denies all network unless the child starts with `--allow-net`, which WordJS passes (after probing that this Node accepts it) only to a plugin holding the network grant. Which hosts a granted plugin reaches is still decided by the egress guard and the native sandbox.
 
 ### `config.sandbox.useCgroupMemoryCap` — opt-in preventive cgroup cap (Linux)
 

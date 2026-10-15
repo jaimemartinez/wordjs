@@ -1200,8 +1200,10 @@ function getSandboxHardeningState() { return sandboxHardeningState; }
 //   · node:sqlite still opens files through it (its C++ fs access is not gated — verified: fs.write
 //     is DENIED while DatabaseSync creates the file). Stays blocked by BLOCKED_PLUGIN_MODULES.
 //   · diagnostics_channel is not an fs/net/process capability at all. Same — blocked by name.
-//   · --allow-net is not enforced in every build that accepts it, so the JS egress guard remains the
-//     authority on outbound traffic.
+//   · the network is Node-version dependent (see probeNetPermission): before Node 25 the model does
+//     not cover it at all; from Node 25 it denies every socket unless `--allow-net` is passed, and that
+//     flag is all-or-nothing. Neither says WHICH hosts, so the JS egress guard remains the authority on
+//     outbound traffic.
 // Which is exactly why the JS layer stays: each floor covers what the other misses.
 let permissionModelState: 'unknown' | 'unsupported' | 'disabled' | 'active' | 'degraded' = 'unknown';
 function getPermissionModelState() { return permissionModelState; }
@@ -1224,17 +1226,7 @@ function probePermissionModel(): Promise<string | null> {
         const probeSrc = 'try{require("fs").readFileSync(process.execPath);console.log("OPEN")}' +
             'catch(e){console.log(e&&e.code==="ERR_ACCESS_DENIED"?"DENIED":"OTHER")}';
         for (const flag of ['--permission', '--experimental-permission']) {
-            const verdict = await new Promise<string>((resolve) => {
-                try {
-                    const p = spawn(process.execPath, [flag, `--allow-fs-read=${__dirname}`, '-e', probeSrc],
-                        { stdio: ['ignore', 'pipe', 'ignore'] });
-                    let out = '';
-                    p.stdout.on('data', (d: any) => { out += String(d); });
-                    p.on('error', () => resolve('ERROR'));
-                    p.on('close', () => resolve(out.trim()));
-                    setTimeout(() => { try { p.kill('SIGKILL'); } catch { /* gone */ } resolve('TIMEOUT'); }, 8000).unref?.();
-                } catch { resolve('ERROR'); }
-            });
+            const verdict = await runProbeChild([flag, `--allow-fs-read=${__dirname}`, '-e', probeSrc]);
             if (verdict === 'DENIED') {
                 permissionModelState = 'active';
                 console.log(`[Sandbox] capability confinement ACTIVE on ${process.platform} (Node permission model via ${flag}: filesystem scoped to the plugin's own zones, child_process/worker_threads/native addons/WASI denied below JS).`);
@@ -1245,6 +1237,88 @@ function probePermissionModel(): Promise<string | null> {
         return null;
     })();
     return permissionProbe;
+}
+
+/** Spawn `node <args>` and resolve its trimmed stdout ('ERROR' / 'TIMEOUT' when it never reported). */
+function runProbeChild(args: string[]): Promise<string> {
+    return new Promise<string>((resolve) => {
+        try {
+            const p = spawn(process.execPath, args, { stdio: ['ignore', 'pipe', 'ignore'] });
+            let out = '';
+            p.stdout.on('data', (d: any) => { out += String(d); });
+            p.on('error', () => resolve('ERROR'));
+            p.on('close', () => resolve(out.trim()));
+            setTimeout(() => { try { p.kill('SIGKILL'); } catch { /* gone */ } resolve('TIMEOUT'); }, 8000).unref?.();
+        } catch { resolve('ERROR'); }
+    });
+}
+
+// --- The network under Node's permission model ----------------------------------------------------
+// Node-version dependent, and measured rather than assumed:
+//   · Node 20–24: the model does not cover the network at all, and `--allow-net` is not an option —
+//     passing it aborts the child on startup with `bad option: --allow-net` (exit 9).
+//   · Node 25+: the model DENIES the network unless the process is started with `--allow-net`. Every
+//     DNS lookup, connect, listen and UDP send fails with ERR_ACCESS_DENIED — so a network-GRANTED
+//     plugin could not reach even the hosts its allowlist names (`getaddrinfo ERR_ACCESS_DENIED`).
+// The flag is all-or-nothing: it takes no host list. It therefore only restores the ability to open
+// sockets, and it is passed ONLY to a plugin that holds the network grant. WHICH hosts that plugin may
+// reach is still decided by the JS egress guard (per-plugin allowlist, private/loopback/metadata block)
+// and by the native sandbox; a plugin without the grant keeps zero network under every Node.
+//
+// 'not-gated'    — this Node's model does not deny the network; no flag is needed.
+// 'gated'        — it denies the network and `--allow-net` (verified) restores it for granted plugins.
+// 'unrestorable' — it denies the network and no form of the flag was accepted; granted plugins stay
+//                  without network on this host, and the operator is told why.
+type NetPermissionState = 'unknown' | 'not-gated' | 'gated' | 'unrestorable';
+let netPermissionState: NetPermissionState = 'unknown';
+function getNetPermissionState() { return netPermissionState; }
+let netPermissionProbe: Promise<string[] | null> | undefined;
+/**
+ * The flags a NETWORK-GRANTED plugin needs on top of the permission flag, or null when it needs none.
+ *
+ * PROBED, in the same spirit as probePermissionModel: one child checks whether the model denies a
+ * lookup of `localhost` (answered by the OS resolver, no nameserver involved), and each candidate flag
+ * set is verified by a child that must START with it and get the same lookup through. A candidate this
+ * Node rejects as a bad option exits before printing anything, so it can never be selected.
+ *
+ * `--disable-warning=ExperimentalWarning` rides along with `--allow-net`, which Node 25 still marks
+ * experimental and announces on every plugin start. It is never sent on its own and only in the exact
+ * combination a child has just started with, so a Node that lacks it (before 20.11 / 21.3) can never
+ * receive it — and every Node that has `--allow-net` is far past both. The bare flag is the fallback.
+ */
+function probeNetPermission(): Promise<string[] | null> {
+    if (netPermissionProbe) return netPermissionProbe;
+    netPermissionProbe = (async () => {
+        const permFlag = await probePermissionModel();
+        if (!permFlag) { netPermissionState = 'not-gated'; return null; }   // no model in force → nothing to gate
+        const lookupSrc = 'const v=e=>console.log(e&&e.code==="ERR_ACCESS_DENIED"?"DENIED":"OPEN");' +
+            'try{require("dns").lookup("localhost",e=>v(e))}catch(e){v(e)}';
+        const base = [permFlag, `--allow-fs-read=${__dirname}`];
+        if (await runProbeChild([...base, '-e', lookupSrc]) !== 'DENIED') { netPermissionState = 'not-gated'; return null; }
+        for (const flags of [['--allow-net', '--disable-warning=ExperimentalWarning'], ['--allow-net']]) {
+            if (await runProbeChild([...base, ...flags, '-e', lookupSrc]) === 'OPEN') {
+                netPermissionState = 'gated';
+                console.log(`[Sandbox] Node's permission model denies network on this Node; network-granted isolated plugins start with ${flags.join(' ')} (the egress guard still decides which hosts they reach).`);
+                return flags;
+            }
+        }
+        netPermissionState = 'unrestorable';
+        console.warn(`[Sandbox] Node's permission model denies network on this Node (${process.version}) and no form of --allow-net was accepted: network-granted isolated plugins will fail every outbound call with ERR_ACCESS_DENIED. Run a Node release whose --allow-net works (the production image uses Node 22).`);
+        return null;
+    })();
+    return netPermissionProbe;
+}
+
+/**
+ * The permission-model argv for one plugin: the permission flag, its read and write roots, and the
+ * network flags ONLY when the plugin holds the network grant. Pure, so the test pins exactly what ships.
+ */
+function permissionModelArgv(o: { permFlag: string; readable: string[]; writable: string[]; netGranted: boolean; netFlags: string[] | null }): string[] {
+    const argv = [o.permFlag];
+    for (const dir of o.readable) argv.push(`--allow-fs-read=${dir}`);
+    for (const dir of o.writable) argv.push(`--allow-fs-write=${dir}`);
+    if (o.netGranted && o.netFlags) argv.push(...o.netFlags);
+    return argv;
 }
 
 /** Backward-compatible entry point: probe the native mechanism for this platform. */
@@ -1717,6 +1791,9 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
     // unavailable on this Node (or explicitly opted out); the native OS boundary remains independently
     // mandatory under the default fail-closed policy.
     const permFlag = await probePermissionModel();
+    // What a network-GRANTED plugin needs under that model on this Node (null: nothing). Probed once and
+    // awaited here, before the grant is read below, so the grant read and the argv stay synchronous.
+    const netPermFlags = (permFlag && !__filename.endsWith('.ts')) ? await probeNetPermission() : null;
     // -- LAUNCH INPUTS ----------------------------------------------------------------------------
     // Everything from here down to `childStdio` used to be the first half of the Promise executor
     // below, and it is moved out UNCHANGED: it is pure, synchronous argv / env / stdio construction
@@ -1874,15 +1951,16 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
     // NOT under ts-node: dev compiles TypeScript in-process and needs broader access than a
     // production child does. Same carve-out as blockCodeGen above, and for the same reason — the
     // production path is the one that has to be tight.
+    //
+    // NETWORK depends on the Node release (see probeNetPermission). Before Node 25 the model has no
+    // network permission: `--allow-net` is a bad option there (exit 9 — it once stopped every
+    // network-granted plugin from activating), so it must never be sent blind. From Node 25 the model
+    // denies all network unless `--allow-net` is passed, so a network-granted plugin needs it to open any
+    // socket at all. netPermFlags is what the probe verified this Node needs, and it is added ONLY for a
+    // plugin holding the network grant. The flag is all-or-nothing; the JS egress guard remains the
+    // authority on where a granted plugin may connect, and the native sandbox on whether IP sockets exist.
     if (permFlag && !__filename.endsWith('.ts')) {
-        execArgv.push(permFlag);
-        for (const dir of sandboxReadable) execArgv.push(`--allow-fs-read=${dir}`);
-        for (const dir of sandboxWritable) execArgv.push(`--allow-fs-write=${dir}`);
-        // NOTE: Node's permission model has NO `--allow-net` flag (never has — the tokens are
-        // fs-read/fs-write/child-process/worker/wasi/addons). Passing it aborted the child on startup
-        // with `bad option: --allow-net` (exit 9), so a network-GRANTED isolated plugin could not
-        // activate in production at all. The JS egress guard remains the authority on where a
-        // network-granted plugin may connect; the native sandbox decides only whether IP sockets exist.
+        execArgv.push(...permissionModelArgv({ permFlag, readable: sandboxReadable, writable: sandboxWritable, netGranted, netFlags: netPermFlags }));
     }
     const childStdio: any = IPC_STDIO;
     // -- LINUX ZERO-CONFIGURATION CONFINEMENT (Landlock + seccomp-bpf) -----------------------------
@@ -3289,6 +3367,8 @@ module.exports = {
     getIsolateStatus, getAllIsolateStatuses,
     assignProcessToJobObject, probeJobObjectCap, getSandboxHardeningState,
     getPermissionModelState, probePermissionModel, probeKernelHardening,
+    // Whether this Node's permission model gates the network, and the flags a network-granted plugin needs.
+    getNetPermissionState, probeNetPermission,
     // This platform's native kernel confinement layer (Landlock / AppContainer / Seatbelt / none).
     probePlatformConfinement, getSandboxPlatformState, getSandboxPlatformNetworkState,
     getSandboxPlatformConfinement, platformKernelMechanism, isolatedLaunchPosture,
@@ -3343,6 +3423,9 @@ module.exports = {
     // instead of quietly becoming a floor with no argv.
     __linuxFloorDecision: linuxFloorDecision,
     __linuxFloorLayers: LINUX_FLOOR_LAYERS,
+    // The permission-model argv one plugin is launched with, as a function of its inputs, so the test
+    // pins that the network flags reach a network-granted plugin and never one without the grant.
+    __permissionModelArgv: permissionModelArgv,
     // Diagnostic: is this slug marked as an INTENTIONAL stop, i.e. is there a pending child exit that
     // must not be supervised as a crash? The mark is consumed by that exit, so a mark with no child
     // behind it is a leak — it never goes away and it silences the supervisor for the NEXT child.
