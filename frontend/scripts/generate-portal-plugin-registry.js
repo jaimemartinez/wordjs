@@ -32,6 +32,25 @@ const PORTAL_SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 const PORTAL_ENTRY_RE = /^(?:\.\/)?client\/[A-Za-z0-9_./-]+\.(?:tsx|ts|jsx|js)$/;
 const PLUGIN_FOLDER_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 
+// JSON.stringify quotes a value but leaves characters that still mean something in source code
+// (`<`, `>`, line and paragraph separators, raw control characters). The values validated above can
+// carry none of them, so this changes no output; it keeps the literal safe if a rule is ever loosened.
+const UNSAFE_SOURCE_CHARS = {
+    '<': '\\u003C',
+    '>': '\\u003E',
+    '\b': '\\b',
+    '\f': '\\f',
+    '\n': '\\n',
+    '\r': '\\r',
+    '\t': '\\t',
+    '\0': '\\0',
+    '\u2028': '\\u2028',
+    '\u2029': '\\u2029',
+};
+function sourceLiteral(value) {
+    return JSON.stringify(value).replace(/[<>\b\f\n\r\t\0\u2028\u2029]/g, c => UNSAFE_SOURCE_CHARS[c]);
+}
+
 // RELEASE BUILD (WORDJS_HERMETIC_BUILD=1): the plugins compiled in are the ones git tracks — never
 // what this machine's running backend reports as active, nor its untracked plugin folders. See
 // hermetic-plugins.js. null outside a release build.
@@ -167,9 +186,9 @@ async function generatePortalRegistry() {
         return true;
     });
 
-    // Both interpolated values are validated above, and quoted with JSON.stringify anyway.
+    // Both interpolated values are validated above, and written as escaped string literals anyway.
     const imports = plugins.map(p =>
-        `    ${JSON.stringify(p.slug)}: () => import(${JSON.stringify(`../../../backend/plugins/${p.folder}/${p.importPath}`)}),`
+        `    ${sourceLiteral(p.slug)}: () => import(${sourceLiteral(`../../../backend/plugins/${p.folder}/${p.importPath}`)}),`
     ).join('\n');
 
     const content = `"use client";
