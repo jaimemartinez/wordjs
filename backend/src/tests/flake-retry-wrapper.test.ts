@@ -67,11 +67,15 @@ interface WrapperRun {
  * opens its report with a fresh `TAP version 13` line, so 1 means "no retry" and 3 means
  * "first run plus both retries".
  */
-function runWrapper(body: string): WrapperRun {
+function runWrapper(body: string | string[], trailing: string[] = []): WrapperRun {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-flake-'));
     try {
-        const file = path.join(dir, 'probe.test.mjs');
-        fs.writeFileSync(file, body, 'utf8');
+        const bodies = Array.isArray(body) ? body : [body];
+        const files = bodies.map((b, i) => {
+            const file = path.join(dir, `probe${i}.test.mjs`);
+            fs.writeFileSync(file, b, 'utf8');
+            return file;
+        });
         const res = spawnSync(
             process.execPath,
             [
@@ -79,7 +83,8 @@ function runWrapper(body: string): WrapperRun {
                 '--test-force-exit',
                 '--test-reporter=tap',
                 '--test-reporter-destination=stdout',
-                file,
+                ...files,
+                ...trailing,
             ],
             { encoding: 'utf8', timeout: 120000, env: childEnv() },
         );
@@ -169,5 +174,14 @@ describe('scripts/test-with-flake-retry.mjs', () => {
             !`${run.stdout}${run.stderr}`.includes('ReferenceError'),
             `the wrapper crashed on the happy path.\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
         );
+    });
+
+    // CI shards the suite with `npm test -- --test-shard=k/4`, which lands AFTER the file glob. Unhoisted,
+    // node reads it as one more file pattern and every shard runs every file — green, and four times slower.
+    it('honours a --test-shard flag placed after the file patterns', () => {
+        const run = runWrapper([PASSING_SUITE, PASSING_SUITE, PASSING_SUITE, PASSING_SUITE], ['--test-shard=2/4']);
+
+        assert.strictEqual(run.status, 0, `a sharded passing suite must exit 0.\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`);
+        assert.match(run.stdout, /^# tests 1$/m, `shard 2/4 of four files must run exactly one.\nstdout:\n${run.stdout}`);
     });
 });
