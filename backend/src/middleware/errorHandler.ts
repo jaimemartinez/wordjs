@@ -4,6 +4,7 @@
 import type { Request, Response, NextFunction } from 'express';
 
 const crypto = require('crypto');
+const log = require('../core/module-logger').moduleLogger('middleware/errorHandler');
 
 /**
  * Not found handler
@@ -83,7 +84,7 @@ function publicErrorText(err: any, fallback: string): string {
 function errorHandler(err: any, req: Request, res: Response, next: NextFunction) {
     // One id, logged next to the FULL error and echoed in the body of an unexpected failure.
     const errorId = crypto.randomUUID();
-    console.error('Error [%s]:', errorId, err);
+    log.error({ errorId, err }, `Error [${errorId}]`);
 
     // Handle specific error types. Both are recognised BY NAME and given a status here, which is the
     // same act of recognition `status` records — so their messages are contract, not disclosure.
@@ -174,7 +175,7 @@ function asyncHandler(fn: any) {
 function offStack(res: Response, next: NextFunction | null, fn: () => unknown): void {
     const fail = (err: any) => {
         if (next && !res.headersSent) return next(err);
-        console.error('Error after the response was committed:', err);
+        log.error({ err }, 'Error after the response was committed');
     };
     try {
         const settled = fn();

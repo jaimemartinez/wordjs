@@ -4,6 +4,21 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [Unreleased]
+
+### Changed
+
+- **Backend log lines are moving off the console bridge onto per-module structured loggers.** A new
+  `core/module-logger` gives each backend module `moduleLogger('<dir>/<file>')`: every line carries a
+  `mod` field and, inside a request, the request's `requestId`; errors are logged as `{ err }` instead
+  of being pasted into the message; values such as a slug, a table or a path travel as fields; and the
+  message keeps its wording, so existing greps still match. Message text still goes through the same
+  credential scrub the bridge applies, and `err` is now serialized by allow-list (type, message, stack,
+  `code`/`errno`/`syscall`/`status`/`statusCode`, `cause`), so an HTTP-client error can no longer carry
+  its request headers into the log. Migrated so far: `models/`, `middleware/`, `drivers/`,
+  `config/database` and `config/swagger`. The remaining `console.*` call sites keep going through the
+  bridge (tagged `legacy: true`) until they are migrated.
+
 ## [2.5.0] - 2026-10-15
 
 ### Added

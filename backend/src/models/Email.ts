@@ -7,10 +7,11 @@ const { db, dbAsync, createPluginTable, getDbType } = require('../config/databas
 const fs = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
+const log = require('../core/module-logger').moduleLogger('models/Email');
 
 // Ensure attachments directory exists
 const UPLOAD_DIR = path.join(__dirname, '../../uploads/mail-attachments');
-fs.mkdir(UPLOAD_DIR, { recursive: true }).catch((err: any) => console.error("Failed to create attachment dir:", err));
+fs.mkdir(UPLOAD_DIR, { recursive: true }).catch((err: any) => log.error({ err }, 'Failed to create attachment dir'));
 
 class Email {
     static async initSchema() {
@@ -74,7 +75,7 @@ class Email {
             if (!(await columnExists('received_emails', col))) {
                 try {
                     await dbAsync.run(`ALTER TABLE received_emails ADD COLUMN ${col} ${type}`);
-                    console.log(`[MailServer] Migrated: Added ${col} to received_emails`);
+                    log.info({ col }, `[MailServer] Migrated: Added ${col} to received_emails`);
                 } catch (e) {
                     // Ignore if race condition or still fails
                 }
@@ -151,7 +152,7 @@ class Email {
                 await fs.copyFile(attachment.path, fullPath);
                 size = attachment.size || (await fs.stat(fullPath)).size;
             } catch (e) {
-                console.error(`Failed to copy attachment ${attachment.path}:`, e.message);
+                log.error({ err: e }, `Failed to copy attachment ${attachment.path}`);
                 return; // Skip if file missing
             }
         }
@@ -336,7 +337,7 @@ class Email {
                 await fs.unlink(fullPath);
             } catch (e) {
                 if (e.code !== 'ENOENT') {
-                    console.error(`[Email] Failed to delete attachment at ${fullPath}:`, e.message);
+                    log.error({ err: e }, `[Email] Failed to delete attachment at ${fullPath}`);
                 }
             }
         }

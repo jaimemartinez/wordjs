@@ -5,6 +5,7 @@
 const path = require('path');
 const fs = require('fs');
 const config = require('../config/app');
+const log = require('../core/module-logger').moduleLogger('drivers/sqlite-native');
 
 let dbInstance: any = null;
 
@@ -28,7 +29,7 @@ function init(options: any = {}) {
         dbInstance.pragma('synchronous = NORMAL'); // Faster writes, safe for WAL
         dbInstance.pragma('foreign_keys = ON');
 
-        console.log('⚡ Native SQLite Driver initialized with WAL mode.');
+        log.info('⚡ Native SQLite Driver initialized with WAL mode.');
         return dbInstance;
     } catch (e) {
         if (e.code === 'MODULE_NOT_FOUND') {

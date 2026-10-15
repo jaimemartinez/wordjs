@@ -1,5 +1,6 @@
 const swaggerJsdoc = require('swagger-jsdoc');
 const path = require('path');
+const log = require('../core/module-logger').moduleLogger('config/swagger');
 
 // swagger-jsdoc scans SOURCE files for @swagger JSDoc comments. The globs must
 // resolve against THIS module's own directory (not process.cwd(), which varies
@@ -44,10 +45,8 @@ const resolveProductVersion = (): string => {
             // Unreadable or absent — try the next candidate.
         }
     }
-    console.warn(
-        `[swagger] could not read a product version from ${candidates.join(' or ')} — ` +
-            `serving 0.0.0 in the OpenAPI spec.`,
-    );
+    log.warn(`[swagger] could not read a product version from ${candidates.join(' or ')} — ` +
+            `serving 0.0.0 in the OpenAPI spec.`);
     return '0.0.0';
 };
 

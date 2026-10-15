@@ -340,6 +340,35 @@ function addLogSink(sink: LogSink): () => void {
     return () => { sinks.delete(sink); };
 }
 
+// ─── Error serialization ─────────────────────────────────────────────────────────────────────────
+
+/** Error properties that are diagnostics and never credentials. Everything else is dropped. */
+const ERROR_FIELDS = ['code', 'errno', 'syscall', 'status', 'statusCode'];
+
+/**
+ * The `err` field, by ALLOW-list. pino's stock error serializer copies every enumerable property of
+ * the error, and the errors this backend catches are not all ours: an HTTP client error carries the
+ * request it made (headers included — an Authorization header sits at `err.config.headers`, under a
+ * capitalisation and a depth no redact path matches), a driver error can carry the query and its
+ * parameters. Logging `{ err }` must be safe by construction, so only the type, the message, the stack,
+ * a handful of scalar diagnostics and the `cause` chain survive. The message goes through
+ * `scrubSecrets()` like every other message, and so does the stack, whose first line repeats it.
+ */
+function serializeError(err: any, depth = 0): any {
+    if (!err || typeof err !== 'object') return err;
+    const out: Record<string, unknown> = {
+        type: (err.constructor && err.constructor.name) || 'Error',
+        message: scrubSecrets(String(err.message ?? '')),
+    };
+    if (typeof err.stack === 'string') out.stack = scrubSecrets(err.stack);
+    for (const k of ERROR_FIELDS) {
+        const v = err[k];
+        if (typeof v === 'string' || typeof v === 'number') out[k] = v;
+    }
+    if (err.cause !== undefined && depth < 3) out.cause = serializeError(err.cause, depth + 1);
+    return out;
+}
+
 // ─── The logger ──────────────────────────────────────────────────────────────────────────────────
 
 const logger = pino({
@@ -350,6 +379,7 @@ const logger = pino({
     // aggregator that will one day be taught wrong.
     formatters: { level: (label: string) => ({ level: label }) },
     redact: { paths: REDACT_PATHS, censor: '[redacted]' },
+    serializers: { err: serializeError },
 }, teeStream);
 
 /**
