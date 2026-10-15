@@ -84,6 +84,16 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **A split install registers its frontend without a restart.** `npm start` starts the frontend before
+  the install wizard writes any config or certificate. The frontend read both once, at boot, so it kept
+  sending its gateway registration to the public port without an identity (a 405 in the log every 5
+  seconds) and never registered. Pages still loaded through the gateway's pre-install route, but every
+  cache purge after the install was dropped ("no frontend node registered"), so edits reached the public
+  site only when their cache expired, until the frontend was restarted. It now re-reads them on every
+  attempt, waits for the certificate instead of sending requests that cannot succeed, and registers in
+  the scheme its server actually listens with (plain HTTP on loopback until its first restart, HTTPS
+  with mutual TLS after).
+
 - **The confirm and alert dialogs speak the admin's language.** The host dialog that core pages and
   plugin admin pages open through `useModal()` had English buttons and titles next to a Spanish message,
   and the unsaved-changes guard was entirely English. Labels now follow the language the admin chose
