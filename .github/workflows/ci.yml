@@ -343,42 +343,32 @@ jobs:
           fi
           echo "every job in every workflow declares a measured timeout-minutes"
 
-  backend:
-    name: Backend (typecheck + test)
+  # THE BACKEND IS FOUR KINDS OF JOB, AND ONLY ONE OF THEM IS SLOW.
+  #
+  # Until 2026-10-15 the backend was one job: install, audit, typecheck, lint, build, the F0-F6 gates,
+  # the license gate, the unit suite, perf:f0, the integration suite and the marketplace check, in
+  # series. A green run took ~18 minutes and 16 of them were the unit suite (~310 files, run one at a
+  # time on purpose: they share fixed ports, SQLite files and the tsx/ts-node caches, so
+  # `--test-concurrency=1` stays). Every PR waited for that, and parallel sessions queued their merges
+  # behind it. The suite is now split by FILE across four runners with node's own `--test-shard=k/4`,
+  # which partitions the sorted file list deterministically — every file runs in exactly one shard, and
+  # the union of the four is the whole suite. The other steps run once, in `backend-gates`, beside them.
+  #
+  #   backend-gates   lint, build, F0-F6, license, perf:f0, integration, marketplace — once
+  #   backend-test    the unit suite, one quarter per runner
+  #   backend         "Backend (typecheck + test)": the aggregate below
+  #
+  # The aggregate keeps the check name branch protection requires. A matrix job reports one check per
+  # leg ("… (shard 1/4)"), never the bare name, so without it the required check would never report and
+  # every PR would wait forever.
+  backend-gates:
+    name: Backend gates (typecheck, lint, build, F0-F6, integration)
     runs-on: ubuntu-latest
-    # 22, sized to MEASURED real work, after everything cuttable was cut. Two fixes already landed: the
-    # test script is transpile-only (types checked once, by the tsc step, not re-checked per file), and
-    # workspace installs run in parallel. With those, the failing run's own step timing shows where the
-    # 15 minutes actually went, and it is not the tests:
-    #
-    #     Install 207s · Audit 196s · License gate 126s  = ~9 min of NETWORK steps
-    #     Type check 7s · Build 6s                        = the suite tooling is fast
-    #     Test 310s and still running when the wall hit
-    #
-    # Install and `npm audit` are registry-bound and were at 3-4× their normal cost on the day this was
-    # measured (the npm advisory endpoint was timing out outright); the audit is now bounded per-attempt
-    # by ci-audit.mjs. The License gate WAS a third live registry hit — `npx license-checker` downloaded
-    # the tool every run and spiked to ~7 min on a degraded registry, blowing this budget outright. It is
-    # now a pinned backend devDependency, so it installs ONCE as part of the cached `npm ci` and the gate
-    # runs the local binary with no network. That removes the only unbounded registry fetch on the
-    # critical path. On a warm cache each remaining step is well under a minute; the job needs ~15 min on
-    # a cold-cache day and cannot warm the cache until it completes once. 22 keeps margin over that and
-    # still catches a real hang; a warm run lands around 10.
-    #
-    # RAISED 22 -> 32 when the coverage ratchet was added as the last step. That step RE-RUNS the whole
-    # unit suite under c8, so it costs roughly what the Test step costs plus instrumentation overhead —
-    # the measured Test step is 310s, and c8 adds the per-process profile write plus a merge over one
-    # profile per test file (~220 of them). That is about +8 minutes on the critical path, which does not
-    # fit under 22 on the cold-cache day this budget was sized for. The alternative — a separate job, so
-    # coverage runs in parallel instead of extending this one — was rejected on purpose: the ratchet has
-    # to gate the SAME suite this job certifies, and a second job would install and boot everything again
-    # to measure the identical thing.
-    #
-    # 2026-10-07: the suite ran twice in this job (plainly, then under c8 for the coverage ratchet) and
-    # reached this wall — a run adding no tests took 31m24s, and one adding 13 suites was cut off while
-    # still passing. The c8 run moved to the parallel `backend-coverage` job below, which takes ~10
-    # minutes off this one without dropping either signal.
-    timeout-minutes: 32
+    # Measured on the unsharded job (2026-10-14, green): ~18 min, of which the unit suite was ~16. What
+    # is left here is install (~3.5 min warm, up to ~9 on a cold-cache day — see the history kept on the
+    # backend-test job), the audit, seconds of typecheck/lint/build, the F0-F6 gates, perf:f0 and the
+    # integration suite: ~5 min warm. 22 is the old pre-coverage budget, and still covers a cold day.
+    timeout-minutes: 22
     services:
       postgres:
         image: postgres:16
@@ -395,18 +385,6 @@ jobs:
           - 6379:6379
         options: >-
           --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
-      mysql:
-        image: mysql:8
-        env:
-          MYSQL_ROOT_PASSWORD: password
-          MYSQL_DATABASE: wordjs
-          MYSQL_ROOT_HOST: '%' # allow root over TCP from the runner host (not just the container)
-        ports:
-          - 3306:3306
-        # Credentialed ping so "healthy" means mysqld accepts a real root TCP login (the driver's path),
-        # not merely that the process is up. Extra retries cover MySQL 8's slower first-boot init.
-        options: >-
-          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -ppassword" --health-interval 10s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -460,16 +438,6 @@ jobs:
         # binary and makes no network round-trip. Do NOT restore `--yes`: it existed only to auto-confirm
         # a live download, which is exactly the ~7-min registry spike this step used to inflict.
         run: npx license-checker --production --failOn 'AGPL;SSPL'
-      - name: Test
-        # WORDJS_CI_DB=1 turns the driver-conformance suite's postgres+mysql blocks from graceful skips
-        # into hard failures: the service containers above are wired precisely so those drivers ARE
-        # exercised, so a container that never came up must fail the job, not slip through green. This is
-        # the only CI coverage of the SQLite→MySQL translation layer (translateCreateTable/translateSql).
-        # The coverage ratchet runs the same suite under c8 in the parallel `backend-coverage` job.
-        working-directory: backend
-        env:
-          WORDJS_CI_DB: '1'
-        run: npm test
       - name: F0 content performance budgets
         working-directory: backend
         run: npm run perf:f0
@@ -480,9 +448,9 @@ jobs:
         working-directory: backend
         env:
           REDIS_ENABLED: 'true'
-          # Same hard-fail contract as the unit Test step above: the postgres + redis service containers
-          # are wired up, so an UNREACHABLE service must FAIL the integration suite — not let the ONLY
-          # multi-node coverage (dist-lock lease CAS + Redis pub/sub coherence) silently skip green.
+          # Same hard-fail contract as the unit suite: the postgres + redis service containers are wired
+          # up, so an UNREACHABLE service must FAIL the integration suite — not let the ONLY multi-node
+          # coverage (dist-lock lease CAS + Redis pub/sub coherence) silently skip green.
           WORDJS_CI_DB: '1'
         run: npm run test:integration
 
@@ -512,37 +480,126 @@ jobs:
           node backend/scripts/build-marketplace.js
           node backend/scripts/verify-marketplace.js --rebuild
 
-
-
-
-  backend-coverage:
-    # THE COVERAGE RATCHET, IN PARALLEL WITH THE BACKEND JOB. It used to be the backend job's last step,
-    # running the whole unit suite a second time under c8 — serially, which roughly doubled that job and
-    # took it past its 32-minute wall on 2026-10-07. Here it runs at the same time instead: the wall clock
-    # of the CI is the slower of the two jobs, not their sum. The price is a second install and a second
-    # set of service containers, paid in runner minutes rather than in waiting.
+  backend-test:
+    name: Backend unit tests (shard ${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    strategy:
+      # Every shard reports, so one red file does not hide whether the other three quarters are green.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    # HISTORY OF THIS BUDGET (it was the whole backend job's until the suite was sharded):
+    # 22, sized to measured real work on a cold-cache day — Install 207s, Audit 196s, License gate 126s
+    # of network steps, Type check 7s, Build 6s, Test 310s; RAISED to 32 when the coverage ratchet ran
+    # here as a second, instrumented pass (it moved to its own job on 2026-10-07, after a run adding no
+    # tests took 31m24s). By 2026-10-14 the plain suite alone took ~16 minutes.
     #
-    # THE SAME SUITE, NOT A COPY. `test:coverage:check` is `c8 … npm test`: c8 wraps the canonical
-    # script, and exports NODE_V8_COVERAGE, which npm, the flake-retry wrapper, `node --test` and its
-    # per-file children all inherit; `--test-force-exit` does not truncate the profile (V8 flushes it on
-    # the process-exit path). The same services and WORDJS_CI_DB=1 as the backend job: without them the
+    # A shard is install (~3.5 min warm, ~9 cold), build (seconds) and a quarter of the files. The shards
+    # split by file COUNT, not by time, so one can draw more slow files than the others: budget a shard
+    # at half the old suite rather than a quarter. 20 covers a cold install plus that and still turns a
+    # hang red.
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: wordjs
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: password
+          MYSQL_DATABASE: wordjs
+          MYSQL_ROOT_HOST: '%' # allow root over TCP from the runner host (not just the container)
+        ports:
+          - 3306:3306
+        # Credentialed ping so "healthy" means mysqld accepts a real root TCP login (the driver's path),
+        # not merely that the process is up. Extra retries cover MySQL 8's slower first-boot init.
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -ppassword" --health-interval 10s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci || npm install
+      - name: Build (the suite's dist/ checks see the same tree as in backend-gates)
+        working-directory: backend
+        run: npm run build
+      - name: Test
+        # WORDJS_CI_DB=1 turns the driver-conformance suite's postgres+mysql blocks from graceful skips
+        # into hard failures: the service containers above are wired precisely so those drivers ARE
+        # exercised, so a container that never came up must fail the job, not slip through green. This is
+        # the only CI coverage of the SQLite→MySQL translation layer (translateCreateTable/translateSql).
+        # The coverage ratchet runs the same suite, sharded the same way, in `backend-coverage-shard`.
+        # The wrapper hoists `--test-shard` in front of the file glob; after it, node would read the flag
+        # as one more file pattern and every shard would run the whole suite.
+        working-directory: backend
+        env:
+          WORDJS_CI_DB: '1'
+        run: npm test -- --test-shard=${{ matrix.shard }}/4
+
+  backend:
+    # THE REQUIRED CHECK. Branch protection on main names "Backend (typecheck + test)" exactly; this job
+    # carries that name and is green only when every shard of the unit suite AND the gates job are.
+    # `if: always()` is load-bearing: without it a failed dependency makes this job SKIPPED, and GitHub
+    # counts a skipped required check as passing — a red shard would merge.
+    name: Backend (typecheck + test)
+    needs: [backend-gates, backend-test]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every backend gate and every unit-suite shard passed
+        env:
+          GATES: ${{ needs.backend-gates.result }}
+          TESTS: ${{ needs.backend-test.result }}
+        run: |
+          echo "backend-gates: $GATES"
+          echo "backend-test (all shards): $TESTS"
+          if [ "$GATES" != "success" ] || [ "$TESTS" != "success" ]; then
+            echo "::error::the backend is not green: backend-gates=$GATES, backend-test=$TESTS (a cancelled or skipped leg is not a pass)"
+            exit 1
+          fi
+
+  backend-coverage-shard:
+    # THE COVERAGE RATCHET, SHARDED LIKE THE SUITE IT MEASURES. It used to be one job running the whole
+    # suite under c8 (`npm run test:coverage:check`); after the 2.4.0 security round that took 20-28 min
+    # and came near its 45-minute wall. Now each shard runs its quarter of the files with NODE_V8_COVERAGE
+    # pointed at backend/coverage/tmp — exactly what `c8 … npm test` exports for its child, and what npm,
+    # the flake-retry wrapper, `node --test` and its per-file children all inherit; `--test-force-exit`
+    # does not truncate the profile (V8 flushes it on the process-exit path) — and uploads the RAW V8
+    # profiles. `backend-coverage` merges the four sets and applies the ratchet once, over the whole
+    # suite: a per-shard threshold would judge each quarter against a floor set for the whole.
+    #
+    # THE SAME SUITE, NOT A COPY: the same services and WORDJS_CI_DB=1 as backend-test. Without them the
     # postgres/mysql conformance blocks would skip, and fewer covered lines would read as a coverage drop.
     #
-    # THIS IS A RATCHET, NOT A TARGET. `--lines` in backend/package.json sits two points under the number
-    # measured when the gate was introduced (82.65 % of lines, one clean pass), so it fails a run that
-    # DROPS coverage and says nothing about any percentage being good. Raise the floor when the measured
-    # number rises; never lower it to turn a red run green. `--all` counts a source file no test loads as
-    # uncovered rather than leaving it out of the denominator.
-    #
-    # Timeout: install ~3.5 min warm, up to ~9 on a cold-cache day (see the backend job), build seconds,
-    # then the instrumented suite. That suite took ~15 min on 2026-10-07; after the 2.4.0 security round
-    # (about 4,100 tests) whole successful runs of this job took 20-28 min on 2026-10-12, and nine runs
-    # that day were cancelled at the old 30-minute wall with the suite still passing — every main push
-    # showed a red CI for a job that was only slow. 45 covers the measured worst case with margin and
-    # still turns a hang red.
-    name: Backend coverage (c8 ratchet)
+    # Timeout: the unsharded instrumented job took 20-28 min whole on 2026-10-12 (nine runs that day were
+    # cancelled at a 30-minute wall while still passing). A shard is install (~3.5 min warm, ~9 cold),
+    # build, and a quarter of that suite with the same uneven-split margin as backend-test. 25 covers it
+    # and still turns a hang red.
+    name: Backend coverage (shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:16
@@ -579,14 +636,89 @@ jobs:
       - name: Install dependencies
         working-directory: backend
         run: npm ci || npm install
-      - name: Build (the suite's dist/ checks see the same tree as in the backend job)
+      - name: Build (the suite's dist/ checks see the same tree as in backend-gates)
         working-directory: backend
         run: npm run build
-      - name: Coverage ratchet (c8 over npm test)
+      - name: Instrumented suite (raw V8 profiles for this shard)
         working-directory: backend
         env:
           WORDJS_CI_DB: '1'
-        run: npm run test:coverage:check
+          NODE_V8_COVERAGE: ${{ github.workspace }}/backend/coverage/tmp
+        run: npm test -- --test-shard=${{ matrix.shard }}/4
+      - name: Upload the raw V8 profiles
+        uses: actions/upload-artifact@v7
+        with:
+          name: backend-coverage-raw-${{ matrix.shard }}
+          path: backend/coverage/tmp
+          retention-days: 1
+          if-no-files-found: error
+
+  backend-coverage:
+    # THE RATCHET ITSELF, over the merged profiles of all four shards. `test:coverage:report` is
+    # `c8 report` with EXACTLY the thresholds, `--all --src src` and excludes of `test:coverage:check`
+    # (backend/src/tests/ci-coverage-timeout.test.ts fails if the two ever differ), so the floor is as
+    # strict as when one job ran the whole suite under c8.
+    #
+    # THIS IS A RATCHET, NOT A TARGET. `--lines` in backend/package.json sits two points under the number
+    # measured when the gate was introduced (82.65 % of lines, one clean pass), so it fails a run that
+    # DROPS coverage and says nothing about any percentage being good. Raise the floor when the measured
+    # number rises; never lower it to turn a red run green. `--all` counts a source file no test loads as
+    # uncovered rather than leaving it out of the denominator — which is why this job checks out the same
+    # tree: the profiles carry absolute paths, identical on every hosted runner.
+    #
+    # `if: always()` + the result check: this keeps the check name "Backend coverage (c8 ratchet)", and
+    # a merge over a partial set of profiles would report a coverage DROP for the shard that is missing,
+    # so a failed or cancelled shard fails here instead of being merged.
+    #
+    # Timeout: install (~3.5 min warm, ~9 cold) plus a streamed merge of ~1.1 GB of profiles (it was the
+    # tail of the old single job, a few minutes). 20 covers it.
+    name: Backend coverage (c8 ratchet)
+    needs: backend-coverage-shard
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Every coverage shard produced its profiles
+        env:
+          SHARDS: ${{ needs.backend-coverage-shard.result }}
+        run: |
+          if [ "$SHARDS" != "success" ]; then
+            echo "::error::backend-coverage-shard is '$SHARDS' — merging an incomplete set of profiles would read as a coverage drop, so the ratchet is not evaluated"
+            exit 1
+          fi
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci || npm install
+      - name: Download the raw V8 profiles of every shard
+        uses: actions/download-artifact@v8
+        with:
+          pattern: backend-coverage-raw-*
+          path: backend/coverage/raw
+      - name: Gather the profiles into c8's temp directory
+        # One directory per shard, prefixed on the way in: profile names are coverage-<pid>-<time>-<n>,
+        # unique on one runner but not guaranteed across four.
+        working-directory: backend
+        run: |
+          mkdir -p coverage/tmp
+          for shard in 1 2 3 4; do
+            src="coverage/raw/backend-coverage-raw-$shard"
+            count=$(find "$src" -maxdepth 1 -name '*.json' | wc -l)
+            if [ "$count" -eq 0 ]; then
+              echo "::error::shard $shard uploaded no V8 profiles"
+              exit 1
+            fi
+            for f in "$src"/*.json; do mv "$f" "coverage/tmp/s$shard-$(basename "$f")"; done
+            echo "shard $shard: $count profiles"
+          done
+      - name: Coverage ratchet (c8 report over all four shards)
+        working-directory: backend
+        run: npm run test:coverage:report
       - name: Upload backend coverage (lcov)
         if: always()
         uses: actions/upload-artifact@v7

@@ -25,7 +25,20 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const NODE_TEST_ARGS = process.argv.slice(2);
+/**
+ * Move every `--flag=value` argument in front of the file patterns. `npm test -- --test-shard=1/4`
+ * appends the flag AFTER the script's `src/tests/*.test.ts` glob, and `node --test` reads every
+ * argument after the first file as one more file pattern — so the shard flag matched no file and was
+ * dropped in silence, and each CI shard would have run the WHOLE suite. Only the `=` form is hoisted:
+ * a bare `-r ts-node/register` pair is already in front in every script, and splitting a flag from its
+ * value is the one thing this must never do. Relative order within each group is kept.
+ */
+export function hoistTrailingOptions(args) {
+    const isOption = (a) => /^--[\w-]+=/.test(a);
+    return [...args.filter(isOption), ...args.filter((a) => !isOption(a))];
+}
+
+const NODE_TEST_ARGS = hoistTrailingOptions(process.argv.slice(2));
 const FLAKE = 'Unable to deserialize cloned data';
 
 // Capture stdout and stderr SEPARATELY. The flake decision is made on stdout alone, because the whole

@@ -8,6 +8,19 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Changed
 
+- **The backend CI runs its unit suite in four parallel shards.** The suite (~310 files, run one file at
+  a time on purpose) took ~16 of the Backend job's ~18 minutes, and the coverage ratchet ran it again
+  under c8 for 20-28 minutes. Both now split the files four ways with `node --test --test-shard=k/4`:
+  `backend-test` runs the plain suite, `backend-coverage-shard` runs it with `NODE_V8_COVERAGE` and
+  uploads the raw profiles, and `backend-coverage` merges all four with `c8 report` and applies the
+  same floor as `test:coverage:check` (`npm run test:coverage:report`; a test fails if the two scripts'
+  options ever differ). Lint, build, the F0-F6 gates, perf:f0, the integration suite and the marketplace
+  check run once, in `backend-gates`. The required checks keep their names: **Backend (typecheck +
+  test)** and **Backend coverage (c8 ratchet)** are now aggregate jobs that fail unless every job they
+  depend on succeeded. `scripts/test-with-flake-retry.mjs` moves `--flag=value` arguments in front of
+  the file patterns, because `npm test -- --test-shard=1/4` appended the flag after the glob, where
+  `node --test` reads it as one more file pattern and runs the whole suite.
+
 - **YouTube Videos (1.0.3) takes its keyless list from the channel's RSS feed only.** Without a Data API
   key the plugin first tried to scrape the channel's public Videos tab and fell back to the RSS feed when
   that failed. On YouTube's current markup the scraper finds no videos, so every keyless site has been
