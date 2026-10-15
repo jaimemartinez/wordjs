@@ -61,6 +61,7 @@ import TabsBlock from "./TabsBlock";
 import SearchBarBlock from "./SearchBarBlock";
 import PluginBlockIsland from "./PluginBlockIsland";
 import { FormBlockRender } from "@/components/blocks/FormBlock";
+import type { PublicUiStrings } from "@/lib/public/uiStrings";
 import { CORE_BLOCK_SLOTS, CORE_BLOCK_TYPES } from "@/generated/verso-registry.generated";
 import type { CoreBlockType } from "@/generated/visual-contract.types.generated";
 
@@ -76,17 +77,22 @@ interface IxEnv {
     page?: IxPage;
     /** Presets del SITIO, serializables — lo único que puede cruzar a un componente de cliente. */
     site?: Record<string, IxPreset>;
+    /** Textos de UI del sitio público ya resueltos en su idioma (lib/public/uiStrings). Serializables. */
+    ui?: PublicUiStrings;
 }
 
 export default function ContentRenderer({
     data,
     ixPresets,
     motion,
+    ui,
 }: {
     data: any;
     ixPresets?: unknown;
     /** Política de movimiento del SITIO (C5), tal cual viene del ajuste: se normaliza aquí. */
     motion?: unknown;
+    /** Textos de UI en el idioma del SITIO, resueltos en el servidor por quien tiene los ajustes. */
+    ui?: PublicUiStrings;
 }) {
     const content = Array.isArray(data?.content) ? data.content : [];
 
@@ -96,7 +102,7 @@ export default function ContentRenderer({
     const ctx: IxCompileCtx = { ...ixCtxFromSite(site), motion: normalizeIxMotion(motion) };
     const page = compileIxPage(collectIxSpecs(data), ctx);
     const hasSite = Object.keys(site).length > 0;
-    const env: IxEnv = { ctx, page, ...(hasSite ? { site } : {}) };
+    const env: IxEnv = { ctx, page, ...(hasSite ? { site } : {}), ...(ui ? { ui } : {}) };
 
     return (
         <>
@@ -112,7 +118,7 @@ export default function ContentRenderer({
             {/* Movimiento PERPETUO en la página ⇒ el visitante tiene que poder pararlo (WCAG 2.2.2,
                 nivel A). El control es una casilla nativa y una regla `:has()`: cero JavaScript, y
                 solo aparece cuando hay algo que pausar. */}
-            {page.hasInfinite && <MotionPause />}
+            {page.hasInfinite && <MotionPause pauseLabel={ui?.motionPause} resumeLabel={ui?.motionResume} />}
             {page.runtime.length > 0 && <IxRuntimeIsland units={page.runtime} />}
         </>
     );
@@ -130,12 +136,12 @@ export default function ContentRenderer({
  * que NO viaja es la página compilada: contiene un `Map` y este componente puede renderizarse en el
  * cliente. Sin ella la clase sale del hash desnudo, que es el mismo salvo colisión.
  */
-export function RenderSubtree({ items, exclude, ixPresets, motion }: { items: unknown[]; exclude?: ReadonlySet<string>; ixPresets?: Record<string, IxPreset>; motion?: IxMotionPolicy }) {
+export function RenderSubtree({ items, exclude, ixPresets, motion, ui }: { items: unknown[]; exclude?: ReadonlySet<string>; ixPresets?: Record<string, IxPreset>; motion?: IxMotionPolicy; ui?: PublicUiStrings }) {
     const list = Array.isArray(items) ? items : [];
     // La política del sitio (C5) también baja hasta aquí: un bloque dentro de un Symbol no es una
     // excepción al ajuste, y sin esto «apagar el movimiento» dejaba moviéndose justo lo anidado.
-    const env: IxEnv | undefined = ixPresets || motion
-        ? { ctx: { ...(ixPresets ? ixCtxFromSite(ixPresets) : {}), ...(motion ? { motion } : {}) }, ...(ixPresets ? { site: ixPresets } : {}) }
+    const env: IxEnv | undefined = ixPresets || motion || ui
+        ? { ctx: { ...(ixPresets ? ixCtxFromSite(ixPresets) : {}), ...(motion ? { motion } : {}) }, ...(ixPresets ? { site: ixPresets } : {}), ...(ui ? { ui } : {}) }
         : undefined;
     return <>{list.map((item: any, i: number) => renderItem(item, `s${i}`, exclude, env))}</>;
 }
@@ -160,7 +166,7 @@ function renderItem(item: any, fallbackKey: string, exclude?: ReadonlySet<string
     const core = renderCore(item.type, props, item, exclude, ix);
     if (core === undefined) {
         // Plugin block or Symbol: the client machinery renders it exactly as before F3.
-        return <PluginBlockIsland key={key} item={item} ixPresets={ix?.site} motion={ix?.ctx.motion} />;
+        return <PluginBlockIsland key={key} item={item} ixPresets={ix?.site} motion={ix?.ctx.motion} ui={ix?.ui} />;
     }
     return (
         <SharedBlockShell key={key} hide={props.hide} anim={props.anim} look={props.look} ix={props.ix} ixCtx={ix?.ctx} ixPage={ix?.page}>
@@ -210,7 +216,7 @@ const CORE_RENDERERS = {
     Accordion: (props) => <AccordionBlock {...props} />,
     Tabs: (props) => <TabsBlock {...props} />,
     SearchBar: (props) => <SearchBarBlock {...props} />,
-    Form: (props) => <FormBlockRender {...(props as any)} />,
+    Form: (props, _item, _exclude, ix) => <FormBlockRender {...(props as any)} ui={ix?.ui} />,
     Symbol: () => undefined,
     ParticleField: (props) => <ParticleFieldBlock {...props} />,
     NavMenu: (props) => <NavMenuBlock {...props} menu={props.resolvedMenu} />,

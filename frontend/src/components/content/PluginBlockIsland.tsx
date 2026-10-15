@@ -9,13 +9,14 @@
  */
 import React from "react";
 import type { IxMotionPolicy, IxPreset } from "@/lib/verso/interactions";
+import type { PublicUiStrings } from "@/lib/public/uiStrings";
 
 const Heavy = React.lazy(() => import("./PluginBlockHeavy"));
 
-export default function PluginBlockIsland({ item, ixPresets, motion }: { item: any; ixPresets?: Record<string, IxPreset>; motion?: IxMotionPolicy }) {
+export default function PluginBlockIsland({ item, ixPresets, motion, ui }: { item: any; ixPresets?: Record<string, IxPreset>; motion?: IxMotionPolicy; ui?: PublicUiStrings }) {
     return (
         <React.Suspense fallback={null}>
-            <Heavy item={item} ixPresets={ixPresets} motion={motion} />
+            <Heavy item={item} ixPresets={ixPresets} motion={motion} ui={ui} />
         </React.Suspense>
     );
 }

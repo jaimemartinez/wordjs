@@ -8,6 +8,7 @@
 import { Fragment } from "react";
 import PluginLoader from "@/components/PluginLoader";
 import ContentRenderer from "@/components/content/ContentRenderer";
+import { publicUiStrings } from "@/lib/public/uiStrings";
 import { sanitizeHTML } from "@/lib/sanitize";
 import type { Post } from "@/lib/api";
 
@@ -63,7 +64,7 @@ export default function HomeContent({ post, settings }: { post: Post; settings?:
                 {/* `wjs_ix_presets` = los preajustes de interacción del sitio (motor F9). Se pasan
                     desde aquí, y no se leen dentro de ContentRenderer, porque ese módulo también lo
                     importa código de cliente y no puede tocar la capa de servidor. */}
-                <ContentRenderer data={post.meta._puck_data} ixPresets={settings?.wjs_ix_presets} motion={settings?.wjs_motion} />
+                <ContentRenderer data={post.meta._puck_data} ixPresets={settings?.wjs_ix_presets} motion={settings?.wjs_motion} ui={publicUiStrings(settings)} />
             </div>
         );
     }

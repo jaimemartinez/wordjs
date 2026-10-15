@@ -24,6 +24,7 @@ import React from "react";
 import SharedBlockShell from "./SharedBlockShell";
 import { RenderSubtree } from "./ContentRenderer";
 import { ixCtxFromSite, type IxMotionPolicy, type IxPreset } from "@/lib/verso/interactions";
+import type { PublicUiStrings } from "@/lib/public/uiStrings";
 import VersoSymbolRender from "@/components/verso/blocks/VersoSymbolBlock";
 import { SYMBOL_BLOCK_TYPE } from "@/lib/symbols";
 import { fetchActivePluginIds, loadPluginBlockConfigs } from "@/lib/pluginBundleLoader";
@@ -96,7 +97,7 @@ function usePluginBlockDef(type: string): PluginBlockDef | null {
  * del catálogo lo usan hoy, pero un plugin de terceros compilado contra el contrato viejo no debe
  * romperse. En el sitio público `isEditing` es SIEMPRE false.
  */
-function puckCompat(props: Record<string, unknown>, ixPresets?: Record<string, IxPreset>, motion?: IxMotionPolicy) {
+function puckCompat(props: Record<string, unknown>, ixPresets?: Record<string, IxPreset>, motion?: IxMotionPolicy, ui?: PublicUiStrings) {
     return {
         isEditing: false,
         metadata: {},
@@ -105,13 +106,13 @@ function puckCompat(props: Record<string, unknown>, ixPresets?: Record<string, I
             const slot = props[zone];
             if (typeof slot === "function") return (slot as (cls?: string) => React.ReactNode)(className);
             // En el dato persistido un slot es un ARRAY de items: se pinta con el switch compartido.
-            if (Array.isArray(slot)) return <div className={className}><RenderSubtree items={slot} ixPresets={ixPresets} motion={motion} /></div>;
+            if (Array.isArray(slot)) return <div className={className}><RenderSubtree items={slot} ixPresets={ixPresets} motion={motion} ui={ui} /></div>;
             return null;
         },
     };
 }
 
-function PluginBlockRender({ type, props, ixPresets, motion }: { type: string; props: Record<string, unknown>; ixPresets?: Record<string, IxPreset>; motion?: IxMotionPolicy }) {
+function PluginBlockRender({ type, props, ixPresets, motion, ui }: { type: string; props: Record<string, unknown>; ixPresets?: Record<string, IxPreset>; motion?: IxMotionPolicy; ui?: PublicUiStrings }) {
     const def = usePluginBlockDef(type);
     const Render = def?.render;
     // Tipo desconocido (plugin inactivo, bundle sin ese bloque, o aún cargando): no se pinta nada —
@@ -124,7 +125,7 @@ function PluginBlockRender({ type, props, ixPresets, motion }: { type: string; p
             {...(def?.defaultProps || {})}
             {...props}
             {...(motion ? { ixMotion: motion } : {})}
-            puck={puckCompat(props, ixPresets, motion)}
+            puck={puckCompat(props, ixPresets, motion, ui)}
         />
     );
 }
@@ -135,12 +136,12 @@ function PluginBlockRender({ type, props, ixPresets, motion }: { type: string; p
  * un `Map` y no cruza la frontera de serialización — la clase sale del hash desnudo, que coincide
  * con el de la página salvo colisión de hash entre dos cuerpos distintos (ver SharedBlockShell).
  */
-export default function PluginBlockHeavy({ item, ixPresets, motion }: { item: any; ixPresets?: Record<string, IxPreset>; motion?: IxMotionPolicy }) {
+export default function PluginBlockHeavy({ item, ixPresets, motion, ui }: { item: any; ixPresets?: Record<string, IxPreset>; motion?: IxMotionPolicy; ui?: PublicUiStrings }) {
     const type = typeof item?.type === "string" ? item.type : "";
     const props = (item?.props || {}) as Record<string, unknown>;
     const inner = type === SYMBOL_BLOCK_TYPE
-        ? <VersoSymbolRender symbolId={props.symbolId} resolvedSymbolItems={props.resolvedSymbolItems} />
-        : <PluginBlockRender type={type} props={props} ixPresets={ixPresets} motion={motion} />;
+        ? <VersoSymbolRender symbolId={props.symbolId} resolvedSymbolItems={props.resolvedSymbolItems} publicUi={ui} />
+        : <PluginBlockRender type={type} props={props} ixPresets={ixPresets} motion={motion} ui={ui} />;
     return (
         <SharedBlockShell hide={props.hide as any} anim={props.anim as any} look={props.look as any} ix={props.ix} ixCtx={{ ...(ixPresets ? ixCtxFromSite(ixPresets) : {}), ...(motion ? { motion } : {}) }}>
             {inner}

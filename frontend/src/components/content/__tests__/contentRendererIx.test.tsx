@@ -16,6 +16,8 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { collectIxSpecs, compileIxPage, ixCtxFromSetting } from "@/lib/verso/interactions";
 import ContentRenderer, { RenderSubtree } from "../ContentRenderer";
+import { formBlockDefaults } from "@/components/blocks/FormBlock";
+import { catalogueLanguage, publicUiStrings, publicUiStringsFor } from "@/lib/public/uiStrings";
 
 const SITE_PRESETS = JSON.stringify([
   {
@@ -242,5 +244,98 @@ describe("ContentRenderer — la política de movimiento del SITIO (C5)", () => 
     expect(nested).not.toContain("wjs-anim");
     expect(nested).toContain("Título n");
     expect(renderToStaticMarkup(<RenderSubtree items={[withAnim("n")]} />)).toContain("wjs-anim");
+  });
+});
+
+describe("visitor-facing UI strings follow the SITE language (WPLANG)", () => {
+  // Revert-red: these were hard-coded in Spanish, so an English site (WPLANG defaults to en_US)
+  // offered «Pausar el movimiento» and «Selecciona una opción» to its visitors.
+  const looping = (id: string) => heading(id, {
+    v: 1,
+    trigger: { on: "load" },
+    tracks: [{ target: { kind: "self" }, steps: [{ at: 0, set: { opacity: 0 } }, { at: 100, set: { opacity: 1 } }], repeat: "inf" }],
+  });
+  const form = (props: Record<string, unknown> = {}) => ({
+    type: "Form",
+    props: {
+      id: "f",
+      formName: "Contact",
+      fields: [{ type: "select", label: "Topic", required: true, options: "A, B", placeholder: "" }],
+      ...props,
+    },
+  });
+  const en = publicUiStrings({ WPLANG: "en_US" });
+  const es = publicUiStrings({ WPLANG: "es_ES" });
+
+  it("the motion pause control speaks the site language", () => {
+    const data = { content: [looping("a")] };
+    const english = renderToStaticMarkup(<ContentRenderer data={data} ui={en} />);
+    expect(english).toContain("wjs-motion-pause");
+    expect(english).toContain("Pause motion");
+    expect(english).toContain("Resume motion");
+    expect(english).not.toContain("Pausar");
+    expect(renderToStaticMarkup(<ContentRenderer data={data} ui={es} />)).toContain("Pausar el movimiento");
+  });
+
+  it("the Form block's empty select option, submit label and status texts follow it too", () => {
+    // `submitLabel` etc. still hold the block's built-in (Spanish) defaults: nobody chose them.
+    const html = renderToStaticMarkup(<ContentRenderer data={{ content: [form({ ...formBlockDefaults, fields: form().props.fields })] }} ui={en} />);
+    expect(html).toContain("Select an option");
+    expect(html).toContain(">Send<");
+    expect(html).not.toMatch(/Selecciona|Enviar|Enviando/);
+    const spanish = renderToStaticMarkup(<ContentRenderer data={{ content: [form({ ...formBlockDefaults, fields: form().props.fields })] }} ui={es} />);
+    expect(spanish).toContain("Selecciona una opción");
+    expect(spanish).toContain(">Enviar<");
+  });
+
+  it("what the AUTHOR wrote is never translated", () => {
+    const html = renderToStaticMarkup(<ContentRenderer
+      data={{ content: [form({ submitLabel: "Enviar ahora", fields: [{ type: "select", label: "Tema", options: "A", placeholder: "Elige uno" }] })] }}
+      ui={en}
+    />);
+    expect(html).toContain(">Enviar ahora<");
+    expect(html).toContain("Elige uno");
+    expect(html).not.toContain("Select an option");
+  });
+
+  it("an empty author text falls back to the site language", () => {
+    const html = renderToStaticMarkup(<ContentRenderer data={{ content: [form({ submitLabel: "  " })] }} ui={en} />);
+    expect(html).toContain(">Send<");
+  });
+
+  it("reaches a nested subtree (Symbol / plugin slot)", () => {
+    const nested = renderToStaticMarkup(<RenderSubtree items={[form()]} ui={en} />);
+    expect(nested).toContain("Select an option");
+  });
+
+  it("without resolved strings (editor canvas) the block renders exactly as before", () => {
+    const html = renderToStaticMarkup(<RenderSubtree items={[form({ ...formBlockDefaults, fields: form().props.fields })]} />);
+    expect(html).toContain("Selecciona una opción");
+    expect(html).toContain(">Enviar<");
+  });
+
+  it("resolves the catalogue language from WPLANG, English when unset or unsupported", () => {
+    expect(catalogueLanguage("es-ES")).toBe("es");
+    expect(catalogueLanguage("pt-BR")).toBe("pt");
+    expect(catalogueLanguage("en")).toBe("en");
+    expect(catalogueLanguage("fr-FR")).toBe("en");
+    expect(catalogueLanguage(null)).toBe("en");
+    expect(publicUiStrings(null)).toEqual(en);
+    expect(publicUiStrings({ WPLANG: "fr_FR" })).toEqual(en);
+    expect(publicUiStrings({ WPLANG: "pt_BR" }).formSelectPlaceholder).toBe("Selecione uma opção");
+  });
+
+  it("every string exists in every catalogue language (no key leaks through)", () => {
+    for (const lang of ["es", "en", "pt"] as const) {
+      for (const value of Object.values(publicUiStringsFor(lang))) {
+        expect(value).not.toMatch(/^public\./);
+      }
+    }
+    // Spanish stays byte-identical to what Spanish sites showed before.
+    expect(es.motionPause).toBe("Pausar el movimiento");
+    expect(es.formSelectPlaceholder).toBe("Selecciona una opción");
+    expect(es.formSuccess).toBe(formBlockDefaults.successMessage);
+    expect(es.formError).toBe(formBlockDefaults.errorMessage);
+    expect(es.formSubmit).toBe(formBlockDefaults.submitLabel);
   });
 });
