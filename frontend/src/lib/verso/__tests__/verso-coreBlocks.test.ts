@@ -32,6 +32,7 @@ import {
 } from "../sharedFields";
 import { createBlockRegistry, makeSlotResolver, type BlockDefinition, type VersoField } from "../registry";
 import { editorStringMatches, humanizeFieldKey, trStr } from "@/lib/editorI18n";
+import { withRecordRootFields } from "@/lib/editorRootFields";
 import { postConfig, pageConfig } from "@/components/versoConfig";
 import { GENERATED_CORE_BLOCK_REGISTRY } from "@/generated/verso-registry.generated";
 
@@ -350,6 +351,9 @@ describe("coreBlocks — field labels are translated (editorI18n)", () => {
     ...coreBlockDefinitions.map((d) => [d.type, withSharedVersoFields(d).fields ?? {}] as [string, Record<string, VersoField>]),
     ["root(post)", rootFieldsPost],
     ["root(page)", rootFieldsPage],
+    // What the editor actually mounts: + featured image, excerpt, category/tags selects and page SEO.
+    ["root(post, editor)", withRecordRootFields(rootFieldsPost, { categories: [], tags: [], seo: true })],
+    ["root(page, editor)", withRecordRootFields(rootFieldsPage, { seo: true })],
   ];
   for (const [type, fields] of sources) {
     collect(fields, type, strings);

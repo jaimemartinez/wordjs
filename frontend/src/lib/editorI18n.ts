@@ -378,6 +378,20 @@ const FIELD_STRINGS: Tri[] = [
     { es: "Nivel máximo", en: "Maximum level", pt: "Nível máximo" },
     { es: "Numerada", en: "Numbered", pt: "Numerada" },
     { es: "Resaltar al desplazar", en: "Highlight on scroll", pt: "Destacar ao rolar" },
+    // Root fields the editor adds on top of the registry (editorRootFields.ts).
+    { es: "Imagen destacada", en: "Featured image", pt: "Imagem destacada" },
+    { es: "Sin imagen destacada", en: "No featured image", pt: "Sem imagem destacada" },
+    { es: "Extracto", en: "Excerpt", pt: "Resumo" },
+    { es: "Resumen breve (listados y descripción SEO)", en: "Short summary (listings and SEO description)", pt: "Resumo breve (listagens e descrição SEO)" },
+    { es: "Sin categoría", en: "Uncategorized", pt: "Sem categoria" },
+    { es: "Etiquetas", en: "Tags", pt: "Tags" },
+    { es: "Elige una etiqueta", en: "Choose a tag", pt: "Escolha uma tag" },
+    { es: "🔍 Título SEO (máx. 60 caracteres)", en: "🔍 SEO title (60 characters max)", pt: "🔍 Título SEO (máx. 60 caracteres)" },
+    { es: "🔍 Meta descripción (máx. 160 caracteres)", en: "🔍 Meta description (160 characters max)", pt: "🔍 Meta descrição (máx. 160 caracteres)" },
+    { es: "🔍 URL de la imagen social", en: "🔍 Social image URL", pt: "🔍 URL da imagem social" },
+    { es: "🔍 Ocultar a los buscadores", en: "🔍 Hide from search engines", pt: "🔍 Ocultar dos mecanismos de busca" },
+    { es: "No (indexable)", en: "No (indexable)", pt: "Não (indexável)" },
+    { es: "Sí (oculta)", en: "Yes (hidden)", pt: "Sim (oculta)" },
 ];
 
 // Editor chrome + block palette copy (BlockInserter descriptions/groups/tabs, editor toolbar &
