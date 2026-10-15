@@ -3,7 +3,7 @@
  *
  * The core cannot send email itself. A mail-PROVIDER plugin registers a host-wide send function via
  * wordjs.provideMail() — which requires the admin-granted `email:provider` capability and sets
- * global.wordjs_send_mail (see core/plugin-api.ts). The host DELETES that global when the providing
+ * global.wordjs_send_mail (see core/plugin-api.ts; another site of a network: its own entry below). The host DELETES that global when the providing
  * plugin unloads, so the check below is a LIVE, fail-closed signal: TRUE only while a provider
  * capability is actually registered right now.
  *
@@ -18,12 +18,44 @@
  */
 const siteContext = require('./site-context');
 
-function isEmailProviderAvailable(): boolean {
-    // Multisite (phase 1): the provider is a main-site plugin, and plugins never handle another site's
-    // data, so the other sites have no provider (password recovery there fails closed, as on any site
-    // without one).
-    if (siteContext.multisiteEnabled() && siteContext.currentSiteIdOrNull() !== siteContext.PRIMARY_SITE_ID) return false;
-    return typeof (global as any).wordjs_send_mail === 'function';
+/**
+ * MULTISITE: each site has its own provider — the mail plugin active on THAT site (its own worker, its
+ * own grant of `email:provider`). Site 1 keeps the historical `global.wordjs_send_mail`, so a single
+ * site, and every caller and test written against the global, behave as before; every other site's
+ * provider lives here, keyed by site id, and is reached only from that site's context.
+ */
+const siteProviders = new Map<number, (msg: any) => any>();
+
+function siteOf(): number {
+    return siteContext.currentSiteIdOrNull() ?? siteContext.PRIMARY_SITE_ID;
 }
 
-module.exports = { isEmailProviderAvailable };
+/** The send function of the current site's provider, or undefined when it has none. */
+function sendMailFn(): ((msg: any) => any) | undefined {
+    const id = siteOf();
+    const fn = id === siteContext.PRIMARY_SITE_ID ? (global as any).wordjs_send_mail : siteProviders.get(id);
+    return typeof fn === 'function' ? fn : undefined;
+}
+
+/** Register `fn` as the current site's provider. */
+function setMailProvider(fn: (msg: any) => any): void {
+    const id = siteOf();
+    if (id === siteContext.PRIMARY_SITE_ID) (global as any).wordjs_send_mail = fn;
+    else siteProviders.set(id, fn);
+}
+
+/** Drop the current site's provider — only if it is still `fn` when given (another plugin may have replaced it). */
+function clearMailProvider(fn?: (msg: any) => any): void {
+    const id = siteOf();
+    if (id === siteContext.PRIMARY_SITE_ID) {
+        if (!fn || (global as any).wordjs_send_mail === fn) { try { delete (global as any).wordjs_send_mail; } catch { /* */ } }
+    } else if (!fn || siteProviders.get(id) === fn) {
+        siteProviders.delete(id);
+    }
+}
+
+function isEmailProviderAvailable(): boolean {
+    return typeof sendMailFn() === 'function';
+}
+
+module.exports = { isEmailProviderAvailable, sendMailFn, setMailProvider, clearMailProvider };

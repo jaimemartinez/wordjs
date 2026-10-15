@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { networkApi, type NetworkSite } from "@/lib/api";
+import { networkApi, type NetworkPlugin, type NetworkSite } from "@/lib/api";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { PageHeader, Button, Card, EmptyState, Input, StatusBadge } from "@/components/ui";
@@ -13,7 +13,12 @@ import { PageHeader, Button, Card, EmptyState, Input, StatusBadge } from "@/comp
  * password, like Settings → Site address: creating a site publishes a new address.
  *
  * A new site gets its own database, uploads, users and settings; its first administrator is created
- * here and signs in on the site's own address. Plugins stay on the main site in this version.
+ * here and signs in on the site's own address.
+ *
+ * Plugins (phase 2): their code is installed once, network-wide. The "Plugins for the sites" card offers a
+ * plugin to the other sites with a grant CEILING — the most a site administrator may grant it — or stops
+ * offering it (it is then deactivated on every other site). The server enforces the ceiling on every
+ * write and every check (core/plugin-permissions); this card only records it.
  */
 
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
@@ -35,11 +40,16 @@ export default function NetworkPage() {
     const [creating, setCreating] = useState(false);
     const [actionPassword, setActionPassword] = useState("");
     const [busyId, setBusyId] = useState<number | null>(null);
+    const [netPlugins, setNetPlugins] = useState<NetworkPlugin[]>([]);
+    const [ceilingDraft, setCeilingDraft] = useState<Record<string, string[]>>({});
+    const [busyPlugin, setBusyPlugin] = useState<string | null>(null);
 
     const load = async () => {
         try {
-            const { sites } = await networkApi.sites();
+            const [{ sites }, { plugins }] = await Promise.all([networkApi.sites(), networkApi.plugins()]);
             setSites(sites);
+            setNetPlugins(plugins);
+            setCeilingDraft(Object.fromEntries(plugins.map((p) => [p.slug, p.ceiling ?? p.requestedPermissions])));
         } catch (e: any) {
             addToast(e?.message || t("network.loadFailed"), "error");
         } finally {
@@ -93,6 +103,46 @@ export default function NetworkPage() {
             addToast(err?.message || t("network.actionFailed"), "error");
         } finally {
             setBusyId(null);
+        }
+    };
+
+    const toggleCeiling = (slug: string, token: string) => setCeilingDraft((d) => {
+        const cur = new Set(d[slug] || []);
+        if (cur.has(token)) cur.delete(token); else cur.add(token);
+        return { ...d, [slug]: Array.from(cur) };
+    });
+
+    const offerPlugin = async (plugin: NetworkPlugin) => {
+        if (!actionPassword) {
+            addToast(t("network.passwordRequired"), "error");
+            return;
+        }
+        setBusyPlugin(plugin.slug);
+        try {
+            await networkApi.offerPlugin(plugin.slug, ceilingDraft[plugin.slug] || [], actionPassword);
+            addToast(t("network.offeredToast").replace("{slug}", plugin.name), "success");
+            await load();
+        } catch (err: any) {
+            addToast(err?.message || t("network.pluginActionFailed"), "error");
+        } finally {
+            setBusyPlugin(null);
+        }
+    };
+
+    const withdrawPlugin = async (plugin: NetworkPlugin) => {
+        if (!actionPassword) {
+            addToast(t("network.passwordRequired"), "error");
+            return;
+        }
+        setBusyPlugin(plugin.slug);
+        try {
+            const r = await networkApi.withdrawPlugin(plugin.slug, actionPassword);
+            addToast(t("network.withdrawnToast").replace("{slug}", plugin.name).replace("{count}", String(r.deactivatedOn.length)), "success");
+            await load();
+        } catch (err: any) {
+            addToast(err?.message || t("network.pluginActionFailed"), "error");
+        } finally {
+            setBusyPlugin(null);
         }
     };
 
@@ -183,6 +233,62 @@ export default function NetworkPage() {
                                 )}
                             </li>
                         ))}
+                    </ul>
+                )}
+            </Card>
+
+            <Card variant="default" padding="none" className="mt-8">
+                <div className="p-6 md:p-8 border-b border-gray-50">
+                    <h2 className="text-xs font-black uppercase tracking-widest text-gray-400 flex items-center gap-2 mb-2">
+                        <i className="fa-solid fa-plug text-blue-500"></i>
+                        {t("network.plugins")}
+                    </h2>
+                    <p className="text-xs text-gray-500">{t("network.pluginsHint")}</p>
+                </div>
+                {!loading && netPlugins.length === 0 ? (
+                    <EmptyState icon="fa-plug" title={t("network.pluginsEmpty")} description="" />
+                ) : (
+                    <ul className="divide-y divide-gray-50">
+                        {netPlugins.map((plugin) => {
+                            const offered = plugin.ceiling !== null;
+                            const draft = new Set(ceilingDraft[plugin.slug] || []);
+                            return (
+                                <li key={plugin.slug} className="p-6 md:p-8" data-network-plugin={plugin.slug}>
+                                    <div className="flex items-start justify-between gap-4 flex-wrap mb-3">
+                                        <div className="min-w-0">
+                                            <div className="flex items-center gap-3 flex-wrap">
+                                                <span className="text-base font-bold text-gray-700 break-all">{plugin.name}</span>
+                                                <code className="text-xs text-gray-400 font-mono">{plugin.slug}{plugin.version ? ` · v${plugin.version}` : ""}</code>
+                                                {offered
+                                                    ? <StatusBadge status="success" label={t("network.pluginOffered")} />
+                                                    : <StatusBadge status="info" label={t("network.pluginMainOnly")} />}
+                                            </div>
+                                        </div>
+                                        <div className="flex gap-2 shrink-0 flex-wrap">
+                                            <Button variant="secondary" icon="fa-check" loading={busyPlugin === plugin.slug} onClick={() => offerPlugin(plugin)}>
+                                                {offered ? t("network.saveCeiling") : t("network.offer")}
+                                            </Button>
+                                            {offered && (
+                                                <Button variant="secondary" icon="fa-ban" loading={busyPlugin === plugin.slug} onClick={() => withdrawPlugin(plugin)}>{t("network.withdraw")}</Button>
+                                            )}
+                                        </div>
+                                    </div>
+                                    <div className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-2">{t("network.pluginCeiling")}</div>
+                                    {plugin.requestedPermissions.length === 0 ? (
+                                        <p className="text-xs text-gray-500">{t("network.pluginNoPermissions")}</p>
+                                    ) : (
+                                        <div className="flex flex-wrap gap-2">
+                                            {plugin.requestedPermissions.map((token) => (
+                                                <label key={token} className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-mono cursor-pointer ${draft.has(token) ? "bg-blue-50 border-blue-200 text-blue-700" : "bg-gray-50 border-gray-200 text-gray-500"}`}>
+                                                    <input type="checkbox" checked={draft.has(token)} onChange={() => toggleCeiling(plugin.slug, token)} data-ceiling-token={token} />
+                                                    {token}
+                                                </label>
+                                            ))}
+                                        </div>
+                                    )}
+                                </li>
+                            );
+                        })}
                     </ul>
                 )}
             </Card>

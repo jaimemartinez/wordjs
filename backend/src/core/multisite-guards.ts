@@ -1,11 +1,15 @@
 /**
- * WordJS — what a site other than the main one may not do (multisite, phase 1).
+ * WordJS — what a site other than the main one may not do (multisite).
  *
  * Some of the install is network-wide, not per site: the plugin and theme code on disk, the backups of
- * the main database, the certificates, the main site's addresses, the installer. In phase 1 those stay
- * the main site's (its administrators run the network); on every other site the routes that change
- * them, or that would hand out the main site's files, are refused. Plugins are not active on the other
- * sites at all, so their routes, assets and bundles do not exist there.
+ * the main database, the certificates, the main site's addresses, the installer. Those stay the main
+ * site's (its administrators run the network); on every other site the routes that change them, or that
+ * would hand out the main site's files, are refused.
+ *
+ * Phase 2: plugins RUN per site. Another site activates the plugins the network offers it, grants them
+ * permissions up to the network's ceiling, and serves their routes, assets and bundles through its own
+ * workers (core/plugins, core/plugin-isolate). Installing, updating, deleting or building plugin code
+ * stays the network's.
  *
  * Every guard here is a no-op on a single site and on the main site.
  */
@@ -35,19 +39,25 @@ function mainSiteWrites(req: Request, res: Response, next: NextFunction) {
 }
 
 /**
- * /api/v1/plugins on another site: the admin shell's reads answer for THIS site, where no plugin is
- * active (an empty menu of plugin pages, no active plugins, no public assets); everything else — the
- * installed list, activation, upload, permissions — belongs to the main site.
+ * /api/v1/plugins on another site. What a site does with the plugins the network installed is the
+ * site's: list them, activate and deactivate them, grant and revoke their permissions (bounded by the
+ * network's ceiling — core/plugin-permissions), set their egress allowlist, restart their worker, read
+ * their status, and everything the admin shell and the public pages read (menus, active list, registry,
+ * assets, bundles). What changes the CODE on disk — upload, delete, pack, the sample generator, installing
+ * a bundled theme, freeing a port the plugin's listener needs, downloading its package — is the network's.
  */
+const SITE_PLUGIN_ROUTES = [
+    { method: 'GET', re: /^\/(?:menus|active|registry|assets)?\/?$/ },
+    { method: 'GET', re: /^\/[^/]+\/(?:status|egress-hosts)\/?$/ },
+    { method: 'POST', re: /^\/[^/]+\/(?:activate|deactivate|permissions|egress-hosts|reload)\/?$/ },
+    // The frontend bundles of plugins (routes/plugin-bundles): reads, answered for this site's plugins.
+    { method: 'GET', re: /^\/[^/]+\/(?:bundle(?:\/manifest|\/css)?|portal|admin-style(?:\/css)?)\/?$/ },
+];
 function pluginsOnSecondarySite(req: Request, res: Response, next: NextFunction) {
     if (!onSecondarySite()) return next();
-    if (req.method === 'GET') {
-        const p = req.path.replace(/\/+$/, '');
-        if (p === '/menus') return next(); // core entries of this site (core/adminMenu is per site)
-        if (p === '/active' || p === '/registry') return res.json([]);
-        if (p === '/assets') return res.json({ scripts: [], styles: [] });
-    }
-    return refuse(res, 403, 'rest_network_only', 'Plugins are managed on the main site of the network.');
+    const method = req.method === 'HEAD' ? 'GET' : req.method;
+    if (method === 'OPTIONS' || SITE_PLUGIN_ROUTES.some((r) => r.method === method && r.re.test(req.path))) return next();
+    return refuse(res, 403, 'rest_network_only', 'Plugin code is installed and removed by the network administrator.');
 }
 
 /** Theme files are network-wide: creating, editing, uploading, restoring or deleting them is the main site's. */

@@ -91,21 +91,34 @@ async function unloadThemeIsolates(incomingIsoSlug: string): Promise<void> {
     }
 }
 
-// Promise-chain mutex for ThemeEngine.init() — see the doc on init(). Module-scoped so it covers the one
-// engine instance this module exports (and any other), and so a re-require can never hand out a second.
-let initChain: Promise<void> = Promise.resolve();
-
-// The init that is QUEUED but has not started running yet, if any. Callers arriving while it waits JOIN it
-// instead of queueing another — see init(). Cleared the moment that queued run begins, so the next caller
-// queues a fresh one and can never be served by a run that started before its request.
-let pendingInit: Promise<void> | null = null;
+/**
+ * MULTISITE: each site has its own active theme (the `template` option is per site) and so its own theme
+ * worker — `theme:<slug>` runs once per site, keyed by core/plugin-isolate like a plugin (`s<id>:theme:<slug>`
+ * on a site other than the main one). The engine's state, and the lock that serializes its re-inits, are
+ * kept per site; a single site has the one state it always had.
+ *
+ *  - initChain: promise-chain mutex for ThemeEngine.init() — see the doc on init(). Module-scoped so it
+ *    covers the one engine instance this module exports (and any other), and so a re-require can never
+ *    hand out a second.
+ *  - pendingInit: the init that is QUEUED but has not started running yet, if any. Callers arriving while
+ *    it waits JOIN it instead of queueing another — see init(). Cleared the moment that queued run begins,
+ *    so the next caller queues a fresh one and can never be served by a run that started before its request.
+ */
+const siteContext = require('./site-context');
+const engineState = siteContext.perSite(() => ({
+    activeTheme: null as any,
+    initChain: Promise.resolve() as Promise<void>,
+    pendingInit: null as Promise<void> | null,
+}));
 
 class ThemeEngine {
-    activeTheme: any;
     partialsLoaded: boolean;
 
+    /** The current site's active theme (see engineState). */
+    get activeTheme(): any { return engineState.get().activeTheme; }
+    set activeTheme(v: any) { engineState.get().activeTheme = v; }
+
     constructor() {
-        this.activeTheme = null;
         this.partialsLoaded = false;
 
         // Register helpers
@@ -180,20 +193,21 @@ class ThemeEngine {
      * arriving while a queued run waits gets that run's result instead of scheduling another.
      */
     async init() {
+        const st = engineState.get();
         // Join a run that has not started yet — it will re-read `template` and so covers this request too.
-        if (pendingInit) return pendingInit;
+        if (st.pendingInit) return st.pendingInit;
 
         // Clearing pendingInit as the FIRST thing the queued run does is what bounds the coalescing window:
         // a caller arriving after this point queues its own run, so it can never be answered by work that
         // began before it asked.
-        const queued = initChain.then(
-            () => { pendingInit = null; return this.initLocked(); },
-            () => { pendingInit = null; return this.initLocked(); }
+        const queued = st.initChain.then(
+            () => { st.pendingInit = null; return this.initLocked(); },
+            () => { st.pendingInit = null; return this.initLocked(); }
         );
         // Joiners share the caller's outcome, failure included. The CHAIN takes a neutered copy: an init
         // that throws must not wedge every later switch.
-        pendingInit = queued;
-        initChain = queued.then(() => undefined, () => undefined);
+        st.pendingInit = queued;
+        st.initChain = queued.then(() => undefined, () => undefined);
         return queued;
     }
 

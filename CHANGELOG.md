@@ -22,6 +22,17 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   real-time collaboration stay on the main site. The design, the isolation guarantees and the next
   phases are in `documentation/multisite-design.md`; running a network is in
   `documentation/multisite.md`.
+- **Multisite, phase 2: plugins and theme code run per site.** Plugin code stays network-wide (installed,
+  updated and deleted on the main site), but every site can now activate plugins and grant them
+  permissions on its own. A network administrator first **offers** a plugin to the sites from
+  **Admin → Network → Plugins for the sites**, choosing a grant ceiling; a site administrator can never
+  grant beyond it (`403 plugin_grant_beyond_ceiling`), and lowering it takes effect at once. Each site
+  runs its **own sandboxed worker** of each plugin it activates, keyed by site: its routes, hooks,
+  shortcodes, scheduled events, notification transports and mail provider answer only for that site, its
+  bridge calls read and write only that site's database, and its private storage is that site's. On
+  Postgres and MySQL the per-plugin database principal is per site too. Each site also runs its own
+  theme server code (`functions.js`). New isolation tests prove guarantees I5 (a plugin active on one site
+  cannot act on another) and I8 (the ceiling). See `documentation/multisite.md`.
 
 ## [2.5.0] - 2026-10-15
 

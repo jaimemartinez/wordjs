@@ -223,14 +223,17 @@ async function runCron() {
 }
 
 /**
- * Multisite (phase 1): the hooks an event of a site other than the main one may run. Plugins are not
- * active there, and the other core jobs (backups, version checks, certificates, maintenance) act on the
- * main site's database and files — an event naming one of them on another site is dropped, not run.
+ * Multisite: the hooks an event of a site other than the main one may run. A plugin's own event runs
+ * there (only that site's worker of the plugin answers it — core/hooks doActionForPlugin). Of the core
+ * jobs, only those that act on the site's own data run; the others (backups, version checks,
+ * certificates, maintenance) act on the main site's database and files — an event naming one of them on
+ * another site is dropped, not run.
  */
 const SECONDARY_SITE_CRON_HOOKS = new Set(['publish_future_post', 'wordjs_analytics_prune']);
 function cronHookAllowedHere(event: any): boolean {
     if (!require('./multisite-guards').onSecondarySite()) return true;
-    return !event.pluginSlug && SECONDARY_SITE_CRON_HOOKS.has(String(event.hook));
+    if (event.pluginSlug) return true;
+    return SECONDARY_SITE_CRON_HOOKS.has(String(event.hook));
 }
 
 async function runCronInner() {

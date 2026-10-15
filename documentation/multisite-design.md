@@ -402,10 +402,10 @@ B with the same roles and users with the same ids on each.
 | I2 | A session, API token or MFA challenge from one site is worthless on another. | Per-site signing key, `sid` claim, per-site token table, host-only cookies. | A's cookie, bearer JWT and `wjt_` token sent to B → 401; a token re-signed with A's key but claiming B → 401. |
 | I3 | A site's uploads, private files and derivatives cannot be fetched or overwritten from another site. | Per-site upload roots resolved from the site context; containment checks against that root. | A's file path requested on B's host → 404; private media id of A on B → 404; upload on B lands under B's root. |
 | I4 | Caches and broadcasts never serve one site's value to another. | Site-namespaced keys and tags; site id on every broadcast. | Same option, post id and slug set differently on A and B; reads through cache (with and without Redis) stay distinct; purge on A leaves B cached. |
-| I5 | A plugin active on A cannot act on B. | Worker per (site, plugin); site-scoped bridge; per-site dispatch of routes and hooks; per-site DB principal. | A plugin active only on A answers 404 on B; its hook does not fire for B's events; its bridge DB calls see A's database only. |
+| I5 | A plugin active on A cannot act on B. | Worker per (site, plugin); site-scoped bridge; per-site dispatch of routes and hooks; per-site DB principal. | A plugin active only on A answers 404 on B; its hook does not fire for B's events; its bridge DB calls see A's database only (`multisite-plugins.test.ts`). |
 | I6 | A request cannot steer which site it lands on beyond the hosts the registry declares, and links never follow the request. | Registry-only host map, strict parser, 421 for unknown hosts, links from the registry. | Unknown host → 421; forged `X-Forwarded-Host` from an untrusted hop ignored; password reset on B links to B's main address whatever `Host` says. |
 | I7 | Code that forgot to propagate the site fails instead of touching site 1. | `currentSite()` throws in multisite. | A test that calls a model outside any site context in multisite mode gets `site_context_missing`. |
-| I8 | A site admin cannot raise their own plugin's privileges beyond the network's decision. | Grant ceiling checked on the host. | Site admin grant beyond the ceiling → 403. |
+| I8 | A site admin cannot raise their own plugin's privileges beyond the network's decision. | Grant ceiling checked on the host. | Site admin grant beyond the ceiling → 403 (`multisite-plugins.test.ts`). |
 
 What is **not** isolated, by design: CPU, memory and I/O of the backend process are shared (a noisy
 site slows its neighbours; per-site quotas are a later phase), and the network administrator can reach
@@ -521,7 +521,60 @@ Phase 1 follows the plan above with these narrowings and departures, each delibe
   attribute of `<html>`, the server-rendered `@font-face` rules and the title of the sign-in pages still
   come from the main site. A root layout per site is a phase 2 item.
 - **Email**: the mail provider is a main-site plugin, so the other sites have none; password recovery
-  there fails closed, as on any site without one.
+  there fails closed, as on any site without one. (Phase 2: a site's own mail plugin provides its mail.)
+
+## Phase 2 as built (plugins and theme code per site)
+
+The plugin half of phase 2. Certificates per site (SNI, per-site ACME), per-site backup/export/restore,
+the audited handoff, Postgres/MySQL site databases, real-time collaboration per site and a root layout
+per site in the frontend remain open (see "Phased plan").
+
+- **Worker key.** `core/plugin-isolate` keys every registry (isolates, in-flight loads, health, restart
+  timers, live pids, spawn policies) by `siteKeyPrefix(site) + slug`: `<slug>` on site 1 — single-site
+  installs keep their keys, process names, cgroup units and AppContainer profiles — and `s<id>:<slug>`
+  elsewhere. A theme's worker is `theme:<slug>` on site 1 and `s<id>:theme:<slug>` elsewhere (the prefix
+  comes first, so every `theme:` check keeps reading the inner slug). The public functions take a plugin
+  slug and act on the current site's worker; `listIsolates()` answers the current site's slugs, and
+  `listIsolateKeys()` / `getAllIsolateStatuses()` the network's.
+- **Site-scoped bridge and registrations.** Every IPC frame from a worker is handled inside
+  `runWithSite(itsSite)`: its bridge calls read and write that site's database and options, its grants are
+  checked against that site's, and what it registers lands in that site's tables. `core/hooks` records
+  the site with each plugin callback and runs only the callbacks of the site the hook fires for;
+  `core/shortcodes`, `core/notifications` (plugin transports) and `core/mail-provider` keep per-site
+  registries (site 1 keeps `global.wordjs_send_mail`, so single-site callers are unchanged). Plugin cron
+  events run on every site again, answered only by that site's worker.
+- **Routes.** Every site's worker mounts the same `/api/v1/plugin/<slug>/…` paths; each mount starts with a
+  gate that passes the request on (`next('route')`) unless it was addressed to the mount's site, so a
+  request reaches its own site's worker, or — the plugin not being active there — no mount, and a 404.
+  The `/plugins/<slug>/…` static files and the frontend bundles were already gated on the current site's
+  active set.
+- **Activation per site, code per network.** `active_plugins`, `plugin_grants` and `plugin_egress_hosts`
+  are options, so they were already per site; `core/plugin-permissions` now keeps its in-memory mirror per
+  site too (`perSite`). Another site never installs or prunes dependencies (the shared `node_modules` is
+  the network's) and skips the plugin test run (done once, for the network); its plugins load when the
+  site is prepared (`initSiteRuntime`), after its own grants. CrashGuard watches the main site's boot only.
+  Deleting a plugin deactivates it on every other site first; an in-place update restarts their workers on
+  the new code.
+- **Grant ceiling (I8).** The network store's `network_plugin_ceilings` table holds, per plugin, the tokens
+  any other site may grant. No row = not offered: activation and grants on another site answer 403
+  `plugin_not_offered`. A grant beyond the ceiling is refused (403 `plugin_grant_beyond_ceiling`), seeds
+  and upgrade grants are clipped to it, and `isGranted` / `isNetworkGranted` also check it on every read,
+  so a lowered ceiling stops a capability on every site at once (and the policy fingerprint changes, so
+  running workers are respawned). The main site has no ceiling. API: `GET /network/plugins`,
+  `PUT|DELETE /network/plugins/:slug/ceiling` (network administrators, re-authenticated); UI: Admin →
+  Network → Plugins for the sites.
+- **Private storage per site.** `core/sandbox-paths` keys a worker's storage directories by
+  `s<id>:<slug>` on another site, and only site 1's worker may write the plugin's own (shared) code
+  directory — the native sandboxes, Node's permission model and `core/io-guard` all read that one
+  declaration. On Windows each (site, plugin) worker has its own AppContainer profile.
+- **Database principals.** `core/plugin-db-isolation` names the Postgres role / MySQL user of another site
+  `…__s<id>` (a slug can never produce a double underscore), so each site's worker queries under its own
+  principal. Dormant until site databases may be Postgres or MySQL; SQLite has no principals.
+- **Theme workers per site.** `core/theme-engine` keeps its active theme and its re-init lock per site;
+  each site runs its own `functions.js` worker, started when the site is prepared and on a theme switch.
+- **Not yet**: idle reaping of workers (a site's workers start with the site and stay up), and removing a
+  secondary site's AppContainer profiles when a plugin is deleted.
+- **Tests**: `backend/src/tests/multisite-plugins.test.ts` (real plugin workers: I5 and I8).
 
 ## Decisions
 

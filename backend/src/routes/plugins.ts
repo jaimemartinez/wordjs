@@ -836,6 +836,9 @@ async function runPluginUpdate(
 
         // Success — the old code is no longer needed.
         if (stashDir) { try { fs.rmSync(stashDir, { recursive: true, force: true }); } catch { /* */ } stashDir = null; }
+        // Multisite: the other sites' workers of this plugin still run the previous code — restart them on
+        // the new one (each in its own site, with its own grants). No-op on a single site.
+        try { await core.respawnOnSecondarySites(slug); } catch (e: any) { console.warn('[plugin-update %s] restart on the other sites failed: %s', logSafe(slug), logSafe(e && e.message)); }
 
         const newManifest = readManifest(installedDir);
         const toVersion = newManifest && newManifest.version != null ? String(newManifest.version) : null;
@@ -1118,7 +1121,7 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
     // Annotate each with its requested/granted permissions so the admin UI can render the per-permission
     // switches. `requestedPermissions` = what the manifest asks for ("scope:access"), the set of switches
     // to show; `grantedPermissions` = what the admin has granted (+ "network"). No trust tier exists.
-    const { getGrants, activationSeedsDeclaredGrants } = require('../core/plugin-permissions');
+    const { getGrants, activationSeedsDeclaredGrants, ceilingFor, isOfferedHere } = require('../core/plugin-permissions');
     // Live runtime health per isolate (running/crashed/crash-looping/restarting + rss/restarts) so the
     // admin sees the TRUE state, not just the persisted 'active' flag which can lie after a crash.
     const { getIsolateStatus } = require('../core/plugin-isolate');
@@ -1204,11 +1207,15 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
         let hasTheme = false;
         const themeProbe = pluginFile(p.slug, 'theme');
         try { hasTheme = !!themeProbe && fs.lstatSync(themeProbe).isDirectory(); } catch { /* none */ }
+        const ceiling = ceilingFor(p.slug);
         return {
             ...p,
             roles,
             requestedPermissions: requested,
             grantedPermissions: getGrants(p.slug),
+            // Multisite: on a site other than the main one, whether the network offers this plugin here and
+            // the most this site may grant it (absent on the main site and on a single site).
+            ...(ceiling ? { offered: isOfferedHere(p.slug), grantCeiling: Array.from(ceiling) } : {}),
             ...(typeof seedsOnActivation[p.slug] === 'boolean' ? { activationSeedsGrants: seedsOnActivation[p.slug] } : {}),
             runtime: p.active ? (getIsolateStatus(p.slug) || null) : null,
             hasTheme,
@@ -1372,6 +1379,15 @@ router.get('/:slug/status', authenticate, isAdmin, asyncHandler(async (req: Requ
  *                         action:
  *                           type: string
  */
+/** Multisite: the answer for a plugin the network has not offered to this site. */
+function refuseNotOffered(res: Response, slug: string) {
+    return res.status(403).json({
+        code: 'plugin_not_offered',
+        message: `Plugin '${slug}' is not available on this site: the network administrator has not offered it to the sites of the network.`,
+        data: { status: 403 },
+    });
+}
+
 router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     // SECURITY: Validate slug to prevent path traversal
     const slug = safeSlugParam(req.params.slug);
@@ -1426,7 +1442,9 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
     // (adoptStoredPolicy): an administrator's revoke or narrowed allowlist made on another node may not
     // have reached this node's memory yet, and the token must not start the plugin with the stale copy
     // (core/plugin-permissions "against what is stored").
-    const { seedGrants, clearGrants, adoptStoredPolicy } = require('../core/plugin-permissions');
+    const { seedGrants, clearGrants, adoptStoredPolicy, isOfferedHere } = require('../core/plugin-permissions');
+    // Multisite: another site activates only what the network offers it (and nothing is seeded otherwise).
+    if (!isOfferedHere(slug)) return refuseNotOffered(res, slug);
     let declared: string[] = [];
     try {
         const all = await getAllPlugins();
@@ -1576,7 +1594,8 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
     if (!slug) {
         return res.status(400).json({ error: 'Invalid plugin slug' });
     }
-    const { applyGrants, getGrants } = require('../core/plugin-permissions');
+    const { applyGrants, getGrants, isOfferedHere } = require('../core/plugin-permissions');
+    if (!isOfferedHere(slug)) return refuseNotOffered(res, slug);
 
     // Body: { granted: ["scope:access", ...], network: boolean }. The admin's granted set is the source
     // of truth (default-deny). We don't constrain to the manifest here — hasPermission already requires
@@ -1599,7 +1618,17 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
     // the respawn below run NOW, and the `updated_option` fan-out (`announced`, every subscriber told in
     // turn) is waited for only after them: waiting first kept a revoked grant in force in the child for
     // as long as the subscribers took.
-    const { announced, refused } = await applyGrants(slug, tokens, { adminDecision: true, narrowOnly: isHeadless(req) });
+    let applied: any;
+    try {
+        applied = await applyGrants(slug, tokens, { adminDecision: true, narrowOnly: isHeadless(req) });
+    } catch (e: any) {
+        // Multisite (isolation guarantee I8): a site administrator cannot grant beyond the network's ceiling.
+        if (e && e.code === 'plugin_grant_beyond_ceiling') {
+            return res.status(403).json({ code: e.code, message: e.message, data: { status: 403, beyond: e.beyond || [] } });
+        }
+        throw e;
+    }
+    const { announced, refused } = applied;
     if (refused.length && refusePluginGrantByToken(req, res, refused)) return;
 
     // A REVOKE has to take effect NOW, not at the next boot. Some capabilities the AST scan gates have no
@@ -2532,6 +2561,15 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request,
     // conditions — nothing registered AND every pid we spawned for this slug observed to exit — so the
     // 409 below means a process really is still alive, not that a Map entry lingered.
     const isolate = require('../core/plugin-isolate');
+    // Multisite: the code is leaving the NETWORK — stop it on every other site (each site's own
+    // deactivation record) and stop offering it, before any of its files go away.
+    try {
+        await require('../core/plugins').deactivatePluginOnSecondarySites(slug);
+        if (require('../core/site-context').multisiteEnabled()) require('../core/network').clearPluginCeiling(slug);
+    } catch (e: any) { console.error('[plugin %s] delete: could not stop it on the other sites: %s', logSafe(slug), logSafe(e && e.message)); }
+    if (!(await isolate.awaitOtherSitesStopped(slug, DELETE_STOP_TIMEOUT_MS))) {
+        return res.status(409).json({ message: `Plugin '${slug}' still runs on another site of the network; nothing was deleted. Try again in a moment.` });
+    }
     if (isolate.isIsolated(slug)) {
         console.warn('[plugin %s] delete: a child process is still registered although the plugin is not listed active (orphaned isolate) — stopping it before removing the directory.', logSafe(slug));
     }

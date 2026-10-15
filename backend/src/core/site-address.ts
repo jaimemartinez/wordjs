@@ -1456,7 +1456,7 @@ async function tellAdmins(message: string) {
                 transports: ['db', 'sse'],
             });
         }
-        const send = (global as any).wordjs_send_mail;
+        const send = require('./mail-provider').sendMailFn();
         if (typeof send === 'function') {
             const { getOption } = require('./options');
             const to = String((await getOption('admin_email', '')) || '').trim();

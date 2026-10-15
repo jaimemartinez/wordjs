@@ -7,6 +7,9 @@
  *   POST /network/sites/:id/suspend      suspend a site (re-authenticates)
  *   POST /network/sites/:id/resume       resume it (re-authenticates)
  *   GET  /network/audit                  the network's own audit log
+ *   GET  /network/plugins                the installed plugins and what the network offers the sites
+ *   PUT  /network/plugins/:slug/ceiling  offer a plugin to the sites, up to a grant ceiling (re-authenticates)
+ *   DELETE /network/plugins/:slug/ceiling  stop offering it; it is deactivated on every other site (re-authenticates)
  *
  * Everything but /status is for NETWORK administrators (core/network-auth), on the main site only, with
  * a session (never an API token): a token minted for automation must not be able to create sites.
@@ -308,5 +311,153 @@ router.get('/audit', (req: Request, res: Response) => {
     res.set('Cache-Control', 'no-store');
     res.json({ entries: require('../core/network').auditLog(Number(req.query.limit) || 100) });
 });
+
+// ── Plugins across the network (phase 2) ─────────────────────────────────────────────────────────────
+
+const PLUGIN_SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+
+/** The permissions a plugin's manifest requests, as grant tokens ("scope:access" / "network"). */
+function requestedTokens(plugin: any): string[] {
+    return Array.from(new Set(((plugin && plugin.permissions) || [])
+        .map((perm: any) => (perm && perm.scope) ? (perm.scope === 'network' ? 'network' : `${perm.scope}:${perm.access || 'read'}`) : null)
+        .filter(Boolean))) as string[];
+}
+
+function pluginErrorStatus(res: Response, e: any) {
+    const code = e && typeof e.code === 'string' ? e.code : '';
+    if (code.startsWith('network_') || code.startsWith('plugin_')) {
+        const status = typeof e.status === 'number' ? e.status : 400;
+        return res.status(status).json({ code, message: e.message, data: { status } });
+    }
+    throw e;
+}
+
+/**
+ * @swagger
+ * /network/plugins:
+ *   get:
+ *     summary: The plugins installed on the network and the grant ceiling each one is offered to the sites with
+ *     description: A plugin with `ceiling` null is not offered — only the main site can activate it. Otherwise any site may activate it and grant it at most the tokens of its ceiling.
+ *     tags: [Network]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: "{ plugins: [{ slug, name, version, requestedPermissions, ceiling }] }"
+ *       401:
+ *         description: Not signed in (rest_not_logged_in)
+ *       403:
+ *         description: Not a network administrator
+ */
+router.get('/plugins', asyncHandler(async (req: Request, res: Response) => {
+    const network = require('../core/network');
+    const all = await require('../core/plugins').getAllPlugins();
+    res.set('Cache-Control', 'no-store');
+    res.json({
+        plugins: all.map((p: any) => ({
+            slug: p.slug,
+            name: p.name || p.slug,
+            version: p.version || '',
+            requestedPermissions: requestedTokens(p),
+            ceiling: network.pluginCeiling(p.slug),
+        })),
+    });
+}));
+
+/**
+ * @swagger
+ * /network/plugins/{slug}/ceiling:
+ *   put:
+ *     summary: Offer a plugin to the sites of the network, with the most any site may grant it
+ *     description: Records the plugin's grant ceiling (replacing a previous one), installs its dependencies into the shared node_modules once, and restarts its running workers on the other sites so a lowered ceiling also reaches their children. A site administrator's grant beyond the ceiling is refused with 403 (plugin_grant_beyond_ceiling), and grants already stored beyond it stop counting at once.
+ *     tags: [Network]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [tokens, currentPassword]
+ *             properties:
+ *               tokens:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Grant tokens ("scope:access" or "network").
+ *               currentPassword:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: "{ slug, ceiling }"
+ *       400:
+ *         description: A wrong currentPassword, a malformed token (network_invalid_ceiling), or not an isolated plugin
+ *       401:
+ *         description: Not signed in (rest_not_logged_in)
+ *       403:
+ *         description: Not a network administrator
+ *       404:
+ *         description: No such plugin (plugin_not_found)
+ *   delete:
+ *     summary: Stop offering a plugin to the sites of the network
+ *     description: Removes its ceiling and deactivates it on every site other than the main one (their grants are kept for a later offer).
+ *     tags: [Network]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [currentPassword]
+ *             properties:
+ *               currentPassword:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: "{ slug, withdrawn, deactivatedOn }"
+ *       400:
+ *         description: A wrong currentPassword
+ *       401:
+ *         description: Not signed in (rest_not_logged_in)
+ *       403:
+ *         description: Not a network administrator
+ */
+router.put('/plugins/:slug/ceiling', asyncHandler(async (req: Request, res: Response) => {
+    const slug = String(req.params.slug || '');
+    if (!PLUGIN_SLUG_RE.test(slug)) return res.status(400).json({ code: 'plugin_invalid_slug', message: 'Not a plugin slug.', data: { status: 400 } });
+    const body = req.body || {};
+    if (await requireSudoPassword(req, res, body.currentPassword)) return;
+    try {
+        const ceiling = await require('../core/plugins').offerPluginToSites(slug, body.tokens);
+        require('../core/network').audit('plugin.offered', { actor: Number(req.user.id), detail: { slug, ceiling } });
+        res.json({ slug, ceiling });
+    } catch (e: any) {
+        return pluginErrorStatus(res, e);
+    }
+}));
+
+router.delete('/plugins/:slug/ceiling', asyncHandler(async (req: Request, res: Response) => {
+    const slug = String(req.params.slug || '');
+    if (!PLUGIN_SLUG_RE.test(slug)) return res.status(400).json({ code: 'plugin_invalid_slug', message: 'Not a plugin slug.', data: { status: 400 } });
+    if (await requireSudoPassword(req, res, (req.body || {}).currentPassword)) return;
+    const result = await require('../core/plugins').withdrawPluginFromSites(slug);
+    require('../core/network').audit('plugin.withdrawn', { actor: Number(req.user.id), detail: { slug, deactivatedOn: result.deactivatedOn } });
+    res.json({ slug, ...result });
+}));
 
 module.exports = router;

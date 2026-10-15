@@ -100,7 +100,7 @@ const DOOR_PERSONAS = ['doorMe', 'doorTwin', 'doorMfa', 'doorMfaEnable', 'doorSe
 /** …and the doors that need a privileged caller to be reachable at all (DELETE /plugins/:slug is isAdmin). */
 const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy'];
 /** …and the network doors (routes/network.ts), whose caller must also be a NETWORK administrator. */
-const NETWORK_DOOR_PERSONAS = ['doorNetworkCreate', 'doorNetworkSuspend', 'doorNetworkResume'];
+const NETWORK_DOOR_PERSONAS = ['doorNetworkCreate', 'doorNetworkSuspend', 'doorNetworkResume', 'doorNetworkOffer', 'doorNetworkWithdraw'];
 
 before(async () => {
     await database.init({ driver: 'sqlite-native' });
@@ -696,6 +696,21 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
                 .send({ currentPassword: pw })),
             alsoExpect: (r: any) => r.status === 404 && r.body.code === 'network_site_not_found',
         })),
+        // Offering a plugin to the sites, and withdrawing it (multisite phase 2): the password is checked
+        // first; a plugin that is not installed is then a 404, and withdrawing an offer that was never made
+        // changes nothing (200, `withdrawn: false`).
+        {
+            site: 'network.ts PUT /plugins/:slug/ceiling', name: 'PUT /network/plugins/:slug/ceiling', persona: 'doorNetworkOffer',
+            send: (p: string, pw: string) => withMultisite(() => request(app).put(`${B}/network/plugins/zz-door-probe/ceiling`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw, tokens: [] })),
+            alsoExpect: (r: any) => r.status === 404 && r.body.code === 'plugin_not_found',
+        },
+        {
+            site: 'network.ts DELETE /plugins/:slug/ceiling', name: 'DELETE /network/plugins/:slug/ceiling', persona: 'doorNetworkWithdraw',
+            send: (p: string, pw: string) => withMultisite(() => request(app).delete(`${B}/network/plugins/zz-door-probe/ceiling`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw })),
+            alsoExpect: (r: any) => r.status === 200 && r.body.withdrawn === false,
+        },
     ];
 
     // ── THE BIJECTION: the rows and the call sites are the same set ──────────────────────────────

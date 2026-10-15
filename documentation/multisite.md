@@ -25,8 +25,8 @@ or changes. The design, the isolation guarantees and the road ahead are in
 | Database | `dbPath`, as before | `<data dir>/sites/<id>/wordjs-native.db` |
 | Uploads | `uploads/` and `data/private-uploads/`, as before | `<data dir>/sites/<id>/uploads/` and `…/private-uploads/` |
 | Users, roles, sessions | Its own | Its own. User ids repeat across sites; a session or API token of one site is refused on every other |
-| Plugins | Installed and run here | Not active (see below) |
-| Themes | Installed, edited and run here | Chosen and customised per site; the theme files are shared |
+| Plugins | Installed here, for the whole network; activated and granted here | Activated and granted per site, among the plugins the network offers ([below](#plugins-on-the-sites)) |
+| Themes | Installed and edited here | Chosen and customised per site; the theme files are shared; each site runs its own theme server code |
 
 A request is assigned to a site by the address it was sent to. An address no site declares is answered
 `421 Misdirected Request`, exactly as on a single site. Loopback addresses and IP literals always mean
@@ -95,16 +95,40 @@ Point the new name at the server the main site runs on, exactly as you did for t
 Admin → Network → Suspend (your password confirms it). A suspended site answers `503` to every request,
 pages and API alike; its data is kept. Resume brings it back. The main site cannot be suspended.
 
+## Plugins on the sites
+
+Plugin **code** is the network's: it is uploaded, updated and deleted on the main site, once, and every
+site sees the same installed plugins. What each site does with them is its own:
+
+1. **The network offers a plugin.** In Admin → Network → *Plugins for the sites*, a network administrator
+   ticks the permissions any site may grant the plugin (its **ceiling**) and clicks *Offer to the sites*
+   (the password field above the list confirms it). Until then the plugin runs on the main site only, and
+   the other sites list it as *Not offered by the network*.
+2. **A site activates it.** The site's administrator opens Admin → Plugins on the site's own address,
+   activates the plugin and grants it permissions, as on a single site — but never beyond the ceiling:
+   the switches past it are disabled, and the API refuses such a grant with `403
+   plugin_grant_beyond_ceiling`.
+3. **Each site runs its own copy.** A plugin active on several sites runs one sandboxed worker per site.
+   Its routes (`/api/v1/plugin/<slug>/…`), hooks, shortcodes, scheduled events, notification transports
+   and mail provider answer only for the site they were started for, it reads and writes that site's
+   database (its own tables included) and its private storage is that site's. On a site where it is not
+   active, its routes answer `404` and its hooks do not run.
+
+Lowering a ceiling takes effect at once on every site (a permission outside it stops counting even
+though the site's stored grant still names it, and running workers are restarted). *Stop offering*
+deactivates the plugin on every other site; their grants are kept for a later offer. Deleting a plugin
+on the main site removes it from the whole network.
+
+A plugin that provides email does so per site: a site sends mail only through a mail plugin active and
+granted `email:provider` **on that site**.
+
+Each site's theme server code (`functions.js`) also runs per site, in its own worker.
+
 ## What stays on the main site in this version
 
-Plugins run on the main site only. On the other sites, plugin pages, routes, assets, hooks and shortcodes
-do not exist, the Plugins screen is not offered, and a plugin that provides email does not send mail for
-them (password recovery there fails closed, as on any site without a mail provider). The same holds for a
-theme's server code (`functions.js`).
-
-These screens are the main site's too, and are not offered elsewhere: Plugins, backups, the site
-address, certificates, the hooks inspector, the database migration tool, and the network screen.
-Real-time collaboration in the editor is available on the main site only.
+These screens are the main site's, and are not offered elsewhere: installing, updating and deleting
+plugins and themes, backups, the site address, certificates, the hooks inspector, the database migration
+tool, and the network screen. Real-time collaboration in the editor is available on the main site only.
 
 ## Where a site's data lives
 
@@ -131,5 +155,6 @@ Allowed while the main site is the only site. Restart the backend afterwards.
 | `421` on a new site's address | The backend was not restarted after `enable`, or the address is not the site's main address, or (separate mode) the gateway has not received the network's addresses yet: check the backend log for "could not tell the gateway". |
 | `npm run network -- enable` refuses | The install is not finished, the driver is not `sqlite-native`, or a login given to `--admin` is not an administrator of the main site. |
 | A site answers `503` | It is suspended (Admin → Network). |
-| A site's admin has no Plugins screen | Plugins are the main site's in this version (see above). |
+| A site's admin cannot activate a plugin ("Not offered by the network") | A network administrator has not offered it to the sites (Admin → Network → Plugins for the sites). |
+| `403 plugin_grant_beyond_ceiling` | The permission is outside the ceiling the network set for that plugin. |
 | Log: "the network store could not be opened" | `<data dir>/network.db` is unreadable; only the main site is answered until it is fixed. |

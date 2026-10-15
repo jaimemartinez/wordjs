@@ -256,11 +256,12 @@ function initCoreMenus() {
         capability: 'switch_themes'
     });
 
-    // Multisite (phase 1): plugins and the hooks registry are the main site's; another site lists neither.
+    // Multisite: the hooks registry is the main site's. Plugins are listed on every site (phase 2): another
+    // site activates and grants the plugins the network offers it.
     const mainSite = !require('./multisite-guards').onSecondarySite();
 
     // 6. Plugins
-    if (mainSite) registerAdminMenu('core', {
+    registerAdminMenu('core', {
         href: '/admin/plugins',
         label: 'Plugins',
         icon: 'fa-plug',

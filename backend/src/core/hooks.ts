@@ -6,14 +6,24 @@
 const EventEmitter = require('events');
 
 /**
- * MULTISITE (phase 1): plugin and theme code (every callback registered with a pluginSlug — an isolate's
- * shim) belongs to the main site, the only site plugins are active on. On any other site those
- * callbacks are skipped, so a main-site plugin never sees, filters or reacts to another site's data.
- * Core callbacks run everywhere. Always true on a single site.
+ * MULTISITE: plugin and theme code (every callback registered with a pluginSlug — an isolate's shim) is
+ * one site's: each site runs its own worker per plugin (core/plugin-isolate), and the shim that worker
+ * registers is recorded with the site it was registered for. Dispatch runs only the callbacks of the
+ * site the hook fires for, so a plugin active on one site never sees, filters or reacts to another
+ * site's data, and two sites running the same plugin each reach their own worker. Core callbacks run
+ * everywhere. On a single site every callback carries site 1 and always runs.
  */
 const siteContext = require('./site-context');
-function pluginCodeRunsHere(): boolean {
-    return !siteContext.multisiteEnabled() || siteContext.currentSiteIdOrNull() === siteContext.PRIMARY_SITE_ID;
+/** The site a plugin callback registered now belongs to (null for core callbacks, which run everywhere). */
+function registeringSite(pluginSlug: string | null): number | null {
+    if (!pluginSlug) return null;
+    return siteContext.currentSiteIdOrNull() ?? siteContext.PRIMARY_SITE_ID;
+}
+/** Does a callback recorded for `siteId` run for the hook firing now? */
+function runsHere(siteId: number | null, pluginSlug: string | null): boolean {
+    if (!pluginSlug) return true;
+    if (!siteContext.multisiteEnabled()) return true;
+    return siteId !== null && siteContext.currentSiteIdOrNull() === siteId;
 }
 
 class Hooks {
@@ -76,7 +86,7 @@ class Hooks {
         if (!this.actions.has(hook)) {
             this.actions.set(hook, []);
         }
-        this.actions.get(hook)!.push({ callback, priority, pluginSlug });
+        this.actions.get(hook)!.push({ callback, priority, pluginSlug, siteId: registeringSite(pluginSlug) });
         this.actions.get(hook)!.sort((a, b) => a.priority - b.priority);
     }
 
@@ -107,10 +117,9 @@ class Hooks {
         this._emitMonitor('action', hook, args);
         if (!this.actions.has(hook)) return;
         const { runWithContext } = require('./plugin-context');
-        const pluginsHere = pluginCodeRunsHere();
-        for (const { callback, pluginSlug } of this.actions.get(hook)!) {
+        for (const { callback, pluginSlug, siteId } of this.actions.get(hook)!) {
             if (pluginSlug) {
-                if (!pluginsHere) continue;
+                if (!runsHere(siteId, pluginSlug)) continue;
                 await runWithContext(pluginSlug, () => callback(...args));
             } else {
                 await callback(...args);
@@ -127,9 +136,9 @@ class Hooks {
         this._emitMonitor('action', hook, args);
         if (!this.actions.has(hook)) return;
         const { runWithContext } = require('./plugin-context');
-        if (!pluginCodeRunsHere()) return;
-        for (const { callback, pluginSlug } of this.actions.get(hook)!) {
+        for (const { callback, pluginSlug, siteId } of this.actions.get(hook)!) {
             if (pluginSlug !== slug) continue; // only the scheduling plugin's own callbacks
+            if (!runsHere(siteId, pluginSlug)) continue; // and only its instance on this site
             await runWithContext(slug, () => callback(...args));
         }
     }
@@ -172,7 +181,7 @@ class Hooks {
         if (!this.filters.has(hook)) {
             this.filters.set(hook, []);
         }
-        this.filters.get(hook)!.push({ callback, priority, pluginSlug });
+        this.filters.get(hook)!.push({ callback, priority, pluginSlug, siteId: registeringSite(pluginSlug) });
         this.filters.get(hook)!.sort((a, b) => a.priority - b.priority);
     }
 
@@ -196,10 +205,9 @@ class Hooks {
         if (!this.filters.has(hook)) return value;
         const { runWithContext } = require('./plugin-context');
         let result = value;
-        const pluginsHere = pluginCodeRunsHere();
-        for (const { callback, pluginSlug } of this.filters.get(hook)!) {
+        for (const { callback, pluginSlug, siteId } of this.filters.get(hook)!) {
             if (pluginSlug) {
-                if (!pluginsHere) continue;
+                if (!runsHere(siteId, pluginSlug)) continue;
                 result = await runWithContext(pluginSlug, () => callback(result, ...args));
             } else {
                 result = await callback(result, ...args);

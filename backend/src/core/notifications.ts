@@ -22,14 +22,18 @@ const NODE_ID = require('crypto').randomBytes(8).toString('hex');
  */
 const log = (...args: any[]): void => { process.stderr.write(`${require('util').format(...args)}\n`); };
 
-/** Multisite: is the current work the main site's (always true on a single site)? */
+/** Multisite: the site the current work belongs to (site 1 outside any context, as the boot is). */
 const siteContext = require('./site-context');
-function mainSiteCode(): boolean {
-    return !siteContext.multisiteEnabled() || siteContext.currentSiteIdOrNull() === siteContext.PRIMARY_SITE_ID;
+function siteOf(): number {
+    return siteContext.currentSiteIdOrNull() ?? siteContext.PRIMARY_SITE_ID;
 }
 
 class NotificationService {
     transports: Map<string, { handler: (...args: any[]) => any; pluginSlug: string | null }>;
+    // Plugin transports, per site: in a multisite network each site runs its own worker of a plugin, and a
+    // transport registered by site A's worker only ever receives site A's notifications. Site 1 / single
+    // site: one table, as before.
+    siteTransports: Map<number, Map<string, { handler: (...args: any[]) => any; pluginSlug: string | null }>>;
     clients: Set<any>;
 
     // SSE concurrency caps (DoS backstop — see addClient).
@@ -38,6 +42,7 @@ class NotificationService {
 
     constructor() {
         this.transports = new Map();
+        this.siteTransports = new Map();
         this.clients = new Set();
 
         // Register core transports
@@ -109,7 +114,15 @@ class NotificationService {
         // Capture the registering plugin (if any) so its handler runs in its sandbox context
         // when fired later by core's notify loop (otherwise it would run detached = trusted).
         const { getCurrentPlugin } = require('./plugin-context');
-        this.transports.set(name, { handler, pluginSlug: getCurrentPlugin() });
+        const pluginSlug = getCurrentPlugin();
+        if (pluginSlug) {
+            const id = siteOf();
+            let table = this.siteTransports.get(id);
+            if (!table) { table = new Map(); this.siteTransports.set(id, table); }
+            table.set(name, { handler, pluginSlug });
+        } else {
+            this.transports.set(name, { handler, pluginSlug: null });
+        }
         log(`📦 Notification Transport Registered: ${name}`);
     }
 
@@ -118,9 +131,11 @@ class NotificationService {
      * or reloaded, so a dispatched notification is never routed to a dead worker.
      */
     unregisterPluginTransports(slug: any) {
-        for (const [name, t] of this.transports) {
+        const table = this.siteTransports.get(siteOf());
+        if (!table) return;
+        for (const [name, t] of table) {
             if (t.pluginSlug === slug) {
-                this.transports.delete(name);
+                table.delete(name);
                 log(`🗑️  Notification Transport Unregistered: ${name} (plugin ${slug})`);
             }
         }
@@ -193,16 +208,18 @@ class NotificationService {
         };
 
         // Determine which transports to use
-        const targetTransports = data.transports || Array.from(this.transports.keys());
+        const siteTable = this.siteTransports.get(siteOf());
+        const targetTransports = data.transports
+            || Array.from(new Set([...this.transports.keys(), ...(siteTable ? siteTable.keys() : [])]));
 
         // Execute all relevant transports
         const promises: Promise<any>[] = [];
         for (const name of targetTransports) {
-            const entry = this.transports.get(name);
+            // This site's plugin transport shadows a core one of the same name (registration used to
+            // be last-writer-wins on one table); another site's plugin transports are not visible here.
+            const entry = (siteTable && siteTable.get(name)) || this.transports.get(name);
             if (entry) {
                 const { handler, pluginSlug } = entry;
-                // Plugin transports belong to the main site (multisite phase 1): never another site's data.
-                if (pluginSlug && !mainSiteCode()) continue;
                 const invoke = pluginSlug
                     ? () => require('./plugin-context').runWithContext(pluginSlug, () => handler(notification))
                     : () => handler(notification);

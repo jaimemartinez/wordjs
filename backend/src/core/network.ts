@@ -39,6 +39,8 @@ export type PolicySite = { id: number; url: string; status: SiteStatus };
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
 
 let db: any = null;
+// slug -> granted-token ceiling (see pluginCeiling). Rebuilt from the store on first read after a write.
+let ceilings: Map<string, string[]> | null = null;
 let snapshot: { sites: SiteRecord[]; byId: Map<number, SiteRecord>; byHost: Map<string, number>; policy: PolicySite[] } | null = null;
 
 /** Where the network store lives: next to the main database file. */
@@ -112,6 +114,11 @@ function openStore(): any {
             user_id INTEGER PRIMARY KEY,
             created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS network_plugin_ceilings (
+            slug TEXT PRIMARY KEY,
+            tokens TEXT NOT NULL DEFAULT '[]',
+            updated_at TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS network_audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             at TEXT NOT NULL,
@@ -123,6 +130,7 @@ function openStore(): any {
     `);
     db = handle;
     snapshot = null;
+    ceilings = null;
     return db;
 }
 
@@ -133,6 +141,7 @@ function closeNetworkStore(): void {
     }
     db = null;
     snapshot = null;
+    ceilings = null;
 }
 
 function rowToSite(r: any): SiteRecord {
@@ -299,6 +308,68 @@ function removeNetworkAdmin(userId: number): void {
     openStore().prepare('DELETE FROM network_admins WHERE user_id = ?').run(userId);
 }
 
+// ── Plugin grant ceilings ─────────────────────────────────────────────────────────────────────────────
+//
+// Plugin code is network-wide; activation and grants are per site. A network administrator OFFERS a
+// plugin to the other sites by recording its ceiling: the most any site may grant it ("scope:access"
+// tokens and/or "network"). No row = not offered: the plugin cannot be activated on a site other than the
+// main one. The main site is never bounded by it (core/plugin-permissions ceilingFor).
+
+const CEILING_TOKEN = /^(?:network|[a-z][a-z0-9_-]{0,31}:[a-z][a-z0-9_-]{0,31})$/;
+const PLUGIN_SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+
+function loadCeilings(): Map<string, string[]> {
+    if (ceilings) return ceilings;
+    const map = new Map<string, string[]>();
+    for (const r of openStore().prepare('SELECT slug, tokens FROM network_plugin_ceilings').all()) {
+        let list: unknown;
+        try { list = JSON.parse(String(r.tokens)); } catch { list = []; }
+        // A malformed row offers the plugin with NOTHING grantable — never more than it says.
+        const clean = Array.isArray(list) ? list.filter((t: unknown) => typeof t === 'string' && CEILING_TOKEN.test(t)) as string[] : [];
+        map.set(String(r.slug), Object.freeze(clean) as string[]);
+    }
+    ceilings = map;
+    return map;
+}
+
+/** The ceiling of `slug` (the most another site may grant it), or null when it is not offered to the other sites. */
+function pluginCeiling(slug: string): string[] | null {
+    if (!PLUGIN_SLUG_RE.test(String(slug))) return null;
+    const c = loadCeilings().get(String(slug));
+    return c ? c.slice() : null;
+}
+
+/** Every recorded ceiling, by slug. */
+function listPluginCeilings(): Record<string, string[]> {
+    const out: Record<string, string[]> = {};
+    for (const [slug, tokens] of loadCeilings()) out[slug] = tokens.slice();
+    return out;
+}
+
+/** Offer `slug` to the other sites with `tokens` as its ceiling (replaces any previous one). Returns the stored list. */
+function setPluginCeiling(slug: string, tokens: unknown): string[] {
+    if (!PLUGIN_SLUG_RE.test(String(slug))) throw codedError('network_invalid_plugin', 'Not a plugin slug.');
+    if (!Array.isArray(tokens)) throw codedError('network_invalid_ceiling', 'The ceiling must be a list of permissions.');
+    const clean: string[] = [];
+    for (const t of tokens) {
+        if (typeof t !== 'string' || !CEILING_TOKEN.test(t)) throw codedError('network_invalid_ceiling', `Not a permission: ${String(t).slice(0, 80)}`);
+        if (!clean.includes(t)) clean.push(t);
+    }
+    clean.sort();
+    openStore().prepare('INSERT INTO network_plugin_ceilings (slug, tokens, updated_at) VALUES (?, ?, ?) ON CONFLICT(slug) DO UPDATE SET tokens = excluded.tokens, updated_at = excluded.updated_at')
+        .run(String(slug), JSON.stringify(clean), now());
+    ceilings = null;
+    return clean;
+}
+
+/** Stop offering `slug` to the other sites. Returns whether a ceiling was recorded. */
+function clearPluginCeiling(slug: string): boolean {
+    if (!PLUGIN_SLUG_RE.test(String(slug))) return false;
+    const r = openStore().prepare('DELETE FROM network_plugin_ceilings WHERE slug = ?').run(String(slug));
+    ceilings = null;
+    return r.changes > 0;
+}
+
 function codedError(code: string, message: string): Error & { code: string } {
     const e = new Error(message) as Error & { code: string };
     e.code = code;
@@ -328,4 +399,8 @@ module.exports = {
     audit,
     auditLog,
     invalidate,
+    pluginCeiling,
+    listPluginCeilings,
+    setPluginCeiling,
+    clearPluginCeiling,
 };

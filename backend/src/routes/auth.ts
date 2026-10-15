@@ -731,7 +731,7 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
                 // assertNewIdentity checks the username first, so this username is free: the only thing that
                 // collided is the address. Tell its owner, not the caller.
                 const text = `Someone tried to create a new ${siteName} account with this email address. It already has an account, so nothing was created.\n\nIf this was you, sign in instead, or use "Forgot password" if you no longer know your password. If it was not you, you can ignore this message.`;
-                (global as any).wordjs_send_mail({
+                require('../core/mail-provider').sendMailFn()({
                     to: String(email).trim().toLowerCase(),
                     subject: `Sign-up attempt on ${siteName}`,
                     text,
@@ -747,7 +747,7 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
                 // The site's link base (core/site-address) — never this request's Host: whoever calls this
                 // endpoint must not be able to choose which host receives the verification token.
                 const link = `${await linkBase()}/verify-email?token=${raw}`;
-                (global as any).wordjs_send_mail({
+                require('../core/mail-provider').sendMailFn()({
                     to: String(email).trim().toLowerCase(),
                     subject: `Verify your email for ${siteName}`,
                     text: `Welcome to ${siteName}! Please confirm this email address to create your account (${username}).\n\nVerify your email (this link is valid for 24 hours):\n${link}\n\nIf you did not ask for this account, you can safely ignore this email: nothing is created until the link is followed.`,
@@ -1483,7 +1483,7 @@ router.post('/forgot-password', asyncHandler(async (req: Request, res: Response)
     const siteName = await getOption('blogname', 'WordJS');
 
     try {
-        (global as any).wordjs_send_mail({
+        require('../core/mail-provider').sendMailFn()({
             to,
             subject: `Password reset for ${siteName}`,
             text: `Someone requested a password reset for your ${siteName} account (${user.userLogin}).\n\nReset your password (this link is valid for 30 minutes):\n${link}\n\nIf you did not request this, you can safely ignore this email — your password will not change.`,

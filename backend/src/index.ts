@@ -730,8 +730,8 @@ const pluginServing = require('./core/plugin-serving');
 const PLUGIN_ATTACH_EXTS = new Set(Array.from(EXECUTABLE_DOC_EXTS).filter((e: string) => e !== '.js' && e !== '.mjs' && e !== '.cjs'));
 app.use('/plugins', (req: Request, res: Response, next: NextFunction) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') return next();
-    // Plugins run on the main site only (multisite phase 1): another site has no plugin files to serve.
-    if (multisiteGuards.onSecondarySite()) return res.status(404).end();
+    // Multisite: each site serves the public files of the plugins active on IT (plugin-serving asks the
+    // current site's active set), so no special case is needed here.
     let segs: string[];
     try {
         // req.path is post-mount and NOT percent-decoded; decode each segment exactly once, then let
@@ -1053,10 +1053,9 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // instead of a 404 that reads as "this endpoint does not exist" (and would be cached as such by a
 // CDN). Scoped to /plugin/* only: every core route is fully functional at this point.
 app.use(`${config.api.prefix}/plugin`, (req: Request, res: Response, next: NextFunction) => {
-    // Plugin routes are the main site's plugins (multisite phase 1): on another site they do not exist.
-    if (multisiteGuards.onSecondarySite()) {
-        return res.status(404).json({ code: 'rest_no_route', message: 'No route was found matching the URL and request method.', data: { status: 404 } });
-    }
+    // Multisite: every site's worker of a plugin mounts the same paths, and each mount answers only its own
+    // site's requests (core/plugin-isolate siteGate); a plugin not active on this site has no mount that
+    // answers here, so its routes fall through to the 404 below.
     if (pluginsReady.arePluginsReady()) return next();
     res.setHeader('Retry-After', '5');
     res.setHeader('Cache-Control', 'no-store');

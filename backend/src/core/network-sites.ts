@@ -26,6 +26,11 @@ async function initSiteRuntime(): Promise<void> {
     await postTypes.initTaxonomies();
     await require('./roles').loadRoles();
     require('./adminMenu').initCoreMenus();
+    // Phase 2: the site's own plugin workers and theme worker (core/plugins, core/theme-engine). Neither
+    // throws: a site whose plugins or theme code fail to start still serves its content.
+    await require('./plugins').loadSitePlugins();
+    try { await require('./theme-engine').init(); }
+    catch (e: any) { console.warn(`[multisite] site ${siteContext.currentSiteIdOrNull()}: theme engine not started: ${e && e.message}`); }
 }
 
 /**
@@ -149,6 +154,22 @@ async function createSite(input: CreateSiteInput) {
 
 function setSiteStatus(id: number, status: 'active' | 'suspended', actorUserId: number | null = null) {
     const site = network.setSiteStatus(id, status);
+    if (status === 'suspended') {
+        // A suspended site answers nothing, so its plugin and theme workers have nothing to do: stop them.
+        try {
+            const iso = require('./plugin-isolate');
+            for (const key of iso.listIsolateKeys()) {
+                if (iso.splitIsolateKey(key).siteId === id) { try { iso.unloadIsolateKey(key); } catch { /* already gone */ } }
+            }
+        } catch { /* isolate layer unavailable */ }
+    } else if (prepared.has(id)) {
+        // Resumed after this process had prepared it: start its workers again (a site prepared later starts
+        // them in initSiteRuntime). In the background — the resume itself must not wait for the spawns.
+        siteContext.runWithSite(id, async () => {
+            await require('./plugins').loadSitePlugins();
+            try { await require('./theme-engine').init(); } catch { /* logged by the engine */ }
+        }).catch(() => { /* loadSitePlugins never throws */ });
+    }
     network.audit(status === 'suspended' ? 'site.suspended' : 'site.resumed', { actor: actorUserId, siteId: id });
     afterRegistryChange();
     return site;

@@ -109,6 +109,8 @@ before(async () => {
         siteTwo = two.id;
         siteThree = three.id;
     });
+    // The boot marks this once the main site's plugins are loaded; until then /plugin/* answers 503.
+    require('../core/plugins-ready').markPluginsReady();
     server = http.createServer(app);
     await new Promise<void>((resolve) => siteContext.runWithSite(null, () => server.listen(0, '127.0.0.1', resolve)));
     tokens.two = await signIn(TWO, 'admin');
@@ -294,12 +296,16 @@ describe('uploads (I3)', () => {
     });
 });
 
-describe('what stays the main site\'s (phase 1)', () => {
-    test('plugin management is refused on another site; the shell\'s reads answer empty', async () => {
-        assert.strictEqual((await bearer('get', `${API}/plugins`, TWO, tokens.two)).status, 403);
+describe('what stays the main site\'s', () => {
+    test('plugin code is the network\'s: a site lists and activates plugins, never installs or deletes them', async () => {
+        // Phase 2: the site's own plugin screen answers (core/multisite-guards); I5 and I8 are proven with
+        // a real plugin worker in multisite-plugins.test.ts.
+        assert.strictEqual((await bearer('get', `${API}/plugins`, TWO, tokens.two)).status, 200);
         const active = await bearer('get', `${API}/plugins/active`, TWO, tokens.two);
         assert.strictEqual(active.status, 200);
         assert.deepStrictEqual(active.body, []);
+        assert.strictEqual((await bearer('post', `${API}/plugins/upload`, TWO, tokens.two)).status, 403);
+        assert.strictEqual((await bearer('post', `${API}/plugins/sample`, TWO, tokens.two)).status, 403);
         assert.strictEqual((await bearer('get', `${API}/plugin/anything/x`, TWO, tokens.two)).status, 404);
     });
 
@@ -315,12 +321,13 @@ describe('what stays the main site\'s (phase 1)', () => {
         assert.strictEqual((await bearer('post', `${API}/themes/default`, TWO, tokens.two)).status, 403);
     });
 
-    test('the admin menu of another site lists core entries only', async () => {
+    test('the admin menu of another site lists its own entries, never the network screen', async () => {
         const res = await bearer('get', `${API}/plugins/menus`, TWO, tokens.two);
         assert.strictEqual(res.status, 200);
         const hrefs = (Array.isArray(res.body) ? res.body : res.body.menus || res.body.items || []).map((m: any) => m.href);
         assert.ok(hrefs.includes('/admin'), JSON.stringify(hrefs));
-        assert.ok(!hrefs.includes('/admin/plugins') && !hrefs.includes('/admin/network'), JSON.stringify(hrefs));
+        assert.ok(hrefs.includes('/admin/plugins'), `the site manages its plugins: ${JSON.stringify(hrefs)}`);
+        assert.ok(!hrefs.includes('/admin/network'), JSON.stringify(hrefs));
     });
 });
 

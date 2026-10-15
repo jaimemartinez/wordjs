@@ -29,8 +29,19 @@ function ownPluginDir(appRoot: string, slug: string): string {
     return owned;
 }
 
-function privateStorageDirs(appRoot: string, slug: string): string[] {
-    const key = storageKey(slug);
+/**
+ * MULTISITE: a plugin runs one worker per site, and each site's worker gets its OWN private storage —
+ * site 1 keeps the directories it always had, any other site's are keyed by `s<id>:<slug>` (so they
+ * never collide with site 1's, nor with each other). Its own code directory is shared by every site,
+ * so only site 1's worker may write there (backwards-compatible private storage); another site's
+ * worker can read its code but keeps its data in its own storage directories.
+ */
+function siteStorageSlug(slug: string, siteId: number = 1): string {
+    return siteId === 1 ? String(slug || '') : `s${siteId}:${String(slug || '')}`;
+}
+
+function privateStorageDirs(appRoot: string, slug: string, siteId: number = 1): string[] {
+    const key = storageKey(siteStorageSlug(slug, siteId));
     return [
         path.join(appRoot, 'data', 'plugins', key),
         path.join(appRoot, 'logs', 'plugins', key),
@@ -38,8 +49,9 @@ function privateStorageDirs(appRoot: string, slug: string): string[] {
     ];
 }
 
-function sandboxPaths(appRoot: string, slug: string, coreDir: string): {
+function sandboxPaths(appRoot: string, slug: string, coreDir: string, siteId: number = 1): {
     own: string;
+    ownWritable: boolean;
     readOnly: string[];
     writable: string[];
     traverse: string[];
@@ -47,18 +59,20 @@ function sandboxPaths(appRoot: string, slug: string, coreDir: string): {
 } {
     const root = path.resolve(appRoot);
     const own = ownPluginDir(root, slug);
-    const storage = privateStorageDirs(root, slug);
+    const storage = privateStorageDirs(root, slug, siteId);
+    const ownWritable = siteId === 1;
     return {
         own,
+        ownWritable,
         // No APP_ROOT grant: configuration, the database and sibling plugins are deliberately absent.
         readOnly: [path.resolve(coreDir), path.join(root, 'node_modules'), own],
         // Own code remains writable for backwards-compatible private storage, but executable-file writes
         // are rejected by io-guard and the native layers never grant executable mapping/FS_EXECUTE here.
-        writable: [own, ...storage],
+        writable: ownWritable ? [own, ...storage] : [...storage],
         // Windows needs directory traversal to reach the narrow descendants without inheriting a read ACE.
         traverse: [root, path.dirname(own)],
         storage,
     };
 }
 
-module.exports = { storageKey, ownPluginDir, privateStorageDirs, sandboxPaths };
+module.exports = { storageKey, siteStorageSlug, ownPluginDir, privateStorageDirs, sandboxPaths };
