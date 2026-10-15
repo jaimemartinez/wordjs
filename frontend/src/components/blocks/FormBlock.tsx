@@ -2,6 +2,7 @@
 
 import React, { useId, useState } from "react";
 import { csrfHeaders } from "@/lib/csrf";
+import type { PublicUiStrings } from "@/lib/public/uiStrings";
 
 /* ============================================================
  * Bloque "Formulario" para el editor visual.
@@ -98,8 +99,32 @@ const isRequired = (f: FormBlockFieldDef): boolean =>
 const selectOptions = (f: FormBlockFieldDef): string[] =>
     (f.options || "").split(",").map((s) => s.trim()).filter(Boolean);
 
-export function FormBlockRender(props: FormBlockProps & { puck?: any }) {
-    const { formName, fields, submitLabel, successMessage, errorMessage, puck } = props;
+/**
+ * Textos del bloque que NO escribe el autor, ya resueltos en el idioma del SITIO por el renderer
+ * público (lib/public/uiStrings → ContentRenderer). Sin ellos (lienzo del editor) se usan los de
+ * siempre.
+ */
+export type FormBlockUiStrings = Partial<Pick<PublicUiStrings,
+    "formSelectPlaceholder" | "formSending" | "formSuccess" | "formError" | "formSubmit">>;
+
+/**
+ * Un texto del autor que sigue siendo el valor POR DEFECTO del bloque (o está vacío) no lo eligió
+ * nadie: se pinta en el idioma del sitio. Así un formulario insertado tal cual en un sitio en inglés
+ * no le habla al visitante en español — y uno en un sitio en español se ve exactamente igual que antes.
+ */
+function authorOr(value: unknown, builtInDefault: string, localized: string | undefined): string {
+    const text = typeof value === "string" ? value : "";
+    if (localized && (text.trim() === "" || text === builtInDefault)) return localized;
+    return text;
+}
+
+export function FormBlockRender(props: FormBlockProps & { puck?: any; ui?: FormBlockUiStrings }) {
+    const { formName, fields, puck, ui } = props;
+    const submitLabel = authorOr(props.submitLabel, formBlockDefaults.submitLabel, ui?.formSubmit);
+    const successMessage = authorOr(props.successMessage, formBlockDefaults.successMessage, ui?.formSuccess);
+    const errorMessage = authorOr(props.errorMessage, formBlockDefaults.errorMessage, ui?.formError);
+    const sendingLabel = ui?.formSending || "Enviando…";
+    const selectPlaceholder = ui?.formSelectPlaceholder || "Selecciona una opción";
     const uid = useId();
     const [status, setStatus] = useState<SubmitStatus>("idle");
     const [invalid, setInvalid] = useState<Record<number, boolean>>({});
@@ -227,7 +252,7 @@ export function FormBlockRender(props: FormBlockProps & { puck?: any }) {
                         ) : f.type === "select" ? (
                             <select className="wjs-form-select" defaultValue="" {...commonProps}>
                                 <option value="" disabled={required}>
-                                    {f.placeholder || "Selecciona una opción"}
+                                    {f.placeholder || selectPlaceholder}
                                 </option>
                                 {selectOptions(f).map((opt, j) => (
                                     <option key={j} value={opt}>{opt}</option>
@@ -274,7 +299,7 @@ export function FormBlockRender(props: FormBlockProps & { puck?: any }) {
                 className="wjs-form-submit"
                 disabled={status === "sending"}
             >
-                {status === "sending" ? "Enviando…" : submitLabel}
+                {status === "sending" ? sendingLabel : submitLabel}
             </button>
 
             <p className="wjs-form-status" role="status" aria-live="polite" data-status={status}>
@@ -283,7 +308,7 @@ export function FormBlockRender(props: FormBlockProps & { puck?: any }) {
                     : status === "error"
                         ? errorMessage
                         : status === "sending"
-                            ? "Enviando…"
+                            ? sendingLabel
                             : ""}
             </p>
         </form>

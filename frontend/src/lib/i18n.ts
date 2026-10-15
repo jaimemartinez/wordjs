@@ -1110,6 +1110,15 @@ export const translations: Record<Language, Record<string, string>> = {
         'hostNotice.signinDisabled': 'El inicio de sesión no está disponible en esta dirección.',
         'hostNotice.signinRefused.transport': 'No se puede iniciar sesión en esta dirección por una conexión sin cifrar. Abre el sitio en su dirección principal para entrar.',
         'hostNotice.signinRefused.address': 'El inicio de sesión no está habilitado en esta dirección. Abre el sitio en su dirección principal para entrar.',
+
+        // Public site (visitor-facing) — resolved on the server from the site language (WPLANG)
+        'public.motion.pause': 'Pausar el movimiento',
+        'public.motion.resume': 'Reanudar el movimiento',
+        'public.form.selectPlaceholder': 'Selecciona una opción',
+        'public.form.sending': 'Enviando…',
+        'public.form.success': '¡Gracias! Hemos recibido tu mensaje.',
+        'public.form.error': 'No se pudo enviar el formulario. Inténtalo de nuevo.',
+        'public.form.submit': 'Enviar',
         'siteBanner.linkBase': 'Estás en {host}. Los enlaces y los correos usan {linkBase}.',
         'siteBanner.conflict': 'La dirección principal del archivo de configuración ({config}) no coincide con la que usan los enlaces ({db}). Elige una.',
         'siteBanner.drift': 'El gateway sirve el sitio en {gateway}, pero la dirección principal es {config}.',
@@ -2357,6 +2366,15 @@ export const translations: Record<Language, Record<string, string>> = {
         'hostNotice.signinDisabled': 'Sign-in is not available at this address.',
         'hostNotice.signinRefused.transport': 'Signing in over an unencrypted connection is not allowed at this address. Open the site at its main address to sign in.',
         'hostNotice.signinRefused.address': 'Signing in is not enabled at this address. Open the site at its main address to sign in.',
+
+        // Public site (visitor-facing) — resolved on the server from the site language (WPLANG)
+        'public.motion.pause': 'Pause motion',
+        'public.motion.resume': 'Resume motion',
+        'public.form.selectPlaceholder': 'Select an option',
+        'public.form.sending': 'Sending…',
+        'public.form.success': 'Thank you! We have received your message.',
+        'public.form.error': 'The form could not be sent. Please try again.',
+        'public.form.submit': 'Send',
         'siteBanner.linkBase': 'You are on {host}. Links and emails use {linkBase}.',
         'siteBanner.conflict': 'The main address in the configuration file ({config}) differs from the one links use ({db}). Choose one.',
         'siteBanner.drift': 'The gateway serves the site at {gateway}, but the main address is {config}.',
@@ -3605,6 +3623,15 @@ export const translations: Record<Language, Record<string, string>> = {
         'hostNotice.signinDisabled': 'O login não está disponível neste endereço.',
         'hostNotice.signinRefused.transport': 'Não é permitido entrar neste endereço por uma conexão sem criptografia. Abra o site no endereço principal para entrar.',
         'hostNotice.signinRefused.address': 'O login não está habilitado neste endereço. Abra o site no endereço principal para entrar.',
+
+        // Public site (visitor-facing) — resolved on the server from the site language (WPLANG)
+        'public.motion.pause': 'Pausar o movimento',
+        'public.motion.resume': 'Retomar o movimento',
+        'public.form.selectPlaceholder': 'Selecione uma opção',
+        'public.form.sending': 'Enviando…',
+        'public.form.success': 'Obrigado! Recebemos a sua mensagem.',
+        'public.form.error': 'Não foi possível enviar o formulário. Tente novamente.',
+        'public.form.submit': 'Enviar',
         'siteBanner.linkBase': 'Você está em {host}. Os links e os e-mails usam {linkBase}.',
         'siteBanner.conflict': 'O endereço principal do arquivo de configuração ({config}) difere do usado nos links ({db}). Escolha um.',
         'siteBanner.drift': 'O gateway serve o site em {gateway}, mas o endereço principal é {config}.',

@@ -20,13 +20,20 @@
  */
 import React from "react";
 
-export default function MotionPause() {
+/**
+ * Los textos llegan YA resueltos en el idioma del sitio (lib/public/uiStrings, desde el servidor):
+ * un sitio en inglés no puede ofrecer «Pausar el movimiento». Sin ellos se conservan los de siempre.
+ */
+export default function MotionPause({
+    pauseLabel = "Pausar el movimiento",
+    resumeLabel = "Reanudar el movimiento",
+}: { pauseLabel?: string; resumeLabel?: string }) {
     return (
         <div className="wjs-motion-pause">
             <input type="checkbox" id="wjs-motion-pause" className="wjs-motion-pause__input" />
             <label htmlFor="wjs-motion-pause" className="wjs-motion-pause__label">
-                <span className="wjs-motion-pause__on">Pausar el movimiento</span>
-                <span className="wjs-motion-pause__off">Reanudar el movimiento</span>
+                <span className="wjs-motion-pause__on">{pauseLabel}</span>
+                <span className="wjs-motion-pause__off">{resumeLabel}</span>
             </label>
         </div>
     );

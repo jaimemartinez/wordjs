@@ -11,6 +11,7 @@
 import Link from "next/link";
 import PageId from "./PageId";
 import ContentRenderer from "@/components/content/ContentRenderer";
+import { publicUiStrings } from "@/lib/public/uiStrings";
 import LocalizedDate from "@/components/content/LocalizedDate";
 import LegacyCarousels from "@/components/content/LegacyCarousels";
 import CommentsSection from "@/components/CommentsSection";
@@ -80,7 +81,7 @@ export default function PostContent({ post, settings, category, showComments }: 
                     </div>
                 ) : versoData ? (
                     <div className="wjs-post-body puck-content">
-                        <ContentRenderer data={versoData} ixPresets={settings?.wjs_ix_presets} motion={settings?.wjs_motion} />
+                        <ContentRenderer data={versoData} ixPresets={settings?.wjs_ix_presets} motion={settings?.wjs_motion} ui={publicUiStrings(settings)} />
                     </div>
                 ) : (
                     // Page fallback (no card). `wjs-post-body` rides here too: the FRAME is post-only,
@@ -145,7 +146,7 @@ export default function PostContent({ post, settings, category, showComments }: 
                         keeps `.puck-content`, which is what ui.css already treats as its twin. */}
                     {isLocked ? protectedNotice : versoData ? (
                         <div className="wjs-post-body puck-content">
-                            <ContentRenderer data={versoData} ixPresets={settings?.wjs_ix_presets} motion={settings?.wjs_motion} />
+                            <ContentRenderer data={versoData} ixPresets={settings?.wjs_ix_presets} motion={settings?.wjs_motion} ui={publicUiStrings(settings)} />
                         </div>
                     ) : (
                         <>

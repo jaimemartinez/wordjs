@@ -25,6 +25,7 @@ import React, { useEffect, useState } from "react";
 import { RenderSubtree } from "@/components/content/ContentRenderer";
 import { normalizeIxMotion } from "@/lib/verso/interactions";
 import { symbolsApi, SYMBOL_BLOCK_TYPE } from "@/lib/symbols";
+import type { PublicUiStrings } from "@/lib/public/uiStrings";
 
 /** Cap de profundidad 1: Symbol jamás se renderiza dentro del subárbol de un Symbol. */
 const SYMBOL_SUBTREE_EXCLUDE: ReadonlySet<string> = new Set([SYMBOL_BLOCK_TYPE]);
@@ -38,7 +39,7 @@ const noticeStyle: React.CSSProperties = {
     background: "rgba(240, 236, 246, 0.5)",
 };
 
-export default function VersoSymbolRender({ symbolId, resolvedSymbolItems, isEditing, ixMotion }: {
+export default function VersoSymbolRender({ symbolId, resolvedSymbolItems, isEditing, ixMotion, publicUi }: {
     symbolId?: unknown;
     resolvedSymbolItems?: unknown;
     isEditing?: unknown;
@@ -48,6 +49,8 @@ export default function VersoSymbolRender({ symbolId, resolvedSymbolItems, isEdi
      * precisamente el contenido que se repite en TODAS las páginas.
      */
     ixMotion?: unknown;
+    /** Textos de UI del sitio público en su idioma (lib/public/uiStrings), cuando los pinta el renderer público. */
+    publicUi?: PublicUiStrings;
 }) {
     const editing = !!isEditing;
     const id = Number(symbolId) || 0;
@@ -72,5 +75,5 @@ export default function VersoSymbolRender({ symbolId, resolvedSymbolItems, isEdi
     if (items === null) return editing ? <div style={noticeStyle}>Este símbolo fue eliminado — elige otro.</div> : null;
     if (!items.length) return editing ? <div style={noticeStyle}>El símbolo está vacío.</div> : null;
 
-    return <RenderSubtree items={items} exclude={SYMBOL_SUBTREE_EXCLUDE} motion={normalizeIxMotion(ixMotion)} />;
+    return <RenderSubtree items={items} exclude={SYMBOL_SUBTREE_EXCLUDE} motion={normalizeIxMotion(ixMotion)} ui={publicUi} />;
 }

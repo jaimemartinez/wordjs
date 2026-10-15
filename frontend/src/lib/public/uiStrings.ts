@@ -1,0 +1,48 @@
+/**
+ * The handful of UI strings that the PUBLIC site paints itself (as opposed to content the author
+ * wrote): the motion pause control and the Form block's runtime texts.
+ *
+ * They follow the SITE language — the same `WPLANG` that drives `<html lang>` (lib/documentLanguage)
+ * — and come from the lib/i18n catalogue like every other WordJS string. The catalogue is resolved
+ * HERE, on the server, and only the few resulting strings travel to the page as plain props: lib/i18n
+ * is the whole admin catalogue and no public page should ship it (same reasoning as
+ * HostNotAllowedNotice, which also loads it only on demand).
+ *
+ * Import this module from server components only (HomeContent, PostContent).
+ */
+import { t, type Language } from "@/lib/i18n";
+import { resolveDocumentLanguage } from "@/lib/documentLanguage";
+
+/** Already-resolved strings; serializable, so they can cross into client islands. */
+export interface PublicUiStrings {
+    motionPause: string;
+    motionResume: string;
+    formSelectPlaceholder: string;
+    formSending: string;
+    formSuccess: string;
+    formError: string;
+    formSubmit: string;
+}
+
+/** Catalogue language for a document language tag: its primary subtag when the catalogue has it, else English. */
+export function catalogueLanguage(documentLang: string | null | undefined): Language {
+    const base = (documentLang ?? "").toLowerCase().split(/[-_]/)[0];
+    return base === "es" || base === "en" || base === "pt" ? base : "en";
+}
+
+export function publicUiStringsFor(lang: Language): PublicUiStrings {
+    return {
+        motionPause: t("public.motion.pause", lang),
+        motionResume: t("public.motion.resume", lang),
+        formSelectPlaceholder: t("public.form.selectPlaceholder", lang),
+        formSending: t("public.form.sending", lang),
+        formSuccess: t("public.form.success", lang),
+        formError: t("public.form.error", lang),
+        formSubmit: t("public.form.submit", lang),
+    };
+}
+
+/** Strings for a site, from its settings (`WPLANG`; nothing configured → English, like `<html lang>`). */
+export function publicUiStrings(settings: Record<string, unknown> | null | undefined): PublicUiStrings {
+    return publicUiStringsFor(catalogueLanguage(resolveDocumentLanguage(settings).lang));
+}
