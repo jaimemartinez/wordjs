@@ -39,8 +39,16 @@ export interface ActionBarProps {
  * contenedor transformado): ancho pintado / ancho CSS — la misma derivación que toFramePoint en
  * dnd/driverCore.ts. 1 fuera de un lienzo escalado.
  */
-function useCanvasScale(ref: React.RefObject<HTMLDivElement | null>): { scale: number; hostWidth: number; barWidth: number } {
-    const [m, setM] = React.useState({ scale: 1, hostWidth: 0, barWidth: 0 });
+interface BarMetrics {
+    scale: number;
+    hostWidth: number;
+    hostHeight: number;
+    barWidth: number;
+    barHeight: number;
+}
+
+function useCanvasScale(ref: React.RefObject<HTMLDivElement | null>): BarMetrics {
+    const [m, setM] = React.useState<BarMetrics>({ scale: 1, hostWidth: 0, hostHeight: 0, barWidth: 0, barHeight: 0 });
     React.useLayoutEffect(() => {
         const bar = ref.current;
         const host = bar?.parentElement;
@@ -48,9 +56,19 @@ function useCanvasScale(ref: React.RefObject<HTMLDivElement | null>): { scale: n
         const measure = () => {
             const css = host.offsetWidth;
             const scale = css > 0 ? host.getBoundingClientRect().width / css || 1 : 1;
-            const next = { scale, hostWidth: css, barWidth: bar.offsetWidth };
+            const next: BarMetrics = {
+                scale,
+                hostWidth: css,
+                hostHeight: host.offsetHeight,
+                barWidth: bar.offsetWidth,
+                barHeight: bar.offsetHeight,
+            };
             setM((prev) =>
-                Math.abs(prev.scale - next.scale) < 1e-3 && prev.hostWidth === next.hostWidth && prev.barWidth === next.barWidth
+                Math.abs(prev.scale - next.scale) < 1e-3 &&
+                prev.hostWidth === next.hostWidth &&
+                prev.hostHeight === next.hostHeight &&
+                prev.barWidth === next.barWidth &&
+                prev.barHeight === next.barHeight
                     ? prev
                     : next,
             );
@@ -66,7 +84,7 @@ function useCanvasScale(ref: React.RefObject<HTMLDivElement | null>): { scale: n
 
 export default function ActionBar({ handle, registry, nodeId, rect }: ActionBarProps) {
     const barRef = React.useRef<HTMLDivElement | null>(null);
-    const { scale, hostWidth, barWidth } = useCanvasScale(barRef);
+    const { scale, hostWidth, hostHeight, barWidth, barHeight } = useCanvasScale(barRef);
     // Opcional: la barra también vive en el Verso Lab y en el editor de chrome; fuera del provider, ES.
     const language = useOptionalI18n()?.language ?? "es";
     const model = actionBarModel(handle.getDoc(), registry, nodeId);
@@ -89,8 +107,13 @@ export default function ActionBar({ handle, registry, nodeId, rect }: ActionBarP
             <MSym name={icon} size={size} />
         </button>
     );
-    // Encima del bloque; si no cabe (borde superior del canvas), dentro del bloque.
-    const BAR_H = 34;
+    // Encima del bloque; si no cabe (borde superior del canvas), dentro del bloque. El alto es el
+    // MEDIDO: en pantallas táctiles los botones crecen a 44 px y una constante de 34 montaba la barra
+    // sobre el propio bloque.
+    const BAR_H = barHeight > 0 ? barHeight : 34;
+    // Bloque fuera del lienzo (scroll): sin bloque a la vista, la barra no tiene a qué referirse —
+    // se quedaba clavada arriba, sobre la cabecera del sitio, apuntando a nada.
+    if (hostHeight > 0 && (rect.y + rect.height <= 0 || rect.y >= hostHeight)) return null;
     const top = rect.y >= (BAR_H + 2) * inv ? rect.y - (BAR_H + 2) * inv : rect.y + 2 * inv;
     // Sin salirse por la derecha del lienzo (la capa recorta): ancho pintado = barWidth en px reales.
     const maxLeft = hostWidth > 0 ? Math.max(0, hostWidth - barWidth * inv) : Infinity;
