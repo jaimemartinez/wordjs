@@ -273,7 +273,7 @@ function verifyDefaultTheme(): { ok: boolean; dir: string; exists: boolean; miss
  * added this check declined to fault the five legacy Handlebars files for exactly that reason.
  *
  * What IS actionable is a default directory that is THERE but incomplete — missing theme.json or
- * style.css. No supported path produces that (createDefaultTheme writes all eight files, and delete
+ * style.css. No supported path produces that (createDefaultTheme writes all nine files, and delete
  * removes the tree), so it is corruption: a half-copied upload, an interrupted restore, an editor
  * that removed a file. Activating it would then degrade the whole site to the framework tokens.
  *
@@ -447,7 +447,7 @@ async function renderTemplate(templateName: string, data = {}) {
  * it was this write). The same trap was still live for the five legacy Handlebars files
  * (partials/{header,footer}.html, templates/{index,single,archive}.html), which were written with a
  * bare fs.writeFileSync and so destroyed any hand edit on every call. They are guarded now too.
- * `force` overwrites all eight deliberately — that is what "restore" means.
+ * `force` overwrites all nine deliberately — that is what "restore" means.
  */
 function createDefaultTheme(force = false) {
   const defaultDir = path.join(THEMES_DIR, 'default');
@@ -460,11 +460,12 @@ function createDefaultTheme(force = false) {
 
   fs.mkdirSync(path.join(defaultDir, 'templates'), { recursive: true });
   fs.mkdirSync(path.join(defaultDir, 'partials'), { recursive: true });
+  fs.mkdirSync(path.join(defaultDir, 'chrome'), { recursive: true });
 
   // theme.json
   const themeJson: Record<string, any> = {
     name: 'WordJS',
-    version: '2.0.0',
+    version: '2.1.0',
     description: 'The default WordJS theme — modern, JavaScript-native, developer-first. Signature indigo→violet gradient, Space Grotesk display type, and a deep-indigo footer.',
     author: 'WordJS'
   };
@@ -603,6 +604,9 @@ module.exports = () => {
   --wjs-card-hover-transform: translateY(-3px);
   --wjs-card-hover-shadow: var(--wjs-shadow-md);
   --wjs-card-hover-border-color: rgba(79, 70, 229, 0.35);
+
+  /* --- POSTS GRID --- a post without a featured image shows a soft brand gradient, not a grey box. */
+  --wjs-posts-thumb-bg: linear-gradient(135deg, #e0e7ff 0%, #ede9fe 45%, #fce7f3 100%);
 }
 
 /* ============================ BASE ============================ */
@@ -615,7 +619,10 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-h1, h2, h3, h4, h5, h6 {
+/* Not the editor's Heading block: it takes its colour, size and weight from its per-block variables
+   (--wjs-heading-color, …) through wordjs-ui.css, and these !important declarations used to beat
+   them — a white heading on a dark section, or a gradient one, came out in the default ink. */
+:is(h1, h2, h3, h4, h5, h6):not(.wjs-block-heading) {
   font-family: var(--wjs-font-family-heading) !important;
   color: var(--wjs-color-heading) !important;
   font-weight: 700 !important;
@@ -894,8 +901,169 @@ footer .w-10:hover {
   }
 }
 
+/* ============================ OUTLINE BUTTONS ============================ */
+/* The gradient pill above is the primary call to action. An "outline" button is the quieter second
+   choice next to it, so it keeps a transparent body and an indigo edge instead of a second gradient. */
+.wjs-block-button .wjs-block-button__link.button-variant-outline,
+.wp-block-button .wp-block-button__link.button-variant-outline {
+  background: rgba(255, 255, 255, 0.7) !important;
+  color: var(--wjs-color-primary) !important;
+  box-shadow: inset 0 0 0 2px rgba(79, 70, 229, 0.35);
+}
+.wjs-block-button .wjs-block-button__link.button-variant-outline:hover,
+.wp-block-button .wp-block-button__link.button-variant-outline:hover {
+  background: #ffffff !important;
+  color: var(--wjs-color-primary-dark) !important;
+  box-shadow: inset 0 0 0 2px rgba(79, 70, 229, 0.7), 0 12px 26px -12px rgba(79, 70, 229, 0.45);
+}
+
+/* ============================ VISUAL-EDITOR PAGES ============================ */
+/* Pages built with the visual editor run full-bleed: each Section decides its own width ("Max
+   width"), so a band can cross the whole screen while its text stays in a comfortable column.
+   !important only because the layout's .px-4 utility (wordjs-ui.css) carries it. */
+#main-content:has(.puck-content) { max-width: none; padding-inline: 0 !important; padding-bottom: 0; }
+html { scroll-padding-top: 6rem; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+
+/* Grids: every card in a row is as tall as the tallest. The motion and appearance layers the editor
+   wraps around each block stretch with the cell. */
+#main-content .wjs-block-grid__items > * { display: flex; flex-direction: column; }
+#main-content .wjs-block-grid__items > * > * { flex: 1 1 auto; display: flex; flex-direction: column; }
+#main-content .wjs-block-grid__items > * > * > * { flex: 1 1 auto; }
+
+/* ============================ DESIGN HOOKS ============================ */
+/* Effects a page can switch on from the editor, with no code: give a Heading, Text or Image an
+   "ID / Anchor" that STARTS with one of these words. Under another theme the same blocks simply
+   render plainly — nothing breaks.
+
+     gradient…        text filled with the WordJS gradient, slowly drifting
+     outline…         hollow letters with an indigo stroke
+     marquee…         a line of text that scrolls forever (marquee-reverse… runs the other way);
+                      put the text in twice so the loop is seamless
+     carousel…        on the first block of the first card of a Grid: the Grid becomes a swipeable
+                      carousel — 4 cards per page on desktop, 2 on tablet, 1 on phones */
+
+@keyframes wjs-default-gradient-drift { from { background-position: 0% 50%; } to { background-position: 100% 50%; } }
+#main-content [id^="gradient"],
+#main-content [id^="gradient"] .wjs-ixw {
+  background-image: linear-gradient(100deg, #4f46e5 0%, #7c3aed 30%, #ec4899 60%, #4f46e5 100%);
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+@media (prefers-reduced-motion: no-preference) {
+  #main-content [id^="gradient"],
+  #main-content [id^="gradient"] .wjs-ixw { animation: wjs-default-gradient-drift 8s ease-in-out infinite alternate; }
+}
+
+#main-content [id^="outline"] {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  -webkit-text-stroke: 1.5px var(--wjs-color-primary);
+}
+
+@keyframes wjs-default-marquee { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-50%, 0, 0); } }
+#main-content [id^="marquee"] { width: max-content; max-width: none; white-space: nowrap; }
+#main-content [id^="marquee"] > p { margin: 0; }
+@media (prefers-reduced-motion: no-preference) {
+  #main-content [id^="marquee"] { animation: wjs-default-marquee 150s linear infinite; }
+  #main-content [id^="marquee-reverse"] { animation-direction: reverse; animation-duration: 240s; }
+}
+
+/* Carousel. Sizes come from the Grid's own width (cqw), so the end padding never shrinks a card. */
+#main-content .wjs-block-grid:has([id^="carousel"]) { container-type: inline-size; }
+#main-content .wjs-block-grid__items:has([id^="carousel"]) {
+  --carousel-gap: var(--wjs-grid-gap, 22px);
+  display: grid;
+  grid-template-columns: none;
+  grid-auto-flow: column;
+  grid-auto-columns: calc((100cqw - 3 * var(--carousel-gap)) / 4);
+  gap: var(--carousel-gap);
+  overflow-x: auto;
+  /* Horizontal only: cards still waiting for their entrance (lowered by the motion) must not add a
+     vertical scrollbar. */
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+  scroll-behavior: smooth;
+  padding: 10px 2px 26px;
+  scrollbar-width: thin;
+  scrollbar-color: #c4b5fd transparent;
+  anchor-name: --wjs-carousel;
+}
+#main-content .wjs-block-grid__items:has([id^="carousel"]) > * { scroll-snap-align: start; }
+@media (min-width: 768px) and (max-width: 1023.98px) {
+  #main-content .wjs-block-grid__items:has([id^="carousel"]) { grid-auto-columns: calc((100cqw - var(--carousel-gap)) / 2); }
+}
+@media (max-width: 767.98px) {
+  /* One card per screen, with the next one peeking out to invite a swipe. */
+  #main-content .wjs-block-grid__items:has([id^="carousel"]) { grid-auto-columns: 86cqw; scrollbar-width: none; }
+}
+/* Native CSS arrows where the browser has them (Chrome/Edge 135+); elsewhere: swipe, trackpad or the
+   thin scrollbar. */
+#main-content .wjs-block-grid__items:has([id^="carousel"])::scroll-button(*) {
+  position: fixed;
+  position-anchor: --wjs-carousel;
+  width: 48px;
+  height: 48px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--wjs-gradient);
+  color: #ffffff;
+  font: 700 1.25rem/1 var(--wjs-font-family-base);
+  box-shadow: 0 10px 24px -10px rgba(124, 58, 237, 0.7);
+  cursor: pointer;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+#main-content .wjs-block-grid__items:has([id^="carousel"])::scroll-button(*):hover { transform: scale(1.06); }
+#main-content .wjs-block-grid__items:has([id^="carousel"])::scroll-button(*):focus-visible { outline: 3px solid #c4b5fd; outline-offset: 3px; }
+#main-content .wjs-block-grid__items:has([id^="carousel"])::scroll-button(*):disabled { opacity: 0; pointer-events: none; }
+#main-content .wjs-block-grid__items:has([id^="carousel"])::scroll-button(left) {
+  content: "←" / "Previous";
+  position-area: inline-start center;
+  translate: 50% -10px;
+}
+#main-content .wjs-block-grid__items:has([id^="carousel"])::scroll-button(right) {
+  content: "→" / "Next";
+  position-area: inline-end center;
+  translate: -50% -10px;
+}
+@media (max-width: 767.98px) {
+  #main-content .wjs-block-grid__items:has([id^="carousel"])::scroll-button(*) { display: none; }
+}
+
+/* ============================ COMPOSED FOOTER (chrome/footer.json) ============================ */
+/* Site title + tagline, the footer menu, a line about the site and the social links; a thin rule and
+   the credit underneath. The wordmark switches to a light gradient: the header's indigo one all but
+   vanished on the deep-indigo band. */
+.wjs-chrome-footer { padding-block: 4.5rem 2.5rem; }
+.wjs-chrome-footer .wjs-header-logo {
+  background-image: linear-gradient(100deg, #c7d2fe, #f0abfc);
+  font-size: 1.9rem !important;
+}
+.wjs-chrome-footer .wjs-chrome-site-title span { color: var(--wjs-footer-text-body); margin-top: 0.35rem; }
+.wjs-chrome-footer .wjs-chrome-nav-vertical a { color: #cbd5e1 !important; }
+.wjs-chrome-footer .wjs-chrome-nav-vertical a:hover { color: #ffffff !important; }
+.wjs-chrome-footer .wjs-chrome-row .wjs-chrome-row { flex-direction: column; align-items: flex-start; width: auto; }
+.wjs-chrome-footer .wjs-chrome-text { color: var(--wjs-footer-text-body); }
+.wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row + .wjs-chrome-row {
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row + .wjs-chrome-row .wjs-chrome-text { font-size: 0.9rem; color: #64748b; }
+@media (max-width: 767.98px) {
+  .wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row:first-child { flex-direction: column; align-items: flex-start; gap: 2rem; }
+}
 `;
   writeIfAbsent(path.join(defaultDir, 'style.css'), styleCss);
+
+  // chrome/footer.json — the composed footer (site title, footer menu, socials, credit). Same parity
+  // rule as style.css: default-theme-chrome.ts mirrors the shipped file and the parity test pins it.
+  const { DEFAULT_THEME_FOOTER } = require('./default-theme-chrome');
+  writeIfAbsent(path.join(defaultDir, 'chrome', 'footer.json'), JSON.stringify(DEFAULT_THEME_FOOTER, null, 2) + '\n');
 
   // partials/header.html
   const headerPartial = `<!DOCTYPE html>

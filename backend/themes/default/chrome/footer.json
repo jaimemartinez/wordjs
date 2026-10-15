@@ -1,0 +1,40 @@
+{
+  "root": { "props": {} },
+  "content": [
+    {
+      "type": "ChromeRow",
+      "props": {
+        "align": "between",
+        "gap": "lg",
+        "wrap": true,
+        "items": [
+          { "type": "ChromeSiteTitle", "props": { "showTagline": true } },
+          { "type": "ChromeNav", "props": { "location": "footer", "orientation": "vertical" } },
+          {
+            "type": "ChromeRow",
+            "props": {
+              "align": "start",
+              "gap": "md",
+              "wrap": true,
+              "items": [
+                { "type": "ChromeText", "props": { "text": "Pages that move, plugins that can't take over." } },
+                { "type": "ChromeSocials", "props": { "source": "settings" } }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "ChromeRow",
+      "props": {
+        "align": "center",
+        "gap": "sm",
+        "wrap": true,
+        "items": [
+          { "type": "ChromeText", "props": { "text": "Built with WordJS — the open-source CMS." } }
+        ]
+      }
+    }
+  ]
+}
