@@ -90,6 +90,9 @@ function attemptDigest(value: any): string {
 // Redis. The in-memory Map remains the single-node path and the always-on fallback: any Redis error
 // (or no client configured) degrades to in-process exactly as before — a Redis outage NEVER blocks
 // login. Mirrors limiterStore()'s passOnStoreError philosophy.
+const { siteKeyPrefix } = require('../core/site-context');
+// The site segment lockBucket() puts in front of a key (core/site-context siteKeyPrefix).
+const SITE_KEY_PREFIX = /^s[0-9]+:/;
 const LOGIN_MAX_FAILS = 10;
 const LOGIN_LOCK_MS = 15 * 60 * 1000;
 const _loginFails = new Map(); // key -> { count, firstFailAt, lockedUntil }
@@ -168,12 +171,15 @@ type LockPurpose = (typeof LOCK_PURPOSES)[number];
  */
 const LOCKING_PURPOSES: readonly LockPurpose[] = ['login', 'mfa'];
 function lockBucket(purpose: LockPurpose, subject: string | number): string {
-    return `${purpose}:${subject}`;
+    // Multisite: account names repeat across sites, so each site has its own buckets — failing logins
+    // for 'admin' on one site must never lock 'admin' out of another. Site 1's keys are unchanged.
+    return `${siteKeyPrefix()}${purpose}:${subject}`;
 }
 /** The purpose a key was built under, or '' for a key that did not come from lockBucket(). */
 function purposeOf(key: string): string {
-    const i = String(key).indexOf(':');
-    return i < 0 ? '' : String(key).slice(0, i);
+    const k = String(key).replace(SITE_KEY_PREFIX, '');
+    const i = k.indexOf(':');
+    return i < 0 ? '' : k.slice(0, i);
 }
 const isLockingKey = (key: string) => (LOCKING_PURPOSES as readonly string[]).includes(purposeOf(_loginKey(key)));
 
@@ -1069,7 +1075,16 @@ router.get('/me', withSignInEligibility, authenticate, asyncHandler(async (req: 
     // the raw slug (GET /roles, where the names live, is administrator-only).
     const role = require('../core/roles').getRole(req.user.role);
     const roleName = role && typeof role.name === 'string' && role.name.trim() ? role.name.trim() : null;
-    res.json({ ...req.user.toJSON(), mfa: await mfa.evaluate(req.user), roleName });
+    // Multisite: which part of the network this session is in, so the admin shell offers only what this
+    // site has (another site has no plugin or backup screens) and shows the network screen to network
+    // administrators. Absent on a single site, so its payload is unchanged.
+    const network = require('../core/site-context').multisiteEnabled()
+        ? {
+            mainSite: require('../core/site-context').currentSiteId() === 1,
+            networkAdmin: require('../core/network-auth').isNetworkAdminRequest(req),
+        }
+        : undefined;
+    res.json({ ...req.user.toJSON(), mfa: await mfa.evaluate(req.user), roleName, ...(network ? { network } : {}) });
 }));
 
 /**
@@ -1324,7 +1339,7 @@ function singleUseTokenValid(given: string, storedHash: string, expiresMs: numbe
 // verifies; an external SMTP/relay would set it once its credentials validate).
 async function mailReady(): Promise<boolean> {
     try {
-        if (typeof (global as any).wordjs_send_mail !== 'function') return false;
+        if (!require('../core/mail-provider').isEmailProviderAvailable()) return false;
         return String(await getOption('mail_delivery_ready', '0')) === '1';
     } catch {
         return false;

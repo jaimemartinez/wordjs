@@ -260,13 +260,34 @@ function configuredUploadsRoot(): string | null {
     return _cfgUploadsRoot;
 }
 
+// MULTISITE: each site of the network other than the main one serves /uploads from its own data
+// directory (core/network siteDataDir: `<the database's directory>/sites/<id>/uploads`, index.ts). Those
+// directories are outside every plugin's storage already (no broad data/ access, see isPathSafe), and are
+// declared served here as well, so the published ∩ writable rule covers them by construction. Derived
+// from config.dbPath exactly as core/network derives it, read from the module cache like the uploads root.
+const NETWORK_SITE_UPLOADS = /^[1-9][0-9]{0,8}$/;
+function networkSiteUploadsRootOf(resolved: string): string | null {
+    let dbPath: unknown;
+    try {
+        const cached = require.cache[require.resolve('../config/app')];
+        if (!cached || cached.loaded !== true) return null;
+        dbPath = (cached.exports as any).dbPath;
+    } catch { return null; }
+    if (typeof dbPath !== 'string' || !dbPath) return null;
+    const sitesDir = path.join(path.dirname(path.resolve(dbPath)), 'sites');
+    if (!under(resolved, sitesDir)) return null;
+    const [id, sub] = path.relative(sitesDir, resolved).split(path.sep);
+    if (!NETWORK_SITE_UPLOADS.test(String(id)) || sub !== 'uploads') return null;
+    return path.join(sitesDir, id, 'uploads');
+}
+
 /** Which publicly-served root (if any) contains `resolved`? The CLASS predicate. */
 function servedRootOf(resolved: string): string | null {
     for (const root of SERVED_ROOTS) if (under(resolved, root)) return root;
     for (const root of cwdServedRoots()) if (under(resolved, root)) return root;  // the cwd-anchored twins
     const cfg = configuredUploadsRoot();
     if (cfg && under(resolved, cfg)) return cfg;
-    return null;
+    return networkSiteUploadsRootOf(resolved);
 }
 
 // === THE PUBLICLY-SERVED PLUGIN SURFACE (single source of truth; index.ts reads it) ===

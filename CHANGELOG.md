@@ -4,6 +4,25 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [Unreleased]
+
+### Added
+
+- **Multisite, phase 1: one install can serve a network of sites.** Off unless turned on with
+  `npm run network -- enable --admin <login>`; a single-site install keeps the same database, files,
+  URLs, cache keys and tokens. Once on, the existing install is site 1, the main site, and network
+  administrators (listed administrators of the main site) create, suspend and resume sites from
+  **Admin → Network**. Each site has its own main address, its own SQLite database and its own uploads
+  under `<data dir>/sites/<id>/`, and its own users, roles, sessions, settings, menus and theme choice.
+  A request belongs to the site whose address it was sent to (an unknown address is still a 421); one
+  site's sessions and API tokens are refused on every other (a per-site signing key and a site claim),
+  in-process caches, cache keys, purge tags and the frontend's Data Cache and Full Route Cache are kept
+  per site, and work that loses track of its site fails instead of touching the main site. Phase 1 needs
+  the `sqlite-native` driver and one backend host; plugins, theme server code, backups, certificates and
+  real-time collaboration stay on the main site. The design, the isolation guarantees and the next
+  phases are in `documentation/multisite-design.md`; running a network is in
+  `documentation/multisite.md`.
+
 ## [2.5.0] - 2026-10-15
 
 ### Added

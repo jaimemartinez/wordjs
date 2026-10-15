@@ -22,6 +22,12 @@ const NODE_ID = require('crypto').randomBytes(8).toString('hex');
  */
 const log = (...args: any[]): void => { process.stderr.write(`${require('util').format(...args)}\n`); };
 
+/** Multisite: is the current work the main site's (always true on a single site)? */
+const siteContext = require('./site-context');
+function mainSiteCode(): boolean {
+    return !siteContext.multisiteEnabled() || siteContext.currentSiteIdOrNull() === siteContext.PRIMARY_SITE_ID;
+}
+
 class NotificationService {
     transports: Map<string, { handler: (...args: any[]) => any; pluginSlug: string | null }>;
     clients: Set<any>;
@@ -129,8 +135,11 @@ class NotificationService {
         // low-priv account could open thousands of streams to exhaust FDs/timers/memory on the one shared
         // process. Refuse (and close) a connection past the cap instead of tracking it. Returns false so
         // the caller can stop; existing streams are untouched so legitimate reconnects still work.
+        // Multisite: user ids repeat across sites, so a stream belongs to (site, user) and only ever
+        // receives its own site's notifications (see broadcast). Site 1 / single site: siteId 1.
+        const siteId = siteContext.currentSiteIdOrNull();
         let perUser = 0;
-        for (const c of this.clients) { if (c._wordjs_user_id === userId) perUser++; }
+        for (const c of this.clients) { if (c._wordjs_user_id === userId && c._wordjs_site_id === siteId) perUser++; }
         if (this.clients.size >= NotificationService.MAX_TOTAL_CLIENTS || perUser >= NotificationService.MAX_CLIENTS_PER_USER) {
             log(`[SSE] ⛔ Stream refused for user ${userId} (per-user ${perUser}/${NotificationService.MAX_CLIENTS_PER_USER}, total ${this.clients.size}/${NotificationService.MAX_TOTAL_CLIENTS})`);
             try { res.write(`event: error\ndata: ${JSON.stringify({ error: 'too_many_streams' })}\n\n`); } catch { /* best-effort */ }
@@ -138,6 +147,7 @@ class NotificationService {
             return false;
         }
         res._wordjs_user_id = userId;
+        res._wordjs_site_id = siteId;
         this.clients.add(res);
         log(`[SSE] 🔌 Client Connected. User: ${userId}. Total Active Clients: ${this.clients.size}`);
 
@@ -191,6 +201,8 @@ class NotificationService {
             const entry = this.transports.get(name);
             if (entry) {
                 const { handler, pluginSlug } = entry;
+                // Plugin transports belong to the main site (multisite phase 1): never another site's data.
+                if (pluginSlug && !mainSiteCode()) continue;
                 const invoke = pluginSlug
                     ? () => require('./plugin-context').runWithContext(pluginSlug, () => handler(notification))
                     : () => handler(notification);
@@ -214,7 +226,11 @@ class NotificationService {
         log(`📢 Broadcasting: ID=${notification.uuid}, TargetUser=${notification.user_id}, ActiveClients=${this.clients.size}`);
         const payload = `data: ${JSON.stringify(notification)}\n\n`;
         let sentCount = 0;
+        // The site this notification belongs to: the site it is being delivered for (a peer's copy is
+        // handled as the site it was published for — core/cache's site envelope).
+        const siteId = siteContext.currentSiteIdOrNull();
         this.clients.forEach(client => {
+            if (client._wordjs_site_id !== siteId) return;
             // Use loose comparison to avoid Number vs String issues
             if (notification.user_id == 0 || client._wordjs_user_id == notification.user_id) {
                 client.write(payload);

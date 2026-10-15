@@ -43,11 +43,11 @@ function generateBackupCodes(n = N_BACKUP): { codes: string[]; hashes: string[] 
 
 /** A 5-minute signed token proving the password step passed, so the 2nd factor can't be reached alone. */
 function signChallenge(userId: number): string {
-    return jwt.sign({ userId, purpose: 'mfa_challenge' }, config.jwt.secret, { algorithm: 'HS256', expiresIn: CHALLENGE_TTL });
+    return require('./site-keys').signForSite({ userId, purpose: 'mfa_challenge' }, { algorithm: 'HS256', expiresIn: CHALLENGE_TTL });
 }
 function verifyChallenge(token: string): { userId: number } | null {
     try {
-        const d = jwt.verify(token, config.jwt.secret, { algorithms: ['HS256'] });
+        const d = require('./site-keys').verifyForSite(token);
         if (d.purpose !== 'mfa_challenge' || !d.userId) return null;
         return { userId: d.userId };
     } catch { return null; }
@@ -171,10 +171,11 @@ const POLICY_TTL_MS = 10_000;
  * ever ADDS enforcement when an admin turns it on. See mfaComplianceGate in middleware/auth.ts.
  */
 type MfaPolicy = { requiredRoles: string[]; graceDays: number; enforcedAt: number | null; enforceForApiTokens: boolean };
-let _policyCache: { value: MfaPolicy; at: number } | null = null;
+// One cached policy per site (each site has its own mfa_policy option); site 1's is the historical one.
+const policyCacheBySite = require('./site-context').perSite(() => ({ entry: null as { value: MfaPolicy; at: number } | null }));
 try {
     require('./hooks').addAction('updated_option', async (name: any) => {
-        if (name === POLICY_OPTION) _policyCache = null;
+        if (name === POLICY_OPTION) policyCacheBySite.get().entry = null;
     });
 } catch { /* hooks unavailable in isolated unit tests */ }
 const DEFAULT_POLICY: MfaPolicy = { requiredRoles: [], graceDays: 0, enforcedAt: null, enforceForApiTokens: false };
@@ -188,7 +189,8 @@ function clampGraceDays(v: any): number {
 
 /** Read the enforcement policy, always fully-shaped + validated (getOption may return a partial/legacy row). */
 async function getPolicy(): Promise<MfaPolicy> {
-    if (_policyCache && Date.now() - _policyCache.at < POLICY_TTL_MS) return _policyCache.value;
+    const cached = policyCacheBySite.get().entry;
+    if (cached && Date.now() - cached.at < POLICY_TTL_MS) return cached.value;
     const p = await getOption(POLICY_OPTION, DEFAULT_POLICY);
     const requiredRoles = Array.isArray(p && p.requiredRoles)
         ? [...new Set(p.requiredRoles.map((r: any) => String(r)))] as string[]
@@ -200,7 +202,7 @@ async function getPolicy(): Promise<MfaPolicy> {
     // upgrade can never silently start refusing tokens that worked yesterday.
     const enforceForApiTokens = (p && p.enforceForApiTokens) === true;
     const value = { requiredRoles, graceDays, enforcedAt, enforceForApiTokens };
-    _policyCache = { value, at: Date.now() };
+    policyCacheBySite.get().entry = { value, at: Date.now() };
     return value;
 }
 
@@ -226,7 +228,7 @@ async function setPolicy(input: any): Promise<MfaPolicy> {
 
     const policy = { requiredRoles, graceDays, enforcedAt, enforceForApiTokens };
     await updateOption(POLICY_OPTION, policy);
-    _policyCache = { value: policy, at: Date.now() };  // write-through: this node enforces instantly
+    policyCacheBySite.get().entry = { value: policy, at: Date.now() };  // write-through: this node enforces instantly
     return policy;
 }
 

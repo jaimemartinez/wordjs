@@ -121,6 +121,7 @@ const ipKey = (req: any) => clientIpBucket(req);
 // request, so the latency histogram and the log can never disagree. Both are pure observers — they add
 // one response header and register one `finish` listener, and neither can end a response.
 const { requestContext } = require('./middleware/request-context');
+const siteContext = require('./core/site-context');
 const { httpMetrics } = require('./core/metrics');
 app.use(requestContext, httpMetrics);
 
@@ -204,6 +205,12 @@ app.use(hostPolicy.hostGateFactory({
 // with the policy the backend applies, not a copy built from another read of the config.
 app.hostPolicy = siteHostPolicy;
 
+// MULTISITE: from here on every request runs as the site it was addressed to (core/site-resolver,
+// documentation/multisite-design.md) — CORS, cookies, limiters, every route, every database query. A
+// no-op on a single site.
+app.use(require('./core/site-resolver').siteResolver({ getPolicy: siteHostPolicy.get }));
+const multisiteGuards = require('./core/multisite-guards');
+
 // CORS — zero-config by design. A request's credentialed cross-origin access is granted only when it
 // is one of:
 //   1) an explicitly CONFIGURED public origin (siteUrl / frontendUrl, set post-setup). gatewayUrl is
@@ -240,8 +247,9 @@ app.use(cors((req: any, done: any) => {
     const origin: string | undefined = req.headers.origin;
     if (!origin) return allow(); // no Origin: curl / server-to-server / same-origin navigation — nothing to gate
 
-    // (1) configured public origins
-    if ([config.site.url, config.frontendUrl].filter(Boolean).indexOf(origin) !== -1) return allow();
+    // (1) configured public origins — the MAIN site's: on another site of a multisite network they are a
+    // different site's pages, and only that site's own origin (2) is allowed.
+    if (!multisiteGuards.onSecondarySite() && [config.site.url, config.frontendUrl].filter(Boolean).indexOf(origin) !== -1) return allow();
 
     let originUrl: URL;
     try { originUrl = new URL(origin); } catch { return deny(); }
@@ -565,14 +573,31 @@ const EXECUTABLE_DOC_EXTS = new Set(['.html', '.htm', '.xhtml', '.xht', '.shtml'
 // a cached, transcoded derivative (same URL, ~50% fewer bytes); on any error / unsupported / non-raster it
 // falls through to express.static below, which serves the original exactly as before.
 const { imageNegotiation } = require('./middleware/image-negotiation');
+// MULTISITE: another site of the network serves /uploads from ITS OWN root (core/private-media
+// publicUploadsRoot), and a miss there is a 404 — never a fall-through to the main site's tree below.
+const siteUploadHandlers = new Map<string, any[]>();
+app.use('/uploads', (req: Request, res: Response, next: NextFunction) => {
+    if (!multisiteGuards.onSecondarySite()) return next();
+    const root = require('./core/private-media').publicUploadsRoot();
+    let handlers = siteUploadHandlers.get(root);
+    if (!handlers) {
+        handlers = [imageNegotiation(root), express.static(root, UPLOADS_STATIC_OPTIONS)];
+        siteUploadHandlers.set(root, handlers);
+    }
+    const [negotiate, serve] = handlers;
+    negotiate(req, res, (err?: any) => {
+        if (err) return next(err);
+        serve(req, res, (err2?: any) => (err2 ? next(err2) : res.status(404).end()));
+    });
+});
 app.use('/uploads', imageNegotiation(config.uploads.dir));
 // `config.uploads.dir` is OPERATOR-configured and is resolved the same way by every writer
 // (routes/media.ts, models/Media.ts, core/backup.ts) and by core/io-guard's configuredUploadsRoot(),
 // so this one deliberately stays on the cwd-relative resolution they share — moving only the READ
 // side would publish a directory nothing writes to. Aligning the whole set is the follow-up noted in
 // backend/src/tests/install-root-paths.test.ts.
-app.use('/uploads', express.static(path.resolve(config.uploads.dir), {
-    dotfiles: 'deny',
+const UPLOADS_STATIC_OPTIONS = {
+    dotfiles: 'deny' as const,
     // Media filenames are UUID-unique (never overwritten at the same URL), so they are safe to cache
     // aggressively + immutable — a re-upload gets a new URL. Huge repeat-visit / Core-Web-Vitals win.
     maxAge: '365d',
@@ -594,7 +619,8 @@ app.use('/uploads', express.static(path.resolve(config.uploads.dir), {
             res.setHeader('Content-Disposition', 'attachment');
         }
     }
-}));
+};
+app.use('/uploads', express.static(path.resolve(config.uploads.dir), UPLOADS_STATIC_OPTIONS));
 // app.use('/admin', express.static(path.resolve('./admin'))); // Removed legacy admin
 // Theme/plugin assets CAN change in place on update, so cache 1h (not immutable) — the browser reuses
 // them for an hour, then ETag-revalidates (cheap 304). Big win without risking stale code after an update.
@@ -704,6 +730,8 @@ const pluginServing = require('./core/plugin-serving');
 const PLUGIN_ATTACH_EXTS = new Set(Array.from(EXECUTABLE_DOC_EXTS).filter((e: string) => e !== '.js' && e !== '.mjs' && e !== '.cjs'));
 app.use('/plugins', (req: Request, res: Response, next: NextFunction) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+    // Plugins run on the main site only (multisite phase 1): another site has no plugin files to serve.
+    if (multisiteGuards.onSecondarySite()) return res.status(404).end();
     let segs: string[];
     try {
         // req.path is post-mount and NOT percent-decoded; decode each segment exactly once, then let
@@ -1025,6 +1053,10 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // instead of a 404 that reads as "this endpoint does not exist" (and would be cached as such by a
 // CDN). Scoped to /plugin/* only: every core route is fully functional at this point.
 app.use(`${config.api.prefix}/plugin`, (req: Request, res: Response, next: NextFunction) => {
+    // Plugin routes are the main site's plugins (multisite phase 1): on another site they do not exist.
+    if (multisiteGuards.onSecondarySite()) {
+        return res.status(404).json({ code: 'rest_no_route', message: 'No route was found matching the URL and request method.', data: { status: 404 } });
+    }
     if (pluginsReady.arePluginsReady()) return next();
     res.setHeader('Retry-After', '5');
     res.setHeader('Cache-Control', 'no-store');
@@ -1130,7 +1162,16 @@ require('./core/db-admin').register(app);
 /**
  * Initialize the application
  */
+/**
+ * Boot. Runs as the main site (site 1): every database read and write of the boot sequence is the main
+ * site's. In a multisite network the other sites are prepared on their first request (core/site-resolver)
+ * and by background work (core/network-sites forEachSecondarySite).
+ */
 async function initialize() {
+    return siteContext.runWithSite(siteContext.PRIMARY_SITE_ID, () => initializeMainSite());
+}
+
+async function initializeMainSite() {
     console.log('🚀 Starting WordJS...');
     console.log(`   Environment: ${config.nodeEnv}`);
 
@@ -1221,7 +1262,10 @@ async function initialize() {
     // Node's 5s default the server races the proxy's socket reuse and drops requests mid-flight.
     server.keepAliveTimeout = 65000;
     server.headersTimeout = 66000;
-    server.listen(config.port, bindHost, () => {
+    // Multisite: the listener (and so every connection it accepts) belongs to NO site — each request is
+    // given its own by core/site-resolver, and anything that loses that context fails rather than
+    // landing on the main site. The listen callback below is boot work, the main site's.
+    siteContext.runWithSite(null, () => server.listen(config.port, bindHost, () => siteContext.runWithSite(siteContext.PRIMARY_SITE_ID, () => {
         console.log('');
         console.log(`✅ WordJS Backend is running via ${serverProtocol.toUpperCase()}!`);
         if (serverProtocol === 'https') {
@@ -1472,7 +1516,7 @@ async function initialize() {
             console.log(`🏠 Public Site: ${publicUrl}`);
         }
         console.log('');
-    });
+    })));
     }
 
     if (isInstalled()) {
@@ -1500,6 +1544,20 @@ async function initialize() {
         // Initialize default options
         console.log('⚙️  Setting up default options...');
         await initDefaultOptions(config);
+
+        // Multisite: keep site 1's record in the network store in step with its main address. The other
+        // sites open on their first request. A store that cannot be read leaves only the main site
+        // answered (the host policy then lists no other site), which is the fail-closed direction.
+        if (siteContext.multisiteEnabled()) {
+            try {
+                const network = require('./core/network');
+                const main = network.normalizeSiteUrl(config.siteUrl);
+                if (main) network.registerPrimarySite(main.url);
+                console.log(`🌐 Multisite: ${network.listSites().length} site(s) in the network.`);
+            } catch (e: any) {
+                console.error(`❌ Multisite: the network store could not be opened (${e && e.message}); only the main site is answered.`);
+            }
+        }
 
         // Initialize cache setting now that the DB and options are ready
         // (moved out of options.ts import-time to avoid a startup race).
@@ -1564,6 +1622,8 @@ async function initialize() {
         // Let's add it to src/routes/index.js instead for cleanliness?
         // Actually, looking at src/routes/index.js (I haven't seen it yet), but usually it's better.
         // However, I can inject it here.
+        // Backups archive the main site's database and files: the main site's only (multisite).
+        app.use(`${config.api.prefix}/backups`, multisiteGuards.mainSiteOnly);
         app.use(`${config.api.prefix}/backups`, require('./routes/backups'));
 
         const { initPostTypes, initTaxonomies } = require('./core/post-types');

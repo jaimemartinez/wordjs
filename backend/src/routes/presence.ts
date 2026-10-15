@@ -16,6 +16,7 @@ import type { Request, Response } from 'express';
 
 const express = require('express');
 const router = express.Router();
+const { siteKeyPrefix } = require('../core/site-context');
 const { authenticate } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
 // THE ROUTE-ID CONTRACT — see core/query-params: one definition of "a route id" for the whole tree.
@@ -196,7 +197,9 @@ router.post('/:postId', authenticate, asyncHandler(async (req: Request, res: Res
         return res.status(400).json({ error: 'invalid post id' });
     }
 
-    const key = String(postId);
+    // One room per site and post: post ids (and user ids) repeat across a multisite network. Site 1's
+    // key is the bare post id, as it always was.
+    const key = siteKeyPrefix() + String(postId);
     const uid = String(req.user.id);
     let room = rooms.get(key);
 

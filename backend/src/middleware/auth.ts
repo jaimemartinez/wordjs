@@ -16,6 +16,8 @@ import type { SiteHost, PolicyProvider } from '../core/host-policy';
 
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
+const { signForSite, verifyForSite } = require('../core/site-keys');
+const siteContext = require('../core/site-context');
 const config = require('../config/app');
 const User = require('../models/User');
 const ApiToken = require('../models/ApiToken');
@@ -43,11 +45,31 @@ const { logSafe } = require('../core/log-safe');
  * for the same reason as sessionAddressStillAccepted below.
  */
 const siteHostPolicy: PolicyProvider = hostPolicy.createPolicyProvider({
-    getConfig: () => require('../core/configManager').getConfig(),
+    getConfig: () => withNetworkSites(require('../core/configManager').getConfig()),
     nodeEnv: () => config.nodeEnv,
     ownAddresses: () => require('../core/site-address').publicOwnAddresses(),
 });
 
+
+/**
+ * Multisite: the config the policy is built from, plus the network's other sites (`networkSites`, from
+ * the network store). The provider memoizes on the identity of what getConfig returns, so the derived
+ * object is memoized on BOTH inputs: a new object only when the file or the registry changed. A single
+ * site (multisite off) gets the file's own object, exactly as before.
+ */
+let networkConfigMemo: { file: any; sites: unknown; value: any } | null = null;
+function withNetworkSites(file: any): any {
+    if (!file || !siteContext.multisiteEnabled()) return file;
+    let sites: unknown;
+    try { sites = require('../core/network').policySites(); } catch (e: any) {
+        console.error(`[multisite] the network store could not be read (${e && e.message}); other sites are not answered until it can.`);
+        return file;
+    }
+    if (networkConfigMemo && networkConfigMemo.file === file && networkConfigMemo.sites === sites) return networkConfigMemo.value;
+    const value = Object.assign({}, file, { networkSites: sites });
+    networkConfigMemo = { file, sites, value };
+    return value;
+}
 
 /**
  * What the host gate (core/host-policy hostGateFactory) attached to this request, or null when it did
@@ -425,7 +447,7 @@ async function mfaComplianceGate(req: Request, res: Response, next: NextFunction
     if (isMfaEnforceExempt(req)) return next();
 
     let decoded: any;
-    try { decoded = jwt.verify(token, config.jwt.secret, { algorithms: ['HS256'] }); }
+    try { decoded = verifyForSite(token); }
     catch { return next(); } // invalid/expired — the route's authenticate will 401 it
     if (!decoded || decoded.purpose) return next(); // challenge/special-purpose tokens are not sessions
     // A session minted on an address the site no longer answers is no session: the route's own
@@ -510,7 +532,7 @@ async function enforceApiTokenMfa(raw: string, req: Request, res: Response, next
 // Helper to avoid duplication
 async function verifyAndAttachUser(token: string, req: Request, res: Response, next: NextFunction) {
     try {
-        const decoded = jwt.verify(token, config.jwt.secret, { algorithms: ['HS256'] });
+        const decoded = verifyForSite(token);
 
         // A session token (generateToken) carries NO `purpose`. Special-purpose tokens signed with the
         // same secret — notably the MFA `mfa_challenge` token — must NEVER authenticate a request, or the
@@ -781,6 +803,10 @@ function sessionCookieOptions(req?: Request): CookieOptions {
 function sessionCookieSecure(req?: Request): boolean | undefined {
     const legacy = config.siteUrl?.startsWith('https://') || config.ssl?.enabled;
     const siteHost = req ? siteHostOf(req) : null;
+    // Multisite: another site's main address is canonical for THAT site, whose own scheme decides.
+    if (siteHost && siteHost.cls === 'canonical' && typeof siteHost.siteId === 'number' && siteHost.siteId > 1) {
+        return (!!siteHost.entry && siteHost.entry.scheme === 'https') || siteHost.scheme === 'https';
+    }
     if (!siteHost || siteHost.cls === 'canonical' || siteHost.cls === 'loopback') return legacy;
     const declaredHttps = !!siteHost.entry && siteHost.entry.scheme === 'https';
     return declaredHttps || siteHost.scheme === 'https';
@@ -1259,7 +1285,7 @@ async function optionalAuth(req: Request, res: Response, next: NextFunction) {
     }
 
     try {
-        const decoded = jwt.verify(token, config.jwt.secret, { algorithms: ['HS256'] });
+        const decoded = verifyForSite(token);
         // Special-purpose tokens (e.g. the MFA challenge) are never a session — treat as anonymous, and so
         // is a session minted on an address the site no longer answers (see sessionAddressStillAccepted).
         if (decoded.purpose || !sessionAddressStillAccepted(decoded)) { req.user = null; return next(); }
@@ -1290,19 +1316,19 @@ function generateToken(user: any, req?: Request) {
     const claims: Record<string, unknown> = { userId: user.id, username: user.userLogin };
     const address = sessionAddressClaims(req);
     if (address) claims.mh = address.mh;
-    const token = jwt.sign(claims, config.jwt.secret, { expiresIn: config.jwt.expiresIn });
+    const token = signForSite(claims, { expiresIn: config.jwt.expiresIn });
     if (!address || address.notAfterSeconds === null) return token;
     // The configured lifetime is a duration string the signer interprets; compare its result with the
     // alias's own end and re-sign with the earlier one, so the session never outlives the address.
     const { exp } = jwt.decode(token) as { exp: number };
-    return exp <= address.notAfterSeconds ? token : jwt.sign({ ...claims, exp: address.notAfterSeconds }, config.jwt.secret);
+    return exp <= address.notAfterSeconds ? token : signForSite({ ...claims, exp: address.notAfterSeconds });
 }
 
 /**
  * Verify token and return decoded payload
  */
 function verifyToken(token: string) {
-    return jwt.verify(token, config.jwt.secret, { algorithms: ['HS256'] });
+    return verifyForSite(token);
 }
 
 /**
@@ -1364,9 +1390,12 @@ function originMatchesHost(origin: string, host: string | undefined): boolean {
  * same-origin, so it must contribute NO entry at all.
  */
 function sameOriginAllowList(host: string | undefined): string[] {
+    // Multisite: the configured public origins are the MAIN site's. On another site of the network they
+    // vouch for nothing — a page on the main site's address is a different site's page there.
+    const onSecondarySite = siteContext.multisiteEnabled() && siteContext.currentSiteId() !== siteContext.PRIMARY_SITE_ID;
+    const configured = onSecondarySite ? [] : [config.site?.url, config.site?.frontendUrl];
     return [
-        config.site?.url,
-        config.site?.frontendUrl,
+        ...configured,
         ...(host ? [`http://${host}`, `https://${host}`] : [])
     ].filter(Boolean);
 }

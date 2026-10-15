@@ -284,22 +284,29 @@ async function pruneProcessed(
 }
 
 let pumping = false;
-let lastPruneAt = 0;
+// One prune clock per site (multisite: each site has its own outbox table); site 1's is the historical one.
+const pruneClock = require('./site-context').perSite(() => ({ lastPruneAt: 0 }));
+async function pumpCurrentSite(): Promise<void> {
+    const now = await databaseNowSeconds();
+    await dispatchIds(await dueIds(now));
+    const clock = pruneClock.get();
+    if (now - clock.lastPruneAt >= PRUNE_INTERVAL_SECONDS) {
+        // Advance before the query so a broken table/connection cannot produce a 2-second error
+        // storm. The next hourly pass retries and health still exposes the database failure.
+        clock.lastPruneAt = now;
+        await pruneProcessed(now);
+    }
+}
 async function pump(): Promise<void> {
     if (pumping) return;
     pumping = true;
     try {
-        const now = await databaseNowSeconds();
-        await dispatchIds(await dueIds(now));
-        if (now - lastPruneAt >= PRUNE_INTERVAL_SECONDS) {
-            // Advance before the query so a broken table/connection cannot produce a 2-second error
-            // storm. The next hourly pass retries and health still exposes the database failure.
-            lastPruneAt = now;
-            await pruneProcessed(now);
-        }
+        await pumpCurrentSite();
     }
     catch (error: any) { console.warn(`[content-outbox] pump failed: ${error?.message || error}`); }
     finally { pumping = false; }
+    // Multisite: each other active site's outbox, in its own context. A no-op on a single site.
+    await require('./network-sites').forEachSecondarySite('content outbox', () => pumpCurrentSite());
 }
 
 let pollTimer: any = null;

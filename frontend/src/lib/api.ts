@@ -1428,6 +1428,34 @@ export const webhooksApi = {
         apiPost<{ requeued: boolean; id: number }>(`/webhooks/deliveries/${deliveryId}/redeliver`, {}),
 };
 
+// ── Network (multisite): the sites of the network, for network administrators ─────────────────────
+export interface NetworkSite {
+    id: number;
+    slug: string;
+    url: string;
+    host: string;
+    status: "active" | "suspended";
+    main: boolean;
+    createdAt: string;
+    updatedAt: string;
+}
+export interface NewNetworkSite {
+    slug: string;
+    url: string;
+    title: string;
+    adminUsername: string;
+    adminEmail: string;
+    adminPassword: string;
+    currentPassword: string;
+}
+export const networkApi = {
+    status: () => apiGet<{ enabled: boolean; networkAdmin: boolean }>("/network/status"),
+    sites: () => apiGet<{ sites: NetworkSite[] }>("/network/sites"),
+    create: (data: NewNetworkSite) => apiPost<{ site: NetworkSite }>("/network/sites", data),
+    suspend: (id: number, currentPassword: string) => apiPost<{ site: NetworkSite }>(`/network/sites/${id}/suspend`, { currentPassword }),
+    resume: (id: number, currentPassword: string) => apiPost<{ site: NetworkSite }>(`/network/sites/${id}/resume`, { currentPassword }),
+};
+
 // ── Form submissions (Webflow "Forms + submissions" parity) ────────────────────────────────────────
 export interface FormSubmission {
     id: number;

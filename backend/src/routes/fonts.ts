@@ -28,7 +28,13 @@ const { asyncHandler } = require('../middleware/errorHandler');
  *   name: Fonts
  *   description: The font files installed under uploads/fonts and served from /uploads/fonts. Listing is public because a theme stylesheet needs the family names; installing and deleting require the manage_options capability. The accept rule for an upload is the file EXTENSION alone (ttf, otf, woff, woff2, eot) - font MIME types are inconsistent across browsers, so a declared font MIME never waves a file through on its own.
  */
-const fontsDir = path.join(config.uploads.dir, 'fonts');
+// The current site's fonts directory (multisite: each site has its own uploads root; site 1's is
+// config.uploads.dir, as it always was). Created on first use.
+function fontsDir(): string {
+    const dir = path.join(require('../core/private-media').publicUploadsRoot(), 'fonts');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    return dir;
+}
 
 // System fonts that are shown as "protected" in the listing and blocked from
 // deletion. Single source of truth so the GET classifier and DELETE guard
@@ -44,15 +50,15 @@ const PROTECTED_FONTS = [
 // `.svg` sent with a `font/ttf` MIME slipped past the old OR-logic and was written under /uploads/fonts.
 const FONT_EXTS = ['.ttf', '.otf', '.woff', '.woff2', '.eot'];
 
-// Ensure fonts directory exists
-if (!fs.existsSync(fontsDir)) {
-    fs.mkdirSync(fontsDir, { recursive: true });
+// Ensure the main site's fonts directory exists (another site's is created on first use).
+if (!fs.existsSync(path.join(config.uploads.dir, 'fonts'))) {
+    fs.mkdirSync(path.join(config.uploads.dir, 'fonts'), { recursive: true });
 }
 
 // Configure multer storage for fonts
 const storage = multer.diskStorage({
     destination: (req: Request, file: any, cb: any) => {
-        cb(null, fontsDir);
+        cb(null, fontsDir());
     },
     filename: (req: Request, file: any, cb: any) => {
         // Derive a SAFE stored name: sanitized base + random suffix + a font-only extension. The random
@@ -143,7 +149,7 @@ function uploadFontSingle(req: Request, res: Response, next: NextFunction) {
  */
 router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     // Read the directory
-    fs.readdir(fontsDir, (err: any, files: any) => {
+    fs.readdir(fontsDir(), (err: any, files: any) => {
         // EVERYTHING below runs in a node-style CALLBACK, not in the async handler. asyncHandler only
         // does `Promise.resolve(fn(...)).catch(next)`, and that promise resolves the instant fs.readdir is
         // CALLED — so a throw in here lands on an empty stack as an uncaughtException, never a 500. The
@@ -163,7 +169,7 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response, n
                     return ['.ttf', '.otf', '.woff', '.woff2', '.eot'].includes(ext);
                 })
                 .map((file: any) => {
-                    const stats = fs.statSync(path.join(fontsDir, file));
+                    const stats = fs.statSync(path.join(fontsDir(), file));
 
                     // Intelligent Parsing
                     const ext = path.extname(file);
@@ -345,7 +351,7 @@ router.post('/', authenticate, can('manage_options'), uploadFontSingle, asyncHan
  */
 router.delete('/:filename', authenticate, can('manage_options'), asyncHandler(async (req: Request, res: Response) => {
     const filename = path.basename(req.params.filename); // Prevent path traversal
-    const filePath = path.join(fontsDir, filename);
+    const filePath = path.join(fontsDir(), filename);
 
     if (fs.existsSync(filePath)) {
         // Check if font is protected

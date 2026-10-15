@@ -204,6 +204,20 @@ function spliceMatches(content: string, matches: ShortcodeMatch[], replacements:
  * @param {string} content - Content with shortcodes
  * @returns {string} - Processed content
  */
+/**
+ * The handler for `tag` on the current site. Multisite (phase 1): a plugin's or theme's shortcode is
+ * main-site code, so on any other site it does not run and its tag is left as written.
+ */
+const siteContext = require('./site-context');
+function runnableShortcode(tag: string): ((...args: any[]) => any) | undefined {
+    const callback = shortcodes.get(tag);
+    if (!callback) return undefined;
+    if ((shortcodeOwners.get(tag) ?? null) !== null) {
+        if (siteContext.multisiteEnabled() && siteContext.currentSiteIdOrNull() !== siteContext.PRIMARY_SITE_ID) return undefined;
+    }
+    return callback;
+}
+
 function doShortcode(content: string) {
     if (!content || shortcodes.size === 0) return content;
 
@@ -212,7 +226,7 @@ function doShortcode(content: string) {
     if (matches.length === 0) return content;
 
     const replacements = matches.map((mm) => {
-        const callback = shortcodes.get(mm.tag);
+        const callback = runnableShortcode(mm.tag);
         if (!callback) return content.slice(mm.index, mm.end);
 
         const parsedAttrs = parseAttrs(mm.attrs.trim());
@@ -242,7 +256,7 @@ async function doShortcodeAsync(content: string) {
 
     const replacements = await Promise.all(matches.map(async (mm) => {
         const full = content.slice(mm.index, mm.end);
-        const callback = shortcodes.get(mm.tag);
+        const callback = runnableShortcode(mm.tag);
         if (!callback) return full;
         const parsedAttrs = parseAttrs((mm.attrs || '').trim());
         try {

@@ -1,12 +1,14 @@
-# Multisite: design proposal
+# Multisite: design
 
-Status: **proposed** (not implemented). This page is the design for running several independent sites
-from one WordJS install: one network of sites, each with its own domain, content, options, uploads,
-users and plugin data. It records how the code is wired today, the tenancy model it picks and why, what
-changes, what it guarantees, and the order in which it would be built.
+Status: **phase 1 implemented**; phases 2 and 3 proposed. This page is the design for running several
+independent sites from one WordJS install: one network of sites, each with its own domain, content,
+options, uploads, users and plugin data. It records how the code was wired before multisite, the tenancy
+model it picks and why, what changes, what it guarantees, and the order in which it is built.
 
-It is a proposal for review. Three decisions are left open on purpose and are listed in
-[Open decisions](#open-decisions); the rest of the document assumes the recommended answer to each.
+The three product decisions are settled (see [Decisions](#decisions)): users per site, plugin code
+installed by network administrators only, domains before subdirectories. How to run a network is in
+[Multisite](multisite.md); [Phase 1 as built](#phase-1-as-built) lists where the implementation narrowed
+or departed from the plan below, and why.
 
 - [Goals and non-goals](#goals-and-non-goals)
 - [How the code is wired today](#how-the-code-is-wired-today)
@@ -20,7 +22,8 @@ It is a proposal for review. Three decisions are left open on purpose and are li
 - [Single-site installs: zero change](#single-site-installs-zero-change)
 - [What breaks, and the risks](#what-breaks-and-the-risks)
 - [Phased plan](#phased-plan)
-- [Open decisions](#open-decisions)
+- [Phase 1 as built](#phase-1-as-built)
+- [Decisions](#decisions)
 - [Alternatives considered](#alternatives-considered)
 
 ## Goals and non-goals
@@ -42,7 +45,7 @@ It is a proposal for review. Three decisions are left open on purpose and are li
 
 - Hundreds of thousands of sites per install. The model targets tens to a few hundred sites per
   install; beyond that the operator shards installs (a hoster already runs many).
-- Tenants uploading their own plugin code (see [Open decisions](#open-decisions)).
+- Tenants uploading their own plugin code (see [Decisions](#decisions)).
 - Sharing content between sites (a post on two sites). Sites are separate.
 
 ## How the code is wired today
@@ -148,7 +151,7 @@ Costs it accepts:
 - Cross-site queries (a network-wide search) are not possible in SQL. They are not a goal.
 
 Subdirectory sites (`example.com/blog2`) are deferred to a later phase; see
-[Open decisions](#open-decisions).
+[Decisions](#decisions).
 
 ## Site registry and the network store
 
@@ -254,7 +257,7 @@ take the current site (`linkBase()`, `canonicalOrigin()`), which already exist f
 
 ### Users, sessions, API tokens, MFA
 
-With users per site (recommended, see [Open decisions](#open-decisions)) the `users` table, roles,
+With users per site (recommended, see [Decisions](#decisions)) the `users` table, roles,
 MFA secrets, recovery codes, API tokens and revocation markers are already per site. Two additions make
 a token unusable on any other site even if a check were forgotten:
 
@@ -271,7 +274,7 @@ a token unusable on any other site even if a check were forgotten:
 ### Uploads and media
 
 - Site 1: `uploads/` and `data/private-uploads/` unchanged.
-- Site N: `uploads/sites/<N>/` and `data/private-uploads/sites/<N>/`, created on site creation.
+- Site N: `<data dir>/sites/<N>/uploads/` and `<data dir>/sites/<N>/private-uploads/`, next to its database (see [Phase 1 as built](#phase-1-as-built)), created on site creation.
 - The `/uploads` static handler and image negotiation resolve their root from the request's site.
   Stored references stay relative (`/uploads/2026/10/x.jpg`), so content needs no rewrite, and the
   same relative URL on two domains names two different files.
@@ -475,16 +478,55 @@ guard test. Ships on its own; single-site suite must be green and `verify:f0` up
 
 **Phase 2: plugins and certificates per site.** Worker per (site, plugin), per-site activation and
 grants with the network ceiling, per-site hooks/routes/shortcodes/mail/notification dispatch, per-site
-DB principals, isolation tests I5 and I8; SNI and per-site ACME; per-site backup, export and restore;
-the network admin's audited handoff into a site.
+DB principals, isolation tests I5 and I8; theme workers per site; real-time collaboration per site;
+SNI and per-site ACME; per-site backup, export and restore; the network admin's audited handoff into a
+site; Postgres and MySQL site databases (and so multi-node networks); a root layout per site in the
+frontend.
 
 **Phase 3: scale and hosting features.** Subdirectory sites (if chosen), per-site quotas (storage,
 workers, database size, request rate), site templates and cloning, archival and deletion with
 retention, network dashboard and metrics per site, optional Postgres schema-per-site variant.
 
-## Open decisions
+## Phase 1 as built
 
-These are product decisions, not technical ones; the rest of the design adapts to each.
+Phase 1 follows the plan above with these narrowings and departures, each deliberate:
+
+- **SQLite only.** A network needs the `sqlite-native` driver (`npm run network -- enable` refuses any
+  other); the network store, every site database and every site's files live on one host. Postgres and
+  MySQL site databases, and so multi-node networks, are phase 2 work. The per-site pub/sub envelope and
+  cache namespacing are already in place for it.
+- **Uploads live with the site.** Another site's files are in `<data dir>/sites/<id>/uploads` and
+  `…/private-uploads`, next to its database, not under `uploads/sites/<id>`: under the main site's served
+  tree, the main site's address would have served them. Each site is one directory. `core/io-guard`
+  declares those directories served (plugins cannot write there anyway: no broad `data/` access).
+- **Network administrator = a listed administrator of the main site**, not a separate identity. The
+  role and the listing are both required, and the network screen exists only on the main site. The
+  audited "open as administrator" handoff into another site is phase 2; a new site's first administrator
+  is created with it and signs in on the site's own address.
+- **Theme code too stays on the main site.** The theme engine (a theme's `functions.js` worker) is one
+  process-wide runtime, so another site can switch themes and customise them (options), but its pages
+  run no theme server code; its hooks and shortcodes are skipped there, like a plugin's. Theme files
+  are network-wide: creating, editing, uploading or deleting them is the main site's.
+- **What else stays the main site's in phase 1**: plugins (management, routes, assets, hooks,
+  shortcodes, mail provider, notification transports), backups, certificates, the site-address screen,
+  the installer, the hooks inspector, the database migration tool, real-time collaboration (its rooms are
+  keyed by post id per process) and the cron jobs that act on the main site's files (backups, version
+  checks, maintenance). Another site's cron runs scheduled publishing and analytics retention only.
+- **The frontend**: `src/proxy.ts` rewrites another site's public pages to an internal
+  `wjs-site/[siteHost]` route tree whose pages wrap the `(public)` ones and declare the site before any
+  read, so each site's pages have their own Full Route Cache paths and Data Cache tags. The site comes
+  from `x-wordjs-site-host`, which only the edge sets (from its own verdict; a client's value is removed).
+  The root layout cannot know the site (it takes no params): another site's pages override its metadata
+  (title, description, icon, base URL), and the admin sets its own title from the request; the `lang`
+  attribute of `<html>`, the server-rendered `@font-face` rules and the title of the sign-in pages still
+  come from the main site. A root layout per site is a phase 2 item.
+- **Email**: the mail provider is a main-site plugin, so the other sites have none; password recovery
+  there fails closed, as on any site without one.
+
+## Decisions
+
+These were product decisions, not technical ones. The owner chose the recommended answer to each
+(2026-10-15); the text below is kept as the reasoning behind them.
 
 1. **Users per site or shared across the network?** Recommended: **per site**. A tenant's users are
    that tenant's; one site's administrator never sees another site's users; a leak of one site's user

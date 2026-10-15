@@ -16,7 +16,13 @@
  * provider to have declared itself delivery-ready (mail_delivery_ready === '1'). "A provider is
  * registered" and "the provider can deliver externally" are different facts; this flag is the former.
  */
+const siteContext = require('./site-context');
+
 function isEmailProviderAvailable(): boolean {
+    // Multisite (phase 1): the provider is a main-site plugin, and plugins never handle another site's
+    // data, so the other sites have no provider (password recovery there fails closed, as on any site
+    // without one).
+    if (siteContext.multisiteEnabled() && siteContext.currentSiteIdOrNull() !== siteContext.PRIMARY_SITE_ID) return false;
     return typeof (global as any).wordjs_send_mail === 'function';
 }
 

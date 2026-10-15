@@ -2743,7 +2743,9 @@ router.get('/menus', authenticate, asyncHandler(async (req: Request, res: Respon
 
     // 3. Per-capability visibility. req.user is the host User model (has .can()); unspecified caps
     //    default to manage_options (admin-only) to preserve the prior admin-only behavior.
+    const networkAdmin = activeMenus.some((menu: any) => menu.networkAdmin) && require('../core/network-auth').isNetworkAdminRequest(req);
     const visibleMenus = activeMenus.filter((menu: any) => {
+        if (menu.networkAdmin && !networkAdmin) return false;
         const requiredCap = menu.cap || menu.capability || 'manage_options';
         return typeof req.user.can === 'function' && req.user.can(requiredCap);
     });

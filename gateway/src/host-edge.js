@@ -61,6 +61,22 @@ function judgedAddress(req) {
     return (req && req[JUDGED]) || null;
 }
 
+// Multisite: the network site (other than the main one) the edge judged this request to be for, as
+// `{ siteId, host }` — or null. In-process and per request, like JUDGED.
+const SITE = Symbol('wordjs.hostEdge.site');
+
+/**
+ * The header the frontend reads to render another site of the network (frontend/src/proxy.ts): that
+ * site's main hostname, set only from the edge's own verdict. A client's own value is always removed
+ * first, so it never reaches an upstream; the main site's requests carry none.
+ */
+const SITE_HOST_HEADER = 'x-wordjs-site-host';
+function pinSiteHeader(req) {
+    delete req.headers[SITE_HOST_HEADER];
+    const site = req && req[SITE];
+    if (site && site.host) req.headers[SITE_HOST_HEADER] = site.host;
+}
+
 /** X-Forwarded-Host for the upstream: the address the edge judged, else (no edge) the Host received. */
 function forwardedHost(req) {
     const judged = judgedAddress(req);
@@ -88,6 +104,7 @@ function forwardedHost(req) {
  * believed on, which is how a cleartext request posed as TLS (the Secure-cookie and sign-in rules read it).
  */
 function pinForwardedHeaders(req) {
+    pinSiteHeader(req);
     const value = forwardedHost(req);
     req.headers['x-forwarded-host'] = value;
     if (value === '') delete req.headers.host;
@@ -105,6 +122,7 @@ function pinForwardedHeaders(req) {
  * hop is read by — is the real scheme.
  */
 function pinUpgradeHeaders(req) {
+    pinSiteHeader(req);
     req.headers['x-forwarded-host'] = forwardedHost(req);
     delete req.headers['x-forwarded-server'];
     delete req.headers['x-forwarded-port'];
@@ -279,6 +297,7 @@ function createHostEdge(opts) {
         const pol = readPolicy();
         const authority = edgeAuthority(req, pol, forwardedHostIsMarker);
         req[JUDGED] = { raw: authority.absent ? '' : authority.raw, source: authority.source };
+        req[SITE] = null;
         if (!upgrade && isExempt(requestPath(req))) return { action: 'pass', reason: 'exempt' };
         if (!isEnforcing(pol)) return { action: 'pass', reason: 'not-enforcing' };
         if (countHostHeaders(req) > 1) return { action: 'invalid' };
@@ -297,6 +316,11 @@ function createHostEdge(opts) {
             }
             return { action: 'refuse', hostname: parsed.hostname, reason: verdict.reason, hint, canonicalOrigin: pol.canonical.origin };
         }
+        const siteEntry = verdict.entry && typeof verdict.entry.siteId === 'number' ? verdict.entry : null;
+        if (siteEntry) {
+            if (siteEntry.status === 'suspended') return { action: 'suspended' };
+            req[SITE] = { siteId: siteEntry.siteId, host: siteEntry.hostname };
+        }
         if (verdict.cls === 'alias' && verdict.entry && verdict.entry.mode === 'redirect'
             && (req.method === 'GET' || req.method === 'HEAD') && !isApiPath(p)) {
             return { action: 'redirect', location: safeLocation(pol.canonical.origin, req.url) };
@@ -312,6 +336,7 @@ function createHostEdge(opts) {
             if (v.action === 'invalid') sendEdgeInvalid(req, res);
             else if (v.action === 'bad-path') sendBadPath(res);
             else if (v.action === 'refuse') sendEdgeRefusal(req, res, v.canonicalOrigin);
+            else if (v.action === 'suspended') sendSuspended(req, res);
             else sendRedirect(res, v.location);
             return true;
         },
@@ -319,6 +344,7 @@ function createHostEdge(opts) {
         handleUpgrade(req, socket) {
             const v = decide(req, true);
             if (v.action === 'refuse') rejectUpgrade(socket, 421);
+            else if (v.action === 'suspended') rejectUpgrade(socket, 503, SUSPENDED_BODY);
             else if (v.action === 'invalid') rejectUpgrade(socket, 400);
             else if (v.action === 'bad-path') rejectUpgrade(socket, 400, BAD_PATH_BODY);
             else return false;
@@ -378,6 +404,23 @@ function sendEdgeRefusal(req, res, canonicalOrigin) {
     }, renderRefusalPage(canonicalOrigin));
 }
 
+const SUSPENDED_BODY = JSON.stringify({ code: 'rest_site_suspended', message: 'This site is suspended.', data: { status: 503 } });
+
+/** Multisite: a suspended site of the network answers 503 everywhere (static, inert page; JSON on the API). */
+function sendSuspended(req, res) {
+    if (isApiPath(requestPath(req))) {
+        return writeBody(res, 503, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }, SUSPENDED_BODY);
+    }
+    writeBody(res, 503, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'Content-Security-Policy': REFUSAL_PAGE_CSP,
+        'X-Robots-Tag': 'noindex',
+        'X-Content-Type-Options': 'nosniff',
+        'Referrer-Policy': 'no-referrer',
+    }, '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Site suspended</title></head><body style="font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;color:#222"><h1 style="font-size:1.4rem">This site is suspended</h1><p>It is not available at the moment.</p></body></html>');
+}
+
 function sendEdgeInvalid(req, res) {
     if (isApiPath(requestPath(req))) return hp.sendInvalidHost(res);
     writeBody(res, 400, {
@@ -417,7 +460,7 @@ function rejectUpgrade(socket, status, bodyOverride) {
     const body = bodyOverride || (status === 421
         ? JSON.stringify({ code: 'rest_host_not_allowed', error: 'host_not_allowed', message: 'This address is not configured for this site.', data: { status: 421 } })
         : JSON.stringify({ code: 'rest_invalid_host', error: 'invalid_host', message: 'The Host header is malformed or repeated.', data: { status: 400 } }));
-    const reason = status === 421 ? 'Misdirected Request' : 'Bad Request';
+    const reason = status === 421 ? 'Misdirected Request' : status === 503 ? 'Service Unavailable' : 'Bad Request';
     try {
         socket.end(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\nContent-Type: application/json; charset=utf-8\r\n`
             + `Cache-Control: no-store\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
@@ -476,6 +519,7 @@ function acmeRedirectLocation(req, opts) {
 const PUSH_ENV_KEYS = Object.freeze(['WORDJS_ALLOWED_HOSTS', 'WORDJS_IP_HOSTS', 'WORDJS_DEV_ORIGINS', 'WORDJS_TRUST_PROXY']);
 const MAX_ALIASES = 256;
 const MAX_URL = 2048;
+const MAX_NETWORK_SITES = 5000;
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
@@ -551,6 +595,19 @@ function sanitizePolicyPush(body) {
                 hostPolicy.ipSignIn = c.hostPolicy.ipSignIn;
             }
             config.hostPolicy = hostPolicy;
+        }
+        if (c.networkSites !== undefined && c.networkSites !== null) {
+            if (!Array.isArray(c.networkSites) || c.networkSites.length > MAX_NETWORK_SITES) return { ok: false, error: `config.networkSites must be a list of at most ${MAX_NETWORK_SITES}` };
+            const sites = [];
+            for (let i = 0; i < c.networkSites.length; i += 1) {
+                const s = c.networkSites[i];
+                if (!isPlainObject(s)) return { ok: false, error: `config.networkSites[${i}] must be an object` };
+                if (typeof s.id !== 'number' || !Number.isSafeInteger(s.id) || s.id < 2) return { ok: false, error: `config.networkSites[${i}].id must be a site id` };
+                if (!boundedString(s.url, MAX_URL)) return { ok: false, error: `config.networkSites[${i}].url must be a string` };
+                if (s.status !== 'active' && s.status !== 'suspended') return { ok: false, error: `config.networkSites[${i}].status must be active or suspended` };
+                sites.push({ id: s.id, url: s.url, status: s.status });
+            }
+            config.networkSites = sites;
         }
         const trust = sanitizeTrustProxy(c.trustProxy);
         if (trust.error) return { ok: false, error: trust.error };
@@ -888,6 +945,8 @@ module.exports = {
     judgedAddress,
     pinForwardedHeaders,
     pinUpgradeHeaders,
+    pinSiteHeader,
+    SITE_HOST_HEADER,
     // the edge
     EDGE_PROBE_PATHS,
     ACME_CHALLENGE_PATH,

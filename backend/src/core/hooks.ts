@@ -5,6 +5,17 @@
 
 const EventEmitter = require('events');
 
+/**
+ * MULTISITE (phase 1): plugin and theme code (every callback registered with a pluginSlug — an isolate's
+ * shim) belongs to the main site, the only site plugins are active on. On any other site those
+ * callbacks are skipped, so a main-site plugin never sees, filters or reacts to another site's data.
+ * Core callbacks run everywhere. Always true on a single site.
+ */
+const siteContext = require('./site-context');
+function pluginCodeRunsHere(): boolean {
+    return !siteContext.multisiteEnabled() || siteContext.currentSiteIdOrNull() === siteContext.PRIMARY_SITE_ID;
+}
+
 class Hooks {
     actions: Map<string, any[]>;
     filters: Map<string, any[]>;
@@ -44,7 +55,9 @@ class Hooks {
                 timestamp: Date.now(),
                 type,
                 hook,
-                args: safeArgs
+                args: safeArgs,
+                // Multisite: which site fired it, so an inspector only ever streams its own site's calls.
+                siteId: siteContext.currentSiteIdOrNull(),
             });
         }
     }
@@ -94,8 +107,10 @@ class Hooks {
         this._emitMonitor('action', hook, args);
         if (!this.actions.has(hook)) return;
         const { runWithContext } = require('./plugin-context');
+        const pluginsHere = pluginCodeRunsHere();
         for (const { callback, pluginSlug } of this.actions.get(hook)!) {
             if (pluginSlug) {
+                if (!pluginsHere) continue;
                 await runWithContext(pluginSlug, () => callback(...args));
             } else {
                 await callback(...args);
@@ -112,6 +127,7 @@ class Hooks {
         this._emitMonitor('action', hook, args);
         if (!this.actions.has(hook)) return;
         const { runWithContext } = require('./plugin-context');
+        if (!pluginCodeRunsHere()) return;
         for (const { callback, pluginSlug } of this.actions.get(hook)!) {
             if (pluginSlug !== slug) continue; // only the scheduling plugin's own callbacks
             await runWithContext(slug, () => callback(...args));
@@ -180,8 +196,10 @@ class Hooks {
         if (!this.filters.has(hook)) return value;
         const { runWithContext } = require('./plugin-context');
         let result = value;
+        const pluginsHere = pluginCodeRunsHere();
         for (const { callback, pluginSlug } of this.filters.get(hook)!) {
             if (pluginSlug) {
+                if (!pluginsHere) continue;
                 result = await runWithContext(pluginSlug, () => callback(result, ...args));
             } else {
                 result = await callback(result, ...args);

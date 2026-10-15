@@ -105,7 +105,7 @@ async function edgeServer(state, edgeOptions) {
         if (edge.handle(req, res)) return;
         // What the gateway does next, before proxying: pin X-Forwarded-Host to the address the edge judged.
         hostEdge.pinForwardedHeaders(req);
-        reached.push({ url: req.url, host: req.headers.host, xfh: req.headers['x-forwarded-host'] });
+        reached.push({ url: req.url, host: req.headers.host, xfh: req.headers['x-forwarded-host'], site: req.headers['x-wordjs-site-host'] });
         res.setHeader('Content-Type', 'text/plain');
         res.end('site');
     });
@@ -548,6 +548,56 @@ describe('a redirect alias', () => {
             assert.ok(location, `no Location for ${target}`);
             assert.strictEqual(location[1], expected, target);
             assert.strictEqual(new URL(location[1]).origin, 'https://example.com');
+        }
+    });
+});
+
+describe('multisite: the other sites of the network', () => {
+    const state = {
+        policy: sitePolicy({ config: { networkSites: [
+            { id: 2, url: 'https://two.example.org', status: 'active' },
+            { id: 3, url: 'https://three.example.org', status: 'suspended' },
+        ] } }),
+    };
+    let s;
+    before(async () => { s = await edgeServer(state); });
+    after(() => s.close());
+
+    it('answers another site of the network and names it upstream, for the frontend', async () => {
+        const r = await s.get('two.example.org', '/hello');
+        assert.strictEqual(r.status, 200);
+        assert.strictEqual(s.reached.at(-1).site, 'two.example.org');
+    });
+
+    it('never forwards a client\'s own site header: the main site gets none, another site its own', async () => {
+        await s.get('example.com', '/', { headers: { 'x-wordjs-site-host': 'two.example.org' } });
+        assert.strictEqual(s.reached.at(-1).site, undefined);
+        await s.get('two.example.org', '/', { headers: { 'x-wordjs-site-host': 'example.com' } });
+        assert.strictEqual(s.reached.at(-1).site, 'two.example.org');
+    });
+
+    it('answers a suspended site 503 everywhere, with an inert page or the API\'s JSON', async () => {
+        const before = s.reached.length;
+        const page = await s.get('three.example.org', '/');
+        assert.strictEqual(page.status, 503);
+        assert.match(page.headers['content-security-policy'], /default-src 'none'/);
+        assert.doesNotMatch(page.body, /<script|<form/i);
+        const api = await s.get('three.example.org', '/api/v1/posts');
+        assert.strictEqual(api.status, 503);
+        assert.strictEqual(JSON.parse(api.body).code, 'rest_site_suspended');
+        assert.strictEqual(s.reached.length, before, 'nothing of a suspended site reaches the upstream');
+    });
+
+    it('still refuses an address no site declares', async () => {
+        assert.strictEqual((await s.get('four.example.org', '/')).status, 421);
+    });
+
+    it('accepts networkSites in a push, exactly, and refuses a malformed one', () => {
+        const ok = hostEdge.sanitizePolicyPush({ enforce: true, config: { siteUrl: 'https://example.com', networkSites: [{ id: 2, url: 'https://two.example.org', status: 'active', db: '/x' }] } });
+        assert.ok(ok.ok, ok.error);
+        assert.deepStrictEqual(ok.value.config.networkSites, [{ id: 2, url: 'https://two.example.org', status: 'active' }]);
+        for (const bad of [{ id: 1, url: 'https://x.org', status: 'active' }, { id: 2, url: 5, status: 'active' }, { id: 2, url: 'https://x.org', status: 'gone' }, 'https://x.org']) {
+            assert.strictEqual(hostEdge.sanitizePolicyPush({ enforce: true, config: { siteUrl: 'https://example.com', networkSites: [bad] } }).ok, false, JSON.stringify(bad));
         }
     });
 });

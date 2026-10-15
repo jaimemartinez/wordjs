@@ -21,7 +21,7 @@
  * security-relevant allowlist to be edited and only one of them to be.
  */
 import { NextResponse } from 'next/server';
-import { resolveServerBase, backendUrl, configuredPublicHost } from '@/lib/server-api';
+import { resolveServerBase, backendUrl, configuredPublicHost, normalizeSiteHost, siteTags } from '@/lib/server-api';
 
 /** Response headers worth carrying to the client: the type, and everything about freshness. */
 const FORWARDED_HEADERS = ['content-type', 'cache-control', 'etag', 'last-modified'];
@@ -51,6 +51,22 @@ export interface ProxyOptions {
     revalidate: number;
     /** Purge tags. 'posts' is what a publish fires (backend/src/core/frontend-purge.ts). */
     tags?: string[];
+    /**
+     * Multisite: the main hostname of the network site this document is for (the `siteHost` param of
+     * the `wjs-site` tree, see siteHostOf). Undefined for the main site. Null — a param that is not a
+     * hostname — is a 404, never a fall-back to the main site's document.
+     */
+    siteHost?: string | null;
+}
+
+/**
+ * The site a route handler serves, from its `siteHost` route param: undefined in the main (public)
+ * tree, the normalized host in the `wjs-site/[siteHost]` tree, null when the param is not a hostname.
+ */
+export async function siteHostOf(ctx: { params?: Promise<Record<string, string | string[] | undefined>> } | undefined): Promise<string | null | undefined> {
+    const params = ctx && ctx.params ? await ctx.params : undefined;
+    if (!params || params.siteHost === undefined) return undefined;
+    return normalizeSiteHost(params.siteHost);
 }
 
 /**
@@ -62,12 +78,16 @@ export interface ProxyOptions {
  * never a cached empty document.
  */
 export async function proxySeo(endpoint: string, options: ProxyOptions): Promise<NextResponse> {
+    if (options.siteHost === null) return plain(404, 'Not found');
     const url = backendUrl(resolveServerBase(), endpoint);
     if (!url) return plain(502, 'Bad gateway');
 
     const headers: Record<string, string> = {};
     const pub = configuredPublicHost();
-    if (pub) {
+    if (options.siteHost) {
+        headers['x-forwarded-host'] = options.siteHost;
+        headers['x-forwarded-proto'] = pub ? pub.proto : 'https';
+    } else if (pub) {
         headers['x-forwarded-host'] = pub.host;
         headers['x-forwarded-proto'] = pub.proto;
     }
@@ -76,7 +96,7 @@ export async function proxySeo(endpoint: string, options: ProxyOptions): Promise
     try {
         res = await fetch(url, {
             headers,
-            next: { revalidate: options.revalidate, tags: options.tags },
+            next: { revalidate: options.revalidate, tags: siteTags(options.tags, options.siteHost || null) },
         } as RequestInit);
     } catch {
         return plain(502, 'Bad gateway');

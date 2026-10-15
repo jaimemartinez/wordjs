@@ -236,6 +236,85 @@ export function configuredPublicHost(): { host: string; proto: string } | null {
     return value;
 }
 
+// ---------------------------------------------------------------------------
+// Multisite: which site of the network this render is for
+// ---------------------------------------------------------------------------
+//
+// The main site renders from the (public) route tree, exactly as a single site always has. Another site
+// of the network is rewritten by src/proxy.ts to the internal tree `wjs-site/[siteHost]/…` (the edge —
+// gateway or monolith — names the site in `x-wordjs-site-host`, from its own verdict, never a client's).
+// Every page, layout and metadata function of that tree calls setRequestSite() with the route's
+// `siteHost` before it reads anything, so every helper below asks the backend for THAT site's data and
+// tags its cache entries under that site. Nothing here reads a request header: the route segment is the
+// carrier, which keeps those pages cacheable (each site's page is its own path in the Full Route Cache).
+
+/** A site's main hostname as the route carries it: lower-case DNS labels only. Null for anything else. */
+export function normalizeSiteHost(raw: unknown): string | null {
+    if (typeof raw !== 'string') return null;
+    let value = raw;
+    try { value = decodeURIComponent(raw); } catch { return null; }
+    value = value.toLowerCase();
+    if (value.length < 1 || value.length > 253) return null;
+    return /^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?(?:\.[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?)*$/.test(value) ? value : null;
+}
+
+// Request-scoped (React cache is one value per server request, shared by the layout, the page and its
+// components). Outside a render React does not cache, so a route handler reads null here: route handlers
+// pass the site explicitly (ProxyOptions.siteHost in app/(public)/_seo/upstream.ts).
+const requestSiteHolder = cache((): { host: string | null } => ({ host: null }));
+
+/**
+ * Declare the site this render is for, from the `siteHost` route param of the `wjs-site` tree. Returns
+ * the normalized host, or null when the param is not a hostname (the caller answers notFound()).
+ */
+export function setRequestSite(raw: unknown): string | null {
+    const host = normalizeSiteHost(raw);
+    if (host) requestSiteHolder().host = host;
+    return host;
+}
+
+/**
+ * For a route that is DYNAMIC anyway (the admin): declare the site from the request itself — the
+ * `x-wordjs-site-host` header the edge sets from its own verdict (src/proxy.ts explains it). Never call
+ * this from a public page: reading the request makes a route dynamic. Null on the main site.
+ */
+export async function declareSiteFromRequest(): Promise<string | null> {
+    try {
+        const { headers } = await import('next/headers');
+        const raw = (await headers()).get('x-wordjs-site-host');
+        return raw ? setRequestSite(raw) : null;
+    } catch {
+        return null;
+    }
+}
+
+/** The site this render is for, or null for the main site (and every single-site install). */
+export function requestSiteHost(): string | null {
+    try { return requestSiteHolder().host; } catch { return null; }
+}
+
+/**
+ * React `cache()` with the site in the key. Every request-memoized read of this module goes through it:
+ * the root layout reads the settings BEFORE a site page has declared its site (it takes no params), and
+ * with a site-blind key the site's layout would be handed that main-site result for the rest of the
+ * request. The holder only ever moves from null to a host within a request, so a read keyed by the
+ * host is always that host's.
+ */
+export function siteCache<F extends (...args: any[]) => any>(fn: F): F {
+    const keyed = cache((site: string | null, ...args: Parameters<F>): ReturnType<F> => fn(...args));
+    return ((...args: Parameters<F>): ReturnType<F> => keyed(requestSiteHost(), ...args)) as F;
+}
+
+/**
+ * The cache tags of a read for `siteHost`: the main site's tags are the bare names (as always); another
+ * site's are `site:<host>:<tag>`, the very names the backend purges for it (core/frontend-purge
+ * siteQualifiedPurge) — so a change on one site never invalidates, nor is answered by, another's.
+ */
+export function siteTags(tags: string[] | undefined, siteHost: string | null): string[] | undefined {
+    if (!tags || !siteHost) return tags;
+    return tags.map((t) => `site:${siteHost}:${t}`);
+}
+
 interface ServerFetchOptions {
     /**
      * Forward the inbound request cookies so the backend sees the logged-in user (authenticated SSR).
@@ -315,8 +394,15 @@ export async function serverResponse(endpoint: string, options: ServerFetchOptio
             /* not in a request scope (e.g. build prerender) — proceed without forwarded headers */
         }
     } else {
+        // Multisite: a page of another site of the network reads THAT site's data — its main
+        // hostname, set by the page from the route the proxy rewrote it to (setRequestSite). Never the
+        // inbound request, for the same reason as above.
         const pub = configuredPublicHost();
-        if (pub) {
+        const siteHost = requestSiteHost();
+        if (siteHost) {
+            headers['x-forwarded-host'] = siteHost;
+            headers['x-forwarded-proto'] = pub ? pub.proto : 'https';
+        } else if (pub) {
             headers['x-forwarded-host'] = pub.host;
             headers['x-forwarded-proto'] = pub.proto;
         }
@@ -326,7 +412,7 @@ export async function serverResponse(endpoint: string, options: ServerFetchOptio
     // Next's Data Cache when the caller passed a `revalidate` window (ISR), else stay dynamic (no-store).
     const cacheInit: RequestInit = options.forwardCookies || options.revalidate == null
         ? { cache: 'no-store' }
-        : ({ next: { revalidate: options.revalidate, tags: options.tags } } as RequestInit);
+        : ({ next: { revalidate: options.revalidate, tags: siteTags(options.tags, requestSiteHost()) } } as RequestInit);
 
     try {
         return await fetch(url, { headers, ...cacheInit });
@@ -350,7 +436,7 @@ export interface PortalPageInfo {
  * the page answers a real 404; 'unavailable' is no usable answer (backend down, 5xx), where the page
  * still renders and lets the client report it, instead of claiming the portal does not exist.
  */
-export const getPortalPage = cache(async (slug: string): Promise<
+export const getPortalPage = siteCache(async (slug: string): Promise<
     { status: 'served'; info: PortalPageInfo } | { status: 'missing' } | { status: 'unavailable' }
 > => {
     const res = await serverResponse(`/plugins/${encodeURIComponent(slug)}/portal`);
@@ -377,7 +463,7 @@ export const getPortalPage = cache(async (slug: string): Promise<
 // page view forever after. While the answer is still "setup required" (or the backend is down) we
 // keep probing, so the install flow itself is unchanged.
 let _setupSettled = false;
-export const checkSetupRequired = cache(async (): Promise<boolean> => {
+export const checkSetupRequired = siteCache(async (): Promise<boolean> => {
     if (_setupSettled) return false;
     const url = backendUrl(resolveServerBase(), '/settings');
     if (!url) return false;
@@ -400,7 +486,7 @@ export const checkSetupRequired = cache(async (): Promise<boolean> => {
 
 // Site settings change rarely and are read on EVERY page (title, theme, menus, SEO, chrome) — the single
 // hottest read. Cache 60s + tag so the ~N-per-render backend calls collapse to one until it changes.
-export const getSettings = cache((): Promise<Record<string, string> | null> =>
+export const getSettings = siteCache((): Promise<Record<string, string> | null> =>
     serverFetch<Record<string, string>>('/settings', { revalidate: 60, tags: ['settings'] })
 );
 
@@ -410,7 +496,7 @@ export interface PublicAssets {
 }
 
 /** Plugin-enqueued frontend scripts/styles (active plugins only), rendered by the public layout. */
-export const getPublicAssets = cache((): Promise<PublicAssets> =>
+export const getPublicAssets = siteCache((): Promise<PublicAssets> =>
     serverFetch<PublicAssets>('/plugins/assets', { revalidate: 120, tags: ['plugin-assets'] }).then((a) => a || { scripts: [], styles: [] })
 );
 
@@ -420,7 +506,7 @@ export const getPublicAssets = cache((): Promise<PublicAssets> =>
  * useEffect), so a public page's first paint had the inline `font-family` but no matching face and fell
  * back to the theme font until hydration — a font changed in the editor appeared unreflected on public.
  */
-export const getFonts = cache((): Promise<import('./fontFaceCss').WjsFont[]> =>
+export const getFonts = siteCache((): Promise<import('./fontFaceCss').WjsFont[]> =>
     serverFetch<import('./fontFaceCss').WjsFont[]>('/fonts', { revalidate: 300, tags: ['fonts'] }).then((f) => f || [])
 );
 
@@ -429,7 +515,7 @@ export const getFonts = cache((): Promise<import('./fontFaceCss').WjsFont[]> =>
  * render their nav in the initial SSR HTML instead of each visitor re-fetching it client-side on
  * hydration. Cached + tagged like the other public reads.
  */
-export const getMenuByLocation = cache((location: string): Promise<{ items: MenuItem[] } | null> =>
+export const getMenuByLocation = siteCache((location: string): Promise<{ items: MenuItem[] } | null> =>
     serverFetch<{ items: MenuItem[] }>(`/menus/location/${encodeURIComponent(location)}`, { revalidate: 60, tags: ['menus', `menu:${location}`] })
 );
 // `parent` is the flat hierarchy the location endpoint returns (MenuItem.toJSON → post_parent /
@@ -442,7 +528,7 @@ export interface MenuItem { id: number | string; title: string; url: string; ord
  * items already attached (routes/menus.ts). Cached + tagged like getMenuByLocation, keyed by id, so
  * several NavMenu blocks naming the same menu on one page share a single backend call.
  */
-export const getMenuById = cache((id: number): Promise<{ items: MenuItem[] } | null> =>
+export const getMenuById = siteCache((id: number): Promise<{ items: MenuItem[] } | null> =>
     serverFetch<{ items: MenuItem[] }>(`/menus/${encodeURIComponent(String(id))}`, { revalidate: 60, tags: ['menus', `menu:${id}`] })
 );
 
@@ -453,7 +539,7 @@ export const getMenuById = cache((id: number): Promise<{ items: MenuItem[] } | n
  * Location reuses getMenuByLocation verbatim; both reads are React-cached + tagged exactly like it.
  * A malformed/missing ref resolves to null → the resolver hands the block an empty list.
  */
-export const getMenuByRef = cache((ref: { source?: string; location?: string; menuId?: number | string }): Promise<{ items: MenuItem[] } | null> => {
+export const getMenuByRef = siteCache((ref: { source?: string; location?: string; menuId?: number | string }): Promise<{ items: MenuItem[] } | null> => {
     if (ref?.source === 'menu') {
         const id = Number(ref?.menuId);
         return Number.isFinite(id) && id > 0 ? getMenuById(id) : Promise.resolve(null);
@@ -481,7 +567,7 @@ export const getMenuByRef = cache((ref: { source?: string; location?: string; me
  * `name` is caller-supplied and lands in a URL, so it is restricted to the shape a template file may
  * have — no dots, no slashes. A traversal here would be a path-injection into the static tree.
  */
-export const getThemeTemplate = cache(async (slug: string, name: string): Promise<string | null> => {
+export const getThemeTemplate = siteCache(async (slug: string, name: string): Promise<string | null> => {
     if (!THEME_ASSET_NAME.test(name)) return null;
     const url = backendUrl(resolveStaticBase(), `/themes/${encodeURIComponent(slug)}/templates/${name}.json`);
     if (!url) return null;
@@ -505,7 +591,7 @@ export const getThemeTemplate = cache(async (slug: string, name: string): Promis
  * parseTemplateParts's job in templateData.ts, never this loader's — same division as the two below.
  * Cached under the 'settings' tag so activating a theme purges it.
  */
-export const getThemeManifest = cache(async (slug: string): Promise<string | null> => {
+export const getThemeManifest = siteCache(async (slug: string): Promise<string | null> => {
     const url = backendUrl(resolveStaticBase(), `/themes/${encodeURIComponent(slug)}/theme.json`);
     if (!url) return null;
     try {
@@ -525,7 +611,7 @@ export const getThemeManifest = cache(async (slug: string): Promise<string | nul
  * here exactly like getThemeTemplate's is: it lands in a URL, so a name that is not [a-z0-9-] never
  * reaches the fetch. (Being declared in theme.json is a SEPARATE gate, enforced by the resolver.)
  */
-export const getThemeChrome = cache(async (slug: string, part: string): Promise<string | null> => {
+export const getThemeChrome = siteCache(async (slug: string, part: string): Promise<string | null> => {
     if (!THEME_ASSET_NAME.test(part)) return null;
     const url = backendUrl(resolveStaticBase(), `/themes/${encodeURIComponent(slug)}/chrome/${part}.json`);
     if (!url) return null;
@@ -562,11 +648,11 @@ export function postBySlugPath(slug: string, type?: string | null): string {
  * GET /posts/slug/:slug (optionalAuth) returns non-published posts to their author /
  * editors. A separate cache() entry from getPostBySlug keeps the keying correct.
  */
-export const getPostBySlugPreview = cache((slug: string, type?: string | null): Promise<Post | null> =>
+export const getPostBySlugPreview = siteCache((slug: string, type?: string | null): Promise<Post | null> =>
     serverFetch<Post>(postBySlugPath(slug, type), { forwardCookies: true })
 );
 
-export const getPostBySlug = cache((slug: string, type?: string | null): Promise<Post | null> =>
+export const getPostBySlug = siteCache((slug: string, type?: string | null): Promise<Post | null> =>
     serverFetch<Post>(postBySlugPath(slug, type), { revalidate: 30, tags: ['posts', `post:${slug}`] })
 );
 
@@ -575,11 +661,11 @@ export const getPostBySlug = cache((slug: string, type?: string | null): Promise
  * resolves to (what this route served before the backend started preferring the page). Untyped, a post
  * and a page sharing a slug rendered the PAGE under the post's category URL.
  */
-export const getCategoryPostBySlug = cache(async (slug: string): Promise<Post | null> =>
+export const getCategoryPostBySlug = siteCache(async (slug: string): Promise<Post | null> =>
     (await getPostBySlug(slug, 'post')) ?? (await getPostBySlug(slug))
 );
 
-export const getPostById = cache((id: number): Promise<Post | null> =>
+export const getPostById = siteCache((id: number): Promise<Post | null> =>
     serverFetch<Post>(`/posts/${id}`, { revalidate: 30, tags: ['posts', `post:${id}`] })
 );
 
@@ -657,7 +743,7 @@ async function walkPosts(type: string, status: string, wanted: number): Promise<
  * A path left out is rendered on demand and cached like any other, so a low `posts_per_page` costs a
  * first-visit render there, never a missing or truncated page.
  */
-export const getPosts = cache(async (type = 'post', status = 'publish'): Promise<Post[] | null> =>
+export const getPosts = siteCache(async (type = 'post', status = 'publish'): Promise<Post[] | null> =>
     walkPosts(type, status, await resolvePostsPerPage()));
 
 /**
@@ -672,7 +758,7 @@ export const getPosts = cache(async (type = 'post', status = 'publish'): Promise
  * `_puck_data` carries, and a page render must not be able to fan out into twenty backend requests
  * because one prop says 9999.
  */
-export const getPostPool = cache(async (
+export const getPostPool = siteCache(async (
     type = 'post',
     status = 'publish',
     minimum = 0,
@@ -878,7 +964,7 @@ export function buildPostMetadata(
  * layout's metadataBase: anchor to the CONFIGURED site URL; honor the request host only when
  * its hostname matches (the Host header is client-controllable — never trust it raw).
  */
-export const resolveSiteBase = cache(async (): Promise<string> => {
+export const resolveSiteBase = siteCache(async (): Promise<string> => {
     const settings = await getSettings();
     const configuredUrl = settings?.siteurl || settings?.home || settings?.site_url;
     let configured: URL | undefined;

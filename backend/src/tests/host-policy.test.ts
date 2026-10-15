@@ -334,6 +334,54 @@ describe('buildPolicy', () => {
     });
 });
 
+describe('multisite: networkSites', () => {
+    const cfg = {
+        siteUrl: 'https://example.com',
+        siteAliases: [{ url: 'https://www.example.com' }],
+        networkSites: [
+            { id: 2, url: 'https://two.example.org', status: 'active' },
+            { id: 3, url: 'http://three.example.org:8080', status: 'suspended' },
+            { id: 4, url: 'https://www.example.com', status: 'active' },
+            { id: 5, url: 'https://two.example.org', status: 'active' },
+            { id: 1, url: 'https://one.example.org', status: 'active' },
+            { id: 6, url: 'https://x.example.org/path', status: 'active' },
+        ],
+    };
+    test('the main address of another site is canonical for that site, and names it', () => {
+        const pol = hp.buildPolicy({ config: cfg });
+        const v = hp.classify(hp.parseHost('TWO.example.org.'), pol);
+        assert.strictEqual(v.cls, 'canonical');
+        assert.strictEqual(v.reason, 'site');
+        assert.strictEqual(v.entry.siteId, 2);
+        assert.strictEqual(hp.siteIdOf(v), 2);
+        const three = hp.classify(hp.parseHost('three.example.org:9999'), pol);
+        assert.strictEqual(three.entry.siteId, 3, 'matched by hostname, the port is ignored as everywhere');
+        assert.strictEqual(three.entry.status, 'suspended');
+    });
+    test('the own addresses of the main site, loopback and IPs belong to site 1; unknown names to no site', () => {
+        const pol = hp.buildPolicy({ config: cfg });
+        for (const host of ['example.com', 'www.example.com', 'localhost:3000', '192.168.1.9']) {
+            assert.strictEqual(hp.siteIdOf(hp.classify(hp.parseHost(host), pol)), 1, host);
+        }
+        assert.strictEqual(hp.siteIdOf(hp.classify(hp.parseHost('nobody.example.org'), pol)), null);
+    });
+    test('an entry that is site 1, an address of the main site, a duplicate or not an origin is left out, with a warning', () => {
+        const pol = hp.buildPolicy({ config: cfg });
+        assert.deepStrictEqual(Array.from(pol.sites.keys()).sort(), ['three.example.org', 'two.example.org']);
+        assert.strictEqual(hp.siteIdOf(hp.classify(hp.parseHost('www.example.com'), pol)), 1, 'the alias stays with the main site');
+        const text = pol.warnings.join('\n');
+        assert.match(text, /no valid site id/);
+        assert.match(text, /address of the main site/);
+        assert.match(text, /listed for two sites/);
+        assert.match(text, /not a valid site address/);
+    });
+    test('a single site has no network sites, and every accepted verdict is site 1', () => {
+        const pol = hp.buildPolicy({ config: { siteUrl: 'https://example.com' } });
+        assert.strictEqual(pol.sites.size, 0);
+        assert.deepStrictEqual(pol.warnings, []);
+    });
+});
+
 describe('createPolicyProvider (memo on the config object, R10)', () => {
     function provider(state: { config: any }, env: Record<string, string | undefined> = {}) {
         const { logger, lines } = captureLogger();
@@ -617,7 +665,7 @@ describe('hostGate: accepted addresses', () => {
         const res = await request(app).get('/x').set('Host', 'www.example.com:8443');
         assert.deepStrictEqual(res.body.siteHost, {
             hostname: 'www.example.com', port: 8443, kind: 'dns', host: 'www.example.com:8443', cls: 'alias', reason: 'alias',
-            entry: res.body.siteHost.entry, hop: null, viaTrustedHop: false, scheme: 'http',
+            entry: res.body.siteHost.entry, siteId: 1, hop: null, viaTrustedHop: false, scheme: 'http',
         });
         assert.strictEqual(res.body.siteHost.entry.origin, 'https://www.example.com');
     });

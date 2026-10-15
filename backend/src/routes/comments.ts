@@ -289,7 +289,7 @@ const DISCARD_MEMORY_MAX = 1000;
 function discardMemoryKey(draft: any, storedContent: string): string {
     const who = draft.userId ? `u:${draft.userId}` : `ip:${draft.authorIp || ''}`;
     return crypto.createHash('sha256')
-        .update(JSON.stringify([draft.postId, who, storedContent]))
+        .update(JSON.stringify([require('../core/site-context').siteKeyPrefix(), draft.postId, who, storedContent]))
         .digest('hex');
 }
 

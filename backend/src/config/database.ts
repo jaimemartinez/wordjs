@@ -53,6 +53,9 @@ type TransactionQuery = {
 
 type TransactionScope = {
   query: TransactionQuery;
+  // The site whose database this transaction is pinned to (null: site 1). A pinned connection is never
+  // handed to work running for another site.
+  siteId: number | null;
   afterCommit: Array<() => any | Promise<any>>;
   active: boolean;
   rollbackOnly?: any;
@@ -66,6 +69,12 @@ const transactionScope: {
   getStore: () => TransactionScope | undefined;
   run: <T>(store: TransactionScope, callback: () => T) => T;
 } = new AsyncLocalStorage();
+
+function assertSameSite(scope: TransactionScope): void {
+  if (scope.siteId !== routedSiteId()) {
+    throw new Error('A database transaction of one site was used by work running for another site.');
+  }
+}
 
 function hasActiveTransaction(): boolean {
   return transactionScope.getStore()?.active === true;
@@ -82,6 +91,7 @@ function afterCommit(callback: () => any | Promise<any>): boolean {
 async function runTransaction<T>(fn: (tx: TransactionQuery) => Promise<T>): Promise<T> {
   const active = transactionScope.getStore();
   if (active?.active) {
+    assertSameSite(active);
     try { return await fn(active.query); }
     catch (error) {
       // There are no cross-driver savepoints in the public contract. If a joined nested unit fails,
@@ -99,7 +109,7 @@ async function runTransaction<T>(fn: (tx: TransactionQuery) => Promise<T>): Prom
 
   let committedScope: TransactionScope | null = null;
   const result = await current.transaction(async (query: TransactionQuery) => {
-    const scope: TransactionScope = { query, afterCommit: [], active: true };
+    const scope: TransactionScope = { query, afterCommit: [], active: true, siteId: routedSiteId() };
     committedScope = scope;
     return await transactionScope.run(scope, async () => {
       try {
@@ -255,11 +265,95 @@ const init = async (options: any = {}) => {
   }
 };
 
+// MULTISITE: one database per site (documentation/multisite-design.md). Site 1 is the database above,
+// unchanged. Every other site has its own SQLite file, opened once by openSiteDatabase (the HTTP layer
+// and forEachSite await it before entering the site) and then returned by getDb/getDbAsync whenever the
+// current work belongs to that site. Nothing else changes: every model, migration and plugin query keeps
+// its literal table names, and simply runs against the current site's database. A site whose database
+// is not open is an error, never a fall-through to site 1's.
+const siteContext = require('../core/site-context');
+const siteDrivers = new Map<number, any>();
+const siteDriversOpening = new Map<number, Promise<any>>();
+
+/** The site whose database the current work must use, or null for site 1 (and every single-site install). */
+function routedSiteId(): number | null {
+  if (!siteContext.multisiteEnabled()) return null;
+  const id = siteContext.currentSiteId();
+  return id === siteContext.PRIMARY_SITE_ID ? null : id;
+}
+
+function openSiteDriver(siteId: number): any {
+  const d = siteDrivers.get(siteId);
+  if (!d) throw new siteContext.SiteContextError('site_db_not_open', `The database of site ${siteId} is not open.`);
+  return d;
+}
+
+/**
+ * Open (once) the database of site `siteId` at `dbPath`, bring its schema to the current version, and
+ * keep it for the life of the process. Concurrent callers share one opening. Multisite requires the
+ * native SQLite driver in this phase; any other driver is refused before a file is created.
+ */
+async function openSiteDatabase(siteId: number, dbPath: string): Promise<void> {
+  if (!siteContext.isSiteId(siteId) || siteId === siteContext.PRIMARY_SITE_ID) throw new Error(`Not a secondary site id: ${siteId}`);
+  if (siteDrivers.has(siteId)) return;
+  const pending = siteDriversOpening.get(siteId);
+  if (pending) { await pending; return; }
+  const opening = (async () => {
+    if (driverName !== 'sqlite-native' || !driverAsync) {
+      throw new Error(`Multisite needs the 'sqlite-native' database driver (this server runs '${driverName}').`);
+    }
+    const fs = require('fs');
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    const Driver = driverAsync.constructor;
+    const d = new Driver();
+    d.dbPath = path.resolve(dbPath);
+    await d.connect();
+    try {
+      await siteContext.runWithSite(siteId, async () => {
+        await initializeSchema(d, true);
+        await runSchemaMigrations(d, true, driverName);
+        siteDrivers.set(siteId, d);
+        await require('../models/Analytics').init();
+      });
+    } catch (e) {
+      siteDrivers.delete(siteId);
+      try { await d.close(); } catch { /* best-effort */ }
+      throw e;
+    }
+  })();
+  siteDriversOpening.set(siteId, opening);
+  try { await opening; } finally { siteDriversOpening.delete(siteId); }
+}
+
+function isSiteDatabaseOpen(siteId: number): boolean {
+  return siteId === siteContext.PRIMARY_SITE_ID || siteDrivers.has(siteId);
+}
+
+/** Close one secondary site's database (a failed provisioning). */
+async function closeSiteDatabase(siteId: number): Promise<void> {
+  const d = siteDrivers.get(siteId);
+  siteDrivers.delete(siteId);
+  if (d) await d.close();
+}
+
+/** Close every secondary site's database (shutdown, tests). Site 1's is closeDatabase's. */
+async function closeSiteDatabases(): Promise<void> {
+  const all = Array.from(siteDrivers.values());
+  siteDrivers.clear();
+  for (const d of all) {
+    try { await d.close(); } catch { /* best-effort */ }
+  }
+}
+
 const getDb = () => {
+  const sid = routedSiteId();
+  if (sid !== null) return new (require('../drivers/sqlite-native').NativeWrapper)(openSiteDriver(sid).db);
   return driver.get();
 };
 
 const getDbAsync = () => {
+  const sid = routedSiteId();
+  if (sid !== null) return openSiteDriver(sid);
   if (driverAsync) return driverAsync;
   // Fallback for legacy sync drivers (sqlite-legacy)
   // Since we rely on await in the codebase, returning the sync DB object
@@ -718,6 +812,7 @@ const dbAsyncProxy = new Proxy({}, {
 
     const scoped = transactionScope.getStore();
     if (scoped?.active && ['get', 'all', 'run', 'exec'].includes(prop as string)) {
+      assertSameSite(scoped);
       const method = scoped.query[prop as keyof TransactionQuery];
       return async (...args: any[]) => {
         if (['run', 'exec'].includes(prop as string)) verifyPermission('database', 'write');
@@ -912,6 +1007,11 @@ module.exports = {
   saveDatabase,
   closeDatabase,
   clearDatabase, // Exposed
+  // Multisite: the per-site databases (see openSiteDatabase above).
+  openSiteDatabase,
+  isSiteDatabaseOpen,
+  closeSiteDatabase,
+  closeSiteDatabases,
   createPluginTable,
   getDbType,
   // The silent-downgrade state and its publisher (see DriverDegradation above). routes/health.ts

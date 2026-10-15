@@ -546,8 +546,30 @@ function flush() {
     deliverDirect(target.origin, body, secret, cfg, isMonolithTarget());
 }
 
+/**
+ * MULTISITE: the frontend renders a site other than site 1 under an internal route segment named after
+ * its main hostname (`/wjs-site/<host>/...`, rewritten there by frontend/src/proxy.ts), and tags that
+ * site's data fetches `site:<host>:<tag>` (frontend/src/lib/server-api.ts). A purge queued while working
+ * for such a site is translated to those names, so it invalidates that site's pages and nobody else's.
+ * Site 1's tags and paths are exactly what they always were. Exported for tests.
+ */
+function siteQualifiedPurge(tags: string[], paths: string[]): { tags: string[]; paths: string[] } {
+    const siteContext = require('./site-context');
+    if (!siteContext.multisiteEnabled()) return { tags, paths };
+    const id = siteContext.currentSiteId();
+    if (id === siteContext.PRIMARY_SITE_ID) return { tags, paths };
+    const site = require('./network').getSite(id);
+    if (!site || !site.mainHost) return { tags: [], paths: [] };
+    const host = site.mainHost;
+    return {
+        tags: tags.map((t) => `site:${host}:${t}`),
+        paths: paths.map((p) => (p === '/' ? `/wjs-site/${host}` : `/wjs-site/${host}${p}`)),
+    };
+}
+
 /** Queue tags/paths for the next debounced flush. */
-function purgeFrontend(tags: string[] = [], paths: string[] = []) {
+function purgeFrontend(rawTags: string[] = [], rawPaths: string[] = []) {
+    const { tags, paths } = siteQualifiedPurge(rawTags, rawPaths);
     for (const t of tags) if (t) pendingTags.add(String(t));
     for (const p of paths) if (p && String(p).startsWith('/')) pendingPaths.add(String(p));
     if (!flushTimer) {
@@ -661,7 +683,7 @@ function initFrontendPurge() {
 }
 
 module.exports = {
-    initFrontendPurge, purgeFrontend, purgeForPost, publicPathsForPost, purgeTransport, gatewayPurgeOptions,
+    initFrontendPurge, purgeFrontend, purgeForPost, siteQualifiedPurge, publicPathsForPost, purgeTransport, gatewayPurgeOptions,
     // Exported for tests and for a future /health/details counter: a purge channel that is permanently
     // broken must be observable, not inferable from a log line an hour old.
     clusterTlsOptions, frontendServesTls, purgeFailureState,

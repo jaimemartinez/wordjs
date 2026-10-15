@@ -891,7 +891,9 @@ const SUDO_INFLIGHT_MAX = 3;           // concurrent verifications per (account,
 const SUDO_INFLIGHT_STALE_MS = 30000;  // a crashed request must not leak its slot for ever
 
 /** account id -> consecutive failures within the window. Module-private: this IS the key space. */
-const _sudoFails = new Map<number, { n: number; at: number }>();
+const _sudoFails = new Map<string, { n: number; at: number }>();
+/** The bucket of `userId` on the current site: user ids repeat across a multisite network (site 1: the bare id). */
+const _sudoKey = (userId: number): string => require('../core/site-context').siteKeyPrefix() + String(userId);
 /** `${account}|${ip}` -> in-flight verifications. Same key space, same privacy. */
 const _sudoInflight = new Map<string, { n: number; at: number }>();
 
@@ -917,12 +919,12 @@ function sudoDelayMs(fails: any): number {
 function _sudoStore() {
     try { return require('../core/cache').getClient() || null; } catch { return null; }
 }
-const _sudoRedisKey = (userId: number) => `wjsudo:fails:${userId}`;
+const _sudoRedisKey = (userId: number) => `wjsudo:fails:${_sudoKey(userId)}`;
 
 function _sudoFailCountMem(userId: number): number {
-    const e = _sudoFails.get(userId);
+    const e = _sudoFails.get(_sudoKey(userId));
     if (!e) return 0;
-    if (Date.now() - e.at > SUDO_WINDOW_MS) { _sudoFails.delete(userId); return 0; }
+    if (Date.now() - e.at > SUDO_WINDOW_MS) { _sudoFails.delete(_sudoKey(userId)); return 0; }
     return e.n;
 }
 
@@ -947,7 +949,7 @@ async function sudoRecordFail(userId: number): Promise<void> {
             return;
         } catch { /* store hiccup → record in-process so this node still slows down */ }
     }
-    _sudoFails.set(userId, { n: _sudoFailCountMem(userId) + 1, at: Date.now() });
+    _sudoFails.set(_sudoKey(userId), { n: _sudoFailCountMem(userId) + 1, at: Date.now() });
 }
 
 async function sudoClearFails(userId: number): Promise<void> {
@@ -955,10 +957,11 @@ async function sudoClearFails(userId: number): Promise<void> {
     if (client) {
         try { await client.del(_sudoRedisKey(userId)); } catch { /* the TTL expires it anyway */ }
     }
-    _sudoFails.delete(userId);
+    _sudoFails.delete(_sudoKey(userId));
 }
 
-function sudoBeginAttempt(key: string): boolean {
+function sudoBeginAttempt(rawKey: string): boolean {
+    const key = require('../core/site-context').siteKeyPrefix() + rawKey;
     const now = Date.now();
     let e = _sudoInflight.get(key);
     if (!e || (now - e.at) > SUDO_INFLIGHT_STALE_MS) e = { n: 0, at: now };
@@ -968,7 +971,8 @@ function sudoBeginAttempt(key: string): boolean {
     return true;
 }
 
-function sudoEndAttempt(key: string): void {
+function sudoEndAttempt(rawKey: string): void {
+    const key = require('../core/site-context').siteKeyPrefix() + rawKey;
     const e = _sudoInflight.get(key);
     if (!e) return;
     e.n = Math.max(0, e.n - 1);

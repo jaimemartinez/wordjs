@@ -184,6 +184,11 @@ async function pump(): Promise<void> {
         for (const id of ids) await deliverOne(id);
     } catch { /* poll error — try again next tick */ }
     finally { _pumping = false; }
+    // Multisite: each other active site's deliveries (its own table), in its own context. No-op on a single site.
+    await require('./network-sites').forEachSecondarySite('webhooks', async () => {
+        const ids = await WebhookDelivery.dueIds(nowSec(), BATCH);
+        for (const id of ids) await deliverOne(id);
+    });
 }
 
 function postPayload(post: any) {

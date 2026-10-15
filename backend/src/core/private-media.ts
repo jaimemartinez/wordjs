@@ -44,12 +44,27 @@ const PRIVATE_STREAM_MAX_BYTES = 2 * 1024 * 1024 * 1024; // 2 GiB
 
 /** The absolute root private media is stored under. Read at call time so tests can repoint it. */
 function privateUploadsRoot(): string {
+    const site = secondarySiteDir();
+    if (site) return path.join(site, 'private-uploads');
     return path.resolve(config.uploads.privateDir || './data/private-uploads');
 }
 
 /** The absolute root public media is stored under (the tree index.ts serves at /uploads). */
 function publicUploadsRoot(): string {
+    const site = secondarySiteDir();
+    if (site) return path.join(site, 'uploads');
     return path.resolve(config.uploads.dir);
+}
+
+/**
+ * Multisite: the data directory of the current site when it is not site 1 (core/network siteDataDir),
+ * else null. Site 1 — and every single-site install — keeps the configured upload roots.
+ */
+const siteContext = require('./site-context');
+function secondarySiteDir(): string | null {
+    if (!siteContext.multisiteEnabled()) return null;
+    const id = siteContext.currentSiteId();
+    return id === siteContext.PRIMARY_SITE_ID ? null : require('./network').siteDataDir(id);
 }
 
 /** Root for one visibility. */
