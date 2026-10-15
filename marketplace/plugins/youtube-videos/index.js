@@ -17,7 +17,7 @@
 
 exports.metadata = {
     name: 'YouTube Videos',
-    version: '1.0.1',
+    version: '1.0.2',
     description: 'Channel video list (links, thumbnails, titles) + Verso carousel block',
     author: 'WordJS',
 };
@@ -29,6 +29,66 @@ const SETTINGS_TABLE = 'wjp_youtube_videos_settings';
 const MAX_API_VIDEOS = 500;            // pagination cap in API mode (10 pages x 50)
 const DEFAULT_LIMIT = 12;
 const MAX_LIMIT = 200;
+
+// ---- channel page parsing ------------------------------------------------------------------------
+// A channel page also embeds the ids of OTHER channels — featured channels, shelves, collaborators —
+// as "channelId" and "browseId" values, and the first of them is often not the page's own channel.
+// So only signals that describe the page itself are read, most authoritative first, and a page that
+// carries none of them is refused rather than guessed at.
+const UC_ID = 'UC[0-9A-Za-z_-]{20,}';
+
+/** The ytInitialData object a youtube.com page embeds, or null. */
+function readInitialData(html) {
+    // The assignment ends its <script>. A lazy `\{[\s\S]*?\};` alone stops at the first `};`, which a
+    // title or a description can contain.
+    const m = html.match(/ytInitialData\s*=\s*(\{[\s\S]*?\});\s*<\/script>/);
+    if (!m) return null;
+    try { return JSON.parse(m[1]); } catch { return null; }
+}
+
+/** The tab the page opened (Home, Videos…), or null. */
+function selectedTab(data) {
+    const r = data && data.contents && data.contents.twoColumnBrowseResultsRenderer;
+    for (const t of (r && r.tabs) || []) {
+        const tab = t && (t.tabRenderer || t.expandableTabRenderer);
+        if (tab && tab.selected) return tab;
+    }
+    return null;
+}
+
+/** Every `<tag …>` whose attributes include name="value" (any order, either quote). */
+function tagsWith(html, tag, name, value) {
+    const attr = new RegExp(`\\b${name}\\s*=\\s*["']${value}["']`, 'i');
+    return (html.match(new RegExp(`<${tag}\\b[^>]*>`, 'gi')) || []).filter((t) => attr.test(t));
+}
+
+/** The page's OWN channel id, or '' — never the id of a channel the page merely links to. */
+function ownChannelId(html, data) {
+    // 1. <link rel="canonical" href="https://www.youtube.com/channel/UC…">
+    for (const t of tagsWith(html, 'link', 'rel', 'canonical')) {
+        const m = t.match(new RegExp(`\\bhref\\s*=\\s*["'][^"']*/channel/(${UC_ID})(?:[/?#][^"']*)?["']`, 'i'));
+        if (m) return m[1];
+    }
+    // 2. The channel metadata's externalId: read from ytInitialData when it parses, else from the raw
+    //    page as long as every "externalId" on it names the same channel.
+    const meta = data && data.metadata && data.metadata.channelMetadataRenderer;
+    if (meta && new RegExp(`^${UC_ID}$`).test(meta.externalId || '')) return meta.externalId;
+    const external = new Set((html.match(new RegExp(`"externalId":"${UC_ID}"`, 'g')) || []).map((s) => s.slice(14, -1)));
+    if (external.size === 1) return [...external][0];
+    // 3. <meta itemprop="identifier" content="UC…"> (older pages: itemprop="channelId").
+    for (const t of [...tagsWith(html, 'meta', 'itemprop', 'identifier'), ...tagsWith(html, 'meta', 'itemprop', 'channelId')]) {
+        const m = t.match(new RegExp(`\\bcontent\\s*=\\s*["'](${UC_ID})["']`, 'i'));
+        if (m) return m[1];
+    }
+    // 4. The channel header, and the browseId of the tab the page opened — both belong to the page's
+    //    channel (the "browseId"s of featured channels and shelves sit elsewhere in the tree).
+    const header = data && data.header && data.header.c4TabbedHeaderRenderer;
+    if (header && new RegExp(`^${UC_ID}$`).test(header.channelId || '')) return header.channelId;
+    const tab = selectedTab(data);
+    const browseId = tab && tab.endpoint && tab.endpoint.browseEndpoint && tab.endpoint.browseEndpoint.browseId;
+    if (new RegExp(`^${UC_ID}$`).test(browseId || '')) return browseId;
+    return '';
+}
 
 exports.init = async function (wordjs) {
     const { options, http, db, adminMenu } = wordjs;
@@ -75,7 +135,7 @@ exports.init = async function (wordjs) {
      * Accepts a channel in any common shape — "UC…" id, "@handle", or a full URL
      * (youtube.com/channel/UC…, youtube.com/@handle) — and resolves it to the UC… channel id.
      * A handle resolves via the Data API when a key exists, else by reading the public channel
-     * page (its HTML embeds "channelId":"UC…").
+     * page — its own id, never the first "channelId" on it (see ownChannelId).
      */
     const resolveChannelId = async (input, apiKey) => {
         const raw = String(input || '').trim();
@@ -92,9 +152,9 @@ exports.init = async function (wordjs) {
             return id;
         }
         const html = await fetchText(`https://www.youtube.com/@${encodeURIComponent(handle)}`);
-        const m = html.match(/"channelId":"(UC[0-9A-Za-z_-]{20,})"/) || html.match(/"externalId":"(UC[0-9A-Za-z_-]{20,})"/);
-        if (!m) throw new Error(`Could not resolve @${handle} to a channel id (add a Data API key to resolve handles reliably)`);
-        return m[1];
+        const id = ownChannelId(html, readInitialData(html));
+        if (!id) throw new Error(`Could not find the channel id of @${handle} on its YouTube page (add a Data API key, or configure the UC… channel id)`);
+        return id;
     };
 
     const fetchViaRss = async (channelId) => {
@@ -112,18 +172,32 @@ exports.init = async function (wordjs) {
         return videos;
     };
 
-    /** Scraper mode: fetch public channel page and parse ytInitialData JSON for keyless high-res videos. */
+    /**
+     * Scraper mode: fetch the channel's public Videos tab and parse ytInitialData JSON for keyless
+     * high-res videos. Only the grid of the tab the page opened is read, and only when that tab is
+     * the Videos tab of `channelId` itself: the rest of the page (the header, a Home tab served
+     * instead) can carry trailers and shelves of other channels' videos.
+     */
     const fetchViaScraper = async (channelId, channelHandle) => {
-        const targetUrl = channelHandle 
+        const targetUrl = channelHandle
             ? `https://www.youtube.com/@${encodeURIComponent(channelHandle.replace('@', ''))}/videos`
             : `https://www.youtube.com/channel/${encodeURIComponent(channelId)}/videos`;
 
         const html = await fetchText(targetUrl);
-        const match = html.match(/ytInitialData\s*=\s*(\{[\s\S]*?\});/);
-        if (!match) {
+        const data = readInitialData(html);
+        if (!data) {
             throw new Error("No se encontró ytInitialData en la página pública de YouTube");
         }
-        const data = JSON.parse(match[1]);
+        const pageChannelId = ownChannelId(html, data);
+        if (pageChannelId !== channelId) {
+            throw new Error(`La página pública de YouTube es de otro canal (${pageChannelId || 'sin identificar'}), no de ${channelId}`);
+        }
+        const tab = selectedTab(data);
+        const tabUrl = (tab && tab.endpoint && tab.endpoint.commandMetadata && tab.endpoint.commandMetadata.webCommandMetadata
+            && tab.endpoint.commandMetadata.webCommandMetadata.url) || '';
+        if (!tab || !tab.content || !/\/videos\/?$/.test(tabUrl)) {
+            throw new Error("La página pública de YouTube no abrió la pestaña Videos del canal");
+        }
         const list = [];
         const findVideos = (obj) => {
             if (!obj || typeof obj !== 'object') return;
@@ -144,7 +218,7 @@ exports.init = async function (wordjs) {
                 findVideos(obj[key]);
             }
         };
-        findVideos(data);
+        findVideos(tab.content);
         const videos = [];
         const seenIds = new Set();
         for (const v of list) {
