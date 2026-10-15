@@ -4,6 +4,32 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [Unreleased]
+
+### Added
+
+- **Members-only content, in core and on every surface.** A post can require an access level (the
+  `_wjs_access` meta, chosen as **Acceso** in the editor once a provider plugin is active). A reader who
+  does not hold the level — and does not manage the post — receives its *teaser*, cut at the access break
+  (an `<hr class="wjs-access-break">` in the HTML body, or the first Verso block declaring
+  `contentAccessBreak`), on every read surface: REST (and therefore GraphQL), the cached public page, the
+  RSS / Atom / JSON and taxonomy feeds, search (a gated post matches by title only) and the post's
+  comments (not listed, fetchable, writable or in the comments feed). The excerpt is never derived from
+  the withheld body. Levels come from two new filters, `content_access_levels` and
+  `content_access_grants`; an unknown level fails closed. Signed-in members get the full body in the
+  browser, with their own session, so the cached HTML never carries it. See `documentation/memberships.md`.
+- **`memberships` plugin (1.0.0) in the marketplace catalog.** Free and paid tiers, a paywall block that
+  ends a post's free teaser and shows the plans, a member account block (change tier, cancel / resume),
+  Stripe Checkout subscriptions verified by signed webhooks, and complimentary memberships granted by the
+  admin. Members are the site's own user accounts. Stripe runs in **test mode only** in this version (live
+  keys are refused).
+- **Plugin webhook routes and an HMAC bridge.** `wordjs.http.route('post', path, { webhook: true }, …)`
+  receives the raw request body and the sender's signature headers and is exempt from the CSRF gate — and
+  never carries an identity (no user, no cookies; it cannot be combined with `auth`/`admin`).
+  `wordjs.crypto.hmac()` and `wordjs.crypto.timingSafeEqual()` let a sandboxed plugin verify the signature.
+- The sign-in and sign-up pages honour `?redirect=<same-origin path>`, so a reader returns to the post
+  they were reading.
+
 ## [2.5.0] - 2026-10-15
 
 ### Added

@@ -158,6 +158,14 @@ const POLICY_TABLE: Record<string, HookPolicy> = {
     'registered_content_type_schema': PUBLIC('carries a public content-type schema'),
     'registered_post_type': PUBLIC('carries a public post-type definition'),
     'registered_taxonomy': PUBLIC('carries a public taxonomy definition'),
+    // Members-only content (core/content-access). The levels filter carries only the provider's own
+    // answer; the grants filter names the viewer (id + role) so a provider can look up what they hold.
+    'content_access_levels': PUBLIC('carries only the access levels providers offer to the editor'),
+    'content_access_grants': {
+        kind: 'data', requires: [['users', 'read']],
+        why: 'identifies the account reading the site (user id and role)',
+        sanitize: (_slug, [value, ctx, ...rest]) => [Array.isArray(value) ? value.slice() : [], { userId: ctx && ctx.userId, role: ctx && ctx.role }, ...rest],
+    },
 
     // ── data: other parties' data, gated on the matching read grant and minimized ──────────────────
     'updated_option': {

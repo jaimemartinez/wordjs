@@ -21,6 +21,9 @@ const {
 // too, as it is to GET /media/:id and GET /posts/:id. Without it, commenting on one by id (and reading its
 // comments) confirmed that the hidden item exists, and attached a comment to it.
 const { attachmentReadable } = require('../core/attachment-visibility');
+// A MEMBERS-ONLY ENTRY'S COMMENTS ARE GATED WITH IT (core/content-access): listed, read and written only by
+// a viewer who reads the entry in full.
+const { canReadGatedContent } = require('../core/content-access');
 const { getOption } = require('../core/options');
 const { authenticate, optionalAuth } = require('../middleware/auth');
 const { can } = require('../middleware/permissions');
@@ -587,7 +590,8 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
             return res.json([]);
         }
         const readable = !!(target && !isInternalPostType(target.type || target.postType || 'post')
-            && canReadPostContent(req.user, target));
+            && canReadPostContent(req.user, target)
+            && await canReadGatedContent(req.user, target));
         if (!readable) publicOnlyTypes = publicPostTypes();
     }
 
@@ -680,7 +684,8 @@ router.get('/:id', optionalAuth, asyncHandler(async (req: Request, res: Response
         // that a draft, private or protected entry has comments (or exists).
         const parentPost = await Post.findById(comment.commentPostId);
         if (!parentPost || isInternalPostType(parentPost.type || parentPost.postType || 'post')
-            || !canReadPostContent(req.user, parentPost)) {
+            || !canReadPostContent(req.user, parentPost)
+            || !(await canReadGatedContent(req.user, parentPost))) {
             return notFound();
         }
         // A comment on an attachment this caller may not see is "no such comment" too: the comment
@@ -827,7 +832,9 @@ router.post('/', optionalAuth, commentLimiter, asyncHandler(async (req: Request,
     const commentable = !!(post
         && !isInternalPostType(post.type || post.postType || 'post')
         && (post.postStatus === 'publish' || post.postStatus === 'private')
-        && canReadPostContent(req.user, post));
+        && canReadPostContent(req.user, post)
+        // A members-only entry takes comments from those who may read it (core/content-access).
+        && await canReadGatedContent(req.user, post));
     if (!commentable) {
         return res.status(404).json({
             code: 'rest_post_invalid_id',

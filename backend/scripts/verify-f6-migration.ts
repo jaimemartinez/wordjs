@@ -126,7 +126,7 @@ function executedByRunStep(workflow: string, needle: string): boolean {
  * These stay ratchet bounds: the floor may only rise, the ceiling may only fall, and neither can be
  * satisfied by editing a list in this file.
  */
-const MIN_COVERED_MARKETPLACE_PLUGINS = 31;
+const MIN_COVERED_MARKETPLACE_PLUGINS = 32;
 /** Marketplace plugins the compatibility suite does not exercise. Adding a plugin without one raises it. */
 const MAX_UNCOVERED_MARKETPLACE_PLUGINS = 0;
 

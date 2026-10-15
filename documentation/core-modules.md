@@ -199,6 +199,20 @@ Each registered callback records the **plugin slug** that registered it (via `pl
 
 ---
 
+## 5a. Content Access Levels (members-only content) 🔒
+
+**Location:** `backend/src/core/content-access.ts`
+
+A post may require an access level (`_wjs_access` meta). Whoever does not hold it — and does not manage the
+post — receives the post's **teaser** (body, excerpt and Verso tree cut at the access break) on every read
+surface: `Post.toJSON` (REST, and GraphQL through it), the feeds (`routes/seo.ts`), search
+(`Post.buildWhere`, title-only match) and the post's comments (`routes/comments.ts`, `models/Comment.ts`,
+the comments feed). Levels are provided by plugins through the `content_access_levels` and
+`content_access_grants` filters (the bundled `memberships` plugin is one); an unknown level fails closed.
+Full guide: [memberships.md](memberships.md).
+
+---
+
 ## 6. Analytics System 📊
 
 **Location:** `backend/src/models/Analytics.ts` + `backend/src/routes/analytics.ts`

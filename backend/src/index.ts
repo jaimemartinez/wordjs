@@ -541,7 +541,9 @@ const { csrfProtection } = require('./middleware/auth');
 app.use(config.api.prefix, csrfProtection);
 
 // Parse JSON bodies
-app.use(express.json({ limit: '10mb' }));
+// Plugin webhook routes (core/plugin-webhooks) also get the body EXACTLY as received, because their
+// sender signed those bytes; every other request keeps only the parsed value.
+app.use(express.json({ limit: '10mb', verify: require('./core/plugin-webhooks').captureWebhookRawBody }));
 
 // Parse URL-encoded bodies
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));

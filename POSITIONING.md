@@ -190,7 +190,7 @@ The sandbox + AST scanner are the *enabling technology* for a marketplace where 
 install" is a verifiable claim**, not a vibe.
 
 **The marketplace *mechanism* now ships in OSS** (no longer a proposal): a curated catalog of
-**31 first-party plugins** (`marketplace/plugins/`), built into catalog + zips by
+**32 first-party plugins** (`marketplace/plugins/`), built into catalog + zips by
 `backend/scripts/build-marketplace.js` into `marketplace/dist/` (separate plugin and theme indexes,
 a gitignored build output published
 as GitHub Release assets; installs default to `releases/latest/download` but the sources are
@@ -308,7 +308,7 @@ enlarges the trust surface:
 
 | Risk / gap | Why it matters | What we do about it |
 |---|---|---|
-| **Ecosystem from zero** | The marketplace pitch needs plugins; the built-in marketplace now ships **31 first-party plugins**, but there are still **no third-party authors**. A safe marketplace without a community is still a thin ecosystem — and the sandbox, our best asset, only pays off once there is outside code to confine. | First-party seeding is done (31 catalog plugins across commerce / marketing / content / SEO), and the **review programme now ships**: public criteria (`marketplace/REVIEW.md`), submission by pull request, automated checks in CI plus a human checklist, a tracked ledger and a **Reviewed** badge only the official catalog can grant. The on-ramp exists and only the authors are missing. Next: a paid early-developer program; lead with *internal / agency* private marketplaces (don't need scale to be valuable). |
+| **Ecosystem from zero** | The marketplace pitch needs plugins; the built-in marketplace now ships **32 first-party plugins**, but there are still **no third-party authors**. A safe marketplace without a community is still a thin ecosystem — and the sandbox, our best asset, only pays off once there is outside code to confine. | First-party seeding is done (32 catalog plugins across commerce / marketing / content / SEO), and the **review programme now ships**: public criteria (`marketplace/REVIEW.md`), submission by pull request, automated checks in CI plus a human checklist, a tracked ledger and a **Reviewed** badge only the official catalog can grant. The on-ramp exists and only the authors are missing. Next: a paid early-developer program; lead with *internal / agency* private marketplaces (don't need scale to be valuable). |
 | **Bus factor is one** | 941 of the 949 commits on `main` at v2.3.0 carry one email address (the rest are Dependabot and GitHub's merge author); there is no company, no SLA and no second reviewer. A vendor questionnaire asks this before it asks about Landlock, and `.github/CODEOWNERS` can only become a real gate once a second owner exists — GitHub forbids self-approval. | Recruit a second maintainer with commit access: it is the same unlock for code-owner review, for reviewer capacity in the plugin programme and for any support story. Until then say so plainly in README and SECURITY.md rather than implying a team. |
 | **Kernel-surface parity** | Plugins run in separate processes and under Landlock+seccomp, AppContainer, or Seatbelt. All three are default-on, probe-gated, grant-invariant and fail-closed in production. | CI certifies the compiled launch on real Linux/Windows/macOS kernels; remaining: preventive memory parity on macOS and an independent audit. Never claim "unbreakable." |
 | **No independent audit** | Self-asserted security doesn't sell to the exact segment we target. Several internal red-team passes ≠ external sign-off. | Commission a third-party pentest / audit of the sandbox; publish results + a public threat model. Make "independently audited" a marketing milestone. |
@@ -325,7 +325,7 @@ The sandbox is **genuinely differentiated and genuinely implemented** — isolat
 for *every* plugin, a permission-checked bridge, admin-granted default-deny capabilities (no
 trust tier, no bypass), a fail-closed AST scanner, and network / secret / core-table lockdown.
 We win by being honest about what is still unaudited while building on the
-marketplace mechanism that now ships (a curated, sha256-verified catalog of 31 first-party
+marketplace mechanism that now ships (a curated, sha256-verified catalog of 32 first-party
 plugins installed through the hardened pipeline) and the hosted offering that turn "your plugins
 can't compromise your site" into the product. The review pipeline and the badge now ship, so the
 work to get there is **third-party authors to use them, an external audit, a second maintainer,

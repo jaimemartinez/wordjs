@@ -277,6 +277,8 @@ class Comment {
                 conditions.push(
                     'EXISTS (SELECT 1 FROM posts p WHERE p.id = comments.comment_post_id ' +
                     "AND p.post_status = 'publish' AND (p.post_password IS NULL OR p.post_password = '')" +
+                    // Nor members-only entries (core/content-access): their discussion is gated with them.
+                    ` AND NOT ${require('../core/content-access').gatedPostSql('p.id')}` +
                     ` AND p.post_type IN (${publicOnlyTypes.map(() => '?').join(',')}))`
                 );
                 params.push(...publicOnlyTypes);

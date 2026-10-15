@@ -98,6 +98,8 @@ router.get('/', (req: Request, res: Response) => {
 // Mount routes
 router.use('/auth', authRoutes);
 router.use('/posts', postsRoutes);
+// Members-only content: the access levels the editor may offer (core/content-access).
+router.use('/content-access', require('./content-access'));
 router.use('/users', usersRoutes);
 router.use('/categories', categoriesRoutes);
 router.use('/tags', tagsRoutes);

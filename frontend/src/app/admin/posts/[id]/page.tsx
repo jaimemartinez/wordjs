@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useMemo } from "react";
 import { useRouter, useParams } from "next/navigation";
 import EditorBootFallback from "@/components/verso/editor/EditorBootFallback";
-import { postsApi, categoriesApi, tagsApi, Category, Tag, PostTermRef } from "@/lib/api";
+import { postsApi, categoriesApi, tagsApi, apiGet, Category, Tag, PostTermRef } from "@/lib/api";
 import EditorLoadError from "@/components/EditorLoadError";
 import VersoEditor from "@/components/verso/editor/VersoEditor";
 import { rootFieldsPost } from "@/lib/verso/coreBlocks";
@@ -26,6 +26,10 @@ import {
     seedTaxonomyRootProps,
     seedSeoRootProps,
     seoMetaForSave,
+    seedAccessRootProps,
+    accessMetaForSave,
+    ACCESS_META_KEY,
+    type AccessLevelOption,
     type TagSelection,
 } from "@/lib/editorRootFields";
 // El productor ÚNICO del estado de categorías del editor (opciones del select = lista contra la que
@@ -102,6 +106,11 @@ export default function PostEditorPage() {
     // en vez de perderse (ver resolveCategoriesForSave).
     const seededCategoryIdsRef = useRef<number[]>([]);
     const seededTagsRef = useRef<TagSelection[]>([]);
+    // ACCESO (contenido para miembros): los niveles que ofrece el proveedor activo y el nivel guardado.
+    // El campo solo se compone si hay niveles o si el registro ya tiene uno (ver accessField).
+    const [accessLevels, setAccessLevels] = useState<AccessLevelOption[]>([]);
+    const [recordAccess, setRecordAccess] = useState("");
+    const seededAccessRef = useRef("");
     const [saving, setSaving] = useState(false);
     const [isLoading, setIsLoading] = useState(!isNew);
     // Data-safety hydration tracking: `loaded` is true only once the EXISTING post's content has
@@ -160,6 +169,7 @@ export default function PostEditorPage() {
     useEffect(() => {
         loadCategories();
         loadTags();
+        loadAccessLevels();
         if (postId) {
             loadPost();
         }
@@ -199,8 +209,12 @@ export default function PostEditorPage() {
             // la vista en vez de aparecer vacío — que es lo que convertía cualquier guardado en un
             // borrado silencioso (`setTerms` REEMPLAZA).
             const taxonomy = seedTaxonomyRootProps(post);
+            const seededAccess = seedAccessRootProps(post);
+            seededAccessRef.current = seededAccess[ACCESS_META_KEY];
+            setRecordAccess(seededAccess[ACCESS_META_KEY]);
             const seedRoot = {
                 ...seedRootPropsFromPost(post),
+                ...seededAccess,
                 ...seedSeoRootProps(post),
                 category: taxonomy.category,
                 tags: taxonomy.tags,
@@ -260,6 +274,17 @@ export default function PostEditorPage() {
             setLoadError(error); // block the editor so a blank stand-in can't overwrite the real post
         } finally {
             setIsLoading(false);
+        }
+    };
+
+    // Niveles de acceso que ofrece el proveedor activo (p. ej. el plugin de membresías). Sin proveedor la
+    // lista viene vacía y el campo no aparece; un fallo de red tampoco lo enseña (nada que elegir).
+    const loadAccessLevels = async () => {
+        try {
+            const res = await apiGet<{ levels?: AccessLevelOption[] }>("/content-access/levels");
+            setAccessLevels(Array.isArray(res?.levels) ? res.levels : []);
+        } catch {
+            setAccessLevels([]);
         }
     };
 
@@ -420,7 +445,9 @@ export default function PostEditorPage() {
                     _thumbnail_id: featuredImageMetaValue(rootProps),
                     // SEO (título/descripción/imagen social/noindex). Una sola fuente para entradas y
                     // páginas — ver editorRootFields.seoMetaForSave.
-                    ...seoMetaForSave(rootProps)
+                    ...seoMetaForSave(rootProps),
+                    // Nivel de acceso: solo si el autor lo cambió (ver accessMetaForSave).
+                    ...accessMetaForSave(rootProps, seededAccessRef.current)
                 },
                 // Autosaves skip the revision snapshot server-side (see routes/posts.ts).
                 ...(isAutosave ? { autosave: true } : {})
@@ -460,6 +487,8 @@ export default function PostEditorPage() {
             // Lo que ya viajó pasa a ser la base: sin esto cada autosave posterior reenviaría el
             // mismo extracto y las mismas categorías eternamente. Solo tras un guardado CONFIRMADO.
             if (excerptPatch !== undefined) seededExcerptRef.current = excerptPatch;
+            const accessPatch = finalPostData.meta ? (finalPostData.meta as Record<string, unknown>)[ACCESS_META_KEY] : undefined;
+            if (typeof accessPatch === "string") seededAccessRef.current = accessPatch;
             if (categoriesPatch !== undefined) seededCategoryIdsRef.current = categoriesPatch;
             if (tagsPatch !== undefined) seededTagsRef.current = tagsPatch.map((id) => ({ tag: String(id) }));
             // Stay in editor - no redirect
@@ -486,8 +515,10 @@ export default function PostEditorPage() {
             recordCategories,
             tags: allTags,
             recordTags,
+            accessLevels,
+            currentAccess: recordAccess,
         }),
-        [categories, rootCategory, recordCategories, allTags, recordTags],
+        [categories, rootCategory, recordCategories, allTags, recordTags, accessLevels, recordAccess],
     );
 
     if (isLoading) {

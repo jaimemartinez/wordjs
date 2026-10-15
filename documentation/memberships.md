@@ -1,0 +1,175 @@
+# Memberships and members-only content
+
+WordJS gates content in two layers:
+
+- **Core — content access levels** (`backend/src/core/content-access.ts`). A generic seam: an entry can
+  require an *access level*, and every read surface serves a reader who does not hold that level the
+  entry's **teaser** instead of its body. Core does not know what a member, a tier or a subscription is.
+- **The `memberships` plugin** (`marketplace/plugins/memberships`). A bundled, sandboxed plugin that
+  *provides* the levels: free and paid tiers, the paywall block, Stripe Checkout subscriptions verified by
+  signed webhooks, tier changes and cancellation by the member, and complimentary memberships granted by
+  an admin.
+
+Any other plugin can be a provider too (a course plugin, an SSO bridge…): the seam is two filters.
+
+---
+
+## 1. The core seam: content access levels
+
+### 1.1 What an entry stores
+
+| Meta key | Value | Meaning |
+| --- | --- | --- |
+| `_wjs_access` | `''` / absent | Public (the default; nothing changes for existing content). |
+| `_wjs_access` | a level slug, e.g. `members`, `paid`, `tier:gold` | Only readers holding that level read the full body. |
+
+The post editor offers the field as **Acceso** in the entry's settings once a provider is active
+(`GET /api/v1/content-access/levels`, `edit_posts`). The value is written through the normal `meta` bag,
+under the same capability gate as every other author-written key.
+
+A level that no active provider grants (a typo, a deleted tier, a deactivated plugin) **fails closed**:
+the entry stays a teaser for everybody except the people who manage it.
+
+### 1.2 Who reads the full body
+
+1. Whoever **manages** the entry — its author with the type's edit capability, or an editor
+   (`canManagePostRecord`). The editor loads through the same projection, so it always gets the full
+   tree: a truncated tree saved back would destroy the body.
+2. A signed-in reader whose **grants** include the level. Core asks the `content_access_grants` filter
+   once per request per reader; anonymous readers hold nothing and the filter is never asked for them.
+
+### 1.3 The teaser and the access break
+
+The teaser is the part of the body **before the access break**:
+
+- **HTML body** (`post_content`): an `<hr class="wjs-access-break">`. Verso writes it into the HTML
+  fallback for any top-level block that declares the break (see below); an HTML comment would not survive
+  the content sanitizer. No break → the body is withheld whole (the teaser is empty).
+- **Verso tree** (`meta._puck_data`): the first top-level item whose props carry
+  `contentAccessBreak: true`. Any block can be a break by putting that prop in its `defaultProps` — the
+  memberships plugin's **Muro de pago** block does. The items before it are kept, the break item itself is
+  kept (it draws the call-to-action) and annotated with `accessState: 'locked' | 'granted'` and
+  `accessLevel`, and everything after it is removed — legacy `zones` included, except those owned by kept
+  items. A break nested inside a container cuts before that container and is lifted to the top level.
+  No break → no items.
+- **Excerpt**: the author's own excerpt, or one generated from the teaser — never from the body.
+
+### 1.4 Every read surface
+
+| Surface | Behaviour for a reader without the level |
+| --- | --- |
+| REST `GET /posts`, `/posts/:id`, `?slug=` (and GraphQL, which dispatches REST) | Teaser `content`, teaser-derived `excerpt`, teaser `_puck_data`, and `access: { level, gated: true, granted: false }`. Public entries carry no `access` key. |
+| Public pages (SSR) | Rendered anonymously and cached (ISR), so the cached HTML only ever contains the teaser. `MembersOnlyGate` re-reads the entry in the browser of a signed-in visitor with their own session and swaps in the full body (and the comments) when the answer is `granted`. Signed-out visitors cause no request. |
+| RSS / Atom / JSON feeds, category / tag / author feeds | The entry is listed; its summary is the author's excerpt or the teaser. |
+| Search (`/posts?search=`) | A gated entry matches on its **title** only (no oracle on the withheld body), unless the searcher is its author or may edit others' entries. |
+| Sitemaps | The URL is listed (its page is public and shows the teaser); sitemaps carry no body. |
+| Comments (`/comments`, `/comments/:id`, `POST /comments`, the comments feed) | The comments of a gated entry are part of what the level unlocks: not listed, not fetchable, not writable (same 404 as a missing entry), not in the comments feed. |
+
+`backend/src/tests/content-access-leaks.test.ts` checks every row above for an anonymous reader, a free
+member and paid members, with managers as the positive control.
+
+### 1.5 Provider contract (filters)
+
+```js
+// Levels the editor offers. value: Array<{ value, label }>
+wordjs.hooks.addFilter('content_access_levels', async (levels) => [...levels, { value: 'members', label: 'Members' }]);
+
+// Levels a signed-in account holds. value: string[]; ctx: { userId, role }
+wordjs.hooks.addFilter('content_access_grants', async (grants, ctx) => [...grants, ...(await lookup(ctx.userId))]);
+```
+
+Level slugs match `^[a-z0-9][a-z0-9:_-]{0,63}$`; anything else a provider returns is dropped. Subscribing
+to `content_access_grants` requires the `users:read` grant (it identifies the reader); the levels filter
+is public. A provider that times out (2 s, like every isolated hook) answers "nothing".
+
+---
+
+## 2. The `memberships` plugin
+
+### 2.1 Members are the site's own accounts
+
+Signing up is core's `/register` (with its e-mail verification, rate limits and MFA) and signing in is
+core's session — a sandboxed plugin cannot hash passwords, and a second authentication stack would
+duplicate every hardening the core one carries. With **free sign-up** on (the default), every signed-in
+account is a free member (holds `members`); paid and complimentary memberships are rows in the plugin's
+own `wjp_memberships_members` table, keyed by user id. Turn on *Anyone can register* in Settings → General
+for the sign-up button to work; the login and sign-up pages honour `?redirect=<same-origin path>`, so a
+reader comes back to the post.
+
+### 2.2 Levels
+
+| Level | Held by |
+| --- | --- |
+| `members` | Every signed-in account (free sign-up on), or any live membership. |
+| `paid` | Any live paid or complimentary membership on a paid tier. |
+| `tier:<slug>` | That tier **or a dearer one** (`Gold` opens content for `Silver`). Tier slugs are immutable for that reason. |
+
+A Stripe membership grants access while it is `active` or `past_due` (Stripe is still retrying the
+renewal); a membership whose paid period ended more than 3 days ago without a renewal stops granting even
+if a webhook was missed. A complimentary membership grants until its optional end date.
+
+### 2.3 Blocks
+
+- **Muro de pago (miembros)** — the access break. In the editor it is a visible marker; on a locked page it
+  draws the call-to-action (create an account, sign in, the tiers that open the post, Stripe Checkout); on
+  a granted page it draws nothing.
+- **Mi membresía** — the member's account box: plan, status, renewal or end date, change to another tier,
+  cancel at period end / keep subscribing.
+
+### 2.4 Stripe (test mode only in this version)
+
+Settings (admin → Membresías → Ajustes): the secret key — **test keys only** (`sk_test_…`/`rk_test_…`;
+live keys are refused until the live flow has been verified end to end) — and the webhook signing secret
+(`whsec_…`). Both are stored in the plugin's own settings table, write-only, never echoed back.
+
+- **Checkout**: `POST /api/v1/plugin/memberships/checkout { tier_id }` creates a Checkout Session in
+  `subscription` mode. The price is the tier row's (a Stripe product per tier is created on first use); the
+  success URL keeps only the path of the page on this site; the session carries the account and tier in
+  its metadata and is recorded against the account.
+- **Return leg**: the success URL carries `?ms_session=<id>`; the block calls `/me/confirm`, which
+  retrieves the session server-side and refuses a session started by another account. Activation is
+  idempotent and shared with the webhook.
+- **Webhook**: `POST /api/v1/plugin/memberships/stripe/webhook` (a core `{ webhook: true }` route, §3).
+  The `Stripe-Signature` header is verified with HMAC-SHA256 over the raw body within a 5-minute
+  tolerance; any of several `v1` signatures may match (secret rotation); each event id is applied once;
+  live-mode events are refused. Handled events: `checkout.session.completed`,
+  `customer.subscription.created|updated|deleted`, `invoice.paid`, `invoice.payment_failed`.
+- **Change tier**: the subscription's item moves to the new tier's price with prorations. **Cancel** sets
+  `cancel_at_period_end` (access continues to the end of the period); **resume** clears it.
+
+Local testing with the Stripe CLI:
+
+```bash
+stripe listen --forward-to http://localhost:3000/api/v1/plugin/memberships/stripe/webhook
+```
+
+Paste the `whsec_…` it prints into Ajustes, and pay with Stripe's published test cards
+(`4242 4242 4242 4242`, any future date, any CVC).
+
+### 2.5 Complimentary memberships
+
+Admin → Membresías → Miembros: grant a tier to an existing account (by e-mail or login), optionally until
+a date; revoke ends it at once (a paid membership is cancelled at Stripe immediately).
+
+### 2.6 Not included (follow-ups)
+
+- **Newsletter delivery to members** (Ghost's email-per-post): out of scope; the `newsletter` plugin is a
+  separate list today.
+- Stripe **live mode**, the Stripe customer portal, coupons/trials, and per-member analytics.
+
+---
+
+## 3. Plugin webhook routes and the HMAC bridge (generic)
+
+Two core additions any plugin can use, introduced for the Stripe webhook:
+
+- `wordjs.http.route('post', '/hook', { webhook: true }, handler)` — a signed server-to-server webhook.
+  The route is exempt from the CSRF gate (a provider sends no `Origin`/`Referer`) and receives
+  `req.rawBody` (the body exactly as received) and the provider's signature headers; in exchange it never
+  carries an identity: `req.user` is `null`, no cookies are forwarded, and it cannot be combined with
+  `auth`, `admin` or `multipart` (such a registration is refused). POST only.
+- `await wordjs.crypto.hmac(algorithm, key, data, encoding?)` (`sha256`/`sha1`/`sha512`, hex or base64,
+  data ≤ 2 MB) and `await wordjs.crypto.timingSafeEqual(a, b)` — keyed hashing for signature checks; the
+  static validator keeps `require('crypto')` out of plugin code.
+
+See `backend/src/core/plugin-webhooks.ts` and `backend/src/tests/plugin-webhook-routes.test.ts`.

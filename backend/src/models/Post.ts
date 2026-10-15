@@ -24,6 +24,7 @@ const privateMedia = require('../core/private-media');
 // lazily), so both functions are complete here — and buildWhere does not resolve the module per query.
 const { canViewAttachment, attachmentVisibilityCondition } = require('../core/attachment-visibility');
 const { canReadPostContent, isPasswordProtected } = require('../core/post-capabilities');
+const contentAccess = require('../core/content-access');
 
 /**
  * Marks a post whose stored post_date is a leftover from a schedule that was CANCELLED — i.e. a
@@ -461,6 +462,17 @@ class Post {
         // unprotected entry the answer cannot withhold anything that caller has not already been granted.
         const contentReadable = !isPasswordProtected(this) || canReadPostContent(viewer, this);
         let meta = cachedMeta;
+
+        // MEMBERS-ONLY CONTENT (core/content-access). A gated entry the viewer may not read in full is
+        // projected as its TEASER — body, excerpt and page-builder tree are cut at the access break —
+        // here, before shortcodes run and before the excerpt is derived, so no later step ever sees the
+        // withheld part. Asked only when the entry carries a level, so public entries pay one map read.
+        const access = await contentAccess.accessFor(viewer, this, cachedMeta);
+        const locked = access.gated && !access.granted;
+        const bodySource = locked ? contentAccess.teaserHtml(this.postContent) : this.postContent;
+        if (access.gated && meta && meta._puck_data && typeof meta._puck_data === 'object') {
+            meta = { ...meta, _puck_data: locked ? contentAccess.teaserVersoData(meta._puck_data, access.level) : contentAccess.grantedVersoData(meta._puck_data, access.level) };
+        }
         if (!contentReadable && meta && Object.prototype.hasOwnProperty.call(meta, '_thumbnail_id')) {
             meta = { ...meta };
             delete meta._thumbnail_id;
@@ -477,7 +489,7 @@ class Post {
             type: this.postType,
             link: this.getPermalink(),
             title: this.postTitle,
-            excerpt: stripShortcodes(this.postExcerpt || generateExcerpt(this.postContent)),
+            excerpt: stripShortcodes(this.postExcerpt || generateExcerpt(bodySource)),
             // THE CONTRACT, NOT THE COLUMN. See PostAuthorRef: this key has been typed as an object by
             // the generated content client since F2 while the model sent the bare `author_id`, so every
             // consumer that reads `author.displayName` read `undefined`. `authorId` is emitted
@@ -498,8 +510,10 @@ class Post {
         };
 
         if (includeContent) {
-            json.content = await doShortcodeAsync(this.postContent);
+            json.content = await doShortcodeAsync(bodySource);
         }
+        // Present only on a gated entry: `level` it requires, whether THIS viewer reads it in full.
+        if (access.gated) json.access = { level: access.level, gated: true, granted: access.granted };
 
         // Add featured image — ONLY an attachment this viewer could read through GET /media/:id
         // (core/attachment-visibility). `_thumbnail_id` is author-written and accepts any integer: projecting
@@ -1202,6 +1216,11 @@ class Post {
         if (search && options.searchProtectedVisibleTo !== undefined && options.searchProtectedVisibleTo !== null) {
             conditions.push(`(${col}post_password IS NULL OR ${col}post_password = '' OR ${col}author_id = ?)`);
             params.push(options.searchProtectedVisibleTo);
+            // MEMBERS-ONLY ENTRIES (core/content-access), same oracle: a match on the withheld body of a
+            // gated entry tells the searcher what it says. A gated entry is found by its TITLE only
+            // (its teaser page is public), unless it is the caller's own.
+            conditions.push(`(NOT ${contentAccess.gatedPostSql(`${col || 'posts.'}id`)} OR ${col}author_id = ? OR LOWER(${col}post_title) LIKE ?)`);
+            params.push(options.searchProtectedVisibleTo, `%${String(search).toLowerCase()}%`);
         }
 
         return { joins, conditions, params };
