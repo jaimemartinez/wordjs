@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import fs from 'node:fs';
 import path from 'node:path';
 import { FormBlockRender, formBlockDefaults } from '@/components/blocks/FormBlock';
-import { PostsGridBlock } from '../blocks';
+import { ColumnsBlock, PostsGridBlock } from '../blocks';
 import { SHADOWS, appearanceToStyle } from '@/components/blocks/blockShell';
 
 /**
@@ -226,5 +226,101 @@ describe('Appearance shadow presets — routed through the elevation tokens', ()
             shadow: 'custom', shadowX: 1, shadowY: 2, shadowBlur: 3, shadowSpread: 4, shadowColor: 'red',
         }).style.boxShadow;
         expect(custom).toBe('1px 2px 3px 4px red');
+    });
+});
+
+describe('Columns — the track list leaves room for the gap', () => {
+    // The shipped component's inline variables, cascaded through the shipped `.wjs-block-columns`
+    // rule, then laid out the way a browser sizes a grid of definite width. The defect was
+    // `54% 46%`: a percentage track takes its share of the WHOLE container, so the gap came on top
+    // and the last column ended `gap` past the block's edge (measured on a 1440px page: a column
+    // ending at x=1456). Put `${w}%` back in ColumnsBlock and the overflow assertions fail.
+    const rule = findRule('.wjs-block-columns');
+    const ROOT = { '--wjs-lg': /--wjs-lg:\s*([^;]+);/.exec(css)![1].trim() };
+    const PAGE = 1440;
+
+    const rootTag = (props: Record<string, unknown>) =>
+        renderToStaticMarkup(<ColumnsBlock slots={[]} {...props} />).match(/^<div\b[^>]*>/)![0];
+
+    /** The resolved `grid-template-columns` and `gap` (in px) of one rendered Columns block. */
+    function resolved(props: Record<string, unknown>): { template: string; gap: number } {
+        const vars = { ...ROOT, ...inlineStyle(rootTag(props)) };
+        const gap = resolveVars(lastDecl(rule, 'gap')!, vars);
+        expect(gap, 'the gap must resolve to a px length').toMatch(/^\d+(?:\.\d+)?px$/);
+        return { template: resolveVars(lastDecl(rule, 'grid-template-columns')!, vars), gap: parseFloat(gap) };
+    }
+
+    /**
+     * Column track sizing (CSS Grid "Find the Size of an fr") for a definite container and the two
+     * track shapes this block has emitted: `<n>%` and `minmax(0, <n>fr)`. Gaps are fixed; a flex
+     * factor sum below 1 is divided by 1, which is what leaves a row of widths short of 100 short.
+     */
+    function layOut(template: string, width: number, gap: number): number[] {
+        const tracks = template.trim().split(/\s+(?![^(]*\))/);
+        const pct = (t: string) => /^([\d.]+)%$/.exec(t);
+        const fr = (t: string) => /^minmax\(0,\s*([\d.e-]+)fr\)$/.exec(t);
+        for (const t of tracks) expect(pct(t) || fr(t), `unexpected track "${t}"`).toBeTruthy();
+        const percentOf = (t: string) => (width * Number(pct(t)![1])) / 100;
+        const fixed = tracks.reduce((s, t) => s + (pct(t) ? percentOf(t) : 0), 0);
+        const flexSum = tracks.reduce((s, t) => s + (fr(t) ? Number(fr(t)![1]) : 0), 0);
+        const frSize = Math.max(0, width - gap * (tracks.length - 1) - fixed) / Math.max(1, flexSum);
+        return tracks.map((t) => (pct(t) ? percentOf(t) : frSize * Number(fr(t)![1])));
+    }
+    const rightEdge = (tracks: number[], gap: number) =>
+        tracks.reduce((a, b) => a + b, 0) + gap * (tracks.length - 1);
+
+    it('the model sees the defect: percentage tracks plus a gap overflow', () => {
+        // Guards the sizer itself, so the assertions below cannot pass by measuring nothing.
+        expect(rightEdge(layOut('42% 58%', PAGE, 64), 64)).toBeCloseTo(PAGE + 64, 6);
+    });
+
+    it('emits proportional flex tracks, not percentages', () => {
+        const { template } = resolved({ distribution: { columnCount: 2, widths: [54, 46] } });
+        expect(template).toBe('minmax(0, 0.54fr) minmax(0, 0.46fr)');
+        expect(template).not.toContain('%');
+    });
+
+    it('the last column ends inside the block, in the proportions the author picked', () => {
+        const cases: { distribution: { columnCount: number; widths: number[] }; gap?: number }[] = [
+            { distribution: { columnCount: 2, widths: [42, 58] }, gap: 64 }, // the measured page
+            { distribution: { columnCount: 2, widths: [50, 50] } }, // no gap set: --wjs-lg
+            { distribution: { columnCount: 3, widths: [35, 30, 35] }, gap: 40 },
+            { distribution: { columnCount: 3, widths: [100 / 3, 100 / 3, 100 / 3] }, gap: 24 }, // TemplateRenderer
+            { distribution: { columnCount: 4, widths: [25, 25, 25, 25] }, gap: 32 },
+        ];
+        for (const props of cases) {
+            const { template, gap } = resolved(props);
+            expect(gap).toBeGreaterThan(0);
+            const tracks = layOut(template, PAGE, gap);
+            expect(tracks).toHaveLength(props.distribution.columnCount);
+            expect(rightEdge(tracks, gap)).toBeLessThanOrEqual(PAGE + 1e-6);
+            const { widths } = props.distribution;
+            tracks.forEach((t, i) => expect(t / tracks[0]).toBeCloseTo(widths[i] / widths[0], 9));
+        }
+    });
+
+    it('renders the same pixels as before wherever nothing overflowed', () => {
+        // Gap 0 was the one setting that never overflowed. [40, 40] pins the `/ 100`: as `40fr`
+        // the pair would stretch to fill the row instead of leaving a fifth of it empty.
+        for (const widths of [[50, 50], [42, 58], [35, 30, 35], [40, 40]]) {
+            const { template, gap } = resolved({ distribution: { columnCount: widths.length, widths }, gap: 0 });
+            expect(gap).toBe(0);
+            const before = layOut(widths.map((w) => `${w}%`).join(' '), PAGE, 0);
+            layOut(template, PAGE, 0).forEach((t, i) => expect(t).toBeCloseTo(before[i], 9));
+        }
+    });
+
+    it('still stacks to one column under 768px', () => {
+        // The mobile rule overrides the DECLARATION, after the base rule, and the block only ever
+        // sets the variable inline — so on small screens the stylesheet keeps the last word.
+        const base = css.indexOf('.wjs-block-columns, .wp-block-columns {');
+        const mobile = css.search(
+            /@media \(max-width: 767\.98px\) \{\s*\.wjs-block-columns, \.wp-block-columns \{\s*grid-template-columns: 1fr;\s*\}\s*\}/,
+        );
+        expect(base).toBeGreaterThanOrEqual(0);
+        expect(mobile).toBeGreaterThan(base);
+        const inline = inlineStyle(rootTag({ distribution: { columnCount: 2, widths: [54, 46] }, gap: 64 }));
+        expect(inline['--wjs-columns-template']).toBeDefined();
+        expect(inline['grid-template-columns']).toBeUndefined();
     });
 });

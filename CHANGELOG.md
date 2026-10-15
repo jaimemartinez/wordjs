@@ -27,6 +27,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   then the channel header and the browse id of the tab the page opened. A page that carries none of them
   is refused with an error on the plugin's admin page instead of being guessed at. UC ids, channel URLs
   and handles resolved through the Data API work as before.
+- **A Columns block with a gap no longer runs past its container.** Each column was a percentage of
+  the whole block (`54% 46%`), so the gap came on top and the last column ended one gap past the
+  block's right edge — on a full-width section, horizontal page scroll. Every Columns block with a gap
+  did this, the default gap (`--wjs-lg`, 24px) and the Columns in theme templates included. Columns are
+  now proportional tracks (`minmax(0, 0.54fr) minmax(0, 0.46fr)`) that share the width left after the
+  gaps, in the ratio set in the editor. A block with a gap of 0 renders exactly as before, widths that
+  add up to less than 100 still leave the rest of the row empty, and below 768px the columns still stack.
 
 - **Network-granted isolated plugins lost all network on Node 25.** Node 25 extended its permission
   model to the network: with `--permission` on, every DNS lookup, connect, listen and UDP send is refused
