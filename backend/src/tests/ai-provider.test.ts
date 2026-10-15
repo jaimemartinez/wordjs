@@ -282,3 +282,17 @@ test('ai:use is a known plugin permission; the plugin entry validates input and 
     await assert.rejects(() => ai.completeForPlugin('demo', { prompt: 'x' }), /limit/);
     ai._resetPluginAiLimits();
 });
+
+// ── Text extraction is parser-based (CodeQL: polynomial regex / incomplete sanitization / double unescape) ──
+
+test('draft text extraction: a real parser drops script/style bodies, entities decode once, hostile input stays linear', () => {
+    const { toPlainText, cleanSuggestion } = require('../core/ai-suggest');
+    const out = toPlainText('<p>Coffee <strong>matters</strong>.</p><script>alert(1)</script><style>p{}</style><p>Tom &amp;amp; Jerry &lt;b&gt;</p>');
+    assert.strictEqual(out, 'Coffee matters.\nTom &amp; Jerry <b>', 'one decoding pass only: &amp;amp; becomes &amp;, never &');
+    assert.ok(!/alert|p\{\}/.test(out));
+    const started = Date.now();
+    toPlainText('<style'.repeat(60_000));
+    toPlainText('<script>'.repeat(30_000));
+    assert.ok(Date.now() - started < 2000, 'pathological markup is handled in linear time');
+    assert.strictEqual(cleanSuggestion('"Resumen: Un <em>gran</em> post &amp; más"', 160), 'Un gran post & más');
+});

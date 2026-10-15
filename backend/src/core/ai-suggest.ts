@@ -10,6 +10,7 @@
  * length cap — so the worst a hostile draft can do is produce a bad suggestion the user can discard.
  */
 
+const sanitizeHtml = require('sanitize-html');
 const { complete } = require('./ai-provider');
 
 const TASKS = ['excerpt', 'seo_description', 'alt_text'] as const;
@@ -24,24 +25,28 @@ function toPlainText(input: unknown): string {
     if ((t.startsWith('{') || t.startsWith('[')) && t.length < 2_000_000) {
         try { s = collectStrings(JSON.parse(t)).join('\n'); } catch { /* not JSON — treat as HTML/text */ }
     }
+    // Bound the work before any parsing: the prompt keeps MAX_INPUT_CHARS anyway.
+    s = s.slice(0, MAX_INPUT_CHARS * 10);
+    // Block boundaries become line breaks so paragraphs do not run together; everything else is left to
+    // a real HTML parser (sanitize-html with no allowed tags), which drops every tag — inline formatting
+    // without a gap — and the CONTENT of script/style, instead of a regex guessing where elements end.
     s = s
-        .replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ')
         .replace(/<br\s*\/?>/gi, '\n')
-        .replace(/<\/(p|div|h[1-6]|li|blockquote)>/gi, '\n')
-        // Inline formatting sits INSIDE words and sentences ("<strong>matters</strong>."): drop it without a gap.
-        .replace(/<\/?(strong|b|em|i|u|s|a|span|code|mark|small|sub|sup)\b[^>]*>/gi, '')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/&nbsp;/g, ' ')
-        .replace(/&amp;/g, '&')
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-        .replace(/&quot;/g, '"')
-        .replace(/&#39;/g, "'")
-        .replace(/[ \t]+/g, ' ')
-        .replace(/\s*\n\s*/g, '\n')
-        .trim();
+        .replace(/<\/(p|div|h[1-6]|li|blockquote|tr|section|article|header|footer|figcaption)\s*>/gi, '\n');
+    s = sanitizeHtml(s, { allowedTags: [], allowedAttributes: {} });
+    // sanitize-html returns entity-encoded text; decode in ONE pass so "&amp;lt;" becomes "&lt;", never "<".
+    s = s.replace(/&(nbsp|amp|lt|gt|quot|#39|#x27);/g, (m: string) => ENTITIES[m] ?? m);
+    s = s
+        .split('\n')
+        .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+        .filter(Boolean)
+        .join('\n');
     return s.slice(0, MAX_INPUT_CHARS);
 }
+
+const ENTITIES: Record<string, string> = {
+    '&nbsp;': ' ', '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&#x27;': "'",
+};
 
 // Keys whose values are presentation or plumbing, not prose.
 const SKIP_KEYS = new Set(['id', 'type', 'className', 'class', 'style', 'href', 'src', 'url', 'image', 'icon',
@@ -66,8 +71,10 @@ function collectStrings(node: unknown, out: string[] = [], depth = 0): string[] 
 
 /** One line of plain text, wrapping quotes removed, cut at a word boundary under `max`. */
 function cleanSuggestion(raw: string, max: number): string {
-    let s = String(raw || '')
-        .replace(/<[^>]+>/g, ' ')
+    // The model's answer is untrusted too: any markup goes through the same parser, and entities are
+    // decoded in one pass. React renders the result as text, never as HTML.
+    let s = sanitizeHtml(String(raw || '').slice(0, 20_000), { allowedTags: [], allowedAttributes: {} })
+        .replace(/&(nbsp|amp|lt|gt|quot|#39|#x27);/g, (m: string) => ENTITIES[m] ?? m)
         .replace(/[*_`#>]+/g, '')
         .replace(/\s+/g, ' ')
         .trim();
