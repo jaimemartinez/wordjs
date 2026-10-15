@@ -12,7 +12,6 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import nextConfig from '../../../next.config';
 import { normalizeMediaBase, rewriteMediaString, rewriteMediaUrls, mediaBaseFromSettings } from '../mediaDelivery';
-// @ts-expect-error -- CommonJS module, no ESM export statement
 import mediaCsp from '../../../media-csp.js';
 
 const { withMediaOrigin, installMediaCsp, currentMediaOrigin, GLOBAL_KEY } = mediaCsp as {
