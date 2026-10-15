@@ -4,6 +4,22 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [Unreleased]
+
+### Fixed
+
+- **YouTube Videos (1.0.2) shows the configured channel, not one it links to.** Without a Data API key,
+  an `@handle` was resolved by reading the channel's public page and taking the first `"channelId"` on
+  it. A channel page also carries the ids of other channels (featured channels, shelves, subscribe
+  buttons), and the first one is often one of those, so the block silently listed another channel's
+  videos. The plugin now reads only signals that describe the page itself, most authoritative first:
+  the canonical `…/channel/UC…` link, the channel metadata's `externalId`, `<meta itemprop="identifier">`,
+  then the channel header and the browse id of the tab the page opened. A page that carries none of them
+  is refused with an error on the plugin's admin page instead of being guessed at. The keyless scraper
+  now reads only the video grid of the channel's own Videos tab, and falls back to the RSS feed when
+  YouTube answers with another tab or another channel's page. UC ids, channel URLs and handles
+  resolved through the Data API work as before.
+
 ## [2.4.0] - 2026-10-12
 
 ### Security

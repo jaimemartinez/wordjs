@@ -45,6 +45,9 @@
  *  - digital-downloads, restaurant-menu, donations, contact-forms, testimonials, vendor-marketplace,
  *    popup-builder, cookie-consent: one site-wide (or per-form) window -> one client 429s everyone.
  *  - bookings, job-board: an INSERT ... WHERE NOT EXISTS / COUNT guard is not atomic on Postgres.
+ *  - youtube-videos:      a handle resolved to the first "channelId" on its channel page (often a
+ *                         featured channel's), and the scraper took a video from anywhere on the
+ *                         page -> another channel's videos were shown.
  *
  * Concurrency: route handlers run concurrently in the plugin isolate, and every db call is an await.
  * The burst tests fire requests with Promise.all, so all of them interleave at each await exactly as
@@ -1781,6 +1784,224 @@ for (const [label, remove, gap] of [
         });
     });
 }
+
+// ================================== youtube-videos ============================================
+// A channel page also carries the ids of OTHER channels — featured channels, shelves, subscribe
+// buttons — and the first "channelId" on it is often one of them. Resolving a handle by that first
+// match made the plugin show another channel's videos. Every page below is synthetic, laid out like
+// the real ones: the canonical link and meta tags in <head>, then ytInitialData, whose Home content
+// (featured channels and other channels' videos) comes before the page's own header and metadata.
+
+const YT_OWN = 'UCownChannel_synthetic01';
+const YT_FEATURED = 'UCforeignFeatured_chan01';
+const YT_SHELF = 'UCforeignShelf_channel02';
+const YT_HANDLE = '@synthetic';
+const YT_HOME_URL = `https://www.youtube.com/${YT_HANDLE}`;
+const ytFeedUrl = (channelId: string) => `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`;
+const ytFeed = (ids: string[]) => `<?xml version="1.0" encoding="UTF-8"?><feed xmlns:yt="http://www.youtube.com/xml/schemas/2015">${
+    ids.map((id) => `<entry><yt:videoId>${id}</yt:videoId><title>Video ${id}</title><published>2026-01-01T00:00:00+00:00</published></entry>`).join('')}</feed>`;
+/** Each channel's feed: the videos the plugin shows for it in RSS mode. */
+const YT_FEEDS: Record<string, string> = {
+    [ytFeedUrl(YT_OWN)]: ytFeed(['ownVideo001', 'ownVideo002']),
+    [ytFeedUrl(YT_FEATURED)]: ytFeed(['featuredV01']),
+    [ytFeedUrl(YT_SHELF)]: ytFeed(['shelfVideo1']),
+};
+
+/** A video tile; `owner` is the channel it belongs to when that is not the page's. */
+const ytVideo = (videoId: string, owner?: string) => ({
+    videoRenderer: {
+        videoId,
+        title: { runs: [{ text: `Video ${videoId}` }] },
+        thumbnail: { thumbnails: [{ url: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` }] },
+        ...(owner ? { ownerText: { runs: [{ text: 'Another channel', navigationEndpoint: { browseEndpoint: { browseId: owner } } }] } } : {}),
+    },
+});
+
+/** A channel's Home content: its featured channels and a shelf of another channel's videos. */
+const ytHomeShelves = () => ({
+    sectionListRenderer: {
+        contents: [
+            { itemSectionRenderer: { contents: [{ channelVideoPlayerRenderer: { videoId: 'featuredV01', title: { runs: [{ text: 'Trailer' }] } } }] } },
+            { itemSectionRenderer: { contents: [{ shelfRenderer: { content: { horizontalListRenderer: { items: [
+                { gridChannelRenderer: { channelId: YT_FEATURED, navigationEndpoint: { browseEndpoint: { browseId: YT_FEATURED } } } },
+                { gridChannelRenderer: { channelId: YT_SHELF, subscribeButton: { subscribeButtonRenderer: { channelId: YT_SHELF } } } },
+            ] } } } }] } },
+            { itemSectionRenderer: { contents: [{ shelfRenderer: { content: { horizontalListRenderer: { items: [ytVideo('shelfVideo1', YT_SHELF)] } } } }] } },
+        ],
+    },
+});
+
+interface YtPage {
+    /** The tab the page opened. Default: Home. */
+    tab?: 'home' | 'videos';
+    /** The page's own-id signals; each one is absent unless given. */
+    canonical?: string;
+    identifier?: string;
+    externalId?: string;
+    headerChannelId?: string;
+    tabBrowseId?: string;
+    /** The Videos tab's grid. */
+    grid?: any[];
+    /** Extra keys in the page header. */
+    header?: any;
+    /** Replaces ytInitialData with this raw script. */
+    rawScript?: string;
+}
+
+/** A channel page. Its own id also appears as a "channelId" (its subscribe button), after the foreign ones. */
+function ytChannelPage(o: YtPage): string {
+    const browse = o.tabBrowseId ? { browseEndpoint: { browseId: o.tabBrowseId } } : {};
+    const tab = (title: string, url: string, selected: boolean, content: any) =>
+        ({ tabRenderer: { title, selected, endpoint: { commandMetadata: { webCommandMetadata: { url } }, ...browse }, ...(selected ? { content } : {}) } });
+    const data: any = {
+        contents: { twoColumnBrowseResultsRenderer: { tabs: [
+            tab('Home', `/${YT_HANDLE}/featured`, o.tab !== 'videos', ytHomeShelves()),
+            tab('Videos', `/${YT_HANDLE}/videos`, o.tab === 'videos', { richGridRenderer: { contents: (o.grid || []).map((v) => ({ richItemRenderer: { content: v } })) } }),
+        ] } },
+        header: {
+            ...(o.headerChannelId ? { c4TabbedHeaderRenderer: { channelId: o.headerChannelId } } : {}),
+            pageHeaderRenderer: { pageTitle: 'Synthetic', subscribeButton: { subscribeButtonRenderer: { channelId: YT_OWN } } },
+            ...(o.header || {}),
+        },
+    };
+    if (o.externalId) data.metadata = { channelMetadataRenderer: { title: 'Synthetic', externalId: o.externalId } };
+    const head = (o.canonical ? `<link rel="canonical" href="https://www.youtube.com/channel/${o.canonical}">` : '')
+        + (o.identifier ? `<meta itemprop="identifier" content="${o.identifier}">` : '');
+    const script = o.rawScript ?? `var ytInitialData = ${JSON.stringify(data)};`;
+    return `<!DOCTYPE html><html><head><title>Synthetic - YouTube</title>${head}</head><body><script nonce="n">${script}</script></body></html>`;
+}
+
+/**
+ * Run `fn` with the global fetch answering from `pages` (exact URL → body; a string is served as text,
+ * anything else as JSON) and 404 for every other URL. `fetched` lists every URL the plugin asked for.
+ */
+async function withYoutube<T>(pages: Record<string, any>, fn: (fetched: string[]) => Promise<T>): Promise<T> {
+    const real = globalThis.fetch;
+    const warn = console.warn;
+    const fetched: string[] = [];
+    (globalThis as any).fetch = async (url: string) => {
+        fetched.push(String(url));
+        const body = pages[String(url)];
+        if (body === undefined) return { ok: false, status: 404, text: async () => 'Not Found', json: async () => ({}) };
+        return { ok: true, status: 200, text: async () => (typeof body === 'string' ? body : JSON.stringify(body)), json: async () => body };
+    };
+    console.warn = () => { /* "Scraper failed, falling back to RSS" */ };
+    try { return await fn(fetched); } finally { (globalThis as any).fetch = real; console.warn = warn; }
+}
+
+/** Save `body` the way the admin page does; returns the cache the refresh wrote and the public list. */
+async function configureYoutube(p: BootedPlugin, body: any) {
+    await p.call('post', '/settings', { body });
+    const cache = p.options.get('youtube_videos_cache') || {};
+    const list = await p.call('get', '/', { query: { limit: '50' } });
+    return { cache, ids: (list.body.videos || []).map((v: any) => v.id), mode: list.body.mode };
+}
+
+const firstChannelId = (html: string) => (html.match(/"channelId":"(UC[0-9A-Za-z_-]{20,})"/) || [])[1];
+
+test('youtube-videos: a handle resolves to its page\'s own channel, never to the first channel the page links to', async () => {
+    const variants: Array<[string, YtPage]> = [
+        ['every signal, as youtube.com serves it', { canonical: YT_OWN, identifier: YT_OWN, externalId: YT_OWN, tabBrowseId: YT_OWN }],
+        ['canonical link only', { canonical: YT_OWN }],
+        ['channel metadata externalId only', { externalId: YT_OWN }],
+        ['externalId outside a ytInitialData that parses', {
+            rawScript: `var ytcfg = {"channelId":"${YT_FEATURED}","browseId":"${YT_SHELF}","externalId":"${YT_OWN}","subscribe":{"channelId":"${YT_OWN}"}};`,
+        }],
+        ['meta itemprop="identifier" only', { identifier: YT_OWN }],
+        ['channel header only', { headerChannelId: YT_OWN }],
+        ['browseId of the opened tab only', { tabBrowseId: YT_OWN }],
+    ];
+    for (const [label, page] of variants) {
+        const html = ytChannelPage(page);
+        assert.strictEqual(firstChannelId(html), YT_FEATURED, `${label}: the fixture must lead with another channel's id`);
+        assert.ok(html.indexOf(`"channelId":"${YT_FEATURED}"`) < html.indexOf(`"channelId":"${YT_OWN}"`), `${label}: the page's own "channelId" must come later`);
+        await withPlugin('youtube-videos', async (p) => {
+            await withYoutube({ [YT_HOME_URL]: html, ...YT_FEEDS }, async (fetched) => {
+                const { cache, ids, mode } = await configureYoutube(p, { channel: YT_HANDLE });
+                assert.strictEqual(cache.error, null, `${label}: ${cache.error}`);
+                assert.strictEqual(cache.channelId, YT_OWN, `${label}: resolved to another channel`);
+                assert.strictEqual(mode, 'rss', label);
+                assert.deepStrictEqual(ids, ['ownVideo001', 'ownVideo002'], `${label}: showed another channel's videos`);
+                assert.deepStrictEqual(fetched.filter((u) => u.includes('/feeds/')), [ytFeedUrl(YT_OWN)], label);
+            });
+        });
+    }
+});
+
+test('youtube-videos: a channel page that does not say which channel it is is refused, not guessed', async () => {
+    const pages: Array<[string, string]> = [
+        ['only other channels\' ids', ytChannelPage({})],
+        ['two different externalIds', ytChannelPage({ rawScript: `var a = {"externalId":"${YT_FEATURED}"}; var b = {"externalId":"${YT_OWN}"};` })],
+        ['a canonical link to a video, not a channel', ytChannelPage({}).replace('<head>', '<head><link rel="canonical" href="https://www.youtube.com/watch?v=featuredV01">')],
+    ];
+    for (const [label, html] of pages) {
+        await withPlugin('youtube-videos', async (p) => {
+            await withYoutube({ [YT_HOME_URL]: html, ...YT_FEEDS }, async (fetched) => {
+                const { cache, ids } = await configureYoutube(p, { channel: YT_HANDLE });
+                assert.match(String(cache.error), /Could not find the channel id of @synthetic/, label);
+                assert.ok(!cache.channelId, `${label}: resolved to ${cache.channelId}`);
+                assert.deepStrictEqual(ids, [], `${label}: showed videos of a channel it guessed`);
+                assert.deepStrictEqual([...new Set(fetched)], [YT_HOME_URL], `${label}: fetched past the refused page`);
+            });
+        });
+    }
+});
+
+test('youtube-videos: the scraper reads only the Videos grid of the channel\'s own page', async () => {
+    // Configured by id, so no handle resolution is involved: this is the scraper on its own.
+    const videosUrl = `https://www.youtube.com/channel/${YT_OWN}/videos`;
+    const videos = (o: YtPage) => ytChannelPage({ tab: 'videos', tabBrowseId: YT_OWN, grid: [ytVideo('ownVideo003'), ytVideo('ownVideo004')], ...o });
+    const cases: Array<[string, string, string, string[]]> = [
+        // A video outside the grid (here: in the header) is not one of the channel's uploads.
+        ['its own Videos tab', videos({ canonical: YT_OWN, externalId: YT_OWN, header: { featuredVideo: ytVideo('shelfVideo1', YT_SHELF) } }), 'scraper', ['ownVideo003', 'ownVideo004']],
+        // /videos answered with the Home tab (a channel without a Videos tab): its shelves hold other channels' videos.
+        ['a Home tab served instead', ytChannelPage({ canonical: YT_OWN, externalId: YT_OWN, tabBrowseId: YT_OWN }), 'rss', ['ownVideo001', 'ownVideo002']],
+        // The Videos tab of another channel.
+        ['another channel\'s page', videos({ canonical: YT_SHELF, externalId: YT_SHELF, tabBrowseId: YT_SHELF, grid: [ytVideo('shelfVideo2')] }), 'rss', ['ownVideo001', 'ownVideo002']],
+        ['a page that does not say whose it is', videos({ tabBrowseId: undefined }), 'rss', ['ownVideo001', 'ownVideo002']],
+    ];
+    for (const [label, page, expectMode, expectIds] of cases) {
+        await withPlugin('youtube-videos', async (p) => {
+            await withYoutube({ [videosUrl]: page, ...YT_FEEDS }, async () => {
+                const { cache, ids, mode } = await configureYoutube(p, { channel: YT_OWN });
+                assert.strictEqual(cache.channelId, YT_OWN, label);
+                assert.strictEqual(mode, expectMode, label);
+                assert.deepStrictEqual(ids, expectIds, `${label}: showed videos that are not the channel's`);
+            });
+        });
+    }
+});
+
+test('youtube-videos: UC ids and channel URLs are taken as given, and with an API key a handle resolves through forHandle', async () => {
+    for (const channel of [YT_OWN, `https://www.youtube.com/channel/${YT_OWN}`]) {
+        await withPlugin('youtube-videos', async (p) => {
+            await withYoutube({ ...YT_FEEDS }, async (fetched) => {
+                const { cache, ids } = await configureYoutube(p, { channel });
+                assert.strictEqual(cache.channelId, YT_OWN, channel);
+                assert.deepStrictEqual(ids, ['ownVideo001', 'ownVideo002'], channel);
+                assert.ok(!fetched.includes(YT_HOME_URL), `${channel}: fetched a channel page to resolve an id it was given`);
+            });
+        });
+    }
+    const uploads = 'UU' + YT_OWN.slice(2);
+    const api = 'https://www.googleapis.com/youtube/v3';
+    await withPlugin('youtube-videos', async (p) => {
+        await withYoutube({
+            [`${api}/channels?part=id&forHandle=%40synthetic&key=test-key`]: { items: [{ id: YT_OWN }] },
+            [`${api}/channels?part=contentDetails&id=${YT_OWN}&key=test-key`]: { items: [{ contentDetails: { relatedPlaylists: { uploads } } }] },
+            [`${api}/playlistItems?part=snippet&maxResults=50&playlistId=${uploads}&key=test-key`]: {
+                items: [{ snippet: { resourceId: { videoId: 'ownVideo005' }, title: 'Uploaded', thumbnails: {} } }],
+            },
+        }, async (fetched) => {
+            const { cache, ids, mode } = await configureYoutube(p, { channel: YT_HANDLE, apiKey: 'test-key' });
+            assert.strictEqual(cache.error, null, String(cache.error));
+            assert.strictEqual(cache.channelId, YT_OWN);
+            assert.strictEqual(mode, 'api');
+            assert.deepStrictEqual(ids, ['ownVideo005']);
+            assert.ok(!fetched.includes(YT_HOME_URL), 'read the channel page although the Data API resolves the handle');
+        });
+    });
+});
 
 // ================================== public error replies ======================================
 // A public route answered 500 { error: e.message }: the driver's text names the plugin's tables and
