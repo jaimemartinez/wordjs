@@ -68,6 +68,8 @@ export interface AppConfig {
         prefix: string;
         /** Global per-IP budget for /api/v1/*. Operator-tunable; consumed by apiLimiter in index.ts. */
         rateLimit: { max: number; windowMs: number };
+        /** Limits of the read-only GraphQL endpoint (core/graphql). Operator-tunable, clamped. */
+        graphql: { maxDepth: number; maxCost: number; maxTokens: number };
     };
 
     // Site
@@ -387,6 +389,13 @@ const config: AppConfig = {
         rateLimit: {
             max: envInt('WORDJS_API_RATELIMIT_MAX', 1000, 10, 1_000_000),
             windowMs: envInt('WORDJS_API_RATELIMIT_WINDOW_MS', 15 * 60 * 1000, 1000, 24 * 60 * 60 * 1000),
+        },
+        // GraphQL (POST/GET /api/v1/graphql). Checked before any resolver runs; see core/graphql/limits.
+        // Clamped like the limiter above, so a typo cannot switch a limit off.
+        graphql: {
+            maxDepth: envInt('WORDJS_GRAPHQL_MAX_DEPTH', 10, 2, 50),
+            maxCost: envInt('WORDJS_GRAPHQL_MAX_COST', 1000, 50, 100_000),
+            maxTokens: envInt('WORDJS_GRAPHQL_MAX_TOKENS', 5000, 100, 100_000),
         },
     },
 
