@@ -69,7 +69,7 @@ Create a folder named `hello-world` inside `backend/plugins/`. Inside it, create
 
 > [!IMPORTANT]
 > **Browser code needs `browser:script`.** A plugin with any frontend entry (`frontend.adminPage`,
-> `frontend.hooks`, `frontend.versoComponents` / legacy `puckComponents`, `frontend.components`, the
+> `frontend.hooks`, `frontend.portalPage`, `frontend.versoComponents` / legacy `puckComponents`, `frontend.components`, the
 > `client/verso/<Pascal>Verso.tsx` convention) or a prebuilt `dist/*.bundle.js` must declare
 > `{ "scope": "browser", "access": "script", "reason": "…" }`. That code is **not sandboxed**: it runs in
 > the admin app's origin with the viewer's session, so the administrator is asked about it explicitly,
@@ -276,6 +276,7 @@ frontend entry:
 - `admin.bundle.js`: Your admin UI (`frontend.adminPage.entry`).
 - `component.bundle.js`: Your Verso block (`frontend.versoComponents.entry`, or the conventional `client/verso/<Pascal>Verso.tsx`; the pre-rename `frontend.puckComponents` / `client/puck/<Pascal>Puck.tsx` still resolve — see §13).
 - `hooks.bundle.js`: Your frontend hooks (`frontend.hooks`).
+- `portal.bundle.js`: Your public portal page (`frontend.portalPage.entry`, §10.6).
 - `manifest.build.json`: Build metadata. Over HTTP (`GET /api/v1/plugins/:slug/bundle/manifest`) only its `bundles` list is served; the other fields, the version among them, stay on disk.
 
 > A declared entry whose file is missing is a **build error**, not a skip — the build fails loudly
@@ -293,8 +294,9 @@ theme, no preflight, and are **not** scoped to `.plugin-admin-<slug>` (a modal o
   admin shell links (through `GET /api/v1/plugins/<slug>/admin-style/css`, for every signed-in user who
   can open your page, administrator or not); your source file is never written (building an installed copy, whose
   `client/admin/admin.css` is already a packaged sheet, keeps only its hand-written part).
-- `component.bundle.css` / `hooks.bundle.css`: the classes of the block / hooks bundle only (a block's
-  CSS reaches public pages), after any CSS esbuild extracted from your imports. The loader links them.
+- `component.bundle.css` / `hooks.bundle.css` / `portal.bundle.css`: the classes of the block / hooks /
+  portal bundle only (a block's and a portal's CSS reach public pages), after any CSS esbuild extracted
+  from your imports. The loader (or, for the portal, `/portal/<slug>`) links them.
 
 Every compiled rule sits **one cascade sub-layer below the host's own** — `@layer utilities { @layer
 wjs-plugin { … } }`, likewise the theme. Your sheet is linked after the host's, so a flat copy of `.flex`
@@ -777,6 +779,56 @@ You can use the **Hooks Registry** in the Admin Panel (`/admin/hooks`) to:
 1.  **Inspect:** See exactly which hooks are registered and by whom.
 2.  **Live Monitor:** Watch events fire in real-time to debug timing issues.
 
+### 10.6 Portal pages (`/portal/<slug>`) 🚪
+
+A plugin can ship **one standalone public page** for people who are not WordJS users — a conference's
+coordinators, a vendor, a field team opening a QR link. Declare it in the manifest:
+
+```json
+"frontend": {
+    "portalPage": {
+        "entry": "client/portal/page.tsx",
+        "slug": "my-portal",
+        "title": "My portal",
+        "themeColor": "#2563eb",
+        "viewportFit": "cover"
+    }
+}
+```
+
+- **`slug`** (required) — the page is served at `/portal/<slug>` and every path below it. One lowercase URL segment
+  (`a-z`, `0-9`, inner hyphens, at most 64 characters). It belongs to **one** installed plugin: the upload
+  and the activation refuse a slug another installed plugin already declares (`Invalid portal page`).
+- **`entry`** (required) — a `.tsx`/`.ts`/`.jsx`/`.js` file under `client/`, starting with `"use client"`
+  like an admin page (§2 Step 3). Its default export is a
+  React component; it receives `{ slug, path }` — `path` being the segments after the slug, so
+  `/portal/my-portal/rsvp` renders the same component with `path: ["rsvp"]` (`[]` at the portal root) and
+  the plugin can keep sub-pages under its slug. It reads the rest of the URL itself — the query string and
+  the hash reach it untouched (`window.location.search`, e.g. `/portal/my-portal?code=123456` for a QR
+  link). `next/navigation` is not available to a runtime bundle; use `window.location`. An unknown
+  sub-path is the plugin's to answer.
+- **`title`**, **`themeColor`**, **`viewportFit`** (optional) — the page's `<title>`, `<meta
+  name="theme-color">` (a hex colour) and `viewport-fit` (`auto`, `cover` or `contain`). Use `cover` only
+  if your page pads itself with `env(safe-area-inset-*)`: it lets the page draw under a phone's notch.
+  Portals are always `noindex`.
+
+**What the page gets.** The bare portal layout — no theme header or footer, no admin shell — with
+`ModalProvider`, `I18nProvider` and `ToastProvider` mounted, so `useModal()`, `useI18n()` and `useToast()`
+work. It may import the same host modules as an admin page (`@/lib/api`, `@/lib/csrf`,
+`@/contexts/ToastContext`, …); a portal that posts with its own `fetch` must spread `csrfHeaders()` from
+`@/lib/csrf` into a mutating request that carries cookies. Your own look is your own: copy the UI
+primitives you want into your plugin rather than importing another plugin's.
+
+**How it is served.** Like every other frontend entry, it needs `browser:script`. The build compiles it to
+`dist/portal.bundle.js` and its Tailwind classes to `dist/portal.bundle.css` (§4). The frontend's server
+page asks `GET /api/v1/plugins/<slug>/portal` first: it answers only for an **active** plugin granted
+`browser:script` (otherwise the page is a real `404`), with the optional head details above. The page
+then renders your component — compiled in when the plugin was present at build time
+(`frontend/scripts/generate-portal-plugin-registry.js`), otherwise loaded at runtime from
+`GET /api/v1/plugins/<slug>/bundle?type=portal` — and links `…/bundle/css?type=portal`. All three routes
+take the **portal** slug, never the folder or the admin-page slug. A static folder under
+`frontend/src/app/portal/` is a core route of its own and wins over a plugin portal of the same name.
+
 ---
 
 ## 11. The `wordjs` Capability Bridge (reference)
@@ -852,8 +904,9 @@ either: mail-server's `data/` (attachments, Bayes corpus) was reachable on a cle
 
 **What you must do:** ship browser assets under `public/` as committed build output, and enqueue them
 with `wordjs.assets.enqueueScript`/`enqueueStyle`, whose `src` is now validated against exactly this
-surface. (The §4 builder's `dist/` output still reaches the browser: the admin and Verso **JS** bundles are
-fetched through the API route `/api/v1/plugins/<slug>/bundle`, not statically, and
+surface. (The §4 builder's `dist/` output still reaches the browser: the admin, Verso and portal **JS**
+bundles are fetched through the API route `/api/v1/plugins/<slug>/bundle`, not statically (a portal's
+stylesheet through `/bundle/css?type=portal`, §10.6), and
 `dist/component.bundle.css` is the one fixed allowlisted path — both only while the plugin is active and
 granted `browser:script`. It is the *builder* that writes
 `dist/`, from outside the sandbox — your plugin's own code cannot.) If you were generating an asset at runtime, move

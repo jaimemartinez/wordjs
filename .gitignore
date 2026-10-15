@@ -132,6 +132,7 @@ gateway/cluster-tokens.json
 frontend/src/lib/pluginRegistry.ts
 frontend/src/lib/versoPluginRegistry.ts
 frontend/src/app/admin/plugin/\[slug\]/page.tsx
+frontend/src/lib/portalPluginRegistry.ts
 
 # Runtime log rotation state — a dev machine artifact, never source (was committed by accident)
 logs/

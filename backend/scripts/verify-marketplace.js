@@ -26,7 +26,7 @@
  *      (`if (fs.existsSync(fullPath))`), so the build stays green while shipping a plugin whose admin
  *      page or Puck block can never load — the exact regression that shipped twice already.
  *   3b. ...and the stylesheet carrying the Tailwind classes that UI uses (client/admin/admin.css for an
- *      admin page, dist/<name>.bundle.css for a block or hooks bundle), compiled by build-plugin.js.
+ *      admin page, dist/<name>.bundle.css for a block, hooks or portal bundle), compiled by build-plugin.js.
  *      A runtime-installed plugin gets no classes from the host build, so without it every screen
  *      installs fine and renders unstyled on a live site.
  *   4. No runtime state inside a zip: a plugin's top-level data/ holds live secrets (mail-server's AES
@@ -129,6 +129,9 @@ function expectedBundles(dir, manifest) {
     // `frontend.hooks` is a bare string in the manifests that use it (mail-server), not an object.
     const hooks = typeof fe.hooks === 'string' ? fe.hooks : fe.hooks?.entry;
     resolve('hooks', hooks, Boolean(fe.hooks));
+
+    // The public /portal/<slug> page (core/portal-pages.ts).
+    resolve('portal', fe.portalPage?.entry, Boolean(fe.portalPage));
 
     return { expected, missingSrc };
 }
@@ -353,16 +356,17 @@ function verifyEntry(entry, kind, srcRoot, seenFiles) {
         for (const name of expected) {
             const bundle = `${entry.id}/dist/${name}.bundle.js`;
             if (!names.includes(bundle)) {
-                fail(`${label}: ${entry.file} is missing ${bundle} — its admin page / block can never load once installed`);
+                fail(`${label}: ${entry.file} is missing ${bundle} — its admin page / block / portal can never load once installed`);
             }
         }
 
         // (3b) ...and so must the CLASSES its UI uses. A runtime-installed plugin gets no Tailwind from the
         // host build, so every screen ships with exactly the stylesheet the package carries: the admin page
-        // with client/admin/admin.css (which the admin shell links), a block / hooks bundle with
-        // dist/<name>.bundle.css (which pluginBundleLoader links). Each must hold the compiled utilities
-        // block — without it the package installs fine and renders transparent overlays and collapsed
-        // layouts on a live site (the conference-manager meal scanner, shipped exactly so).
+        // with client/admin/admin.css (which the admin shell links), a block / hooks / portal bundle with
+        // dist/<name>.bundle.css (which pluginBundleLoader or the /portal/<slug> route links). Each must
+        // hold the compiled utilities block — without it the package installs fine and renders transparent
+        // overlays and collapsed layouts on a live site (the conference-manager meal scanner, shipped
+        // exactly so).
         const pkgZip = new AdmZip(buf);
         const sheets = expected.map((name) => (name === 'admin' ? PACKAGED_STYLESHEET : `dist/${name}.bundle.css`));
         for (const rel of sheets) {

@@ -22,8 +22,9 @@ const path = require('path');
 // drifted in build-marketplace.js and shipped bundle-less zips.
 const { resolveBlockEntry } = require('./plugin-block-contract');
 // Compiles the Tailwind classes the plugin's UI uses into the stylesheets the host already loads
-// (client/admin/admin.css in the package, dist/component.bundle.css, dist/hooks.bundle.css). Without it
-// a runtime-loaded plugin renders with only the classes the host happens to share — see the header there.
+// (client/admin/admin.css in the package, dist/component.bundle.css, dist/hooks.bundle.css,
+// dist/portal.bundle.css). Without it a runtime-loaded plugin renders with only the classes the host
+// happens to share — see the header there.
 const { writePluginStylesheets, BUILT_STYLESHEET } = require('./plugin-stylesheet');
 
 // Defaults to backend/plugins (the installed set). build-marketplace.js points this at
@@ -107,6 +108,8 @@ async function buildPlugin(slug) {
     const block = resolveBlockEntry(pluginDir, manifest, { componentsChannel: true });
     const componentEntry = block ? block.entry : null;
     const hooksEntry = manifest.frontend?.hooks;
+    // The standalone public page at /portal/<slug> (core/portal-pages.ts) → dist/portal.bundle.js.
+    const portalEntry = manifest.frontend?.portalPage?.entry;
 
     // A DECLARED entry whose file is missing is a build error, not something to skip past. Silently
     // dropping it produced a plugin that installs fine and whose UI is simply absent at runtime — the
@@ -116,7 +119,7 @@ async function buildPlugin(slug) {
     const entryPoints = [];
     const missing = [];
 
-    for (const [name, declared] of [['admin', adminEntry], ['component', componentEntry], ['hooks', hooksEntry]]) {
+    for (const [name, declared] of [['admin', adminEntry], ['component', componentEntry], ['hooks', hooksEntry], ['portal', portalEntry]]) {
         if (!declared) continue;
         const fullPath = path.join(pluginDir, String(declared).replace('./', ''));
         if (fs.existsSync(fullPath)) entryPoints.push({ name, path: fullPath });
@@ -161,7 +164,7 @@ async function buildPlugin(slug) {
     // loud-fail turns any drift into a build error instead of a blank panel in production.
     const HOST_SRC = path.resolve(__dirname, '../../frontend/src');
     const HOST_MODULES = [
-        'lib/api', 'lib/i18n', 'lib/plugin-hooks', 'lib/sanitize',
+        'lib/api', 'lib/i18n', 'lib/plugin-hooks', 'lib/sanitize', 'lib/csrf',
         'contexts/ModalContext', 'contexts/I18nContext', 'contexts/ToastContext', 'contexts/AuthContext',
         'components/MediaPickerModal',
         'components/ui/StatCard', 'components/ui/PageHeader', 'components/ui/Card', 'components/ui/ActionCard',

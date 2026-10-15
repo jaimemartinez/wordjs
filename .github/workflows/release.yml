@@ -137,7 +137,7 @@ jobs:
         # (e.g. the gitignored conference-manager), so on a clean checkout tsc fails on a missing
         # module unless they are regenerated first.
         working-directory: frontend
-        run: node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js && node scripts/generate-verso-plugin-registry.js
+        run: node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js && node scripts/generate-verso-plugin-registry.js && node scripts/generate-portal-plugin-registry.js
 
       - name: Frontend type check
         working-directory: frontend

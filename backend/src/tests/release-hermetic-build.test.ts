@@ -95,6 +95,8 @@ function cleanBuild(): Required<Build> {
             'src/lib/pluginRegistry.ts': ['backend/plugins/hello-world/client/Widget'],
             'src/app/admin/plugin/[slug]/page.tsx': ['backend/plugins/hello-world/client/admin/Page'],
             'src/lib/versoPluginRegistry.ts': ['backend/plugins/hello-world/client/verso/HelloWorldVerso'],
+            // hello-world declares no portal page: the generator still writes the (empty) registry.
+            'src/lib/portalPluginRegistry.ts': [],
         },
     };
 }
@@ -190,7 +192,7 @@ describe('release hermetic-build guard — the clean case passes (control)', () 
             .filter((f: string) => /^generate-.*registry\.js$/.test(f))
             .map((f: string) => fs.readFileSync(path.join(scripts, f), 'utf8'))
             .join('\n');
-        assert.strictEqual(PLUGIN_REGISTRIES.length, 3);
+        assert.strictEqual(PLUGIN_REGISTRIES.length, 4);
         for (const registry of PLUGIN_REGISTRIES) {
             assert.ok(sources.includes(`'../${registry}'`), `no generator writes frontend/${registry}`);
         }

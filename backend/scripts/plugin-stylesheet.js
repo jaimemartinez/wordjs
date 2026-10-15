@@ -28,6 +28,9 @@
  *   editor block → appended to dist/component.bundle.css, which pluginBundleLoader already links.
  *   hooks       → appended to dist/hooks.bundle.css, which pluginBundleLoader links once the hooks
  *                 bundle registers (hooks render inside OTHER admin screens, e.g. the user form).
+ *   portal page → appended to dist/portal.bundle.css, which the /portal/<slug> route links from the
+ *                 anonymous GET /api/v1/plugins/<portal-slug>/bundle/css?type=portal (its visitors are
+ *                 not WordJS users, so the authenticated admin-style route cannot serve them).
  *
  * UNSCOPED, BUT ONE SUB-LAYER BELOW THE HOST. The utilities are compiled the way the host compiles its
  * own — same theme (Tailwind's defaults plus the host's `@theme` blocks from globals.css), no preflight
@@ -388,8 +391,9 @@ async function writePluginStylesheets(pluginDir, slug, metafiles) {
         fs.rmSync(builtAdmin, { force: true }); // a previous build's, for an admin page that is gone
     }
 
-    // BLOCK and HOOKS: only what each bundle actually contains — a block's CSS reaches public pages.
-    for (const name of ['component', 'hooks']) {
+    // BLOCK, HOOKS and PORTAL: only what each bundle actually contains — a block's and a portal's CSS
+    // reach public pages.
+    for (const name of ['component', 'hooks', 'portal']) {
         if (!metafiles[name]) continue;
         const utilities = await compileUtilities(metafileSources(metafiles[name], pluginDir), `${slug}/${name}`);
         if (!utilities) continue;

@@ -581,7 +581,7 @@ const KNOWN_PERMISSIONS: Record<string, string[]> = {
 const BROWSER_SCRIPT_TOKEN = 'browser:script';
 // The compiled bundles build-plugin.js produces and routes/plugin-bundles.ts serves. Shipping one of
 // these (even with no manifest entry that would build it) is shipping browser code.
-const BROWSER_BUNDLE_FILES = ['dist/admin.bundle.js', 'dist/component.bundle.js', 'dist/hooks.bundle.js'];
+const BROWSER_BUNDLE_FILES = ['dist/admin.bundle.js', 'dist/component.bundle.js', 'dist/hooks.bundle.js', 'dist/portal.bundle.js'];
 
 function pascalCaseId(id: string): string {
     return String(id).split(/[-_]/).filter(Boolean).map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join('');
@@ -590,7 +590,8 @@ function pascalCaseId(id: string): string {
 /**
  * What browser code does this plugin ship? Returns a list of human-readable sources (empty = none).
  *
- * Mirrors what build-plugin.js compiles — the manifest's frontend.adminPage.entry, frontend.hooks, the
+ * Mirrors what build-plugin.js compiles — the manifest's frontend.adminPage.entry, frontend.hooks,
+ * frontend.portalPage.entry (the public /portal/<slug> page, core/portal-pages.ts), the
  * block entry in either spelling (frontend.versoComponents / legacy frontend.puckComponents), the legacy
  * frontend.components[].entry channel, and the folder CONVENTION that compiles a block with no manifest
  * key at all (client/verso/<Pascal>Verso.tsx, legacy client/puck/<Pascal>Puck.tsx; see
@@ -604,6 +605,7 @@ function browserCodeSources(pluginDir: string | null, manifest: any): string[] {
     if (fe) {
         if (fe.adminPage && fe.adminPage.entry) out.push('frontend.adminPage');
         if (fe.hooks) out.push('frontend.hooks');
+        if (fe.portalPage && fe.portalPage.entry) out.push('frontend.portalPage');
         if (fe.versoComponents && fe.versoComponents.entry) out.push('frontend.versoComponents');
         if (fe.puckComponents && fe.puckComponents.entry) out.push('frontend.puckComponents');
         if (Array.isArray(fe.components) && fe.components.some((c: any) => c && c.entry)) out.push('frontend.components');
@@ -2447,6 +2449,10 @@ async function _activatePluginUnlocked(slug: string) {
             // plugins installed since its upload count, and a folder copied by hand never went through it.
             const pageConflict = require('./adminMenu').adminPageConflict(slug, manifest);
             if (pageConflict) throw new Error(`Invalid admin page in manifest.json: ${pageConflict}`);
+            // 0d. Likewise its portal page (/portal/<slug>, core/portal-pages.ts): a valid declaration that no
+            // other installed plugin already claims.
+            const portalConflict = require('./portal-pages').portalPageConflict(slug, manifest);
+            if (portalConflict) throw new Error(`Invalid portal page in manifest.json: ${portalConflict}`);
 
             // 1a. Check if this is a bundled plugin
             const isBundled = isBundledPlugin(plugin.path, manifest);
