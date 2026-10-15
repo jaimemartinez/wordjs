@@ -63,10 +63,16 @@ const certPath = path.join(certDir, 'frontend.crt');
 
 const port = process.env.PORT || 3001;
 
+// Decided ONCE, before Next starts, and published for src/instrumentation.ts: the gateway registration
+// advertises this node's URL in the scheme chosen here (advertisedUrl). Certificates the installer writes
+// later do not change the socket this process already listens on — only a restart does.
+const hasIdentity = fs.existsSync(caPath) && fs.existsSync(keyPath) && fs.existsSync(certPath);
+process.env.WORDJS_FRONTEND_LISTENER = hasIdentity ? 'https' : 'http';
+
 app.prepare().then(() => {
     let httpsOptions = null;
 
-    if (fs.existsSync(caPath) && fs.existsSync(keyPath) && fs.existsSync(certPath)) {
+    if (hasIdentity) {
         httpsOptions = {
             key: fs.readFileSync(keyPath),
             cert: fs.readFileSync(certPath),

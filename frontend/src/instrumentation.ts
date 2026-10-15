@@ -58,6 +58,25 @@ export function advertisedPort(listenPort: string | undefined, frontendPort: unk
 }
 
 /**
+ * The URL this node tells the gateway to proxy to, in the scheme its server ACTUALLY speaks.
+ *
+ * `server.js` picks HTTPS-with-mTLS or plain HTTP once, at boot, from whether this node's certificate
+ * is on disk, and records the choice in `WORDJS_FRONTEND_LISTENER` before Next starts. A split install
+ * writes the certificates while the frontend is already listening on plain HTTP, so registering then as
+ * `https://` would send the gateway's TLS into a plain socket (ECONNRESET on every page) until the next
+ * restart. Unset — a server started some other way — keeps the historical `https://`.
+ *
+ * A plain-HTTP listener is advertised on loopback only. It exists solely on a single-host install that
+ * booted before setup (a separate-mode node is enrolled before it starts, so it always listens with
+ * mTLS), where the gateway is on the same machine — and the gateway sends the cache-purge secret to the
+ * registered URL, which must never cross a network in clear text. Every issuer puts 127.0.0.1 in the
+ * service certificate's SANs, so the gateway's certCoversHost check accepts it.
+ */
+export function advertisedUrl(listener: string | undefined, hostname: string, port: string): string {
+    return listener === 'http' ? `http://127.0.0.1:${port}` : `https://${hostname}:${port}`;
+}
+
+/**
  * Is this registration failure PERMANENT misconfiguration rather than "the gateway is still booting"?
  *
  * The retry loop below swallows every error and retries forever in silence, which is right for a
@@ -75,11 +94,10 @@ export function isRegisterHandshakeFailure(e: any): boolean {
 
 export async function register() {
     // Monolith mode: frontend and backend share one process/port and there is no gateway to
-    // register with. Without this guard the no-cert fallback targets gatewayPort's default
-    // (3000 = the monolith itself), and the retry loop POSTs /register at ourselves every 5s.
+    // register with. Without this guard an installed monolith (it holds the service certificates)
+    // would dial a gateway that does not exist every 5s for the life of the process.
     if (process.env.WORDJS_MODE === 'mono') return;
     if (process.env.NEXT_RUNTIME === 'nodejs') {
-        const http = await import('http');
         const fs = await import('fs');
         const path = await import('path');
 
@@ -101,7 +119,12 @@ export async function register() {
             }
         };
 
-        const registerWithGateway = () => {
+        // Everything the next attempt needs, read from disk AT THAT ATTEMPT. A split install starts the
+        // frontend before the wizard has written any config or certificate; reading them once, at boot,
+        // left this loop dialling the gateway's public port without an identity for the life of the
+        // process — every attempt a 405, and the node never registered, so every cache purge after the
+        // install was dropped ("no frontend node registered") until someone restarted the frontend.
+        const readRegistrationContext = () => {
             // Advertised host the gateway proxies to. Defaults to loopback (co-located), but a
             // frontend on a SEPARATE machine must advertise its routable address via config.advertiseHost
             // (or the host of config.frontendUrl) — otherwise the gateway records 127.0.0.1 and proxies
@@ -113,7 +136,6 @@ export async function register() {
             let gatewaySecret = null;
             let gatewayHost = 'localhost';
             let gatewayInternalPort = 3100;
-            let gatewayPort = 3000;
 
             try {
                 // Priority: Local (Distributed) -> Backend (Monolith)
@@ -127,7 +149,6 @@ export async function register() {
                     gatewaySecret = config.gatewaySecret;
                     if (config.gatewayHost) gatewayHost = config.gatewayHost;
                     if (config.gatewayInternalPort) gatewayInternalPort = config.gatewayInternalPort;
-                    if (config.gatewayPort) gatewayPort = config.gatewayPort;
                     frontendPort = config.frontendPort;
 
                     if (config.frontendUrl) {
@@ -160,23 +181,37 @@ export async function register() {
 
             const data = JSON.stringify({
                 name: 'frontend',
-                url: `https://${hostname}:${port}`, // Now using HTTPS custom server
+                url: advertisedUrl(process.env.WORDJS_FRONTEND_LISTENER, hostname, port),
                 routes: ['/', '/admin', '/login', '/install', '/migration', '/portal', '/_next']
             });
+            return { clientOpts, data, gatewaySecret, gatewayHost, gatewayInternalPort };
+        };
 
+        const registerWithGateway = () => {
             // exponential backoff: quick retries while the gateway is coming up, 5s steady-state
             let attemptN = 0;
             let handshakeReported = false;
+            let waitingReported = false;
             const retry = () => {
                 attemptN++;
                 setTimeout(attempt, Math.min(5000, [250, 1000, 2000][attemptN - 1] ?? 5000));
             };
             const attempt = () => {
-                const useMtls = Object.keys(clientOpts).length > 0;
-                const targetPort = useMtls ? gatewayInternalPort : gatewayPort;
-                const targetProtocol = useMtls ? require('https') : http;
+                const { clientOpts, data, gatewaySecret, gatewayHost, gatewayInternalPort } = readRegistrationContext();
+                // `/register` exists only on the gateway's internal mTLS listener and requires a cluster
+                // identity, so without one there is nothing to send: wait for the install (or node-join)
+                // to write the certificates, and register on the first attempt that finds them.
+                if (Object.keys(clientOpts).length === 0) {
+                    if (!waitingReported) {
+                        waitingReported = true;
+                        console.log('[Frontend Instrumentation] no cluster certificate yet — registering with the gateway once setup issues one');
+                    }
+                    retry();
+                    return;
+                }
+                const targetPort = gatewayInternalPort;
 
-                const gatewayReq = targetProtocol.request({
+                const gatewayReq = require('https').request({
                     hostname: gatewayHost,
                     port: targetPort,
                     path: '/register',
@@ -189,7 +224,6 @@ export async function register() {
                     }
                 }, (res: any) => {
                     if (res.statusCode === 200) {
-                        // console.log('✅ Frontend registered with Gateway via ' + (useMtls ? 'mTLS' : 'HTTP'));
                         // Registration proving out means the gateway is up AND this node's cluster
                         // certificate is accepted — the exact moment the missing purge secret can be
                         // asked for. A cluster enrolled before that secret existed has everything but
@@ -205,9 +239,7 @@ export async function register() {
                     // A refused handshake is configuration, not weather: it will fail identically for
                     // ever, so retrying it in total silence (the old behaviour) hides a node that never
                     // registers. Said ONCE per process, at error level, naming what to check.
-                    // `useMtls` guards it: without cluster certs this leg is plain HTTP, where an
-                    // ECONNRESET means the gateway is down, not that a certificate was refused.
-                    if (useMtls && !handshakeReported && isRegisterHandshakeFailure(e)) {
+                    if (!handshakeReported && isRegisterHandshakeFailure(e)) {
                         handshakeReported = true;
                         console.error(
                             `[Frontend Instrumentation] TLS handshake with the gateway at ${gatewayHost}:${targetPort} ` +
