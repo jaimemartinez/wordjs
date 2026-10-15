@@ -13,7 +13,7 @@
  * GeometryStore re-mide en scroll capture), HoverOutline, InsertionIndicator
  * (línea en el slot/índice del dragPreview) y el ActionBar flotante (el ÚNICO
  * elemento con pointer-events-auto). El hover se detecta con listeners sobre el
- * documento del iframe (mouseover capture → closest [data-wjs-block-id]).
+ * documento del iframe (pointerover de RATÓN, capture → closest [data-wjs-block-id]).
  */
 import React from "react";
 import type { DragPreview, VersoDoc, VersoEditorState } from "@/lib/verso/types";
@@ -45,17 +45,26 @@ function useHoveredBlockId(frameDocument: Document | null): string | null {
     const [hovered, setHovered] = React.useState<string | null>(null);
     React.useEffect(() => {
         if (!frameDocument) return;
+        // Solo RATÓN. Un toque en pantalla táctil también emite mouseover (eventos de compatibilidad),
+        // y como no hay «salir» el contorno de hover se quedaba pegado al bloque tocado —o al que
+        // pasaba bajo el dedo al hacer scroll—: un segundo recuadro donde no había nada seleccionado.
         const onOver = (e: Event) => {
+            if ((e as PointerEvent).pointerType !== "mouse") return;
             // The STORE key: this id is looked up in the geometry registry, which VersoBlock fills
             // under the same key it renders with (see render/nodeKey.ts).
             setHovered(nodeKeyFromTarget(e.target));
         };
         const onLeave = () => setHovered(null);
-        frameDocument.addEventListener("mouseover", onOver, true);
+        const onDown = (e: Event) => {
+            if ((e as PointerEvent).pointerType !== "mouse") setHovered(null);
+        };
+        frameDocument.addEventListener("pointerover", onOver, true);
         frameDocument.addEventListener("mouseleave", onLeave, true);
+        frameDocument.addEventListener("pointerdown", onDown, true);
         return () => {
-            frameDocument.removeEventListener("mouseover", onOver, true);
+            frameDocument.removeEventListener("pointerover", onOver, true);
             frameDocument.removeEventListener("mouseleave", onLeave, true);
+            frameDocument.removeEventListener("pointerdown", onDown, true);
             setHovered(null);
         };
     }, [frameDocument]);

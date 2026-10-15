@@ -234,10 +234,16 @@ body {
   box-shadow: inset -1px 0 var(--ed-outline-variant);
 }
 
+/* Unlayered, so it beats Tailwind's layered utilities: an icon button that is itself positioned
+   (`absolute`/`fixed`, e.g. the clear button inside the block search) must keep its own position —
+   forcing `relative` there dropped it below the input and doubled the field's height. */
 .verso-rail-button,
 .verso-icon-button {
-  position: relative;
   isolation: isolate;
+}
+.verso-rail-button:not(.absolute):not(.fixed),
+.verso-icon-button:not(.absolute):not(.fixed) {
+  position: relative;
 }
 
 .verso-rail-button::after,

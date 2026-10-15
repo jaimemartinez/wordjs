@@ -30,6 +30,8 @@ import {
   createDirectionTracker,
   createPointerGesture,
   createKeyboardMover,
+  createTouchHold,
+  TOUCH_HOLD_MS,
   createOriginTracker,
   frameScaleOf,
   keyboardMoveTarget,
@@ -816,5 +818,63 @@ describe("gesto de puntero: lo decide la distancia, nunca el azar de los fotogra
     expect(h.gesture.active()).toBe(true);
     h.gesture.up();
     expect(h.gesture.active()).toBe(false);
+  });
+});
+
+describe("createTouchHold — en táctil, deslizar es scroll y mantener pulsado es agarrar", () => {
+  const fakeTimers = () => {
+    const pending = new Map<number, () => void>();
+    let next = 1;
+    return {
+      deps: {
+        schedule: (cb: () => void, ms: number) => {
+          expect(ms).toBe(TOUCH_HOLD_MS);
+          pending.set(next, cb);
+          return next++;
+        },
+        clear: (id: unknown) => {
+          pending.delete(id as number);
+        },
+      },
+      fire: () => {
+        for (const [id, cb] of [...pending]) {
+          pending.delete(id);
+          cb();
+        }
+      },
+    };
+  };
+
+  it("dedo quieto: arma tras la espera", () => {
+    const t = fakeTimers();
+    const hold = createTouchHold(t.deps);
+    let armed = 0;
+    hold.start({ x: 10, y: 10 }, () => armed++);
+    expect(hold.pending()).toBe(true);
+    expect(hold.move({ x: 13, y: 14 })).toBe(false); // dentro del margen: sigue siendo pulsación
+    t.fire();
+    expect(armed).toBe(1);
+    expect(hold.pending()).toBe(false);
+  });
+
+  it("dedo que se desliza antes: es scroll, nunca arma", () => {
+    const t = fakeTimers();
+    const hold = createTouchHold(t.deps);
+    let armed = 0;
+    hold.start({ x: 10, y: 10 }, () => armed++);
+    expect(hold.move({ x: 10, y: 40 })).toBe(true);
+    t.fire();
+    expect(armed).toBe(0);
+    expect(hold.pending()).toBe(false);
+  });
+
+  it("soltar o cancelar antes de la espera no arma", () => {
+    const t = fakeTimers();
+    const hold = createTouchHold(t.deps);
+    let armed = 0;
+    hold.start({ x: 0, y: 0 }, () => armed++);
+    hold.end();
+    t.fire();
+    expect(armed).toBe(0);
   });
 });

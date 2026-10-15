@@ -418,6 +418,84 @@ const CHROME_STRINGS: Tri[] = [
     { es: "Marcar como resuelto", en: "Mark as resolved", pt: "Marcar como resolvido" },
     { es: "Escribe un comentario…", en: "Write a comment…", pt: "Escreva um comentário…" },
     { es: "Añadir comentario", en: "Add comment", pt: "Adicionar comentário" },
+    // Fallback labels for block fields that declare none (humanizeFieldKey) — keyed by prop name.
+    { es: "Tema", en: "Theme", pt: "Tema" },
+    { es: "Icono", en: "Icon", pt: "Ícone" },
+    { es: "Color", en: "Color", pt: "Cor" },
+    { es: "Fondo", en: "Background", pt: "Fundo" },
+    { es: "Tamaño", en: "Size", pt: "Tamanho" },
+    { es: "Variante", en: "Variant", pt: "Variante" },
+    { es: "Texto alternativo", en: "Alt text", pt: "Texto alternativo" },
+    { es: "Autor", en: "Author", pt: "Autor" },
+    { es: "Cargo", en: "Role", pt: "Cargo" },
+    { es: "Precio", en: "Price", pt: "Preço" },
+    { es: "Nombre", en: "Name", pt: "Nome" },
+    { es: "Cita", en: "Quote", pt: "Citação" },
+    { es: "Destino del enlace", en: "Link target", pt: "Destino do link" },
+    // Selection breadcrumb, action bar and keyboard shortcuts.
+    { es: "Ruta de la selección", en: "Selection path", pt: "Caminho da seleção" },
+    { es: "Seleccionar contenedor", en: "Select parent", pt: "Selecionar contêiner" },
+    { es: "Editar texto", en: "Edit text", pt: "Editar texto" },
+    { es: "Seleccionar contenedor (Esc)", en: "Select parent (Esc)", pt: "Selecionar contêiner (Esc)" },
+    { es: "Subir bloque (Ctrl+Shift+↑)", en: "Move block up (Ctrl+Shift+↑)", pt: "Mover bloco para cima (Ctrl+Shift+↑)" },
+    { es: "Bajar bloque (Ctrl+Shift+↓)", en: "Move block down (Ctrl+Shift+↓)", pt: "Mover bloco para baixo (Ctrl+Shift+↓)" },
+    { es: "Duplicar bloque (Ctrl+D)", en: "Duplicate block (Ctrl+D)", pt: "Duplicar bloco (Ctrl+D)" },
+    { es: "Editar texto (doble clic)", en: "Edit text (double-click)", pt: "Editar texto (clique duplo)" },
+    { es: "Eliminar bloque (Supr)", en: "Delete block (Del)", pt: "Excluir bloco (Del)" },
+    { es: "Acciones del bloque", en: "Block actions", pt: "Ações do bloco" },
+    { es: "Deshacer", en: "Undo", pt: "Desfazer" },
+    { es: "Rehacer", en: "Redo", pt: "Refazer" },
+    { es: "Supr", en: "Del", pt: "Del" },
+    { es: "Atajos de teclado", en: "Keyboard shortcuts", pt: "Atalhos de teclado" },
+    { es: "Atajos de teclado (?)", en: "Keyboard shortcuts (?)", pt: "Atalhos de teclado (?)" },
+    { es: "General", en: "General", pt: "Geral" },
+    { es: "Bloque seleccionado", en: "Selected block", pt: "Bloco selecionado" },
+    { es: "Guardar o publicar", en: "Save or publish", pt: "Salvar ou publicar" },
+    { es: "Buscar bloques y acciones", en: "Search blocks and actions", pt: "Buscar blocos e ações" },
+    { es: "Mostrar esta ayuda", en: "Show this help", pt: "Mostrar esta ajuda" },
+    { es: "Copiar / pegar bloque", en: "Copy / paste block", pt: "Copiar / colar bloco" },
+    { es: "Mover con las flechas (modo mover)", en: "Move with the arrow keys (move mode)", pt: "Mover com as setas (modo mover)" },
+    { es: "Seleccionar el contenedor; otra vez, deseleccionar", en: "Select the parent; again, deselect", pt: "Selecionar o contêiner; de novo, desmarcar" },
+    { es: "Editar el texto del bloque", en: "Edit the block's text", pt: "Editar o texto do bloco" },
+    { es: "Doble clic", en: "Double-click", pt: "Clique duplo" },
+    { es: "Buscar bloques o acciones…", en: "Search blocks or actions…", pt: "Buscar blocos ou ações…" },
+    { es: "Usa ↑↓ para navegar · ↵ para ejecutar", en: "Use ↑↓ to navigate · ↵ to run", pt: "Use ↑↓ para navegar · ↵ para executar" },
+    { es: "Contraer", en: "Collapse", pt: "Recolher" },
+    { es: "Expandir", en: "Expand", pt: "Expandir" },
+    { es: "Tienes cambios sin guardar. ¿Salir del editor sin guardarlos?", en: "You have unsaved changes. Leave the editor without saving them?", pt: "Você tem alterações não salvas. Sair do editor sem salvá-las?" },
+    { es: "Salir sin guardar", en: "Leave without saving", pt: "Sair sem salvar" },
+    { es: "Arrastra bloques dentro de este contenedor en el lienzo.", en: "Drag blocks into this container on the canvas.", pt: "Arraste blocos para dentro deste contêiner na tela." },
+    // Motion dock (IxDock / IxDockParts).
+    { es: "Movimiento", en: "Motion", pt: "Movimento" },
+    { es: "Movimiento del bloque", en: "Block motion", pt: "Movimento do bloco" },
+    { es: "Plegar el panel de movimiento", en: "Collapse the motion panel", pt: "Recolher o painel de movimento" },
+    { es: "Desplegar el panel de movimiento", en: "Expand the motion panel", pt: "Expandir o painel de movimento" },
+    { es: "Cambiar la altura del panel de movimiento", en: "Resize the motion panel", pt: "Redimensionar o painel de movimento" },
+    { es: "Arrastra para cambiar la altura", en: "Drag to resize", pt: "Arraste para redimensionar" },
+    { es: "Selecciona un bloque para editar su animación de entrada y sus interacciones.", en: "Select a block to edit its entrance animation and interactions.", pt: "Selecione um bloco para editar sua animação de entrada e suas interações." },
+    { es: "Suelta el bloque en el lienzo para editar su movimiento.", en: "Drop the block on the canvas to edit its motion.", pt: "Solte o bloco na tela para editar seu movimento." },
+    { es: "Animación de entrada", en: "Entrance animation", pt: "Animação de entrada" },
+    { es: "Un efecto rápido al aparecer el bloque. Para algo más elaborado, usa la interacción.", en: "A quick effect when the block appears. For something more elaborate, use the interaction.", pt: "Um efeito rápido quando o bloco aparece. Para algo mais elaborado, use a interação." },
+    { es: "Línea de tiempo", en: "Timeline", pt: "Linha do tempo" },
+    { es: "Probar", en: "Play", pt: "Testar" },
+    { es: "Probar todo", en: "Play all", pt: "Testar tudo" },
+    { es: "Reproducir la interacción de este bloque en el lienzo", en: "Play this block's interaction on the canvas", pt: "Reproduzir a interação deste bloco na tela" },
+    { es: "Reproducir todas las interacciones de la página en el lienzo", en: "Play every interaction on the page on the canvas", pt: "Reproduzir todas as interações da página na tela" },
+    { es: "Clips", en: "Clips", pt: "Clipes" },
+    { es: "Arrastra a la línea de tiempo, o pulsa para aplicar", en: "Drag onto the timeline, or click to apply", pt: "Arraste para a linha do tempo ou clique para aplicar" },
+    { es: "Arrastra un clip de la paleta (o elige un preajuste en el inspector) para encender la línea de tiempo.", en: "Drag a clip from the palette (or pick a preset in the inspector) to start the timeline.", pt: "Arraste um clipe da paleta (ou escolha uma predefinição no inspetor) para ativar a linha do tempo." },
+    { es: "Guardar como preajuste", en: "Save as preset", pt: "Salvar como predefinição" },
+    { es: "Guardado como preajuste", en: "Saved as preset", pt: "Salvo como predefinição" },
+    { es: "No se pudo guardar el preajuste", en: "Could not save the preset", pt: "Não foi possível salvar a predefinição" },
+    { es: "Nombre del preajuste", en: "Preset name", pt: "Nome da predefinição" },
+    { es: "Usa el preajuste", en: "Uses the preset", pt: "Usa a predefinição" },
+    { es: "Cambiarlo en Ajustes cambia todos los bloques que lo usan.", en: "Changing it in Settings changes every block that uses it.", pt: "Alterá-la em Configurações altera todos os blocos que a usam." },
+    { es: "¿Te gusta este movimiento? Guárdalo como preajuste y reutilízalo en otros bloques.", en: "Like this motion? Save it as a preset and reuse it on other blocks.", pt: "Gostou deste movimento? Salve-o como predefinição e reutilize-o em outros blocos." },
+    { es: "Los preajustes son movimientos guardados del sitio: elige uno abajo, o crea el tuyo y guárdalo aquí.", en: "Presets are the site's saved motions: pick one below, or build your own and save it here.", pt: "Predefinições são movimentos salvos do site: escolha uma abaixo ou crie a sua e salve-a aqui." },
+    { es: "Editar en Ajustes", en: "Edit in Settings", pt: "Editar em Configurações" },
+    { es: "Gestionar preajustes", en: "Manage presets", pt: "Gerenciar predefinições" },
+    { es: "Cancelar", en: "Cancel", pt: "Cancelar" },
+    { es: "Estado de publicación", en: "Publication status", pt: "Status de publicação" },
 ];
 
 const TRIPLES: Tri[] = [...BLOCKS_CATEGORIES, ...FIELD_STRINGS, ...CHROME_STRINGS];
@@ -456,6 +534,57 @@ function walk(node: any, lang: Language): any {
         return out;
     }
     return node;
+}
+
+/** Copy of ONE field definition with its label/placeholder/option labels translated (same rules as walk). */
+export function localizeField<T>(field: T, lang: Language): T {
+    return walk(field, lang);
+}
+
+// Spanish source label for the prop names blocks most often leave unlabelled. trStr then renders it
+// in the UI language; a key not listed here is split on camelCase/_/- and capitalised instead, so the
+// inspector never shows a raw `titleSize` or `description`.
+const FIELD_KEY_LABELS: Record<string, string> = {
+    title: "Título",
+    subtitle: "Subtítulo",
+    description: "Descripción",
+    text: "Texto",
+    content: "Contenido",
+    label: "Etiqueta",
+    theme: "Tema",
+    icon: "Icono",
+    color: "Color",
+    bg: "Fondo",
+    background: "Fondo",
+    size: "Tamaño",
+    variant: "Variante",
+    align: "Alineación",
+    alignment: "Alineación",
+    href: "Enlace",
+    link: "Enlace",
+    url: "URL",
+    src: "Imagen",
+    image: "Imagen",
+    alt: "Texto alternativo",
+    items: "Elementos",
+    author: "Autor",
+    role: "Cargo",
+    price: "Precio",
+    name: "Nombre",
+    quote: "Cita",
+    target: "Destino del enlace",
+};
+
+/** Readable label for a field that declares none — never the raw prop key. */
+export function humanizeFieldKey(key: string, lang: Language): string {
+    const known = FIELD_KEY_LABELS[key];
+    if (known) return trStr(known, lang);
+    const words = key
+        .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+        .replace(/[_-]+/g, " ")
+        .trim()
+        .toLowerCase();
+    return words ? words.charAt(0).toUpperCase() + words.slice(1) : key;
 }
 
 /** Return a copy of a block config with all editor-chrome strings translated to `lang`. */

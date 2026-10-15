@@ -6,7 +6,9 @@
  *   Ctrl/Cmd+S → save          (funciona TAMBIÉN mientras se escribe)
  *   Ctrl/Cmd+K → palette       (ídem — abre desde cualquier foco, incluso el iframe)
  *   Ctrl/Cmd+Z → undo          · Ctrl/Cmd+Shift+Z o Ctrl/Cmd+Y → redo
- *   Delete     → delete        · Ctrl/Cmd+D → duplicate
+ *   Delete / Backspace → delete (el «delete» de un teclado Mac ES Backspace) · Ctrl/Cmd+D → duplicate
+ *   Escape     → escape (selecciona el contenedor; desde un bloque raíz, deselecciona)
+ *   ?          → shortcuts (diálogo de ayuda con esta misma lista)
  *   Ctrl/Cmd+C → copy          · Ctrl/Cmd+V → paste (clipboard de bloques, localStorage
  *                                wjs_block_clipboard — cross-página y cross-editor con el legacy)
  * Todo salvo save/palette se ignora mientras se escribe (input/textarea/select/contenteditable/
@@ -16,7 +18,17 @@
  * Ctrl+Shift+Flecha).
  */
 
-export type HotkeyAction = "save" | "palette" | "undo" | "redo" | "delete" | "duplicate" | "copy" | "paste";
+export type HotkeyAction =
+    | "save"
+    | "palette"
+    | "undo"
+    | "redo"
+    | "delete"
+    | "duplicate"
+    | "copy"
+    | "paste"
+    | "escape"
+    | "shortcuts";
 
 export interface HotkeyEventLike {
     key: string;
@@ -33,7 +45,9 @@ export function hotkeyActionOf(e: HotkeyEventLike): HotkeyAction | null {
     if (mod && key === "k") return "palette";
     if (mod && key === "z" && !e.shiftKey) return "undo";
     if ((mod && key === "z" && e.shiftKey) || (mod && key === "y")) return "redo";
-    if (e.key === "Delete") return "delete";
+    if ((e.key === "Delete" || e.key === "Backspace") && !mod) return "delete";
+    if (e.key === "Escape" && !mod) return "escape";
+    if (e.key === "?" && !mod) return "shortcuts";
     if (mod && key === "d") return "duplicate";
     if (mod && key === "c") return "copy";
     if (mod && key === "v") return "paste";

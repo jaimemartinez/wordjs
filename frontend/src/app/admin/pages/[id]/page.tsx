@@ -377,7 +377,12 @@ export default function PageEditorPage() {
                     saving={saving}
                     hasChanges={isDirty}
                     onSave={handleSubmit as any}
-                    onCancel={() => router.back()}
+                    onCancel={() => {
+                        // VersoEditor ya confirmó el descarte: el dirty global no debe seguir
+                        // disparando el aviso de beforeunload en las pantallas siguientes.
+                        setIsDirty(false);
+                        router.back();
+                    }}
                     pageId={pageId || undefined}
                     previewSlug={slug || undefined}
                     previewType="page"

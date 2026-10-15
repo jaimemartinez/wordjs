@@ -113,6 +113,8 @@ describe("presencia y espec de las filas (ids/glifos/hints del legacy)", () => {
 
         const { actions: published } = makeDeps(handle, { status: "publish" });
         expect(find(published, "save").label).toBe("Publicar");
+        const { actions: scheduled } = makeDeps(handle, { status: "future" });
+        expect(find(scheduled, "save").label).toBe("Programar");
 
         const { actions: bare } = makeDeps(handle, { hasSave: false, hasPreview: false });
         expect(bare.some((a) => a.id === "save")).toBe(false);
@@ -155,6 +157,19 @@ describe("presencia y espec de las filas (ids/glifos/hints del legacy)", () => {
         expect(draft.some((a) => a.id === "revisions")).toBe(false);
         expect(draft.some((a) => a.id === "comments")).toBe(false);
         expect(draft.some((a) => a.id === "media")).toBe(true);
+    });
+
+    it("atajos de teclado: fila con hint «?» solo si el editor la cablea", () => {
+        const registry = makeRegistry();
+        const handle = makeHandle(registry);
+        const openShortcuts = vi.fn();
+        const { actions } = makeDeps(handle, { openShortcuts });
+        expect(find(actions, "shortcuts").hint).toBe("?");
+        expect(find(actions, "shortcuts").ms).toBe("keyboard_command_key");
+        find(actions, "shortcuts").run();
+        expect(openShortcuts).toHaveBeenCalledTimes(1);
+        const { actions: bare } = makeDeps(handle);
+        expect(bare.some((a) => a.id === "shortcuts")).toBe(false);
     });
 });
 

@@ -68,6 +68,8 @@ export interface VersoPaletteActionDeps {
     toggleGuides: () => void;
     /** "Guardar bloque como símbolo" (W35) — el componente cablea saveSelectedAsSymbol + toast/alert. */
     saveSymbol: () => void;
+    /** Ayuda de atajos de teclado (la misma que abre «?»); sin ella, la fila no aparece. */
+    openShortcuts?: () => void;
 }
 
 /** Props inyectadas por el resolver SSR que JAMÁS se persisten en un símbolo (legacy L1580-1583). */
@@ -132,7 +134,8 @@ export function buildVersoPaletteActions(d: VersoPaletteActionDeps): PaletteActi
             id: "save",
             ms: "cloud_done",
             hint: "Ctrl+S",
-            label: d.status === "draft" ? d.tr("Guardar") : d.tr("Publicar"),
+            // Mismo verbo que el botón del header: un borrador se guarda, una programada se programa.
+            label: d.status === "draft" ? d.tr("Guardar") : d.status === "future" ? d.tr("Programar") : d.tr("Publicar"),
             run: () => d.save(),
         });
     }
@@ -266,5 +269,15 @@ export function buildVersoPaletteActions(d: VersoPaletteActionDeps): PaletteActi
         label: d.tr("Guías y contornos"),
         run: () => d.toggleGuides(),
     });
+    const openShortcuts = d.openShortcuts;
+    if (openShortcuts) {
+        acts.push({
+            id: "shortcuts",
+            ms: "keyboard_command_key",
+            hint: "?",
+            label: d.tr("Atajos de teclado"),
+            run: () => openShortcuts(),
+        });
+    }
     return acts;
 }

@@ -15,11 +15,16 @@
  * selección de texto real (y sin preventDefault: el copy nativo sigue funcionando, paridad
  * legacy); Ctrl+V pega con ids regenerados tras la selección o al final (blockClipboard.ts,
  * UNA entrada de undo). Las flechas de mover son del DnDDriver.
+ *
+ * Escape (subir la selección al contenedor) se resuelve en fase BURBUJA y solo si nadie lo
+ * reclamó antes: el modo mover y el arrastre del DnDDriver lo consumen con stopPropagation, la
+ * paleta ⌘K y los cajones con preventDefault, y la edición inline vive en un editable (guard de
+ * escritura). Así un Escape que cierra algo nunca cambia además la selección.
  */
 import React from "react";
 import type { EditorHandle } from "@/lib/verso/store";
 import type { BlockRegistry } from "@/lib/verso/registry";
-import { duplicateSelected, removeSelected } from "../overlay/actionBarCommands";
+import { duplicateSelected, removeSelected, selectParent } from "../overlay/actionBarCommands";
 import { copySelectedSubtree, pasteFromClipboard } from "./blockClipboard";
 import { bypassesTypingGuard, hotkeyActionOf, TYPING_TARGET_SELECTOR } from "./hotkeyMap";
 
@@ -31,15 +36,19 @@ export interface VersoEditorHotkeysProps {
     frameDocument: Document | null;
     onSave?: () => void;
     onCommandPalette?: () => void;
+    /** «?» — abre la ayuda de atajos. */
+    onShortcuts?: () => void;
 }
 
-export default function EditorHotkeys({ handle, registry, frameDocument, onSave, onCommandPalette }: VersoEditorHotkeysProps) {
+export default function EditorHotkeys({ handle, registry, frameDocument, onSave, onCommandPalette, onShortcuts }: VersoEditorHotkeysProps) {
     // Refs para callbacks inline sin re-enganchar los listeners.
     const onSaveRef = React.useRef(onSave);
     const onPaletteRef = React.useRef(onCommandPalette);
+    const onShortcutsRef = React.useRef(onShortcuts);
     React.useEffect(() => {
         onSaveRef.current = onSave;
         onPaletteRef.current = onCommandPalette;
+        onShortcutsRef.current = onShortcuts;
     });
 
     React.useEffect(() => {
@@ -55,6 +64,14 @@ export default function EditorHotkeys({ handle, registry, frameDocument, onSave,
                 if (isTypingTarget(e.target) || handle.getState().inlineEditingId !== null) return;
             }
             switch (action) {
+                case "escape":
+                    return; // fase burbuja — ver onEscape
+                case "shortcuts":
+                    if (!onShortcutsRef.current) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onShortcutsRef.current();
+                    return;
                 case "save":
                     e.preventDefault();
                     e.stopPropagation();
@@ -110,14 +127,30 @@ export default function EditorHotkeys({ handle, registry, frameDocument, onSave,
             }
         };
 
+        const onEscape = (e: KeyboardEvent) => {
+            if (hotkeyActionOf(e) !== "escape" || e.defaultPrevented) return;
+            const state = handle.getState();
+            const id = state.selection.nodeId;
+            if (!id || state.dragPreview || state.inlineEditingId !== null || isTypingTarget(e.target)) return;
+            // Un diálogo modal ABIERTO (medios, ayuda…) es dueño de su propio Escape. Los cajones de
+            // revisiones/notas siguen montados al cerrarse, pero inert + aria-hidden: esos no cuentan.
+            if (document.querySelector('[aria-modal="true"]:not([inert]):not([aria-hidden="true"])')) return;
+            e.preventDefault();
+            selectParent(handle, id);
+        };
+
         const targets: Window[] = [window];
         const frameWin = frameDocument?.defaultView;
         if (frameWin) targets.push(frameWin);
-        for (const w of targets) w.addEventListener("keydown", onKey as EventListener, true);
+        for (const w of targets) {
+            w.addEventListener("keydown", onKey as EventListener, true);
+            w.addEventListener("keydown", onEscape as EventListener);
+        }
         return () => {
             for (const w of targets) {
                 try {
                     w.removeEventListener("keydown", onKey as EventListener, true);
+                    w.removeEventListener("keydown", onEscape as EventListener);
                 } catch {
                     /* ventana del iframe ya destruida */
                 }

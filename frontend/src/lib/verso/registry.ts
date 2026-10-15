@@ -43,6 +43,11 @@ export interface VersoFieldBase {
 export interface VersoFieldOption {
   label: string;
   value: string | number | boolean | null | undefined | object;
+  /**
+   * Opcional: rótulo de grupo. Un `select` pinta las opciones CONSECUTIVAS con el mismo grupo dentro
+   * de un `<optgroup>` (las que no lo llevan, sueltas). Los `radio` lo ignoran.
+   */
+  group?: string;
 }
 
 export interface TextVersoField extends VersoFieldBase {

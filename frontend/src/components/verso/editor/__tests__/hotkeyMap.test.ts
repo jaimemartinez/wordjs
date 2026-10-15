@@ -25,8 +25,10 @@ describe("hotkeyActionOf", () => {
         expect(hotkeyActionOf(ev("y", { ctrl: true }))).toBe("redo");
     });
 
-    it("Supr → delete · Ctrl+D → duplicate", () => {
+    it("Supr y Retroceso → delete (Mac no tiene Supr) · Ctrl+D → duplicate", () => {
         expect(hotkeyActionOf(ev("Delete"))).toBe("delete");
+        expect(hotkeyActionOf(ev("Backspace"))).toBe("delete");
+        expect(hotkeyActionOf(ev("Backspace", { meta: true }))).toBe(null);
         expect(hotkeyActionOf(ev("d", { ctrl: true }))).toBe("duplicate");
         expect(hotkeyActionOf(ev("d", { meta: true }))).toBe("duplicate");
     });
@@ -38,9 +40,14 @@ describe("hotkeyActionOf", () => {
         expect(hotkeyActionOf(ev("V", { meta: true }))).toBe("paste");
     });
 
-    it("no-atajos → null (letras solas, Backspace)", () => {
+    it("Escape → escape · ? → shortcuts", () => {
+        expect(hotkeyActionOf(ev("Escape"))).toBe("escape");
+        expect(hotkeyActionOf(ev("?", { shift: true }))).toBe("shortcuts");
+        expect(hotkeyActionOf(ev("?", { ctrl: true, shift: true }))).toBe(null);
+    });
+
+    it("no-atajos → null (letras solas)", () => {
         expect(hotkeyActionOf(ev("s"))).toBe(null);
-        expect(hotkeyActionOf(ev("Backspace"))).toBe(null);
         expect(hotkeyActionOf(ev("c"))).toBe(null);
         expect(hotkeyActionOf(ev("v"))).toBe(null);
         expect(hotkeyActionOf(ev("d"))).toBe(null);
@@ -55,5 +62,7 @@ describe("hotkeyActionOf", () => {
         expect(bypassesTypingGuard("duplicate")).toBe(false);
         expect(bypassesTypingGuard("copy")).toBe(false);
         expect(bypassesTypingGuard("paste")).toBe(false);
+        expect(bypassesTypingGuard("escape")).toBe(false);
+        expect(bypassesTypingGuard("shortcuts")).toBe(false);
     });
 });

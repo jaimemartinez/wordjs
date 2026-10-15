@@ -37,6 +37,7 @@ import {
   blockRectToDndRect,
   buildDragLayout,
   createKeyboardMover,
+  createTouchHold,
   createPointerGesture,
   slotAttrValue,
   toFramePoint,
@@ -186,6 +187,22 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
     });
 
     let scrollRaf: number | null = null;
+    // Táctil: un dedo arma el arrastre solo tras mantenerse quieto (driverCore.createTouchHold).
+    const touchHold = createTouchHold({
+      schedule: (cb, ms) => window.setTimeout(cb, ms),
+      clear: (id) => window.clearTimeout(id as number),
+    });
+    /** Arma el gesto ya, con ratón; tras la pulsación larga, con el dedo (y un toque háptico). */
+    const armFor = (pe: PointerEvent, arm: () => void): void => {
+      if (pe.pointerType === "mouse") {
+        arm();
+        return;
+      }
+      touchHold.start({ x: pe.clientX, y: pe.clientY }, () => {
+        arm();
+        navigator.vibrate?.(10);
+      });
+    };
     /** ¿El fantasma ya enseña la vista previa del lienzo (y no la tarjeta de la paleta)? */
     let ghostFromCanvas = false;
     /**
@@ -431,6 +448,11 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
 
     const makeMoveHandler = (fromParent: boolean) => (e: Event) => {
       const pe = e as PointerEvent;
+      // Un dedo que se desliza antes de la pulsación larga está haciendo scroll: no es del editor.
+      if (touchHold.pending()) {
+        touchHold.move({ x: pe.clientX, y: pe.clientY });
+        return;
+      }
       const p = eventToFramePoint(pe, fromParent);
       if (!p) return;
       // El fantasma vive en el padre: se guarda el punto en SUS coordenadas. Desde dentro del
@@ -467,9 +489,11 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
         grabOffsetRef.current = { x: (pe.clientX - gr.left) * sc, y: (pe.clientY - gr.top) * sc };
       }
       parentPointRef.current = toParentPoint({ x: pe.clientX, y: pe.clientY });
-      gesture.down(
-        { kind: "existing", nodeId: id, originRect: rect ? blockRectToDndRect(rect) : null },
-        { x: pe.clientX, y: pe.clientY },
+      armFor(pe, () =>
+        gesture.down(
+          { kind: "existing", nodeId: id, originRect: rect ? blockRectToDndRect(rect) : null },
+          { x: pe.clientX, y: pe.clientY },
+        ),
       );
     };
 
@@ -488,10 +512,11 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
         ? { x: pe.clientX - cardRect.left, y: pe.clientY - cardRect.top }
         : { x: 0, y: 0 };
       parentPointRef.current = { x: pe.clientX, y: pe.clientY };
-      gesture.down({ kind: "new", type }, p);
+      armFor(pe, () => gesture.down({ kind: "new", type }, p));
     };
 
     const onUp = () => {
+      touchHold.end();
       gesture.up();
       stopScroll();
       setDragging(false);
@@ -507,6 +532,22 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
       ke.stopPropagation();
     };
 
+    /**
+     * El navegador se quedó el gesto (scroll, zoom, cambio de app): llega `pointercancel` y ya no
+     * vendrá `pointerup`. Sin escucharlo, el arrastre quedaba ARMADO a medias y el siguiente
+     * movimiento lo «continuaba» desde un punto viejo.
+     */
+    const onCancel = () => {
+      touchHold.end();
+      gesture.cancel();
+      stopScroll();
+      setDragging(false);
+    };
+    /** Con un bloque ya agarrado por el dedo, el lienzo no debe hacer scroll bajo él. */
+    const blockTouchScroll = (e: Event) => {
+      if (gesture.armed() && e.cancelable) e.preventDefault();
+    };
+
     const moveFromFrame = makeMoveHandler(false);
     const moveFromParent = makeMoveHandler(true);
 
@@ -516,11 +557,17 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
     parentDoc.addEventListener("pointermove", moveFromParent, true);
     frameDocument.addEventListener("pointerup", onUp, true);
     parentDoc.addEventListener("pointerup", onUp, true);
+    frameDocument.addEventListener("pointercancel", onCancel, true);
+    parentDoc.addEventListener("pointercancel", onCancel, true);
+    frameDocument.addEventListener("touchmove", blockTouchScroll, { capture: true, passive: false });
+    parentDoc.addEventListener("touchmove", blockTouchScroll, { capture: true, passive: false });
     frameDocument.addEventListener("keydown", onKeyDown, true);
     parentDoc.addEventListener("keydown", onKeyDown, true);
     for (const doc of [frameDocument, parentDoc]) {
       doc.addEventListener("selectstart", suppressNative, true);
       doc.addEventListener("dragstart", suppressNative, true);
+      // Android abre el menú contextual con la pulsación larga que aquí significa «agarrar».
+      doc.addEventListener("contextmenu", suppressNative, true);
     }
 
     return () => {
@@ -530,11 +577,17 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
       parentDoc.removeEventListener("pointermove", moveFromParent, true);
       frameDocument.removeEventListener("pointerup", onUp, true);
       parentDoc.removeEventListener("pointerup", onUp, true);
+      frameDocument.removeEventListener("pointercancel", onCancel, true);
+      parentDoc.removeEventListener("pointercancel", onCancel, true);
+      frameDocument.removeEventListener("touchmove", blockTouchScroll, true);
+      parentDoc.removeEventListener("touchmove", blockTouchScroll, true);
+      touchHold.end();
       frameDocument.removeEventListener("keydown", onKeyDown, true);
       parentDoc.removeEventListener("keydown", onKeyDown, true);
       for (const doc of [frameDocument, parentDoc]) {
         doc.removeEventListener("selectstart", suppressNative, true);
         doc.removeEventListener("dragstart", suppressNative, true);
+        doc.removeEventListener("contextmenu", suppressNative, true);
       }
       setDragging(false);
       gesture.cancel();

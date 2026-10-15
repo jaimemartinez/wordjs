@@ -517,7 +517,12 @@ export default function PostEditorPage() {
                     saving={saving}
                     hasChanges={isDirty}
                     onSave={handleSubmit as any}
-                    onCancel={() => router.back()}
+                    onCancel={() => {
+                        // VersoEditor ya confirmó el descarte: el dirty global no debe seguir
+                        // disparando el aviso de beforeunload en las pantallas siguientes.
+                        setIsDirty(false);
+                        router.back();
+                    }}
                     breadcrumbRoot="Entradas"
                     pageId={postId || undefined}
                     previewSlug={slug || undefined}

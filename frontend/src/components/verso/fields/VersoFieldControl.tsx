@@ -158,6 +158,17 @@ function NumberControl(props: ControlProps<NumberVersoField>) {
   );
 }
 
+/** Tramos consecutivos de opciones con el mismo `group` (el índice global se conserva: es el value). */
+function groupRuns<T extends { group?: string }>(options: readonly T[]): { group?: string; start: number; items: T[] }[] {
+  const runs: { group?: string; start: number; items: T[] }[] = [];
+  options.forEach((option, i) => {
+    const last = runs[runs.length - 1];
+    if (last && last.group === option.group) last.items.push(option);
+    else runs.push({ group: option.group, start: i, items: [option] });
+  });
+  return runs;
+}
+
 function SelectControl(props: ControlProps<SelectVersoField>) {
   const { field, value, onChange, readOnly } = props;
   const id = useId();
@@ -172,11 +183,23 @@ function SelectControl(props: ControlProps<SelectVersoField>) {
         onChange={(e) => onChange(optionValueAt(field.options, e.target.value))}
       >
         {selected === -1 && <option value="" disabled />}
-        {field.options.map((option, i) => (
-          <option key={i} value={String(i)}>
-            {option.label}
-          </option>
-        ))}
+        {groupRuns(field.options).map((run) =>
+          run.group ? (
+            <optgroup key={`g${run.start}`} label={run.group}>
+              {run.items.map((option, j) => (
+                <option key={run.start + j} value={String(run.start + j)}>
+                  {option.label}
+                </option>
+              ))}
+            </optgroup>
+          ) : (
+            run.items.map((option, j) => (
+              <option key={run.start + j} value={String(run.start + j)}>
+                {option.label}
+              </option>
+            ))
+          ),
+        )}
       </select>
     </FieldShell>
   );

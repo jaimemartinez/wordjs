@@ -668,3 +668,63 @@ export function createPointerGesture<S>(deps: PointerGestureDeps<S>): PointerGes
     },
   };
 }
+
+/* ---------------- táctil: mantener pulsado para arrastrar ---------------- */
+
+/** Pulsación quieta que convierte un toque en arrastre de bloque (por debajo de la lupa de iOS). */
+export const TOUCH_HOLD_MS = 350;
+/** Lo que el dedo puede moverse durante la espera sin que deje de ser una pulsación. */
+export const TOUCH_HOLD_SLOP = 8;
+
+export interface TouchHold {
+  /** Dedo abajo: arma el arrastre (onArm) si sigue quieto TOUCH_HOLD_MS. */
+  start(point: DndPoint, onArm: () => void): void;
+  /** Dedo movido. true = era scroll: la espera se descarta y el gesto es del navegador. */
+  move(point: DndPoint): boolean;
+  /** Dedo arriba / gesto cancelado: se olvida la espera. */
+  end(): void;
+  /** ¿Hay una espera en curso (dedo abajo, aún sin armar)? */
+  pending(): boolean;
+}
+
+/**
+ * En una pantalla táctil, deslizar el dedo sobre el lienzo ES hacer scroll. El ratón arma el
+ * arrastre de bloque al pulsar (y el umbral de 5 px decide); con un dedo eso secuestraba el scroll:
+ * cualquier deslizamiento sobre un bloque se convertía en arrastre —líneas de inserción y
+ * selecciones donde no tocaba— o, si el navegador se quedaba el gesto, en un arrastre a medias que
+ * el siguiente toque «terminaba». Aquí un dedo solo arma el arrastre si se queda QUIETO un momento
+ * (la convención de móvil para «agarrar»); si se mueve antes, es scroll y el editor no interviene.
+ */
+export function createTouchHold(deps: {
+  schedule(cb: () => void, ms: number): unknown;
+  clear(id: unknown): void;
+}): TouchHold {
+  let timer: unknown = null;
+  let origin: DndPoint | null = null;
+  const end = (): void => {
+    if (timer !== null) deps.clear(timer);
+    timer = null;
+    origin = null;
+  };
+  return {
+    start(point, onArm) {
+      end();
+      origin = point;
+      timer = deps.schedule(() => {
+        timer = null;
+        origin = null;
+        onArm();
+      }, TOUCH_HOLD_MS);
+    },
+    move(point) {
+      if (!origin) return false;
+      if (Math.hypot(point.x - origin.x, point.y - origin.y) <= TOUCH_HOLD_SLOP) return false;
+      end();
+      return true;
+    },
+    end,
+    pending() {
+      return timer !== null;
+    },
+  };
+}

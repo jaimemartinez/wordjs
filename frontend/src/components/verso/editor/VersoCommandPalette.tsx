@@ -221,7 +221,7 @@ function PaletteDialog({
                         aria-autocomplete="list"
                         value={query}
                         onChange={(e) => { setQuery(e.target.value); setActive(0); }}
-                        placeholder={trStr("Buscar un bloque para insertar…", language)}
+                        placeholder={trStr("Buscar bloques o acciones…", language)}
                         aria-label={trStr("Buscar un bloque para insertar", language)}
                         className="min-w-0 flex-1 h-10 bg-transparent text-[15px] text-[var(--ed-on-surface)] placeholder:text-[var(--ed-outline)] focus:outline-none"
                     />
@@ -287,7 +287,7 @@ function PaletteDialog({
 
                 {/* Footer hints */}
                 <div className="flex items-center justify-between px-4 sm:px-5 py-2.5 border-t border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-low)] text-[10px] text-[var(--ed-on-surface-variant)] select-none">
-                    <span className="hidden sm:inline">{trStr("Usa ↑↓ para navegar · ↵ para insertar", language)}</span>
+                    <span className="hidden sm:inline">{trStr("Usa ↑↓ para navegar · ↵ para ejecutar", language)}</span>
                     <span className="sm:hidden">{trStr("Toca una opción para elegirla", language)}</span>
                     <span>{APP_VERSION ? `WordJS v${APP_VERSION}` : "WordJS"}</span>
                 </div>

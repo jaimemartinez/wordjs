@@ -99,6 +99,7 @@ import { startPresenceHeartbeat, type PresenceEditor } from "./presence";
 import CollabPresence from "./CollabPresence";
 import { remoteSelections } from "./collabModel";
 import EditorHotkeys from "./EditorHotkeys";
+import ShortcutsDialog from "./ShortcutsDialog";
 import SaveStateChip from "./SaveStateChip";
 import BlockPalette from "./BlockPalette";
 import OutlineTree from "./OutlineTree";
@@ -468,6 +469,8 @@ export default function VersoEditor({
     const [mobileSheet, setMobileSheet] = useState<"left" | "right" | null>(null);
     const [viewport, setViewport] = useState<DeviceKind>("desktop");
     const [cmdkOpen, setCmdkOpen] = useState(false);
+    const [shortcutsOpen, setShortcutsOpen] = useState(false);
+    const closeShortcuts = useCallback(() => setShortcutsOpen(false), []);
     const [toastMsg, setToastMsg] = useState<string | null>(null);
     const [savedAt, setSavedAt] = useState<Date | null>(null);
     const [lastSaveWasAuto, setLastSaveWasAuto] = useState(false);
@@ -584,6 +587,22 @@ export default function VersoEditor({
         }
         if (previewSlug) window.open(previewHref(previewSlug, previewType), "_blank", "noopener");
     }, [hasChanges, onSave, previewSlug, previewType]);
+
+    // Salir (chevron/breadcrumb): con cambios sin guardar se pregunta antes — router.back() del host
+    // es navegación de SPA, que el beforeunload de UnsavedChangesContext no ve, y descartaba el
+    // trabajo en silencio.
+    const handleExit = useCallback(async () => {
+        if (!onCancel) return;
+        if (hasChanges && onSave) {
+            const leave = await confirm(
+                trStr("Tienes cambios sin guardar. ¿Salir del editor sin guardarlos?", language),
+                trStr("Salir sin guardar", language),
+                true,
+            );
+            if (!leave) return;
+        }
+        onCancel();
+    }, [onCancel, hasChanges, onSave, confirm, language]);
 
     /* ---------------- colaboración en vivo (F8.4) ---------------- */
 
@@ -910,16 +929,30 @@ export default function VersoEditor({
                 },
                 toggleGuides: () => setGuidesOn((v) => !v),
                 saveSymbol: handleSaveSymbol,
+                openShortcuts: () => setShortcutsOpen(true),
             }),
         [handle, language, status, onSave, previewSlug, handleManualSave, handlePreview, handleExportDoc, handleImportDoc, frameDoc, pageId, runAudit, handleSaveSymbol],
     );
 
     /* ---------------- geometría del canvas (piel PreviewFrame) ---------------- */
 
+    // ¿Ventana compacta (paneles como sheets: teléfono/tableta)? Solo ahí el lienzo estrecho se
+    // pinta a su ancho real. En escritorio, «Escritorio» se renderiza SIEMPRE a 1280 y se escala:
+    // con los dos paneles abiertos en un portátil de 1280-1366 px el área queda por debajo de 640 y
+    // el lienzo enseñaba el diseño MÓVIL del sitio bajo el botón «Escritorio» seleccionado.
+    const [compactWindow, setCompactWindow] = useState(false);
+    useEffect(() => {
+        const mq = window.matchMedia("(max-width: 1279.98px)");
+        const sync = () => setCompactWindow(mq.matches);
+        sync();
+        mq.addEventListener("change", sync);
+        return () => mq.removeEventListener("change", sync);
+    }, []);
+
     const areaRef = useRef<HTMLDivElement | null>(null);
     const area = useAreaSize(areaRef);
     const isDesktop = viewport === "desktop";
-    const isNarrow = area.width > 0 && area.width < 640;
+    const isNarrow = compactWindow && area.width > 0 && area.width < 640;
     const PAD = isNarrow ? 12 : isDesktop ? 28 : 24;
     const availW = Math.max(280, area.width - PAD * 2);
     const availH = Math.max(320, area.height - PAD * 2);
@@ -936,7 +969,7 @@ export default function VersoEditor({
         { id: "outline" as const, icon: "layers", label: trStr("Estructura", language) },
         { id: "patterns" as const, icon: "dashboard_customize", label: trStr("Plantillas", language) },
     ];
-    const modalSurfaceOpen = cmdkOpen || mediaOpen || showRevisions || commentsOpen || a11yOpen;
+    const modalSurfaceOpen = cmdkOpen || mediaOpen || showRevisions || commentsOpen || a11yOpen || shortcutsOpen;
 
     return (
         // Safe-area padding: the admin viewport is `viewport-fit=cover` (app/admin/layout.tsx), so in
@@ -954,7 +987,10 @@ export default function VersoEditor({
                     frameDocument={frameDoc}
                     onSave={handleManualSave}
                     onCommandPalette={() => setCmdkOpen((v) => !v)}
+                    onShortcuts={() => setShortcutsOpen(true)}
                 />
+
+                <ShortcutsDialog open={shortcutsOpen} onClose={closeShortcuts} />
 
                 {/* ⌘K — CommandPalette completa (W29): acciones + inserción de bloques (portal a <body>) */}
                 <VersoCommandPalette
@@ -972,7 +1008,7 @@ export default function VersoEditor({
                         {onCancel && (
                             <button
                                 type="button"
-                                onClick={onCancel}
+                                onClick={() => void handleExit()}
                                 title={t("editor.cancel")}
                                 aria-label={t("editor.cancel")}
                                 className="xl:hidden verso-icon-button w-10 h-10 -ml-1 shrink-0 rounded-xl flex items-center justify-center text-[var(--ed-on-surface-variant)] active:bg-[var(--ed-surface-container)]"
@@ -994,7 +1030,7 @@ export default function VersoEditor({
                             {onCancel ? (
                                 <button
                                     type="button"
-                                    onClick={onCancel}
+                                    onClick={() => void handleExit()}
                                     title={t("editor.cancel")}
                                     className="shrink-0 px-1 py-0.5 rounded hover:bg-[var(--ed-surface-container)] hover:text-[var(--ed-primary)] transition-colors"
                                 >
@@ -1100,8 +1136,10 @@ export default function VersoEditor({
                             <MSym name="tune" size={18} />
                         </button>
 
+                        {/* Estado desde xl (antes 2xl): en un portátil de 1280-1535 px no había forma de
+                            pasar un borrador a publicado ni de programarlo. */}
                         {onStatusChange && (
-                            <div className="hidden 2xl:block">
+                            <div className="hidden xl:block" title={trStr("Estado de publicación", language)}>
                                 <ModernSelect
                                     value={status}
                                     onChange={(e) => onStatusChange(e.target.value)}
@@ -1138,7 +1176,7 @@ export default function VersoEditor({
                                 aria-label={status === SCHEDULED_STATUS
                                     ? trStr("Fecha y hora de publicación programada", language)
                                     : trStr("Fecha de publicación de la entrada", language)}
-                                className="hidden 2xl:block h-9 px-2.5 rounded-lg border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container)] text-[11px] text-[var(--ed-on-surface)]"
+                                className="hidden xl:block h-9 px-2.5 rounded-lg border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container)] text-[11px] text-[var(--ed-on-surface)]"
                                 style={{ colorScheme: "light dark" }}
                             />
                         )}

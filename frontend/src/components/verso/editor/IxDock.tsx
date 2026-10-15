@@ -20,7 +20,7 @@
  * SOLO ESCRITORIO/TABLETA (`hidden md:flex`): en móvil el editor trabaja con hojas y el inspector
  * móvil sigue siendo el camino.
  */
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import MSym from "@/components/editor/MSym";
 import { useI18n } from "@/contexts/I18nContext";
 import { trStr } from "@/lib/editorI18n";
@@ -30,6 +30,7 @@ import type { VersoEditorState } from "@/lib/verso/types";
 import type { IxCompileCtx } from "@/lib/verso/interactions";
 import { useStoreSlice } from "../render/context";
 import { useSiteIxPresets } from "../canvas/useSiteIxPresets";
+import { DockTabs, PresetBar, type DockPane } from "./IxDockParts";
 import { requestIxPreview, requestIxScrub } from "../canvas/IxCanvasEngine";
 import InteractionsControl, { isTimed } from "../fields/InteractionsControl";
 import IxScrubberControl from "../fields/IxScrubberControl";
@@ -51,6 +52,12 @@ import type { IxPropKey } from "@/lib/verso/interactions";
 import { dockFieldEntries } from "./panelTabs";
 
 const selectState = (s: VersoEditorState) => s;
+const MOTION_DOCK_KEY = "verso_motion_dock";
+/** Altura del cuerpo elegida arrastrando el borde superior (px); sin valor, la de siempre. */
+const MOTION_DOCK_H_KEY = "verso_motion_dock_h";
+const DOCK_MIN_H = 180;
+/** Por debajo de este ancho el dock no cabe en dos columnas: inspector y escenario van en pestañas. */
+const DOCK_TWO_COL_MIN_W = 760;
 
 export interface IxDockProps {
     handle: EditorHandle;
@@ -68,12 +75,79 @@ export default function IxDock({ handle, registry }: IxDockProps) {
 
     // Plegado LOCAL del dock: no roba lienzo cuando todavía no hay una selección. La selección
     // puede llegar DESPUÉS del montaje (la ruta nueva arranca vacía), así que debe sincronizar el
-    // estado: un bloque nuevo abre Movimiento; deseleccionar vuelve a plegarlo. El gesto manual se
-    // conserva mientras no cambie la selección.
+    // estado: un bloque nuevo abre Movimiento; deseleccionar vuelve a plegarlo.
+    // Quien lo PLIEGA con un bloque seleccionado lo quiere plegado: esa preferencia se recuerda
+    // (localStorage `verso_motion_dock`) y las selecciones siguientes ya no lo reabren — 280 px de
+    // lienzo en cada clic, para editar textos que no tienen nada que ver con el movimiento, era
+    // el peaje de no recordarlo. Desplegarlo a mano vuelve al comportamiento por defecto.
     const [open, setOpen] = useState(() => Boolean(node));
     useEffect(() => {
-        setOpen(Boolean(selectedId));
+        let keepClosed = false;
+        try {
+            keepClosed = localStorage.getItem(MOTION_DOCK_KEY) === "closed";
+        } catch {
+            /* almacenamiento bloqueado: comportamiento por defecto */
+        }
+        setOpen(Boolean(selectedId) && !keepClosed);
     }, [selectedId]);
+    // Altura AJUSTABLE: arrastrar el borde superior del dock. La preferencia se recuerda; con la
+    // ventana más baja se recorta al 70 % del alto, para que el lienzo nunca desaparezca.
+    const [bodyH, setBodyH] = useState<number | null>(null);
+    useEffect(() => {
+        try {
+            const saved = Number(localStorage.getItem(MOTION_DOCK_H_KEY));
+            if (saved >= DOCK_MIN_H) setBodyH(saved);
+        } catch {
+            /* sin almacenamiento: altura por defecto */
+        }
+    }, []);
+    const clampH = (h: number) => Math.round(Math.max(DOCK_MIN_H, Math.min(h, window.innerHeight * 0.7)));
+    const startResize = (e: React.PointerEvent<HTMLDivElement>) => {
+        if (e.button !== 0) return;
+        const body = document.getElementById("verso-motion-dock-body");
+        if (!body) return;
+        e.preventDefault();
+        const startY = e.clientY;
+        const startH = body.getBoundingClientRect().height;
+        let last = startH;
+        const move = (ev: PointerEvent) => {
+            last = clampH(startH + (startY - ev.clientY));
+            setBodyH(last);
+        };
+        const up = () => {
+            window.removeEventListener("pointermove", move);
+            window.removeEventListener("pointerup", up);
+            try {
+                localStorage.setItem(MOTION_DOCK_H_KEY, String(last));
+            } catch {
+                /* la altura dura lo que la sesión */
+            }
+        };
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", up);
+    };
+    const nudgeH = (delta: number) => {
+        const body = document.getElementById("verso-motion-dock-body");
+        if (!body) return;
+        const next = clampH(body.getBoundingClientRect().height + delta);
+        setBodyH(next);
+        try {
+            localStorage.setItem(MOTION_DOCK_H_KEY, String(next));
+        } catch {
+            /* idem */
+        }
+    };
+
+    const toggleOpen = () => {
+        const next = !open;
+        setOpen(next);
+        if (!selectedId) return; // plegar el estado vacío no dice nada de la preferencia
+        try {
+            localStorage.setItem(MOTION_DOCK_KEY, next ? "open" : "closed");
+        } catch {
+            /* almacenamiento bloqueado: la preferencia dura lo que la sesión */
+        }
+    };
 
     return (
         <section
@@ -81,8 +155,26 @@ export default function IxDock({ handle, registry }: IxDockProps) {
             data-verso-dock={node ? "block" : "empty"}
             data-verso-dock-node={node?.id}
             aria-label={trStr("Movimiento del bloque", language)}
-            className="hidden md:flex shrink-0 flex-col border-t border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-lowest)]"
+            className="relative hidden md:flex shrink-0 flex-col border-t border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-lowest)]"
         >
+            {open && (
+                // Asa de redimensión: arrastrar el borde, o flechas ↑/↓ con el foco en ella.
+                <div
+                    role="separator"
+                    aria-orientation="horizontal"
+                    aria-label={trStr("Cambiar la altura del panel de movimiento", language)}
+                    title={trStr("Arrastra para cambiar la altura", language)}
+                    tabIndex={0}
+                    onPointerDown={startResize}
+                    onKeyDown={(e) => {
+                        if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                            e.preventDefault();
+                            nudgeH(e.key === "ArrowUp" ? 24 : -24);
+                        }
+                    }}
+                    className="absolute -top-1 inset-x-0 z-10 h-2 cursor-row-resize outline-none hover:bg-[var(--ed-primary)]/25 focus-visible:bg-[var(--ed-primary)]/40 transition-colors"
+                />
+            )}
             <header className="h-10 shrink-0 px-3 flex items-center gap-2 border-b border-[var(--ed-outline-variant)]">
                 <MSym name="animation" size={16} className="text-[var(--ed-on-surface-variant)]" />
                 <h3 className="text-[11px] font-semibold uppercase tracking-[0.03em] text-[var(--ed-on-surface)]">
@@ -102,7 +194,7 @@ export default function IxDock({ handle, registry }: IxDockProps) {
                         // terminó; límpialo antes de mostrar los controles, nunca un panel falso
                         // de “Suelta el bloque”.
                         if (state.dragPreview) handle.setDragPreview(null);
-                        setOpen((o) => !o);
+                        toggleOpen();
                     }}
                     aria-expanded={open}
                     aria-controls="verso-motion-dock-body"
@@ -123,7 +215,8 @@ export default function IxDock({ handle, registry }: IxDockProps) {
                 <div
                     id="verso-motion-dock-body"
                     data-verso-dock-body
-                    className="relative h-[220px] shrink-0 xl:h-[280px]"
+                    className={`relative shrink-0 ${bodyH === null ? "h-[220px] xl:h-[280px]" : ""}`}
+                    style={bodyH === null ? undefined : { height: bodyH }}
                 >
                     {!node || !def ? (
                         <div className="absolute inset-0 flex items-center justify-center text-center p-6 select-none">
@@ -209,12 +302,35 @@ function DockMotion({
         });
     };
 
-    return (
-        <div className="absolute inset-0 grid grid-cols-[minmax(20rem,23rem)_1fr]">
-            {/* INSPECTOR — los controles de siempre, sin su timeline ni su transporte internos. */}
-            <div className="overflow-y-auto custom-scrollbar border-r border-[var(--ed-outline-variant)] px-3 py-3">
-                {def ? (
-                    dockFieldEntries(def.fields).map(([key, field]) => (
+    // Dos columnas solo si caben: a 1280 px con los dos paneles abiertos la columna central mide
+    // ~600 px, el inspector se llevaba 320 y el escenario quedaba en 140 (botones partidos, clips con
+    // scroll, línea de tiempo ilegible). Debajo del umbral, pestañas: Ajustes | Línea de tiempo.
+    const rootRef = useRef<HTMLDivElement | null>(null);
+    const [twoCol, setTwoCol] = useState(true);
+    const [pane, setPane] = useState<DockPane>("settings");
+    useEffect(() => {
+        const el = rootRef.current;
+        if (!el) return;
+        const ro = new ResizeObserver(() => setTwoCol(el.clientWidth >= DOCK_TWO_COL_MIN_W));
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, []);
+    const dockFields = def ? dockFieldEntries(def.fields) : [];
+
+    const inspector = (
+        <div className="h-full overflow-y-auto custom-scrollbar px-3 py-3 space-y-3">
+            {/* ENTRADA — el campo `anim` pinta sus selects sin rótulo propio: aquí lleva título y una
+                línea que lo distingue de la interacción (dos sistemas que el autor confundía). */}
+            {dockFields.length > 0 && (
+                <section className="rounded-xl border border-[var(--ed-outline-variant)] p-3" data-verso-dock-section="entrance">
+                    <h4 className="text-xs font-semibold text-[var(--ed-on-surface)] flex items-center gap-1.5">
+                        <MSym name="play_circle" size={14} />
+                        {trStr("Animación de entrada", language)}
+                    </h4>
+                    <p className="text-[11px] leading-4 text-[var(--ed-on-surface-variant)] mt-0.5 mb-2">
+                        {trStr("Un efecto rápido al aparecer el bloque. Para algo más elaborado, usa la interacción.", language)}
+                    </p>
+                    {dockFields.map(([key, field]) => (
                         <VersoFieldControl
                             key={`${node.id}:${key}`}
                             field={field}
@@ -223,8 +339,19 @@ function DockMotion({
                             value={node.props[key]}
                             onChange={(v) => onFieldChange(key, v)}
                         />
-                    ))
-                ) : null}
+                    ))}
+                </section>
+            )}
+            <section className="rounded-xl border border-[var(--ed-outline-variant)] p-3" data-verso-dock-section="ix">
+                <PresetBar
+                    ix={ix}
+                    linked={linked}
+                    active={st.active}
+                    presetName={st.presetId ? ixCtx?.presets?.[st.presetId]?.name ?? st.presetId : null}
+                    ixCtx={ixCtx}
+                    language={language}
+                    onLinked={(next) => onFieldChange("ix", next)}
+                />
                 <InteractionsControl
                     key={`${node.id}:ix`}
                     value={ix}
@@ -235,15 +362,19 @@ function DockMotion({
                     onChange={(v) => onFieldChange("ix", v)}
                     stage={{ trackSel: active, onTrackSel: setTrackSel }}
                 />
-            </div>
+            </section>
+        </div>
+    );
 
-            {/* ESCENARIO — transporte arriba, línea de tiempo protagonista debajo. */}
-            <div className="min-w-0 flex flex-col">
+    // ESCENARIO — transporte arriba, línea de tiempo protagonista debajo.
+    const stage = (
+            <div className="h-full min-w-0 flex flex-col">
                 <div className="h-10 shrink-0 px-3 flex items-center gap-2 border-b border-[var(--ed-outline-variant)]">
-                    {/* «Probar» PRIMARIO — medidas exactas de la referencia: 28px, radio 2px. */}
+                    {/* «Probar» primario y «Probar todo» secundario a la MISMA altura y radio (antes
+                        32 vs 28 px y radio 8 vs 2: hermanos que parecían de dos sistemas). */}
                     <button
                         type="button"
-                        className="inline-flex h-8 items-center gap-1 rounded-lg bg-[var(--ed-primary-solid,var(--ed-primary))] px-3 text-[11px] font-medium text-[var(--ed-on-primary,#fff)] hover:bg-[var(--ed-primary-hover)] disabled:opacity-40 disabled:pointer-events-none transition-colors"
+                        className="inline-flex h-8 shrink-0 whitespace-nowrap items-center gap-1 rounded-lg bg-[var(--ed-primary-solid,var(--ed-primary))] px-3 text-[11px] font-medium text-[var(--ed-on-primary,#fff)] hover:bg-[var(--ed-primary-hover)] disabled:opacity-40 disabled:pointer-events-none transition-colors"
                         disabled={!st.active}
                         title={trStr("Reproducir la interacción de este bloque en el lienzo", language)}
                         aria-label="Probar la interacción de este bloque"
@@ -253,7 +384,7 @@ function DockMotion({
                     </button>
                     <button
                         type="button"
-                        className="inline-flex h-7 items-center rounded-[2px] border border-[var(--ed-outline-variant)] bg-[var(--ed-surface)] px-3 text-[11px] font-medium text-[var(--ed-on-surface)] hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] disabled:opacity-40 disabled:pointer-events-none transition-colors"
+                        className="inline-flex h-8 shrink-0 whitespace-nowrap items-center rounded-lg border border-[var(--ed-outline-variant)] bg-[var(--ed-surface)] px-3 text-[11px] font-medium text-[var(--ed-on-surface)] hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] disabled:opacity-40 disabled:pointer-events-none transition-colors"
                         disabled={!st.active}
                         title={trStr("Reproducir todas las interacciones de la página en el lienzo", language)}
                         aria-label="Probar todas las interacciones de la página"
@@ -345,6 +476,17 @@ function DockMotion({
                         </div>
                     )}
                 </div>
+            </div>
+    );
+
+    return (
+        <div ref={rootRef} className="absolute inset-0 flex flex-col">
+            {!twoCol && <DockTabs pane={pane} onPane={setPane} tracks={st.tracks.length} language={language} />}
+            <div className={`flex-1 min-h-0 ${twoCol ? "grid grid-cols-[minmax(20rem,23rem)_1fr]" : ""}`}>
+                {(twoCol || pane === "settings") && (
+                    <div className={twoCol ? "min-h-0 border-r border-[var(--ed-outline-variant)]" : "h-full"}>{inspector}</div>
+                )}
+                {(twoCol || pane === "timeline") && <div className="h-full min-h-0">{stage}</div>}
             </div>
         </div>
     );

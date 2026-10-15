@@ -19,6 +19,7 @@ import {
     editSelectedInline,
     moveSelected,
     removeSelected,
+    selectParent,
     siblingIdsOf,
 } from "../actionBarCommands";
 
@@ -222,5 +223,23 @@ describe("contraste con el editor REAL (semántica post-remoción de moveNode)",
         expect(handle.getDoc().nodes[cloneId].type).toBe("Card");
         expect(removeSelected(handle, cloneId)).toBe(true);
         expect(handle.getDoc().nodes["s1"].slots.children).toEqual(["b", "c", "d"]);
+    });
+});
+
+describe("seleccionar el contenedor (Esc / botón de la barra)", () => {
+    it("parentId del modelo: el contenedor, o null en la raíz", () => {
+        const { handle, registry } = makeRealEditor();
+        expect(actionBarModel(handle.getDoc(), registry, "c")?.parentId).toBe("s1");
+        expect(actionBarModel(handle.getDoc(), registry, "a")?.parentId).toBe(null);
+    });
+
+    it("selectParent sube un nivel y, desde la raíz, deselecciona", () => {
+        const { handle } = makeRealEditor();
+        handle.select("c");
+        expect(selectParent(handle, "c")).toBe(true);
+        expect(handle.getState().selection.nodeId).toBe("s1");
+        expect(selectParent(handle, "s1")).toBe(true);
+        expect(handle.getState().selection.nodeId).toBe(null);
+        expect(selectParent(handle, "no-existe")).toBe(false);
     });
 });
