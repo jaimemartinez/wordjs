@@ -109,7 +109,7 @@ export default function YoutubeVideosAdminPage() {
             else if (apiKey.trim()) body.apiKey = apiKey.trim();
             const s = await apiPost("/plugin/youtube-videos/settings", body);
             setStatus(s); setApiKey(""); setClearKey(false);
-            setMessage(s.error ? `Guardado, pero la carga falló: ${s.error}` : `Guardado — ${s.videoCount} videos (modo ${s.mode === "api" ? "API completa" : (s.mode === "scraper" ? "Scraper" : "RSS")}).`);
+            setMessage(s.error ? `Guardado, pero la carga falló: ${s.error}` : `Guardado — ${s.videoCount} videos (modo ${s.mode === "api" ? "API completa" : "RSS"}).`);
             loadPreview();
         } catch (err) {
             setMessage(`Error al guardar: ${err?.message || err}`);
@@ -216,8 +216,8 @@ export default function YoutubeVideosAdminPage() {
                             <div className="cf-stat-row">
                                 <dt className="cf-stat-key">Modo de carga</dt>
                                 <dd>
-                                    <span className={`cf-pill ${status.mode === "api" ? "is-accent" : (status.mode === "scraper" ? "is-warn" : "")}`}>
-                                        {status.mode === "api" ? "API v3" : (status.mode === "scraper" ? "Scraper (Sin API Key)" : "RSS Feed")}
+                                    <span className={`cf-pill ${status.mode === "api" ? "is-accent" : ""}`}>
+                                        {status.mode === "api" ? "API v3" : "RSS Feed"}
                                     </span>
                                 </dd>
                             </div>

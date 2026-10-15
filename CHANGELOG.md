@@ -6,6 +6,16 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Changed
+
+- **YouTube Videos (1.0.3) takes its keyless list from the channel's RSS feed only.** Without a Data API
+  key the plugin first tried to scrape the channel's public Videos tab and fell back to the RSS feed when
+  that failed. On YouTube's current markup the scraper finds no videos, so every keyless site has been
+  showing the RSS feed all along: the latest 15 uploads, live streams included, with their publication
+  dates. The scraper is removed, and those sites keep showing the same list. A keyless `@handle` is still
+  resolved by reading the channel's page. For the full upload history (up to 500 videos), add a Data API
+  key.
+
 ### Fixed
 
 - **YouTube Videos (1.0.2) shows the configured channel, not one it links to.** Without a Data API key,
@@ -15,10 +25,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   videos. The plugin now reads only signals that describe the page itself, most authoritative first:
   the canonical `…/channel/UC…` link, the channel metadata's `externalId`, `<meta itemprop="identifier">`,
   then the channel header and the browse id of the tab the page opened. A page that carries none of them
-  is refused with an error on the plugin's admin page instead of being guessed at. The keyless scraper
-  now reads only the video grid of the channel's own Videos tab, and falls back to the RSS feed when
-  YouTube answers with another tab or another channel's page. UC ids, channel URLs and handles
-  resolved through the Data API work as before.
+  is refused with an error on the plugin's admin page instead of being guessed at. UC ids, channel URLs
+  and handles resolved through the Data API work as before.
 
 ## [2.4.0] - 2026-10-12
 
