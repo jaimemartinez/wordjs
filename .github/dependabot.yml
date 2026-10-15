@@ -94,6 +94,20 @@ updates:
       # Node 22 and the engines floor is 20.9. Patches on 21.x still flow through the minor/patch group.
       - dependency-name: "file-type"
         update-types: ["version-update:semver-major"]
+      # better-sqlite3 13 and dnsbl 6 declare engines node >=22, above the >=20.9 floor. They wait for
+      # the floor to move, like file-type.
+      - dependency-name: "better-sqlite3"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "dnsbl"
+        update-types: ["version-update:semver-major"]
+      # TypeScript 7 is outside the peer range of @typescript-eslint 8, so `npm ci` cannot resolve the
+      # tree. It waits for a typescript-eslint release that accepts it.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      # @types/node stays on the 22 line, the Node version CI runs; a newer line would type APIs the
+      # supported runtimes do not have.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   # ── gateway ──────────────────────────────────────────────────────────────────────────────────────
   - package-ecosystem: "npm"
@@ -169,6 +183,12 @@ updates:
       # @types/node stays on the 20 line on purpose: package.json engines declares node >=20.9.0, so
       # the frontend must type-check against the OLDEST runtime it claims to support.
       - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # vitest 5 declares engines node ^22.12, above the >=20.9 floor, and peers on @types/node >=22.12,
+      # which the entry above keeps on 20. Both vitest packages move together, when the floor moves.
+      - dependency-name: "vitest"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@vitest/coverage-v8"
         update-types: ["version-update:semver-major"]
 
   # ── setup (the install wizard) ───────────────────────────────────────────────────────────────────
