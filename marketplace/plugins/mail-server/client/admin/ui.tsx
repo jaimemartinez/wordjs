@@ -376,6 +376,20 @@ export function useElementWidth(ref: any) {
  * data-wjs-src until the reader asks for them, so opening a message does not tell a tracker that it was
  * read (and from which IP). Returns the html plus how many images were held back.
  */
+const URL_ATTRS = new Set(['href', 'src', 'xlink:href', 'action', 'formaction', 'background', 'poster']);
+/**
+ * A URL attribute is kept unless its scheme can run code or smuggle a document: javascript: and
+ * vbscript: never, and data: only as an inline IMAGE source (data:image/png|gif|jpeg|webp) — a data:
+ * link or frame source can carry an html document.
+ */
+function isSafeUrl(attr: string, compactLower: string) {
+    if (/^(javascript|vbscript):/.test(compactLower)) return false;
+    if (compactLower.startsWith('data:')) {
+        return (attr === 'src' || attr === 'background' || attr === 'poster') && /^data:image\/(png|gif|jpe?g|webp);/.test(compactLower);
+    }
+    return true;
+}
+
 export function prepareEmailHtml(html: string, showImages: boolean) {
     if (!html) return { html: '', blocked: 0 };
     if (typeof window === 'undefined' || typeof DOMParser === 'undefined') return { html: '', blocked: 0 };
@@ -388,7 +402,7 @@ export function prepareEmailHtml(html: string, showImages: boolean) {
                 const name = attr.name.toLowerCase();
                 const val = attr.value.replace(/\s+/g, '').toLowerCase();
                 if (name.startsWith('on')) el.removeAttribute(attr.name);
-                else if ((name === 'href' || name === 'src' || name === 'xlink:href' || name === 'action' || name === 'formaction') && val.startsWith('javascript:')) el.removeAttribute(attr.name);
+                else if (URL_ATTRS.has(name) && !isSafeUrl(name, val)) el.removeAttribute(attr.name);
             }
             if (el.tagName === 'IMG' && !showImages) {
                 const src = el.getAttribute('src') || '';

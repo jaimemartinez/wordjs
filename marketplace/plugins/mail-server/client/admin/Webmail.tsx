@@ -1,7 +1,7 @@
 // @ts-nocheck — backend plugin client source; bundled by the plugin loader, not type-checked by the frontend tsc.
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../../../../frontend/src/lib/api";
 import { sanitizeHTML } from "../../../../../frontend/src/lib/sanitize";
 import {

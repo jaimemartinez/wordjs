@@ -483,6 +483,11 @@ function ScheduleItems({ t, locale, scheduledAt, setScheduledAt, setPickDate }: 
     );
 }
 
+// The visible text of the editor's html, only to tell "empty" from "has content" (never rendered).
+// Stripped to a fixpoint and then of any stray angle bracket: one pass of /<[^>]*>/ can splice two
+// fragments into a new tag ("<<b>b>"), which CodeQL rightly flags as an incomplete sanitizer.
 function stripTags(html: string) {
-    return String(html || '').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
+    let out = String(html || '');
+    for (let prev = null; prev !== out;) { prev = out; out = out.replace(/<[^>]*>/g, ''); }
+    return out.replace(/[<>]/g, '').replace(/&nbsp;/g, ' ').trim();
 }
