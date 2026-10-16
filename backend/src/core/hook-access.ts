@@ -210,6 +210,10 @@ const POLICY_TABLE: Record<string, HookPolicy> = {
     // renderSidebar's result is served as text/html by GET /widgets/sidebars/:id/render.
     'dynamic_sidebar': RAW_HTML,
     'admin_menu_items': DENIED('host-only synchronous filter carrying the requesting user'),
+    // core/graphql/extensions: the argument is a registration FUNCTION and the product is executable
+    // resolvers — neither can cross the isolate boundary, and a schema extension is code that runs in the
+    // host. Sandboxed plugins get a declarative, route-backed bridge later; host modules use the hook today.
+    'wordjs_graphql_register_types': DENIED('host-only: registers executable GraphQL resolvers in the host'),
     'publish_future_post': HOST_MAINTENANCE,
     'wordjs_scheduled_backup': HOST_MAINTENANCE,
     'wordjs_version_check': HOST_MAINTENANCE,

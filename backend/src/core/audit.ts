@@ -16,6 +16,7 @@
  */
 
 const { dbAsync } = require('../config/database');
+const log = require('./module-logger').moduleLogger('core/audit');
 
 /**
  * THE ACTION CATALOGUE — one place where every action name in the product is written down.
@@ -36,19 +37,24 @@ const AUDIT_ACTIONS = Object.freeze({
     LOGIN_SUCCESS: 'auth.login.success',
     LOGIN_FAILURE: 'auth.login.failure',
     LOGOUT: 'auth.logout',
-    // Reserved for the self-service password change, whose handler is routes/users.ts (PUT /users/me
-    // and PUT /users/:id). The name is fixed HERE so that call site adopts this one instead of
-    // inventing 'user.password_change' next to the 'user.*' names that surround it.
+    // A new password stored through a profile write (routes/users.ts PUT /users/me and PUT /users/:id).
+    // Kept under `auth.` rather than as a `user.update` field, so "who changed whose password" is one query.
     PASSWORD_CHANGE: 'auth.password.change',
     PASSWORD_RESET: 'auth.password.reset',
     MFA_ENABLE: 'auth.mfa.enable',
     MFA_DISABLE: 'auth.mfa.disable',
     MFA_BACKUP_CODES: 'auth.mfa.backup_codes',
+    // Which roles must have a second factor, the grace window, and whether API tokens are held to it.
+    MFA_POLICY_UPDATE: 'auth.mfa.policy_update',
     TOKEN_CREATE: 'auth.token.create',
+    // A mint refused because the step-up code a required-2FA role must present was wrong.
+    TOKEN_CREATE_REFUSED: 'auth.token.create_refused',
     TOKEN_REVOKE: 'auth.token.revoke',
 
     // ── Users (already recorded before this batch — names preserved verbatim) ────────────────────────
     USER_CREATE: 'user.create',
+    // A profile write: {fields} names what the request wrote (never values, never the password).
+    USER_UPDATE: 'user.update',
     USER_DELETE: 'user.delete',
     USER_ROLE_CHANGE: 'user.role_change',
     USER_SESSIONS_REVOKED: 'user.sessions_revoked',
@@ -63,6 +69,24 @@ const AUDIT_ACTIONS = Object.freeze({
     POST_TRASH: 'post.trash',
     POST_RESTORE: 'post.restore',
     POST_DELETE: 'post.delete',
+    // Comment moderation, one row per write naming the most specific transition ({from, to} statuses).
+    COMMENT_UPDATE: 'comment.update',
+    COMMENT_APPROVE: 'comment.approve',
+    COMMENT_SPAM: 'comment.spam',
+    COMMENT_TRASH: 'comment.trash',
+    COMMENT_DELETE: 'comment.delete',
+    // The media library (routes/media.ts).
+    MEDIA_UPLOAD: 'media.upload',
+    MEDIA_UPDATE: 'media.update',
+    MEDIA_DELETE: 'media.delete',
+    // Categories and tags ({taxonomy}).
+    TERM_CREATE: 'term.create',
+    TERM_UPDATE: 'term.update',
+    TERM_DELETE: 'term.delete',
+    // Navigation menus. Item and location changes are `menu.update` with a {change} naming which.
+    MENU_CREATE: 'menu.create',
+    MENU_UPDATE: 'menu.update',
+    MENU_DELETE: 'menu.delete',
 
     // ── Backups (a restore is the most destructive operation the product offers) ─────────────────────
     BACKUP_CREATE: 'backup.create',
@@ -72,6 +96,9 @@ const AUDIT_ACTIONS = Object.freeze({
     // ── Extensions ──────────────────────────────────────────────────────────────────────────────────
     MARKETPLACE_INSTALL: 'marketplace.install',
     MARKETPLACE_UPDATE: 'marketplace.update',
+    // A plugin installed from an uploaded zip (the marketplace path records `marketplace.install`).
+    PLUGIN_INSTALL: 'plugin.install',
+    PLUGIN_UNINSTALL: 'plugin.uninstall',
     PLUGIN_ACTIVATE: 'plugin.activate',
     PLUGIN_DEACTIVATE: 'plugin.deactivate',
     // An ORPHANED slug reclaimed: `active_plugins` named it while its files were not loadable, so the
@@ -83,6 +110,14 @@ const AUDIT_ACTIONS = Object.freeze({
 
     // ── Configuration ───────────────────────────────────────────────────────────────────────────────
     SETTINGS_UPDATE: 'settings.update',
+    // Where public media is stored (core/media-storage): {driver, bucket, endpoint, publicUrl,
+    // keysRotated} - never a credential - and each offload/restore run that was started.
+    MEDIA_STORAGE_UPDATE: 'media.storage.update',
+    MEDIA_STORAGE_MIGRATE: 'media.storage.migrate',
+    // The AI provider (core/ai-provider): {provider, model, baseUrlHost, previousProvider, keyChanged,
+    // keyCleared}. Where the site's prompts — and its provider key — are sent is security-relevant on its
+    // own; the key itself is never in the row.
+    AI_SETTINGS_UPDATE: 'ai.settings.update',
 
     // ── The site's addresses (core/site-address) ─────────────────────────────────────────────────────
     // Each change of where the site lives is recorded with {from, to, added, removed, via, force, rev}
@@ -99,6 +134,19 @@ const AUDIT_ACTIONS = Object.freeze({
     // changes than it keeps before the backend applied them — stopped, or a burst inside one watcher
     // tick): {from, to, revisions}, one row per run of consecutive revisions. Never silently skipped.
     SITE_ADDRESS_GAP: 'site.address.gap',
+
+    // ── AI agent connections (models/AgentConnection, routes/agents, core/mcp-server) ──────────────
+    // Every row of an agent's own trail is keyed target_type 'agent' / target_id <connection id>, so the
+    // admin screen's "what did this agent do" is one indexed-by-PK walk with a WHERE on two columns.
+    AGENT_CREATE: 'agent.create',
+    AGENT_GRANT: 'agent.grant',
+    AGENT_REVOKE: 'agent.revoke',
+    // One row per agent tool call that WRITES (create/update draft, submit, publish, upload, term,
+    // moderation), success or refusal, with {tool, objectType, objectId, status, ok}. The REST handler the
+    // call ran through records its own row too (post.create, …) under the bound user.
+    AGENT_WRITE: 'agent.write',
+    // A tool call refused because the connection lacks the grant (or is still pending): {tool, needs}.
+    AGENT_DENIED: 'agent.denied',
 
     // ── The log about the log ───────────────────────────────────────────────────────────────────────
     AUDIT_PRUNE: 'audit.prune'
@@ -181,6 +229,32 @@ function sanitizeDetail(detail: any): Record<string, any> {
 }
 
 /**
+ * IN-PROCESS OBSERVERS of recorded events — host-only, never the plugin hook bus. An audit row marks
+ * the moment a mutation committed, with its actor and target, so it is the one seam that already covers
+ * every lifecycle moment the product records; core/webhooks derives outgoing events from it instead of
+ * scattering emit calls next to every recordAudit. An observer receives the SANITIZED detail (the same
+ * secret-free, bounded object that is stored), runs after the mutation's transaction commits, and can
+ * never affect the mutation: a throwing or rejecting observer is logged and ignored.
+ */
+type AuditEvent = { actorId: number | null; action: string; targetType: string; targetId: string; detail: Record<string, any> };
+type AuditObserver = (event: AuditEvent) => any;
+const _observers: AuditObserver[] = [];
+
+/** Register an observer; returns a function that removes it. */
+function onAuditRecorded(fn: AuditObserver): () => void {
+    _observers.push(fn);
+    return () => { const i = _observers.indexOf(fn); if (i !== -1) _observers.splice(i, 1); };
+}
+
+async function notifyObservers(event: AuditEvent): Promise<void> {
+    for (const fn of _observers.slice()) {
+        try { await fn(event); } catch (e: any) {
+            log.warn(`[audit] observer failed for '${event.action}' (non-fatal): ${e && e.message}`);
+        }
+    }
+}
+
+/**
  * Record one audit event. Never throws.
  * @param actorId  acting user's id, or null/undefined for a system action.
  * @param action   one of AUDIT_ACTIONS, e.g. 'user.role_change', 'auth.login.failure'.
@@ -189,24 +263,36 @@ function sanitizeDetail(detail: any): Record<string, any> {
  * @param detail   optional small object; sanitized before storage.
  */
 async function recordAudit(actorId: any, action: AuditAction, targetType: string, targetId: any, detail?: any): Promise<void> {
+    let event: AuditEvent | null = null;
     try {
         const actor = (actorId === null || actorId === undefined || actorId === '') ? null : Number(actorId);
         const clean = sanitizeDetail(detail);
+        event = {
+            actorId: Number.isFinite(actor) ? actor : null,
+            action: String(action || ''),
+            targetType: String(targetType || ''),
+            targetId: targetId === null || targetId === undefined ? '' : String(targetId),
+            detail: clean
+        };
         await dbAsync.run(
             `INSERT INTO audit_log (actor_id, action, target_type, target_id, detail) VALUES (?, ?, ?, ?, ?)`,
-            [
-                Number.isFinite(actor) ? actor : null,
-                String(action || ''),
-                String(targetType || ''),
-                targetId === null || targetId === undefined ? '' : String(targetId),
-                JSON.stringify(clean)
-            ]
+            [event.actorId, event.action, event.targetType, event.targetId, JSON.stringify(clean)]
         );
     } catch (e: any) {
         // Log-and-continue: the mutation already happened (or is about to answer) — auditing must not
         // change its outcome.
-        console.warn(`[audit] failed to record '${action}': ${e && e.message}`);
+        log.warn({ action, err: e }, `[audit] failed to record '${action}'`);
     }
+    // The mutation happened whether or not its row could be written, so observers hear about it either
+    // way. Inside a pinned transaction they run only after COMMIT (the same rule as hooks.doAction): an
+    // outgoing webhook must never announce a write that is then rolled back.
+    if (!event || !_observers.length) return;
+    const ev = event;
+    try {
+        const database = require('../config/database');
+        if (database.afterCommit(() => notifyObservers(ev))) return;
+    } catch { /* database still bootstrapping — notify immediately */ }
+    await notifyObservers(ev);
 }
 
 /**
@@ -234,6 +320,37 @@ async function listAudit(opts: { limit?: any; offset?: any } = {}): Promise<any>
             createdAt: r.created_at
         })),
         total,
+        limit,
+        offset
+    };
+}
+
+/**
+ * The trail of ONE target (e.g. an agent connection), newest first. Admin-only at the route layer.
+ */
+async function listAuditForTarget(targetType: string, targetId: any, opts: { limit?: any; offset?: any } = {}): Promise<any> {
+    const limit = Math.min(Math.max(parseInt(String(opts.limit), 10) || 50, 1), 200);
+    const offset = Math.max(parseInt(String(opts.offset), 10) || 0, 0);
+    const tid = targetId === null || targetId === undefined ? '' : String(targetId);
+    const rows = (await dbAsync.all(
+        `SELECT id, actor_id, action, target_type, target_id, detail, created_at
+         FROM audit_log WHERE target_type = ? AND target_id = ? ORDER BY id DESC LIMIT ? OFFSET ?`,
+        [String(targetType), tid, limit, offset]
+    )) || [];
+    const totalRow = await dbAsync.get(
+        `SELECT COUNT(*) AS c FROM audit_log WHERE target_type = ? AND target_id = ?`, [String(targetType), tid]
+    );
+    return {
+        rows: rows.map((r: any) => ({
+            id: r.id,
+            actorId: r.actor_id,
+            action: r.action,
+            targetType: r.target_type,
+            targetId: r.target_id,
+            detail: safeParse(r.detail),
+            createdAt: r.created_at
+        })),
+        total: totalRow ? Number(totalRow.c) || 0 : 0,
         limit,
         offset
     };
@@ -375,7 +492,7 @@ async function runAuditRetention(): Promise<number> {
     try {
         const removed = await pruneAuditLog();
         if (removed > 0) {
-            console.log(`⏰ audit: pruned ${removed} row(s) past the retention window`);
+            log.info({ removed }, `⏰ audit: pruned ${removed} row(s) past the retention window`);
             // The prune is the ONE thing that removes evidence, so it leaves evidence of itself: an
             // operator reading a thin log must be able to tell "nothing happened" from "it was pruned".
             await recordAudit(null, AUDIT_ACTIONS.AUDIT_PRUNE, 'audit_log', '', {
@@ -383,21 +500,19 @@ async function runAuditRetention(): Promise<number> {
             });
         }
         if (pruneState.behind) {
-            console.warn(
-                `⚠️  audit retention is BEHIND: ${removed} row(s) removed and the table still holds rows ` +
-                'outside the window. Lower audit_retention_days or run the prune more often.'
-            );
+            log.warn(`⚠️  audit retention is BEHIND: ${removed} row(s) removed and the table still holds rows ` +
+                'outside the window. Lower audit_retention_days or run the prune more often.');
         }
         return removed;
     } catch (e: any) {
         pruneState = { ...pruneState, lastRunAt: Date.now(), lastError: String(e && e.message) };
-        console.error('Audit retention prune failed:', e && e.message);
+        log.error({ err: e }, 'Audit retention prune failed');
         return 0;
     }
 }
 
 module.exports = {
-    recordAudit, listAudit, sanitizeDetail,
+    recordAudit, listAudit, listAuditForTarget, sanitizeDetail, onAuditRecorded,
     AUDIT_ACTIONS,
     pruneAuditLog, runAuditRetention, auditRetentionState, auditRetentionDays,
     AUDIT_PRUNE_HOOK, DEFAULT_AUDIT_RETENTION_DAYS,

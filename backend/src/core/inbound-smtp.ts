@@ -29,6 +29,7 @@
 'use strict';
 
 const net = require('net');
+const log = require('./module-logger').moduleLogger('core/inbound-smtp');
 
 type Verdict = null | undefined | { code?: number; message?: string };
 type Invoke = (phase: string, args: any[]) => Promise<Verdict>;
@@ -105,7 +106,7 @@ async function ask(invoke: Invoke, phase: string, args: any[]): Promise<Verdict 
         });
         return await Promise.race([invoke(phase, args), deadline]);
     } catch (e: any) {
-        console.warn(`[InboundSMTP] plugin '${owner}' failed in ${phase}: ${e && e.message}`);
+        log.warn(`[InboundSMTP] plugin '${owner}' failed in ${phase}: ${e && e.message}`);
         return smtpError(451, '4.3.0 Temporary local problem, try again later');
     } finally {
         clearTimeout(timer);
@@ -206,7 +207,7 @@ async function start(slug: string, opts: ListenOptions, claimedPorts: number[], 
             if (session && session.__wjsId) invoke('close', [sessionView(session)]).catch(() => { /* best effort */ });
         },
     });
-    server.on('error', (e: any) => console.error(`[InboundSMTP] listener error: ${e && e.message}`));
+    server.on('error', (e: any) => log.error(`[InboundSMTP] listener error: ${e && e.message}`));
     owner = slug;
 
     const bound = await new Promise<boolean>((resolve) => {
@@ -222,11 +223,11 @@ async function start(slug: string, opts: ListenOptions, claimedPorts: number[], 
     });
     if (bound) {
         status.boundPort = port;
-        console.log(`[InboundSMTP] listening on port ${port} for plugin '${slug}'${status.degraded ? ` (fallback: ${status.reason})` : ''}`);
+        log.info(`[InboundSMTP] listening on port ${port} for plugin '${slug}'${status.degraded ? ` (fallback: ${status.reason})` : ''}`);
     } else {
         try { server.close(); } catch { /* not listening */ }
         server = null;
-        console.warn(`[InboundSMTP] could not listen for plugin '${slug}': ${status.reason}`);
+        log.warn(`[InboundSMTP] could not listen for plugin '${slug}': ${status.reason}`);
     }
     return { ok: bound, ...status };
 }

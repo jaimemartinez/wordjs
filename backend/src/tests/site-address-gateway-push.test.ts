@@ -36,6 +36,7 @@
 
 const { describe, test, before, after, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert');
+const { captureLogLines } = require('./fixtures/log-capture');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -284,10 +285,8 @@ describe('the addresses are re-sent periodically, so a restarted or new gateway 
         await world(BASE);
         const warned: string[] = [];
         const logged: string[] = [];
-        const realWarn = console.warn;
-        const realLog = console.log;
-        console.warn = (m: string) => { warned.push(String(m)); };
-        console.log = (m: string) => { logged.push(String(m)); };
+        const warnings = captureLogLines('warn', { into: warned });
+        const infos = captureLogLines('info', { into: logged });
         try {
             gatewayDown = true;
             const attempts = () => warned.length + logged.length;
@@ -298,8 +297,8 @@ describe('the addresses are re-sent periodically, so a restarted or new gateway 
             await until('the gateway is reached again', () => logged.some((l) => /reachable again/.test(l)));
             assert.ok(attempts() >= 2);
         } finally {
-            console.warn = realWarn;
-            console.log = realLog;
+            warnings.stop();
+            infos.stop();
         }
     });
 
@@ -308,8 +307,7 @@ describe('the addresses are re-sent periodically, so a restarted or new gateway 
         // stored each in turn: an address was answered for half a minute and refused for the next.
         await world(BASE);
         const warned: string[] = [];
-        const realWarn = console.warn;
-        console.warn = (m: string) => { warned.push(String(m)); };
+        const warnings = captureLogLines('warn', { into: warned });
         const flags = () => policyPushes().map((b) => b.onlyIfMissing);
         try {
             assert.strictEqual(await siteAddress.armGateway(), null, 'the push after registration');
@@ -339,7 +337,7 @@ describe('the addresses are re-sent periodically, so a restarted or new gateway 
             await siteAddress.armGateway({ periodic: true });
             assert.deepStrictEqual(flags(), [undefined, true]);
         } finally {
-            console.warn = realWarn;
+            warnings.stop();
         }
     });
 

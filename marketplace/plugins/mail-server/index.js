@@ -61,7 +61,7 @@ function stripHtml(s) {
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '3.0.0',
+    version: '3.0.1',
     description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
 };
@@ -78,6 +78,28 @@ const dns = {
     resolve6: (host) => wordjs.dns.resolve6(host),
     resolve: (host) => wordjs.dns.resolve(host),
 };
+
+// DNSBL over the host's TXT lookup. A blocklist answers a listed IP with BOTH an A record in 127/8
+// and a TXT record explaining the listing; unlisted IPs are NXDOMAIN. The host bridge strips loopback
+// A answers (by design — it never hands a plugin an internal address), so the A form can never say
+// "listed" here; the TXT form can, and goes through the same governed resolver. Returns true (listed),
+// false (not listed) or null (no verdict: IPv6, a resolver error, or the list REFUSING the query —
+// Spamhaus answers queries from public/open resolvers with an error record, not a listing).
+const DNSBL_ZONE = 'zen.spamhaus.org';
+async function dnsblListed(ip, zone = DNSBL_ZONE) {
+    const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(String(ip || ''));
+    if (!m || m.slice(1).some(o => Number(o) > 255)) return null;
+    let records;
+    try {
+        records = await dns.resolveTxt(`${m[4]}.${m[3]}.${m[2]}.${m[1]}.${zone}`);
+    } catch (e) {
+        return /ENOTFOUND|ENODATA|NXDOMAIN/i.test(`${e && e.code} ${e && e.message}`) ? false : null;
+    }
+    const text = (records || []).map(r => (Array.isArray(r) ? r.join('') : String(r))).join(' ');
+    if (!text) return false;
+    if (/open resolver|public resolver|returnc|query refused|error/i.test(text)) return null;
+    return true;
+}
 
 // === Bridge-backed module state (set in init) ===
 let wordjs = null;        // the injected capability bridge
@@ -1184,6 +1206,68 @@ function inboundPortReason(code) {
 }
 
 /**
+ * May this server accept mail for `address` (RCPT TO)? null = yes, else the SMTP error to answer.
+ * Yes for a mailbox on our mail domain (the same predicate as delivery: mailboxAddressOf), an alias, or
+ * any address on the domain while catch-all is on. Another domain is relaying (5.7.1); an address on our
+ * domain with none of those is unknown (5.1.1). A lookup failure is a temporary 4xx, never a silent accept.
+ */
+async function recipientVerdict(rawAddress, mailDomain, catchAllRaw) {
+    const address = String(rawAddress || '').trim().toLowerCase();
+    const at = address.lastIndexOf('@');
+    const local = at > 0 ? address.slice(0, at) : '';
+    const domain = at > 0 ? address.slice(at + 1) : '';
+    if (!local || !domain || domain !== mailDomain) {
+        return smtpError(550, `5.7.1 Relaying denied: this server only accepts mail for ${mailDomain}`);
+    }
+    try {
+        let mailbox = null;
+        const candidate = await User.findByEmail(address) || await User.findByLogin(local);
+        if (mailboxAddressOf(candidate, mailDomain)) {
+            mailbox = candidate;
+        }
+        if (mailbox) return null;
+        if (Admin && await Admin.findAliasByLocalPart(local)) return null;
+        if (catchAllRaw === '1') return null;
+        return smtpError(550, `5.1.1 <${address}>: no such user here`);
+    } catch (e) {
+        console.warn(`[MailServer] RCPT check failed for ${address}: ${e && e.message}`);
+        return smtpError(451, '4.3.0 Temporary local problem, try again later');
+    }
+}
+
+// The Bayesian verdict needs EVIDENCE before it may file mail as spam. The library's categorize()
+// answers "the most probable category" however thin the training: after one message marked spam and
+// one marked not-spam, every text full of words it never saw tied — and the tie went to 'spam', so a
+// normal message from an SPF-authenticated sender landed in Spam (and lost its vacation reply and
+// forward with it). Found in the production lab. So: no verdict until each class has a minimum of
+// training documents, only words the classifier has seen count (an unseen word carries no evidence,
+// it merely favours the class with less text), and spam needs a clear margin — at least ~90 %.
+const BAYES_MIN_DOCS = 5;
+const BAYES_SPAM_MARGIN = Math.log(9); // posterior odds 9:1
+async function isLikelySpam(c, text) {
+    try {
+        const spamDocs = (c && c.docCount && c.docCount.spam) || 0;
+        const hamDocs = (c && c.docCount && c.docCount.ham) || 0;
+        if (spamDocs < BAYES_MIN_DOCS || hamDocs < BAYES_MIN_DOCS) return false;
+        const freq = c.frequencyTable(await c.tokenizer(text));
+        const total = spamDocs + hamDocs;
+        let logSpam = Math.log(spamDocs / total);
+        let logHam = Math.log(hamDocs / total);
+        let seen = 0;
+        for (const token of Object.keys(freq)) {
+            if (!c.vocabulary || !c.vocabulary[token]) continue;
+            seen++;
+            logSpam += freq[token] * Math.log(c.tokenProbability(token, 'spam'));
+            logHam += freq[token] * Math.log(c.tokenProbability(token, 'ham'));
+        }
+        if (seen === 0) return false;
+        return (logSpam - logHam) > BAYES_SPAM_MARGIN;
+    } catch (e) {
+        return false; // a classifier problem never files mail away
+    }
+}
+
+/**
  * Initialize the Inbound SMTP Server
  */
 async function initSMTPServer() {
@@ -1227,20 +1311,17 @@ async function initSMTPServer() {
             getOption('mail_security_dnsbl_enabled', '1').then(enabled => {
                 if (enabled === '0') return callback();
 
-                const dnsbl = require('dnsbl');
-                dnsbl.lookup(ip, 'zen.spamhaus.org').then(listed => {
-                    if (listed) {
-                        console.warn(`[Security][DNSBL] IP ${ip} blocked by DNSBL — rejecting`);
+                dnsblListed(ip).then(listed => {
+                    if (listed === true) {
+                        console.warn(`[Security][DNSBL] IP ${ip} is listed on ${DNSBL_ZONE} — rejecting`);
                         return callback(smtpError(554, 'Connection rejected: your IP is listed on a DNS blocklist'));
                     }
+                    // FAIL OPEN on no verdict: Spamhaus refuses queries from public/cloud resolvers, so
+                    // that is a COMMON case — rejecting on it would blackhole ALL inbound mail. SPF and
+                    // the Bayesian filter still apply. Only a POSITIVE listing rejects.
+                    if (listed === null) console.warn(`[Security][DNSBL] no verdict for ${ip} from ${DNSBL_ZONE} — accepting (fail open)`);
                     callback();
-                }).catch((e) => {
-                    // FAIL OPEN: Spamhaus Zen refuses queries from public/cloud resolvers, so a lookup error
-                    // is the COMMON case — rejecting on it would blackhole ALL inbound mail. Log and accept;
-                    // SPF + the Bayesian filter still apply. Only a POSITIVE listing rejects.
-                    console.warn(`[Security][DNSBL] lookup error for ${ip}: ${e.message} — accepting (fail open)`);
-                    callback();
-                });
+                }).catch(() => callback());
             }).catch((e) => {
                 // The option lookup itself failed — accept (fail open) rather than blackhole inbound.
                 console.warn(`[Security][DNSBL] option lookup error: ${e.message} — accepting (fail open)`);
@@ -1324,19 +1405,23 @@ async function initSMTPServer() {
             });
         },
 
-        // 3. The administrator's site-wide sender blocklist — refused at the envelope, before any DATA
-        //    is transferred. (Trusted loopback/authenticated sessions are our own relay: never gated.)
+        // 3. RCPT TO: the administrator's site-wide sender blocklist (refused before any DATA is
+        //    transferred; trusted loopback/authenticated sessions are our own relay and never gated), then
+        //    the recipient itself — a mailbox, an alias, or catch-all on OUR mail domain, or a 550. Accepting
+        //    an address that delivers nowhere told the sender "250 OK" and then dropped the message, so
+        //    nobody ever learned it was lost (found in the production lab).
         onRcptTo(address, session, callback) {
-            if (isTrustedSmtpSession(session)) return callback();
             const envelopeFrom = (session && session.envelope && session.envelope.mailFrom && session.envelope.mailFrom.address) || '';
-            if (!envelopeFrom) return callback();
-            getDeliveryPolicy().then((policy) => {
-                if (MailRules.senderMatches(envelopeFrom, policy.blocked)) {
+            const blocked = (envelopeFrom && !isTrustedSmtpSession(session))
+                ? getDeliveryPolicy().then((policy) => MailRules.senderMatches(envelopeFrom, policy.blocked)).catch(() => false)
+                : Promise.resolve(false);
+            blocked.then(async (isBlocked) => {
+                if (isBlocked) {
                     console.warn(`[Security] Sender ${envelopeFrom} is on the site blocklist — rejecting`);
                     return callback(smtpError(550, '5.7.1 Sender rejected by recipient policy'));
                 }
-                callback();
-            }).catch(() => callback()); // a policy read failure never blackholes inbound mail
+                callback(await recipientVerdict(address && address.address, mailDomain, catchAllRaw));
+            }).catch(() => callback(smtpError(451, '4.3.0 Temporary local problem, try again later')));
         },
 
         onData(stream, session, callback) {
@@ -1346,8 +1431,7 @@ async function initSMTPServer() {
                 try {
                     // 3. Bayesian Analysis
                     const text = (parsed.subject || '') + ' ' + (parsed.text || '');
-                    const category = await classifier.categorize(text);
-                    const isSpam = category === 'spam';
+                    const isSpam = await isLikelySpam(classifier, text);
 
                     if (isSpam) console.log(`[Security] Bayesian Filter marked message as SPAM`);
 
@@ -1830,8 +1914,17 @@ async function deliverLocalCopy(user, createData) {
             if (label && row) await Email.addLabelToEmails([row.id], label.id);
         } catch (e) { /* a label failure never loses the message */ }
     }
+    // Keep the cached usage honest between refreshes: the bodies AND the attachments this copy stored.
+    // Counting the text alone let a mailbox with a 1 MB quota take message after message carrying
+    // megabytes of attachments until the cache expired (found in the production lab).
     const hit = _usageCache.get(user.id);
-    if (hit) hit.bytes += String(createData.bodyText || '').length + String(createData.bodyHtml || '').length + String(createData.rawContent || '').length;
+    if (hit) {
+        let added = String(createData.bodyText || '').length + String(createData.bodyHtml || '').length + String(createData.rawContent || '').length;
+        for (const att of (createData.attachments || [])) {
+            added += (att && att.content && att.content.length) || (att && Number(att.size)) || 0;
+        }
+        hit.bytes += added;
+    }
     // Quiet filing (read, archived, trashed or spam) gets no "new mail" notification.
     const quiet = !!(filing.isSpam || filing.isTrash || filing.isRead || filing.isArchived || forwardsAway);
     const forwardTo = (fwd.enabled && policy.forwardingAllowed && !filing.isSpam && !filing.isTrash) ? fwd.address : '';
@@ -2078,6 +2171,9 @@ async function sendMail(data) {
                 parentId,
                 threadId,
                 userId: senderUserId,
+                // Remembered on the row so a queued retry goes out as an auto-reply again (null
+                // return path + Auto-Submitted), not as the user's own mail.
+                isAutoReply: data.isAutoReply ? 1 : 0,
                 attachments: data.attachments
             });
             sentRecordId = sentRec ? sentRec.id : 0;
@@ -2295,7 +2391,7 @@ async function sendMail(data) {
         const extraHeaders = (data.isAutoReply || data.extraHeaders)
             ? { ...(data.extraHeaders || {}), ...(data.isAutoReply ? { 'Auto-Submitted': 'auto-replied' } : {}) }
             : undefined;
-        const mailObj = { fromEmail: wireFrom, fromName, replyTo: wireReplyTo, subject: data.subject, text: data.text, html: data.html, attachments, messageId: outboundMessageId, headers: extraHeaders };
+        const mailObj = { fromEmail: wireFrom, envelopeFrom: envelopeSenderOf(data, wireFrom), fromName, replyTo: wireReplyTo, subject: data.subject, text: data.text, html: data.html, attachments, messageId: outboundMessageId, headers: extraHeaders };
 
         if (relay) {
             // Relay/smarthost path (used only if a relay is configured). NOTE: wireFrom === fromEmail
@@ -2303,14 +2399,7 @@ async function sendMail(data) {
             console.log(`[MailServer] Delivering ${externalRecipients.length} recipient(s) via configured relay...`);
             for (const extR of externalRecipients) {
                 try {
-                    const info = await relay.sendMail({
-                        envelope: { from: wireFrom, to: extR },
-                        from: `"${fromName}" <${wireFrom}>`, to: extR,
-                        replyTo: wireReplyTo,
-                        messageId: outboundMessageId,
-                        subject: data.subject, text: data.text, html: data.html, attachments, dkim: dkimOptions,
-                        headers: extraHeaders
-                    });
+                    const info = await deliverViaRelay(relay, extR, mailObj, dkimOptions);
                     delivered.push({ recipient: extR, via: 'relay', response: info.response });
                 } catch (e) {
                     console.error(`[MailServer] ❌ Relay delivery to ${extR} failed: ${e.message}`);
@@ -2550,6 +2639,57 @@ function isTlsVerifyError(e) {
 }
 
 /**
+ * Did the MX REFUSE STARTTLS with an SMTP reply (e.g. "454 4.7.0 TLS not available due to local
+ * problem" from a Postfix with no certificate)? nodemailer reports that as code ETLS carrying the
+ * server's reply code. Only that shape qualifies: a handshake that starts and then fails (reset,
+ * protocol error) is NOT this, and stays undowngraded — see the TLS suite.
+ *
+ * Continuing in plaintext after such a refusal is opportunistic TLS as every MTA does it (Postfix
+ * `smtp_tls_security_level = may`): it is the same outcome as a server that does not advertise STARTTLS
+ * at all, which we already accept, so an on-path attacker gains nothing they could not get by stripping
+ * the advertisement. Without it, mail to a provider with a broken TLS setup was retried for hours and
+ * then bounced (found in the production lab).
+ */
+function isStartTlsRefused(e) {
+    if (!e || String(e.code || '').toUpperCase() !== 'ETLS') return false;
+    const code = Number(e.responseCode) || 0;
+    return code >= 400 && code < 600;
+}
+
+/**
+ * The SMTP envelope sender (MAIL FROM) for an outbound message. RFC 3834 §3.3: an automatic response
+ * (the vacation responder) goes out with a NULL return path, MAIL FROM:<>, so a reply that cannot be
+ * delivered is dropped by the remote MTA instead of bouncing back into the vacationing user's inbox —
+ * which is what happened while the envelope carried the user's address. The header From, Reply-To,
+ * DKIM signature and Auto-Submitted header are unaffected; only the envelope changes. Everything else
+ * (normal sends, and forwards, which keep the forwarding address for SPF alignment) uses the wire From.
+ * nodemailer turns `envelope.from: ''` into exactly `MAIL FROM:<>` on both the direct and relay paths.
+ */
+function envelopeSenderOf(data, wireFrom) {
+    return data && data.isAutoReply ? '' : wireFrom;
+}
+
+// A mail object without envelopeFrom keeps the historical behaviour: the envelope sender is the wire From.
+function envelopeFromOf(mail) {
+    return typeof mail.envelopeFrom === 'string' ? mail.envelopeFrom : mail.fromEmail;
+}
+
+/**
+ * Deliver ONE message to ONE recipient through the configured relay/smarthost. Resolves with
+ * nodemailer's info; a rejection carries nodemailer's responseCode for the caller to classify.
+ */
+async function deliverViaRelay(relay, recipient, mail, dkimOptions) {
+    return await relay.sendMail({
+        envelope: { from: envelopeFromOf(mail), to: recipient },
+        from: `"${mail.fromName}" <${mail.fromEmail}>`, to: recipient,
+        replyTo: mail.replyTo,
+        messageId: mail.messageId,
+        subject: mail.subject, text: mail.text, html: mail.html, attachments: mail.attachments, dkim: dkimOptions,
+        headers: mail.headers
+    });
+}
+
+/**
  * Deliver ONE message to ONE recipient by connecting directly to its domain's MX servers.
  * Resolves on success ({ ok, mx, response }); rejects with err.permanent set (5xx = permanent,
  * 4xx/network = temporary so the caller may retry).
@@ -2577,11 +2717,13 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
     // TTL=0 rebinding window where authoritative DNS hands a public IP to the validator and
     // 127.0.0.1 / 169.254.169.254 to the live connection. `servername` keeps the REAL MX hostname so
     // STARTTLS certificate validation and SNI still target the host, not the bare IP.
-    const sendVia = async (pinnedIp, serverName, rejectUnauthorized) => {
+    const sendVia = async (pinnedIp, serverName, rejectUnauthorized, plaintext = false) => {
         const transport = nodemailer.createTransport({
             host: pinnedIp,               // already-validated public IP — no second resolution
             port: 25,
             secure: false,
+            // Only after this host REFUSED STARTTLS with a reply (isStartTlsRefused): do not ask again.
+            ...(plaintext ? { ignoreTLS: true } : {}),
             name: heloName,               // EHLO/HELO hostname (must match rDNS)
             connectionTimeout: 20000,
             greetingTimeout: 15000,
@@ -2592,8 +2734,9 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
         });
         try {
             const info = await transport.sendMail({
-                // Envelope (MAIL FROM / RCPT TO) drives SPF alignment & bounces; keep it our domain.
-                envelope: { from: mail.fromEmail, to: recipient },
+                // Envelope (MAIL FROM / RCPT TO) drives SPF alignment & bounces; keep it our domain
+                // (or the null return path for an auto-reply — see envelopeSenderOf).
+                envelope: { from: envelopeFromOf(mail), to: recipient },
                 from: `"${mail.fromName}" <${mail.fromEmail}>`,
                 to: recipient,
                 replyTo: mail.replyTo,
@@ -2646,6 +2789,21 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
                     lastErr = e2;
                     const code = e2.responseCode || 0;
                     permanent = code >= 500 && code < 600;
+                    if (permanent) break;
+                    continue;
+                }
+            }
+            // The host refused STARTTLS with a reply: deliver to it without TLS, as opportunistic TLS
+            // does, and say so in the log.
+            if (isStartTlsRefused(e)) {
+                console.warn(`[MailServer][TLS] ${mx.exchange} refused STARTTLS (${e.responseCode}) — retrying WITHOUT TLS (opportunistic, plaintext).`);
+                try {
+                    const info = await sendVia(pinnedIp, mx.exchange, false, true);
+                    return { ok: true, mx: mx.exchange, response: info.response, tlsDowngraded: true, plaintext: true };
+                } catch (e2) {
+                    lastErr = e2;
+                    const code2 = e2.responseCode || 0;
+                    permanent = code2 >= 500 && code2 < 600;
                     if (permanent) break;
                     continue;
                 }
@@ -2708,6 +2866,7 @@ async function retryFailedDelivery(email, rateKey) {
             threadId: email.thread_id,
             userId: email.user_id || 0,
             isRetry: true,
+            isAutoReply: Number(email.is_auto_reply) === 1,
             sentRecordId: email.id,
             deliveryAttempts: 0, // manual retry → fresh cycle, not stuck at max attempts
             attachments
@@ -2925,6 +3084,7 @@ exports.init = async function (bridge) {
                         userId: email.user_id || 0,
                         // Reuse the existing Sent record instead of creating a duplicate copy.
                         isRetry: true,
+                        isAutoReply: Number(email.is_auto_reply) === 1,
                         sentRecordId: email.id,
                         deliveryAttempts: email.delivery_attempts || 0,
                         attachments: formattedAttachments
@@ -3075,6 +3235,27 @@ exports.init = async function (bridge) {
     // exists, gate this behind an explicit 'read_others_mail' capability instead of the bare role.
     const canAccessEmail = (email, user) =>
         !!user && (Email._ownsRow(email, user.id, user.userEmail) || user.role === 'administrator');
+
+    // FORWARDED ATTACHMENTS: to forward a message WITH its files, the composer names each stored
+    // attachment by its row id (`attachmentId`) — never by a path. The id is honoured only when the
+    // caller may read the message it belongs to (the same canAccessEmail test as the download route),
+    // and it becomes a path inside our own attachment dir built from storage_path. An id the caller
+    // may not read, or that does not exist, is DROPPED. Entries without an id (fresh uploads) pass
+    // through unchanged to the store's path resolver.
+    const resolveComposerAttachments = async (list, user) => {
+        const out = [];
+        for (const a of (Array.isArray(list) ? list : []).slice(0, 50)) {
+            if (!a || typeof a !== 'object') continue;
+            if (a.attachmentId === undefined || a.attachmentId === null) { out.push(a); continue; }
+            // NOT-A-USER-PATH: read only to be gated — canAccessEmail(parent) below decides before any use.
+            const row = await Email.getAttachmentById(parseInt(a.attachmentId, 10) || 0);
+            // NOT-A-USER-PATH: the parent row is what the gate below is asked about.
+            const parent = row && await Email.findById(row.email_id);
+            if (!row || !row.storage_path || !parent || !canAccessEmail(parent, user)) continue;
+            out.push({ filename: row.filename, contentType: row.content_type, size: row.size, path: path.join(UPLOAD_DIR, row.storage_path) });
+        }
+        return out;
+    };
 
     // GET /api/v1/plugin/mail-server/emails/search — operator-aware (from:/to:/subject:/label:/in:/
     // has:attachment/is:unread/is:starred + free text), scoped to the requester's mailbox.
@@ -3311,7 +3492,8 @@ exports.init = async function (bridge) {
 
     // POST /api/v1/plugin/mail-server/drafts
     route('post', '/drafts', { auth: true, mailbox: true }, async (req, res) => {
-        const { id, to, cc, bcc, subject, body, isHtml = true, replyToId, attachments } = req.body;
+        const { id, to, cc, bcc, subject, body, isHtml = true, replyToId } = req.body;
+        const attachments = await resolveComposerAttachments(req.body.attachments, req.user);
 
         try {
             const data = {
@@ -3383,7 +3565,7 @@ exports.init = async function (bridge) {
 
     // POST /api/v1/plugin/mail-server/send
     route('post', '/send', { auth: true, mailbox: true }, async (req, res) => {
-        const { to, cc, bcc, isHtml = true, replyToId, id, attachments, scheduledAt } = req.body;
+        const { to, cc, bcc, isHtml = true, replyToId, id, scheduledAt } = req.body;
         // A message may have an empty subject or body (the composer asks first) — only a recipient is required.
         const subject = String(req.body.subject == null ? '' : req.body.subject);
         const body = String(req.body.body == null ? '' : req.body.body);
@@ -3421,6 +3603,8 @@ exports.init = async function (bridge) {
         // outbox: doing so overwrote the colleague's message AND left the row's from_address — a
         // colleague's address — as the identity the send queue would have used. Send it as a NEW
         // message of the caller's own instead; the shared row is left exactly as it was.
+        const attachments = await resolveComposerAttachments(req.body.attachments, req.user);
+
         let sendAsNew = false;
         if (id) {
             const existing = await Email.findById(id);

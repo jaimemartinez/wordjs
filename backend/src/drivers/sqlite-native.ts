@@ -5,6 +5,7 @@
 const path = require('path');
 const fs = require('fs');
 const config = require('../config/app');
+const log = require('../core/module-logger').moduleLogger('drivers/sqlite-native');
 
 let dbInstance: any = null;
 
@@ -20,7 +21,7 @@ function init(options: any = {}) {
         // Lazy load to avoid crashing if not installed
         const Database = require('better-sqlite3');
         dbInstance = new Database(dbPath, {
-            verbose: config.nodeEnv === 'development' ? console.log : null
+            verbose: config.nodeEnv === 'development' ? (sql: unknown) => log.debug({ sql }, 'sqlite statement') : null
         });
 
         // Performance optimizations
@@ -28,7 +29,7 @@ function init(options: any = {}) {
         dbInstance.pragma('synchronous = NORMAL'); // Faster writes, safe for WAL
         dbInstance.pragma('foreign_keys = ON');
 
-        console.log('⚡ Native SQLite Driver initialized with WAL mode.');
+        log.info('⚡ Native SQLite Driver initialized with WAL mode.');
         return dbInstance;
     } catch (e) {
         if (e.code === 'MODULE_NOT_FOUND') {
@@ -100,5 +101,7 @@ module.exports = {
     init,
     get,
     save,
-    close
+    close,
+    // Multisite: config/database wraps a secondary site's connection in the same synchronous API.
+    NativeWrapper
 };

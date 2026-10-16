@@ -18,6 +18,9 @@
  *
  * THE INVARIANT. An accepted host grants nothing. `req.siteHost` says which address the request used;
  * no authorisation decision may read it. Links, cookies' Domain and allow-lists never come from it.
+ * In a multisite network the address also selects WHICH site's data the request works on
+ * (`req.siteHost.siteId`, from the network's declared addresses only); inside that site it still grants
+ * nothing: authorisation comes from that site's own users, roles and sessions.
  */
 const net = require('net');
 const os = require('os');
@@ -505,6 +508,10 @@ function classify(p, pol, ctx) {
     const alias = pol.aliases && pol.aliases.get(h);
     const aliasExpired = Boolean(alias && alias.expiresAt !== null && now >= alias.expiresAt);
     if (alias && !aliasExpired) return { cls: 'alias', reason: 'alias', entry: alias };
+    // Multisite: another site's main address is that site's canonical. Its entry carries the siteId,
+    // which selects the site's data partition and nothing else (see THE INVARIANT above).
+    const networkSite = pol.sites && pol.sites.get(h);
+    if (networkSite) return { cls: 'canonical', reason: 'site', entry: networkSite };
     const envEntry = pol.envHosts && pol.envHosts.get(h);
     if (envEntry) return { cls: 'env', reason: 'env', entry: envEntry };
     if (isLoopbackAuthority(p)) return { cls: 'loopback', reason: 'loopback', entry: null };
@@ -639,6 +646,52 @@ function readAliases(list, canonical, warnings) {
     return aliases;
 }
 
+/**
+ * Multisite: the main addresses of the network's OTHER sites (`networkSites`, built by the backend from
+ * the network store and pushed to the gateway with the rest of the policy). Each becomes an accepted
+ * address whose entry names its site. Site 1 is never listed here (its addresses are siteUrl and
+ * siteAliases), an address that is already site 1's is refused, and a malformed entry is left out.
+ */
+const MAX_NETWORK_SITES = 5000;
+
+function readNetworkSites(list, canonical, aliases, warnings) {
+    const sites = new Map();
+    if (list === undefined || list === null) return sites;
+    if (!Array.isArray(list)) {
+        warnings.push('networkSites is not a list; no other site is answered.');
+        return sites;
+    }
+    list.slice(0, MAX_NETWORK_SITES).forEach((item, i) => {
+        if (!item || typeof item !== 'object') {
+            warnings.push(`networkSites[${i}] is not a site entry; ignored.`);
+            return;
+        }
+        const id = item.id;
+        if (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 2) {
+            warnings.push(`networkSites[${i}] has no valid site id; ignored.`);
+            return;
+        }
+        const site = parseSiteUrl(item.url);
+        if (!site) {
+            warnings.push(`networkSites[${i}]: ${quote(item.url)} is not a valid site address; ignored.`);
+            return;
+        }
+        if ((canonical && site.hostname === canonical.hostname) || aliases.has(site.hostname)) {
+            warnings.push(`networkSites[${i}]: ${site.hostname} is an address of the main site; ignored.`);
+            return;
+        }
+        if (sites.has(site.hostname)) {
+            warnings.push(`networkSites[${i}]: ${site.hostname} is listed for two sites; the first entry is used.`);
+            return;
+        }
+        sites.set(site.hostname, Object.freeze(Object.assign({}, site, {
+            siteId: id,
+            status: item.status === 'suspended' ? 'suspended' : 'active',
+        })));
+    });
+    return sites;
+}
+
 function readEnvHosts(value, canonical, warnings) {
     const hosts = new Map();
     for (const text of splitList(value)) {
@@ -740,10 +793,12 @@ function buildPolicy(input) {
         warnings.push(`trustProxy ${quote(trustProxy)} is not address-based (an IP, a subnet or loopback); forwarded Host headers are not honoured from it.`);
     }
 
+    const aliases = readAliases(cfg.siteAliases, canonical, warnings);
     return Object.freeze({
         canonical,
         canonicalError,
-        aliases: readAliases(cfg.siteAliases, canonical, warnings),
+        aliases,
+        sites: readNetworkSites(cfg.networkSites, canonical, aliases, warnings),
         envHosts: readEnvHosts(env.WORDJS_ALLOWED_HOSTS, canonical, warnings),
         ipLiterals: ipLiterals.mode,
         ipLiteralsSource: ipLiterals.source,
@@ -1215,6 +1270,17 @@ function forwardingAdvice(req, authority, pol, now) {
  * ones by default, which GET /site-address reads), `exemptPaths`, `now`. Uses only the raw Node
  * response API, so the monolith and the gateway can mount it outside Express too.
  */
+/**
+ * Multisite: the site an ACCEPTED verdict belongs to — the network site its entry names, else site 1
+ * (the main address, its aliases, loopback, IP literals, environment and development hosts all serve
+ * the main site). null for an unknown address.
+ */
+function siteIdOf(verdict) {
+    if (!verdict || verdict.cls === 'unknown') return null;
+    const id = verdict.entry && verdict.entry.siteId;
+    return typeof id === 'number' && Number.isSafeInteger(id) && id >= 2 ? id : 1;
+}
+
 function hostGateFactory(opts) {
     if (!opts || typeof opts.getPolicy !== 'function' || typeof opts.isInstalled !== 'function') {
         throw new TypeError('hostGateFactory: getPolicy() and isInstalled() are required');
@@ -1287,6 +1353,7 @@ function hostGateFactory(opts) {
             cls: verdict.cls,
             reason: verdict.reason,
             entry: verdict.entry,
+            siteId: siteIdOf(verdict),
             hop: authority.hop,
             viaTrustedHop: authority.viaTrustedHop,
             scheme: schemeVia(req, authority.hop),
@@ -1317,6 +1384,7 @@ module.exports = {
     forwardedForValues,
     // classification and policy
     classify,
+    siteIdOf,
     refusalHint,
     REFUSAL_HINTS,
     TUNNEL_SUFFIXES,

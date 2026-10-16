@@ -15,6 +15,8 @@
  * the recorded key); prefix with a zero-padded ordinal, e.g. '0001_add_posts_author_index'.
  */
 
+const log = require('./module-logger').moduleLogger('core/schema-migrations');
+
 type MigrationCtx = {
     exec: (sql: string) => Promise<any>;
     run: (sql: string, params?: any[]) => Promise<any>;
@@ -73,23 +75,23 @@ const MIGRATIONS: Migration[] = [
                 try {
                     const dups = (await ctx.all(chk.dupSql)) || [];
                     if (dups.length > 0) {
-                        console.warn(`⚠️  [migration 0001] ${dups.length} duplicate group(s) found for ${chk.label}; the unique index may not be created until these are resolved:`);
+                        log.warn({ label: chk.label }, `⚠️  [migration 0001] ${dups.length} duplicate group(s) found for ${chk.label}; the unique index may not be created until these are resolved:`);
                         for (const d of dups.slice(0, 20)) {
                             const key = d.t !== undefined ? `${d.k} / ${d.t}` : d.k;
-                            console.warn(`      - "${key}" appears ${d.c} times`);
+                            log.warn(`      - "${key}" appears ${d.c} times`);
                         }
-                        if (dups.length > 20) console.warn(`      ...and ${dups.length - 20} more`);
+                        if (dups.length > 20) log.warn(`      ...and ${dups.length - 20} more`);
                     }
                 } catch (e: any) {
-                    console.warn(`⚠️  [migration 0001] duplicate scan for ${chk.label} skipped: ${e && e.message}`);
+                    log.warn({ label: chk.label, err: e }, `⚠️  [migration 0001] duplicate scan for ${chk.label} skipped`);
                 }
 
                 // 2. Attempt the unique index. Failure (e.g. residual duplicates) is logged, not fatal.
                 try {
                     await ctx.exec(chk.indexSql);
-                    console.log(`   ✓ [migration 0001] unique index ensured for ${chk.label}`);
+                    log.info({ label: chk.label }, `   ✓ [migration 0001] unique index ensured for ${chk.label}`);
                 } catch (e: any) {
-                    console.warn(`⚠️  [migration 0001] could NOT create unique index for ${chk.label} (continuing, data integrity not enforced for this column): ${e && e.message}`);
+                    log.warn({ label: chk.label, err: e }, `⚠️  [migration 0001] could NOT create unique index for ${chk.label} (continuing, data integrity not enforced for this column)`);
                 }
             }
             // Intentionally no throw: recorded-as-applied even if some indexes were skipped.
@@ -196,7 +198,7 @@ const MIGRATIONS: Migration[] = [
             try {
                 await ctx.exec('ALTER TABLE webhooks RENAME COLUMN secret_enc TO secret');
             } catch (e: any) {
-                console.warn(`   [migration 0005] webhooks.secret_enc→secret rename skipped (non-fatal): ${e && e.message}`);
+                log.warn({ err: e }, '   [migration 0005] webhooks.secret_enc→secret rename skipped (non-fatal)');
             }
         }
     },
@@ -244,7 +246,7 @@ const MIGRATIONS: Migration[] = [
                     try { mailDomain = new URL(siteUrl).hostname.toLowerCase(); } catch { mailDomain = ''; }
                 }
                 if (!mailDomain) {
-                    console.log('   [migration 0006] no site/mail domain configured — no professional mailboxes to derive.');
+                    log.info('   [migration 0006] no site/mail domain configured — no professional mailboxes to derive.');
                     return;
                 }
 
@@ -259,7 +261,7 @@ const MIGRATIONS: Migration[] = [
                         if (caps.includes('*') || caps.includes('edit_users')) privilegedRoles.add(name);
                     }
                 } catch (e: any) {
-                    console.warn(`   [migration 0006] could not read the roles map (${e && e.message}); treating only 'administrator' as privileged.`);
+                    log.warn({ err: e }, `   [migration 0006] could not read the roles map (${e && e.message}); treating only 'administrator' as privileged.`);
                 }
 
                 // 3. Derive. A user with no role meta is a subscriber (User.getRole's default).
@@ -285,22 +287,22 @@ const MIGRATIONS: Migration[] = [
                 }
 
                 if (granted.length) {
-                    console.log(`   ✓ [migration 0006] professional mailbox kept for ${granted.length} privileged account(s): ${granted.join(', ')}`);
+                    log.info(`   ✓ [migration 0006] professional mailbox kept for ${granted.length} privileged account(s): ${granted.join(', ')}`);
                 }
                 if (pending.length) {
-                    console.warn(`⚠️  [migration 0006] ${pending.length} account(s) hold an address on the mail domain '${mailDomain}' but are NOT administrators/user managers, so their professional mailbox was NOT auto-enabled (it could have been self-assigned before this release). Re-enable the legitimate ones in Users → edit user → Professional Mail Account:`);
-                    for (const p of pending.slice(0, 50)) console.warn(`      - ${p}`);
-                    if (pending.length > 50) console.warn(`      ...and ${pending.length - 50} more`);
+                    log.warn({ mailDomain }, `⚠️  [migration 0006] ${pending.length} account(s) hold an address on the mail domain '${mailDomain}' but are NOT administrators/user managers, so their professional mailbox was NOT auto-enabled (it could have been self-assigned before this release). Re-enable the legitimate ones in Users → edit user → Professional Mail Account:`);
+                    for (const p of pending.slice(0, 50)) log.warn({ p }, `      - ${p}`);
+                    if (pending.length > 50) log.warn(`      ...and ${pending.length - 50} more`);
                     try {
                         await ctx.run('DELETE FROM options WHERE option_name = ?', ['professional_mailbox_migration_pending']);
                         await ctx.run("INSERT INTO options (option_name, option_value, autoload) VALUES (?, ?, 'no')",
                             ['professional_mailbox_migration_pending', JSON.stringify(pending)]);
                     } catch (e: any) {
-                        console.warn(`   [migration 0006] could not record the pending list as an option (the log above is the worklist): ${e && e.message}`);
+                        log.warn({ err: e }, '   [migration 0006] could not record the pending list as an option (the log above is the worklist)');
                     }
                 }
             } catch (e: any) {
-                console.warn(`⚠️  [migration 0006] professional-mailbox derivation skipped (non-fatal — accounts stay DISABLED until an admin enables them): ${e && e.message}`);
+                log.warn({ err: e }, '⚠️  [migration 0006] professional-mailbox derivation skipped (non-fatal — accounts stay DISABLED until an admin enables them)');
             }
         }
     },
@@ -354,7 +356,23 @@ const MIGRATIONS: Migration[] = [
                     post_title, post_content, content='posts', content_rowid='id', tokenize='unicode61'
                 )`);
             } catch (e: any) {
-                console.warn(`   [migration 0008] FTS5 unavailable (${e && e.message}) — search keeps using LIKE.`);
+                // Strict driver mode (dbStrictDriver / WORDJS_DB_STRICT) refuses this degradation the same
+                // way config/database.ts refuses the 'sqlite-legacy' fallback: a native SQLite build without
+                // FTS5 is a boot error, not a quiet switch to LIKE. An EXPLICITLY configured 'sqlite-legacy'
+                // is exempt — no FTS5 is a documented property of the driver the operator chose, not a
+                // degradation of it (and a fallback to it never gets this far in strict mode).
+                if (ctx.driverName !== 'sqlite-legacy' && require('../config/app').dbStrictDriver === true) {
+                    throw new Error(
+                        `Strict database driver mode is on (WORDJS_DB_STRICT / "dbStrictDriver"), and this ` +
+                        `SQLite build has no FTS5 (${e && e.message}), so ranked full-text search cannot be ` +
+                        `enabled. To fix it, use a SQLite build with FTS5 (the better-sqlite3 prebuilt binaries ` +
+                        `include it: run \`npm rebuild better-sqlite3\` in backend/ without a custom ` +
+                        `SQLite), then restart. To accept LIKE search instead, unset WORDJS_DB_STRICT and ` +
+                        `remove "dbStrictDriver" from backend/wordjs-config.json.`,
+                        { cause: e }
+                    );
+                }
+                log.warn({ err: e }, `   [migration 0008] FTS5 unavailable (${e && e.message}) — search keeps using LIKE.`);
                 return;
             }
 
@@ -373,7 +391,7 @@ const MIGRATIONS: Migration[] = [
 
             // Backfill the posts that already exist (a no-op on a fresh install).
             await ctx.exec(`INSERT INTO posts_fts(posts_fts) VALUES('rebuild')`);
-            console.log('   ✓ [migration 0008] full-text index built over posts(title, content)');
+            log.info('   ✓ [migration 0008] full-text index built over posts(title, content)');
         }
     },
     {
@@ -434,7 +452,7 @@ const MIGRATIONS: Migration[] = [
                 await ctx.exec(
                     `CREATE INDEX IF NOT EXISTS idx_posts_search_vector ON posts USING GIN (search_vector)`
                 );
-                console.log('   ✓ [migration 0010] Postgres tsvector column + GIN index built over posts(title, content, excerpt)');
+                log.info('   ✓ [migration 0010] Postgres tsvector column + GIN index built over posts(title, content, excerpt)');
                 return;
             }
 
@@ -450,9 +468,9 @@ const MIGRATIONS: Migration[] = [
                     await ctx.exec(
                         `ALTER TABLE posts ADD FULLTEXT INDEX ftidx_posts_search (post_title, post_content, post_excerpt)`
                     );
-                    console.log('   ✓ [migration 0010] MySQL FULLTEXT index built over posts(title, content, excerpt)');
+                    log.info('   ✓ [migration 0010] MySQL FULLTEXT index built over posts(title, content, excerpt)');
                 } else {
-                    console.log('   • [migration 0010] MySQL FULLTEXT index already present — skipped');
+                    log.info('   • [migration 0010] MySQL FULLTEXT index already present — skipped');
                 }
                 return;
             }
@@ -522,7 +540,7 @@ const MIGRATIONS: Migration[] = [
             // Resolve "translations of X" by exact translation_group. A translation set is tiny, so a
             // plain single-column index is all it needs.
             await ctx.exec('CREATE INDEX IF NOT EXISTS idx_posts_translation_group ON posts (translation_group)');
-            console.log('   ✓ [migration 0011] posts.post_language + posts.translation_group ready');
+            log.info('   ✓ [migration 0011] posts.post_language + posts.translation_group ready');
         }
     },
     {
@@ -572,7 +590,7 @@ const MIGRATIONS: Migration[] = [
             await ctx.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_collab_ops_dot ON collab_ops (post_id, site_id, counter)');
             // La lectura caliente es "dame el log de esta sala en orden": (post_id, epoch, id).
             await ctx.exec('CREATE INDEX IF NOT EXISTS idx_collab_ops_room ON collab_ops (post_id, epoch, id)');
-            console.log('   ✓ [migration 0012] collab_docs + collab_ops ready');
+            log.info('   ✓ [migration 0012] collab_docs + collab_ops ready');
         }
     },
     {
@@ -681,9 +699,9 @@ const MIGRATIONS: Migration[] = [
             } catch (e: any) {
                 // No poder retirar el índice viejo NO es motivo para abortar el arranque: el nuevo ya
                 // está y es más estricto. Se deja dicho en el log y se sigue.
-                console.warn('   ⚠️  [migration 0013] no se pudo retirar idx_collab_ops_dot:', (e && e.message) || e);
+                log.warn({ err: e }, '   ⚠️  [migration 0013] no se pudo retirar idx_collab_ops_dot');
             }
-            console.log('   ✓ [migration 0013] collab: epoch en el UNIQUE, truncated/base_hash/updated_ms y collab_members');
+            log.info('   ✓ [migration 0013] collab: epoch en el UNIQUE, truncated/base_hash/updated_ms y collab_members');
         }
     },
     {
@@ -727,7 +745,7 @@ const MIGRATIONS: Migration[] = [
                 'CREATE UNIQUE INDEX IF NOT EXISTS idx_wh_delivery_source_event ' +
                 'ON webhook_deliveries (webhook_id, source_event_id, event)'
             );
-            console.log('   ✓ [migration 0014] durable transactional content outbox ready');
+            log.info('   ✓ [migration 0014] durable transactional content outbox ready');
         }
     },
     {
@@ -792,14 +810,50 @@ const MIGRATIONS: Migration[] = [
                 }
 
                 if (filled > 0) {
-                    console.log(`   ✓ [migration 0015] public author slug derived for ${filled} account(s)`);
+                    log.info({ filled }, `   ✓ [migration 0015] public author slug derived for ${filled} account(s)`);
                 }
                 if (unnameable > 0) {
-                    console.warn(`   [migration 0015] ${unnameable} account(s) have a display name that slugifies to nothing; they stay addressable by user id until one is given a name.`);
+                    log.warn({ unnameable }, `   [migration 0015] ${unnameable} account(s) have a display name that slugifies to nothing; they stay addressable by user id until one is given a name.`);
                 }
             } catch (e: any) {
-                console.warn(`⚠️  [migration 0015] author-slug backfill skipped (non-fatal — authors stay addressable by user id): ${e && e.message}`);
+                log.warn({ err: e }, '⚠️  [migration 0015] author-slug backfill skipped (non-fatal — authors stay addressable by user id)');
             }
+        }
+    },
+    {
+        // AI AGENT CONNECTIONS (the MCP server, core/mcp-server). An agent connection is a dedicated `wja_` token
+        // bound to ONE user, carrying TWO capability sets: what the connection REQUESTED and what an administrator
+        // GRANTED (always a subset of the requested set — the same "the manifest requests, the admin grants" model
+        // plugins follow). The effective authority of every call is grants ∩ the bound user's live capabilities,
+        // resolved at request time (core/agent-capabilities), so nothing stored here can widen a user.
+        //   - token_hash: sha256 of the token, exactly like api_tokens — the plaintext is shown once, never stored.
+        //   - requested_caps / granted_caps: comma lists of the agent vocabulary (content:read, content:draft, …).
+        //   - status: 'pending' (nothing granted yet) | 'active' | 'revoked'. Revocation is a terminal state.
+        //   - expires_at / last_used_at / granted_at: epoch SECONDS, same convention as api_tokens (0002).
+        // Registered by name in the CORE table lists (import-export, mysql) so an export never dumps the hashes.
+        id: '0016_create_agent_connections',
+        up: async (ctx: MigrationCtx) => {
+            const INT_PK = ctx.isPostgres ? 'SERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT';
+            const TS = ctx.isPostgres ? 'TIMESTAMP' : 'DATETIME';
+            await ctx.exec(
+                `CREATE TABLE IF NOT EXISTS agent_connections (` +
+                `id ${INT_PK}, ` +
+                `user_id INTEGER NOT NULL, ` +
+                `name TEXT NOT NULL DEFAULT '', ` +
+                `token_hash TEXT NOT NULL, ` +
+                `token_prefix TEXT NOT NULL DEFAULT '', ` +
+                `requested_caps TEXT NOT NULL DEFAULT '', ` +
+                `granted_caps TEXT NOT NULL DEFAULT '', ` +
+                `status TEXT NOT NULL DEFAULT 'pending', ` +
+                `created_by INTEGER, ` +
+                `granted_by INTEGER, ` +
+                `granted_at INTEGER, ` +
+                `last_used_at INTEGER, ` +
+                `expires_at INTEGER, ` +
+                `created_at ${TS} DEFAULT CURRENT_TIMESTAMP)`
+            );
+            await ctx.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_connections_hash ON agent_connections (token_hash)');
+            await ctx.exec('CREATE INDEX IF NOT EXISTS idx_agent_connections_user ON agent_connections (user_id)');
         }
     }
 ];
@@ -825,7 +879,7 @@ async function runSchemaMigrations(db: any, isAsync: boolean, driverName: string
 
     if (pending.length === 0) return;
 
-    console.log(`🧬 Schema migrations: applying ${pending.length} pending...`);
+    log.info(`🧬 Schema migrations: applying ${pending.length} pending...`);
     const ctx: MigrationCtx = { exec, run, get, all, isPostgres, driverName };
     for (const m of pending) {
         try {
@@ -838,10 +892,10 @@ async function runSchemaMigrations(db: any, isAsync: boolean, driverName: string
                     : 'INSERT OR IGNORE INTO schema_migrations (id) VALUES (?)',
                 [m.id]
             );
-            console.log(`   ✓ applied schema migration ${m.id}`);
+            log.info({ id: m.id }, `   ✓ applied schema migration ${m.id}`);
         } catch (e: any) {
             // Fail closed: do NOT continue on a half-migrated schema.
-            console.error(`   ✗ schema migration ${m.id} FAILED: ${e && e.message}`);
+            log.error({ id: m.id, err: e }, `   ✗ schema migration ${m.id} FAILED`);
             throw e;
         }
     }

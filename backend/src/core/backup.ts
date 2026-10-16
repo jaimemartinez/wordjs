@@ -15,6 +15,7 @@ const { getOption } = require('./options');
 const { captureDump, restoreDump, dumpEntryName, usesExternalDump } = require('./db-dump');
 const { offloadBackup } = require('./s3-offload');
 const { logSafe } = require('./log-safe');
+const log = require('./module-logger').moduleLogger('core/backup');
 
 /** Top-level archive directory that carries config.uploads.privateDir (see createBackup step 4a). */
 const PRIVATE_UPLOADS_ARCHIVE_ROOT = 'private-uploads';
@@ -69,7 +70,7 @@ function safeDumpFileName(entry: string): string {
  * @returns {Promise<string>} Filename of the backup
  */
 async function createBackup() {
-    console.log('📦 Starting backup process...');
+    log.info('📦 Starting backup process...');
     // What this archive could NOT include. `complete:false` means the ZIP is missing something a
     // restore will need — see the class note above withIncidents().
     const incidents: BackupIncident[] = [];
@@ -180,10 +181,10 @@ async function createBackup() {
             );
             if (fs.existsSync(dbFile)) {
                 zip.addLocalFile(dbFile, 'database', 'wordjs.db');
-                console.log('   ✓ Added physical database snapshot (database/wordjs.db) to backup.');
+                log.info('   ✓ Added physical database snapshot (database/wordjs.db) to backup.');
             }
         } catch (e: any) {
-            console.warn('   ⚠️ Could not add physical DB snapshot (logical export still included):', e && e.message);
+            log.warn({ err: e }, '   ⚠️ Could not add physical DB snapshot (logical export still included)');
             // The PRODUCER half of the same class. An archive without the snapshot can only be
             // restored logically, i.e. WITHOUT analytics, notifications, plugin tables or
             // schema_migrations — a fact the operator can otherwise only discover during a recovery.
@@ -203,7 +204,7 @@ async function createBackup() {
                 const tmpDump = path.join(tmpDir, safeDumpFileName(entry));
                 await captureDump(driver, tmpDump, config.db);
                 zip.addLocalFile(tmpDump, 'database', entry);
-                console.log(`   ✓ Added physical database dump (database/${entry}) to backup.`);
+                log.info(`   ✓ Added physical database dump (database/${entry}) to backup.`);
             });
         }
     }
@@ -215,10 +216,10 @@ async function createBackup() {
 
     zip.writeZip(filepath);
 
-    console.log(`✅ Backup created: ${filename}`);
+    log.info({ filename }, `✅ Backup created: ${filename}`);
 
     // Enforce retention so scheduled/auto backups don't fill the disk unbounded.
-    try { await pruneBackups(); } catch (e: any) { console.warn('   ⚠️ Backup prune failed:', e && e.message); }
+    try { await pruneBackups(); } catch (e: any) { log.warn({ err: e }, '   ⚠️ Backup prune failed'); }
 
     // Optional S3 offload (config-gated). No-op unless bucket + keys are configured; on failure the local
     // copy is kept and the failure is reported — an unreachable bucket never fails a good local backup.
@@ -227,12 +228,12 @@ async function createBackup() {
     let s3: any;
     try {
         s3 = await offloadBackup(filepath, filename);
-        if (s3.offloaded) console.log(`   ☁ Offloaded backup to S3: s3://${s3.bucket}/${s3.key}`);
-        else if (s3.reason === 'upload-failed') console.warn('   ⚠️ S3 offload failed (local copy kept):', s3.error);
+        if (s3.offloaded) log.info(`   ☁ Offloaded backup to S3: s3://${s3.bucket}/${s3.key}`);
+        else if (s3.reason === 'upload-failed') log.warn({ err: s3.error }, '   ⚠️ S3 offload failed (local copy kept)');
     } catch (e: any) {
         // offloadBackup is designed not to throw; guard anyway so offload can never fail the backup.
         s3 = { offloaded: false, reason: 'upload-failed', error: e && e.message };
-        console.warn('   ⚠️ S3 offload error (local copy kept):', e && e.message);
+        log.warn({ err: e }, '   ⚠️ S3 offload error (local copy kept)');
     }
 
     // `s3` stays a field of its own (an unreachable bucket does not make the ARCHIVE incomplete);
@@ -264,9 +265,9 @@ async function pruneBackups(keep?: number) {
     let pruned = 0;
     for (const b of toDelete) {
         try { fs.unlinkSync(path.join(BACKUPS_DIR, b.filename)); pruned++; }
-        catch (e: any) { console.warn(`   ⚠️ Could not prune backup ${b.filename}:`, e && e.message); }
+        catch (e: any) { log.warn({ err: e }, `   ⚠️ Could not prune backup ${b.filename}`); }
     }
-    if (pruned) console.log(`   🧹 Pruned ${pruned} old backup(s); kept newest ${n}.`);
+    if (pruned) log.info({ pruned, n }, `   🧹 Pruned ${pruned} old backup(s); kept newest ${n}.`);
     return { pruned, kept: Math.min(all.length, n) };
 }
 
@@ -364,7 +365,7 @@ async function restoreBackup(filename: string) {
     }
 
     // The name is the request's (POST /backups/:filename/restore): one inert line in the log.
-    console.log(`♻️ Restoring backup: ${logSafe(filename)}...`);
+    log.info({ filename: logSafe(filename) }, `♻️ Restoring backup: ${logSafe(filename)}...`);
 
     const zip = new AdmZip(filepath);
     const zipEntries = zip.getEntries();
@@ -455,7 +456,7 @@ async function restoreBackup(filename: string) {
     }
     const incidents: BackupIncident[] = [];
     if (skipped.length) {
-        console.warn(`   ⚠️ ${skipped.length} backup entr${skipped.length === 1 ? 'y' : 'ies'} skipped — the name cannot be represented on this filesystem: ${skipped.slice(0, 10).join(', ')}${skipped.length > 10 ? ', …' : ''}`);
+        log.warn(`   ⚠️ ${skipped.length} backup entr${skipped.length === 1 ? 'y' : 'ies'} skipped — the name cannot be represented on this filesystem: ${skipped.slice(0, 10).join(', ')}${skipped.length > 10 ? ', …' : ''}`);
         // …AND it goes back to the caller. A recovery that silently dropped files while answering
         // `{success:true}` leaves the operator with broken media the database still references, or a
         // plugin directory missing one file, and no way to know which.
@@ -501,9 +502,9 @@ async function restoreBackup(filename: string) {
             await dbModule.init();               // reopen driver + async connection against the restored file
             await dbModule.initializeDatabase(); // re-run migrations (idempotent) + analytics + divergence guard
             physicalRestored = true;
-            console.log('   ✓ Physical database snapshot restored (all tables).');
+            log.info('   ✓ Physical database snapshot restored (all tables).');
         } catch (e: any) {
-            console.warn('   ⚠️ Physical DB restore failed — falling back to logical import:', e && e.message);
+            log.warn({ err: e }, '   ⚠️ Physical DB restore failed — falling back to logical import');
             // Same class as the skipped entries: the fallback restores the LOGICAL tables only, so
             // analytics, notifications, plugin tables and schema_migrations do not come back. The
             // operator must be told, not the log.
@@ -531,7 +532,7 @@ async function restoreBackup(filename: string) {
                 fs.writeFileSync(tmp, dumpEntry.getData(), { mode: 0o600 });
                 await restoreDump(dbType.driver, tmp, config.db);
                 physicalRestored = true;
-                console.log('   ✓ Physical database dump restored (all tables).');
+                log.info('   ✓ Physical database dump restored (all tables).');
             });
         }
     }
@@ -541,7 +542,7 @@ async function restoreBackup(filename: string) {
     //     drivers ONLY, so a SQLite logical restore was a merge that resurrected deleted content (audit
     //     F-03, defect #1). importSite then repopulates the logical tables.
     if (!physicalRestored) {
-        console.log(`🧹 Logical restore: wiping content tables (${dbType.driver}) before import...`);
+        log.info(`🧹 Logical restore: wiping content tables (${dbType.driver}) before import...`);
         await clearDatabase();
         const results = await importSite(data, {
             updateExisting: true, // Overwrite existing content
@@ -551,13 +552,13 @@ async function restoreBackup(filename: string) {
         // state and would be served for up to its TTL. Drop it all.
         try { await require('./cache').flush(); }
         catch (e: any) { incidents.push({ stage: 'cache', message: `The cache could not be flushed (${e && e.message}); pre-restore values may be served until their TTL expires.` }); }
-        console.log(`✅ Restore ${incidents.length ? 'finished with warnings' : 'complete'} (logical import)`);
+        log.info(`✅ Restore ${incidents.length ? 'finished with warnings' : 'complete'} (logical import)`);
         return withIncidents(results, incidents);
     }
 
     try { await require('./cache').flush(); }
     catch (e: any) { incidents.push({ stage: 'cache', message: `The cache could not be flushed (${e && e.message}); pre-restore values may be served until their TTL expires.` }); }
-    console.log(`✅ Restore ${incidents.length ? 'finished with warnings' : 'complete'} (physical snapshot)`);
+    log.info(`✅ Restore ${incidents.length ? 'finished with warnings' : 'complete'} (physical snapshot)`);
     return withIncidents({ physical: true, driver: dbType.driver }, incidents);
 }
 

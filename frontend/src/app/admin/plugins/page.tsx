@@ -5,7 +5,7 @@ import { pluginsApi, themesApi, Plugin, PluginPortConflict, PluginRuntime } from
 import DeclaredRolesList, { ROLES_TOKEN } from "./DeclaredRolesList";
 import BreakableToken, { TOKEN_WRAP_CLASS } from "./BreakableToken";
 import { PermissionRow, RiskBadge, RISK_CLASSES, TOKEN_CLASS, REASON_LABEL_CLASS, PERMISSION_TOGGLE_CLASS, PERMISSION_DETAILS_CLASS } from "./PermissionRow";
-import { activationGrant, activationLeavesSomeOff, rolesHeldState } from "./grantState";
+import { activationGrant, activationLeavesSomeOff, ceilingAllows, rolesHeldState } from "./grantState";
 import DialogLayer from "@/components/DialogLayer";
 import { permMeta } from "@/lib/permissionMeta";
 import { reloadActivePlugins } from "@/lib/plugins";
@@ -237,6 +237,10 @@ export function BrokenPluginCard({ plugin, onReinstall, onCleanup, busy }: {
 export default function PluginsPage() {
     const { t } = useI18n();
     const [plugins, setPlugins] = useState<Plugin[]>([]);
+    // Multisite: on a site other than the main one, GET /plugins carries each plugin's grant ceiling. The
+    // code is the network's there: no upload, marketplace, download, build or delete — only activation and
+    // grants, bounded by what the network administrator offers.
+    const siteScoped = plugins.some((p) => Array.isArray(p.grantCeiling));
     const [loading, setLoading] = useState(true);
     const [uploading, setUploading] = useState(false);
     const { refreshMenus } = useMenu();
@@ -387,7 +391,10 @@ export default function PluginsPage() {
         if (!permsModalPlugin) return;
         setSavingPerms(true);
         try {
-            const res = await pluginsApi.setPermissions(permsModalPlugin.slug, Array.from(grantDraft), grantDraft.has('network'));
+            // What the network's ceiling does not allow is never sent (the server would refuse it with 403).
+            const ceiling = permsModalPlugin.grantCeiling;
+            const draft = Array.from(grantDraft).filter((token) => !Array.isArray(ceiling) || ceilingAllows(ceiling, token));
+            const res = await pluginsApi.setPermissions(permsModalPlugin.slug, draft, draft.includes('network'));
             setPermsModalPlugin(null);
             loadPlugins();
             refreshMenus();
@@ -1124,7 +1131,9 @@ export default function PluginsPage() {
                                 {declaredTokens(permsModalPlugin).length === 0 ? (
                                     <div className="p-6 bg-slate-50 border border-slate-100 rounded-2xl text-slate-600 text-xs font-semibold text-center">{t('plugins.permissions.none')}</div>
                                 ) : declaredTokens(permsModalPlugin).map((token) => {
-                                    const on = grantDraft.has(token);
+                                    // Multisite: a permission beyond the network's ceiling cannot be granted on this site.
+                                    const beyondCeiling = Array.isArray(permsModalPlugin.grantCeiling) && !ceilingAllows(permsModalPlugin.grantCeiling, token);
+                                    const on = grantDraft.has(token) && !beyondCeiling;
                                     const meta = permMeta(token, t);
                                     const highRisk = meta.risk === 'high';
                                     const activeClasses = highRisk ? 'bg-rose-50/80 border-rose-200/70 shadow-sm' : meta.risk === 'med' ? 'bg-amber-50/80 border-amber-200/70 shadow-sm' : 'bg-emerald-50/85 border-emerald-200/70 shadow-sm';
@@ -1137,9 +1146,11 @@ export default function PluginsPage() {
                                                 (PERMISSION_DETAILS_CLASS). In one column beside the switch they stopped ~75 px
                                                 short of the card's edge on an iPhone. */}
                                             <button
-                                                onClick={() => toggleGrant(token)}
+                                                onClick={() => { if (!beyondCeiling) toggleGrant(token); }}
+                                                disabled={beyondCeiling}
                                                 className={PERMISSION_TOGGLE_CLASS}
                                                 data-permission-toggle={token}
+                                                style={beyondCeiling ? { opacity: 0.6, cursor: 'not-allowed' } : undefined}
                                             >
                                                 <span className="flex items-center gap-2 flex-wrap min-w-0">
                                                     <i className={`fas ${meta.icon || 'fa-key'} text-xs opacity-75`} />
@@ -1151,6 +1162,7 @@ export default function PluginsPage() {
                                                     <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform duration-300 ${on ? 'translate-x-6' : 'translate-x-1'} shadow-sm`} />
                                                 </span>
                                                 <span className={PERMISSION_DETAILS_CLASS} data-permission-details="">
+                                                    {beyondCeiling && <span className="block text-xs text-slate-700 font-bold leading-relaxed mt-1.5" data-permission-beyond-ceiling={token}>{t('plugins.network.beyondCeiling')}</span>}
                                                     {meta.description && <span className="block text-xs text-slate-600 font-medium leading-relaxed mt-1.5">{meta.description}</span>}
                                                     {reason && <span className="block text-xs text-slate-600 font-semibold leading-relaxed mt-1.5 italic"><span className={REASON_LABEL_CLASS}>{isUndeclared(permsModalPlugin, token) ? t('plugins.permission.wordjsNote') : t('plugins.permission.pluginSays')} </span>{reason}</span>}
                                                     {token === ROLES_TOKEN && <DeclaredRolesList roles={permsModalPlugin.roles} heading={t('plugins.declaredRoles')} state={rolesHeldState(permsModalPlugin, 'permissions')} capabilitiesLabel={t('plugins.declaredRoles.capabilities')} heldTemplate={t('plugins.declaredRoles.held')} heldGrantedTemplate={t('plugins.declaredRoles.heldGranted')} heldStaysOffTemplate={t('plugins.declaredRoles.heldStaysOff')} />}
@@ -1177,7 +1189,7 @@ export default function PluginsPage() {
                     title={t('plugins.title')}
                     subtitle={t('plugins.extend.functionality')}
                     icon="fa-plug"
-                    actions={
+                    actions={siteScoped ? undefined : (
                         <div className="relative">
                             <Button
                                 icon={uploading ? "fa-spinner fa-spin" : "fa-upload"}
@@ -1195,8 +1207,11 @@ export default function PluginsPage() {
                                 disabled={uploading}
                             />
                         </div>
-                    }
+                    )}
                 />
+                {siteScoped && (
+                    <p className="mb-6 -mt-4 text-xs text-slate-500 font-semibold" data-network-plugins-note="">{t('plugins.network.siteNote')}</p>
+                )}
             </div>
 
             {/* Installed | Marketplace tabs */}
@@ -1207,12 +1222,12 @@ export default function PluginsPage() {
                 >
                     <FaPlug className="text-xs" /> {t('plugins.tab.installed')}
                 </button>
-                <button
+                {!siteScoped && <button
                     onClick={() => setTab('marketplace')}
                     className={`px-6 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-300 flex items-center gap-2 ${tab === 'marketplace' ? 'bg-white text-slate-900 shadow-md border border-slate-100/50' : 'text-slate-500 hover:text-slate-800'}`}
                 >
                     <FaStore className="text-xs" /> {t('plugins.tab.marketplace')}
-                </button>
+                </button>}
             </div>
 
             {/* Marketplace view */}
@@ -1308,8 +1323,8 @@ export default function PluginsPage() {
                                         >
                                             <FaInfoCircle className="text-sm" />
                                         </button>
-                                        <PackPluginButton plugin={plugin} packing={!!packing[plugin.slug]} onPack={handlePack} />
-                                        {!plugin.active && (
+                                        {!siteScoped && <PackPluginButton plugin={plugin} packing={!!packing[plugin.slug]} onPack={handlePack} />}
+                                        {!plugin.active && !siteScoped && (
                                             <>
                                                 <button
                                                     onClick={() => pluginsApi.download(plugin.slug)}
@@ -1419,13 +1434,13 @@ export default function PluginsPage() {
                                         <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider bg-slate-50 border border-slate-100 px-2 py-1 rounded-lg">
                                             v{plugin.version}
                                         </span>
-                                        <button
+                                        {!(siteScoped && !plugin.offered) && <button
                                             onClick={() => openPermissions(plugin)}
                                             title="Manage what this plugin can access (per-permission grants)"
                                             className="text-[9px] font-extrabold uppercase tracking-widest px-2.5 py-1.5 rounded-lg border flex items-center gap-1 transition-all bg-slate-50 hover:bg-blue-50 hover:text-blue-600 text-slate-500 border-slate-200/60 shadow-sm hover:scale-105 active:scale-95"
                                         >
                                             <FaSlidersH className="text-[10px]" /> {t('plugins.permissions.manage')}
-                                        </button>
+                                        </button>}
                                         {plugin.hasTheme && (
                                             <button
                                                 onClick={() => handleInstallTheme(plugin)}
@@ -1444,6 +1459,15 @@ export default function PluginsPage() {
                                         )}
                                     </div>
 
+                                    {siteScoped && !plugin.offered && !plugin.active ? (
+                                        <span
+                                            className="px-3 py-2 rounded-xl text-[10px] font-extrabold uppercase tracking-wider bg-slate-100 text-slate-500 border border-slate-200/60"
+                                            title={t('plugins.network.notOfferedHint')}
+                                            data-plugin-not-offered={plugin.slug}
+                                        >
+                                            {t('plugins.network.notOffered')}
+                                        </span>
+                                    ) : (
                                     <button
                                         onClick={() => togglePlugin(plugin)}
                                         className={`
@@ -1463,6 +1487,7 @@ export default function PluginsPage() {
                                             </>
                                         )}
                                     </button>
+                                    )}
                                 </div>
                             </div>
                             );

@@ -83,6 +83,28 @@ The DB Manager (`loadDriver` in `config/database.ts`) falls back to `sqlite-lega
 *   A failed **SQLite** driver (default path, or any `sqlite*` name) → silently falls back to pure-JS `sqlite-legacy` (same file format).
 *   A failed **non-SQLite** name passed as an explicit **override** — `loadDriver('postgres')`, the path re-init, tests and the migration tool take — is **not** downgraded to SQLite; the error propagates. The guard keys on that override, and the boot path passes none, so a `postgres`/`mysql` named only in `wordjs-config.json` whose module fails to load (a missing `pg`/`mysql2`, say) *does* fall back and comes up on an empty local SQLite file.
 
+#### Strict driver mode (`dbStrictDriver` / `WORDJS_DB_STRICT`)
+
+The fallback keeps a site up, at the cost of ranked search (`sqlite-legacy` has no FTS5). An operator who would rather not serve at all than serve degraded — a fleet behind a health check, an image built by CI, a host nobody watches the admin panel of — can turn every fallback above into a **boot error**:
+
+```json
+{
+  "dbDriver": "sqlite-native",
+  "dbStrictDriver": true
+}
+```
+
+or set **`WORDJS_DB_STRICT=1`** in the backend's environment. The environment variable wins over the file in both directions (`1`/`true`/`yes`/`on` or `0`/`false`/`no`/`off`; any other value is reported and ignored), so a container can switch it without editing a config file on a volume. Only a JSON `true` in the file turns it on.
+
+With strict mode on:
+
+*   A SQLite driver that fails to load stops the boot (`init()` throws an error with code `WORDJS_DB_STRICT_DRIVER`) whose message names the driver, the load error, what the fallback would have cost, and the fix: `npm rebuild better-sqlite3` in `backend/` for `sqlite-native` (the usual cause is a Node.js upgrade or an install made with `--ignore-scripts`). Nothing is recorded as a downgrade and no admin notice is written.
+*   The same applies to a non-SQLite driver named only in `wordjs-config.json` (the case above that would come up on an empty SQLite file).
+*   Migration `0008_posts_fts5` fails instead of skipping when a SQLite build has no FTS5 — see [the FTS5 section](#sqlite--fts5-0008_posts_fts5).
+*   An explicitly configured `sqlite-legacy` still boots: having no FTS5 is a property of the driver you chose, not a degradation of it.
+
+Strict mode is **off by default**, including when `dbDriver` names `sqlite-native` explicitly. The install wizard and the Docker entrypoint write `"dbDriver"` into every config they create, so an explicit driver name does not tell an operator's deliberate choice apart from a default install, and failing on it would turn the documented recovery from a Node.js upgrade into a site that does not start. To recover a strict site in a hurry, boot once with `WORDJS_DB_STRICT=0`.
+
 ### 1.4 Live Data Migration
 
 WordJS includes a **Zero Data Loss** migration tool for switching drivers without losing users or posts.
@@ -145,6 +167,7 @@ To change the driver, edit `backend/wordjs-config.json`. The flat `db*` keys (`d
   "dbPath": "./data/wordjs-native.db"
 }
 ```
+> Add `"dbStrictDriver": true` (or set `WORDJS_DB_STRICT=1`) to refuse to boot rather than fall back to `sqlite-legacy` when the native driver cannot load — see [Strict driver mode](#strict-driver-mode-dbstrictdriver--wordjs_db_strict).
 > Each SQLite driver defaults to its **own** file (`sqlite-native` → `data/wordjs-native.db`, `sqlite-legacy` → `data/wordjs.db`). If you set `dbPath` explicitly, point it at the file for the driver you selected. See [§1.7](#17-sqlite-drivers-use-different-files).
 
 > **Secrets:** on boot the config layer auto-generates and persists a secure `jwtSecret` and `dbPassword` if `wordjs-config.json` already exists and the value is **missing** or is the known-insecure literal (`wordjs-default-secret-change-me` / `password`). A `jwtSecret` that is not a string is also treated as missing. On a config that has **not been installed yet** (no `installedAt` or `dbDriver`), the boot also replaces a `jwtSecret` shorter than 64 characters or one of the placeholders printed in this repository, because the install wizard keeps the secret the backend booted with. The new value is written back into the file. An installed site's secret is never rotated: if it is one of the published placeholders, the backend **refuses to start** with an error telling you to set a real one (`openssl rand -hex 64`, the same value on every node), because anyone can sign an administrator session with it. Operators should still review these.
@@ -375,7 +398,7 @@ Post search used to be `post_title LIKE '%q%' OR post_content LIKE '%q%'` — a 
 *   **`posts_fts`** is a **virtual table**, created `USING fts5(post_title, post_content, content='posts', content_rowid='id', tokenize='unicode61')`. Because it is an **external-content** table it stores only the inverted terms and reads the columns back from `posts` — post bodies are **not** duplicated on disk.
 *   Three triggers keep it in sync: `posts_fts_ai` (AFTER INSERT), `posts_fts_ad` (AFTER DELETE) and `posts_fts_au` (AFTER UPDATE); the delete/update triggers write the `'delete'` command row carrying the OLD values, which is how an external-content index retracts a document. Existing rows are backfilled once with `INSERT INTO posts_fts(posts_fts) VALUES('rebuild')`.
 *   **Engine-scoped.** The migration returns early on Postgres (`ctx.isPostgres`) and on MySQL (`ctx.driverName === 'mysql'`), which get their own index from `0010`. This is what the `driverName` field on the migration context exists for.
-*   **Degrades, never fails.** The `CREATE VIRTUAL TABLE` is wrapped in a `try/catch`, so a SQLite build with FTS5 compiled out logs a warning and leaves the database untouched. At query time `Post` probes `sqlite_master` for `posts_fts`: present → `id IN (SELECT rowid FROM posts_fts WHERE posts_fts MATCH ?)` ordered by `bm25()` ascending; absent → the original `LIKE` scan, byte-identical to before. User text is never passed to FTS5 raw — each token is stripped of FTS5 syntax and re-quoted as a literal phrase (the last one gets a `*` for type-ahead), and if nothing usable survives the caller falls back to `LIKE`.
+*   **Degrades, never fails — unless strict driver mode is on.** The `CREATE VIRTUAL TABLE` is wrapped in a `try/catch`, so a SQLite build with FTS5 compiled out logs a warning and leaves the database untouched. With [`dbStrictDriver` / `WORDJS_DB_STRICT`](#strict-driver-mode-dbstrictdriver--wordjs_db_strict) on, the migration fails instead (on any driver but an explicitly configured `sqlite-legacy`), and the failed migration stops the boot. At query time `Post` probes `sqlite_master` for `posts_fts`: present → `id IN (SELECT rowid FROM posts_fts WHERE posts_fts MATCH ?)` ordered by `bm25()` ascending; absent → the original `LIKE` scan, byte-identical to before. User text is never passed to FTS5 raw — each token is stripped of FTS5 syntax and re-quoted as a literal phrase (the last one gets a `*` for type-ahead), and if nothing usable survives the caller falls back to `LIKE`.
 
 ### Postgres and MySQL (`0010_posts_fts_pg_mysql`)
 

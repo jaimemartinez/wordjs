@@ -10,7 +10,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { sanitizeEmailHtml } = require('./sanitize-email-html');
+const { sanitizeEmailHtml, sanitizeStyle } = require('./sanitize-email-html');
 
 // The four attack shapes the audit item calls out, plus the classic evasions.
 const ATTACKS = [
@@ -77,4 +77,44 @@ test('safe urls and image src survive', () => {
     assert.match(out, /href="\/inbox"/);
     assert.match(out, /href="mailto:a@b.com"/);
     assert.match(out, /<img src="https:\/\/cdn\.example\/x\.png" alt="ok"\/>/);
+});
+
+// Inline styles: newsletters must keep their look, and no style may load anything or run anything.
+test('safe inline styles and table presentation survive', () => {
+    const html = '<div style="max-width:600px;margin:auto;font-family:Arial, \'Helvetica Neue\'"><h2 style="color:#4c1d95">T</h2>'
+        + '<table width="100%" cellpadding="4" bgcolor="#ffffff"><tr><td style="padding:8px;background:#f5f3ff" align="center">A</td></tr></table></div>';
+    const out = sanitizeEmailHtml(html);
+    assert.match(out, /<div style="max-width:600px;margin:auto;font-family:Arial, Helvetica Neue">/);
+    assert.match(out, /<h2 style="color:#4c1d95">/);
+    assert.match(out, /<table width="100%" cellpadding="4" bgcolor="#ffffff">/);
+    assert.match(out, /<td style="padding:8px;background:#f5f3ff" align="center">/);
+    assert.equal(sanitizeStyle('color: rgba(10, 20, 30, .5); border:1px solid #ddd'), 'color:rgba(10, 20, 30, .5);border:1px solid #ddd');
+});
+
+test('styles that load, script, escape or escape their box are dropped', () => {
+    const refused = [
+        'background:url(https://evil.example/t.gif)',
+        'background-image:url(x)',
+        'width:expression(alert(1))',
+        'color:red;background:u\\72l(https://evil.example)',
+        'background:ur/**/l(https://evil.example)',
+        'background:&#117;rl(https://evil.example)',
+        'color:red;@import "x"',
+        'behavior:url(x.htc)',
+        '-moz-binding:url(x)',
+        'position:fixed;top:0',
+        'margin-top:-500px',
+        'display:contents',
+        'background:image-set(x 1x)',
+        'color:rgb((1),2,3)',
+        'font-family:"a<b"',
+    ];
+    for (const css of refused) {
+        const out = sanitizeEmailHtml(`<div style="${css.replace(/"/g, '&quot;')}">x</div>`);
+        assert.ok(!/url|expression|binding|behavior|position|import|image-set|-500|contents|\\/i.test(out), `${css} → ${out}`);
+    }
+    // An attribute duplicated to slip a second value past the parser: the FIRST wins, like the browser.
+    assert.equal(sanitizeEmailHtml('<p style="color:red" style="background:url(x)">x</p>'), '<p style="color:red">x</p>');
+    // Presentational attributes take plain values only.
+    assert.equal(sanitizeEmailHtml('<td width="javascript:alert(1)" bgcolor="red" onclick="x">c</td>'), '<td bgcolor="red">c</td>');
 });

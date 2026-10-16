@@ -1,6 +1,7 @@
 const forge = require('node-forge');
 const fs = require('fs');
 const path = require('path');
+const log = require('./module-logger').moduleLogger('core/certManager');
 const { pki, md } = forge;
 
 const CERTS_DIR = path.resolve(__dirname, '../../certs');
@@ -22,7 +23,7 @@ function writePrivateKey(filePath: string, content: string) {
  * Generate a Cluster Root CA
  */
 function generateClusterCA() {
-    console.log('🔐 Generating Cluster Root CA...');
+    log.info('🔐 Generating Cluster Root CA...');
 
     // 1. Generate Keypair
     const keys = pki.rsa.generateKeyPair(2048);
@@ -80,7 +81,7 @@ function generateClusterCA() {
  * @param {Array<{type: number, value?: string, ip?: string}>} additionalAltNames
  */
 function generateServiceCert(serviceName: string, caKeyPem: string, caCertPem: string, additionalAltNames = []) {
-    console.log(`🔐 Generating Certificate for service: ${serviceName}...`);
+    log.info({ serviceName }, `🔐 Generating Certificate for service: ${serviceName}...`);
 
     const caKey = pki.privateKeyFromPem(caKeyPem);
     const caCert = pki.certificateFromPem(caCertPem);

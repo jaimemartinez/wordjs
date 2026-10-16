@@ -6,6 +6,7 @@
 import type { Request, Response } from 'express';
 
 const express = require('express');
+const log = require('../core/module-logger').moduleLogger('routes/seo');
 const router = express.Router();
 const Post = require('../models/Post');
 const { getOption } = require('../core/options');
@@ -245,7 +246,7 @@ router.get('/sitemap.xml', async (req: Request, res: Response) => {
         res.set('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
         res.send(xml);
     } catch (error) {
-        console.error('Sitemap error:', error);
+        log.error({ err: error }, 'Sitemap error');
         res.status(500).send('Error generating sitemap');
     }
 });
@@ -293,7 +294,7 @@ router.get('/sitemap-:kind-:page.xml', async (req: Request, res: Response) => {
         res.set('Cache-Control', 'public, max-age=3600');
         res.send(generateSitemapUrlset(chunk.entries));
     } catch (error) {
-        console.error('Sitemap chunk error:', error);
+        log.error({ err: error }, 'Sitemap chunk error');
         res.status(500).send('Error generating sitemap');
     }
 });
@@ -322,7 +323,7 @@ router.get('/robots.txt', async (req: Request, res: Response) => {
         res.set('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
         res.send(robotsTxt);
     } catch (error) {
-        console.error('Robots.txt error:', error);
+        log.error({ err: error }, 'Robots.txt error');
         res.status(500).send('Error generating robots.txt');
     }
 });
@@ -383,7 +384,7 @@ router.get('/feed.xml', async (req: Request, res: Response) => {
 
         sendFeed(res, 'application/rss+xml; charset=utf-8', xml);
     } catch (error) {
-        console.error('RSS feed error:', error);
+        log.error({ err: error }, 'RSS feed error');
         res.status(500).send('Error generating feed');
     }
 });
@@ -414,7 +415,7 @@ router.get('/feed.atom', async (req: Request, res: Response) => {
 
         sendFeed(res, 'application/atom+xml; charset=utf-8', xml);
     } catch (error) {
-        console.error('Atom feed error:', error);
+        log.error({ err: error }, 'Atom feed error');
         res.status(500).send('Error generating feed');
     }
 });
@@ -447,7 +448,7 @@ router.get('/feed.json', async (req: Request, res: Response) => {
         // content type is the JSON Feed one, not application/json.
         sendFeed(res, 'application/feed+json; charset=utf-8', json);
     } catch (error) {
-        console.error('JSON feed error:', error);
+        log.error({ err: error }, 'JSON feed error');
         res.status(500).send('Error generating feed');
     }
 });
@@ -560,7 +561,7 @@ router.get('/category/:slug/feed.xml', async (req: Request, res: Response) => {
     try {
         await sendTermFeed(req, res, 'category', 'category');
     } catch (error) {
-        console.error('Category feed error:', error);
+        log.error({ err: error }, 'Category feed error');
         res.status(500).send('Error generating feed');
     }
 });
@@ -588,7 +589,7 @@ router.get('/tag/:slug/feed.xml', async (req: Request, res: Response) => {
     try {
         await sendTermFeed(req, res, 'post_tag', 'tag');
     } catch (error) {
-        console.error('Tag feed error:', error);
+        log.error({ err: error }, 'Tag feed error');
         res.status(500).send('Error generating feed');
     }
 });
@@ -666,7 +667,7 @@ router.get('/author/:slug/feed.xml', async (req: Request, res: Response) => {
             selfPath: `/author/${canonical}/feed.xml`,
         });
     } catch (error) {
-        console.error('Author feed error:', error);
+        log.error({ err: error }, 'Author feed error');
         res.status(500).send('Error generating feed');
     }
 });
@@ -714,7 +715,7 @@ router.get('/comments/feed.xml', async (req: Request, res: Response) => {
 
         sendFeed(res, 'application/rss+xml; charset=utf-8', xml);
     } catch (error) {
-        console.error('Comments feed error:', error);
+        log.error({ err: error }, 'Comments feed error');
         res.status(500).send('Error generating feed');
     }
 });
@@ -777,7 +778,7 @@ router.get('/meta/:postId', authenticate, can('edit_posts'), async (req: Request
             canonical: `/${post.postName || post.slug}` // live canonical is /<slug> for posts AND pages
         });
     } catch (error) {
-        console.error('SEO meta error:', error);
+        log.error({ err: error }, 'SEO meta error');
         res.status(500).json({ error: 'Error fetching SEO data' });
     }
 });

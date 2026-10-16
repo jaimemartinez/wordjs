@@ -235,6 +235,8 @@ Example `backend/wordjs-config.json`:
 > **What the `sqlite-legacy` fallback costs you.** If a SQLite driver cannot be loaded — almost always a missing or mismatched `better-sqlite3` native binary after a Node upgrade or a copied `node_modules` — the manager does **not** fail the boot: it falls back to the pure-JS `sqlite-legacy` driver, which reads the same file format. That keeps the site up, but `sqlite-legacy` has **no FTS5**, so the full-text index is never built and **site search silently drops from ranked results to `LIKE` matching**. Postgres and MySQL are never downgraded this way; an explicit non-SQLite driver that fails to load still stops the boot.
 >
 > Because this is invisible from the front end, the fallback now reports itself in two places instead of one boot-log line: a **persistent admin notice** (`db.sqlite-legacy-fallback`, shown on **Admin → Notices**) and `GET /api/v1/health/details`, whose `database` section carries `driver` (the driver **actually** running, not the configured one), `degraded: true` and a `reason`. To fix it, run `npm rebuild better-sqlite3` in `backend/` and restart — the next boot on the native driver retires the notice on its own. Note that each SQLite driver keeps its **own** data file, so if you decide to stay on a different driver, move the data with `npm run migrate` rather than by editing `dbDriver` alone.
+>
+> If you would rather the site not start than run degraded, turn on **strict driver mode**: `"dbStrictDriver": true` in `backend/wordjs-config.json` or `WORDJS_DB_STRICT=1` in the backend's environment (the variable wins; `WORDJS_DB_STRICT=0` turns it off for one boot). The fallback then becomes a boot error that names the failed driver, the cause and the fix, and a SQLite build without FTS5 fails migration `0008` instead of skipping it. It is off by default. See [database.md → Strict driver mode](database.md#strict-driver-mode-dbstrictdriver--wordjs_db_strict).
 
 ---
 
@@ -724,7 +726,9 @@ WordJS stores media URLs as **relative paths** (e.g., `/uploads/image.jpg`) rath
 
 - ✅ **Seamless migration** — No database updates needed when changing domains
 - ✅ **Multi-environment support** — Same database works in dev/staging/production
-- ✅ **CDN flexibility** — Easy to add or change CDN prefixes
+- ✅ **CDN flexibility** — Easy to add or change CDN prefixes: with media offload ([media-storage.md](media-storage.md))
+  the files live in an S3-compatible bucket and pages are served CDN URLs, while the database keeps the same
+  relative paths
 
 If you have legacy content with absolute URLs, you may need to run a migration script to convert them to relative paths.
 

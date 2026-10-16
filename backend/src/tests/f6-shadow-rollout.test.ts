@@ -9,6 +9,7 @@
 
 const { describe, it, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert');
+const { captureLogLines } = require('./fixtures/log-capture');
 
 import type { ContentComparisonInput, ContentComparisonOutcome } from '../core/content-rollout';
 
@@ -85,11 +86,11 @@ function instrumented(type: string, permissiveResult: FakeResult, generatedResul
     return { calls, outcome };
 }
 
+/** The warnings the real logger emits until restore() (core/module-logger; see fixtures/log-capture). */
 function captureWarnings(): { lines: string[]; restore: () => void } {
     const lines: string[] = [];
-    const original = console.warn;
-    console.warn = (...args: unknown[]) => { lines.push(args.map(String).join(' ')); };
-    return { lines, restore: () => { console.warn = original; } };
+    const capture = captureLogLines('warn');
+    return { lines, restore: () => { lines.push(...capture.stop()); } };
 }
 
 beforeEach(() => { resetContentRollout(); });

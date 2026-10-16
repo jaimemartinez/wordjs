@@ -129,7 +129,7 @@ describe('F0 live REST characterization', () => {
                 name: 'WordJS REST API',
                 version: '1.0.0',
                 routeKeys: [
-                    'authentication', 'categories', 'chrome', 'comments', 'export', 'forms', 'hooks', 'import', 'media',
+                    'authentication', 'categories', 'chrome', 'comments', 'export', 'forms', 'graphql', 'hooks', 'import', 'media',
                     'menus', 'notices', 'notifications', 'plugins', 'posts', 'revisions', 'roles', 'settings',
                     'tags', 'taxonomies', 'themes', 'types', 'users', 'widgets',
                 ].sort(),

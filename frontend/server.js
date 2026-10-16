@@ -11,6 +11,8 @@ const {
     createReplicaUpgradeHandler,
     isGatewayPeer,
 } = require('./backend-proxy-target.js');
+// The configured media/CDN origin joins img-src/media-src at response time (the build cannot know it).
+const { installMediaCsp } = require('./media-csp.js');
 
 const dev = process.env.NODE_ENV !== 'production';
 
@@ -91,6 +93,7 @@ app.prepare().then(() => {
 
             // mTLS: every cluster-CA certificate gets in; only the gateway's identity (CN gateway-internal)
             // keeps the forwarding headers it stated — see isGatewayPeer.
+            installMediaCsp(res);
             dispatchGateway(req, res, parsedUrl);
         });
         if (onUpgradeGateway) server.on('upgrade', onUpgradeGateway);
@@ -104,6 +107,7 @@ app.prepare().then(() => {
         const server = createHttpServer((req, res) => {
             const parsedUrl = parse(req.url, true);
             // HTTP fallback: no mTLS hop in front, so a client can reach this directly — pin the headers.
+            installMediaCsp(res);
             dispatchFrontDoor(req, res, parsedUrl);
         });
         if (onUpgradeFrontDoor) server.on('upgrade', onUpgradeFrontDoor);

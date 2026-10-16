@@ -246,7 +246,7 @@ function readHostPrivilege(): HostPrivilege {
 /** The boot-time twin of `sandbox.hostPrivilege`: one warning block when the core holds privilege it does not need. */
 // `read` is the live reading by default; a test passes a diagnosis so the EXCESS block is asserted on
 // every host, not only on one that happens to run the suite with privilege.
-function warnHostPrivilegeAtBoot(log: { warn: (...a: any[]) => void } = console, read: () => HostPrivilege = readHostPrivilege): HostPrivilege {
+function warnHostPrivilegeAtBoot(log: { warn: (...a: any[]) => void } = require('./module-logger').moduleLogger('core/host-privilege'), read: () => HostPrivilege = readHostPrivilege): HostPrivilege {
     const d = read();
     if (d.status !== 'EXCESS') return d;
     log.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');

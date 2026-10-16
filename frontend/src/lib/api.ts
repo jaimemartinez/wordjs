@@ -376,6 +376,10 @@ export interface Plugin {
     roles?: DeclaredPluginRole[];     // roles the manifest declares (registered only with the roles:declare grant)
     requestedPermissions?: string[];  // "scope:access" tokens the manifest requests (the togglable set)
     grantedPermissions?: string[];    // tokens the admin has granted (subset of requested + optional "network")
+    // Multisite, on a site other than the main one only: does the network offer this plugin here, and the
+    // most this site may grant it (the network administrator's ceiling). Absent on the main site.
+    offered?: boolean;
+    grantCeiling?: string[];
     // Would activating it now grant every permission its manifest declares? (no grant record, or an empty
     // one no administrator decided). false after an administrator revoked every grant: activation grants nothing.
     activationSeedsGrants?: boolean;
@@ -1382,9 +1386,69 @@ export interface ApiTokenCreated {
 }
 export const tokensApi = {
     list: () => apiGet<{ tokens: ApiToken[] }>("/auth/tokens"),
-    create: (data: { name: string; scopes: string; expiresInDays?: number | null }) =>
+    // `mfaCode` is the step-up code: required only when the caller's role requires 2FA and the session was
+    // not signed in with the second factor (the backend answers 403 `rest_mfa_step_up_required` first).
+    create: (data: { name: string; scopes: string; expiresInDays?: number | null; mfaCode?: string }) =>
         apiPost<ApiTokenCreated>("/auth/tokens", data),
     revoke: (id: number) => apiDelete<{ revoked: boolean; id: number }>(`/auth/tokens/${id}`),
+};
+
+// ── AI agent connections (MCP) ─────────────────────────────────────────────────────────────────────
+// The connection REQUESTS capabilities, an administrator GRANTS a subset; every call runs as the bound
+// user narrowed by the grant (backend core/agent-capabilities). The `wja_` token is shown once.
+export type AgentCapability =
+    | "content:read" | "content:draft" | "content:publish" | "media:upload"
+    | "taxonomy:write" | "comments:moderate" | "settings:read";
+export interface AgentConnection {
+    id: number;
+    userId: number;
+    name: string;
+    tokenPrefix: string;
+    requested: AgentCapability[];
+    granted: AgentCapability[];
+    /** Granted AND backed by a capability the bound user really holds — the rest is inert. */
+    effective: AgentCapability[];
+    status: "pending" | "active" | "revoked";
+    expired: boolean;
+    createdBy: number | null;
+    grantedBy: number | null;
+    grantedAt: number | null;
+    lastUsedAt: number | null;
+    expiresAt: number | null;
+    createdAt: string | null;
+    user: { id: number; login: string; displayName: string; role: string } | null;
+}
+export const agentsApi = {
+    list: () => apiGet<{ connections: AgentConnection[]; capabilities: AgentCapability[]; canGrant: boolean; mcpUrl: string }>("/agents"),
+    create: (data: { name: string; requested: AgentCapability[]; userId?: number; expiresInDays?: number | null }) =>
+        apiPost<{ token: string; connection: AgentConnection; mcpUrl: string }>("/agents", data),
+    grant: (id: number, granted: AgentCapability[]) => apiPut<{ connection: AgentConnection }>(`/agents/${id}/grant`, { granted }),
+    revoke: (id: number) => apiDelete<{ revoked: boolean; id: number }>(`/agents/${id}`),
+    audit: (id: number, page = 1) =>
+        apiGet<{ entries: AuditEntry[]; total: number; page: number; perPage: number }>(`/agents/${id}/audit?page=${page}&per_page=50`),
+};
+
+// ── AI provider layer ──────────────────────────────────────────────────────────────────────────────
+// Backend routes/ai.ts. The provider key is write-only: settings come back with `hasKey`/`keyHint` only.
+export type AiProviderId = "" | "anthropic" | "openai-compatible";
+export type AiSuggestTask = "excerpt" | "seo_description" | "alt_text";
+export interface AiSettings {
+    provider: AiProviderId;
+    model: string;
+    baseUrl: string;
+    hasKey: boolean;
+    keyHint: string;
+    providers: Exclude<AiProviderId, "">[];
+    anthropicModels: string[];
+}
+export const aiApi = {
+    status: () => apiGet<{ enabled: boolean; tasks: AiSuggestTask[] }>("/ai/status"),
+    getSettings: () => apiGet<AiSettings>("/ai/settings"),
+    saveSettings: (data: { provider: AiProviderId; model?: string; baseUrl?: string; apiKey?: string; clearKey?: boolean }) =>
+        apiPut<AiSettings>("/ai/settings", data),
+    test: () => apiPost<{ ok: boolean; provider: string; model: string; ms: number }>("/ai/test", {}),
+    suggest: (data: { task: AiSuggestTask; title?: string; content?: string; mediaId?: number; language?: string }) =>
+        apiPost<{ suggestion: string; model: string }>("/ai/suggest", data),
 };
 
 // ── Outgoing webhooks ──────────────────────────────────────────────────────────────────────────────
@@ -1413,9 +1477,14 @@ export interface WebhookDelivery {
     createdAt: string;
     payload?: string;
 }
+/** The event catalogue grouped by the entity each event concerns (GET /webhooks/events). */
+export interface WebhookEventGroup {
+    entity: string;
+    events: string[];
+}
 export const webhooksApi = {
     list: () => apiGet<{ webhooks: Webhook[] }>("/webhooks"),
-    events: () => apiGet<{ events: string[] }>("/webhooks/events"),
+    events: () => apiGet<{ events: string[]; groups?: WebhookEventGroup[]; optIn?: string[] }>("/webhooks/events"),
     create: (data: { name?: string; url: string; events?: string[]; active?: boolean }) =>
         apiPost<Webhook & { secret: string; message: string }>("/webhooks", data),
     update: (id: number, data: { name?: string; url?: string; events?: string[]; active?: boolean }) =>
@@ -1426,6 +1495,50 @@ export const webhooksApi = {
     deliveries: (id: number) => apiGet<{ deliveries: WebhookDelivery[] }>(`/webhooks/${id}/deliveries`),
     redeliver: (deliveryId: number) =>
         apiPost<{ requeued: boolean; id: number }>(`/webhooks/deliveries/${deliveryId}/redeliver`, {}),
+    /** Send the signed `ping` test delivery to one endpoint; it is attempted at once. */
+    ping: (id: number) =>
+        apiPost<{ delivered: boolean; delivery: WebhookDelivery | null }>(`/webhooks/${id}/ping`, {}),
+};
+
+// ── Network (multisite): the sites of the network, for network administrators ─────────────────────
+export interface NetworkSite {
+    id: number;
+    slug: string;
+    url: string;
+    host: string;
+    status: "active" | "suspended";
+    main: boolean;
+    createdAt: string;
+    updatedAt: string;
+}
+export interface NewNetworkSite {
+    slug: string;
+    url: string;
+    title: string;
+    adminUsername: string;
+    adminEmail: string;
+    adminPassword: string;
+    currentPassword: string;
+}
+export interface NetworkPlugin {
+    slug: string;
+    name: string;
+    version: string;
+    requestedPermissions: string[];
+    /** The most any other site may grant it; null = not offered (main site only). */
+    ceiling: string[] | null;
+}
+export const networkApi = {
+    status: () => apiGet<{ enabled: boolean; networkAdmin: boolean }>("/network/status"),
+    plugins: () => apiGet<{ plugins: NetworkPlugin[] }>("/network/plugins"),
+    offerPlugin: (slug: string, tokens: string[], currentPassword: string) =>
+        apiPut<{ slug: string; ceiling: string[] }>(`/network/plugins/${encodeURIComponent(slug)}/ceiling`, { tokens, currentPassword }),
+    withdrawPlugin: (slug: string, currentPassword: string) =>
+        api<{ slug: string; withdrawn: boolean; deactivatedOn: number[] }>(`/network/plugins/${encodeURIComponent(slug)}/ceiling`, { method: "DELETE", body: { currentPassword } }),
+    sites: () => apiGet<{ sites: NetworkSite[] }>("/network/sites"),
+    create: (data: NewNetworkSite) => apiPost<{ site: NetworkSite }>("/network/sites", data),
+    suspend: (id: number, currentPassword: string) => apiPost<{ site: NetworkSite }>(`/network/sites/${id}/suspend`, { currentPassword }),
+    resume: (id: number, currentPassword: string) => apiPost<{ site: NetworkSite }>(`/network/sites/${id}/resume`, { currentPassword }),
 };
 
 // ── Form submissions (Webflow "Forms + submissions" parity) ────────────────────────────────────────
@@ -1551,6 +1664,12 @@ export interface MfaPolicy {
     // predates the field, so headless clients keep working until an admin deliberately turns it on.
     enforceForApiTokens: boolean;
 }
+// What the policy means for EXISTING API tokens (counts only) — returned next to the policy.
+export interface MfaTokenExposure {
+    requiredRoleTokens: number;      // active tokens owned by users whose role requires 2FA
+    unenrolledOwnerTokens: number;   // ...of which the owner has not enrolled
+    unenrolledOwners: number;        // distinct owners behind those
+}
 /**
  * Enrolment is SUDO-GATED on the backend (routes/auth.ts): both /auth/mfa/setup — the call that hands
  * out the TOTP secret — and /auth/mfa/enable — the call that actually locks the account — demand the
@@ -1577,8 +1696,10 @@ export const mfaApi = {
         apiPost<{ enabled: boolean; backupCodes: string[]; message: string }>("/auth/mfa/enable", { code, currentPassword: requireCurrentPassword(currentPassword) }),
     disable: (code: string) => apiPost<{ disabled: boolean }>("/auth/mfa/disable", { code }),
     regenerateBackupCodes: (code: string) => apiPost<{ backupCodes: string[]; message: string }>("/auth/mfa/backup-codes", { code }),
-    getPolicy: () => apiGet<{ policy: MfaPolicy }>("/auth/mfa/policy"),
-    savePolicy: (policy: { requiredRoles: string[]; graceDays: number; enforceForApiTokens: boolean }) => apiPut<{ policy: MfaPolicy }>("/auth/mfa/policy", policy),
+    // `enforceForApiTokensDefault`: true only on a freshly installed site whose policy has never required a
+    // role — the screen then pre-checks the API-token switch (the admin can still uncheck it).
+    getPolicy: () => apiGet<{ policy: MfaPolicy; tokenExposure?: MfaTokenExposure; enforceForApiTokensDefault?: boolean }>("/auth/mfa/policy"),
+    savePolicy: (policy: { requiredRoles: string[]; graceDays: number; enforceForApiTokens: boolean }) => apiPut<{ policy: MfaPolicy; tokenExposure?: MfaTokenExposure; enforceForApiTokensDefault?: boolean }>("/auth/mfa/policy", policy),
     /**
      * Administrative two-factor reset — the way OUT of a 2FA lockout, and the reason enrolment above can
      * be password-gated without creating an unrecoverable state. It lives under the USERS router

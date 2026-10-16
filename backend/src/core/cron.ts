@@ -8,6 +8,7 @@ const { doAction, doActionForPlugin, addAction } = require('./hooks');
 const { getCurrentPlugin } = require('./plugin-context');
 const { logSafe } = require('./log-safe');
 const database = require('../config/database');
+const log = require('./module-logger').moduleLogger('core/cron');
 const { dbAsync } = database;
 
 // Registered cron jobs
@@ -217,6 +218,23 @@ async function runCron() {
     // Single-runner across nodes. The lease is HEARTBEAT-renewed for the whole run, so a long job
     // (full backup, ACME renewal) is never preempted and can't double-run on another node.
     await distLock.runAsLeader('wordjs:cron', { ttlMs: 90000, renewMs: 30000 }, () => runCronInner());
+    // Multisite: every other active site's own events, each in its own context (one at a time). A no-op
+    // on a single site. Multisite runs on one SQLite host in this phase, so no lease is needed.
+    await require('./network-sites').forEachSecondarySite('cron', () => runCronInner());
+}
+
+/**
+ * Multisite: the hooks an event of a site other than the main one may run. A plugin's own event runs
+ * there (only that site's worker of the plugin answers it — core/hooks doActionForPlugin). Of the core
+ * jobs, only those that act on the site's own data run; the others (backups, version checks,
+ * certificates, maintenance) act on the main site's database and files — an event naming one of them on
+ * another site is dropped, not run.
+ */
+const SECONDARY_SITE_CRON_HOOKS = new Set(['publish_future_post', 'wordjs_analytics_prune']);
+function cronHookAllowedHere(event: any): boolean {
+    if (!require('./multisite-guards').onSecondarySite()) return true;
+    if (event.pluginSlug) return true;
+    return SECONDARY_SITE_CRON_HOOKS.has(String(event.hook));
 }
 
 async function runCronInner() {
@@ -245,6 +263,11 @@ async function runCronInner() {
         for (const key of Object.keys(events[timestamp])) {
             const event = events[timestamp][key];
 
+            if (!cronHookAllowedHere(event)) {
+                log.warn(`Cron: removing event '${event.hook}' — it is not available on this site of the network.`);
+                executed.push({ timestamp, key });
+                continue;
+            }
             try {
                 // SECURITY: a plugin-scheduled event runs ONLY that plugin's own callbacks, in its
                 // context — so a plugin cannot schedule a CORE hook with attacker args to trigger core
@@ -253,7 +276,7 @@ async function runCronInner() {
                     if (activeSet && !activeSet.has(String(event.pluginSlug))) {
                         // Don't run it (its code isn't loaded) AND remove it from the store — leaving it
                         // would warn + re-skip every tick forever and hold a slot toward MAX_CRON_EVENTS_TOTAL.
-                        console.warn(`Cron: removing event '${event.hook}' for unknown/inactive plugin '${event.pluginSlug}'.`);
+                        log.warn(`Cron: removing event '${event.hook}' for unknown/inactive plugin '${event.pluginSlug}'.`);
                         executed.push({ timestamp, key });
                         continue;
                     }
@@ -261,9 +284,9 @@ async function runCronInner() {
                 } else {
                     await doAction(event.hook, ...(event.args || []));
                 }
-                console.log(`Cron: Executed ${event.hook}`);
+                log.info(`Cron: Executed ${event.hook}`);
             } catch (error) {
-                console.error(`Cron error for ${event.hook}:`, error);
+                log.error({ err: error }, `Cron error for ${event.hook}`);
             }
 
             executed.push({ timestamp, key });
@@ -279,7 +302,7 @@ async function runCronInner() {
                 } else if (event.schedule !== 'off') {
                     // 'off' (interval 0) is intentionally non-recurring; anything else with an
                     // unresolvable interval is a misconfiguration worth flagging.
-                    console.warn(`Cron: recurring event '${event.hook}' has schedule '${event.schedule}' but no resolvable interval — not rescheduled.`);
+                    log.warn(`Cron: recurring event '${event.hook}' has schedule '${event.schedule}' but no resolvable interval — not rescheduled.`);
                 }
             }
         }
@@ -322,7 +345,7 @@ function startCron(intervalMs = 60000) {
     }
 
     cronTimer = setInterval(runCron, intervalMs);
-    console.log(`   ⏰ Cron started (checking every ${intervalMs / 1000}s)`);
+    log.info(`   ⏰ Cron started (checking every ${intervalMs / 1000}s)`);
 
     // Run immediately
     runCron(); // Async call, but we don't await it here to not block startup
@@ -384,7 +407,7 @@ async function rescheduleBackup(frequency?: any) {
     const time = await getOption('backup_time', '00:00'); // Default midnight
     const day = parseInt(await getOption('backup_day', '1')); // Default Monday (1)
 
-    console.log(`⏰ Cron: Rescheduling backup to '${frequency}' at '${time}' (Day: ${day})`);
+    log.info({ day }, `⏰ Cron: Rescheduling backup to '${frequency}' at '${time}' (Day: ${day})`);
 
     // 1. Clear existing generic backup hook
     await clearScheduledHook('wordjs_scheduled_backup');
@@ -392,7 +415,7 @@ async function rescheduleBackup(frequency?: any) {
     await clearScheduledHook('wordjs_daily_backup');
 
     if (frequency === 'off' || !schedules[frequency]) {
-        console.log('   Create backup schedule disabled.');
+        log.info('   Create backup schedule disabled.');
         return;
     }
 
@@ -401,7 +424,7 @@ async function rescheduleBackup(frequency?: any) {
     const nextRun = computeNextBackupRun(frequency, time, day, new Date());
 
     await scheduleEvent(nextRun.getTime(), frequency, 'wordjs_scheduled_backup');
-    console.log(`   Next backup scheduled: ${nextRun.toISOString()}`);
+    log.info(`   Next backup scheduled: ${nextRun.toISOString()}`);
 }
 
 /**
@@ -461,7 +484,7 @@ async function initDefaultCronEvents() {
             await scheduleEvent(Date.now(), 'daily', AUDIT_PRUNE_HOOK);
         }
     } catch (e) {
-        console.error('Failed to init cron events:', e);
+        log.error({ err: e }, 'Failed to init cron events');
     }
 
     // Register Actions Implementation
@@ -470,12 +493,12 @@ async function initDefaultCronEvents() {
     addAction('wordjs_scheduled_backup', async () => {
         const autoBackup = await getOption('auto_backup', 'yes'); // redundancy check
         if (autoBackup === 'yes' || autoBackup === true) {
-            console.log('⏰ Running scheduled backup...');
+            log.info('⏰ Running scheduled backup...');
             const { createBackup } = require('./backup');
             try {
                 await createBackup();
             } catch (e) {
-                console.error('Backup failed:', e);
+                log.error({ err: e }, 'Backup failed');
             }
         }
     });
@@ -486,12 +509,12 @@ async function initDefaultCronEvents() {
             const certManager = require('./cert-manager');
             const result = await certManager.renewIfDue();
             if (result && result.ok) {
-                console.log(`⏰ ACME: certificate renewed for ${result.domain}`);
+                log.info(`⏰ ACME: certificate renewed for ${result.domain}`);
             } else if (result && !result.skipped) {
-                console.warn(`⏰ ACME: renewal not completed: ${logSafe(result.error || 'unknown error')}`);
+                log.warn({ err: result.error }, '⏰ ACME: renewal not completed');
             }
         } catch (e) {
-            console.error('ACME auto-renewal error:', e);
+            log.error({ err: e }, 'ACME auto-renewal error');
         }
     });
 
@@ -500,9 +523,9 @@ async function initDefaultCronEvents() {
     addAction('wordjs_collab_sweep', async () => {
         try {
             const retired = await require('./collab-rooms').sweepIdleRooms();
-            if (retired > 0) console.log(`⏰ colaboración: ${retired} sala(s) inactiva(s) retirada(s)`);
+            if (retired > 0) log.info(`⏰ colaboración: ${retired} sala(s) inactiva(s) retirada(s)`);
         } catch (e) {
-            console.error('Barrido de salas colaborativas fallido:', e);
+            log.error({ err: e }, 'Barrido de salas colaborativas fallido');
         }
     });
 

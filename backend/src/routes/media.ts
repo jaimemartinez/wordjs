@@ -5,6 +5,7 @@
 
 import type { Request, Response } from 'express';
 const express = require('express');
+const log = require('../core/module-logger').moduleLogger('routes/media');
 const router = express.Router();
 const multer = require('multer');
 const path = require('path');
@@ -15,6 +16,7 @@ const Post = require('../models/Post');
 const config = require('../config/app');
 // PRIVATE MEDIA — files outside the served /uploads tree, hidden from every public listing.
 const privateMedia = require('../core/private-media');
+const { recordAudit } = require('../core/audit');
 const {
     canViewAttachment, filterVisibleMediaItems, resolveAttachmentParent, attachmentWriteRefusal,
 } = require('../core/attachment-visibility');
@@ -202,7 +204,7 @@ async function encodeModernDerivatives(
                     filesize: info.size,
                 };
             } catch (err: any) {
-                console.warn(`Media upload: ${format.key} derivative failed for ${file} — keeping the original format only:`, err?.message || err);
+                log.warn({ err }, `Media upload: ${format.key} derivative failed for ${file} — keeping the original format only`);
                 try { if (fs.existsSync(target)) fs.unlinkSync(target); } catch { /* best effort */ }
             } finally {
                 activeModernEncodes--;
@@ -214,7 +216,7 @@ async function encodeModernDerivatives(
     // and a line per (size x format) pair would bury it under its own repetition.
     const skipped = queue.length - next;
     if (skipped > 0) {
-        console.warn(`Media upload: skipped ${skipped} modern derivative encode(s) — the host was already at its encode budget (${MODERN_ENCODE_CONCURRENCY} concurrent). The upload keeps its original-format sizes.`);
+        log.warn({ skipped }, `Media upload: skipped ${skipped} modern derivative encode(s) — the host was already at its encode budget (${MODERN_ENCODE_CONCURRENCY} concurrent). The upload keeps its original-format sizes.`);
     }
 }
 
@@ -265,7 +267,7 @@ type UploadRequest = Request & { file?: StoredFile };
  */
 const { authenticate, optionalAuth } = require('../middleware/auth');
 const { can } = require('../middleware/permissions');
-const { asyncHandler } = require('../middleware/errorHandler');
+const { asyncHandler, UploadRejectedError } = require('../middleware/errorHandler');
 // THE SCALAR QUERY RULE — see core/query-params.
 const { requireScalarQuery, requireRouteId } = require('../core/query-params');
 
@@ -289,7 +291,8 @@ const MEDIA_LIST_QUERY_FIELDS: readonly string[] = Object.freeze([
     'page', 'per_page', 'search', 'mime_type', 'orderby', 'order', 'visibility',
 ]);
 
-// Ensure uploads directory exists
+// Ensure uploads directory exists (the main site's; another site's root is created with the site and
+// on first upload below).
 if (!fs.existsSync(config.uploads.dir)) {
     fs.mkdirSync(config.uploads.dir, { recursive: true });
 }
@@ -306,7 +309,7 @@ const storage = multer.diskStorage({
         // after the file part, and is honoured by moving the files before the row is created.
         const root = requestedVisibility(req.query && req.query.visibility) === 'private'
             ? privateMedia.privateUploadsRoot()
-            : config.uploads.dir;
+            : privateMedia.publicUploadsRoot();
         const uploadPath = path.join(root, subDir);
 
         if (!fs.existsSync(uploadPath)) {
@@ -335,7 +338,7 @@ const fileFilter = (req: Request, file: IncomingFile, cb: (error: Error | null, 
     // SECURITY: Block SVG uploads for non-admins (SVGs can contain JavaScript)
     if (file.mimetype === 'image/svg+xml') {
         if (!req.user || req.user.getRole() !== 'administrator') {
-            return cb(new Error('SVG uploads are restricted to administrators only.'), false);
+            return cb(new UploadRejectedError(403, 'rest_upload_svg_forbidden', 'SVG uploads are restricted to administrators only.'), false);
         }
     }
 
@@ -343,18 +346,18 @@ const fileFilter = (req: Request, file: IncomingFile, cb: (error: Error | null, 
     // the declared MIME (defense in depth — a benign MIME could carry an active-content name).
     const declaredExt = path.extname(file.originalname);
     if (Media.isDangerousExtension(declaredExt)) {
-        return cb(new Error(`File extension ${declaredExt} is not allowed.`), false);
+        return cb(new UploadRejectedError(415, 'rest_upload_invalid_type', `File extension ${declaredExt} is not allowed.`), false);
     }
 
     if (!Media.isAllowedMimeType(file.mimetype)) {
-        return cb(new Error(`File type ${file.mimetype} is not allowed.`), false);
+        return cb(new UploadRejectedError(415, 'rest_upload_invalid_type', `File type ${file.mimetype} is not allowed.`), false);
     }
 
     // SECURITY: The declared MIME must map to a safe stored extension; otherwise we cannot
     // persist it safely and must reject (getExtensionForMime also returns null for dangerous
     // extensions like .xml that are otherwise in the allowlist).
     if (!Media.getExtensionForMime(file.mimetype)) {
-        return cb(new Error(`File type ${file.mimetype} cannot be stored safely.`), false);
+        return cb(new UploadRejectedError(415, 'rest_upload_invalid_type', `File type ${file.mimetype} cannot be stored safely.`), false);
     }
 
     cb(null, true);
@@ -640,6 +643,12 @@ router.get('/:id/file', authenticate, asyncHandler(async (req: Request, res: Res
  *         description: Media uploaded
  *       400:
  *         description: Invalid file
+ *       403:
+ *         description: "`rest_upload_svg_forbidden` — SVG uploads are restricted to administrators."
+ *       413:
+ *         description: "`rest_upload_too_large` — the file exceeds the configured upload size limit."
+ *       415:
+ *         description: "`rest_upload_invalid_type` — a file type or extension the media library does not accept."
  */
 router.post('/', authenticate, can('upload_files'), upload.single('file'), asyncHandler(async (req: UploadRequest, res: Response) => {
     // Bound once into a const so the "an upload actually arrived" guard below still holds inside the
@@ -780,7 +789,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
         }
 
     } catch (err) {
-        console.error("Security check failed:", err);
+        log.error({ err }, 'Security check failed');
         // FAIL-CLOSED: if the magic-byte/sanitization step threw for a type that MUST carry a
         // verifiable signature, do not let the unverified file through.
         if (requiresSignature) {
@@ -813,7 +822,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
     }
     const storedPrivate = queryVisibility === 'private';
     const wantPrivate = storedPrivate || bodyVisibility === 'private';
-    const storedRoot = storedPrivate ? privateMedia.privateUploadsRoot() : path.resolve(config.uploads.dir);
+    const storedRoot = storedPrivate ? privateMedia.privateUploadsRoot() : privateMedia.publicUploadsRoot();
 
     // Get relative path from uploads dir
     const relativePath = path.relative(storedRoot, uploaded.path).replace(/\\/g, '/');
@@ -956,7 +965,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
                 }
             }
         } catch (err) {
-            console.error("Image processing failed:", err);
+            log.error({ err }, 'Image processing failed');
         }
     }
 
@@ -974,7 +983,36 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
         privateMedia.moveAttachmentFiles(fromFiles.map((f: string, i: number) => [f, toFiles[i]]));
     }
 
+    // MEDIA OFFLOAD (core/media-storage). With an s3 store configured, a PUBLIC upload — the original and
+    // every derivative written above — goes to the bucket BEFORE the row exists, verified by size, so no
+    // row is ever told its files are somewhere that does not hold them. The row keeps the same relative
+    // /uploads path as always; only the `_wjs_media_storage` marker says where the bytes are. A bucket
+    // that refuses the write fails the upload (and removes what it wrote): keeping the file only on this
+    // node's disk would hand every other node a broken image.
+    let offloaded = false;
+    const mediaStorage = require('../core/media-storage');
+    const store = wantPrivate ? null : mediaStorage.resolveMediaStorage();
+    if (store && store.driver === 's3') {
+        const files = Media._deletableFiles(relativePath, sizes, sources, storedRoot);
+        try {
+            await mediaStorage.pushFiles(mediaStorage.getMediaStorage(store), storedRoot, files);
+            offloaded = true;
+        } catch (err: any) {
+            log.error(`Media upload: the media bucket refused the upload: ${require('../core/log-safe').logSafeError(err)}`);
+            for (const f of files) { try { fs.unlinkSync(f); } catch { /* best effort */ } }
+            return res.status(502).json({
+                code: 'rest_media_storage_unavailable',
+                message: 'The media storage bucket could not store this file. Nothing was saved; try again or check Settings → Media storage.',
+                data: { status: 502 }
+            });
+        }
+        if (!store.keepLocalCopy) {
+            for (const f of files) { try { fs.unlinkSync(f); } catch { /* best effort */ } }
+        }
+    }
+
     const media = await Media.create({
+        offloaded,
         isPrivate: wantPrivate,
         authorId: req.user.id,
         title: title || uploaded.originalname,
@@ -991,6 +1029,9 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
         alt
     });
 
+    await recordAudit(req.user.id, 'media.upload', 'media', media && media.id, {
+        mimeType: uploaded.mimetype, size: uploaded.size, visibility: wantPrivate ? 'private' : 'public'
+    });
     res.status(201).json(media);
 }));
 
@@ -1113,6 +1154,10 @@ router.put('/:id', authenticate, can('upload_files'), asyncHandler(async (req: R
         alt
     });
 
+    // Field NAMES only (the values are in the media row itself) — see core/audit's "small" contract.
+    const fields = Object.entries({ title, description, caption, alt, visibility })
+        .filter(([, v]) => v !== undefined && v !== null).map(([k]) => k);
+    await recordAudit(req.user.id, 'media.update', 'media', mediaId, { fields });
     res.json(updated);
 }));
 
@@ -1195,6 +1240,9 @@ router.delete('/:id', authenticate, can('upload_files'), asyncHandler(async (req
     // The force parameter was causing files to be orphaned since the frontend doesn't send it
     await Media.delete(mediaId, true);
 
+    await recordAudit(req.user.id, 'media.delete', 'media', mediaId, {
+        title: media.title, mimeType: media.mimeType, visibility: media.visibility
+    });
     res.json({ deleted: true, previous: media });
 }));
 

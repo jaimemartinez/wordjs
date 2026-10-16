@@ -738,7 +738,7 @@ class MediaImporter {
      * proof belongs at the sink, not in an argument about the input.
      */
     private claimRelativePath(relative: string): string | { relativePath: string; absolutePath: string } {
-        const uploadsDir = path.resolve(config.uploads.dir);
+        const uploadsDir = require('./private-media').publicUploadsRoot();
         const slash = relative.lastIndexOf('/');
         const directory = slash >= 0 ? relative.slice(0, slash + 1) : '';
         const base = slash >= 0 ? relative.slice(slash + 1) : relative;

@@ -125,7 +125,7 @@ function scopeAllowsMethod(scopes: string[], method: string): boolean {
 
 // last_used_at is best-effort telemetry, so throttle the write to at most once/minute per token to avoid
 // a DB round-trip on every single API request. In-process only; a multi-node deploy just writes per node.
-const _touchedAt = new Map<number, number>();
+const _touchedAt = new Map<string, number>();
 const TOUCH_THROTTLE_MS = 60 * 1000;
 
 class ApiToken {
@@ -208,6 +208,20 @@ class ApiToken {
             revoked: !!r.revoked,
             createdAt: r.created_at
         }));
+    }
+
+    /**
+     * Active (non-revoked, unexpired) token counts per owner — metadata only. Feeds the admin's view of
+     * which tokens the MFA-by-role policy reaches (core/mfa.ts tokenExposure).
+     */
+    static async activeCountsByOwner(): Promise<{ userId: number; count: number }[]> {
+        const rows = await dbAsync.all(
+            `SELECT user_id, COUNT(*) AS n FROM api_tokens
+             WHERE revoked = 0 AND (expires_at IS NULL OR expires_at > ?)
+             GROUP BY user_id`,
+            [Math.floor(Date.now() / 1000)]
+        );
+        return (rows || []).map((r: any) => ({ userId: Number(r.user_id), count: Number(r.n) }));
     }
 
     /**
@@ -300,9 +314,11 @@ class ApiToken {
     /** Best-effort, throttled last-used stamp (epoch seconds). Never throws — telemetry, not correctness. */
     static touch(id: number): void {
         const now = Date.now();
-        const last = _touchedAt.get(id) || 0;
+        // Token ids repeat across a multisite network: one throttle entry per site and token.
+        const key = require('../core/site-context').siteKeyPrefix() + String(id);
+        const last = _touchedAt.get(key) || 0;
         if (now - last < TOUCH_THROTTLE_MS) return;
-        _touchedAt.set(id, now);
+        _touchedAt.set(key, now);
         Promise.resolve(
             dbAsync.run('UPDATE api_tokens SET last_used_at = ? WHERE id = ?', [Math.floor(now / 1000), id])
         ).catch(() => { /* telemetry write failed — ignore */ });

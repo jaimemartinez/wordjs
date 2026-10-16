@@ -153,6 +153,29 @@ interface NodeSubscription {
   last: VersoNode | undefined;
 }
 
+/**
+ * EMBUDO DE PUBLICACIÓN: lo que el store entrega hacia fuera (`getData` y `onChange`) cumple el tipo
+ * que promete — `content` es SIEMPRE un array.
+ *
+ * `fromNormalized` no lo garantiza a propósito: su round-trip es byte-exacto y un documento cuya
+ * clave `content` venía AUSENTE (`contentKeyState === "absent"`, forma real en revisiones guardadas)
+ * sale sin ella. Eso no se puede cambiar ahí sin romper el gate de round-trip, pero tampoco se puede
+ * publicar: el doc ausente llega, por ejemplo, con el `welcome` de una sala colaborativa cuyo snapshot
+ * es `{}` (un post sin `_puck_data`), y todos los consumidores leen `data.content.length`. Un solo
+ * consumidor que lanzara dentro de `notify()` cortaba la notificación entera.
+ *
+ * Solo se rellena el caso AUSENTE (documento vacío: no hay nada que perder). Un `content` presente
+ * pero corrupto ("verbatim") se entrega tal cual: ahí hay dato del autor y la política fail-soft
+ * lo preserva para que el guardado no lo destruya.
+ */
+function publishedData(doc: VersoDoc): VersoData {
+  const data = fromNormalized(doc);
+  if (!Object.hasOwn(data as object, "content")) {
+    (data as { content: VersoData["content"] }).content = [];
+  }
+  return data;
+}
+
 export function createEditor(options: CreateEditorOptions): EditorHandle {
   const { isSlot, onChange, generateId } = options;
   const now = options.now ?? (() => Date.now());
@@ -225,7 +248,7 @@ export function createEditor(options: CreateEditorOptions): EditorHandle {
     notify();
     if (onChange) {
       try {
-        onChange(fromNormalized(doc));
+        onChange(publishedData(doc));
       } catch (e) {
         console.error("verso: onChange lanzó", e);
       }
@@ -397,7 +420,7 @@ export function createEditor(options: CreateEditorOptions): EditorHandle {
   }
 
   return {
-    getData: () => fromNormalized(doc),
+    getData: () => publishedData(doc),
     getDoc: () => doc,
     getState: () => state,
     transact,

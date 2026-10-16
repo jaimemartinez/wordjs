@@ -638,4 +638,5 @@ payment return URLs, ACME) cannot follow a request, and because letting the requ
 base would let anyone who triggers a password reset choose which listed address receives the token.
 Caches have no host in their key either. Pages in the browser use relative URLs (`Media.sourceUrl`,
 `featuredMedia.path`), so browsing works the same on every accepted address. Several domains, each with
-its own identity in links, is multisite or domain mapping: a separate feature.
+its own identity in links, is multisite or domain mapping: a separate feature (proposed design:
+[Multisite](multisite-design.md)).

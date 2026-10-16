@@ -26,6 +26,8 @@
     "setup": "node setup/index.js --install",
     "migrate": "node setup/index.js --migrate",
     "site": "node backend/scripts/site-address.js",
+    "media": "node backend/scripts/media-storage.js",
+    "network": "node backend/scripts/network.js",
     "cluster": "node scripts/cluster.js",
     "node:join": "node scripts/node-join.js",
     "gate:separate": "node scripts/separate-mode-gate.mjs",

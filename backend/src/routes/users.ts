@@ -891,7 +891,9 @@ const SUDO_INFLIGHT_MAX = 3;           // concurrent verifications per (account,
 const SUDO_INFLIGHT_STALE_MS = 30000;  // a crashed request must not leak its slot for ever
 
 /** account id -> consecutive failures within the window. Module-private: this IS the key space. */
-const _sudoFails = new Map<number, { n: number; at: number }>();
+const _sudoFails = new Map<string, { n: number; at: number }>();
+/** The bucket of `userId` on the current site: user ids repeat across a multisite network (site 1: the bare id). */
+const _sudoKey = (userId: number): string => require('../core/site-context').siteKeyPrefix() + String(userId);
 /** `${account}|${ip}` -> in-flight verifications. Same key space, same privacy. */
 const _sudoInflight = new Map<string, { n: number; at: number }>();
 
@@ -917,12 +919,12 @@ function sudoDelayMs(fails: any): number {
 function _sudoStore() {
     try { return require('../core/cache').getClient() || null; } catch { return null; }
 }
-const _sudoRedisKey = (userId: number) => `wjsudo:fails:${userId}`;
+const _sudoRedisKey = (userId: number) => `wjsudo:fails:${_sudoKey(userId)}`;
 
 function _sudoFailCountMem(userId: number): number {
-    const e = _sudoFails.get(userId);
+    const e = _sudoFails.get(_sudoKey(userId));
     if (!e) return 0;
-    if (Date.now() - e.at > SUDO_WINDOW_MS) { _sudoFails.delete(userId); return 0; }
+    if (Date.now() - e.at > SUDO_WINDOW_MS) { _sudoFails.delete(_sudoKey(userId)); return 0; }
     return e.n;
 }
 
@@ -947,7 +949,7 @@ async function sudoRecordFail(userId: number): Promise<void> {
             return;
         } catch { /* store hiccup → record in-process so this node still slows down */ }
     }
-    _sudoFails.set(userId, { n: _sudoFailCountMem(userId) + 1, at: Date.now() });
+    _sudoFails.set(_sudoKey(userId), { n: _sudoFailCountMem(userId) + 1, at: Date.now() });
 }
 
 async function sudoClearFails(userId: number): Promise<void> {
@@ -955,10 +957,11 @@ async function sudoClearFails(userId: number): Promise<void> {
     if (client) {
         try { await client.del(_sudoRedisKey(userId)); } catch { /* the TTL expires it anyway */ }
     }
-    _sudoFails.delete(userId);
+    _sudoFails.delete(_sudoKey(userId));
 }
 
-function sudoBeginAttempt(key: string): boolean {
+function sudoBeginAttempt(rawKey: string): boolean {
+    const key = require('../core/site-context').siteKeyPrefix() + rawKey;
     const now = Date.now();
     let e = _sudoInflight.get(key);
     if (!e || (now - e.at) > SUDO_INFLIGHT_STALE_MS) e = { n: 0, at: now };
@@ -968,7 +971,8 @@ function sudoBeginAttempt(key: string): boolean {
     return true;
 }
 
-function sudoEndAttempt(key: string): void {
+function sudoEndAttempt(rawKey: string): void {
+    const key = require('../core/site-context').siteKeyPrefix() + rawKey;
     const e = _sudoInflight.get(key);
     if (!e) return;
     e.n = Math.max(0, e.n - 1);
@@ -1022,6 +1026,37 @@ function isPrivilegedTarget(user: any): boolean {
             user.can('manage_options') || user.can('manage_roles')
         ))
     ));
+}
+
+/**
+ * The audit rows of a profile write (PUT /me and PUT /:id): one `user.update` naming the fields the
+ * request wrote — names only, never values — and, when a new password was stored, the reserved
+ * `auth.password.change`. The password is deliberately absent from the `user.update` field list: it has
+ * its own action, so "who changed whose password" is one query. Consumers of these rows (the audit log,
+ * outgoing webhooks) therefore never see a credential, only that one was set.
+ *
+ * A role change keeps its own `user.role_change` row (one row per role change). When the same request
+ * also wrote other fields, `user.update` lists `role` among them and the role_change row says so with
+ * `profileUpdate: true`, so a consumer that wants one event per profile write (core/webhooks) can tell
+ * the two rows describe the same save; a role-ONLY change writes no `user.update` row at all.
+ */
+function profileWriteFields(updateData: any): string[] {
+    const fields: string[] = [];
+    for (const [k, v] of Object.entries(updateData || {})) {
+        if (v === undefined || k === 'password') continue;
+        if (k === 'meta') {
+            if (v && typeof v === 'object') for (const m of Object.keys(v)) fields.push(m === 'personal_email' ? 'personalEmail' : m);
+            continue;
+        }
+        fields.push(k);
+    }
+    return fields;
+}
+
+async function recordProfileWriteAudit(actorId: number, userId: number, updateData: any): Promise<void> {
+    const fields = profileWriteFields(updateData);
+    if (updateData && updateData.password) await recordAudit(actorId, 'auth.password.change', 'user', userId, {});
+    if (fields.some((f) => f !== 'role')) await recordAudit(actorId, 'user.update', 'user', userId, { fields });
 }
 
 /**
@@ -1109,6 +1144,7 @@ router.put('/me', asyncHandler(async (req: Request, res: Response) => {
     const updated = await User.update(req.user.id, updateData);
     // A changed recovery address invalidates any reset link already in flight to the old one.
     if (recoveryChanged) await invalidatePendingPasswordReset(req.user.id);
+    await recordProfileWriteAudit(req.user.id, req.user.id, updateData);
     res.json(updated.toJSON());
 }));
 
@@ -1407,8 +1443,10 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
 
     // AUDIT: exactly one row per security-relevant change — a role change. No secret material.
     if (updateData.role !== undefined) {
-        await recordAudit(req.user.id, 'user.role_change', 'user', userId, { from: previousRole, to: updateData.role });
+        const profileUpdate = profileWriteFields(updateData).some((f) => f !== 'role');
+        await recordAudit(req.user.id, 'user.role_change', 'user', userId, { from: previousRole, to: updateData.role, profileUpdate });
     }
+    await recordProfileWriteAudit(req.user.id, userId, updateData);
     res.json(updated.toJSON());
 }));
 

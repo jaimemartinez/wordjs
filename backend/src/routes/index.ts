@@ -90,10 +90,25 @@ router.get('/', (req: Request, res: Response) => {
             notices: '/api/v1/notices',
             hooks: '/api/v1/hooks',
             forms: '/api/v1/forms',
-            chrome: '/api/v1/chrome'
+            chrome: '/api/v1/chrome',
+            graphql: '/api/v1/graphql'
         }
     });
 });
+
+// MULTISITE (phase 1): what is network-wide stays the main site's — see core/multisite-guards. Every
+// guard is a no-op on a single site and on the main site.
+const multisiteGuards = require('../core/multisite-guards');
+router.use('/site-address', multisiteGuards.mainSiteOnly);
+router.use('/plugins', multisiteGuards.pluginsOnSecondarySite);
+router.use('/marketplace', multisiteGuards.mainSiteOnly);
+router.use('/themes', multisiteGuards.themeFilesOnSecondarySite);
+router.use('/setup', multisiteGuards.mainSiteWrites);
+router.use('/system/certs', multisiteGuards.mainSiteOnly);
+router.use('/health/details', multisiteGuards.mainSiteOnly);
+router.use('/hooks', multisiteGuards.mainSiteOnly);
+// The network itself: its sites and administrators (main site, network administrators only).
+router.use('/network', require('./network'));
 
 // Mount routes
 router.use('/auth', authRoutes);
@@ -107,6 +122,9 @@ router.use('/settings', settingsRoutes);
 // Where the site lives: its main address, the other addresses it answers and the IP policy. Its own
 // namespace, not a setting: every write re-authenticates and is audited (core/site-address).
 router.use('/site-address', require('./site-address'));
+// Where public media is stored and served from (local disk, or an S3-compatible bucket + CDN).
+// Administrator-only; the credentials it writes are never read back in full (core/media-storage).
+router.use('/media-storage', require('./media-storage'));
 router.use('/plugins', pluginsRoutes);
 router.use('/marketplace', require('./marketplace'));
 router.use('/themes', themesRoutes);
@@ -131,12 +149,21 @@ router.use('/seo', seoRoutes);
 router.use('/hooks', hooksRoutes);
 router.use('/webhooks', require('./webhooks'));
 router.use('/audit', require('./audit'));
+// AI agents: the connections an administrator grants (routes/agents.ts) and the MCP endpoint they use
+// (routes/mcp.ts). See core/agent-capabilities for the request/grant/narrow model.
+router.use('/agents', require('./agents'));
+router.use('/mcp', require('./mcp'));
+// The AI provider layer: admin-held provider settings and the editor's suggestions (core/ai-provider).
+router.use('/ai', require('./ai'));
 router.use('/forms', require('./forms'));
 router.use('/presence', require('./presence'));
 // Colaboración en tiempo real de Verso (SSE de bajada + POST de subida). Distinta de `/presence`,
 // que es un aviso de "alguien más tiene esto abierto"; esta es la edición simultánea real.
 router.use('/collab', require('./collab'));
 router.use('/import', require('./import'));
+// Read-only GraphQL (phase 1). Every field resolves through the REST reads above for the same caller
+// (core/graphql/dispatch), so it adds a query language, not a second authorization model.
+router.use('/graphql', require('./graphql'));
 router.use('/', exportRoutes);
 
 // Pages endpoint (alias for posts with type=page)
@@ -196,7 +223,17 @@ router.use('/', exportRoutes);
  */
 router.get('/pages', (req: Request, res: Response, next: NextFunction) => {
     req.query.type = 'page';
-    postsRoutes.handle(req, res, next);
+    // The posts router matches on req.url, which is still '/pages' here: left as is it routed to
+    // `/:id` and answered 404 rest_post_invalid_id. Point it at the list route (the query string is
+    // kept for completeness; req.query is already parsed) and put the URL back if the posts router
+    // hands the request on.
+    const url = req.url;
+    const queryStart = url.indexOf('?');
+    req.url = queryStart === -1 ? '/' : `/${url.slice(queryStart)}`;
+    postsRoutes.handle(req, res, (err?: unknown) => {
+        req.url = url;
+        next(err);
+    });
 });
 
 const { authenticate, CSRF_COOKIE, CSRF_HEADER } = require('../middleware/auth');

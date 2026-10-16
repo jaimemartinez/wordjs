@@ -12,6 +12,7 @@ const { Menu, MenuItem } = require('../models/Menu');
 const { getOption, updateOption } = require('./options');
 // The writable post statuses, which an imported status is folded onto (see canonicalImportedPostStatus).
 const { canonicalImportedPostStatus } = require('./post-capabilities');
+const log = require('./module-logger').moduleLogger('core/import-export');
 
 /**
  * Export all site content
@@ -161,7 +162,7 @@ async function exportSite(options: Record<string, any> = {}) {
         'comments', 'comment_meta',
         'terms', 'term_taxonomy', 'term_relationships',
         'options', 'links', 'notifications',
-        'schema_migrations', 'api_tokens', 'audit_log', 'webhooks', 'webhook_deliveries',
+        'schema_migrations', 'api_tokens', 'agent_connections', 'audit_log', 'webhooks', 'webhook_deliveries',
         'form_submissions', 'collab_docs', 'collab_members', 'collab_ops', 'content_outbox',
         'sqlite_sequence', 'migrations' // exclusions
     ];
@@ -187,7 +188,7 @@ async function exportSite(options: Record<string, any> = {}) {
                 });
             }
         } catch (e) {
-            console.warn('⚠️ Failed to export custom tables:', e.message);
+            log.warn({ err: e }, '⚠️ Failed to export custom tables');
         }
     }
 
@@ -511,7 +512,7 @@ async function importSite(data: any, options: Record<string, any> = {}) {
             'comments', 'comment_meta',
             'terms', 'term_taxonomy', 'term_relationships',
             'options', 'links', 'notifications',
-            'schema_migrations', 'api_tokens', 'audit_log', 'webhooks', 'webhook_deliveries',
+            'schema_migrations', 'api_tokens', 'agent_connections', 'audit_log', 'webhooks', 'webhook_deliveries',
             'form_submissions', 'collab_docs', 'collab_members', 'collab_ops', 'content_outbox',
             'sqlite_sequence', 'migrations'
         ];

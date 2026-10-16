@@ -72,6 +72,14 @@ const PROTECTED_OPTION_NAMES = new Set([
     // roles and owns the enforcement clock; written raw — by a settings:write plugin, or by a site import,
     // which skips every name on this list — it dropped the requirement and could back-date the clock.
     'mfa_policy',
+    // 'mfa_policy_fresh_install' marks a site CREATED by the install wizard, so its first MFA policy turns
+    // API-token enforcement on by default (core/mfa). Written by a plugin or carried in by a site import it
+    // would flip that default on a site that was upgraded, not installed.
+    'mfa_policy_fresh_install',
+    // 'ai_provider' says WHERE the site's AI requests go (provider, model, base URL). Its key lives in
+    // 'ai_provider_api_key', which PROTECTED_OPTION_RE already covers — but a plugin able to rewrite the
+    // base URL would have the host send that key, and every prompt, to a server of its choosing.
+    'ai_provider',
     // 'site_address_rev' is the mirror of the config's site-address revision; core/site-address compares
     // it with the file to decide whether a change made at the server still has to be applied. A plugin
     // that could write it could make the backend skip (or replay) a change of the site's address.
@@ -990,7 +998,7 @@ function createPluginApi(slug: string) {
 
         async mail(msg: any) {
             verifyPermission('email', 'admin');
-            const send = (global as any).wordjs_send_mail;
+            const send = require('./mail-provider').sendMailFn();
             if (typeof send !== 'function') throw new Error('Mail server not available');
             return send(msg);
         },
@@ -1004,7 +1012,17 @@ function createPluginApi(slug: string) {
             // bypass — re-checked here AND at the register-mail-provider IPC handler.
             verifyPermission('email', 'provider');
             if (typeof handler !== 'function') throw new Error('provideMail requires a function');
-            (global as any).wordjs_send_mail = handler;
+            require('./mail-provider').setMailProvider(handler);
+        },
+
+        // The site's AI provider (core/ai-provider), gated on ai:use. The plugin sends text and gets text
+        // back; the key, the provider settings and the raw response never cross the bridge.
+        ai: {
+            async complete(req: any) {
+                verifyPermission('ai', 'use');
+                const { runAsHost } = require('./plugin-context');
+                return runAsHost(() => require('./ai-provider').completeForPlugin(slug, req));
+            },
         },
 
         async notify(n: any) {

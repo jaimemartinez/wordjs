@@ -359,7 +359,7 @@ function GatewayConfigForm() {
     );
 }
 
-import { mfaApi, rolesApi, type Role } from "@/lib/api";
+import { mfaApi, rolesApi, type Role, type MfaTokenExposure } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/contexts/ToastContext";
 
@@ -371,17 +371,26 @@ function MfaPolicyForm() {
     const [required, setRequired] = useState<string[]>([]);
     const [graceDays, setGraceDays] = useState(7);
     const [enforceForApiTokens, setEnforceForApiTokens] = useState(false);
+    // The SAVED policy's answer about existing tokens — what the notice below reports.
+    const [savedRoles, setSavedRoles] = useState<string[]>([]);
+    const [savedEnforceTokens, setSavedEnforceTokens] = useState(false);
+    const [exposure, setExposure] = useState<MfaTokenExposure | null>(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
 
     useEffect(() => {
         (async () => {
             try {
-                const [rolesData, { policy }] = await Promise.all([rolesApi.list(), mfaApi.getPolicy()]);
+                const [rolesData, { policy, tokenExposure, enforceForApiTokensDefault }] = await Promise.all([rolesApi.list(), mfaApi.getPolicy()]);
                 setRoles(rolesData);
                 setRequired(policy.requiredRoles || []);
                 setGraceDays(typeof policy.graceDays === "number" ? policy.graceDays : 7);
-                setEnforceForApiTokens(policy.enforceForApiTokens === true);
+                // A freshly installed site that has never required a role starts with the switch ON; the
+                // admin can still uncheck it before the first save. Everywhere else it shows what is stored.
+                setEnforceForApiTokens(policy.enforceForApiTokens === true || enforceForApiTokensDefault === true);
+                setSavedRoles(policy.requiredRoles || []);
+                setSavedEnforceTokens(policy.enforceForApiTokens === true);
+                setExposure(tokenExposure ?? null);
             } catch (e: any) {
                 addToast(e?.message || "Failed to load the MFA policy", "error");
             } finally {
@@ -396,13 +405,16 @@ function MfaPolicyForm() {
     const save = async () => {
         setSaving(true);
         try {
-            const { policy } = await mfaApi.savePolicy({
+            const { policy, tokenExposure } = await mfaApi.savePolicy({
                 requiredRoles: required,
                 graceDays: Number(graceDays) || 0,
                 enforceForApiTokens,
             });
             setRequired(policy.requiredRoles);
             setEnforceForApiTokens(policy.enforceForApiTokens === true);
+            setSavedRoles(policy.requiredRoles);
+            setSavedEnforceTokens(policy.enforceForApiTokens === true);
+            setExposure(tokenExposure ?? null);
             addToast(policy.requiredRoles.length ? "Two-factor enforcement updated" : "Two-factor enforcement disabled", "success");
         } catch (e: any) {
             addToast(e?.message || "Failed to save the MFA policy", "error");
@@ -414,6 +426,9 @@ function MfaPolicyForm() {
     // Warn when the admin is about to require 2FA for their OWN role without having it enabled — after the
     // grace period they'd be forced into the enrolment screen.
     const selfAtRisk = user?.role != null && required.includes(user.role) && user.mfa?.enabled === false;
+    // The saved policy requires 2FA for some roles but leaves `wjt_` tokens exempt: say so, with numbers.
+    const tokensExempt = savedRoles.length > 0 && !savedEnforceTokens;
+    const exposed = exposure?.unenrolledOwnerTokens ?? 0;
 
     if (loading) return <p className="text-gray-500 font-medium">Loading policy…</p>;
 
@@ -458,12 +473,40 @@ function MfaPolicyForm() {
                 <span>
                     <span className="block font-bold text-gray-800 dark:text-gray-100">Also enforce for personal API tokens</span>
                     <span className="block text-[11px] text-gray-400 mt-0.5">
-                        Blocks <code>Bearer wjt_…</code> tokens whose owner is in a selected role and hasn&apos;t enrolled — including
-                        tokens minted before this policy. A token can&apos;t answer a 2FA challenge, so the fix is for its owner to
-                        enrol (or for the token to be revoked). Off by default.
+                        Starts on for a new site; a site upgraded from an earlier version keeps it off, so existing integrations
+                        keep working. While it is off, a <code>Bearer wjt_…</code> token
+                        keeps working even when its owner&apos;s role requires 2FA and the owner never enrolled — for example a token
+                        created before this policy, or before the owner&apos;s role changed. Turning it on blocks those tokens once
+                        the grace period ends; a token can&apos;t answer a 2FA challenge, so the fix is for its owner to enrol (or
+                        for the token to be revoked). Either way, new tokens for a selected role can only be created by an
+                        enrolled user who signed in with 2FA or confirms a current code.
                     </span>
                 </span>
             </label>
+
+            {tokensExempt && (
+                <div
+                    role="status"
+                    data-testid="mfa-token-exemption-notice"
+                    className="flex items-start gap-3 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 rounded-2xl px-4 py-3 text-sm text-amber-800 dark:text-amber-300"
+                >
+                    <i className="fa-solid fa-key mt-0.5"></i>
+                    <span>
+                        <strong>API tokens are exempt from this policy.</strong>{" "}
+                        {exposed > 0 ? (
+                            <>
+                                {exposed === 1 ? "1 active token belongs" : `${exposed} active tokens belong`} to{" "}
+                                {exposure!.unenrolledOwners === 1 ? "a user" : `${exposure!.unenrolledOwners} users`} in a
+                                role that requires 2FA who {exposure!.unenrolledOwners === 1 ? "hasn't" : "haven't"} enrolled, and{" "}
+                                {exposed === 1 ? "it keeps" : "they keep"} working without a second factor.
+                            </>
+                        ) : (
+                            <>No active token currently belongs to an un-enrolled user in a required role, but tokens are not checked if that changes.</>
+                        )}{" "}
+                        Turn on &ldquo;Also enforce for personal API tokens&rdquo; to block them after the grace period, or revoke them.
+                    </span>
+                </div>
+            )}
 
             <div className="flex flex-wrap items-end gap-4">
                 <div>

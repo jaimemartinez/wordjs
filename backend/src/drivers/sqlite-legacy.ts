@@ -9,6 +9,7 @@ const path = require('path');
 const fs = require('fs');
 const config = require('../config/app');
 const { AsyncLocalStorage } = require('async_hooks');
+const log = require('../core/module-logger').moduleLogger('drivers/sqlite-legacy');
 
 let dbInstance: any = null;
 let SQL: any = null;
@@ -187,7 +188,7 @@ class DatabaseWrapper {
                 this.sqlDb.run('ROLLBACK');
             } catch (rbErr: any) {
                 rolledBack = false;
-                console.error('❌ SQLite (legacy) ROLLBACK failed:', rbErr && rbErr.message);
+                log.error({ err: rbErr }, '❌ SQLite (legacy) ROLLBACK failed');
             }
             if (!rolledBack) {
                 // ROLLBACK could not undo it, so the live handle may hold partially-applied state.
@@ -202,7 +203,7 @@ class DatabaseWrapper {
                     this.sqlDb = restored;
                     dbInstance = restored;
                 } catch (restoreErr: any) {
-                    console.error('❌ SQLite (legacy) committed-image restore failed:', restoreErr && restoreErr.message);
+                    log.error({ err: restoreErr }, '❌ SQLite (legacy) committed-image restore failed');
                 }
             }
             inTransaction = false;
@@ -271,7 +272,7 @@ class StatementWrapper {
             stmt.free();
             return undefined;
         } catch (e) {
-            console.error('SQL error:', e.message, 'SQL:', this.sql);
+            log.error({ err: e, sql: this.sql }, 'SQL error');
             return undefined;
         }
     }
@@ -295,7 +296,7 @@ class StatementWrapper {
             stmt.free();
             return results;
         } catch (e) {
-            console.error('SQL error:', e.message, 'SQL:', this.sql);
+            log.error({ err: e, sql: this.sql }, 'SQL error');
             return [];
         }
     }

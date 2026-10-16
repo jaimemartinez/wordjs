@@ -193,6 +193,9 @@ Two rules in `backend/src/core/query-params.ts` decide what a malformed paramete
 > `http://localhost:4000/api/v1/docs` (Requires Admin Login)
 > The page attaches your session's CSRF token to every call it makes (a `requestInterceptor` that echoes the `wjs_csrf` cookie as `X-CSRF-Token`), so **Try it out** works for mutating endpoints with an admin session; a Bearer token supplied through **Authorize** works too, since Bearer callers are exempt from the token gate (§2.4).
 
+> [!NOTE]
+> **GraphQL.** A read-only GraphQL endpoint lives at `/api/v1/graphql` (GET or POST). Every field resolves through the REST read documented below, as the same caller, so what it returns is exactly what these endpoints return. See [graphql.md](graphql.md).
+
 ### 6.1 Core Modules
 - **Authentication**: `/auth` - Login, Register, Session management.
 - **Content**: `/posts`, `/pages` (alias for `?type=page`), `/media`, `/categories`, `/tags`, `/comments`.
@@ -225,7 +228,7 @@ Two rules in `backend/src/core/query-params.ts` decide what a malformed paramete
 | `POST` | `/reset-password`           | No   | Body `{ uid, token, password }`. Consumes the single-use token (constant-time hash compare) and revokes all existing sessions; `400 rest_invalid_reset` / `rest_weak_password` on failure |
 | `POST` | `/verify-email`             | No   | Body `{ token }` (the current link, `/verify-email?token=…`) or `{ uid, token }` (a link sent by an earlier version for an account created unverified). Consumes the single-use token (24h TTL): for a registration it **creates the account**, for a legacy account it clears `email_verification_pending`; login works afterwards. One uniform `400 rest_invalid_verification` for a bad, expired or already-consumed token; `409 rest_registration_unavailable` when the link was valid but the username or address was taken by another account in the meantime (pending registrations reserve nothing). Rate-limited by the auth limiter |
 | `GET`  | `/tokens`                   | Session + `manage_api_tokens` | List the caller's scoped API tokens (metadata only; secrets are never re-shown) |
-| `POST` | `/tokens`                   | Session + `manage_api_tokens` | Mint a scoped API token. Body `{ name?, scopes?, expiresInDays? }`; the raw `wjt_…` secret is returned **once** (`201`). Refusals, in check order: a session started on an address other than the main one or loopback → `403 rest_token_bound_session`; over the active-token cap → `400 rest_token_limit`; `expiresInDays` present but not a positive number → `400 rest_invalid_param`; unknown scopes → `400 rest_invalid_scope`; caller's role is under the MFA-by-role policy but the caller has not enrolled → `403 rest_mfa_required_for_tokens` (refused even **inside** the grace period, because `Bearer wjt_…` tokens are exempt from the `MfaComplianceGate` and a token minted during grace would sidestep the policy for good) |
+| `POST` | `/tokens`                   | Session + `manage_api_tokens` | Mint a scoped API token. Body `{ name?, scopes?, expiresInDays?, mfaCode? }`; the raw `wjt_…` secret is returned **once** (`201`). Refusals, in check order: a session started on an address other than the main one or loopback → `403 rest_token_bound_session`; over the active-token cap → `400 rest_token_limit`; `expiresInDays` present but not a positive number → `400 rest_invalid_param`; unknown scopes → `400 rest_invalid_scope`; caller's role is under the MFA-by-role policy but the caller has not enrolled → `403 rest_mfa_required_for_tokens` (refused even **inside** the grace period, because `Bearer wjt_…` tokens are exempt from the `MfaComplianceGate` and a token minted during grace would sidestep the policy for good); caller's role is under the policy, the caller IS enrolled, but this session did not sign in with the second factor (no `amr: ["mfa"]` claim) and no `mfaCode` was sent → `403 rest_mfa_step_up_required` (send a current TOTP or backup code as `mfaCode`; a wrong one → `400 rest_mfa_invalid`, throttled like `/mfa/disable` and audited as `auth.token.create_refused`). The `auth.token.create` audit row records `mfa`: `session`, `step_up` or `not_required` |
 | `DELETE` | `/tokens/:id`             | Session + `manage_api_tokens` | Revoke one of the caller's tokens (`404` if not the caller's or already gone) |
 | `POST` | `/mfa`                      | No   | Complete a login that requires a second factor. Body `{ mfaToken, code }` (TOTP or backup code); issues both cookies on success (own `mfa:` lockout bucket). Off the double-submit gate (§2.4), like `/login`, as the second half of sign-in. `503 rest_address_retiring` (with `Retry-After`) in the seconds after this address was retired, before the code is checked (no backup code is used up) |
 | `GET`  | `/mfa/status`               | Yes  | Whether MFA is enabled for the caller + remaining backup-code count |
@@ -550,17 +553,18 @@ Base path: `/api/v1` (the routes below sit under `/import`). Migrates an existin
 **Errors:** a missing upload returns `400 no_file`; an unreadable upload `400 read_failed`; a file that doesn't parse as a valid WXR returns `400 invalid_wxr`. Non-fatal per-item problems during a run are collected (capped at 100) in the summary's `errors[]` array rather than aborting the import.
 
 ### 6.10 Outgoing Webhooks 🪝
-Base path: `/api/v1/webhooks` (`backend/src/routes/webhooks.ts`; core `backend/src/core/webhooks.ts`, models `Webhook.ts`/`WebhookDelivery.ts`). WordJS fans **content events** (e.g. `post.published`) out to admin-registered HTTP endpoints. Every delivery is **HMAC-signed** with the webhook's per-endpoint secret and **SSRF-safe** — the destination host is IP-validated **at delivery time**, so loopback / link-local (incl. the cloud-metadata address) / RFC1918 targets are rejected. The whole resource is **admin-only** (`authenticate` + `isAdmin`); all **mutations** are additionally **session-only** (an `Authorization: Bearer wjt_…` API token is rejected, so a leaked token can't plant an exfiltration endpoint or rotate a secret). Delivery is subscribed to content hooks and polled by `initWebhooks()` at boot.
+Base path: `/api/v1/webhooks` (`backend/src/routes/webhooks.ts`; core `backend/src/core/webhooks.ts`, models `Webhook.ts`/`WebhookDelivery.ts`). WordJS fans **site events** — posts/pages, comments, users, media, terms, menus, plugins, themes and settings (e.g. `post.published`, `comment.approved`, `media.uploaded`; the full catalogue and every payload are in **[webhooks.md](webhooks.md)**) — out to admin-registered HTTP endpoints. A subscription takes exact names, family wildcards (`post.*`) or `*`; `user.login` is **opt-in** (only an exact subscription receives it). Every delivery is **HMAC-signed** with the webhook's per-endpoint secret and **SSRF-safe** — the destination host is IP-validated **at delivery time**, so loopback / link-local (incl. the cloud-metadata address) / RFC1918 targets are rejected. The whole resource is **admin-only** (`authenticate` + `isAdmin`); all **mutations** are additionally **session-only** (an `Authorization: Bearer wjt_…` API token is rejected, so a leaked token can't plant an exfiltration endpoint or rotate a secret). Delivery is subscribed to content hooks and polled by `initWebhooks()` at boot.
 
 | Method   | Endpoint                            | Auth  | Description                                                        |
 | :------- | :---------------------------------- | :---- | :---------------------------------------------------------------- |
-| `GET`    | `/events`                           | Admin | The subscribable content-event catalog (`Webhook.EVENTS`)          |
+| `GET`    | `/events`                           | Admin | The subscribable event catalog: `{ events, groups: [{ entity, events }], optIn }` (`Webhook.EVENTS` / `EVENT_GROUPS`) |
 | `GET`    | `/`                                 | Admin | List all webhooks                                                  |
 | `POST`   | `/`                                 | Admin (session) | Create a webhook. Body `{ name?, url, events?, active? }`; the signing **secret is returned once** (`201`). Capped at 100 webhooks |
 | `GET`    | `/:id`                              | Admin | Get one webhook                                                    |
 | `PATCH`  | `/:id`                              | Admin (session) | Update `name`/`url`/`events`/`active`                    |
 | `DELETE` | `/:id`                              | Admin (session) | Delete a webhook                                          |
 | `POST`   | `/:id/rotate-secret`                | Admin (session) | Rotate the signing secret (returned **once**)            |
+| `POST`   | `/:id/ping`                         | Admin (session) | Send a signed `ping` test delivery to this endpoint only and attempt it at once; returns `{ delivered, delivery }`. `409 rest_webhook_inactive` for a paused webhook |
 | `GET`    | `/:id/deliveries`                   | Admin | Recent delivery attempts for a webhook (audit log)                 |
 | `POST`   | `/deliveries/:deliveryId/redeliver` | Admin (session) | Re-queue a specific delivery for another attempt         |
 
@@ -725,6 +729,31 @@ Write responses are `{ rev, warnings, unchanged? }` (a no-op answers `200 { unch
 
 `POST /api/v1/system/certs/config` (§6.5) additionally returns `canonicalUpgraded` (the same host moved from http to https and the main address followed) or `suggestCanonical` (the gateway now reports another address; the certificates page opens the Change dialog prefilled with it).
 
+
+### 6.23 AI agents & MCP 🤖
+Operator guide and the full model: [ai-agents.md](ai-agents.md). An **agent connection** is a `Bearer wja_…` token bound to one user; it **requests** capabilities (`content:read`, `content:draft`, `content:publish`, `media:upload`, `taxonomy:write`, `comments:moderate`, `settings:read`), an administrator **grants** a subset, and every call runs as the bound user with capabilities **narrowed** to the grant (`backend/src/core/agent-capabilities.ts`) — never wider than the user. Audited as `agent.create` / `.grant` / `.revoke` / `.write` / `.denied`.
+
+| Method | Endpoint | Auth | Description |
+| :----- | :------- | :--- | :---------- |
+| `GET`    | `/agents` | Session + `manage_api_tokens` | Connections (administrators: all; others: their own), the capability vocabulary, `canGrant`, and `mcpUrl` |
+| `POST`   | `/agents` | Session + `manage_api_tokens` | Create a **pending** connection. Body `{ name?, requested[], userId? (administrators only), expiresInDays? }`; the raw `wja_…` token is returned **once** (`201`). `400 rest_invalid_capability` / `rest_missing_param` / `rest_invalid_param` / `rest_agent_limit` (25 live per user); `403 rest_token_bound_session` from a session on a secondary address |
+| `PUT`    | `/agents/:id/grant` | Session + administrator | Replace the grant `{ granted[] }` — a subset of the request (`400 rest_grant_exceeds_request`); empty → pending; a revoked connection answers `409 rest_agent_revoked` |
+| `DELETE` | `/agents/:id` | Session (owner or administrator) | Revoke — immediate and terminal |
+| `GET`    | `/agents/:id/audit` | Session (owner or administrator) | The connection's audit trail, newest first (`page`, `per_page`) |
+| `POST`   | `/mcp` | `Bearer wja_…` only | MCP Streamable HTTP endpoint (JSON-RPC 2.0), stateless, JSON responses; clients send `Accept: application/json, text/event-stream`. `401` with `WWW-Authenticate: Bearer` for a missing/invalid/revoked token; `GET`/`DELETE` answer `405` |
+
+A `wja_` token is refused by every REST route (the REST `authenticate` does not know the prefix), and a `wjt_` API token or a session cookie is refused by `/mcp`. Someone else's connection answers `404 rest_agent_not_found`. Agent tool calls run through the REST router in-process (`backend/src/core/rest-dispatch.ts`), so every REST rule, hook and audit row applies to them.
+
+### 6.24 AI provider 🧠
+Base path `/api/v1/ai` (`backend/src/routes/ai.ts`, `core/ai-provider.ts`). Operator guide: [ai-provider.md](ai-provider.md). The provider's API key is **write-only** — no route returns it.
+
+| Method | Endpoint | Auth | Description |
+| :----- | :------- | :--- | :---------- |
+| `GET`  | `/status` | Signed in | `{ enabled, tasks }` — whether suggestions are available |
+| `GET`  | `/settings` | Session + administrator | `{ provider, model, baseUrl, hasKey, keyHint, providers, anthropicModels }` |
+| `PUT`  | `/settings` | Session + administrator | `{ provider: '' \| 'anthropic' \| 'openai-compatible', model?, baseUrl?, apiKey?, clearKey? }`; an empty `apiKey` keeps the stored key. `400 rest_invalid_param` for an unknown provider/model, credentials in the URL, or plain http to a non-loopback host. Audited as `ai.settings.update` (never the key) |
+| `POST` | `/test` | Session + administrator | One tiny round trip: `{ ok, provider, model, ms }`, or the provider error |
+| `POST` | `/suggest` | `edit_posts`/`edit_pages` (text tasks); `upload_files` + edit rights on the image (`alt_text`) | `{ task: 'excerpt' \| 'seo_description' \| 'alt_text', title?, content?, mediaId?, language? }` → `{ suggestion, model }`. Saves nothing. `409 ai_not_configured`, `422 ai_refused`, `429 ai_rate_limited` (20/min per user), `502 ai_provider_*` |
 ---
 
 ## 8. Cron System ⏰

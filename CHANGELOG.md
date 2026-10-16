@@ -4,6 +4,199 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [Unreleased]
+
+### Added
+
+- **Strict database driver mode.** `"dbStrictDriver": true` in `backend/wordjs-config.json`, or
+  `WORDJS_DB_STRICT=1` in the backend's environment (the variable wins, in both directions), turns the
+  fallback to the pure-JS `sqlite-legacy` driver into a boot error. The error names the driver that failed,
+  its load error, what the fallback would have cost (no FTS5, so site search on `LIKE` instead of ranked
+  results) and the fix (`npm rebuild better-sqlite3` in `backend/` for the native driver). In strict mode
+  migration `0008_posts_fts5` also fails, rather than skipping, on a SQLite build without FTS5; an
+  explicitly configured `sqlite-legacy` still boots. Off by default, so nothing changes for existing
+  installs: the fallback, its admin notice and `/health/details` report work as before. See
+  `documentation/database.md`.
+- **Webhooks cover the whole site lifecycle, not just six content events.** The catalogue grows from 6 to
+  31 events, grouped by entity: posts and pages (`post.scheduled`, `post.unpublished`, `post.trashed`,
+  `post.restored` next to the existing four), comments (`comment.updated`, `comment.approved`,
+  `comment.spam`, `comment.trashed`), users (`user.created`, `user.updated`, `user.deleted`, and
+  `user.login`, which is opt-in: no wildcard includes it), media (`media.uploaded/updated/deleted`),
+  categories and tags (`term.created/updated/deleted`), menus (`menu.updated`, naming what changed),
+  plugins (`plugin.installed/activated/deactivated/uninstalled`), themes (`theme.activated`) and settings
+  (`settings.updated`, key names only). The events come from the hooks core already fires and from a new
+  host-only observer of the audit trail (`onAuditRecorded`), so there are no emit calls scattered through
+  the routes; signing, retries, the SSRF guard and the delivery log are unchanged, and existing
+  subscriptions (`*`, `post.*`, …) keep their format and simply receive the new events in their scope.
+  Every payload is built by an allowlisted per-entity serializer, so no password hash, MFA secret, token,
+  email address, option value or private-media URL can reach a receiver. `POST /webhooks/:id/ping` sends a
+  signed test delivery to one endpoint, and the admin page gets an event picker grouped by entity (with a
+  per-entity "All") and a **Send test** button. Every event and its payload is documented in
+  `documentation/webhooks.md`.
+
+- **The audit trail records media, taxonomy, menu, comment-moderation and plugin install/uninstall
+  changes, profile saves and self-registrations.** New actions: `media.upload/update/delete`,
+  `term.create/update/delete`, `menu.create/update/delete`, `comment.approve/spam/trash/update/delete`,
+  `plugin.install` (zip upload), `plugin.uninstall`, `user.update` (field names only) and
+  `auth.password.change`; a self-registration now records `user.create`. This closes the two call sites
+  `documentation/security.md` listed as missing (the media routes and the profile password change).
+- **A read-only GraphQL API at `/api/v1/graphql`.** Posts, pages, custom post types, categories and tags,
+  taxonomies and content types, media, menus, approved comments, the public settings and the current
+  viewer, with cursor pagination (`first`/`after`, `pageInfo`, `totalCount`), filtering and the same
+  full-text search as REST. Every field resolves through the matching REST read, in process and as the
+  same caller, so drafts, private and password-protected entries, non-public types, hidden attachments and
+  scoped API tokens behave exactly as they do on REST; a parity suite compares the two for anonymous
+  callers, owners, other authors and editors. The server is protected by a depth limit (10), a query-cost
+  limit (1000), a parser token cap, a 100-item page cap and the existing API rate limiter; introspection
+  is off in production unless the new admin-only `graphql_introspection` setting turns it on. Host code
+  can extend the schema with `registerGraphQLExtension()` or the `wordjs_graphql_register_types` hook.
+  Mutations are not part of this release. Built on `graphql` 16 and `graphql-http` (both MIT, no
+  transitive dependencies). See `documentation/graphql.md`.
+- **Optional media offload to an S3-compatible bucket and CDN.** Media could only live on the backend's
+  local disk. Settings → Media storage (or a `mediaStorage` block in `wordjs-config.json` / the
+  `WORDJS_MEDIA_*` env vars) now sends public uploads — the original and every stored derivative, the size
+  ladder and its WebP/AVIF siblings included — to AWS S3, Cloudflare R2, MinIO, Backblaze B2 or any
+  S3-compatible store, reusing the dependency-free SigV4 signer of the backup offload. The database keeps
+  the same relative `/uploads/...` paths: `/uploads` redirects to the CDN for files a node does not hold,
+  the API adds a `deliveryUrl`, and once the whole library is offloaded the public SSR emits CDN URLs
+  directly. The page CSP gains exactly the configured media origin in `img-src` and `media-src`, at
+  response time. `npm run media -- offload | restore | status | test` (and buttons on the screen) move an
+  existing library to the bucket and back, idempotent and resumable, one run at a time across the
+  cluster. The screen has a "Test connection" button: the server writes and reads a probe object, the
+  admin's browser loads it from the public URL, and the server deletes it; credentials are write-only (only a four-character hint is ever returned). With offload
+  on, backend nodes no longer need a shared uploads directory for media. Private media stays on local
+  disk. See `documentation/media-storage.md`.
+- **AI agents can work on a site through a built-in MCP server, with the plugin permission model.**
+  `POST /api/v1/mcp` speaks the Model Context Protocol (Streamable HTTP, stateless, JSON responses, via the
+  official `@modelcontextprotocol/sdk`), so Claude Code, Claude Desktop and other MCP clients can list,
+  search and read content, create and edit drafts, submit them for review, publish, upload media, create
+  categories and tags, moderate comments and read the site's public identity. Each client authenticates
+  with a dedicated **agent connection** token (`Bearer wja_…`) bound to one user. The connection
+  **requests** capabilities (`content:read`, `content:draft`, `content:publish`, `media:upload`,
+  `taxonomy:write`, `comments:moderate`, `settings:read`) and an **administrator grants** a subset; every
+  call then runs as the bound user with its capabilities narrowed to the grant, so an agent can never do
+  more than its user (a contributor's agent granted `content:publish` still cannot publish) and no grant
+  reaches deletion, users, roles, plugins, themes, settings writes, tokens or backups. Tools run through
+  the REST router in-process, so every REST rule, hook and audit row applies; new content is always a
+  draft; site content returned to the model is labelled untrusted data. Agent tokens are refused by the
+  REST API and `/mcp` refuses API tokens and session cookies. A new admin screen, **AI agents**
+  (`/admin/agents`), creates connections, reviews and grants requested capabilities (showing grants the
+  user cannot exercise as inert), revokes them, shows each agent's audit trail and copies ready-made
+  client configuration. New audit actions: `agent.create`, `agent.grant`, `agent.revoke`, `agent.write`
+  (every agent write, success or refusal) and `agent.denied`. Rate limits: 240 requests/min per agent
+  token, plus 120 tool calls and 30 writes per minute per agent. New routes `GET/POST /api/v1/agents`,
+  `PUT /api/v1/agents/:id/grant`, `DELETE /api/v1/agents/:id`, `GET /api/v1/agents/:id/audit`; migration
+  `0016_create_agent_connections`. A password change/reset or account deletion revokes the user's agent
+  connections, and agent tokens follow the MFA policy's `enforceForApiTokens` like API tokens. See
+  `documentation/ai-agents.md`.
+- **An AI provider layer, with editor suggestions and an `ai:use` plugin permission.** Administrators
+  connect a provider under **Settings → AI** (`/admin/settings/ai`): **Anthropic** (Claude — default model
+  `claude-sonnet-5-5`, also `claude-haiku-5-5` and `claude-opus-5-5`, through the official
+  `@anthropic-ai/sdk`) or any **OpenAI-compatible** server (OpenAI, Ollama, LM Studio, vLLM…; https unless
+  loopback), with a connection test. The API key is write-only: no route returns it (the screen shows
+  only that one is stored and its last four characters), it is never logged or audited, and plugins can
+  neither read it nor redirect the provider (`ai_provider` and `ai_provider_api_key` are protected
+  options). The editor gets **Suggest with AI** under a post's or page's excerpt and meta description
+  (it reads the live canvas, unsaved edits included) and under an image's alt text in the media library
+  (the image is read server-side behind the same rule as editing it and downscaled before it leaves the
+  site). A suggestion is only ever shown — Use / Try again / Dismiss — and nothing is saved until the user
+  accepts it; the material is sent as data the model is told not to obey, and the answer is reduced to a
+  single line of plain text with a length cap. Plugins get `wordjs.ai.complete({ prompt, system?,
+  maxTokens? })` → `{ text, model }`, gated on the new `ai:use` permission that a manifest requests and
+  an administrator grants (30 calls/minute per plugin). New routes `GET /api/v1/ai/status`,
+  `GET`/`PUT /api/v1/ai/settings`, `POST /api/v1/ai/test` and `POST /api/v1/ai/suggest` (20/minute per
+  user); new audit action `ai.settings.update`. See `documentation/ai-provider.md`.
+- **Multisite, phase 1: one install can serve a network of sites.** Off unless turned on with
+  `npm run network -- enable --admin <login>`; a single-site install keeps the same database, files,
+  URLs, cache keys and tokens. Once on, the existing install is site 1, the main site, and network
+  administrators (listed administrators of the main site) create, suspend and resume sites from
+  **Admin → Network**. Each site has its own main address, its own SQLite database and its own uploads
+  under `<data dir>/sites/<id>/`, and its own users, roles, sessions, settings, menus and theme choice.
+  A request belongs to the site whose address it was sent to (an unknown address is still a 421); one
+  site's sessions and API tokens are refused on every other (a per-site signing key and a site claim),
+  in-process caches, cache keys, purge tags and the frontend's Data Cache and Full Route Cache are kept
+  per site, and work that loses track of its site fails instead of touching the main site. Phase 1 needs
+  the `sqlite-native` driver and one backend host; plugins, theme server code, backups, certificates and
+  real-time collaboration stay on the main site. The design, the isolation guarantees and the next
+  phases are in `documentation/multisite-design.md`; running a network is in
+  `documentation/multisite.md`.
+- **Multisite, phase 2: plugins and theme code run per site.** Plugin code stays network-wide (installed,
+  updated and deleted on the main site), but every site can now activate plugins and grant them
+  permissions on its own. A network administrator first **offers** a plugin to the sites from
+  **Admin → Network → Plugins for the sites**, choosing a grant ceiling; a site administrator can never
+  grant beyond it (`403 plugin_grant_beyond_ceiling`), and lowering it takes effect at once. Each site
+  runs its **own sandboxed worker** of each plugin it activates, keyed by site: its routes, hooks,
+  shortcodes, scheduled events, notification transports and mail provider answer only for that site, its
+  bridge calls read and write only that site's database, and its private storage is that site's. On
+  Postgres and MySQL the per-plugin database principal is per site too. Each site also runs its own
+  theme server code (`functions.js`). New isolation tests prove guarantees I5 (a plugin active on one site
+  cannot act on another) and I8 (the ceiling). See `documentation/multisite.md`.
+
+### Changed
+
+- **The WordPress import API downloads attachments by default, like the importer and the admin screen.**
+  A `POST /api/v1/import/wordpress` that sent neither `media` nor the legacy `importAttachments` switch
+  used to skip every attachment, while the core importer and the admin screen both default to
+  `download`. The route now uses `download` too; `media=skip` and `importAttachments=0` still opt out, and
+  `importAttachments=1` still means `download`. The OpenAPI description documents the default.
+- **Backend log lines go through per-module structured loggers instead of `console`.** A new
+  `core/module-logger` gives each backend module `moduleLogger('<dir>/<file>')`: every line carries a
+  `mod` field and, inside a request, the request's `requestId`; errors are logged as `{ err }` instead
+  of being pasted into the message; values such as a slug, a table or a path travel as fields; and the
+  message keeps its wording, so existing greps still match. Message text still goes through the same
+  credential scrub the console bridge applies, and `err` is now serialized by allow-list (type, message,
+  stack, `code`/`errno`/`syscall`/`status`/`statusCode`, `cause`), so an HTTP-client error can no
+  longer carry its request headers into the log. All of `backend/src` is migrated except an explicit
+  allowlist — the modules loaded inside the isolated plugin child (their output is still captured and
+  slug-tagged by the host), `config/app` and the two first-boot banners — and
+  `src/tests/no-console-in-backend.test.ts` fails on any new `console.*` call outside it. The
+  development-only per-request line (`NODE_ENV=development`) is now `debug`: the access log already
+  records every request at `info`. See `documentation/observability.md`.
+
+### Fixed
+
+- **`GET /api/v1/pages` answered `404 rest_post_invalid_id`.** The alias forced `type=page` but handed the request to the posts router with its URL still `/pages`, so it matched the single-post route instead of the list. It now reaches the list route and behaves as documented: the same filters, authorization, `X-WP-Total`/`X-WP-TotalPages` headers and refusal of repeated scalars as `GET /posts`, with any caller-supplied `type` overwritten.
+- **Opening a post or page in the editor no longer crashes or blanks the canvas when live collaboration
+  is on.** A record with no saved editor document (an imported or legacy post, one created through the
+  API, or the demo posts of a fresh install) joined the collaboration room, whose snapshot for it is
+  `{}`. The room's welcome then replaced the locally seeded document: the canvas, title, slug and
+  excerpt opened empty, and every field edit threw `Cannot read properties of undefined (reading
+  'length')`. The Verso store now always publishes `content` as an array (a document whose `content`
+  key is absent is published as `[]`; a corrupt one is still passed through untouched), and an editor
+  whose record has no saved document stays out of the room until it has been saved once. Records that
+  already have a saved document collaborate as before.
+- **A refused upload answers with a 4xx and its reason instead of a 500.** An SVG uploaded by a
+  non-administrator, a file type or extension the media library does not take, a non-zip plugin or theme
+  package, a WordPress import that is not a WXR file, and a file over the upload size limit all reached the
+  error handler without a status and were answered `500 rest_internal_error` with the reason discarded.
+  They now answer `403 rest_upload_svg_forbidden`, `415 rest_upload_invalid_type` and
+  `413 rest_upload_too_large` (multer's other limits: `400 rest_upload_invalid`), with the message.
+- **`comment.created` webhook payloads now carry the comment's id.** The serializer read a field the
+  comment model does not have, so `data.id` was always missing.
+
+### Security
+
+- **API tokens and the MFA-by-role policy: a deliberate, visible choice.** Personal API tokens (`wjt_…`)
+  stay exempt from the two-factor compliance gate by default, so existing integrations keep working, but
+  the trade-off is no longer silent. A user whose role requires 2FA can now create a token only from a
+  session that signed in with the second factor, or by confirming a current authenticator or backup
+  code when creating it (`mfaCode` on `POST /auth/tokens`; otherwise `403 rest_mfa_step_up_required`, and
+  a wrong code is `400 rest_mfa_invalid`). Sessions issued by a two-factor sign-in carry an `amr: ["mfa"]`
+  claim, which `/auth/refresh` keeps. Roles outside the policy create tokens exactly as before. The
+  `auth.token.create` audit row now records how the second factor was proven (`mfa`: `session`,
+  `step_up` or `not_required`), a failed step-up writes `auth.token.create_refused`, and policy changes
+  write `auth.mfa.policy_update`. `GET /auth/mfa/policy` also returns `tokenExposure`: how many active
+  tokens belong to users in a required role, and how many of their owners have not enrolled. The
+  Security screen shows a notice with those numbers while the policy requires 2FA and tokens are
+  exempt, and explains the "Also enforce for personal API tokens" switch. The API tokens screen asks for
+  the code when it is needed.
+- **New installs hold API tokens to the MFA policy by default; upgraded sites keep them exempt.** On a site
+  created by the install wizard, the first time an administrator requires 2FA for a role the "Also enforce
+  for personal API tokens" switch is on (pre-checked on the Security screen, and the default when
+  `PUT /auth/mfa/policy` omits the field); the administrator can still turn it off. A site upgraded from an
+  earlier version keeps it off, even on its first policy save after the upgrade, so no existing token
+  starts failing. `GET /auth/mfa/policy` reports this as `enforceForApiTokensDefault`.
+
 ## [2.5.0] - 2026-10-15
 
 ### Added

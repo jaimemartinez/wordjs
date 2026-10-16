@@ -36,7 +36,7 @@ const { compileTheme, writeCompiled } = require('../core/theme-compile');
 const { analyzeTheme } = require('../core/theme-doctor');
 const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
-const { asyncHandler, offStack } = require('../middleware/errorHandler');
+const { asyncHandler, offStack, UploadRejectedError } = require('../middleware/errorHandler');
 const { recordAudit } = require('../core/audit');
 const { isThemeAssetName, resolveThemeDir, resolveWithin } = require('../core/safe-path');
 
@@ -75,7 +75,7 @@ const upload = multer({
         if (file.mimetype === 'application/zip' || file.mimetype === 'application/x-zip-compressed' || file.originalname.endsWith('.zip')) {
             cb(null, true);
         } else {
-            cb(new Error('Only .zip files are allowed'));
+            cb(new UploadRejectedError(415, 'rest_upload_invalid_type', 'Only .zip files are allowed'));
         }
     }
 });

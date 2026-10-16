@@ -114,7 +114,11 @@ const ALL_SETTINGS = [
     // es postura de infraestructura, del mismo tipo que sandbox_hardening_* — no lo necesita ningún
     // render público, y contárselo a un visitante anónimo solo ayuda a quien mide la caché desde fuera.
     // Tampoco es DERIVED: es un valor ALMACENADO, y el estado en memoria se deriva de él, no al revés.
-    'redis_cache_enabled'
+    'redis_cache_enabled',
+    // Whether GET/POST /api/v1/graphql answers introspection (__schema / __type). Unset means "on in
+    // development, off in production" (core/graphql); '1'/'0' force it. Admin-only: the schema is not a
+    // secret, but turning discovery on is a posture decision, not something a visitor needs to read.
+    'graphql_introspection'
 ];
 
 // Publicly readable, but NOT writable through the generic settings writers: these have a
@@ -170,7 +174,20 @@ const DERIVED_PUBLIC_SETTINGS: Map<string, () => Promise<any>> = new Map(Object.
     // banner naming the missing slug, and mirrored by a boot-time warning in index.ts.
     // Boolean, not a string: `Boolean("false")` is true, and a health flag that reads backwards when
     // stringified is worse than no flag. Derived, so it can never drift from the directory on disk.
-    active_theme_missing: isActiveThemeMissing
+    active_theme_missing: isActiveThemeMissing,
+    // MEDIA OFFLOAD (core/media-storage). `media_cdn_origin`: the one origin offloaded media is served
+    // from whenever an s3 store is configured ('' otherwise) — the frontend adds exactly it to the
+    // page CSP's img-src/media-src. `media_public_base`: the URL the /uploads tree maps to, but ONLY once
+    // the whole library is in the bucket (state 'offloaded'); the public SSR rewrites /uploads/ to it.
+    // Before that (or during a restore) it is '' and pages keep /uploads, which the backend redirects
+    // for files it does not hold. Derived per request: content and the DB only ever hold /uploads paths.
+    media_cdn_origin: async () => require('../core/media-storage').resolveMediaStorage().publicOrigin || '',
+    media_public_base: async () => {
+        const store = require('../core/media-storage').resolveMediaStorage();
+        if (store.driver !== 's3' || !store.publicBase) return '';
+        const state = await require('../core/media-storage-migrate').getState();
+        return state === 'offloaded' ? store.publicBase : '';
+    },
 }));
 
 // Admin-ONLY derived settings: computed per request, never stored, and returned only from GET
@@ -291,6 +308,10 @@ const SETTING_VALIDATORS: Record<string, (v: any) => string | null> = {
     redis_cache_enabled: (v: any) => booleanishSetting(v) === null
         ? 'redis_cache_enabled must be a boolean ("1" or "0").'
         : null,
+    // Introspection of /api/v1/graphql: the same closed boolean vocabulary.
+    graphql_introspection: (v: any) => booleanishSetting(v) === null
+        ? 'graphql_introspection must be a boolean ("1" or "0").'
+        : null,
     wjs_ix_presets: (v: any) => {
         if (v === '' || v === null || v === undefined) return null; // sin preajustes de sitio
         if (typeof v !== 'string') return 'wjs_ix_presets must be a JSON string.';
@@ -367,6 +388,7 @@ const SETTING_NORMALIZERS: Record<string, (v: any) => any> = {
     // El validador ya garantizó que es reconocible; el `?? '0'` es solo un fail-closed defensivo por si
     // algún día se escribe por un camino que no valide (apagado es el lado seguro).
     redis_cache_enabled: (v: any) => booleanishSetting(v) ?? '0',
+    graphql_introspection: (v: any) => booleanishSetting(v) ?? '0',
 };
 
 /** El valor EXACTO que se persiste para esta clave (idéntico al recibido si no hay normalizador). */

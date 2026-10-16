@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 const express = require('express');
+const log = require('../core/module-logger').moduleLogger('routes/hooks');
 const router = express.Router();
 const { hooks } = require('../core/hooks');
 const { isAdmin } = require('../middleware/permissions');
@@ -23,7 +24,7 @@ router.get('/', authenticate, isAdmin, (req: Request, res: Response) => {
         const allHooks = hooks.getHooks();
         res.json(allHooks);
     } catch (error) {
-        console.error('Failed to retrieve hooks:', error);
+        log.error({ err: error }, 'Failed to retrieve hooks');
         res.status(500).json({ error: 'Failed to retrieve hooks registry' });
     }
 });
@@ -64,8 +65,13 @@ router.get('/stream', authenticate, isAdmin, (req: Request, res: Response) => {
     // reaches JSON.stringify and raises `Do not know how to serialize a BigInt`. One admin holding
     // the hook inspector open was enough to turn that into a failure somewhere else entirely.
     // Containing it costs this subscriber one frame, which is the right price.
+    // Multisite: the monitor is process-wide, so it only relays the calls of the site this inspector
+    // was opened on (and never says which site fired one).
+    const watchedSite = require('../core/site-context').currentSiteIdOrNull();
     const onHookCall = (data: any) => offStack(res, null, () => {
-        res.write(`data: ${JSON.stringify(data)}\n\n`);
+        if (!data || data.siteId !== watchedSite) return;
+        const { siteId: _site, ...event } = data;
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
     });
 
     hooks.monitor.on('hook:call', onHookCall);

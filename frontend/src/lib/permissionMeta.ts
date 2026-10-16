@@ -105,6 +105,12 @@ export const PERMISSION_META: Record<string, PermissionMeta> = {
         risk: 'high',
         icon: 'fa-inbox',
     },
+    'ai:use': {
+        label: "Use the site's AI provider",
+        description: 'Ask the AI provider an administrator configured for generated text. The plugin never sees the key; every request is billed to the site and rate-limited.',
+        risk: 'med',
+        icon: 'fa-wand-magic-sparkles',
+    },
     'notifications:send': {
         label: 'Send notifications',
         description: 'Emit in-app notifications to admins.',

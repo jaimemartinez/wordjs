@@ -22,7 +22,7 @@
  * that last segment back into the file name by prepending `sitemap-`. The two halves are asserted
  * against each other in backend/src/tests/seo.test.ts — see documentation/frontend.md.
  */
-import { proxySeo, seoNotFound } from '../../_seo/upstream';
+import { proxySeo, seoNotFound, siteHostOf } from '../../_seo/upstream';
 
 export const revalidate = 3600;
 
@@ -32,9 +32,9 @@ export const revalidate = 3600;
  */
 const CHUNK_NAME = /^sitemap-(posts|pages|terms)-\d+\.xml$/;
 
-export async function GET(_req: Request, ctx: { params: Promise<{ chunk: string }> }) {
+export async function GET(_req: Request, ctx: { params: Promise<{ chunk: string; siteHost?: string }> }) {
     const { chunk } = await ctx.params;
     const name = `sitemap-${chunk}`;
     if (!CHUNK_NAME.test(name)) return seoNotFound();
-    return proxySeo(`/seo/${name}`, { revalidate, tags: ['posts', 'settings'] });
+    return proxySeo(`/seo/${name}`, { revalidate, tags: ['posts', 'settings'], siteHost: await siteHostOf(ctx) });
 }

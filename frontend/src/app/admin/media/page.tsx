@@ -5,6 +5,7 @@ import { mediaApi } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
 import ConfirmationModal from "@/components/ConfirmationModal";
 import DialogLayer from "@/components/DialogLayer";
+import AiSuggestion from "@/components/AiSuggest";
 import { useToast } from "@/contexts/ToastContext";
 import { PageHeader, Button, EmptyState } from "@/components/ui";
 import {
@@ -181,6 +182,16 @@ function MediaDetailModal({
                             <p id="media-alt-help" className="text-[11px] font-medium text-gray-400 mt-1.5 leading-snug">
                                 Lo que anuncian los lectores de pantalla. Déjalo vacío solo si la imagen es decorativa.
                             </p>
+                            {/^image\/(png|jpe?g|webp|gif|avif)$/i.test(item.mimeType) && (
+                                <div className="mt-2">
+                                    <AiSuggestion
+                                        task="alt_text"
+                                        tone="admin"
+                                        getInput={() => ({ mediaId: item.id })}
+                                        onAccept={(s) => setDraft((d) => ({ ...d, alt: s }))}
+                                    />
+                                </div>
+                            )}
                         </div>
                         <div>
                             <label className={labelClass} htmlFor="media-caption">Leyenda</label>

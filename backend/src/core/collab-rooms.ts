@@ -91,6 +91,7 @@ const { dbAsync } = require('../config/database');
 const cache = require('./cache');
 const appConfig = require('../config/app');
 const { validateFrame, sanitizeVersionVector, vvCovers, LIMITS } = require('./collab-ops');
+const mlog = require('./module-logger').moduleLogger('core/collab-rooms');
 
 /** Único por proceso — etiqueta los mensajes del bus para descartar el eco propio. */
 const NODE_ID = crypto.randomBytes(8).toString('hex');
@@ -592,15 +593,14 @@ async function loadOps(
         try { ops.push(JSON.parse(r.payload)); } catch { unreadable++; }
     }
     if (budgetHit) {
-        console.warn(
-            `[collab] sala ${postId}: el log supera el presupuesto de ${CONFIG.MAX_LOG_LOAD_BYTES} B; ` +
+        mlog.warn(`[collab] sala ${postId}: el log supera el presupuesto de ${CONFIG.MAX_LOG_LOAD_BYTES} B; ` +
             `se sirven ${ops.length} op(s) y la sesión NO es reanudable`);
     }
 
     if (total === null) {
         // Ni siquiera se sabe cuántas había: no se puede afirmar que el log servido sea el aceptado.
         unreadable++;
-        console.warn(`[collab] sala ${postId}: no se pudo contar el log; la sesión NO es reanudable`);
+        mlog.warn({ postId }, `[collab] sala ${postId}: no se pudo contar el log; la sesión NO es reanudable`);
     } else if (!budgetHit) {
         // Solo se puede exigir que lleguen TODAS las filas cuando no se ha recortado a propósito: con
         // el presupuesto agotado, `traidas.length` es menor que `esperadas` PORQUE lo pedimos así, y
@@ -609,11 +609,11 @@ async function loadOps(
         const faltan = Math.max(0, esperadas - traidas.length);
         if (faltan > 0) {
             unreadable += faltan;
-            console.warn(`[collab] sala ${postId}: ${faltan} fila(s) del log no llegaron a leerse`);
+            mlog.warn({ postId, faltan }, `[collab] sala ${postId}: ${faltan} fila(s) del log no llegaron a leerse`);
         }
     }
 
-    if (unreadable) console.warn(`[collab] sala ${postId}: ${unreadable} fila(s) del log ilegibles o no leídas`);
+    if (unreadable) mlog.warn({ postId, unreadable }, `[collab] sala ${postId}: ${unreadable} fila(s) del log ilegibles o no leídas`);
     return { ops, bytes, unreadable, budgetHit };
 }
 
@@ -727,12 +727,12 @@ async function countOrNull(sql: string, params: any[]): Promise<number | null> {
     try {
         row = await dbAsync.get(sql, params);
     } catch (e: any) {
-        console.warn('[collab] recuento fallido:', e && e.message);
+        mlog.warn({ err: e }, '[collab] recuento fallido');
         return null;
     }
     if (!row || row.c === null || row.c === undefined) {
         // El driver no lanzó, pero tampoco contestó. Es el mismo caso, no un cero.
-        console.warn('[collab] recuento sin fila utilizable: se trata como "no se sabe", no como cero');
+        mlog.warn('[collab] recuento sin fila utilizable: se trata como "no se sabe", no como cero');
         return null;
     }
     const n = Number(row.c);
@@ -830,7 +830,7 @@ async function touchMember(conn: Conn): Promise<void> {
             await dbAsync.run('UPDATE collab_members SET seen_at = ? WHERE conn_id = ?', [Date.now(), conn.connId]);
         }
     } catch (e: any) {
-        console.warn('[collab] latido de miembro fallido:', e && e.message);
+        mlog.warn({ err: e }, '[collab] latido de miembro fallido');
     }
 }
 
@@ -838,7 +838,7 @@ async function releaseMember(connId: string): Promise<void> {
     try {
         await dbAsync.run('DELETE FROM collab_members WHERE conn_id = ?', [connId]);
     } catch (e: any) {
-        console.warn('[collab] no se pudo dar de baja al miembro:', e && e.message);
+        mlog.warn({ err: e }, '[collab] no se pudo dar de baja al miembro');
     }
 }
 
@@ -849,7 +849,7 @@ async function touchDoc(postId: number): Promise<void> {
             'UPDATE collab_docs SET updated_ms = ?, updated_at = CURRENT_TIMESTAMP WHERE post_id = ?',
             [Date.now(), postId]);
     } catch (e: any) {
-        console.warn('[collab] no se pudo sellar la sala', postId, e && e.message);
+        mlog.warn({ postId, err: e }, '[collab] no se pudo sellar la sala');
     }
 }
 
@@ -905,7 +905,7 @@ async function retireRoom(
         await announceReset(postId, expect && expect.exceptConnId);
         return 'retired';
     } catch (e: any) {
-        console.warn('[collab] no se pudo retirar la sala', postId, e && e.message);
+        mlog.warn({ postId, err: e }, '[collab] no se pudo retirar la sala');
         return 'error';
     }
 }
@@ -934,8 +934,7 @@ async function announceReset(postId: number, exceptConnId?: string | null): Prom
         // bus no lo lleva, vuelve exactamente al «live y mudo» que esto cierra. `cache.publish`
         // devuelve `false` sin lanzar, así que sin esta línea la pérdida es INVISIBLE — ni un log.
         // No se puede reintentar (el epoch ya subió), pero sí se puede dejar de ser silenciosa.
-        console.error(
-            `[collab] sala ${postId}: el aviso de reinicio NO cruzó el bus. ` +
+        mlog.error(`[collab] sala ${postId}: el aviso de reinicio NO cruzó el bus. ` +
             'Los editores de otros nodos pueden haberse quedado en «live» y mudos: revisa Redis.');
     }
     return entregado;
@@ -1025,7 +1024,7 @@ function initClusterBus(): void {
             if (!parsed || parsed.o === NODE_ID) return; // eco propio: ya entregado localmente
             deliverLocal(Number(parsed.p), String(parsed.e), parsed.d, parsed.x || null);
         } catch (e: any) {
-            console.warn('[collab] bus parse error:', e && e.message);
+            mlog.warn({ err: e }, '[collab] bus parse error');
         }
     });
 }
@@ -1198,7 +1197,7 @@ async function join(params: {
         conn.ready = true;
         await touchMember(conn);
     } catch (e: any) {
-        console.warn('[collab] join fallido:', e && e.message);
+        mlog.warn({ err: e }, '[collab] join fallido');
         // `closeSocket: false` a propósito: la respuesta la cierra la RUTA, después de escribir el
         // evento de error. Terminarla aquí dejaba a la ruta escribiendo sobre un stream ya cerrado,
         // y ese `ERR_STREAM_WRITE_AFTER_END` no lo veía ningún `catch` — salía por `nextTick` y
@@ -1258,7 +1257,7 @@ async function reauthorize(conn: Conn): Promise<void> {
         // para siempre sería no comprobar nada. Se tolera un rato acotado y luego se cierra.
         conn.authFailures++;
         if (conn.authFailures < CONFIG.MAX_AUTH_FAILURES) return;
-        console.warn('[collab] re-autorización no concluyente repetida, se cierra la sesión:', e && e.message);
+        mlog.warn({ err: e }, '[collab] re-autorización no concluyente repetida, se cierra la sesión');
         allowed = false;
     }
     if (allowed) { conn.authFailures = 0; return; }
@@ -1326,7 +1325,7 @@ async function displayNames(userIds: number[]): Promise<Map<number, string>> {
             out.set(Number(r.id), String(r.display_name || r.user_login || ''));
         }
     } catch (e: any) {
-        console.warn('[collab] no se pudieron leer los nombres de los miembros remotos:', e && e.message);
+        mlog.warn({ err: e }, '[collab] no se pudieron leer los nombres de los miembros remotos');
     }
     return out;
 }
@@ -1373,7 +1372,7 @@ async function clusterPresence(room: Room, postId: number, exceptSite?: string |
             [postId, NODE_ID, since],
         );
     } catch (e: any) {
-        console.warn('[collab] no se pudo leer la presencia del clúster:', e && e.message);
+        mlog.warn({ err: e }, '[collab] no se pudo leer la presencia del clúster');
         return local;
     }
     if (!Array.isArray(rows) || !rows.length) return local;
@@ -1489,7 +1488,7 @@ async function sweepIdleRooms(maxAgeMs = 60 * 60 * 1000): Promise<number> {
         try {
             await dbAsync.run('DELETE FROM collab_members WHERE ABS(seen_at) < ?', [now - CONFIG.MEMBER_TTL_MS * 4]);
         } catch (e: any) {
-            console.warn('[collab] no se pudo podar collab_members:', e && e.message);
+            mlog.warn({ err: e }, '[collab] no se pudo podar collab_members');
         }
 
         // GEMELA DEL HALLAZGO 20, en pequeño: esta consulta no llevaba NINGUNA cota y traía una fila
@@ -1523,7 +1522,7 @@ async function sweepIdleRooms(maxAgeMs = 60 * 60 * 1000): Promise<number> {
             if (rooms.has(postId)) continue;                       // viva en ESTE nodo
             const ms = Number(r.updated_ms) || 0;
             if (!ms) {
-                console.warn(`[collab] sala ${postId} sin marca de tiempo legible: no se retira`);
+                mlog.warn({ postId }, `[collab] sala ${postId} sin marca de tiempo legible: no se retira`);
                 continue;
             }
             if (ms > cutoff) continue;
@@ -1534,7 +1533,7 @@ async function sweepIdleRooms(maxAgeMs = 60 * 60 * 1000): Promise<number> {
             if (await retireRoom(postId) === 'retired') retired++;
         }
     } catch (e: any) {
-        console.warn('[collab] barrido fallido:', e && e.message);
+        mlog.warn({ err: e }, '[collab] barrido fallido');
     }
     return retired;
 }
@@ -2168,7 +2167,7 @@ async function pushOps(conn: Conn, rawOps: any, epoch: number): Promise<PushResu
                 if (!isDuplicateKeyError(e)) {
                     // Fallo operativo. Se dice, con un status que el cliente sabe reintentar: dar el
                     // lote por bueno le haría borrarlo de su outbox y la op se perdería para siempre.
-                    console.warn('[collab] no se pudo persistir una op:', e && e.message);
+                    mlog.warn({ err: e }, '[collab] no se pudo persistir una op');
                     return {
                         ok: false, status: 503, code: 'collab_store_failed',
                         message: 'No se pudo guardar la operación. Se reintentará.',
@@ -2202,7 +2201,7 @@ async function pushOps(conn: Conn, rawOps: any, epoch: number): Promise<PushResu
                 try {
                     canonica = JSON.parse(prior.payload);
                 } catch {
-                    console.warn('[collab] fila de op ilegible en el log:', conn.postId, op.id.counter);
+                    mlog.warn({ postId: conn.postId, counter: op.id.counter }, '[collab] fila de op ilegible en el log');
                     return {
                         ok: false, status: 503, code: 'collab_store_failed',
                         message: 'No se pudo confirmar la operación. Se reintentará.',
@@ -2236,7 +2235,7 @@ async function pushOps(conn: Conn, rawOps: any, epoch: number): Promise<PushResu
                 await dbAsync.run('UPDATE collab_docs SET truncated = 1, updated_ms = ? WHERE post_id = ?',
                     [Date.now(), conn.postId]);
             } catch (e: any) {
-                console.warn('[collab] no se pudo marcar la sala como truncada:', e && e.message);
+                mlog.warn({ err: e }, '[collab] no se pudo marcar la sala como truncada');
             }
         }
         await broadcast(conn.postId, 'warning', {

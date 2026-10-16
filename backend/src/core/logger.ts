@@ -9,12 +9,13 @@
  *
  * THREE THINGS THIS FILE IS CAREFUL ABOUT
  *
- * 1. THE 802 LEGACY `console.*` CALLS. They are not rewritten here — a repository-wide replacement is
- *    its own change, reviewable on its own. `consoleBridge()` routes console.log/info/warn/error/debug
- *    through this logger instead, so every one of those call sites becomes a structured line the day
- *    the bridge is enabled, carrying `legacy: true` so the migration can be measured (and finished)
- *    from the logs themselves. The message text — emoji prefixes and all — is preserved verbatim: it
- *    IS the message, and rewriting it would break the operator greps that exist today.
+ * 1. BACKEND MODULES LOG THROUGH `core/module-logger`, not `console` (src/tests/no-console-in-backend
+ *    fails on a new `console.*` call outside its allowlist). `consoleBridge()` still routes
+ *    console.log/info/warn/error/debug through this logger for what legitimately stays on console —
+ *    the modules loaded inside the isolated plugin child, config/app (which runs before this file can
+ *    exist), the first-boot banners — and for anything a dependency prints. Those lines carry
+ *    `legacy: true`. The message text — emoji prefixes and all — is preserved verbatim: it IS the
+ *    message, and rewriting it would break the operator greps that exist today.
  *
  * 2. NO WORKER THREADS. pino's `transport` option spawns a worker thread; this process installs an IO
  *    guard, a secure-require hook and a plugin sandbox at boot, and a logging path that forks a thread
@@ -27,7 +28,8 @@
  *    request, a config blob, a webhook payload) cannot leak an Authorization header or a password
  *    through a caller who forgot to strip it. But pino's `redact` rewrites FIELDS ONLY: it never
  *    touches `msg`. The console bridge collapses its arguments into `msg`, so for the ~800 legacy
- *    lines structural redaction is not weak — it is INAPPLICABLE. Those lines therefore go through
+ *    lines structural redaction is not weak — it is INAPPLICABLE. Those lines (and every module-logger
+ *    message, see core/module-logger) therefore go through
  *    `scrubSecrets()` first, a deliberately small pattern over the credential shapes this codebase
  *    actually prints. A scrub is a mitigation, not a control: the control is not printing the secret,
  *    which is why `core/install-token.ts` and the bootstrap-admin banner in `index.ts` now gate the
@@ -340,6 +342,35 @@ function addLogSink(sink: LogSink): () => void {
     return () => { sinks.delete(sink); };
 }
 
+// ─── Error serialization ─────────────────────────────────────────────────────────────────────────
+
+/** Error properties that are diagnostics and never credentials. Everything else is dropped. */
+const ERROR_FIELDS = ['code', 'errno', 'syscall', 'status', 'statusCode'];
+
+/**
+ * The `err` field, by ALLOW-list. pino's stock error serializer copies every enumerable property of
+ * the error, and the errors this backend catches are not all ours: an HTTP client error carries the
+ * request it made (headers included — an Authorization header sits at `err.config.headers`, under a
+ * capitalisation and a depth no redact path matches), a driver error can carry the query and its
+ * parameters. Logging `{ err }` must be safe by construction, so only the type, the message, the stack,
+ * a handful of scalar diagnostics and the `cause` chain survive. The message goes through
+ * `scrubSecrets()` like every other message, and so does the stack, whose first line repeats it.
+ */
+function serializeError(err: any, depth = 0): any {
+    if (!err || typeof err !== 'object') return err;
+    const out: Record<string, unknown> = {
+        type: (err.constructor && err.constructor.name) || 'Error',
+        message: scrubSecrets(String(err.message ?? '')),
+    };
+    if (typeof err.stack === 'string') out.stack = scrubSecrets(err.stack);
+    for (const k of ERROR_FIELDS) {
+        const v = err[k];
+        if (typeof v === 'string' || typeof v === 'number') out[k] = v;
+    }
+    if (err.cause !== undefined && depth < 3) out.cause = serializeError(err.cause, depth + 1);
+    return out;
+}
+
 // ─── The logger ──────────────────────────────────────────────────────────────────────────────────
 
 const logger = pino({
@@ -350,6 +381,7 @@ const logger = pino({
     // aggregator that will one day be taught wrong.
     formatters: { level: (label: string) => ({ level: label }) },
     redact: { paths: REDACT_PATHS, censor: '[redacted]' },
+    serializers: { err: serializeError },
 }, teeStream);
 
 /**

@@ -77,7 +77,9 @@ export function shortPeople(list: string, me?: string, meLabel = 'me') {
 const AVATAR_COLORS = ['#7c3aed', '#2563eb', '#0891b2', '#059669', '#65a30d', '#d97706', '#dc2626', '#db2777', '#4f46e5', '#0d9488'];
 export function Avatar({ name, email, size = 36, className = '' }: any) {
     const label = String(name || email || '?').trim();
-    const initials = label.split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?';
+    const base = /^[^\s@]+@[^\s@]+$/.test(label) ? label.split('@')[0] : label;
+    const initials = base.split(/[\s._-]+/).filter(w => /[\p{L}]/u.test(w)).slice(0, 2).map(w => (w.match(/\p{L}/u) || ['?'])[0]).join('').toUpperCase()
+        || base.charAt(0).toUpperCase() || '?';
     let h = 0;
     for (const ch of String(email || name || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
     const bg = AVATAR_COLORS[h % AVATAR_COLORS.length];
@@ -89,6 +91,74 @@ export function Avatar({ name, email, size = 36, className = '' }: any) {
         >
             {initials}
         </span>
+    );
+}
+
+// --- horizontal scroll rows ----------------------------------------------------------------------
+
+/**
+ * A row (tab bar, toolbar) that may be wider than its box. The native scrollbar stays hidden, so it
+ * shows what it hides instead: a fade plus an arrow button on each side that has more, a vertical mouse
+ * wheel scrolls it sideways (a mouse has no other way to), and the element marked aria-selected /
+ * aria-current is brought into view whenever `activeKey` changes. When the row fits (or is laid out as
+ * a column at wider sizes) none of this shows.
+ */
+export function ScrollRow({ as: Tag = 'div', className = '', wrapClassName = '', activeKey, children, ...rest }: any) {
+    const ref = useRef<HTMLElement>(null);
+    const [edge, setEdge] = useState({ l: false, r: false });
+    const update = () => {
+        const el = ref.current;
+        if (!el) return;
+        const l = el.scrollLeft > 2;
+        const r = el.scrollLeft + el.clientWidth < el.scrollWidth - 2;
+        setEdge(p => (p.l === l && p.r === r ? p : { l, r }));
+    };
+    useEffect(() => {
+        const el = ref.current;
+        if (!el) return;
+        update();
+        const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(update) : null;
+        ro?.observe(el);
+        const onWheel = (e: WheelEvent) => {
+            if (el.scrollWidth <= el.clientWidth || Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return;
+            const atEnd = e.deltaY > 0 ? el.scrollLeft + el.clientWidth >= el.scrollWidth - 1 : el.scrollLeft <= 0;
+            if (atEnd) return; // let the page scroll on
+            el.scrollLeft += e.deltaY;
+            e.preventDefault();
+        };
+        el.addEventListener('wheel', onWheel, { passive: false });
+        return () => { ro?.disconnect(); el.removeEventListener('wheel', onWheel); };
+    }, []);
+    useEffect(() => {
+        const el = ref.current;
+        const active = el?.querySelector('[aria-selected="true"], [aria-current="page"]') as HTMLElement | null;
+        if (el && active && el.scrollWidth > el.clientWidth) {
+            const left = active.offsetLeft - el.offsetLeft;
+            if (left < el.scrollLeft || left + active.offsetWidth > el.scrollLeft + el.clientWidth) {
+                el.scrollTo({ left: Math.max(0, left - 24), behavior: 'smooth' });
+            }
+        }
+        update();
+    }, [activeKey]);
+    const by = (dir: number) => ref.current?.scrollBy({ left: dir * Math.max(120, (ref.current?.clientWidth || 0) * 0.7), behavior: 'smooth' });
+    // The arrows are pointer conveniences: every item stays reachable with Tab, so they stay out of it.
+    const arrow = (side: 'l' | 'r') => (
+        <button type="button" tabIndex={-1} aria-hidden="true" onClick={() => by(side === 'l' ? -1 : 1)}
+            className={cx('absolute inset-y-0 z-10 flex w-9 items-center text-slate-500 hover:text-violet-700',
+                side === 'l' ? 'left-0 justify-start bg-gradient-to-r from-white via-white/90 to-transparent pl-1' : 'right-0 justify-end bg-gradient-to-l from-white via-white/90 to-transparent pr-1')}>
+            <span className="flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white shadow-sm">
+                <i className={cx('fa-solid text-[10px]', side === 'l' ? 'fa-chevron-left' : 'fa-chevron-right')}></i>
+            </span>
+        </button>
+    );
+    return (
+        <div className={cx('relative min-w-0', wrapClassName)}>
+            {edge.l && arrow('l')}
+            <Tag ref={ref} onScroll={update} className={cx('overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden', className)} {...rest}>
+                {children}
+            </Tag>
+            {edge.r && arrow('r')}
+        </div>
     );
 }
 

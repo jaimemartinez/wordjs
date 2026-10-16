@@ -79,6 +79,7 @@ Two enforcement gates live on the host (`backend/src/core/plugin-isolate.ts`):
 | `fs.write(path, data)` | `fs.write` | `filesystem:write` grant. Same confinement, plus a 16 MB per-write cap and a 100 MB per-plugin disk quota; `manifest.json` is immutable. |
 | `mail(msg)` | `mail` | `email:admin` grant. Send through the host-wide mail sender. |
 | `notify(notification)` | `notify` | `notifications:send` grant. Dispatch a core notification. |
+| `ai.complete(request)` | `ai.complete` | `ai:use` grant. Text completion through the site's AI provider (`ai-provider.md` §4). |
 | `adminMenu.add(item)` | `adminMenu.add` | `admin_menu:register` grant (an explicit, admin-granted verb — `scope: "admin"` does not imply it). Adds a sidebar item; capped at 50 items per plugin, and `href` must be a same-origin relative admin path (single leading `/`, no scheme, no `//`) or the item is dropped with a warning. |
 | `cron.schedule(ts, recurring, hook, args)` | `cron.schedule` | Schedule a recurring/one-shot hook fire. |
 | `crypto.randomToken(bytes=16)` / `crypto.randomInt(min, max)` | `crypto.randomToken` / `crypto.randomInt` | CSPRNG helpers (no data access, no permission gate) — use instead of `Math.random` for tokens/access codes. **Async** in an isolated plugin (RPC to host), so `await` them. |

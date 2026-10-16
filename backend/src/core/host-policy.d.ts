@@ -50,6 +50,8 @@ export interface HostPolicy {
     canonicalError: 'missing' | 'invalid' | null;
     /** Keyed by hostname. */
     aliases: Map<string, AliasEntry>;
+    /** Multisite: the main addresses of the network's other sites, by hostname. Empty on a single site. */
+    sites: Map<string, NetworkSiteEntry>;
     /** Keyed by hostname. */
     envHosts: Map<string, EnvHostEntry>;
     ipLiterals: IpLiteralMode;
@@ -64,16 +66,22 @@ export interface HostPolicy {
     warnings: readonly string[];
 }
 
+/** Multisite: another site's main address (`config.networkSites`). */
+export interface NetworkSiteEntry extends SiteUrl {
+    siteId: number;
+    status: 'active' | 'suspended';
+}
+
 export type HostClass = 'canonical' | 'alias' | 'env' | 'loopback' | 'ip' | 'dev' | 'unknown';
 
 export type ClassifyReason =
-    | 'canonical' | 'alias' | 'env' | 'loopback' | 'localhost-subdomain' | 'ip-any' | 'ip-own' | 'dev-origin'
+    | 'canonical' | 'site' | 'alias' | 'env' | 'loopback' | 'localhost-subdomain' | 'ip-any' | 'ip-own' | 'dev-origin'
     | 'invalid' | 'proxied-ip' | 'ip-not-own' | 'ip-literals-none' | 'expired-alias' | 'undeclared';
 
 export interface Classification {
     cls: HostClass;
     reason: ClassifyReason;
-    entry: SiteUrl | AliasEntry | EnvHostEntry | null;
+    entry: SiteUrl | AliasEntry | EnvHostEntry | NetworkSiteEntry | null;
 }
 
 export interface ClassifyContext {
@@ -116,7 +124,9 @@ export interface SiteHost {
     host: string;
     cls: Exclude<HostClass, 'unknown'>;
     reason: ClassifyReason;
-    entry: SiteUrl | AliasEntry | EnvHostEntry | null;
+    entry: SiteUrl | AliasEntry | EnvHostEntry | NetworkSiteEntry | null;
+    /** Multisite: the site whose data this request works on (1 on a single site). Selects data, grants nothing. */
+    siteId: number;
     hop: TrustedHop;
     viaTrustedHop: boolean;
     /** trustedScheme() for this request. */
@@ -213,6 +223,8 @@ export function requestHost(req: IncomingMessage, opts?: TrustOptions | null): s
 export function trustedScheme(req: IncomingMessage, opts?: TrustOptions | null): 'http' | 'https';
 
 export function classify(p: ParsedHost | null, pol: HostPolicy | null, ctx?: ClassifyContext): Classification;
+/** Multisite: the site an accepted verdict serves (its network site, else 1); null for an unknown address. */
+export function siteIdOf(verdict: Classification | null): number | null;
 export function refusalHint(p: ParsedHost | null, pol: HostPolicy | null, reason?: ClassifyReason): RefusalHint | null;
 export const REFUSAL_HINTS: Readonly<Record<RefusalHint, string>>;
 export const TUNNEL_SUFFIXES: readonly string[];

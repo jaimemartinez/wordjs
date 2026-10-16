@@ -26,6 +26,7 @@
 
 const { describe, it, beforeEach, after } = require('node:test');
 const assert = require('node:assert');
+const { captureLogLines } = require('./fixtures/log-capture');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -130,6 +131,8 @@ async function install(body: Record<string, unknown> = {}) {
     const saved: any = {};
     const output: string[] = [];
     for (const m of methods) { saved[m] = (console as any)[m]; (console as any)[m] = (...a: any[]) => { output.push(a.map(String).join(' ')); }; }
+    // Backend modules log through core/module-logger: read what the real logger emitted as well.
+    const logged = captureLogLines(undefined, { raw: true });
     try {
         const res = await request(app)
             .post('/setup/install')
@@ -144,8 +147,10 @@ async function install(body: Record<string, unknown> = {}) {
                 siteUrl: 'http://localhost:3000',
                 ...body,
             });
+        output.push(...logged.stop());
         return { res, output: output.join('\n') };
     } finally {
+        logged.stop();
         for (const m of methods) (console as any)[m] = saved[m];
     }
 }

@@ -140,6 +140,18 @@ export interface VersoEditorProps {
     onSave?: OnSave;
     onCancel?: () => void;
     pageId?: number;
+    /**
+     * ¿Tiene el registro un documento de editor PERSISTIDO (`_puck_data`)? Default `true`.
+     *
+     * La sala colaborativa siembra su `base` con el `_puck_data` guardado, y su `welcome` SUSTITUYE el
+     * documento del editor. Un registro sin `_puck_data` (legacy, importado, creado por la API) se
+     * abre con un documento sembrado EN LOCAL —el HTML envuelto en un HTMLEmbed y los campos del
+     * registro en el root—, que la sala no conoce: el `welcome` lo pisaba con `{}` y el lienzo, el
+     * título, el extracto y el SEO se abrían vacíos (y un guardado los habría borrado). Con `false`
+     * el editor no se une a la sala; tras el primer guardado el registro ya tiene documento y la
+     * siguiente apertura colabora con normalidad.
+     */
+    hasStoredDocument?: boolean;
     /** Slug del registro — habilita "Vista Previa" (/preview/slug). */
     previewSlug?: string;
     /** Post type of the entry being edited, sent with the preview (lib/previewHref) so a page that shares the slug does not answer for it. */
@@ -290,6 +302,7 @@ export default function VersoEditor({
     onSave,
     onCancel,
     pageId,
+    hasStoredDocument = true,
     previewSlug,
     previewType,
     breadcrumbRoot,
@@ -606,6 +619,11 @@ export default function VersoEditor({
 
     /* ---------------- colaboración en vivo (F8.4) ---------------- */
 
+    // `hasStoredDocument` se congela AL MONTAR, igual que `initialData`: el documento sembrado es el
+    // de la carga, y que el primer guardado cree el `_puck_data` no convierte a mitad de sesión el
+    // lienzo local en el de la sala (su `welcome` reemplazaría lo que se está editando).
+    const [collabEligible] = useState(hasStoredDocument);
+
     /**
      * La bandera se lee en un EFECTO, no en el render: mira `localStorage`, que en SSR no existe y
      * que además haría divergir el HTML del servidor del primer render del cliente (hydration
@@ -613,7 +631,7 @@ export default function VersoEditor({
      * de preferencias de este editor (`verso_show_sidebar`).
      */
     const [collabEnabled, setCollabEnabled] = useState(false);
-    useEffect(() => setCollabEnabled(isCollabEnabled()), []);
+    useEffect(() => setCollabEnabled(collabEligible && isCollabEnabled()), [collabEligible]);
 
     /**
      * Los resolutores viajan al hook y ENTRAN en las deps de su sesión: si cambiaran de identidad

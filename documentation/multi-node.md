@@ -50,7 +50,10 @@ diverge. (A single-replica-per-role split across machines needs none of them —
 Mount the same shared volume at these paths on every backend node (paths are relative to the backend
 working directory):
 
-- `backend/uploads/` — media + fonts (`config.uploads.dir`)
+- `backend/uploads/` — media + fonts (`config.uploads.dir`). With **media offload** on
+  ([media-storage.md](media-storage.md)) public media lives in an S3-compatible bucket instead: every node
+  writes new uploads there and redirects any `/uploads` path it does not hold to the CDN, so media no
+  longer needs this mount (fonts still do, and so does private media under `data/private-uploads/`).
 - `backend/themes/` — installed themes
 - `backend/plugins/` — installed plugin code
 - `backend/backups/` — backup archives. After every backup only the newest `backup_retention` archives

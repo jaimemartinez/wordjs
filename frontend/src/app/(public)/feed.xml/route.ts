@@ -3,11 +3,11 @@
  * tries first. The items are the backend's (`/api/v1/seo/feed.xml`); this route only publishes them
  * where they can be found.
  */
-import { proxySeo } from '../_seo/upstream';
+import { proxySeo, siteHostOf } from '../_seo/upstream';
 
 /** The window the upstream advertises (`public, max-age=900`, backend/src/routes/seo.ts). */
 export const revalidate = 900;
 
-export async function GET() {
-    return proxySeo('/seo/feed.xml', { revalidate, tags: ['posts', 'settings'] });
+export async function GET(_req?: Request, ctx?: { params?: Promise<Record<string, string>> }) {
+    return proxySeo('/seo/feed.xml', { revalidate, tags: ['posts', 'settings'], siteHost: await siteHostOf(ctx) });
 }

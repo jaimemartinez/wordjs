@@ -347,9 +347,9 @@ TOTP second factor. Enrolment and lifecycle live under `/api/v1/auth/mfa*`: `POS
 
 ## 9c. Outgoing Webhooks 🔔
 
-**Location:** `backend/src/core/webhooks.ts` + `backend/src/models/Webhook.ts`
+**Location:** `backend/src/core/webhooks.ts` + `backend/src/core/webhook-payloads.ts` + `backend/src/models/Webhook.ts`
 
-HMAC-signed outbound webhooks fired on content events. Subscriptions are managed via `/api/v1/webhooks` (admin UI at `/admin/webhooks`); each delivery is signed with the subscription's HMAC secret and is **SSRF-safe** — the destination IP is re-validated **at delivery time** (loopback/metadata/RFC1918 rejected), mirroring the egress posture in §4b. A delivery log and manual redeliver are exposed per subscription.
+HMAC-signed outbound webhooks fired across the site's lifecycle — posts and pages, comments, users (sign-ins opt-in), media, taxonomy terms, menus, plugins, themes and settings; the catalogue and every payload are documented in **[webhooks.md](./webhooks.md)**. The dispatcher derives events from two existing seams instead of emit calls of its own: the action hooks core already fires (`post_updated`, `wp_insert_comment`, `activated_plugin`, `switch_theme`, …) and `core/audit`'s in-process `onAuditRecorded()` observer, which sees every `recordAudit()` row after its transaction commits. Each payload is built by an allowlisted per-entity serializer, so no hash, secret, token, email address or option value can reach a body. Subscriptions are managed via `/api/v1/webhooks` (admin UI at `/admin/webhooks`); each delivery is signed with the subscription's HMAC secret and is **SSRF-safe** — the destination IP is re-validated **at delivery time** (loopback/metadata/RFC1918 rejected), mirroring the egress posture in §4b. A delivery log and manual redeliver are exposed per subscription.
 
 ---
 

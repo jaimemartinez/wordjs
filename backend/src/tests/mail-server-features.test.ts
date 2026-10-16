@@ -234,6 +234,25 @@ test('a full mailbox is refused with 452 inbound and reported as a failure inter
     } finally { b.plugin.deactivate(); }
 });
 
+test('attachments count against the quota between usage refreshes (no stream of big mail past a full mailbox)', async () => {
+    const b = await boot();
+    try {
+        await call(b, 'put /admin/mailboxes/:userId', BOSS, { params: { userId: String(BOB.id) }, body: { quotaMb: 1 } });
+        const attachment = Buffer.alloc(700 * 1024, 65).toString('base64');
+        const raw = (n: number) => [
+            'From: c@outside.example', `To: ${BOB.userEmail}`, `Subject: Big ${n}`, 'MIME-Version: 1.0',
+            'Content-Type: multipart/mixed; boundary="XX"', '', '--XX', 'Content-Type: text/plain', '', 'see attached',
+            '--XX', 'Content-Type: application/octet-stream', 'Content-Transfer-Encoding: base64',
+            'Content-Disposition: attachment; filename="blob.bin"', '', attachment, '--XX--', ''
+        ].join('\r\n');
+        assert.equal(await inbound(b, raw(1)), null, 'the first one fits');
+        assert.equal(await inbound(b, raw(2)), null, 'the second one is still accepted (usage was under the quota)');
+        const third = await inbound(b, raw(3));
+        assert.ok(third, 'the mailbox is now over its quota: the third is refused');
+        assert.equal(third.responseCode, 452);
+    } finally { b.plugin.deactivate(); }
+});
+
 test('the site blocklist refuses the envelope; forwarding guards hold', async () => {
     const b = await boot({ mail_blocked_senders: '@evil.example' });
     try {
@@ -253,6 +272,29 @@ test('the site blocklist refuses the envelope; forwarding guards hold', async ()
         r = await call(b, 'put /prefs', ALICE, { body: { forwarding: { enabled: true, address: 'alice.home@gmail.com' } } });
         assert.equal(r.status, 403, 'the administrator can switch external forwarding off');
     } finally { b.plugin.deactivate(); }
+});
+
+test('RCPT TO refuses addresses that deliver nowhere instead of accepting and dropping them', async () => {
+    const rcpt = (b: Boot, to: string) => new Promise<any>((resolve) => {
+        b.smtp.options.onRcptTo({ address: to }, { remoteAddress: '203.0.113.9', envelope: { mailFrom: { address: 'someone@outside.example' } } }, (e: any) => resolve(e || null));
+    });
+    const b = await boot();
+    try {
+        await call(b, 'post /admin/aliases', BOSS, { body: { localPart: 'sales', destinations: BOB.userEmail } });
+        assert.equal(await rcpt(b, ALICE.userEmail), null, 'a mailbox');
+        assert.equal(await rcpt(b, `SALES@${DOMAIN}`), null, 'an alias (case-insensitive)');
+        const unknown = await rcpt(b, `nobody@${DOMAIN}`);
+        assert.equal(unknown && unknown.responseCode, 550);
+        assert.match(unknown.message, /5\.1\.1/);
+        const relay = await rcpt(b, 'victim@elsewhere.example');
+        assert.equal(relay && relay.responseCode, 550);
+        assert.match(relay.message, /5\.7\.1/);
+    } finally { b.plugin.deactivate(); }
+
+    const withCatchAll = await boot({ smtp_catch_all: '1' });
+    try {
+        assert.equal(await rcpt(withCatchAll, `anything@${DOMAIN}`), null, 'catch-all accepts any address on the domain');
+    } finally { withCatchAll.plugin.deactivate(); }
 });
 
 test('administration routes answer for an administrator', async () => {
@@ -278,5 +320,39 @@ test('administration routes answer for an administrator', async () => {
 
         const settings = await call(b, 'get /settings', BOSS);
         assert.equal(settings.body.mail_quota_default_mb, '500');
+    } finally { b.plugin.deactivate(); }
+});
+
+test('forwarding carries the original attachments by id, and only ones the sender may read', async () => {
+    const b = await boot();
+    try {
+        const raw = [
+            'From: c@outside.example', `To: ${BOB.userEmail}`, 'Subject: Budget', 'MIME-Version: 1.0',
+            'Content-Type: multipart/mixed; boundary="XX"', '', '--XX', 'Content-Type: text/plain', '', 'see attached',
+            '--XX', 'Content-Type: application/pdf', 'Content-Transfer-Encoding: base64',
+            'Content-Disposition: attachment; filename="budget.pdf"', '', Buffer.from('%PDF-1.4 demo').toString('base64'), '--XX--', ''
+        ].join('\r\n');
+        assert.equal(await inbound(b, raw), null);
+        const [received] = await rowsOf(b, BOB.id);
+        const [att] = await b.db.all(`SELECT * FROM ${PREFIX}email_attachments WHERE email_id = ?`, [received.id]);
+        assert.ok(att, 'the inbound attachment is stored');
+
+        const fwd = await call(b, 'post /send', BOB, { body: { to: ALICE.userEmail, subject: 'Fwd: Budget', body: 'fyi', attachments: [{ attachmentId: att.id, filename: 'ignored.exe', path: '../../index.js' }] } });
+        assert.equal(fwd.status, 200, JSON.stringify(fwd.body));
+        const aliceCopy = (await rowsOf(b, ALICE.id)).find((r: any) => r.subject === 'Fwd: Budget');
+        assert.ok(aliceCopy, 'Alice received the forward');
+        const copied = await b.db.all(`SELECT * FROM ${PREFIX}email_attachments WHERE email_id = ?`, [aliceCopy.id]);
+        assert.equal(copied.length, 1, 'the original file travelled with the forward');
+        assert.equal(copied[0].filename, 'budget.pdf', 'name and bytes come from the stored row, not the client');
+        assert.notEqual(copied[0].storage_path, att.storage_path, 'a copy, not a shared blob');
+
+        // Alice cannot read Bob's message, so naming its attachment id gets her nothing.
+        const steal = await call(b, 'post /send', ALICE, { body: { to: BOB.userEmail, subject: 'Steal', body: 'x', attachments: [{ attachmentId: att.id }] } });
+        assert.equal(steal.status, 200, JSON.stringify(steal.body));
+        const stolen = (await rowsOf(b, BOB.id)).find((r: any) => r.subject === 'Steal');
+        assert.ok(stolen);
+        assert.equal((await b.db.all(`SELECT * FROM ${PREFIX}email_attachments WHERE email_id = ?`, [stolen.id])).length, 0);
+        const draft = await call(b, 'post /drafts', ALICE, { body: { to: BOB.userEmail, subject: 'Steal draft', body: 'x', attachments: [{ attachmentId: att.id }] } });
+        assert.equal((await b.db.all(`SELECT * FROM ${PREFIX}email_attachments WHERE email_id = ?`, [draft.body.id])).length, 0);
     } finally { b.plugin.deactivate(); }
 });

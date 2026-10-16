@@ -260,13 +260,34 @@ function configuredUploadsRoot(): string | null {
     return _cfgUploadsRoot;
 }
 
+// MULTISITE: each site of the network other than the main one serves /uploads from its own data
+// directory (core/network siteDataDir: `<the database's directory>/sites/<id>/uploads`, index.ts). Those
+// directories are outside every plugin's storage already (no broad data/ access, see isPathSafe), and are
+// declared served here as well, so the published ∩ writable rule covers them by construction. Derived
+// from config.dbPath exactly as core/network derives it, read from the module cache like the uploads root.
+const NETWORK_SITE_UPLOADS = /^[1-9][0-9]{0,8}$/;
+function networkSiteUploadsRootOf(resolved: string): string | null {
+    let dbPath: unknown;
+    try {
+        const cached = require.cache[require.resolve('../config/app')];
+        if (!cached || cached.loaded !== true) return null;
+        dbPath = (cached.exports as any).dbPath;
+    } catch { return null; }
+    if (typeof dbPath !== 'string' || !dbPath) return null;
+    const sitesDir = path.join(path.dirname(path.resolve(dbPath)), 'sites');
+    if (!under(resolved, sitesDir)) return null;
+    const [id, sub] = path.relative(sitesDir, resolved).split(path.sep);
+    if (!NETWORK_SITE_UPLOADS.test(String(id)) || sub !== 'uploads') return null;
+    return path.join(sitesDir, id, 'uploads');
+}
+
 /** Which publicly-served root (if any) contains `resolved`? The CLASS predicate. */
 function servedRootOf(resolved: string): string | null {
     for (const root of SERVED_ROOTS) if (under(resolved, root)) return root;
     for (const root of cwdServedRoots()) if (under(resolved, root)) return root;  // the cwd-anchored twins
     const cfg = configuredUploadsRoot();
     if (cfg && under(resolved, cfg)) return cfg;
-    return null;
+    return networkSiteUploadsRootOf(resolved);
 }
 
 // === THE PUBLICLY-SERVED PLUGIN SURFACE (single source of truth; index.ts reads it) ===
@@ -501,7 +522,7 @@ function declaredPermissionsOf(pluginSlug: string): any[] {
 // with the current one on every grant/egress broadcast and on a 10 s re-sync, so a revoke made elsewhere
 // takes effect within that bound (plus the respawn itself) even when the broadcast is lost. That is the
 // same guarantee the network grant has, and it is the reason a revoke is not left inert.
-const ISOLATE_FS_GRANT: { slug: string; read: boolean; write: boolean } | null = (() => {
+const ISOLATE_FS_GRANT: { slug: string; read: boolean; write: boolean; site: number } | null = (() => {
     const g: any = (typeof globalThis !== 'undefined') ? globalThis : {};
     // HOST: the in-memory grant map is authoritative and live. Read the marker off `globalThis` (per
     // spec unreassignable) for the same reason plugin-context does: `global = {}` must not flip this.
@@ -534,6 +555,8 @@ const ISOLATE_FS_GRANT: { slug: string; read: boolean; write: boolean } | null =
         slug: typeof cfg.slug === 'string' ? cfg.slug : '',
         read: cfg.fsRead === true,
         write: cfg.fsWrite === true,
+        // Multisite: the site this worker runs for (its private storage is that site's; see sandbox-paths).
+        site: (Number.isSafeInteger(cfg.site) && cfg.site >= 1) ? cfg.site : 1,
     });
     try {
         Object.defineProperty(g, '__WORDJS_PLUGIN_FS_GRANT__',
@@ -541,6 +564,15 @@ const ISOLATE_FS_GRANT: { slug: string; read: boolean; write: boolean } | null =
     } catch { /* already defined by something we do not trust ⇒ keep OUR bootstrap answer */ }
     return snapshot;
 })();
+
+/**
+ * The site whose private storage `pluginSlug` uses for the access being checked (multisite). Inside an
+ * isolate: the site the host spawned it for (only for its own slug). On the host: the current site.
+ */
+function guardSiteId(pluginSlug: string): number {
+    if (ISOLATE_FS_GRANT) return ISOLATE_FS_GRANT.slug === pluginSlug ? ISOLATE_FS_GRANT.site : 1;
+    try { return require('./site-context').currentSiteIdOrNull() ?? 1; } catch { return 1; }
+}
 
 /**
  * Did the operator GRANT `filesystem:<access>` to this slug? One question, two authorities, chosen by
@@ -728,7 +760,7 @@ function isPathSafe(targetPath: string, isWrite = false, knownSlug?: string | nu
     // One filesystem declaration feeds this JS gate and every native sandbox. In particular there is no
     // broad data/, logs/, themes/ or src/ read: those trees contain the database, sibling state and host
     // implementation details. Shared mutable storage is namespaced by slug under private directories.
-    const nativePaths = sandboxPaths(ROOT_DIR, pluginSlug, __dirname);
+    const nativePaths = sandboxPaths(ROOT_DIR, pluginSlug, __dirname, guardSiteId(pluginSlug));
     const SAFE_READ_DIRS = [...nativePaths.readOnly, ...nativePaths.storage];
     const SAFE_WRITE_DIRS = [...nativePaths.storage];
 
@@ -812,7 +844,8 @@ function isPathSafe(targetPath: string, isWrite = false, knownSlug?: string | nu
         }
     }
 
-    const dirsToCheck = (isWrite ? SAFE_WRITE_DIRS : SAFE_READ_DIRS).concat([ownDir]);
+    // Another site's worker of a plugin reads its own code but never writes there (sandbox-paths ownWritable).
+    const dirsToCheck = (isWrite ? SAFE_WRITE_DIRS : SAFE_READ_DIRS).concat(!isWrite || nativePaths.ownWritable ? [ownDir] : []);
     // Exact-match or trailing-separator prefix so safe dir 'foo' does not also whitelist
     // a sibling 'foo-bar' that merely shares a string prefix.
     let isAllowed = dirsToCheck.some(dir => resolved === dir || resolved.startsWith(dir + path.sep));

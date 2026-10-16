@@ -5,6 +5,7 @@
 
 const crypto = require('crypto');
 const database = require('../config/database');
+const log = require('./module-logger').moduleLogger('core/revisions');
 const { dbAsync } = database;
 const { diffText, diffStats } = require('./text-diff');
 const { canonicalMetaKey } = require('./protected-meta');
@@ -240,7 +241,7 @@ async function restoreRevision(revisionId: number) {
   if (!isContentMutationActive()) {
     try { return await runContentMutation(() => restoreRevision(revisionId)); }
     catch (error) {
-      console.error('Failed to restore revision:', error);
+      log.error({ err: error }, 'Failed to restore revision');
       return false;
     }
   }
