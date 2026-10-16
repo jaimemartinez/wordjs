@@ -140,6 +140,9 @@ app.use(helmet({
             styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
             fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
             imgSrc: ["'self'", "data:", "blob:", "https:", "*"], // Allow images from everywhere (CMS content)
+            // Audio/video: this origin, plus the ONE origin media is offloaded to (core/media-storage),
+            // read per response so a change in Settings → Media storage applies without a restart.
+            mediaSrc: ["'self'", () => require('./core/media-storage').resolveMediaStorage().publicOrigin || "'self'"],
             connectSrc: ["'self'", "*"], // Allow API calls
             objectSrc: ["'none'"], // Protect against Flash/Applet injections
             upgradeInsecureRequests: [], // Auto-upgrade http to https
@@ -595,6 +598,13 @@ app.use('/uploads', express.static(path.resolve(config.uploads.dir), {
         }
     }
 }));
+// MEDIA OFFLOAD (core/media-storage). A file this node does not hold on disk, with an s3 media store
+// configured, is answered with a redirect to its public bucket/CDN URL. That is what keeps every
+// reference ever written — /uploads/... in post HTML, in persisted srcsets, in theme settings — working
+// on ANY node without a shared uploads directory. It runs only after express.static missed, so a local
+// file (local storage, keepLocalCopy, a restore) is still served from disk exactly as before. 302, not
+// 301: a restore brings the file back to /uploads, and a permanent redirect would outlive it.
+app.use('/uploads', require('./core/media-storage').uploadsRedirect());
 // app.use('/admin', express.static(path.resolve('./admin'))); // Removed legacy admin
 // Theme/plugin assets CAN change in place on update, so cache 1h (not immutable) — the browser reuses
 // them for an hour, then ETag-revalidates (cheap 304). Big win without risking stale code after an update.

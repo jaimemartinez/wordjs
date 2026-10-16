@@ -60,8 +60,8 @@ const MAX_RESPONSE_ANY_OCCURRENCES = 0;
 const MAX_UNTYPED_BOUNDARY_FILES = 0;
 /**
  * Boundary files that are FULLY migrated: at least one typed `req` and not one `req: any` left.
- * 45: routes/frontend.ts, the never-mounted legacy page renderer, was DELETED (tests/route-modules-mounted.test.ts)
- * rather than un-migrated, taking the count to 44; routes/graphql.ts was born typed and brought it back to 45.
+ * Boundary files counted as fully typed. Routes added in 2.6.0 (graphql.ts, media-storage.ts, ...) were born
+ * typed; routes/frontend.ts was DELETED (tests/route-modules-mounted.test.ts) rather than un-migrated.
  * Every file that remains is still counted.
  */
 const MIN_FULLY_TYPED_BOUNDARY_FILES = 45;

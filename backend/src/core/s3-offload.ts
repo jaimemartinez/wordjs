@@ -183,6 +183,25 @@ type PayloadMeta = { sha256: string; length: number };
  * primitives in `meta`. Nothing here can move the request.
  */
 function buildSignedPutOptions(target: ReturnType<typeof resolveTarget>, s3: S3Config, meta: PayloadMeta, now: Date): any {
+    return buildSignedOptions('PUT', target, s3, meta, now, { 'Content-Type': 'application/zip' });
+}
+
+/** sha256 of the empty payload: what a body-less GET/HEAD/DELETE signs as its content digest. */
+const EMPTY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+
+/**
+ * The method-generic signer behind buildSignedPutOptions. `extraHeaders` are sent but NOT signed
+ * (Content-Type, Cache-Control, Content-Disposition — S3 does not require them in the signature), so
+ * they can never change what the signature covers: method, destination, payload digest, date, token.
+ */
+function buildSignedOptions(
+    method: 'PUT' | 'GET' | 'HEAD' | 'DELETE',
+    target: ReturnType<typeof resolveTarget>,
+    s3: S3Config,
+    meta: PayloadMeta,
+    now: Date,
+    extraHeaders: Record<string, string> = {},
+): any {
     const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, ''); // YYYYMMDDTHHMMSSZ
     const dateStamp = amzDate.slice(0, 8);
     const payloadHash = meta.sha256;
@@ -200,7 +219,7 @@ function buildSignedPutOptions(target: ReturnType<typeof resolveTarget>, s3: S3C
     const signedHeaders = signedHeaderNames.join(';');
 
     const canonicalRequest = [
-        'PUT',
+        method,
         target.canonicalUri,
         '', // no query string
         canonicalHeaders,
@@ -224,17 +243,17 @@ function buildSignedPutOptions(target: ReturnType<typeof resolveTarget>, s3: S3C
         `SignedHeaders=${signedHeaders}, Signature=${signature}`;
 
     const headers: Record<string, string> = {
+        ...extraHeaders,
         Host: hostHeader,
         'X-Amz-Date': amzDate,
         'X-Amz-Content-Sha256': payloadHash,
         Authorization: authorization,
-        'Content-Length': String(meta.length),
-        'Content-Type': 'application/zip',
     };
+    if (method === 'PUT') headers['Content-Length'] = String(meta.length);
     if (s3.sessionToken) headers['X-Amz-Security-Token'] = s3.sessionToken;
 
     const options: any = {
-        method: 'PUT',
+        method,
         host: target.host,
         path: target.canonicalUri,
         headers,
@@ -300,8 +319,68 @@ async function offloadBackup(localPath: string, filename: string, deps: any = {}
     }
 }
 
+/**
+ * One signed request against a bucket object, for callers that need more than "PUT this file": the
+ * media storage adapter (core/media-storage) writes, reads, verifies and deletes media objects with it.
+ * Same destination rules as uploadToS3 — resolveTarget alone decides where it goes, from config — and
+ * the body, when there is one, only ever reaches `req.end()`.
+ *
+ * Resolves with the status, the response headers and (for GET) the body, whatever the status: the
+ * caller decides what a 404 means. Rejects only on a transport error or an oversized response.
+ *
+ * @param opts.maxBytes refuse (and abort) a response body larger than this (default 2 GiB).
+ * @param deps injectable { request, now, timeoutMs } for tests.
+ */
+async function s3Request(
+    method: 'PUT' | 'GET' | 'HEAD' | 'DELETE',
+    key: string,
+    s3: S3Config,
+    opts: { body?: Buffer; headers?: Record<string, string>; maxBytes?: number } = {},
+    deps: any = {},
+): Promise<{ status: number; headers: Record<string, any>; body: Buffer }> {
+    const requestFn = deps.request || https.request;
+    const now: Date = deps.now || new Date();
+    const timeoutMs: number = deps.timeoutMs || 60000;
+    const maxBytes = opts.maxBytes ?? 2 * 1024 * 1024 * 1024;
+
+    const target = resolveTarget(s3, key);
+    const body = method === 'PUT' ? (opts.body || Buffer.alloc(0)) : null;
+    const meta: PayloadMeta = body ? { sha256: sha256Hex(body), length: body.length } : { sha256: EMPTY_SHA256, length: 0 };
+    const options = buildSignedOptions(method, target, s3, meta, now, opts.headers || {});
+    if (target.protocol === 'http:' && !deps.request) {
+        // An http:// endpoint (a MinIO on the LAN) — https.request refuses that scheme.
+        return s3RequestWith(require('http').request, options, body, method, maxBytes, timeoutMs);
+    }
+    return s3RequestWith(requestFn, options, body, method, maxBytes, timeoutMs);
+}
+
+function s3RequestWith(requestFn: any, options: any, body: Buffer | null, method: string, maxBytes: number, timeoutMs: number) {
+    return new Promise<{ status: number; headers: Record<string, any>; body: Buffer }>((resolve, reject) => {
+        const req = requestFn(options, (res: any) => {
+            const chunks: Buffer[] = [];
+            let size = 0;
+            res.on('data', (c: Buffer) => {
+                size += c.length;
+                if (size > maxBytes) {
+                    req.destroy(new Error(`S3 ${method} refused: response exceeds ${maxBytes} bytes`));
+                    return;
+                }
+                chunks.push(c);
+            });
+            res.on('end', () => resolve({ status: res.statusCode || 0, headers: res.headers || {}, body: Buffer.concat(chunks) }));
+            res.on('error', reject);
+        });
+        if (typeof req.setTimeout === 'function') {
+            req.setTimeout(timeoutMs, () => req.destroy(new Error(`S3 ${method} timed out after ${timeoutMs} ms`)));
+        }
+        req.on('error', reject);
+        req.end(body || undefined);
+    });
+}
+
 module.exports = {
     getS3Config,
+    s3Request,
     uploadToS3,
     offloadBackup,
     // exported for unit tests

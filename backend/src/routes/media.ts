@@ -981,7 +981,36 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
         privateMedia.moveAttachmentFiles(fromFiles.map((f: string, i: number) => [f, toFiles[i]]));
     }
 
+    // MEDIA OFFLOAD (core/media-storage). With an s3 store configured, a PUBLIC upload — the original and
+    // every derivative written above — goes to the bucket BEFORE the row exists, verified by size, so no
+    // row is ever told its files are somewhere that does not hold them. The row keeps the same relative
+    // /uploads path as always; only the `_wjs_media_storage` marker says where the bytes are. A bucket
+    // that refuses the write fails the upload (and removes what it wrote): keeping the file only on this
+    // node's disk would hand every other node a broken image.
+    let offloaded = false;
+    const mediaStorage = require('../core/media-storage');
+    const store = wantPrivate ? null : mediaStorage.resolveMediaStorage();
+    if (store && store.driver === 's3') {
+        const files = Media._deletableFiles(relativePath, sizes, sources, storedRoot);
+        try {
+            await mediaStorage.pushFiles(mediaStorage.getMediaStorage(store), storedRoot, files);
+            offloaded = true;
+        } catch (err: any) {
+            console.error(`Media upload: the media bucket refused the upload: ${require('../core/log-safe').logSafeError(err)}`);
+            for (const f of files) { try { fs.unlinkSync(f); } catch { /* best effort */ } }
+            return res.status(502).json({
+                code: 'rest_media_storage_unavailable',
+                message: 'The media storage bucket could not store this file. Nothing was saved; try again or check Settings → Media storage.',
+                data: { status: 502 }
+            });
+        }
+        if (!store.keepLocalCopy) {
+            for (const f of files) { try { fs.unlinkSync(f); } catch { /* best effort */ } }
+        }
+    }
+
     const media = await Media.create({
+        offloaded,
         isPrivate: wantPrivate,
         authorId: req.user.id,
         title: title || uploaded.originalname,

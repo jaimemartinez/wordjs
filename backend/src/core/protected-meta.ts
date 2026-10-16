@@ -69,6 +69,9 @@ const PROTECTED_POST_META: Set<string> = new Set([
     '_wxr_source_url',
     '_wxr_menu_item_id',
     '_wxr_remote_url',
+    // Where an attachment's bytes live (core/media-storage): server-owned, set only by the upload route,
+    // the visibility move and the offload/restore migration.
+    '_wjs_media_storage',
     // F4 snapshot envelopes are executable restore instructions. Allowing a generic meta request to
     // forge one would turn a later restore into an arbitrary core-column/meta write.
     REVISION_SNAPSHOT_META_KEY,

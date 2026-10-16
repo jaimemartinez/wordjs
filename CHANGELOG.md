@@ -134,6 +134,25 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   Mutations are not part of this release. Built on `graphql` 16 and `graphql-http` (both MIT, no
   transitive dependencies). See `documentation/graphql.md`.
 
+## [Unreleased]
+
+### Added
+
+- **Optional media offload to an S3-compatible bucket and CDN.** Media could only live on the backend's
+  local disk. Settings → Media storage (or a `mediaStorage` block in `wordjs-config.json` / the
+  `WORDJS_MEDIA_*` env vars) now sends public uploads — the original and every stored derivative, the size
+  ladder and its WebP/AVIF siblings included — to AWS S3, Cloudflare R2, MinIO, Backblaze B2 or any
+  S3-compatible store, reusing the dependency-free SigV4 signer of the backup offload. The database keeps
+  the same relative `/uploads/...` paths: `/uploads` redirects to the CDN for files a node does not hold,
+  the API adds a `deliveryUrl`, and once the whole library is offloaded the public SSR emits CDN URLs
+  directly. The page CSP gains exactly the configured media origin in `img-src` and `media-src`, at
+  response time. `npm run media -- offload | restore | status | test` (and buttons on the screen) move an
+  existing library to the bucket and back, idempotent and resumable, one run at a time across the
+  cluster. The screen has a "Test connection" button: the server writes and reads a probe object, the
+  admin's browser loads it from the public URL, and the server deletes it; credentials are write-only (only a four-character hint is ever returned). With offload
+  on, backend nodes no longer need a shared uploads directory for media. Private media stays on local
+  disk. See `documentation/media-storage.md`.
+
 ## [2.5.0] - 2026-10-15
 
 ### Added

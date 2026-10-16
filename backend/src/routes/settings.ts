@@ -174,7 +174,20 @@ const DERIVED_PUBLIC_SETTINGS: Map<string, () => Promise<any>> = new Map(Object.
     // banner naming the missing slug, and mirrored by a boot-time warning in index.ts.
     // Boolean, not a string: `Boolean("false")` is true, and a health flag that reads backwards when
     // stringified is worse than no flag. Derived, so it can never drift from the directory on disk.
-    active_theme_missing: isActiveThemeMissing
+    active_theme_missing: isActiveThemeMissing,
+    // MEDIA OFFLOAD (core/media-storage). `media_cdn_origin`: the one origin offloaded media is served
+    // from whenever an s3 store is configured ('' otherwise) — the frontend adds exactly it to the
+    // page CSP's img-src/media-src. `media_public_base`: the URL the /uploads tree maps to, but ONLY once
+    // the whole library is in the bucket (state 'offloaded'); the public SSR rewrites /uploads/ to it.
+    // Before that (or during a restore) it is '' and pages keep /uploads, which the backend redirects
+    // for files it does not hold. Derived per request: content and the DB only ever hold /uploads paths.
+    media_cdn_origin: async () => require('../core/media-storage').resolveMediaStorage().publicOrigin || '',
+    media_public_base: async () => {
+        const store = require('../core/media-storage').resolveMediaStorage();
+        if (store.driver !== 's3' || !store.publicBase) return '';
+        const state = await require('../core/media-storage-migrate').getState();
+        return state === 'offloaded' ? store.publicBase : '';
+    },
 }));
 
 // Admin-ONLY derived settings: computed per request, never stored, and returned only from GET

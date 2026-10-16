@@ -109,6 +109,10 @@ const AUDIT_ACTIONS = Object.freeze({
 
     // ── Configuration ───────────────────────────────────────────────────────────────────────────────
     SETTINGS_UPDATE: 'settings.update',
+    // Where public media is stored (core/media-storage): {driver, bucket, endpoint, publicUrl,
+    // keysRotated} - never a credential - and each offload/restore run that was started.
+    MEDIA_STORAGE_UPDATE: 'media.storage.update',
+    MEDIA_STORAGE_MIGRATE: 'media.storage.migrate',
 
     // ── The site's addresses (core/site-address) ─────────────────────────────────────────────────────
     // Each change of where the site lives is recorded with {from, to, added, removed, via, force, rev}
