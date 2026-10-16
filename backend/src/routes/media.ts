@@ -265,7 +265,7 @@ type UploadRequest = Request & { file?: StoredFile };
  */
 const { authenticate, optionalAuth } = require('../middleware/auth');
 const { can } = require('../middleware/permissions');
-const { asyncHandler } = require('../middleware/errorHandler');
+const { asyncHandler, UploadRejectedError } = require('../middleware/errorHandler');
 // THE SCALAR QUERY RULE — see core/query-params.
 const { requireScalarQuery, requireRouteId } = require('../core/query-params');
 
@@ -335,7 +335,7 @@ const fileFilter = (req: Request, file: IncomingFile, cb: (error: Error | null, 
     // SECURITY: Block SVG uploads for non-admins (SVGs can contain JavaScript)
     if (file.mimetype === 'image/svg+xml') {
         if (!req.user || req.user.getRole() !== 'administrator') {
-            return cb(new Error('SVG uploads are restricted to administrators only.'), false);
+            return cb(new UploadRejectedError(403, 'rest_upload_svg_forbidden', 'SVG uploads are restricted to administrators only.'), false);
         }
     }
 
@@ -343,18 +343,18 @@ const fileFilter = (req: Request, file: IncomingFile, cb: (error: Error | null, 
     // the declared MIME (defense in depth — a benign MIME could carry an active-content name).
     const declaredExt = path.extname(file.originalname);
     if (Media.isDangerousExtension(declaredExt)) {
-        return cb(new Error(`File extension ${declaredExt} is not allowed.`), false);
+        return cb(new UploadRejectedError(415, 'rest_upload_invalid_type', `File extension ${declaredExt} is not allowed.`), false);
     }
 
     if (!Media.isAllowedMimeType(file.mimetype)) {
-        return cb(new Error(`File type ${file.mimetype} is not allowed.`), false);
+        return cb(new UploadRejectedError(415, 'rest_upload_invalid_type', `File type ${file.mimetype} is not allowed.`), false);
     }
 
     // SECURITY: The declared MIME must map to a safe stored extension; otherwise we cannot
     // persist it safely and must reject (getExtensionForMime also returns null for dangerous
     // extensions like .xml that are otherwise in the allowlist).
     if (!Media.getExtensionForMime(file.mimetype)) {
-        return cb(new Error(`File type ${file.mimetype} cannot be stored safely.`), false);
+        return cb(new UploadRejectedError(415, 'rest_upload_invalid_type', `File type ${file.mimetype} cannot be stored safely.`), false);
     }
 
     cb(null, true);
@@ -640,6 +640,12 @@ router.get('/:id/file', authenticate, asyncHandler(async (req: Request, res: Res
  *         description: Media uploaded
  *       400:
  *         description: Invalid file
+ *       403:
+ *         description: "`rest_upload_svg_forbidden` — SVG uploads are restricted to administrators."
+ *       413:
+ *         description: "`rest_upload_too_large` — the file exceeds the configured upload size limit."
+ *       415:
+ *         description: "`rest_upload_invalid_type` — a file type or extension the media library does not accept."
  */
 router.post('/', authenticate, can('upload_files'), upload.single('file'), asyncHandler(async (req: UploadRequest, res: Response) => {
     // Bound once into a const so the "an upload actually arrived" guard below still holds inside the

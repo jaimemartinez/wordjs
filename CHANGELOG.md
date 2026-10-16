@@ -73,6 +73,17 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   whose record has no saved document stays out of the room until it has been saved once. Records that
   already have a saved document collaborate as before.
 
+## [Unreleased]
+
+### Fixed
+
+- **A refused upload answers with a 4xx and its reason instead of a 500.** An SVG uploaded by a
+  non-administrator, a file type or extension the media library does not take, a non-zip plugin or theme
+  package, a WordPress import that is not a WXR file, and a file over the upload size limit all reached the
+  error handler without a status and were answered `500 rest_internal_error` with the reason discarded.
+  They now answer `403 rest_upload_svg_forbidden`, `415 rest_upload_invalid_type` and
+  `413 rest_upload_too_large` (multer's other limits: `400 rest_upload_invalid`), with the message.
+
 ## [2.5.0] - 2026-10-15
 
 ### Added

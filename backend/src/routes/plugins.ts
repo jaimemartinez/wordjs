@@ -24,7 +24,7 @@ const { assertZipWithinBudget } = require('../core/zip-guard');
 // token's grant / egress write in `narrowOnly` mode, judged against what is STORED (core/plugin-permissions).
 const { authenticate, authenticateAllowQuery, optionalAuth, refusePluginGrantByToken, isHeadless } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
-const { asyncHandler, publicErrorText } = require('../middleware/errorHandler');
+const { asyncHandler, publicErrorText, UploadRejectedError } = require('../middleware/errorHandler');
 const { recordAudit } = require('../core/audit');
 const { findSandboxUnavailable, sandboxRefusalBody } = require('../core/sandbox-refusal');
 const { execFile } = require('child_process');
@@ -64,7 +64,7 @@ const upload = multer({
         if (file.mimetype === 'application/zip' || file.mimetype === 'application/x-zip-compressed' || file.originalname.endsWith('.zip')) {
             cb(null, true);
         } else {
-            cb(new Error('Only .zip files are allowed'));
+            cb(new UploadRejectedError(415, 'rest_upload_invalid_type', 'Only .zip files are allowed'));
         }
     }
 });
