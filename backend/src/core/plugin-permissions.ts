@@ -221,6 +221,69 @@ function grantRecordIn(stored: any, slug: string): string[] | null {
     return grantRecordOf(slug, stored[slug]);
 }
 
+// ── EXCLUSIVE GRANTS — at most ONE plugin may hold these ─────────────────────────────────────────────
+//
+// Some capabilities are a single host resource, not a per-plugin right. `smtp:inbound` makes the HOST open
+// the public SMTP port (25) and hand every inbound message to the plugin that holds it: two holders would
+// mean two plugins competing for the internet's mail. So the rule is enforced in the store, decided on the
+// row read fresh under the policy lease like every other write:
+//   · an administrator's grant (applyGrants) of an exclusive token another plugin holds is REFUSED with
+//     code 'plugin_grant_exclusive' (status 409) naming the holder — revoke it there first;
+//   · the automatic writers (grant-on-activate, the boot backfill, an upgrade step) never take it from
+//     the holder: they store the plugin's other grants and leave the exclusive one out.
+// The host listener (core/inbound-smtp.ts) also accepts one owner at a time, so even a store edited by
+// hand cannot produce two listeners.
+const EXCLUSIVE_GRANTS: ReadonlySet<string> = new Set(['smtp:inbound']);
+
+/** The plugins other than `exceptSlug` whose stored record holds `token`. */
+function exclusiveHoldersIn(stored: any, token: string, exceptSlug: string): string[] {
+    const out: string[] = [];
+    if (!stored || typeof stored !== 'object') return out;
+    for (const k of Object.keys(stored)) {
+        if (k === exceptSlug || k === HOST_RECORD_KEY || !isSafeSlugKey(k) || !Object.hasOwn(stored, k)) continue;
+        const rec = grantRecordOf(k, stored[k]);
+        if (rec && rec.includes(token)) out.push(k);
+    }
+    return out;
+}
+
+/** The exclusive tokens of `tokens` that another plugin already holds, with who holds them. */
+function exclusiveConflictsIn(stored: any, slug: string, tokens: string[]): Array<{ token: string; holder: string }> {
+    const out: Array<{ token: string; holder: string }> = [];
+    for (const t of tokens) {
+        if (!EXCLUSIVE_GRANTS.has(t)) continue;
+        const holders = exclusiveHoldersIn(stored, t, slug);
+        if (holders.length) out.push({ token: t, holder: holders[0] });
+    }
+    return out;
+}
+
+/** `tokens` without the exclusive ones another plugin holds (the automatic writers' rule). */
+function withoutForeignExclusive(stored: any, slug: string, tokens: string[]): string[] {
+    const conflicts = exclusiveConflictsIn(stored, slug, tokens);
+    if (!conflicts.length) return tokens;
+    for (const c of conflicts) {
+        console.warn("[PluginPermissions] Not granting '%s' to plugin '%s': plugin '%s' already holds it (an exclusive capability).", c.token, logSafeKey(slug), logSafeKey(c.holder));
+    }
+    const drop = new Set(conflicts.map(c => c.token));
+    return tokens.filter(t => !drop.has(t));
+}
+
+function exclusiveGrantError(conflicts: Array<{ token: string; holder: string }>): Error {
+    const c = conflicts[0];
+    const err: any = new Error(`Only one plugin may hold '${c.token}', and '${c.holder}' holds it. Revoke it from '${c.holder}' first.`);
+    err.code = 'plugin_grant_exclusive';
+    err.status = 409;
+    err.conflicts = conflicts;
+    return err;
+}
+
+/** Which plugin holds an exclusive token right now (this node's mirror of the current site), or null. For the admin UI/API. */
+function getExclusiveHolder(token: string): string | null {
+    for (const [slug, set] of policyState.get().grants) if (set.has(token)) return slug;
+    return null;
+}
+
 /** One plugin's egress list from a stored list: its valid hosts (a value that is not a list: none). */
 function egressRecordOf(slug: string, list: unknown): string[] | null {
     if (!Array.isArray(list)) return null;
@@ -675,6 +738,9 @@ async function applyGrants(slug: string, tokens: string[], opts: { adminDecision
         (stored) => {
             refused = opts.narrowOnly ? grantsAddedTo(grantRecordIn(stored, slug) || [], clean) : [];
             if (refused.length) return { changed: false };
+            // An exclusive capability another plugin holds is refused outright (nothing written).
+            const conflicts = exclusiveConflictsIn(stored, slug, clean);
+            if (conflicts.length) throw exclusiveGrantError(conflicts);
             return { changed: true, next: grantStoreWith(stored, slug, clean, opts) };
         },
         () => { if (!refused.length) policyState.get().grants.set(slug, new Set(clean)); }));
@@ -715,16 +781,18 @@ async function seedGrants(slug: string, tokens: string[], opts: { adminDecision?
     const clean = clipToCeiling(slug, cleanGrantTokens(slug, tokens));
     let seeded = false;
     let existing: string[] | null = null;
+    let seed: string[] = clean;
     await writePolicy(() => writePolicyBlob('plugin_grants',
         (stored) => {
             existing = grantRecordIn(stored, slug);
             seeded = shouldSeedDeclaredGrants(slug, existing, hasAdminDecisionIn(stored, slug));
             if (!seeded) return { changed: false };
-            return { changed: true, next: grantStoreWith(stored, slug, clean, opts) };
+            seed = withoutForeignExclusive(stored, slug, clean);
+            return { changed: true, next: grantStoreWith(stored, slug, seed, opts) };
         },
         // Memory mirrors the row this decision was made on: the seed, or the record as stored (none ⇒ none).
         () => {
-            if (seeded) policyState.get().grants.set(slug, new Set(clean));
+            if (seeded) policyState.get().grants.set(slug, new Set(seed));
             else if (existing) policyState.get().grants.set(slug, new Set(existing));
             else policyState.get().grants.delete(slug);
         }));
@@ -811,13 +879,15 @@ async function backfillActive(entries: Array<{ slug: string; requested: string[]
         // administrator's decision on another node, an update's empty record) is kept, never replaced.
         const clean = clipToCeiling(slug, cleanGrantTokens(slug, requested));
         let existing: string[] | null = null;
+        let record: string[] = clean;
         await writePolicy(() => writePolicyBlob('plugin_grants',
             (stored) => {
                 existing = grantRecordIn(stored, slug);
                 if (existing !== null) return { changed: false };
-                return { changed: true, next: grantStoreWith(stored, slug, clean) };
+                record = withoutForeignExclusive(stored, slug, clean);
+                return { changed: true, next: grantStoreWith(stored, slug, record) };
             },
-            () => { policyState.get().grants.set(slug, new Set(existing !== null ? existing : clean)); }));
+            () => { policyState.get().grants.set(slug, new Set(existing !== null ? existing : record)); }));
         if (existing === null) done.push(slug);
     }
     if (done.length) console.log(`[PluginPermissions] Backfilled manifest grants for already-active plugins: ${done.join(', ')} (default-deny applies to new activations).`);
@@ -854,7 +924,8 @@ async function addUpgradeGrant(slug: string, token: string): Promise<boolean> {
     await writePolicy(() => writePolicyBlob('plugin_grants',
         (stored) => {
             const existing = grantRecordIn(stored, slug);
-            added = !(existing && existing.includes(clean[0])) && !hasAdminDecisionIn(stored, slug);
+            added = !(existing && existing.includes(clean[0])) && !hasAdminDecisionIn(stored, slug)
+                && exclusiveConflictsIn(stored, slug, clean).length === 0;
             record = added ? Array.from(new Set([...(existing || []), clean[0]])) : existing;
             if (!added) return { changed: false };
             return { changed: true, next: grantStoreWith(stored, slug, record as string[]) };
@@ -1093,4 +1164,5 @@ module.exports = {
     PLUGIN_SLUG, FORBIDDEN_KEYS, isSafeSlugKey, writeSlugKey,
     getHostMarker, setHostMarker, HOST_RECORD_KEY, hasAdminGrantDecision, activationSeedsDeclaredGrants, ADMIN_DECISIONS_MARKER,
     grantsAddedTo, egressHostsAddedTo, EGRESS_EVERY_PUBLIC_HOST,
+    EXCLUSIVE_GRANTS, getExclusiveHolder,
 };

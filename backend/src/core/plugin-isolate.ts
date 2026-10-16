@@ -2775,6 +2775,22 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
         const pendingTransport = new Map<number, any>();
         const invokeNotifyTransport = (name: string, notification: any) => rpcSend(pendingTransport, { kind: 'invoke-notify-transport', name, notification });
 
+        // smtp:inbound — the HOST listens on the plugin's behalf (core/inbound-smtp.ts) and asks the plugin
+        // what to do at each SMTP step over this channel.
+        const pendingSmtp = new Map<number, any>();
+        const invokeSmtp = (phase: string, args: any[]) => rpcSend(pendingSmtp, { kind: 'invoke-smtp', phase, args });
+        const claimedPortsOf = (): number[] => {
+            // The ports the plugin's manifest declares (`claimPorts`), read from its own directory.
+            for (const dir of [path.dirname(entryFile), path.dirname(path.dirname(entryFile))]) {
+                try {
+                    const m = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
+                    if (m && Array.isArray(m.claimPorts)) return m.claimPorts.filter((p: any) => Number.isInteger(p) && p > 0 && p < 65536);
+                    if (m) return [];
+                } catch { /* try the parent */ }
+            }
+            return [];
+        };
+
         // Every frame from this child is handled AS ITS SITE: its bridge calls read and write that site's
         // database, its registrations land in that site's tables, its grants are that site's.
         worker.on('message', (msg: any) => siteContext.runWithSite(siteId, async () => {
@@ -3168,6 +3184,30 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                 }
             } else if (msg.kind === 'notify-transport-reply') {
                 rpcSettle(pendingTransport, msg, msg.value);
+            } else if (msg.kind === 'register-smtp-listener') {
+                // Receiving the internet's mail is the EXCLUSIVE smtp:inbound capability (one plugin at a
+                // time, admin-granted). Without it the answer says so and the plugin may fall back to its
+                // own listener where its platform allows one.
+                let value: any;
+                if (siteId !== siteContext.PRIMARY_SITE_ID) {
+                    // Multisite: the inbound SMTP listener is ONE host-wide port with one owner; it stays the
+                    // main site's in this version (another site's worker of a mail plugin gets no listener).
+                    value = { ok: false, granted: false, error: 'the inbound SMTP listener belongs to the main site of the network' };
+                } else if (!isGrantedFor(slug, 'smtp', 'inbound')) {
+                    value = { ok: false, granted: false, error: 'the smtp:inbound permission is not granted (grant it in /admin/plugins)' };
+                } else {
+                    try {
+                        value = { granted: true, ...(await require('./inbound-smtp').start(slug, msg.opts || {}, claimedPortsOf(), invokeSmtp)) };
+                    } catch (e: any) {
+                        value = { ok: false, granted: true, error: String((e && e.message) || e) };
+                    }
+                }
+                worker.postMessage({ kind: 'reply', id: msg.id, ok: true, value });
+            } else if (msg.kind === 'smtp-status') {
+                const st = require('./inbound-smtp').getStatus();
+                worker.postMessage({ kind: 'reply', id: msg.id, ok: true, value: { ...st, mine: st.owner === slug && siteId === siteContext.PRIMARY_SITE_ID } });
+            } else if (msg.kind === 'smtp-reply') {
+                rpcSettle(pendingSmtp, msg, msg.value);
             }
           } catch (e: any) {
             console.error(`[Isolate ${logSafe(slug)}] dropped malformed/poison IPC message (kind=${logSafe(msg && msg.kind)}): ${logSafe(e && e.message)}`);
@@ -3212,6 +3252,9 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
             if (providedMail) { try { require('./mail-provider').clearMailProvider(mailProviderFn || undefined); } catch { /* */ } }
             try { require('./notifications').unregisterPluginTransports(slug); } catch { /* */ }
             try { require('./adminMenu').unregisterAdminMenu(slug); } catch { /* */ }
+            // The inbound SMTP listener the host opened for this plugin (no-op if it owns none). Only the main
+            // site's worker can own it, so another site's teardown must never stop it.
+            if (siteId === siteContext.PRIMARY_SITE_ID) { try { require('./inbound-smtp').stop(slug).catch(() => { /* */ }); } catch { /* */ } }
         });
 
         /**

@@ -1622,6 +1622,10 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
     try {
         applied = await applyGrants(slug, tokens, { adminDecision: true, narrowOnly: isHeadless(req) });
     } catch (e: any) {
+        // An EXCLUSIVE capability (smtp:inbound) another plugin holds: nothing was written. Say who holds it.
+        if (e && e.code === 'plugin_grant_exclusive') {
+            return res.status(409).json({ code: e.code, error: e.message, conflicts: e.conflicts });
+        }
         // Multisite (isolation guarantee I8): a site administrator cannot grant beyond the network's ceiling.
         if (e && e.code === 'plugin_grant_beyond_ceiling') {
             return res.status(403).json({ code: e.code, message: e.message, data: { status: 403, beyond: e.beyond || [] } });
