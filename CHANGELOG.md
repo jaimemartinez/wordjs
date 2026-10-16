@@ -4,7 +4,7 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
-## [Unreleased]
+## [2.6.0] - 2026-10-16
 
 ### Added
 
@@ -154,6 +154,20 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   records every request at `info`. See `documentation/observability.md`.
 
 ### Fixed
+
+- **mail-server 3.0.1: findings from a production-like lab.** A fresh install now loads the plugin
+  grants and egress policy right after setup, so a network-granted plugin is not deny-all until the next
+  restart. Unknown recipients are refused at `RCPT TO` (`550 5.1.1` / `5.7.1`) instead of being accepted
+  and dropped. Quota usage between refreshes counts attachment bytes. An MX that refuses STARTTLS with a
+  reply (e.g. `454`) gets one plaintext retry, as opportunistic TLS does everywhere; a failed handshake
+  still never downgrades. Forwarding keeps the original attachments (only those of a message the user may
+  read). Received HTML keeps an allowlist of safe inline styles. The DNSBL check works inside the sandbox
+  through the host DNS bridge. The Bayesian filter needs real evidence before it files mail as spam. Plus
+  webmail and server-console polish: scrolling tab bars, address entry, translations.
+- **mail-server: vacation auto-replies go out with a null return path (RFC 3834).** The envelope sender
+  is `MAIL FROM:<>` on the direct and relay paths, and the retry queue keeps it, so an auto-reply that
+  cannot be delivered is dropped by the remote MTA instead of bouncing back into the user's inbox. The
+  header From, DKIM and `Auto-Submitted` are unchanged; normal sends and forwards keep their sender.
 
 - **`GET /api/v1/pages` answered `404 rest_post_invalid_id`.** The alias forced `type=page` but handed the request to the posts router with its URL still `/pages`, so it matched the single-post route instead of the list. It now reaches the list route and behaves as documented: the same filters, authorization, `X-WP-Total`/`X-WP-TotalPages` headers and refusal of repeated scalars as `GET /posts`, with any caller-supplied `type` overwritten.
 - **Opening a post or page in the editor no longer crashes or blanks the canvas when live collaboration
