@@ -5,6 +5,7 @@ import { errorText } from "./i18n";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../../../../../frontend/src/lib/api";
 import {
+    ScrollRow,
     cx, Button, IconBtn, Field, Toggle, Card, Pill, EmptyState, Spinner, Sheet, Avatar, Menu, MenuItem,
     inputCls, formatBytes, listDate, fullDate, relativeTime
 } from "./ui";
@@ -903,7 +904,7 @@ export default function ServerAdmin({ t, locale, toasts, confirm, canUseMail, on
                     </div>
                     {canUseMail && <Button size="sm" variant="secondary" icon="fa-solid fa-inbox" className="hidden sm:inline-flex" onClick={onBack}>{t('app.backToMail')}</Button>}
                 </div>
-                <nav className="mx-auto flex max-w-7xl gap-1 overflow-x-auto px-2 pt-3 [scrollbar-width:none] sm:px-5" role="tablist">
+                <ScrollRow as="nav" activeKey={tab} wrapClassName="mx-auto max-w-7xl" className="flex gap-1 px-2 pt-3 sm:px-5" role="tablist">
                     {TABS.map(([id, icon]) => (
                         <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}
                             className={cx('flex shrink-0 items-center gap-2 border-b-2 px-3 pb-2.5 pt-1 text-sm transition-colors', tab === id ? 'border-violet-600 font-semibold text-violet-700' : 'border-transparent text-slate-500 hover:text-slate-800')}>
@@ -913,7 +914,7 @@ export default function ServerAdmin({ t, locale, toasts, confirm, canUseMail, on
                             )}
                         </button>
                     ))}
-                </nav>
+                </ScrollRow>
             </header>
             <main className="min-h-0 flex-1 overflow-y-auto">
                 <div className="mx-auto max-w-7xl px-3 py-4 sm:px-6 sm:py-6">

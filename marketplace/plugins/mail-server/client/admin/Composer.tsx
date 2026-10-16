@@ -7,7 +7,7 @@ import { api, apiPost } from "../../../../../frontend/src/lib/api";
 // Platform isomorphic sanitizer (DOMPurify on the client). It guards the ONE live-DOM innerHTML sink —
 // this editor — which receives the quoted body of a reply/forward (attacker-controlled HTML).
 import { sanitizeHTML } from "../../../../../frontend/src/lib/sanitize";
-import { cx, IconBtn, Button, Menu, MenuItem, Avatar, formatBytes, escapeHtml } from "./ui";
+import { cx, ScrollRow, IconBtn, Button, Menu, MenuItem, Avatar, formatBytes, escapeHtml } from "./ui";
 
 const splitList = (v: string) => String(v || '').split(/[,;]/).map(s => s.trim()).filter(Boolean);
 const looksLikeAddress = (s: string) => /^[^\s@,;<>"]+@[^\s@,;<>"]+$/.test(s);
@@ -422,7 +422,7 @@ export default function Composer({ initial, prefs, user, t, locale, fullscreen: 
                 )}
 
                 {/* Formatting toolbar */}
-                <div className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-t border-slate-100 px-2 py-1 [scrollbar-width:none]">
+                <ScrollRow wrapClassName="shrink-0 border-t border-slate-100" className="flex items-center gap-0.5 px-2 py-1">
                     <IconBtn size="sm" icon="fa-solid fa-bold" label={t('comp.bold')} onMouseDown={(e: any) => e.preventDefault()} onClick={() => exec('bold')} />
                     <IconBtn size="sm" icon="fa-solid fa-italic" label={t('comp.italic')} onMouseDown={(e: any) => e.preventDefault()} onClick={() => exec('italic')} />
                     <IconBtn size="sm" icon="fa-solid fa-underline" label={t('comp.underline')} onMouseDown={(e: any) => e.preventDefault()} onClick={() => exec('underline')} />
@@ -436,7 +436,7 @@ export default function Composer({ initial, prefs, user, t, locale, fullscreen: 
                         if (url && /^(https?:|mailto:)/i.test(url.trim())) exec('createLink', url.trim());
                     }} />
                     <IconBtn size="sm" icon="fa-solid fa-text-slash" label={t('comp.clear')} onMouseDown={(e: any) => e.preventDefault()} onClick={() => exec('removeFormat')} />
-                </div>
+                </ScrollRow>
 
                 {/* Footer */}
                 <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-slate-100 bg-slate-50/60 px-3 py-2.5" style={{ paddingBottom: forceFull ? 'max(0.625rem, env(safe-area-inset-bottom))' : undefined }}>

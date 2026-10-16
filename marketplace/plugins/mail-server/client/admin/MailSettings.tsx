@@ -4,7 +4,7 @@
 import { errorText } from "./i18n";
 import { useEffect, useState } from "react";
 import { api } from "../../../../../frontend/src/lib/api";
-import { cx, Sheet, Button, IconBtn, Field, Toggle, Checkbox, inputCls, EmptyState, Pill } from "./ui";
+import { cx, ScrollRow, Sheet, Button, IconBtn, Field, Toggle, Checkbox, inputCls, EmptyState, Pill } from "./ui";
 
 const FIELDS = ['from', 'to', 'subject', 'body', 'any'];
 const OPS = ['contains', 'not_contains', 'equals', 'starts', 'ends'];
@@ -199,18 +199,19 @@ export default function MailSettings({ open, onClose, t, labels, density, setDen
             )}
         >
             <div className="flex h-full min-h-[420px] flex-col sm:flex-row">
-                <nav className="flex shrink-0 gap-1 overflow-x-auto border-b border-slate-100 p-2 [scrollbar-width:none] sm:w-52 sm:flex-col sm:overflow-visible sm:border-b-0 sm:border-r sm:p-3">
+                <ScrollRow as="nav" activeKey={tab} wrapClassName="shrink-0 border-b border-slate-100 sm:w-52 sm:border-b-0 sm:border-r" className="flex gap-1 p-2 sm:flex-col sm:overflow-visible sm:p-3">
                     {TABS.map(([id, icon, label]) => (
                         <button
                             key={id}
                             type="button"
+                            aria-current={tab === id ? 'page' : undefined}
                             onClick={() => setTab(id)}
                             className={cx('flex shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors', tab === id ? 'bg-violet-50 font-semibold text-violet-700' : 'text-slate-600 hover:bg-slate-50')}
                         >
                             <i className={cx(icon, 'w-4 text-center')}></i>{label}
                         </button>
                     ))}
-                </nav>
+                </ScrollRow>
                 <div className="min-w-0 flex-1 p-4 sm:p-6">
                     {!prefs ? (
                         <div className="py-16 text-center text-sm text-slate-500"><i className="fa-solid fa-circle-notch fa-spin mr-2 text-violet-500"></i>{t('common.loading')}</div>
