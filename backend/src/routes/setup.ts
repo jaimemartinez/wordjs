@@ -794,7 +794,7 @@ router.post('/install', async (req: Request, res: Response) => {
                 await perms.loadGrants();
                 await perms.loadEgressHosts();
             } catch (e: any) {
-                console.warn('⚠️ Setup: could not load the plugin policy (network plugins stay deny-all until a restart):', e && e.message);
+                log.warn({ err: e }, '⚠️ Setup: could not load the plugin policy (network plugins stay deny-all until a restart)');
             }
 
             // SECURITY: Generate mTLS Certificates — but NEVER on a cluster-enrolled node. There the
