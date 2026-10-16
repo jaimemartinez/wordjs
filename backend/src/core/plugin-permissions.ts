@@ -265,7 +265,7 @@ function withoutForeignExclusive(stored: any, slug: string, tokens: string[]): s
     const conflicts = exclusiveConflictsIn(stored, slug, tokens);
     if (!conflicts.length) return tokens;
     for (const c of conflicts) {
-        log.warn("[PluginPermissions] Not granting '%s' to plugin '%s': plugin '%s' already holds it (an exclusive capability).", c.token, logSafeKey(slug), logSafeKey(c.holder));
+        log.warn({ token: c.token, slug: logSafeKey(slug), holder: logSafeKey(c.holder) }, `[PluginPermissions] Not granting '${c.token}' to plugin '${logSafeKey(slug)}': plugin '${logSafeKey(c.holder)}' already holds it (an exclusive capability).`);
     }
     const drop = new Set(conflicts.map(c => c.token));
     return tokens.filter(t => !drop.has(t));

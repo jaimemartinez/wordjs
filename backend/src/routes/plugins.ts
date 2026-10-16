@@ -844,7 +844,7 @@ async function runPluginUpdate(
         if (stashDir) { try { fs.rmSync(stashDir, { recursive: true, force: true }); } catch { /* */ } stashDir = null; }
         // Multisite: the other sites' workers of this plugin still run the previous code — restart them on
         // the new one (each in its own site, with its own grants). No-op on a single site.
-        try { await core.respawnOnSecondarySites(slug); } catch (e: any) { log.warn('[plugin-update %s] restart on the other sites failed: %s', logSafe(slug), logSafe(e && e.message)); }
+        try { await core.respawnOnSecondarySites(slug); } catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[plugin-update ${logSafe(slug)}] restart on the other sites failed: ${logSafe(e && e.message)}`); }
 
         const newManifest = readManifest(installedDir);
         const toVersion = newManifest && newManifest.version != null ? String(newManifest.version) : null;
@@ -2576,7 +2576,7 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request,
     try {
         await require('../core/plugins').deactivatePluginOnSecondarySites(slug);
         if (require('../core/site-context').multisiteEnabled()) require('../core/network').clearPluginCeiling(slug);
-    } catch (e: any) { log.error('[plugin %s] delete: could not stop it on the other sites: %s', logSafe(slug), logSafe(e && e.message)); }
+    } catch (e: any) { log.error({ slug: logSafe(slug), err: e }, `[plugin ${logSafe(slug)}] delete: could not stop it on the other sites: ${logSafe(e && e.message)}`); }
     if (!(await isolate.awaitOtherSitesStopped(slug, DELETE_STOP_TIMEOUT_MS))) {
         return res.status(409).json({ message: `Plugin '${slug}' still runs on another site of the network; nothing was deleted. Try again in a moment.` });
     }
