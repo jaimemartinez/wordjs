@@ -14,6 +14,20 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   `download`. The route now uses `download` too; `media=skip` and `importAttachments=0` still opt out, and
   `importAttachments=1` still means `download`. The OpenAPI description documents the default.
 
+## [Unreleased]
+
+### Added
+
+- **Strict database driver mode.** `"dbStrictDriver": true` in `backend/wordjs-config.json`, or
+  `WORDJS_DB_STRICT=1` in the backend's environment (the variable wins, in both directions), turns the
+  fallback to the pure-JS `sqlite-legacy` driver into a boot error. The error names the driver that failed,
+  its load error, what the fallback would have cost (no FTS5, so site search on `LIKE` instead of ranked
+  results) and the fix (`npm rebuild better-sqlite3` in `backend/` for the native driver). In strict mode
+  migration `0008_posts_fts5` also fails, rather than skipping, on a SQLite build without FTS5; an
+  explicitly configured `sqlite-legacy` still boots. Off by default, so nothing changes for existing
+  installs: the fallback, its admin notice and `/health/details` report work as before. See
+  `documentation/database.md`.
+
 ## [2.5.0] - 2026-10-15
 
 ### Added

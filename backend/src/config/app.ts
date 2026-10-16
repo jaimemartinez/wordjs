@@ -25,6 +25,10 @@ export interface AppConfig {
     // Database (flat defaults + driver selection)
     dbDriver: string;
     dbPath: string;
+    // Strict driver mode: a SQLite driver that fails to load (or a SQLite build without FTS5) is a boot
+    // error instead of a downgrade to the pure-JS 'sqlite-legacy' driver. Off by default; see
+    // resolveDbStrictDriver below and config/database.ts.
+    dbStrictDriver: boolean;
 
     // Secrets
     jwtSecret: string;
@@ -302,6 +306,26 @@ function envInt(name: string, fallback: number, min: number, max: number): numbe
     return value;
 }
 
+/**
+ * Whether the database manager may downgrade to 'sqlite-legacy' (false, the default) or must refuse to
+ * boot instead (true).
+ *
+ * WORDJS_DB_STRICT wins over "dbStrictDriver" in wordjs-config.json, the way NODE_ENV wins over the
+ * file's nodeEnv: a container image can turn strictness on (or off for one emergency boot) without
+ * editing a config file that lives on a volume. An unrecognised value is a mistake, so it is reported
+ * and ignored rather than guessed at.
+ */
+function resolveDbStrictDriver(fileValue: unknown): boolean {
+    const raw = process.env.WORDJS_DB_STRICT;
+    if (raw !== undefined && raw.trim() !== '') {
+        const v = raw.trim().toLowerCase();
+        if (['1', 'true', 'yes', 'on'].includes(v)) return true;
+        if (['0', 'false', 'no', 'off'].includes(v)) return false;
+        console.warn(`⚠️  WORDJS_DB_STRICT="${raw}" is not one of 1/0/true/false/yes/no/on/off — ignoring it.`);
+    }
+    return fileValue === true;
+}
+
 // SECURITY: ephemeral fallback secret for when none is configured (see jwt.secret below). It is also
 // the value POST /setup/install persists — the installer adopts the secret this process already signs
 // with instead of minting another — so it carries the 64 bytes the installer used to generate, as does
@@ -326,6 +350,8 @@ const config: AppConfig = {
         ((fileConfig.dbDriver || defaultConfig.dbDriver) === 'sqlite-legacy'
             ? './data/wordjs.db'
             : './data/wordjs-native.db'),
+
+    dbStrictDriver: resolveDbStrictDriver(fileConfig.dbStrictDriver),
 
     // Routable address the gateway uses to reach this backend node (multi-node). Single-host default.
     advertiseHost: fileConfig.advertiseHost || '127.0.0.1',
@@ -620,3 +646,4 @@ function reloadFromFile(fresh?: any) {
 module.exports = config;
 // Not part of the config object: the boot-time secret gate, exported for its regression test.
 Object.defineProperty(module.exports, 'assertInstalledJwtSecretIsNotPublished', { value: assertInstalledJwtSecretIsNotPublished, enumerable: false });
+Object.defineProperty(module.exports, 'resolveDbStrictDriver', { value: resolveDbStrictDriver, enumerable: false });

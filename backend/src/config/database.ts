@@ -44,6 +44,41 @@ function getDriverDegradation(): DriverDegradation | null {
 // one row on /admin/notices, and the first boot that loads the native driver retires it.
 const DEGRADED_DRIVER_NOTICE_ID = 'db.sqlite-legacy-fallback';
 
+// STRICT DRIVER MODE (config "dbStrictDriver" / env WORDJS_DB_STRICT, resolved in config/app.ts).
+//
+// The downgrade above keeps a site up, which is the right default for a self-hosted CMS whose usual
+// way of losing better-sqlite3 is a Node.js upgrade. It is the wrong one for an operator who would
+// rather not serve at all than serve with ranked search quietly gone — a fleet behind a health check, a
+// CI image, a host provisioned by automation that nobody watches the admin panel of. Strict mode turns
+// every fallback into a boot error that says what failed, what the fallback would have cost, and how to
+// fix it. Read at call time (not captured at module load) so a test can flip it on the config object.
+function isStrictDriverMode(): boolean {
+  return config.dbStrictDriver === true;
+}
+
+/** The boot error strict mode raises where the manager would otherwise fall back to 'sqlite-legacy'. */
+function strictDriverError(requested: string, cause: any): Error {
+  const fix = requested === 'sqlite-native'
+    ? 'restore the native driver: run `npm rebuild better-sqlite3` in backend/ (it is needed after a Node.js ' +
+      'upgrade or an install made with --ignore-scripts), then restart'
+    : `make the '${requested}' driver loadable (run \`npm ci\` in backend/ to restore its dependencies), then restart`;
+  const err: any = new Error(
+    `Strict database driver mode is on (WORDJS_DB_STRICT / "dbStrictDriver"), and the '${requested}' driver ` +
+    `failed to load: ${(cause && cause.message) || cause}. Without strict mode WordJS would fall back to the ` +
+    `pure-JS 'sqlite-legacy' driver, which has no FTS5: ranked full-text search would be disabled and site ` +
+    `search would fall back to LIKE matching. To fix it, ${fix}. To accept the fallback instead, unset ` +
+    `WORDJS_DB_STRICT and remove "dbStrictDriver" from backend/wordjs-config.json.`
+  );
+  err.code = 'WORDJS_DB_STRICT_DRIVER';
+  err.cause = cause;
+  return err;
+}
+
+// The failure of the most recent loadDriver(), kept because the boot-time load runs at module scope
+// where nobody can await it: init() rethrows it, so a strict-mode refusal (or any other driver that
+// cannot load) stops the boot at the point that opens the database, with the message above.
+let driverLoadError: Error | null = null;
+
 type TransactionQuery = {
   get: (...args: any[]) => Promise<any>;
   all: (...args: any[]) => Promise<any>;
@@ -163,6 +198,7 @@ async function loadDriver(overrideName: string | null = null) {
   // (tests, migrations, or simply the next boot after `npm rebuild better-sqlite3`) clears the state
   // instead of inheriting a stale downgrade from the previous attempt.
   driverDegradation = null;
+  driverLoadError = null;
 
   try {
     console.log(`🔌 DB Manager: Loading driver '${name}'...`);
@@ -211,7 +247,17 @@ async function loadDriver(overrideName: string | null = null) {
     // be missing, while 'sqlite-legacy' (sql.js / pure-JS WASM) reads the SAME file format. Fall back
     // to it whenever ANY sqlite driver fails (even an explicit one) or on the default path. A failed
     // NON-sqlite override (e.g. an explicit 'postgres') is NOT silently downgraded to SQLite.
+    //
+    // Strict mode (dbStrictDriver / WORDJS_DB_STRICT) refuses every such fallback with an explanatory
+    // error instead — the operator opted out of running degraded.
     const recoverable = (!overrideName || /^sqlite/.test(name)) && name !== 'sqlite-legacy';
+    if (recoverable && isStrictDriverMode()) {
+      driver = null;
+      driverAsync = null;
+      driverLoadError = strictDriverError(name, e);
+      console.error(`❌ DB Manager: ${driverLoadError.message}`);
+      throw driverLoadError;
+    }
     if (recoverable) {
       console.warn(`⚠️  DB Manager: '${name}' unavailable — falling back to pure-JS 'sqlite-legacy'.`);
       console.warn(`⚠️  DB Manager: 'sqlite-legacy' has no FTS5 — ranked full-text search is DISABLED and site search falls back to LIKE matching.`);
@@ -227,6 +273,7 @@ async function loadDriver(overrideName: string | null = null) {
         at: new Date().toISOString(),
       };
     } else {
+      driverLoadError = e;
       throw e;
     }
   }
@@ -234,7 +281,8 @@ async function loadDriver(overrideName: string | null = null) {
 
 // Initial Load (Default). loadDriver is async to close any prior async driver before
 // swapping; the very first load has none, so this resolves synchronously in practice.
-loadDriver();
+// A failure is recorded in driverLoadError and raised by init(), not left as an unhandled rejection.
+loadDriver().catch(() => { /* surfaced by init() */ });
 
 // 2. Abstraction Proxies
 const init = async (options: any = {}) => {
@@ -242,6 +290,7 @@ const init = async (options: any = {}) => {
   if (options.driver) {
     await loadDriver(options.driver);
   }
+  if (driverLoadError) throw driverLoadError;
 
   // The 'postgres' driver connects to an EXTERNAL Postgres via the pg client (host/port/user/password
   // from wordjs-config.json). WordJS does NOT bundle or spawn a database server.
@@ -918,6 +967,8 @@ module.exports = {
   // reads the getter so /health/details reports the ACTIVE driver, not the configured one.
   getDriverDegradation,
   reportDriverDegradation,
+  isStrictDriverMode,
+  strictDriverError,
   nativeSqliteLoadError,
   hasActiveTransaction,
   afterCommit,
