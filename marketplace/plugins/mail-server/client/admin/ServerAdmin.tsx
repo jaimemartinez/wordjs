@@ -1,6 +1,7 @@
 // @ts-nocheck — backend plugin client source; bundled by the plugin loader, not type-checked by the frontend tsc.
 "use client";
 
+import { errorText } from "./i18n";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../../../../../frontend/src/lib/api";
 import {
@@ -207,7 +208,7 @@ function Mailboxes({ t, locale, toast }: any) {
     const load = async (query = q) => {
         setLoading(true);
         try { setData(await api(`/plugin/mail-server/admin/mailboxes${query ? `?q=${encodeURIComponent(query)}` : ''}`)); }
-        catch (e: any) { toast('error', e?.message || t('common.error')); }
+        catch (e: any) { toast('error', errorText(e, t)); }
         finally { setLoading(false); }
     };
     useEffect(() => { load(''); }, []);
@@ -218,7 +219,7 @@ function Mailboxes({ t, locale, toast }: any) {
             await api(`/plugin/mail-server/admin/mailboxes/${m.id}`, { method: 'PUT', body: { quotaMb } });
             toast('success', t('srv.mbx.quotaSaved'));
             load();
-        } catch (e: any) { toast('error', e?.message || t('common.error')); }
+        } catch (e: any) { toast('error', errorText(e, t)); }
     };
 
     const list = data?.mailboxes || [];
@@ -309,7 +310,7 @@ function Aliases({ t, toast, confirm }: any) {
     const [saving, setSaving] = useState(false);
     const load = async () => {
         try { setData(await api('/plugin/mail-server/admin/aliases')); }
-        catch (e: any) { toast('error', e?.message || t('common.error')); }
+        catch (e: any) { toast('error', errorText(e, t)); }
     };
     useEffect(() => { load(); }, []);
     const domain = data?.mailDomain || '';
@@ -323,19 +324,19 @@ function Aliases({ t, toast, confirm }: any) {
             toast('success', t('srv.alias.saved'));
             setEditing(null);
             load();
-        } catch (e: any) { toast('error', e?.message || t('common.error')); }
+        } catch (e: any) { toast('error', errorText(e, t)); }
         finally { setSaving(false); }
     };
     const remove = async (a: any) => {
         if (!(await confirm(t('srv.alias.deleteConfirm', { addr: `${a.local_part}@${domain}` }), t('common.delete'), true))) return;
         try { await api(`/plugin/mail-server/admin/aliases/${a.id}`, { method: 'DELETE' }); toast('success', t('srv.alias.deleted')); load(); }
-        catch (e: any) { toast('error', e?.message || t('common.error')); }
+        catch (e: any) { toast('error', errorText(e, t)); }
     };
     const toggle = async (a: any) => {
         try {
             await api(`/plugin/mail-server/admin/aliases/${a.id}`, { method: 'PUT', body: { localPart: a.local_part, destinations: a.destinations, description: a.description, enabled: !a.enabled } });
             load();
-        } catch (e: any) { toast('error', e?.message || t('common.error')); }
+        } catch (e: any) { toast('error', errorText(e, t)); }
     };
 
     return (
@@ -411,7 +412,7 @@ function Queue({ t, locale, toast, confirm }: any) {
     const [busy, setBusy] = useState<number | null>(null);
     const load = async () => {
         try { const d = await api('/plugin/mail-server/admin/queue') as any; setItems(d.items || []); }
-        catch (e: any) { toast('error', e?.message || t('common.error')); }
+        catch (e: any) { toast('error', errorText(e, t)); }
     };
     useEffect(() => { load(); const id = setInterval(load, 20000); return () => clearInterval(id); }, []);
 
@@ -421,14 +422,14 @@ function Queue({ t, locale, toast, confirm }: any) {
             const r = await api(`/plugin/mail-server/admin/queue/${it.id}/retry`, { method: 'POST' }) as any;
             if (r && r.success) toast('success', t('read.delivered')); else toast('error', r?.message || t('read.stillFailing'));
             load();
-        } catch (e: any) { toast('error', e?.message || t('common.error')); }
+        } catch (e: any) { toast('error', errorText(e, t)); }
         finally { setBusy(null); }
     };
     const cancel = async (it: any) => {
         if (!(await confirm(t('srv.queue.cancelConfirm'), t('srv.queue.cancel'), true))) return;
         setBusy(it.id);
         try { await api(`/plugin/mail-server/admin/queue/${it.id}`, { method: 'DELETE' }); toast('success', t('srv.queue.cancelled')); load(); }
-        catch (e: any) { toast('error', e?.message || t('common.error')); }
+        catch (e: any) { toast('error', errorText(e, t)); }
         finally { setBusy(null); }
     };
 
@@ -545,11 +546,11 @@ function InboundStatus({ settings, setSettings, t, confirm }: any) {
     const [freeing, setFreeing] = useState(false);
     const [msg, setMsg] = useState<string | null>(null);
     const consent = (c: any) => {
-        const label = c?.occupant?.label || 'The conflicting service';
+        const label = c?.occupant?.label || t('srv.cfg.conflictingService');
         const scope = c?.occupant?.loopbackOnly
-            ? `${label} only listens on localhost, so it is NOT receiving internet mail — disabling it is safe.`
-            : `CAREFUL: ${label} is listening on public interfaces and may be receiving real mail for this server.`;
-        return confirm(`${label} is holding port 25, which WordJS needs to receive internet mail.\n\n${scope}\n\nWordJS will PERMANENTLY disable ${label} (systemctl disable --now) and restart the mail listener. Continue?`, 'Free port 25', true);
+            ? t('srv.cfg.freeLoopback', { label })
+            : t('srv.cfg.freePublic', { label });
+        return confirm(t('srv.cfg.freeConfirm', { label, scope }), t('srv.cfg.freePort'), true);
     };
     const free = async () => {
         setMsg(null); setFreeing(true);
@@ -568,7 +569,7 @@ function InboundStatus({ settings, setSettings, t, confirm }: any) {
             }
             const fresh = await api('/plugin/mail-server/settings') as any;
             setSettings((p: any) => ({ ...p, inbound_bound_port: fresh.inbound_bound_port, inbound_ok: fresh.inbound_ok, inbound_degraded: fresh.inbound_degraded, inbound_reason: fresh.inbound_reason }));
-        } catch (e: any) { setMsg(e?.message || 'Failed to free port 25.'); }
+        } catch (e: any) { setMsg(e?.message || t('srv.cfg.freeFailed')); }
         finally { setFreeing(false); }
     };
     if (settings.inbound_bound_port === null || settings.inbound_bound_port === undefined) {
@@ -605,7 +606,7 @@ function InboundStatus({ settings, setSettings, t, confirm }: any) {
                     <span className="text-sm font-semibold">{t('srv.inboundDegraded', { port: settings.inbound_bound_port })}</span>
                     {settings.inbound_reason && <code className="block whitespace-pre-wrap break-words rounded-lg bg-amber-100/70 px-3 py-2 font-mono text-xs leading-relaxed">{settings.inbound_reason}</code>}
                     {grantHint}
-                    <div><Button size="sm" variant="secondary" icon="fa-solid fa-unlock" loading={freeing} onClick={free}>Free port 25</Button></div>
+                    <div><Button size="sm" variant="secondary" icon="fa-solid fa-unlock" loading={freeing} onClick={free}>{t('srv.cfg.freePort')}</Button></div>
                     {msg && <div className="whitespace-pre-wrap text-xs">{msg}</div>}
                 </div>
             </div>
@@ -620,53 +621,53 @@ function Config({ t, settings, set, setSettings, dnsInfo, onGenerateDkim, genera
                 <div className="grid gap-5">
                     <InboundStatus settings={settings} setSettings={setSettings} t={t} confirm={confirm} />
                     <div className="grid gap-4 md:grid-cols-2">
-                        <Field label="From email (default)"><input type="email" className={inputCls} value={settings.mail_from_email || ''} onChange={(e) => set({ mail_from_email: e.target.value })} placeholder="noreply@example.com" /></Field>
-                        <Field label="From name (default)"><input className={inputCls} value={settings.mail_from_name || ''} onChange={(e) => set({ mail_from_name: e.target.value })} placeholder="My Site" /></Field>
+                        <Field label={t('srv.cfg.fromEmail')}><input type="email" className={inputCls} value={settings.mail_from_email || ''} onChange={(e) => set({ mail_from_email: e.target.value })} placeholder="noreply@example.com" /></Field>
+                        <Field label={t('srv.cfg.fromName')}><input className={inputCls} value={settings.mail_from_name || ''} onChange={(e) => set({ mail_from_name: e.target.value })} placeholder="My Site" /></Field>
                     </div>
-                    <Field label="HELO / EHLO host" hint="Must match the reverse DNS (PTR) of your sending IP."><input className={inputCls} value={settings.mail_helo_host || ''} onChange={(e) => set({ mail_helo_host: e.target.value })} placeholder="mail.example.com" /></Field>
+                    <Field label={t('srv.cfg.helo')} hint={t('srv.cfg.heloHint')}><input className={inputCls} value={settings.mail_helo_host || ''} onChange={(e) => set({ mail_helo_host: e.target.value })} placeholder="mail.example.com" /></Field>
                     <details className="rounded-xl border border-slate-200 p-4">
-                        <summary className="cursor-pointer text-sm font-semibold text-slate-700">Advanced</summary>
+                        <summary className="cursor-pointer text-sm font-semibold text-slate-700">{t('srv.cfg.advanced')}</summary>
                         <div className="mt-4 grid gap-4 md:grid-cols-2">
-                            <Field label="Inbound listen port" hint="Defaults to 25 — the port the internet delivers mail to. Change it only if you map ports yourself (e.g. 25 → 2525).">
+                            <Field label={t('srv.cfg.listenPort')} hint={t('srv.cfg.listenPortHint')}>
                                 <input className={inputCls} value={settings.smtp_listen_port || ''} onChange={(e) => set({ smtp_listen_port: e.target.value })} placeholder="25" />
                             </Field>
-                            <Field label="Trusted proxy IPs (PROXY protocol)" hint="Only when inbound mail reaches WordJS through a TCP proxy (nginx stream proxy_protocol / HAProxy send-proxy). Comma-separated IPs.">
+                            <Field label={t('srv.cfg.proxyIps')} hint={t('srv.cfg.proxyIpsHint')}>
                                 <input className={cx(inputCls, 'font-mono')} value={settings.smtp_proxy_ips || ''} onChange={(e) => set({ smtp_proxy_ips: e.target.value })} placeholder="10.8.0.1, 2001:db8::1" />
                             </Field>
                         </div>
-                        {settings.smtp_proxy_active && <p className="mt-3 text-xs font-medium text-emerald-700"><i className="fa-solid fa-shield-halved mr-1"></i>PROXY protocol active.</p>}
+                        {settings.smtp_proxy_active && <p className="mt-3 text-xs font-medium text-emerald-700"><i className="fa-solid fa-shield-halved mr-1"></i>{t('srv.cfg.proxyActive')}</p>}
                     </details>
                 </div>
             </Card>
-            <Card title={<>Relay / smarthost <span className="ml-1 text-xs font-normal text-slate-400">({t('common.optional')})</span></>} icon="fa-solid fa-tower-broadcast">
-                <p className="mb-5 text-xs leading-relaxed text-slate-500">Leave the host blank to deliver <strong>direct-to-MX on port 25</strong>. Most cloud and residential providers block outbound port 25 — use a relay (SendGrid, Mailgun, Amazon SES, your ISP). The password is stored <strong>encrypted</strong>.</p>
+            <Card title={<>{t('srv.cfg.relay')} <span className="ml-1 text-xs font-normal text-slate-400">({t('common.optional')})</span></>} icon="fa-solid fa-tower-broadcast">
+                <p className="mb-5 text-xs leading-relaxed text-slate-500">{t('srv.cfg.relayHint')}</p>
                 <div className="grid gap-4 md:grid-cols-2">
-                    <Field label="Relay host"><input className={inputCls} value={settings.mail_server || ''} onChange={(e) => set({ mail_server: e.target.value })} placeholder="smtp.sendgrid.net" /></Field>
-                    <Field label="Port"><input className={inputCls} value={settings.mail_port || ''} onChange={(e) => set({ mail_port: e.target.value })} placeholder="587" /></Field>
-                    <Field label="Username"><input className={inputCls} value={settings.mail_user || ''} onChange={(e) => set({ mail_user: e.target.value })} placeholder="apikey" autoComplete="off" /></Field>
-                    <Field label={settings.mail_pass_set ? 'Password (stored — leave blank to keep)' : 'Password'}>
+                    <Field label={t('srv.cfg.relayHost')}><input className={inputCls} value={settings.mail_server || ''} onChange={(e) => set({ mail_server: e.target.value })} placeholder="smtp.sendgrid.net" /></Field>
+                    <Field label={t('srv.cfg.port')}><input className={inputCls} value={settings.mail_port || ''} onChange={(e) => set({ mail_port: e.target.value })} placeholder="587" /></Field>
+                    <Field label={t('srv.cfg.username')}><input className={inputCls} value={settings.mail_user || ''} onChange={(e) => set({ mail_user: e.target.value })} placeholder="apikey" autoComplete="off" /></Field>
+                    <Field label={settings.mail_pass_set ? t('srv.cfg.passwordStored') : t('srv.cfg.password')}>
                         <input type="password" className={inputCls} value={settings.mail_pass || ''} onChange={(e) => set({ mail_pass: e.target.value })} placeholder={settings.mail_pass_set ? '••••••••' : ''} autoComplete="new-password" />
                     </Field>
-                    <Field label="Encryption">
+                    <Field label={t('srv.cfg.encryption')}>
                         <select className={inputCls} value={settings.mail_secure || '0'} onChange={(e) => set({ mail_secure: e.target.value })}>
-                            <option value="0">STARTTLS (587 / 25)</option><option value="1">Implicit TLS (465)</option>
+                            <option value="0">STARTTLS (587 / 25)</option><option value="1">{t('srv.cfg.implicitTls')}</option>
                         </select>
                     </Field>
-                    <Field label="Require STARTTLS">
+                    <Field label={t('srv.cfg.requireTls')}>
                         <select className={inputCls} value={settings.mail_relay_require_tls || '1'} onChange={(e) => set({ mail_relay_require_tls: e.target.value })}>
-                            <option value="1">{t('common.yes')}</option><option value="0">{t('common.no')} — internal TLS-less relay only</option>
+                            <option value="1">{t('common.yes')}</option><option value="0">{t('common.no')} — {t('srv.cfg.noTlsRelay')}</option>
                         </select>
                     </Field>
                 </div>
             </Card>
             <Card title="DKIM" icon="fa-solid fa-key" action={<Pill tone={dnsInfo?.dkimConfigured ? 'green' : 'amber'}>{dnsInfo?.dkimConfigured ? '✓' : '—'}</Pill>}>
                 <div className="grid gap-4 md:grid-cols-2">
-                    <Field label="Domain"><input className={inputCls} value={settings.mail_security_dkim_domain || ''} onChange={(e) => set({ mail_security_dkim_domain: e.target.value })} placeholder="example.com" /></Field>
-                    <Field label="Selector"><input className={inputCls} value={settings.mail_security_dkim_selector || ''} onChange={(e) => set({ mail_security_dkim_selector: e.target.value })} placeholder="default" /></Field>
+                    <Field label={t('srv.cfg.domain')}><input className={inputCls} value={settings.mail_security_dkim_domain || ''} onChange={(e) => set({ mail_security_dkim_domain: e.target.value })} placeholder="example.com" /></Field>
+                    <Field label={t('srv.cfg.selector')}><input className={inputCls} value={settings.mail_security_dkim_selector || ''} onChange={(e) => set({ mail_security_dkim_selector: e.target.value })} placeholder="default" /></Field>
                 </div>
                 <div className="mt-4 flex flex-wrap items-center gap-3">
-                    <Button variant="dark" icon="fa-solid fa-key" loading={generatingDkim} onClick={onGenerateDkim}>{dnsInfo?.dkimConfigured ? 'Regenerate DKIM key' : 'Generate DKIM key'}</Button>
-                    <span className="text-xs text-amber-700"><i className="fa-solid fa-triangle-exclamation mr-1"></i>Regenerating invalidates the old key until you publish the new DNS record.</span>
+                    <Button variant="dark" icon="fa-solid fa-key" loading={generatingDkim} onClick={onGenerateDkim}>{dnsInfo?.dkimConfigured ? t('srv.cfg.dkimRegenerate') : t('srv.cfg.dkimGenerate')}</Button>
+                    <span className="text-xs text-amber-700"><i className="fa-solid fa-triangle-exclamation mr-1"></i>{t('srv.cfg.dkimWarning')}</span>
                 </div>
             </Card>
         </div>
@@ -677,13 +678,7 @@ function Config({ t, settings, set, setSettings, dnsInfo, onGenerateDkim, genera
 // DNS
 // =================================================================================================
 
-const DNS_PROVIDER_GUIDE = {
-    cloudflare: { label: 'Cloudflare', where: 'dash.cloudflare.com → your domain → DNS → Records → “Add record”.', fields: 'Type · Name · Content (or “Mail server” for MX) · Priority (MX) · TTL Auto.', tips: ['Name is the sub-part only — Cloudflare appends your domain. Use @ for the root.', 'For MX and TXT records keep Proxy status “DNS only” (grey cloud).', 'Paste long DKIM values as one string — Cloudflare splits them.'] },
-    hostinger: { label: 'Hostinger', where: 'hPanel → Domains → your domain → DNS / Nameservers → “Manage DNS records”.', fields: 'Type · Name · Points to / Value · Priority (MX) · TTL.', tips: ['Use @ in Name for the root domain.', 'Paste values exactly as shown, without quotes.'] },
-    godaddy: { label: 'GoDaddy', where: 'Domain Portfolio → your domain → DNS → “Add New Record”.', fields: 'Type · Name (Host) · Value · Priority (MX) · TTL.', tips: ['Use @ for the root domain.', 'The default TTL (1 hour) is fine.'] },
-    namecheap: { label: 'Namecheap', where: 'Domain List → “Manage” → Advanced DNS → “Add New Record”.', fields: 'Type (“MX Record” for MX) · Host · Value · Priority · TTL.', tips: ['Use @ in Host for the root domain.'] },
-    generic: { label: 'Other', where: 'Your registrar or DNS host’s “DNS zone editor” / “Manage DNS”.', fields: 'Type · Host/Name · Value/Content · Priority (MX) · TTL.', tips: ['Host = the record’s host with your domain removed (@ for the root).', 'e.g. _dmarc.example.com → “_dmarc”; default._domainkey.example.com → “default._domainkey”.'] },
-};
+const DNS_PROVIDER_GUIDE = { cloudflare: 'Cloudflare', hostinger: 'Hostinger', godaddy: 'GoDaddy', namecheap: 'Namecheap', generic: '' };
 
 function CopyBtn({ value, t }: any) {
     const [ok, setOk] = useState(false);
@@ -702,40 +697,40 @@ function CopyBtn({ value, t }: any) {
     );
 }
 
-function DnsRow({ step, title, record, check, t }: any) {
+function DnsRow({ step, title, record, check, note, t }: any) {
     if (!record) return null;
     const st = check ? {
-        ok: ['green', 'fa-circle-check', 'Verified'], missing: ['amber', 'fa-clock', 'Not found yet'],
-        mismatch: ['red', 'fa-triangle-exclamation', "Doesn't match"], nokey: ['slate', 'fa-key', 'No DKIM key yet'],
+        ok: ['green', 'fa-circle-check', t('srv.dnsx.ok')], missing: ['amber', 'fa-clock', t('srv.dnsx.missing')],
+        mismatch: ['red', 'fa-triangle-exclamation', t('srv.dnsx.mismatch')], nokey: ['slate', 'fa-key', t('srv.dnsx.nokey')],
     }[check.status] : null;
     return (
         <div className="rounded-xl border border-slate-200 bg-white p-4">
             <div className="mb-2 flex flex-wrap items-center gap-2">
                 {step && <span className="flex h-6 w-6 items-center justify-center rounded-full bg-violet-600 text-[11px] font-bold text-white">{step}</span>}
                 <span className="text-sm font-bold text-slate-800">{title}</span>
-                <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-bold text-slate-600">{record.type}</span>
+                <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-bold text-slate-600">{/^PTR/.test(record.type) ? t('srv.dnsx.ptrType') : record.type}</span>
                 {st && <Pill tone={st[0]}><i className={cx('fa-solid', st[1])}></i>{st[2]}</Pill>}
             </div>
             <dl className="grid gap-2 text-xs">
                 {record.host && (
                     <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
-                        <dt className="w-16 shrink-0 font-semibold uppercase text-slate-400">Host</dt>
+                        <dt className="w-16 shrink-0 font-semibold uppercase text-slate-400">{t('srv.dnsx.host')}</dt>
                         <dd className="min-w-0 flex-1 break-all font-mono text-slate-700">{record.host}</dd>
                         <CopyBtn value={record.host} t={t} />
                     </div>
                 )}
                 {record.priority !== undefined && record.priority !== null && (
-                    <div className="flex items-center gap-2"><dt className="w-16 shrink-0 font-semibold uppercase text-slate-400">Priority</dt><dd className="font-mono text-slate-700">{record.priority}</dd></div>
+                    <div className="flex items-center gap-2"><dt className="w-16 shrink-0 font-semibold uppercase text-slate-400">{t('srv.dnsx.priority')}</dt><dd className="font-mono text-slate-700">{record.priority}</dd></div>
                 )}
                 {record.value && (
                     <div className="flex flex-wrap items-start gap-2 sm:flex-nowrap">
-                        <dt className="w-16 shrink-0 pt-0.5 font-semibold uppercase text-slate-400">Value</dt>
+                        <dt className="w-16 shrink-0 pt-0.5 font-semibold uppercase text-slate-400">{t('srv.dnsx.value')}</dt>
                         <dd className="min-w-0 flex-1 whitespace-pre-wrap break-all font-mono text-slate-700">{record.value}</dd>
                         <CopyBtn value={record.value} t={t} />
                     </div>
                 )}
             </dl>
-            {record.note && <p className="mt-2 text-[11px] leading-relaxed text-slate-500">{record.note}</p>}
+            {record.note && <p className="mt-2 text-[11px] leading-relaxed text-slate-500">{note || record.note}</p>}
             {check?.status === 'mismatch' && check.detail && <p className="mt-2 text-[11px] text-red-600"><i className="fa-solid fa-triangle-exclamation mr-1"></i>{check.detail}</p>}
         </div>
     );
@@ -751,41 +746,42 @@ function Dns({ t, locale, dnsInfo, loading, reload }: any) {
         catch { setCheck({ error: true }); }
         finally { setChecking(false); }
     };
+    // The server's notes are English; show the interface-language version with the same facts.
+    const note = (k: string) => t(`srv.dnsx.note.${k}`, { domain: dnsInfo?.domain || '', mailHost: dnsInfo?.records?.mx?.value || '' });
     const verified = check && !check.error ? ['mx', 'a', 'spf', 'dkim', 'dmarc'].filter(k => check.results?.[k]?.status === 'ok').length : null;
-    const guide = DNS_PROVIDER_GUIDE[provider];
     return (
         <div className="grid gap-4 sm:gap-6 xl:grid-cols-[1fr_340px]">
             <div className="grid content-start gap-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                    <p className="text-sm text-slate-600">Publish these for <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-slate-800">{dnsInfo?.domain || '—'}</code>{dnsInfo?.heloHost && <> · HELO <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-slate-800">{dnsInfo.heloHost}</code></>}</p>
+                    <p className="text-sm text-slate-600">{t('srv.dnsx.publishFor')} <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-slate-800">{dnsInfo?.domain || '—'}</code>{dnsInfo?.heloHost && <> · HELO <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-slate-800">{dnsInfo.heloHost}</code></>}</p>
                     <div className="flex items-center gap-2">
                         {verified !== null && <Pill tone={verified === 5 ? 'green' : 'amber'}>{verified} / 5</Pill>}
-                        <Button size="sm" variant="primary" icon="fa-solid fa-shield-halved" loading={checking} onClick={run}>{check && !check.error ? 'Re-check' : 'Verify DNS'}</Button>
+                        <Button size="sm" variant="primary" icon="fa-solid fa-shield-halved" loading={checking} onClick={run}>{check && !check.error ? t('srv.dnsx.recheck') : t('srv.dnsx.verify')}</Button>
                         <IconBtn size="sm" icon={cx('fa-solid fa-rotate-right', loading && 'fa-spin')} label={t('common.refresh')} onClick={reload} />
                     </div>
                 </div>
                 {check?.checkedAt && <p className="text-xs text-slate-500">{fullDate(check.checkedAt, locale)}</p>}
                 {!dnsInfo ? <div className="py-16 text-center"><Spinner className="text-2xl" /></div> : (
                     <>
-                        <DnsRow step={1} title="MX" record={dnsInfo.records?.mx} check={check?.results?.mx} t={t} />
-                        <DnsRow step={2} title="A" record={dnsInfo.records?.a} check={check?.results?.a} t={t} />
-                        <DnsRow step={3} title="SPF" record={dnsInfo.records?.spf} check={check?.results?.spf} t={t} />
-                        <DnsRow step={4} title="DKIM" record={dnsInfo.records?.dkim} check={check?.results?.dkim} t={t} />
+                        <DnsRow step={1} title="MX" record={dnsInfo.records?.mx} note={note('mx')} check={check?.results?.mx} t={t} />
+                        <DnsRow step={2} title="A" record={dnsInfo.records?.a} note={note('a')} check={check?.results?.a} t={t} />
+                        <DnsRow step={3} title="SPF" record={dnsInfo.records?.spf} note={note('spf')} check={check?.results?.spf} t={t} />
+                        <DnsRow step={4} title="DKIM" record={dnsInfo.records?.dkim} note={note('dkim')} check={check?.results?.dkim} t={t} />
                         <DnsRow step={5} title="DMARC" record={dnsInfo.records?.dmarc} check={check?.results?.dmarc} t={t} />
-                        <DnsRow step={6} title="PTR" record={dnsInfo.records?.ptr} t={t} />
+                        <DnsRow step={6} title="PTR" record={dnsInfo.records?.ptr} note={note('ptr')} t={t} />
                     </>
                 )}
             </div>
-            <Card title="How to add them" icon="fa-solid fa-book" className="self-start xl:sticky xl:top-4">
+            <Card title={t('srv.dnsx.howTo')} icon="fa-solid fa-book" className="self-start xl:sticky xl:top-4">
                 <div className="mb-4 flex flex-wrap gap-1.5">
                     {Object.keys(DNS_PROVIDER_GUIDE).map(k => (
-                        <button key={k} type="button" onClick={() => setProvider(k)} className={cx('rounded-full border px-3 py-1 text-xs font-semibold', provider === k ? 'border-violet-600 bg-violet-600 text-white' : 'border-slate-200 text-slate-600 hover:border-violet-300')}>{DNS_PROVIDER_GUIDE[k].label}</button>
+                        <button key={k} type="button" onClick={() => setProvider(k)} className={cx('rounded-full border px-3 py-1 text-xs font-semibold', provider === k ? 'border-violet-600 bg-violet-600 text-white' : 'border-slate-200 text-slate-600 hover:border-violet-300')}>{k === 'generic' ? t('srv.guide.other') : DNS_PROVIDER_GUIDE[k]}</button>
                     ))}
                 </div>
-                <p className="mb-2 text-xs leading-relaxed text-slate-600"><b className="text-slate-500">Where:</b> {guide.where}</p>
-                <p className="mb-3 text-xs leading-relaxed text-slate-600"><b className="text-slate-500">Fields:</b> {guide.fields}</p>
+                <p className="mb-2 text-xs leading-relaxed text-slate-600"><b className="text-slate-500">{t('srv.dnsx.where')}</b> {t(`srv.guide.${provider}.where`)}</p>
+                <p className="mb-3 text-xs leading-relaxed text-slate-600"><b className="text-slate-500">{t('srv.dnsx.fields')}</b> {t(`srv.guide.${provider}.fields`)}</p>
                 <ul className="grid gap-1.5">
-                    {guide.tips.map((tip: string, i: number) => <li key={i} className="flex gap-2 text-[11px] leading-relaxed text-slate-500"><i className="fa-solid fa-circle-check mt-0.5 text-violet-400"></i>{tip}</li>)}
+                    {t(`srv.guide.${provider}.tips`).split('\n').map((tip: string, i: number) => <li key={i} className="flex gap-2 text-[11px] leading-relaxed text-slate-500"><i className="fa-solid fa-circle-check mt-0.5 text-violet-400"></i>{tip}</li>)}
                 </ul>
             </Card>
         </div>
@@ -803,23 +799,23 @@ function TestDelivery({ t }: any) {
     const run = async () => {
         setBusy(true); setRes(null);
         try { setRes(await api('/plugin/mail-server/test', { method: 'POST', body: { to: to || undefined } })); }
-        catch (e: any) { setRes({ success: false, message: e?.message || 'Test request failed', delivered: [], failed: [] }); }
+        catch (e: any) { setRes({ success: false, message: e?.message || t('srv.testx.failed'), delivered: [], failed: [] }); }
         finally { setBusy(false); }
     };
     return (
-        <Card title="Test deliverability" icon="fa-solid fa-vial" className="max-w-3xl">
+        <Card title={t('srv.testx.title')} icon="fa-solid fa-vial" className="max-w-3xl">
             <form className="flex flex-col gap-3 sm:flex-row" onSubmit={(e) => { e.preventDefault(); run(); }}>
                 <input type="email" value={to} onChange={(e) => setTo(e.target.value)} placeholder="recipient@gmail.com" className={cx(inputCls, 'flex-1')} />
-                <Button type="submit" variant="primary" icon="fa-solid fa-paper-plane" loading={busy}>Send test</Button>
+                <Button type="submit" variant="primary" icon="fa-solid fa-paper-plane" loading={busy}>{t('srv.testx.send')}</Button>
             </form>
-            <p className="mt-3 text-xs leading-relaxed text-slate-500">Send to an EXTERNAL address (Gmail, Outlook) to test real delivery: it needs reverse DNS (PTR) for your IP, published SPF/DKIM/DMARC and outbound port 25 (or a relay).</p>
+            <p className="mt-3 text-xs leading-relaxed text-slate-500">{t('srv.testx.hint')}</p>
             {res && (
                 <div className={cx('mt-5 rounded-xl border p-4 text-sm', res.localOnly ? 'border-amber-200 bg-amber-50' : res.success ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50')}>
                     <div className={cx('flex items-center gap-2 font-semibold', res.localOnly ? 'text-amber-800' : res.success ? 'text-emerald-800' : 'text-red-800')}>
-                        <i className={cx('fa-solid', res.localOnly ? 'fa-triangle-exclamation' : res.success ? 'fa-circle-check' : 'fa-circle-exclamation')}></i>{res.message}
+                        <i className={cx('fa-solid', res.localOnly ? 'fa-triangle-exclamation' : res.success ? 'fa-circle-check' : 'fa-circle-exclamation')}></i>{res.localOnly ? t('srv.testx.localOnly', { to: res.to }) : res.success ? t('srv.testx.ok') : res.message && !res.failed?.length && !res.delivered?.length ? res.message : t('srv.testx.fail')}
                     </div>
-                    {(res.delivered || []).map((d: any, i: number) => <div key={'d' + i} className="mt-2 break-all rounded-lg bg-white/70 px-3 py-2 font-mono text-xs text-emerald-900"><b>{d.recipient}</b> via <b>{d.via}</b> — {d.response}</div>)}
-                    {(res.failed || []).map((f: any, i: number) => <div key={'f' + i} className="mt-2 break-all rounded-lg bg-white/70 px-3 py-2 font-mono text-xs text-red-900"><b>{f.recipient}</b> — {f.error}{f.permanent ? ' (permanent)' : ''}</div>)}
+                    {(res.delivered || []).map((d: any, i: number) => <div key={'d' + i} className="mt-2 break-all rounded-lg bg-white/70 px-3 py-2 font-mono text-xs text-emerald-900"><b>{d.recipient}</b> {t('srv.testx.via')} <b>{d.via}</b> — {d.response}</div>)}
+                    {(res.failed || []).map((f: any, i: number) => <div key={'f' + i} className="mt-2 break-all rounded-lg bg-white/70 px-3 py-2 font-mono text-xs text-red-900"><b>{f.recipient}</b> — {f.error}{f.permanent ? ` (${t('srv.testx.permanent')})` : ''}</div>)}
                 </div>
             )}
         </Card>
@@ -849,10 +845,10 @@ export default function ServerAdmin({ t, locale, toasts, confirm, canUseMail, on
     const [generatingDkim, setGeneratingDkim] = useState(false);
     const toast = toasts.push;
 
-    const loadOverview = async () => { try { setOverview(await api('/plugin/mail-server/admin/overview')); } catch (e: any) { toast('error', e?.message || t('common.error')); } };
+    const loadOverview = async () => { try { setOverview(await api('/plugin/mail-server/admin/overview')); } catch (e: any) { toast('error', errorText(e, t)); } };
     const loadSettings = async () => {
         try { const s = await api('/plugin/mail-server/settings') as any; setSettings(s); setSaved(s); }
-        catch (e: any) { toast('error', e?.message || t('common.error')); }
+        catch (e: any) { toast('error', errorText(e, t)); }
     };
     const loadDns = async () => {
         setDnsLoading(true);
@@ -874,21 +870,21 @@ export default function ServerAdmin({ t, locale, toasts, confirm, canUseMail, on
             await loadSettings();
             loadOverview();
             loadDns();
-        } catch (e: any) { toast('error', e?.message || t('common.error')); }
+        } catch (e: any) { toast('error', errorText(e, t)); }
         finally { setSaving(false); }
     };
 
     const generateDkim = async () => {
         const domain = settings?.mail_security_dkim_domain || dnsInfo?.domain || '';
         const selector = settings?.mail_security_dkim_selector || 'default';
-        if (dnsInfo?.dkimConfigured && !(await confirm('Regenerating the DKIM key invalidates the old key. Mail will fail DKIM checks until you publish the new DNS value. Continue?', 'Regenerate DKIM key', true))) return;
+        if (dnsInfo?.dkimConfigured && !(await confirm(t('srv.cfg.dkimConfirm'), t('srv.cfg.dkimRegenerate'), true))) return;
         setGeneratingDkim(true);
         try {
             await api('/plugin/mail-server/security/dkim/generate', { method: 'POST', body: { domain, selector, force: dnsInfo?.dkimConfigured ? true : undefined } });
-            toast('success', 'DKIM key generated — publish the new DNS record.');
+            toast('success', t('srv.cfg.dkimGenerated'));
             await loadDns();
             loadSettings();
-        } catch (e: any) { toast('error', e?.message || t('common.error')); }
+        } catch (e: any) { toast('error', errorText(e, t)); }
         finally { setGeneratingDkim(false); }
     };
 

@@ -1,6 +1,7 @@
 // @ts-nocheck — backend plugin client source; bundled by the plugin loader, not type-checked by the frontend tsc.
 "use client";
 
+import { errorText } from "./i18n";
 import { useEffect, useState } from "react";
 import { api } from "../../../../../frontend/src/lib/api";
 import { cx, Sheet, Button, IconBtn, Field, Toggle, Checkbox, inputCls, EmptyState, Pill } from "./ui";
@@ -30,7 +31,9 @@ export function ShortcutList({ t }: any) {
 }
 
 function FilterCard({ rule, labels, t, onChange, onDelete }: any) {
-    const [open, setOpen] = useState(!rule.conditions?.[0]?.value);
+    // Open when it still needs something: a condition value, or any action at all ("Filter messages like
+    // this" seeds a rule with the condition filled in and nothing to do yet).
+    const [open, setOpen] = useState(!rule.conditions?.[0]?.value || !Object.values(rule.actions || {}).some(Boolean));
     const set = (patch: any) => onChange({ ...rule, ...patch });
     const setCond = (i: number, patch: any) => set({ conditions: rule.conditions.map((c: any, j: number) => j === i ? { ...c, ...patch } : c) });
     const setAct = (patch: any) => set({ actions: { ...rule.actions, ...patch } });
@@ -130,7 +133,7 @@ export default function MailSettings({ open, onClose, t, labels, density, setDen
                 if (seedRule) p.rules = [...(p.rules || []), seedRule];
                 setPrefs(p);
             }
-            catch (e: any) { onError(e?.message || t('common.error')); }
+            catch (e: any) { onError(errorText(e, t)); }
         })();
     }, [open, initialTab]);
 
@@ -157,7 +160,7 @@ export default function MailSettings({ open, onClose, t, labels, density, setDen
             onSaved(prefs);
             onClose();
         } catch (e: any) {
-            onError(e?.message || t('common.error'));
+            onError(errorText(e, t));
         } finally {
             setSaving(false);
         }

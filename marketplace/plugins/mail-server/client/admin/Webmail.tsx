@@ -1,6 +1,7 @@
 // @ts-nocheck — backend plugin client source; bundled by the plugin loader, not type-checked by the frontend tsc.
 "use client";
 
+import { errorText } from "./i18n";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../../../../frontend/src/lib/api";
 import { sanitizeHTML } from "../../../../../frontend/src/lib/sanitize";
@@ -97,7 +98,7 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
     const setShowPreview = (v: boolean) => { setShowPreviewState(v); writeLocal('wjp_mail_preview', v); };
     const { push: toast } = toasts;
     const ok = (text: string, opts?: any) => toast('success', text, opts);
-    const fail = (e: any) => toast('error', (e && e.message) || (typeof e === 'string' ? e : t('common.error')));
+    const fail = (e: any) => toast('error', errorText(e, t));
 
     // --- data ------------------------------------------------------------------------------------
     const loadList = useCallback(async ({ query = queryRef.current, silent = false, append = false } = {}) => {
@@ -233,7 +234,9 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
         const m = msg || lastOf(email);
         const head = `<br/><br/><div>${escapeHtml(t('comp.forwardedHeader'))}<br/>${escapeHtml(t('read.from'))}: ${escapeHtml(m.from_name || '')} &lt;${escapeHtml(m.from_address)}&gt;<br/>${escapeHtml(t('read.date'))}: ${escapeHtml(fullDate(m.date_received, locale))}<br/>${escapeHtml(t('comp.subject'))}: ${escapeHtml(m.subject)}<br/>${escapeHtml(t('comp.to'))}: ${escapeHtml(m.to_address)}</div><br/>`;
         const body = m.body_html || escapeHtml(m.body_text || '').replace(/\n/g, '<br/>');
-        startCompose({ kind: 'forward', subject: `Fwd: ${String(m.subject || '').replace(/^(re|fwd?):\s*/i, '')}`, body: head + body, attachments: [] });
+        startCompose({ kind: 'forward', subject: `Fwd: ${String(m.subject || '').replace(/^(re|fwd?):\s*/i, '')}`, body: head + body,
+            // The original files travel by id: the server checks the user may read them and copies them.
+            attachments: (m.attachments || []).map((a: any) => ({ attachmentId: a.id, filename: a.filename, size: a.size, contentType: a.content_type })) });
     };
 
     const onSent = (res: any, { scheduled }: any) => {
@@ -349,7 +352,8 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
         try {
             const res = await api('/plugin/mail-server/trash/empty', { method: 'DELETE' }) as any;
             closeMessage();
-            ok(t('toast.trashEmptied', { n: typeof res?.deleted === 'number' ? res.deleted : '' }));
+            const n = typeof res?.deleted === 'number' ? res.deleted : null;
+            ok(n === 1 ? t('toast.trashEmptiedOne') : n === null ? t('folder.emptyTrash') : t('toast.trashEmptied', { n }));
             loadList();
             loadQuota();
         } catch (e) { fail(e); }
@@ -415,7 +419,7 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
             const k = e.key;
             const current = openEmail || emails[cursor];
             if (k === 'g') { gPressed.current = Date.now(); return; }
-            if (k === 'i' && Date.now() - gPressed.current < 1200) { setFolder('inbox'); return; }
+            if (k === 'i' && Date.now() - gPressed.current < 1200) { go('inbox'); return; }
             const map: Record<string, () => void> = {
                 'c': () => startCompose(),
                 '/': () => searchRef.current?.focus(),
@@ -479,7 +483,19 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
     const showList = split || !openId;
     const effListWidth = Math.min(listWidth, Math.max(320, width - (sidebarMode === 'full' ? 248 : sidebarMode === 'rail' ? 72 : 0) - 420));
 
-    const go = (f: string) => { setFolder(f); setDrawer(false); closeMessage(); };
+    const go = (f: string) => {
+        setDrawer(false);
+        closeMessage();
+        // The folder effect only runs on a CHANGE: picking the folder already shown (to leave a search)
+        // must clear the search and reload it here, or the results simply stayed on screen.
+        if (f === folderRef.current) {
+            setSearchText('');
+            setActiveQuery('');
+            loadList({ query: '' });
+        } else {
+            setFolder(f);
+        }
+    };
     const runSearch = (q: string) => {
         const query = q.trim();
         setActiveQuery(query);
@@ -598,7 +614,7 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
                 ))}
             </div>
             <span className="flex-1"></span>
-            <IconBtn icon="fa-solid fa-bars" label={t('folder.labels')} onClick={() => setDrawer(true)} />
+            <IconBtn icon="fa-solid fa-folder-tree" label={t('folder.labels')} onClick={() => setDrawer(true)} />
             <IconBtn icon="fa-solid fa-gear" label={t('act.settings')} onClick={() => setSettings({ open: true, tab: 'general' })} />
             {isAdmin && <IconBtn icon="fa-solid fa-server" label={t('app.serverConsole')} onClick={onOpenServer} />}
         </div>
@@ -727,7 +743,15 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
         <section className={cx('flex min-h-0 min-w-0 flex-col bg-white', split ? 'shrink-0 border-r border-slate-200' : 'flex-1')} style={split ? { width: effListWidth } : undefined}>
             {/* App bar */}
             <div className="flex shrink-0 items-center gap-2 border-b border-slate-100 px-2 py-2 sm:px-3">
-                {sidebarMode === 'drawer' && <IconBtn icon="fa-solid fa-bars" label={t('folder.labels')} onClick={() => setDrawer(true)} />}
+                {sidebarMode === 'drawer' && (
+                    // Not a hamburger: the admin shell already shows one right above on phones. This opens
+                    // the MAIL folders, so it shows the current folder's icon.
+                    <button type="button" onClick={() => setDrawer(true)} aria-label={t('folder.labels')} title={t('folder.labels')}
+                        className="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full border border-slate-200 bg-white pl-3 pr-2.5 text-slate-600 hover:bg-slate-50">
+                        <i className={cx((FOLDERS.find(f => f.id === folder) || { icon: 'fa-solid fa-tag' }).icon, 'text-sm text-violet-600')}></i>
+                        <i className="fa-solid fa-chevron-down text-[10px] text-slate-400"></i>
+                    </button>
+                )}
                 <form className="relative min-w-0 flex-1" onSubmit={(e) => { e.preventDefault(); runSearch(searchText); }}>
                     <i className="fa-solid fa-magnifying-glass pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-sm text-slate-400"></i>
                     <input

@@ -1,6 +1,7 @@
 // @ts-nocheck — backend plugin client source; bundled by the plugin loader, not type-checked by the frontend tsc.
 "use client";
 
+import { errorText } from "./i18n";
 import { useEffect, useRef, useState } from "react";
 import { api, apiPost } from "../../../../../frontend/src/lib/api";
 // Platform isomorphic sanitizer (DOMPurify on the client). It guards the ONE live-DOM innerHTML sink —
@@ -12,7 +13,7 @@ const splitList = (v: string) => String(v || '').split(/[,;]/).map(s => s.trim()
 const looksLikeAddress = (s: string) => /^[^\s@,;<>"]+@[^\s@,;<>"]+$/.test(s);
 
 /** To / Cc / Bcc as chips, with autocomplete from colleagues + your correspondence history. */
-function RecipientField({ label, value, onChange, autoFocus, t, trailing }: any) {
+function RecipientField({ label, value, onChange, onPending, autoFocus, t, trailing }: any) {
     const [text, setText] = useState('');
     const [suggestions, setSuggestions] = useState<any[]>([]);
     const [hi, setHi] = useState(0);
@@ -38,11 +39,15 @@ function RecipientField({ label, value, onChange, autoFocus, t, trailing }: any)
         if (!a) return;
         if (!chips.includes(a)) onChange([...chips, a].join(', '));
         setText('');
+        onPending?.('');
         setSuggestions([]);
     };
     const remove = (addr: string) => onChange(chips.filter(c => c !== addr).join(', '));
 
     const onKeyDown = (e: any) => {
+        // Ctrl/Cmd+Enter is "send": leave the text pending (send() folds it in) instead of committing a
+        // chip whose state update the send handler, in this same event, would not see yet.
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') return;
         if (suggestions.length > 0 && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
             e.preventDefault();
             setHi(h => (h + (e.key === 'ArrowDown' ? 1 : -1) + suggestions.length) % suggestions.length);
@@ -78,7 +83,21 @@ function RecipientField({ label, value, onChange, autoFocus, t, trailing }: any)
                     ref={inputRef}
                     autoFocus={autoFocus}
                     value={text}
-                    onChange={(e) => setText(e.target.value)}
+                    onChange={(e) => {
+                        // Mobile keyboards report ',' as an unidentified key, so a separator typed there
+                        // never reaches onKeyDown: split it here too.
+                        const v = e.target.value;
+                        const parts = v.split(/[,;]/);
+                        if (parts.length > 1) {
+                            const add = parts.slice(0, -1).map(s => s.trim().replace(/^<|>$/g, '')).filter(Boolean);
+                            onChange([...chips, ...add.filter(a => !chips.includes(a))].join(', '));
+                            setText(parts[parts.length - 1]);
+                            onPending?.(parts[parts.length - 1]);
+                            return;
+                        }
+                        setText(v);
+                        onPending?.(v);
+                    }}
                     onKeyDown={onKeyDown}
                     onBlur={() => { setTimeout(() => { if (text.trim()) commit(text); setSuggestions([]); }, 150); }}
                     onPaste={(e) => {
@@ -199,16 +218,27 @@ export default function Composer({ initial, prefs, user, t, locale, fullscreen: 
         return name || email ? `<br/><br/>-- <br/>${escapeHtml(name)}<br/>${escapeHtml(email)}` : '';
     };
 
+    // An address still being typed (no Enter / comma yet) only becomes a chip on blur, AFTER a click on
+    // Send has already run — so send() folds the pending text in itself.
+    const pending = useRef<any>({ to: '', cc: '', bcc: '' });
+    const withPending = (v: string, p: string) => {
+        const list = splitList(v);
+        return [...list, ...splitList(p).filter(a => !list.includes(a))].join(', ');
+    };
     const send = async () => {
         if (sending) return;
-        if (!splitList(mail.to).length) { onError(t('comp.needRecipient')); return; }
+        const to = withPending(mail.to, pending.current.to);
+        const cc = withPending(mail.cc, pending.current.cc);
+        const bcc = withPending(mail.bcc, pending.current.bcc);
+        if (to !== mail.to || cc !== mail.cc || bcc !== mail.bcc) update({ to, cc, bcc });
+        if (!splitList(to).length) { onError(t('comp.needRecipient')); return; }
         if (!mail.subject.trim() && !(await confirm(t('comp.noSubjectConfirm'), t('comp.send')))) return;
         setSending(true);
         try {
             const res = await api('/plugin/mail-server/send', {
                 method: 'POST',
                 body: {
-                    to: mail.to, cc: mail.cc, bcc: mail.bcc, subject: mail.subject,
+                    to, cc, bcc, subject: mail.subject,
                     body: mail.useSignature ? mail.body + signatureHtml() : mail.body,
                     attachments: mail.attachments, isHtml: true, replyToId, id: draftId,
                     scheduledAt: scheduledAt ? new Date(scheduledAt).toISOString() : undefined
@@ -216,7 +246,7 @@ export default function Composer({ initial, prefs, user, t, locale, fullscreen: 
             }) as any;
             onSent(res, { scheduled: !!scheduledAt });
         } catch (e: any) {
-            onError(e?.message || t('common.error'));
+            onError(errorText(e, t));
             setSending(false);
         }
     };
@@ -238,7 +268,7 @@ export default function Composer({ initial, prefs, user, t, locale, fullscreen: 
                 const data = await apiPost<any>('/plugin/mail-server/upload/attachment', fd);
                 if (data && data.file) update({ attachments: [...(mailRef.current.attachments || []), data.file] });
             } catch (e: any) {
-                onError(`${file.name}: ${e?.message || t('common.error')}`);
+                onError(`${file.name}: ${errorText(e, t)}`);
             } finally {
                 setUploading(n => n - 1);
             }
@@ -327,7 +357,7 @@ export default function Composer({ initial, prefs, user, t, locale, fullscreen: 
 
                 {/* Recipients */}
                 <RecipientField
-                    label={t('comp.to')} value={mail.to} onChange={(v: string) => update({ to: v })} autoFocus={!mail.to} t={t}
+                    label={t('comp.to')} value={mail.to} onChange={(v: string) => update({ to: v })} onPending={(v: string) => { pending.current.to = v; }} autoFocus={!mail.to} t={t}
                     trailing={(
                         <div className="flex shrink-0 gap-1 pt-2 text-[13px] text-slate-500">
                             {!showCc && <button type="button" className="rounded px-1 hover:bg-slate-100 hover:text-slate-900" onClick={() => setShowCc(true)}>{t('comp.cc')}</button>}
@@ -335,8 +365,8 @@ export default function Composer({ initial, prefs, user, t, locale, fullscreen: 
                         </div>
                     )}
                 />
-                {showCc && <RecipientField label={t('comp.cc')} value={mail.cc} onChange={(v: string) => update({ cc: v })} t={t} />}
-                {showBcc && <RecipientField label={t('comp.bcc')} value={mail.bcc} onChange={(v: string) => update({ bcc: v })} t={t} />}
+                {showCc && <RecipientField label={t('comp.cc')} value={mail.cc} onChange={(v: string) => update({ cc: v })} onPending={(v: string) => { pending.current.cc = v; }} t={t} />}
+                {showBcc && <RecipientField label={t('comp.bcc')} value={mail.bcc} onChange={(v: string) => update({ bcc: v })} onPending={(v: string) => { pending.current.bcc = v; }} t={t} />}
                 <div className="flex items-center border-b border-slate-100 px-4">
                     <input
                         value={mail.subject}
@@ -359,7 +389,7 @@ export default function Composer({ initial, prefs, user, t, locale, fullscreen: 
                             const files = Array.from(e.clipboardData?.files || []);
                             if (files.length) { e.preventDefault(); upload(files); }
                         }}
-                        className="min-h-full px-4 py-3 text-[15px] leading-relaxed text-slate-800 outline-none sm:text-sm [&_blockquote]:border-l-2 [&_blockquote]:border-slate-300 [&_blockquote]:pl-3 [&_blockquote]:text-slate-600 [&_a]:text-violet-700 [&_a]:underline [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:list-decimal [&_ol]:pl-6"
+                        className="min-h-full px-4 py-3 text-[15px] leading-relaxed text-slate-800 outline-none sm:text-sm [&_blockquote]:border-l-2 [&_blockquote]:border-slate-300 [&_blockquote]:pl-3 [&_blockquote]:text-slate-600 [&_a]:text-violet-700 [&_a]:underline [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:list-decimal [&_ol]:pl-6 [&_h1]:my-2 [&_h1]:text-2xl [&_h1]:font-bold [&_h2]:my-2 [&_h2]:text-xl [&_h2]:font-bold [&_h3]:my-2 [&_h3]:text-lg [&_h3]:font-semibold [&_p]:my-2 [&_img]:h-auto [&_img]:max-w-full [&_table]:max-w-full [&_td]:p-1"
                         role="textbox"
                         aria-multiline="true"
                         aria-label={t('comp.body')}

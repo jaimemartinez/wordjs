@@ -77,7 +77,9 @@ export function shortPeople(list: string, me?: string, meLabel = 'me') {
 const AVATAR_COLORS = ['#7c3aed', '#2563eb', '#0891b2', '#059669', '#65a30d', '#d97706', '#dc2626', '#db2777', '#4f46e5', '#0d9488'];
 export function Avatar({ name, email, size = 36, className = '' }: any) {
     const label = String(name || email || '?').trim();
-    const initials = label.split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?';
+    const base = /^[^\s@]+@[^\s@]+$/.test(label) ? label.split('@')[0] : label;
+    const initials = base.split(/[\s._-]+/).filter(w => /[\p{L}]/u.test(w)).slice(0, 2).map(w => (w.match(/\p{L}/u) || ['?'])[0]).join('').toUpperCase()
+        || base.charAt(0).toUpperCase() || '?';
     let h = 0;
     for (const ch of String(email || name || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
     const bg = AVATAR_COLORS[h % AVATAR_COLORS.length];

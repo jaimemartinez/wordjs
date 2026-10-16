@@ -109,7 +109,6 @@
         "nodemailer": "^7.0.12",
         "smtp-server": "^3.18.0",
         "mailparser": "^3.9.1",
-        "dnsbl": "^3.0.0",
         "bayes": "^1.0.0"
     }
 }

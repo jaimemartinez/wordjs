@@ -79,6 +79,28 @@ const dns = {
     resolve: (host) => wordjs.dns.resolve(host),
 };
 
+// DNSBL over the host's TXT lookup. A blocklist answers a listed IP with BOTH an A record in 127/8
+// and a TXT record explaining the listing; unlisted IPs are NXDOMAIN. The host bridge strips loopback
+// A answers (by design — it never hands a plugin an internal address), so the A form can never say
+// "listed" here; the TXT form can, and goes through the same governed resolver. Returns true (listed),
+// false (not listed) or null (no verdict: IPv6, a resolver error, or the list REFUSING the query —
+// Spamhaus answers queries from public/open resolvers with an error record, not a listing).
+const DNSBL_ZONE = 'zen.spamhaus.org';
+async function dnsblListed(ip, zone = DNSBL_ZONE) {
+    const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(String(ip || ''));
+    if (!m || m.slice(1).some(o => Number(o) > 255)) return null;
+    let records;
+    try {
+        records = await dns.resolveTxt(`${m[4]}.${m[3]}.${m[2]}.${m[1]}.${zone}`);
+    } catch (e) {
+        return /ENOTFOUND|ENODATA|NXDOMAIN/i.test(`${e && e.code} ${e && e.message}`) ? false : null;
+    }
+    const text = (records || []).map(r => (Array.isArray(r) ? r.join('') : String(r))).join(' ');
+    if (!text) return false;
+    if (/open resolver|public resolver|returnc|query refused|error/i.test(text)) return null;
+    return true;
+}
+
 // === Bridge-backed module state (set in init) ===
 let wordjs = null;        // the injected capability bridge
 let Email = null;         // plugin-local email store backed by wordjs.db
@@ -1213,6 +1235,38 @@ async function recipientVerdict(rawAddress, mailDomain, catchAllRaw) {
     }
 }
 
+// The Bayesian verdict needs EVIDENCE before it may file mail as spam. The library's categorize()
+// answers "the most probable category" however thin the training: after one message marked spam and
+// one marked not-spam, every text full of words it never saw tied — and the tie went to 'spam', so a
+// normal message from an SPF-authenticated sender landed in Spam (and lost its vacation reply and
+// forward with it). Found in the production lab. So: no verdict until each class has a minimum of
+// training documents, only words the classifier has seen count (an unseen word carries no evidence,
+// it merely favours the class with less text), and spam needs a clear margin — at least ~90 %.
+const BAYES_MIN_DOCS = 5;
+const BAYES_SPAM_MARGIN = Math.log(9); // posterior odds 9:1
+async function isLikelySpam(c, text) {
+    try {
+        const spamDocs = (c && c.docCount && c.docCount.spam) || 0;
+        const hamDocs = (c && c.docCount && c.docCount.ham) || 0;
+        if (spamDocs < BAYES_MIN_DOCS || hamDocs < BAYES_MIN_DOCS) return false;
+        const freq = c.frequencyTable(await c.tokenizer(text));
+        const total = spamDocs + hamDocs;
+        let logSpam = Math.log(spamDocs / total);
+        let logHam = Math.log(hamDocs / total);
+        let seen = 0;
+        for (const token of Object.keys(freq)) {
+            if (!c.vocabulary || !c.vocabulary[token]) continue;
+            seen++;
+            logSpam += freq[token] * Math.log(c.tokenProbability(token, 'spam'));
+            logHam += freq[token] * Math.log(c.tokenProbability(token, 'ham'));
+        }
+        if (seen === 0) return false;
+        return (logSpam - logHam) > BAYES_SPAM_MARGIN;
+    } catch (e) {
+        return false; // a classifier problem never files mail away
+    }
+}
+
 /**
  * Initialize the Inbound SMTP Server
  */
@@ -1257,20 +1311,17 @@ async function initSMTPServer() {
             getOption('mail_security_dnsbl_enabled', '1').then(enabled => {
                 if (enabled === '0') return callback();
 
-                const dnsbl = require('dnsbl');
-                dnsbl.lookup(ip, 'zen.spamhaus.org').then(listed => {
-                    if (listed) {
-                        console.warn(`[Security][DNSBL] IP ${ip} blocked by DNSBL — rejecting`);
+                dnsblListed(ip).then(listed => {
+                    if (listed === true) {
+                        console.warn(`[Security][DNSBL] IP ${ip} is listed on ${DNSBL_ZONE} — rejecting`);
                         return callback(smtpError(554, 'Connection rejected: your IP is listed on a DNS blocklist'));
                     }
+                    // FAIL OPEN on no verdict: Spamhaus refuses queries from public/cloud resolvers, so
+                    // that is a COMMON case — rejecting on it would blackhole ALL inbound mail. SPF and
+                    // the Bayesian filter still apply. Only a POSITIVE listing rejects.
+                    if (listed === null) console.warn(`[Security][DNSBL] no verdict for ${ip} from ${DNSBL_ZONE} — accepting (fail open)`);
                     callback();
-                }).catch((e) => {
-                    // FAIL OPEN: Spamhaus Zen refuses queries from public/cloud resolvers, so a lookup error
-                    // is the COMMON case — rejecting on it would blackhole ALL inbound mail. Log and accept;
-                    // SPF + the Bayesian filter still apply. Only a POSITIVE listing rejects.
-                    console.warn(`[Security][DNSBL] lookup error for ${ip}: ${e.message} — accepting (fail open)`);
-                    callback();
-                });
+                }).catch(() => callback());
             }).catch((e) => {
                 // The option lookup itself failed — accept (fail open) rather than blackhole inbound.
                 console.warn(`[Security][DNSBL] option lookup error: ${e.message} — accepting (fail open)`);
@@ -1380,8 +1431,7 @@ async function initSMTPServer() {
                 try {
                     // 3. Bayesian Analysis
                     const text = (parsed.subject || '') + ' ' + (parsed.text || '');
-                    const category = await classifier.categorize(text);
-                    const isSpam = category === 'spam';
+                    const isSpam = await isLikelySpam(classifier, text);
 
                     if (isSpam) console.log(`[Security] Bayesian Filter marked message as SPAM`);
 
@@ -3154,6 +3204,27 @@ exports.init = async function (bridge) {
     const canAccessEmail = (email, user) =>
         !!user && (Email._ownsRow(email, user.id, user.userEmail) || user.role === 'administrator');
 
+    // FORWARDED ATTACHMENTS: to forward a message WITH its files, the composer names each stored
+    // attachment by its row id (`attachmentId`) — never by a path. The id is honoured only when the
+    // caller may read the message it belongs to (the same canAccessEmail test as the download route),
+    // and it becomes a path inside our own attachment dir built from storage_path. An id the caller
+    // may not read, or that does not exist, is DROPPED. Entries without an id (fresh uploads) pass
+    // through unchanged to the store's path resolver.
+    const resolveComposerAttachments = async (list, user) => {
+        const out = [];
+        for (const a of (Array.isArray(list) ? list : []).slice(0, 50)) {
+            if (!a || typeof a !== 'object') continue;
+            if (a.attachmentId === undefined || a.attachmentId === null) { out.push(a); continue; }
+            // NOT-A-USER-PATH: read only to be gated — canAccessEmail(parent) below decides before any use.
+            const row = await Email.getAttachmentById(parseInt(a.attachmentId, 10) || 0);
+            // NOT-A-USER-PATH: the parent row is what the gate below is asked about.
+            const parent = row && await Email.findById(row.email_id);
+            if (!row || !row.storage_path || !parent || !canAccessEmail(parent, user)) continue;
+            out.push({ filename: row.filename, contentType: row.content_type, size: row.size, path: path.join(UPLOAD_DIR, row.storage_path) });
+        }
+        return out;
+    };
+
     // GET /api/v1/plugin/mail-server/emails/search — operator-aware (from:/to:/subject:/label:/in:/
     // has:attachment/is:unread/is:starred + free text), scoped to the requester's mailbox.
     route('get', '/emails/search', { auth: true, mailbox: true }, async (req, res) => {
@@ -3389,7 +3460,8 @@ exports.init = async function (bridge) {
 
     // POST /api/v1/plugin/mail-server/drafts
     route('post', '/drafts', { auth: true, mailbox: true }, async (req, res) => {
-        const { id, to, cc, bcc, subject, body, isHtml = true, replyToId, attachments } = req.body;
+        const { id, to, cc, bcc, subject, body, isHtml = true, replyToId } = req.body;
+        const attachments = await resolveComposerAttachments(req.body.attachments, req.user);
 
         try {
             const data = {
@@ -3461,7 +3533,7 @@ exports.init = async function (bridge) {
 
     // POST /api/v1/plugin/mail-server/send
     route('post', '/send', { auth: true, mailbox: true }, async (req, res) => {
-        const { to, cc, bcc, isHtml = true, replyToId, id, attachments, scheduledAt } = req.body;
+        const { to, cc, bcc, isHtml = true, replyToId, id, scheduledAt } = req.body;
         // A message may have an empty subject or body (the composer asks first) — only a recipient is required.
         const subject = String(req.body.subject == null ? '' : req.body.subject);
         const body = String(req.body.body == null ? '' : req.body.body);
@@ -3499,6 +3571,8 @@ exports.init = async function (bridge) {
         // outbox: doing so overwrote the colleague's message AND left the row's from_address — a
         // colleague's address — as the identity the send queue would have used. Send it as a NEW
         // message of the caller's own instead; the shared row is left exactly as it was.
+        const attachments = await resolveComposerAttachments(req.body.attachments, req.user);
+
         let sendAsNew = false;
         if (id) {
             const existing = await Email.findById(id);

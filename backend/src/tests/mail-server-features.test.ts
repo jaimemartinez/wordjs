@@ -322,3 +322,37 @@ test('administration routes answer for an administrator', async () => {
         assert.equal(settings.body.mail_quota_default_mb, '500');
     } finally { b.plugin.deactivate(); }
 });
+
+test('forwarding carries the original attachments by id, and only ones the sender may read', async () => {
+    const b = await boot();
+    try {
+        const raw = [
+            'From: c@outside.example', `To: ${BOB.userEmail}`, 'Subject: Budget', 'MIME-Version: 1.0',
+            'Content-Type: multipart/mixed; boundary="XX"', '', '--XX', 'Content-Type: text/plain', '', 'see attached',
+            '--XX', 'Content-Type: application/pdf', 'Content-Transfer-Encoding: base64',
+            'Content-Disposition: attachment; filename="budget.pdf"', '', Buffer.from('%PDF-1.4 demo').toString('base64'), '--XX--', ''
+        ].join('\r\n');
+        assert.equal(await inbound(b, raw), null);
+        const [received] = await rowsOf(b, BOB.id);
+        const [att] = await b.db.all(`SELECT * FROM ${PREFIX}email_attachments WHERE email_id = ?`, [received.id]);
+        assert.ok(att, 'the inbound attachment is stored');
+
+        const fwd = await call(b, 'post /send', BOB, { body: { to: ALICE.userEmail, subject: 'Fwd: Budget', body: 'fyi', attachments: [{ attachmentId: att.id, filename: 'ignored.exe', path: '../../index.js' }] } });
+        assert.equal(fwd.status, 200, JSON.stringify(fwd.body));
+        const aliceCopy = (await rowsOf(b, ALICE.id)).find((r: any) => r.subject === 'Fwd: Budget');
+        assert.ok(aliceCopy, 'Alice received the forward');
+        const copied = await b.db.all(`SELECT * FROM ${PREFIX}email_attachments WHERE email_id = ?`, [aliceCopy.id]);
+        assert.equal(copied.length, 1, 'the original file travelled with the forward');
+        assert.equal(copied[0].filename, 'budget.pdf', 'name and bytes come from the stored row, not the client');
+        assert.notEqual(copied[0].storage_path, att.storage_path, 'a copy, not a shared blob');
+
+        // Alice cannot read Bob's message, so naming its attachment id gets her nothing.
+        const steal = await call(b, 'post /send', ALICE, { body: { to: BOB.userEmail, subject: 'Steal', body: 'x', attachments: [{ attachmentId: att.id }] } });
+        assert.equal(steal.status, 200, JSON.stringify(steal.body));
+        const stolen = (await rowsOf(b, BOB.id)).find((r: any) => r.subject === 'Steal');
+        assert.ok(stolen);
+        assert.equal((await b.db.all(`SELECT * FROM ${PREFIX}email_attachments WHERE email_id = ?`, [stolen.id])).length, 0);
+        const draft = await call(b, 'post /drafts', ALICE, { body: { to: BOB.userEmail, subject: 'Steal draft', body: 'x', attachments: [{ attachmentId: att.id }] } });
+        assert.equal((await b.db.all(`SELECT * FROM ${PREFIX}email_attachments WHERE email_id = ?`, [draft.body.id])).length, 0);
+    } finally { b.plugin.deactivate(); }
+});
