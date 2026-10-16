@@ -36,6 +36,16 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   authors, retries failures and sends tests. A post that requires an access level goes out in full only to
   members who hold it — everyone else gets the teaser and a link. Every mail has a one-click unsubscribe
   link (an HMAC token per account) and members manage newsletters from their account block.
+- **Mercado Pago and Wompi payments for memberships (`memberships` 1.2.0).** Payments now go through one
+  provider interface, and the admin picks **Stripe**, **Mercado Pago** or **Wompi** in Ajustes (Stripe
+  behaves as before). Mercado Pago uses preapproval subscriptions verified by the `x-signature` HMAC. Wompi
+  has no subscriptions: each Web Checkout payment (card, PSE, Nequi, Bancolombia) buys one period in COP,
+  with the amount fixed by the integrity signature; paying again prepays the next period, and automatic
+  renewal is opt-in with a Nequi payment source the site charges before the period ends (declines retried
+  daily, canceled after three). Wompi events are verified by the events-secret checksum. Every provider
+  applies each event once and accepts sandbox / test credentials only. Paid memberships whose period ran
+  out without a renewal are marked expired. Plugins get **`wordjs.crypto.hash()`** (an unkeyed SHA
+  digest), and webhook routes also receive `*checksum*` headers and `x-request-id`.
 - **Plugin fields in the post editor.** Through the new `post_editor_fields` filter a plugin declares a
   field (select, radio or text, validated by core) that the editor shows in the entry's settings and saves
   as unprefixed post meta (`GET /api/v1/editor/fields`).

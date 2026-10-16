@@ -40,10 +40,10 @@
         "WordJSSafeUser",
         "WordJSUploadedFile"
       ],
-      "semanticSha256": "ff265e1aa7e3eac8561a3d50fb6a6227e72060878ee52d2f98384e9380d8ae34"
+      "semanticSha256": "d79abedb491669a037df95c6509b49c644ebf158f618d73b36791d80d7f6ac25"
     },
     "verificationSurface": {
-      "backendTestFiles": 316,
+      "backendTestFiles": 317,
       "frontendTestFiles": 243,
       "sandboxWorkflowSemanticSha256": "6589c490e047c52e4330eed83db22c91501686ccf6f30ba7ce030938c995a913",
       "performanceBudgetsSha256": "5a608e783d98267030d14c9ce70edb7cc9f5354cbf006c31353648425d7a7556"

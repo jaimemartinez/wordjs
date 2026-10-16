@@ -45,13 +45,20 @@ function isWebhookRequest(req: any): boolean {
     return webhookPaths.has(normalize(req.originalUrl || req.url || ''));
 }
 
-/** The provider headers a webhook handler receives (signatures and Standard Webhooks metadata). */
+/**
+ * Named provider headers a webhook handler also receives besides any `*signature*` / `*checksum*` one:
+ * Standard Webhooks' id/timestamp, the content type, and the request id some providers fold into the
+ * signed manifest (Mercado Pago signs `id;request-id;ts`).
+ */
+const WEBHOOK_HEADER_NAMES: ReadonlySet<string> = new Set(['webhook-id', 'webhook-timestamp', 'content-type', 'x-request-id']);
+
+/** The provider headers a webhook handler receives (signatures, checksums and their metadata). */
 function webhookHeaders(req: any): Record<string, string> {
     const out: Record<string, string> = {};
     const headers = (req && req.headers) || {};
     for (const [name, value] of Object.entries(headers)) {
         const lk = name.toLowerCase();
-        if (!(lk.includes('signature') || lk === 'webhook-id' || lk === 'webhook-timestamp' || lk === 'content-type')) continue;
+        if (!(lk.includes('signature') || lk.includes('checksum') || WEBHOOK_HEADER_NAMES.has(lk))) continue;
         if (typeof value === 'string') out[lk] = value.slice(0, 4096);
     }
     return out;
