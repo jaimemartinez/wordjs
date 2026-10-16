@@ -405,8 +405,10 @@ async function pullFiles(adapter: MediaStorageAdapter, root: string, files: stri
         if (!bytes) throw new Error(`media storage: ${rel} vanished from the bucket while restoring`);
         fs.mkdirSync(path.dirname(file), { recursive: true });
         const tmp = `${file}.${crypto.randomBytes(6).toString('hex')}.part`;
-        fs.writeFileSync(tmp, bytes);
+        // Exclusive create, owner-only while partial; the finished file gets the usual media mode.
+        fs.writeFileSync(tmp, bytes, { flag: 'wx', mode: 0o600 });
         fs.renameSync(tmp, file);
+        fs.chmodSync(file, 0o644);
         written++;
     }
     return written;
