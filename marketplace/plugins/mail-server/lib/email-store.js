@@ -903,7 +903,7 @@ module.exports = function createEmailStore(db, hooks = {}) {
             const {
                 messageId, fromAddress, fromName, toAddress, ccAddress = '', bccAddress = '', subject, bodyText, bodyHtml, rawContent,
                 receivedSpf = '',
-                isSent = 0, isDraft = 0, isArchived = 0, isStarred = 0, isTrash = 0, isSpam = 0,
+                isSent = 0, isDraft = 0, isArchived = 0, isStarred = 0, isTrash = 0, isSpam = 0, isRead = 0,
                 parentId = 0, threadId = 0, scheduledAt = null
             } = data;
 
@@ -922,13 +922,13 @@ module.exports = function createEmailStore(db, hooks = {}) {
                 INSERT INTO ${T_EMAILS} (
                     message_id, from_address, from_name, to_address, cc_address, bcc_address, subject, body_text, body_html, raw_content,
                     received_spf,
-                    is_sent, is_draft, is_archived, is_starred, is_trash, is_spam, user_id, parent_id, thread_id, scheduled_at
+                    is_sent, is_draft, is_archived, is_starred, is_trash, is_spam, is_read, user_id, parent_id, thread_id, scheduled_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `, [
                 str(messageId), str(fromAddress), str(fromName), str(toAddress), str(ccAddress), str(bccAddress), str(subject), str(bodyText), str(bodyHtml), str(rawContent),
                 str(receivedSpf).slice(0, 1024),
-                isSent, isDraft, isArchived, isStarred, isTrash, isSpam ? 1 : 0, ownerId, parentId, threadId, scheduledAt
+                isSent, isDraft, isArchived, isStarred, isTrash, isSpam ? 1 : 0, isRead ? 1 : 0, ownerId, parentId, threadId, scheduledAt
             ]);
 
             const emailId = result.lastID;

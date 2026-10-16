@@ -1599,7 +1599,17 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
     // the respawn below run NOW, and the `updated_option` fan-out (`announced`, every subscriber told in
     // turn) is waited for only after them: waiting first kept a revoked grant in force in the child for
     // as long as the subscribers took.
-    const { announced, refused } = await applyGrants(slug, tokens, { adminDecision: true, narrowOnly: isHeadless(req) });
+    let applied: any;
+    try {
+        applied = await applyGrants(slug, tokens, { adminDecision: true, narrowOnly: isHeadless(req) });
+    } catch (e: any) {
+        // An EXCLUSIVE capability (smtp:inbound) another plugin holds: nothing was written. Say who holds it.
+        if (e && e.code === 'plugin_grant_exclusive') {
+            return res.status(409).json({ code: e.code, error: e.message, conflicts: e.conflicts });
+        }
+        throw e;
+    }
+    const { announced, refused } = applied;
     if (refused.length && refusePluginGrantByToken(req, res, refused)) return;
 
     // A REVOKE has to take effect NOW, not at the next boot. Some capabilities the AST scan gates have no
