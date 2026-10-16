@@ -39,6 +39,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const net = require('net');
 const hp = require('./host-policy');
 
 // ─── Forwarded headers (gateway) ────────────────────────────────────────────────────────────────────
@@ -75,6 +76,43 @@ function pinSiteHeader(req) {
     delete req.headers[SITE_HOST_HEADER];
     const site = req && req[SITE];
     if (site && site.host) req.headers[SITE_HOST_HEADER] = site.host;
+}
+
+/** A socket's peer address as an IP literal comparable with registered ones (IPv4-mapped IPv6 unwrapped). */
+function normalizePeer(address) {
+    if (typeof address !== 'string' || address === '') return null;
+    const v = address.toLowerCase();
+    return v.startsWith('::ffff:') && v.includes('.') ? v.slice(7) : v;
+}
+
+/**
+ * Multisite: the addresses of the frontend nodes registered in a gateway registry (routing.hydrateRegistry
+ * shape) — the peers createHostEdge's `relayPeers` names. Only IP-literal targets count (a socket's peer
+ * is an address, not a name). A frontend registered on loopback runs on this machine, whose server-side
+ * reads may arrive from loopback or from one of this machine's own addresses (`ownAddresses()`).
+ */
+function frontendRelayPeers(registry, prefixOwner, ownAddresses) {
+    const out = new Set();
+    if (!registry || typeof registry.forEach !== 'function') return out;
+    let local = false;
+    registry.forEach((group, prefix) => {
+        if (prefixOwner(prefix) !== 'frontend' || !group || !group.targets) return;
+        for (const target of group.targets) {
+            let host;
+            try { host = new URL(target).hostname.replace(/^\[|\]$/g, ''); } catch { continue; }
+            if (!net.isIP(host)) continue;
+            out.add(normalizePeer(host));
+            if (host === '127.0.0.1' || host === '::1' || host.startsWith('127.')) local = true;
+        }
+    });
+    if (local) {
+        out.add('127.0.0.1');
+        out.add('::1');
+        if (typeof ownAddresses === 'function') {
+            try { for (const a of ownAddresses()) out.add(normalizePeer(String(a).replace(/^\[|\]$/g, ''))); } catch { /* interfaces unreadable */ }
+        }
+    }
+    return out;
 }
 
 /** X-Forwarded-Host for the upstream: the address the edge judged, else (no edge) the Host received. */
@@ -293,9 +331,36 @@ function createHostEdge(opts) {
         return verdict;
     }
 
+    /**
+     * MULTISITE: a frontend node's server-side reads reach this listener like any client, addressed to
+     * the main site's address (an IP literal in separate mode, often a domain), and name the site they
+     * render in X-Forwarded-Host. host-policy believes that header only from a trusted hop, and a frontend
+     * node on another machine is none — so every other site's pages were rendered with the MAIN site's
+     * data. A peer this gateway registered as a frontend node (`relayPeers`, from the registry) is a relay:
+     * its X-Forwarded-Host names the address, but only when the address it connected to is one this
+     * network answers AND the address it names is one too. A DNS-rebinding page cannot satisfy the first
+     * (its Host is the attacker's name), and nothing outside the network's declared addresses can be named.
+     */
+    function relayAuthority(req, pol, authority) {
+        if (typeof o.relayPeers !== 'function' || !pol || authority.hop !== null || !authority.parsed) return null;
+        const xfh = req.headers['x-forwarded-host'];
+        if (typeof xfh !== 'string' || xfh === '') return null;
+        let peers;
+        try { peers = o.relayPeers(); } catch { return null; }
+        const peer = normalizePeer(req.socket && req.socket.remoteAddress);
+        if (!peers || !peer || !peers.has(peer)) return null;
+        const t = now();
+        if (hp.classify(authority.parsed, pol, { now: t }).cls === 'unknown') return null;
+        const raw = xfh.split(',')[0].trim();
+        const parsed = hp.parseHost(raw);
+        if (!parsed || hp.classify(parsed, pol, { now: t }).cls === 'unknown') return null;
+        return { parsed, absent: false, raw, hop: 'relay', viaTrustedHop: true, source: 'x-forwarded-host', proxied: false };
+    }
+
     function judge(req, upgrade) {
         const pol = readPolicy();
-        const authority = edgeAuthority(req, pol, forwardedHostIsMarker);
+        const direct = edgeAuthority(req, pol, forwardedHostIsMarker);
+        const authority = relayAuthority(req, pol, direct) || direct;
         req[JUDGED] = { raw: authority.absent ? '' : authority.raw, source: authority.source };
         req[SITE] = null;
         if (!upgrade && isExempt(requestPath(req))) return { action: 'pass', reason: 'exempt' };
@@ -947,6 +1012,7 @@ module.exports = {
     pinUpgradeHeaders,
     pinSiteHeader,
     SITE_HOST_HEADER,
+    frontendRelayPeers,
     // the edge
     EDGE_PROBE_PATHS,
     ACME_CHALLENGE_PATH,

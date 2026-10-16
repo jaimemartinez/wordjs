@@ -602,6 +602,62 @@ describe('multisite: the other sites of the network', () => {
     });
 });
 
+describe('multisite: a registered frontend node relays the address of its server-side reads', () => {
+    // Separate mode: a frontend node renders another site's page and fetches that site's data through
+    // this listener, addressed to the MAIN site's address, naming the site in X-Forwarded-Host. Without
+    // the relay rule the gateway judged the Host and the backend served the main site's data (lab finding).
+    const config = { networkSites: [{ id: 2, url: 'https://two.example.org', status: 'active' }] };
+    const state = { policy: sitePolicy({ config }) };
+    let relay;
+    let plain;
+    before(async () => {
+        relay = await edgeServer(state, { relayPeers: () => new Set(['127.0.0.1', '::1']) });
+        plain = await edgeServer(state);
+    });
+    after(async () => { await relay.close(); await plain.close(); });
+
+    it('names the site the node asked for, upstream and to the frontend', async () => {
+        const r = await relay.get('example.com', '/api/v1/settings', { headers: { 'x-forwarded-host': 'two.example.org' } });
+        assert.strictEqual(r.status, 200);
+        assert.strictEqual(relay.reached.at(-1).xfh, 'two.example.org');
+        assert.strictEqual(relay.reached.at(-1).site, 'two.example.org');
+    });
+
+    it('an IP-literal main address, as a separate-mode node dials it, relays too', async () => {
+        const ipState = { policy: sitePolicy({ config: Object.assign({}, config, { siteUrl: 'https://192.0.2.10:3000' }) }) };
+        const s = await edgeServer(ipState, { relayPeers: () => new Set(['127.0.0.1', '::1']) });
+        try {
+            await s.get('192.0.2.10:3000', '/', { headers: { 'x-forwarded-host': 'two.example.org' } });
+            assert.strictEqual(s.reached.at(-1).site, 'two.example.org');
+        } finally { await s.close(); }
+    });
+
+    it('never from a peer that is not a registered node: the Host decides, as before', async () => {
+        await plain.get('example.com', '/api/v1/settings', { headers: { 'x-forwarded-host': 'two.example.org' } });
+        assert.strictEqual(plain.reached.at(-1).xfh, 'example.com');
+        assert.strictEqual(plain.reached.at(-1).site, undefined);
+    });
+
+    it('never for a Host the network does not answer (a rebinding page), nor to name an undeclared host', async () => {
+        assert.strictEqual((await relay.get('evil.example', '/', { headers: { 'x-forwarded-host': 'two.example.org' } })).status, 421);
+        await relay.get('example.com', '/', { headers: { 'x-forwarded-host': 'nowhere.example' } });
+        assert.strictEqual(relay.reached.at(-1).xfh, 'example.com', 'an undeclared name is ignored, the Host stands');
+        assert.strictEqual(relay.reached.at(-1).site, undefined);
+    });
+
+    it('frontendRelayPeers: the registry\'s frontend IP targets, and this machine when a node is local', () => {
+        const registry = new Map([
+            ['/', { targets: new Set(['https://10.0.0.5:3001', 'https://frontend.internal:3001']) }],
+            ['/_next', { targets: new Set(['https://[2001:db8::5]:3001']) }],
+            ['/api', { targets: new Set(['https://10.0.0.9:4000']) }],
+        ]);
+        const routing = require('../src/routing');
+        assert.deepStrictEqual([...hostEdge.frontendRelayPeers(registry, routing.prefixOwner)].sort(), ['10.0.0.5', '2001:db8::5']);
+        const local = new Map([['/', { targets: new Set(['http://127.0.0.1:3001']) }]]);
+        assert.deepStrictEqual([...hostEdge.frontendRelayPeers(local, routing.prefixOwner, () => new Set(['192.0.2.7']))].sort(), ['127.0.0.1', '192.0.2.7', '::1']);
+    });
+});
+
 describe('safeLocation', () => {
     it('keeps the origin whatever the request target', () => {
         const vectors = [
@@ -1021,6 +1077,25 @@ describe('the pushed-policy file, as a worker reads it', () => {
         fs.unlinkSync(file);
         assert.strictEqual(source.get(), null, 'a removed file means nothing was pushed');
         assert.deepStrictEqual(fs.readdirSync(dir).filter((f) => f.endsWith('.tmp')), [], 'no temp file is left behind');
+    });
+
+    it('multisite: a network site pushed by the backend is answered and named upstream, through a relay too', async () => {
+        // The whole separate-mode path: the backend's push body, sanitized and stored like the internal
+        // listener stores it, read back like a worker reads it, judged by an edge built on it.
+        const file = path.join(dir, 'p-network.json');
+        push(file, {
+            config: { siteUrl: 'https://192.0.2.10:3000', networkSites: [{ id: 2, url: 'https://two.example.org:3000', status: 'active' }] },
+        });
+        const source = hostEdge.createPushedPolicySource({ file, checkEveryMs: 0, logger: silent });
+        const s = await edgeServer({ policy: () => source.get() }, { relayPeers: () => new Set(['127.0.0.1', '::1']) });
+        try {
+            assert.strictEqual((await s.get('two.example.org:3000', '/')).status, 200);
+            assert.strictEqual(s.reached.at(-1).site, 'two.example.org', 'a browser on the site');
+            await s.get('192.0.2.10:3000', '/api/v1/settings', { headers: { 'x-forwarded-host': 'two.example.org:3000' } });
+            assert.strictEqual(s.reached.at(-1).site, 'two.example.org', 'a frontend node rendering the site');
+            assert.strictEqual(s.reached.at(-1).xfh, 'two.example.org:3000');
+            assert.strictEqual((await s.get('three.example.org:3000', '/')).status, 421);
+        } finally { await s.close(); }
     });
 
     it('notices a rewrite that kept the same size, inode and modification time (a coarse file-system clock)', () => {

@@ -415,11 +415,25 @@ export async function serverResponse(endpoint: string, options: ServerFetchOptio
         : ({ next: { revalidate: options.revalidate, tags: siteTags(options.tags, requestSiteHost()) } } as RequestInit);
 
     try {
-        return await fetch(url, { headers, ...cacheInit });
+        const res = await fetch(url, { headers, ...cacheInit });
+        return fromRequestedSite(res, requestSiteHost());
     } catch {
         // Backend unreachable during SSR — caller decides how to degrade.
         return null;
     }
+}
+
+/**
+ * Multisite: the response, when it is the requested site's — else null. The backend names the site that
+ * answered (`X-WordJS-Site-Host`, backend/src/core/site-resolver.ts). A page of another site whose read
+ * came back from a different site (a deployment path that lost the site on the way to the backend) gets
+ * "no answer", so it renders not-found rather than one site's content under another site's address.
+ * The main site's reads are not checked (null siteHost), exactly as before.
+ */
+export function fromRequestedSite(res: Response, siteHost: string | null): Response | null {
+    if (!siteHost) return res;
+    const answeredBy = String(res.headers.get('x-wordjs-site-host') || '').toLowerCase();
+    return answeredBy === siteHost ? res : null;
 }
 
 /** What a plugin portal page (/portal/<slug>, manifest frontend.portalPage) puts in its <head>. */

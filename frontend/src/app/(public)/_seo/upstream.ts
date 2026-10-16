@@ -21,7 +21,7 @@
  * security-relevant allowlist to be edited and only one of them to be.
  */
 import { NextResponse } from 'next/server';
-import { resolveServerBase, backendUrl, configuredPublicHost, normalizeSiteHost, siteTags } from '@/lib/server-api';
+import { resolveServerBase, backendUrl, configuredPublicHost, normalizeSiteHost, siteTags, fromRequestedSite } from '@/lib/server-api';
 
 /** Response headers worth carrying to the client: the type, and everything about freshness. */
 const FORWARDED_HEADERS = ['content-type', 'cache-control', 'etag', 'last-modified'];
@@ -102,6 +102,8 @@ export async function proxySeo(endpoint: string, options: ProxyOptions): Promise
         return plain(502, 'Bad gateway');
     }
 
+    // Multisite: another site's document must come from that site (see fromRequestedSite).
+    if (options.siteHost && !fromRequestedSite(res, options.siteHost)) return plain(404, 'Not found');
     if (res.status === 404) return plain(404, 'Not found');
     if (!res.ok) return plain(502, 'Bad gateway');
 

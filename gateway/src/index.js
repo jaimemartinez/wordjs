@@ -997,7 +997,13 @@ if (cluster.isPrimary) {
     const edgeRefused = hostEdge.createReportingRefusals({
         send: (message) => { if (typeof process.send === 'function' && process.connected) process.send(message); },
     });
-    const edge = hostEdge.createHostEdge({ getPolicy: edgePolicy.get, logger, forwardedHostIsMarker: false, refused: edgeRefused });
+    // Multisite: the registered frontend nodes are relays for the address of their server-side reads
+    // (host-edge.js relayAuthority), so another site of the network renders with its own data.
+    const relayPeers = () => hostEdge.frontendRelayPeers(workerRegistry, routing.prefixOwner, () => {
+        const pol = edgePolicy.get();
+        return pol && typeof pol.ownAddresses === 'function' ? pol.ownAddresses() : [];
+    });
+    const edge = hostEdge.createHostEdge({ getPolicy: edgePolicy.get, logger, forwardedHostIsMarker: false, refused: edgeRefused, relayPeers });
     app.use((req, res, next) => {
         if (!edge.handle(req, res)) next();
     });
