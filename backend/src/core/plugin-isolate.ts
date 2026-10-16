@@ -1983,7 +1983,14 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
     // Own-dir private storage remains the compatibility floor for zero-permission plugins.
     if (storageEnabled) for (const dir of nativePaths.storage) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     // Another site's worker never writes its (shared) code directory — its storage is its own (sandbox-paths).
-    const sandboxWritable = [...(nativePaths.ownWritable ? [nativePaths.own] : []), ...(fsGrant.write ? nativePaths.storage : [])];
+    // In its place it keeps ONE always-present write zone: its site's private data directory, created here.
+    // The native layers need at least one existing zone (the Linux shim refuses an argv with none, and
+    // site 1's floor — the code directory — always exists); what plugin code may actually write there is
+    // still decided by io-guard and the filesystem grant, exactly as for site 1's private storage.
+    if (!nativePaths.ownWritable) fs.mkdirSync(nativePaths.storage[0], { recursive: true, mode: 0o700 });
+    const sandboxWritable = nativePaths.ownWritable
+        ? [nativePaths.own, ...(fsGrant.write ? nativePaths.storage : [])]
+        : Array.from(new Set([nativePaths.storage[0], ...(fsGrant.write ? nativePaths.storage : [])]));
     const sandboxReadable = Array.from(new Set([
         ...nativePaths.readOnly,
         ...(storageEnabled ? nativePaths.storage : []),
