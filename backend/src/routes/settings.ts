@@ -114,7 +114,11 @@ const ALL_SETTINGS = [
     // es postura de infraestructura, del mismo tipo que sandbox_hardening_* — no lo necesita ningún
     // render público, y contárselo a un visitante anónimo solo ayuda a quien mide la caché desde fuera.
     // Tampoco es DERIVED: es un valor ALMACENADO, y el estado en memoria se deriva de él, no al revés.
-    'redis_cache_enabled'
+    'redis_cache_enabled',
+    // Whether GET/POST /api/v1/graphql answers introspection (__schema / __type). Unset means "on in
+    // development, off in production" (core/graphql); '1'/'0' force it. Admin-only: the schema is not a
+    // secret, but turning discovery on is a posture decision, not something a visitor needs to read.
+    'graphql_introspection'
 ];
 
 // Publicly readable, but NOT writable through the generic settings writers: these have a
@@ -291,6 +295,10 @@ const SETTING_VALIDATORS: Record<string, (v: any) => string | null> = {
     redis_cache_enabled: (v: any) => booleanishSetting(v) === null
         ? 'redis_cache_enabled must be a boolean ("1" or "0").'
         : null,
+    // Introspection of /api/v1/graphql: the same closed boolean vocabulary.
+    graphql_introspection: (v: any) => booleanishSetting(v) === null
+        ? 'graphql_introspection must be a boolean ("1" or "0").'
+        : null,
     wjs_ix_presets: (v: any) => {
         if (v === '' || v === null || v === undefined) return null; // sin preajustes de sitio
         if (typeof v !== 'string') return 'wjs_ix_presets must be a JSON string.';
@@ -367,6 +375,7 @@ const SETTING_NORMALIZERS: Record<string, (v: any) => any> = {
     // El validador ya garantizó que es reconocible; el `?? '0'` es solo un fail-closed defensivo por si
     // algún día se escribe por un camino que no valide (apagado es el lado seguro).
     redis_cache_enabled: (v: any) => booleanishSetting(v) ?? '0',
+    graphql_introspection: (v: any) => booleanishSetting(v) ?? '0',
 };
 
 /** El valor EXACTO que se persiste para esta clave (idéntico al recibido si no hay normalizador). */

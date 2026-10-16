@@ -90,7 +90,8 @@ router.get('/', (req: Request, res: Response) => {
             notices: '/api/v1/notices',
             hooks: '/api/v1/hooks',
             forms: '/api/v1/forms',
-            chrome: '/api/v1/chrome'
+            chrome: '/api/v1/chrome',
+            graphql: '/api/v1/graphql'
         }
     });
 });
@@ -137,6 +138,9 @@ router.use('/presence', require('./presence'));
 // que es un aviso de "alguien más tiene esto abierto"; esta es la edición simultánea real.
 router.use('/collab', require('./collab'));
 router.use('/import', require('./import'));
+// Read-only GraphQL (phase 1). Every field resolves through the REST reads above for the same caller
+// (core/graphql/dispatch), so it adds a query language, not a second authorization model.
+router.use('/graphql', require('./graphql'));
 router.use('/', exportRoutes);
 
 // Pages endpoint (alias for posts with type=page)

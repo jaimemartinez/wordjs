@@ -56,6 +56,8 @@
     "express-rate-limit": "^8.7.1",
     "fast-xml-parser": "^5.11.2",
     "file-type": "^21.3.4",
+    "graphql": "^16.14.2",
+    "graphql-http": "^1.23.1",
     "handlebars": "^4.7.10",
     "helmet": "^8.3.0",
     "http-proxy": "^1.18.1",

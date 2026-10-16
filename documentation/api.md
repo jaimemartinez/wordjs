@@ -193,6 +193,9 @@ Two rules in `backend/src/core/query-params.ts` decide what a malformed paramete
 > `http://localhost:4000/api/v1/docs` (Requires Admin Login)
 > The page attaches your session's CSRF token to every call it makes (a `requestInterceptor` that echoes the `wjs_csrf` cookie as `X-CSRF-Token`), so **Try it out** works for mutating endpoints with an admin session; a Bearer token supplied through **Authorize** works too, since Bearer callers are exempt from the token gate (§2.4).
 
+> [!NOTE]
+> **GraphQL.** A read-only GraphQL endpoint lives at `/api/v1/graphql` (GET or POST). Every field resolves through the REST read documented below, as the same caller, so what it returns is exactly what these endpoints return. See [graphql.md](graphql.md).
+
 ### 6.1 Core Modules
 - **Authentication**: `/auth` - Login, Register, Session management.
 - **Content**: `/posts`, `/pages` (alias for `?type=page`), `/media`, `/categories`, `/tags`, `/comments`.

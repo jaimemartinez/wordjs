@@ -117,6 +117,23 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 - **`comment.created` webhook payloads now carry the comment's id.** The serializer read a field the
   comment model does not have, so `data.id` was always missing.
 
+## [Unreleased]
+
+### Added
+
+- **A read-only GraphQL API at `/api/v1/graphql`.** Posts, pages, custom post types, categories and tags,
+  taxonomies and content types, media, menus, approved comments, the public settings and the current
+  viewer, with cursor pagination (`first`/`after`, `pageInfo`, `totalCount`), filtering and the same
+  full-text search as REST. Every field resolves through the matching REST read, in process and as the
+  same caller, so drafts, private and password-protected entries, non-public types, hidden attachments and
+  scoped API tokens behave exactly as they do on REST; a parity suite compares the two for anonymous
+  callers, owners, other authors and editors. The server is protected by a depth limit (10), a query-cost
+  limit (1000), a parser token cap, a 100-item page cap and the existing API rate limiter; introspection
+  is off in production unless the new admin-only `graphql_introspection` setting turns it on. Host code
+  can extend the schema with `registerGraphQLExtension()` or the `wordjs_graphql_register_types` hook.
+  Mutations are not part of this release. Built on `graphql` 16 and `graphql-http` (both MIT, no
+  transitive dependencies). See `documentation/graphql.md`.
+
 ## [2.5.0] - 2026-10-15
 
 ### Added
