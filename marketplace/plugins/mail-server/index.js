@@ -61,7 +61,7 @@ function stripHtml(s) {
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '3.0.0',
+    version: '3.0.1',
     description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
 };
@@ -1184,6 +1184,36 @@ function inboundPortReason(code) {
 }
 
 /**
+ * May this server accept mail for `address` (RCPT TO)? null = yes, else the SMTP error to answer.
+ * Yes for a mailbox on our mail domain (the same predicate as delivery: mailboxAddressOf), an alias, or
+ * any address on the domain while catch-all is on. Another domain is relaying (5.7.1); an address on our
+ * domain with none of those is unknown (5.1.1). A lookup failure is a temporary 4xx, never a silent accept.
+ */
+async function recipientVerdict(rawAddress, mailDomain, catchAllRaw) {
+    const address = String(rawAddress || '').trim().toLowerCase();
+    const at = address.lastIndexOf('@');
+    const local = at > 0 ? address.slice(0, at) : '';
+    const domain = at > 0 ? address.slice(at + 1) : '';
+    if (!local || !domain || domain !== mailDomain) {
+        return smtpError(550, `5.7.1 Relaying denied: this server only accepts mail for ${mailDomain}`);
+    }
+    try {
+        let mailbox = null;
+        const candidate = await User.findByEmail(address) || await User.findByLogin(local);
+        if (mailboxAddressOf(candidate, mailDomain)) {
+            mailbox = candidate;
+        }
+        if (mailbox) return null;
+        if (Admin && await Admin.findAliasByLocalPart(local)) return null;
+        if (catchAllRaw === '1') return null;
+        return smtpError(550, `5.1.1 <${address}>: no such user here`);
+    } catch (e) {
+        console.warn(`[MailServer] RCPT check failed for ${address}: ${e && e.message}`);
+        return smtpError(451, '4.3.0 Temporary local problem, try again later');
+    }
+}
+
+/**
  * Initialize the Inbound SMTP Server
  */
 async function initSMTPServer() {
@@ -1324,19 +1354,23 @@ async function initSMTPServer() {
             });
         },
 
-        // 3. The administrator's site-wide sender blocklist — refused at the envelope, before any DATA
-        //    is transferred. (Trusted loopback/authenticated sessions are our own relay: never gated.)
+        // 3. RCPT TO: the administrator's site-wide sender blocklist (refused before any DATA is
+        //    transferred; trusted loopback/authenticated sessions are our own relay and never gated), then
+        //    the recipient itself — a mailbox, an alias, or catch-all on OUR mail domain, or a 550. Accepting
+        //    an address that delivers nowhere told the sender "250 OK" and then dropped the message, so
+        //    nobody ever learned it was lost (found in the production lab).
         onRcptTo(address, session, callback) {
-            if (isTrustedSmtpSession(session)) return callback();
             const envelopeFrom = (session && session.envelope && session.envelope.mailFrom && session.envelope.mailFrom.address) || '';
-            if (!envelopeFrom) return callback();
-            getDeliveryPolicy().then((policy) => {
-                if (MailRules.senderMatches(envelopeFrom, policy.blocked)) {
+            const blocked = (envelopeFrom && !isTrustedSmtpSession(session))
+                ? getDeliveryPolicy().then((policy) => MailRules.senderMatches(envelopeFrom, policy.blocked)).catch(() => false)
+                : Promise.resolve(false);
+            blocked.then(async (isBlocked) => {
+                if (isBlocked) {
                     console.warn(`[Security] Sender ${envelopeFrom} is on the site blocklist — rejecting`);
                     return callback(smtpError(550, '5.7.1 Sender rejected by recipient policy'));
                 }
-                callback();
-            }).catch(() => callback()); // a policy read failure never blackholes inbound mail
+                callback(await recipientVerdict(address && address.address, mailDomain, catchAllRaw));
+            }).catch(() => callback(smtpError(451, '4.3.0 Temporary local problem, try again later')));
         },
 
         onData(stream, session, callback) {
@@ -1830,8 +1864,17 @@ async function deliverLocalCopy(user, createData) {
             if (label && row) await Email.addLabelToEmails([row.id], label.id);
         } catch (e) { /* a label failure never loses the message */ }
     }
+    // Keep the cached usage honest between refreshes: the bodies AND the attachments this copy stored.
+    // Counting the text alone let a mailbox with a 1 MB quota take message after message carrying
+    // megabytes of attachments until the cache expired (found in the production lab).
     const hit = _usageCache.get(user.id);
-    if (hit) hit.bytes += String(createData.bodyText || '').length + String(createData.bodyHtml || '').length + String(createData.rawContent || '').length;
+    if (hit) {
+        let added = String(createData.bodyText || '').length + String(createData.bodyHtml || '').length + String(createData.rawContent || '').length;
+        for (const att of (createData.attachments || [])) {
+            added += (att && att.content && att.content.length) || (att && Number(att.size)) || 0;
+        }
+        hit.bytes += added;
+    }
     // Quiet filing (read, archived, trashed or spam) gets no "new mail" notification.
     const quiet = !!(filing.isSpam || filing.isTrash || filing.isRead || filing.isArchived || forwardsAway);
     const forwardTo = (fwd.enabled && policy.forwardingAllowed && !filing.isSpam && !filing.isTrash) ? fwd.address : '';
@@ -2550,6 +2593,24 @@ function isTlsVerifyError(e) {
 }
 
 /**
+ * Did the MX REFUSE STARTTLS with an SMTP reply (e.g. "454 4.7.0 TLS not available due to local
+ * problem" from a Postfix with no certificate)? nodemailer reports that as code ETLS carrying the
+ * server's reply code. Only that shape qualifies: a handshake that starts and then fails (reset,
+ * protocol error) is NOT this, and stays undowngraded — see the TLS suite.
+ *
+ * Continuing in plaintext after such a refusal is opportunistic TLS as every MTA does it (Postfix
+ * `smtp_tls_security_level = may`): it is the same outcome as a server that does not advertise STARTTLS
+ * at all, which we already accept, so an on-path attacker gains nothing they could not get by stripping
+ * the advertisement. Without it, mail to a provider with a broken TLS setup was retried for hours and
+ * then bounced (found in the production lab).
+ */
+function isStartTlsRefused(e) {
+    if (!e || String(e.code || '').toUpperCase() !== 'ETLS') return false;
+    const code = Number(e.responseCode) || 0;
+    return code >= 400 && code < 600;
+}
+
+/**
  * Deliver ONE message to ONE recipient by connecting directly to its domain's MX servers.
  * Resolves on success ({ ok, mx, response }); rejects with err.permanent set (5xx = permanent,
  * 4xx/network = temporary so the caller may retry).
@@ -2577,11 +2638,13 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
     // TTL=0 rebinding window where authoritative DNS hands a public IP to the validator and
     // 127.0.0.1 / 169.254.169.254 to the live connection. `servername` keeps the REAL MX hostname so
     // STARTTLS certificate validation and SNI still target the host, not the bare IP.
-    const sendVia = async (pinnedIp, serverName, rejectUnauthorized) => {
+    const sendVia = async (pinnedIp, serverName, rejectUnauthorized, plaintext = false) => {
         const transport = nodemailer.createTransport({
             host: pinnedIp,               // already-validated public IP — no second resolution
             port: 25,
             secure: false,
+            // Only after this host REFUSED STARTTLS with a reply (isStartTlsRefused): do not ask again.
+            ...(plaintext ? { ignoreTLS: true } : {}),
             name: heloName,               // EHLO/HELO hostname (must match rDNS)
             connectionTimeout: 20000,
             greetingTimeout: 15000,
@@ -2646,6 +2709,21 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
                     lastErr = e2;
                     const code = e2.responseCode || 0;
                     permanent = code >= 500 && code < 600;
+                    if (permanent) break;
+                    continue;
+                }
+            }
+            // The host refused STARTTLS with a reply: deliver to it without TLS, as opportunistic TLS
+            // does, and say so in the log.
+            if (isStartTlsRefused(e)) {
+                console.warn(`[MailServer][TLS] ${mx.exchange} refused STARTTLS (${e.responseCode}) — retrying WITHOUT TLS (opportunistic, plaintext).`);
+                try {
+                    const info = await sendVia(pinnedIp, mx.exchange, false, true);
+                    return { ok: true, mx: mx.exchange, response: info.response, tlsDowngraded: true, plaintext: true };
+                } catch (e2) {
+                    lastErr = e2;
+                    const code2 = e2.responseCode || 0;
+                    permanent = code2 >= 500 && code2 < 600;
                     if (permanent) break;
                     continue;
                 }

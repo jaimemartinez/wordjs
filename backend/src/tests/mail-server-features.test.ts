@@ -234,6 +234,25 @@ test('a full mailbox is refused with 452 inbound and reported as a failure inter
     } finally { b.plugin.deactivate(); }
 });
 
+test('attachments count against the quota between usage refreshes (no stream of big mail past a full mailbox)', async () => {
+    const b = await boot();
+    try {
+        await call(b, 'put /admin/mailboxes/:userId', BOSS, { params: { userId: String(BOB.id) }, body: { quotaMb: 1 } });
+        const attachment = Buffer.alloc(700 * 1024, 65).toString('base64');
+        const raw = (n: number) => [
+            'From: c@outside.example', `To: ${BOB.userEmail}`, `Subject: Big ${n}`, 'MIME-Version: 1.0',
+            'Content-Type: multipart/mixed; boundary="XX"', '', '--XX', 'Content-Type: text/plain', '', 'see attached',
+            '--XX', 'Content-Type: application/octet-stream', 'Content-Transfer-Encoding: base64',
+            'Content-Disposition: attachment; filename="blob.bin"', '', attachment, '--XX--', ''
+        ].join('\r\n');
+        assert.equal(await inbound(b, raw(1)), null, 'the first one fits');
+        assert.equal(await inbound(b, raw(2)), null, 'the second one is still accepted (usage was under the quota)');
+        const third = await inbound(b, raw(3));
+        assert.ok(third, 'the mailbox is now over its quota: the third is refused');
+        assert.equal(third.responseCode, 452);
+    } finally { b.plugin.deactivate(); }
+});
+
 test('the site blocklist refuses the envelope; forwarding guards hold', async () => {
     const b = await boot({ mail_blocked_senders: '@evil.example' });
     try {
@@ -253,6 +272,29 @@ test('the site blocklist refuses the envelope; forwarding guards hold', async ()
         r = await call(b, 'put /prefs', ALICE, { body: { forwarding: { enabled: true, address: 'alice.home@gmail.com' } } });
         assert.equal(r.status, 403, 'the administrator can switch external forwarding off');
     } finally { b.plugin.deactivate(); }
+});
+
+test('RCPT TO refuses addresses that deliver nowhere instead of accepting and dropping them', async () => {
+    const rcpt = (b: Boot, to: string) => new Promise<any>((resolve) => {
+        b.smtp.options.onRcptTo({ address: to }, { remoteAddress: '203.0.113.9', envelope: { mailFrom: { address: 'someone@outside.example' } } }, (e: any) => resolve(e || null));
+    });
+    const b = await boot();
+    try {
+        await call(b, 'post /admin/aliases', BOSS, { body: { localPart: 'sales', destinations: BOB.userEmail } });
+        assert.equal(await rcpt(b, ALICE.userEmail), null, 'a mailbox');
+        assert.equal(await rcpt(b, `SALES@${DOMAIN}`), null, 'an alias (case-insensitive)');
+        const unknown = await rcpt(b, `nobody@${DOMAIN}`);
+        assert.equal(unknown && unknown.responseCode, 550);
+        assert.match(unknown.message, /5\.1\.1/);
+        const relay = await rcpt(b, 'victim@elsewhere.example');
+        assert.equal(relay && relay.responseCode, 550);
+        assert.match(relay.message, /5\.7\.1/);
+    } finally { b.plugin.deactivate(); }
+
+    const withCatchAll = await boot({ smtp_catch_all: '1' });
+    try {
+        assert.equal(await rcpt(withCatchAll, `anything@${DOMAIN}`), null, 'catch-all accepts any address on the domain');
+    } finally { withCatchAll.plugin.deactivate(); }
 });
 
 test('administration routes answer for an administrator', async () => {

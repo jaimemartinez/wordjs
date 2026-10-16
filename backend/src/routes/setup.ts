@@ -773,6 +773,19 @@ router.post('/install', async (req: Request, res: Response) => {
                 console.warn('⚠️ Setup: could not record the browser:script upgrade as done:', e && e.message);
             }
 
+            // Load the plugin policy (grants + egress allowlists) NOW. This process booted in setup mode and
+            // skipped the boot block that loads it, so until the next restart the egress policy stayed "not
+            // loaded" — which fails CLOSED by design: every network-granted plugin got a deny-all, so
+            // wordjs.dns refused every name and a mail plugin could not resolve a single MX (found on a
+            // fresh production install). Best-effort: a failure here leaves exactly that fail-closed state.
+            try {
+                const perms = require('../core/plugin-permissions');
+                await perms.loadGrants();
+                await perms.loadEgressHosts();
+            } catch (e: any) {
+                console.warn('⚠️ Setup: could not load the plugin policy (network plugins stay deny-all until a restart):', e && e.message);
+            }
+
             // SECURITY: Generate mTLS Certificates — but NEVER on a cluster-enrolled node. There the
             // cluster CA already exists on the GATEWAY (its private key deliberately never leaves that
             // machine) and this node holds a CN=backend leaf signed by it. Minting a second, unrelated
