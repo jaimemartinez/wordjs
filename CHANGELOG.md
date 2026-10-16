@@ -4,6 +4,20 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [Unreleased]
+
+### Fixed
+
+- **Opening a post or page in the editor no longer crashes or blanks the canvas when live collaboration
+  is on.** A record with no saved editor document (an imported or legacy post, one created through the
+  API, or the demo posts of a fresh install) joined the collaboration room, whose snapshot for it is
+  `{}`. The room's welcome then replaced the locally seeded document: the canvas, title, slug and
+  excerpt opened empty, and every field edit threw `Cannot read properties of undefined (reading
+  'length')`. The Verso store now always publishes `content` as an array (a document whose `content`
+  key is absent is published as `[]`; a corrupt one is still passed through untouched), and an editor
+  whose record has no saved document stays out of the room until it has been saved once. Records that
+  already have a saved document collaborate as before.
+
 ## [2.5.0] - 2026-10-15
 
 ### Added

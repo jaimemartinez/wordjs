@@ -228,6 +228,7 @@ export default function PostEditorPage() {
                 setVersoData(withTemplate);
                 versoDataRef.current = withTemplate;
                 legacyHtmlRef.current = null; // real Puck blocks — not a legacy HTML body
+                setHasStoredDocument(true);
                 if (typeof stored.root?.title === "string") {
                     setTitle(stored.root.title);
                 }
@@ -253,6 +254,7 @@ export default function PostEditorPage() {
                 // the post if the HTMLEmbed block is deleted before its HTML round-trips. Once the block
                 // round-trips through onChange (content.length > 0), legacyHtmlRef is cleared.
                 legacyHtmlRef.current = legacyHtml;
+                setHasStoredDocument(false);
             }
             setLoaded(true); // content is now hydrated — saving is safe
         } catch (error) {
@@ -317,6 +319,9 @@ export default function PostEditorPage() {
     // Holds a legacy post's original HTML body while its Puck canvas is still empty (see loadPost).
     // Cleared once the user builds real blocks, after which the normal block→HTML path takes over.
     const legacyHtmlRef = useRef<string | null>(null);
+    // ¿El registro trae `_puck_data`? Sin él el lienzo es una siembra LOCAL que la sala colaborativa
+    // no conoce, y el editor no debe unirse a ella (ver VersoEditor `hasStoredDocument`).
+    const [hasStoredDocument, setHasStoredDocument] = useState(false);
 
     // Cambiar estado o fecha programada marca dirty por sí solo — programar/despublicar no exige
     // tocar el lienzo, y el botón Guardar se deshabilita sin cambios.
@@ -525,6 +530,7 @@ export default function PostEditorPage() {
                     }}
                     breadcrumbRoot="Entradas"
                     pageId={postId || undefined}
+                    hasStoredDocument={hasStoredDocument}
                     previewSlug={slug || undefined}
                     previewType="post"
                     rootFields={rootFields}
