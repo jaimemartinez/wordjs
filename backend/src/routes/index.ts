@@ -135,6 +135,10 @@ router.use('/seo', seoRoutes);
 router.use('/hooks', hooksRoutes);
 router.use('/webhooks', require('./webhooks'));
 router.use('/audit', require('./audit'));
+// AI agents: the connections an administrator grants (routes/agents.ts) and the MCP endpoint they use
+// (routes/mcp.ts). See core/agent-capabilities for the request/grant/narrow model.
+router.use('/agents', require('./agents'));
+router.use('/mcp', require('./mcp'));
 router.use('/forms', require('./forms'));
 router.use('/presence', require('./presence'));
 // Colaboración en tiempo real de Verso (SSE de bajada + POST de subida). Distinta de `/presence`,

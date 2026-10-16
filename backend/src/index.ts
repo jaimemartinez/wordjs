@@ -477,6 +477,29 @@ const setupLimiter = rateLimit({
     message: { error: 'Too many setup attempts, please try again later.' }
 });
 
+// The MCP endpoint (routes/mcp.ts) gets its own bucket, keyed by the AGENT TOKEN (hashed — never the raw
+// secret in a store key) rather than the IP: one machine commonly runs several agents, and one agent loop
+// must not starve the others or the admin's own browser behind the same IP. Requests with no agent token
+// fall back to the IP key (they are refused by the route anyway). It is on top of the global per-IP
+// apiLimiter, and per-agent tool-call/write windows inside core/mcp-server bound a single request's fan-out.
+const mcpLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 240,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req: any) => {
+        const h = String((req.headers && req.headers.authorization) || '');
+        if (h.startsWith('Bearer wja_')) {
+            return 'agent:' + require('crypto').createHash('sha256').update(h.slice(7)).digest('hex').slice(0, 32);
+        }
+        return ipKey(req);
+    },
+    store: limiterStore('rl:mcp:'),
+    passOnStoreError: true,
+    message: { jsonrpc: '2.0', error: { code: -32029, message: 'Too many requests from this agent, please slow down.' }, id: null }
+});
+app.use(`${config.api.prefix}/mcp`, mcpLimiter);
+
 // (#19) Collaboration's own budget, mounted BEFORE the global limiter — which now skips these paths
 // (see apiLimiter.skip). Both halves are required: mounting a second limiter does not exempt a
 // request from the first, and skipping without a replacement would leave the busiest write endpoint

@@ -19,6 +19,8 @@ const jwt = require('jsonwebtoken');
 const config = require('../config/app');
 const User = require('../models/User');
 const ApiToken = require('../models/ApiToken');
+const AgentConnection = require('../models/AgentConnection');
+const { dispatchContextOf } = require('../core/rest-dispatch');
 const mfa = require('../core/mfa');
 const hostPolicy: typeof import('../core/host-policy') = require('../core/host-policy');
 const { logSafe } = require('../core/log-safe');
@@ -423,6 +425,11 @@ async function mfaComplianceGate(req: Request, res: Response, next: NextFunction
         if (bearer.startsWith(ApiToken.PREFIX)) {
             return policy.enforceForApiTokens ? enforceApiTokenMfa(bearer, req, res, next) : next();
         }
+        // An AI agent connection is the same kind of credential — headless, unable to answer a challenge,
+        // acting as its owner — so it follows the same opt-in rule as a `wjt_` token.
+        if (bearer.startsWith(AgentConnection.PREFIX)) {
+            return policy.enforceForApiTokens ? enforceApiTokenMfa(bearer, req, res, next) : next();
+        }
         token = bearer; // a session JWT over the Bearer transport — subject to enforcement
     }
     if (!token) token = sessionCookie(req);
@@ -499,7 +506,9 @@ async function enforceApiTokenMfa(raw: string, req: Request, res: Response, next
         // A second lookup on top of verifyApiTokenAndAttachUser's, and deliberately so: the gate runs BEFORE
         // any route's auth, so it has only the raw string. It costs one hash lookup and only on requests
         // that both present a wjt_ token AND run under an opted-in policy.
-        const record = await ApiToken.findByRawToken(raw);
+        const record = raw.startsWith(AgentConnection.PREFIX)
+            ? await AgentConnection.findByRawToken(raw)
+            : await ApiToken.findByRawToken(raw);
         if (!record) return next();
         const user = await User.findById(record.userId);
         if (!user) return next();
@@ -662,6 +671,33 @@ function markHeadless(req: Request, record: { id: number; scopes: string[]; name
 
 function isHeadless(req: Request): boolean {
     return !!(req && (req.isHeadless || req.apiToken));
+}
+
+/**
+ * An AI agent's call, dispatched in-process by core/rest-dispatch on behalf of the MCP server. Such a
+ * request carries NO credential: its identity is the WeakMap entry rest-dispatch wrote for that exact
+ * request object, which no client can forge. When present it is the ONLY identity the request may have:
+ * the narrowed user (grant ∩ the bound user's capabilities), stamped headless — so every session-only gate
+ * refuses it, exactly like an API token — and held to the grant's coarse REST scopes as a second fence.
+ *
+ * Returns true when it fully handled the request (attached + next(), or answered 403).
+ */
+function handleDispatchedAgent(req: Request, res: Response, next: NextFunction): boolean {
+    const ctx = dispatchContextOf(req);
+    if (!ctx) return false;
+    const resource = apiResourceOf(req);
+    if (!ApiToken.scopeAllows(ctx.scopes, req.method, resource)) {
+        res.status(403).json({
+            code: 'rest_agent_scope_insufficient',
+            message: `This agent's grant does not cover ${req.method} on the "${resource || 'unknown'}" resource.`,
+            data: { status: 403 }
+        });
+        return true;
+    }
+    req.user = ctx.user;
+    markHeadless(req, { id: ctx.agent.id, scopes: ctx.scopes, name: ctx.agent.name });
+    next();
+    return true;
 }
 
 const SESSION_COOKIE = 'wordjs_token';
@@ -1164,6 +1200,7 @@ function sessionOnly(req: Request, res: Response, next: NextFunction) {
  * Authenticate request with JWT token (Strict: Headers Only, with Cookie fallback)
  */
 async function authenticate(req: Request, res: Response, next: NextFunction) {
+    if (handleDispatchedAgent(req, res, next)) return;
     const authHeader = req.headers.authorization;
     let token;
 
@@ -1210,6 +1247,7 @@ async function authenticate(req: Request, res: Response, next: NextFunction) {
  * never authorize a state-changing request off a query-string token.
  */
 async function authenticateAllowQuery(req: Request, res: Response, next: NextFunction) {
+    if (handleDispatchedAgent(req, res, next)) return;
     const authHeader = req.headers.authorization;
     let token;
 
@@ -1242,6 +1280,7 @@ async function authenticateAllowQuery(req: Request, res: Response, next: NextFun
  * Optional authentication (doesn't fail if no token)
  */
 async function optionalAuth(req: Request, res: Response, next: NextFunction) {
+    if (handleDispatchedAgent(req, res, next)) return;
     const authHeader = req.headers.authorization;
     let token;
 

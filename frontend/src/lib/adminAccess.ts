@@ -98,6 +98,9 @@ export const CORE_MENU_ITEMS: AdminMenuItem[] = [
     // minting a token is a privileged action even though the token inherits the owner's own permissions.
     // Account self-service stays at 'read' (every logged-in user manages their own profile/password).
     { href: "/admin/tokens", label: "nav.apiTokens", icon: "fa-key", cap: "manage_api_tokens" },
+    // AI agent connections (MCP): same gate as API tokens — creating one mints a credential. Granting is
+    // administrator-only and enforced by the backend; the page hides the grant controls from everyone else.
+    { href: "/admin/agents", label: "nav.aiAgents", icon: "fa-robot", cap: "manage_api_tokens" },
     { href: ACCOUNT_PATH, label: "nav.account", icon: "fa-user-gear", cap: "read" },
 ];
 
