@@ -743,6 +743,17 @@ Operator guide and the full model: [ai-agents.md](ai-agents.md). An **agent conn
 | `POST`   | `/mcp` | `Bearer wja_…` only | MCP Streamable HTTP endpoint (JSON-RPC 2.0), stateless, JSON responses; clients send `Accept: application/json, text/event-stream`. `401` with `WWW-Authenticate: Bearer` for a missing/invalid/revoked token; `GET`/`DELETE` answer `405` |
 
 A `wja_` token is refused by every REST route (the REST `authenticate` does not know the prefix), and a `wjt_` API token or a session cookie is refused by `/mcp`. Someone else's connection answers `404 rest_agent_not_found`. Agent tool calls run through the REST router in-process (`backend/src/core/rest-dispatch.ts`), so every REST rule, hook and audit row applies to them.
+
+### 6.24 AI provider 🧠
+Base path `/api/v1/ai` (`backend/src/routes/ai.ts`, `core/ai-provider.ts`). Operator guide: [ai-provider.md](ai-provider.md). The provider's API key is **write-only** — no route returns it.
+
+| Method | Endpoint | Auth | Description |
+| :----- | :------- | :--- | :---------- |
+| `GET`  | `/status` | Signed in | `{ enabled, tasks }` — whether suggestions are available |
+| `GET`  | `/settings` | Session + administrator | `{ provider, model, baseUrl, hasKey, keyHint, providers, anthropicModels }` |
+| `PUT`  | `/settings` | Session + administrator | `{ provider: '' \| 'anthropic' \| 'openai-compatible', model?, baseUrl?, apiKey?, clearKey? }`; an empty `apiKey` keeps the stored key. `400 rest_invalid_param` for an unknown provider/model, credentials in the URL, or plain http to a non-loopback host. Audited as `ai.settings.update` (never the key) |
+| `POST` | `/test` | Session + administrator | One tiny round trip: `{ ok, provider, model, ms }`, or the provider error |
+| `POST` | `/suggest` | `edit_posts`/`edit_pages` (text tasks); `upload_files` + edit rights on the image (`alt_text`) | `{ task: 'excerpt' \| 'seo_description' \| 'alt_text', title?, content?, mediaId?, language? }` → `{ suggestion, model }`. Saves nothing. `409 ai_not_configured`, `422 ai_refused`, `429 ai_rate_limited` (20/min per user), `502 ai_provider_*` |
 ---
 
 ## 8. Cron System ⏰

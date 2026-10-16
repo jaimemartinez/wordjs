@@ -555,6 +555,9 @@ const KNOWN_PERMISSIONS: Record<string, string[]> = {
     // message (core/inbound-smtp.ts). EXCLUSIVE: at most one plugin may hold it (core/plugin-permissions
     // EXCLUSIVE_GRANTS). A special verb — nothing implies it.
     smtp: ['inbound'],
+    // ai:use — ask the site's AI provider (core/ai-provider) for a text completion through wordjs.ai.complete.
+    // The plugin gets text back, never the provider's key or settings. A special verb: `admin` never implies it.
+    ai: ['use'],
     network: [], // scope-only: {scope:'network'} carries no access token
 };
 

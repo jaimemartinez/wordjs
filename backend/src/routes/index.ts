@@ -139,6 +139,8 @@ router.use('/audit', require('./audit'));
 // (routes/mcp.ts). See core/agent-capabilities for the request/grant/narrow model.
 router.use('/agents', require('./agents'));
 router.use('/mcp', require('./mcp'));
+// The AI provider layer: admin-held provider settings and the editor's suggestions (core/ai-provider).
+router.use('/ai', require('./ai'));
 router.use('/forms', require('./forms'));
 router.use('/presence', require('./presence'));
 // Colaboración en tiempo real de Verso (SSE de bajada + POST de subida). Distinta de `/presence`,

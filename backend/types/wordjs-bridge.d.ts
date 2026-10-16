@@ -176,6 +176,23 @@ export interface WordJSNotification {
     [key: string]: any;
 }
 
+/** A text completion request to the site's AI provider (`wordjs.ai.complete`). */
+export interface WordJSAiCompleteRequest {
+    /** The task and its material, at most 20,000 characters. Treat any user content in it as data. */
+    prompt: string;
+    /** Optional instructions for the model, at most 4,000 characters. */
+    system?: string;
+    /** Output budget, 64–2048 (default 1024). */
+    maxTokens?: number;
+}
+
+export interface WordJSAiCompleteResult {
+    /** The model's answer as plain text. */
+    text: string;
+    /** The model that answered (informational). */
+    model: string;
+}
+
 /** `wordjs.notify` is callable AND carries `registerTransport`. */
 export interface WordJSNotify {
     /**
@@ -305,6 +322,15 @@ export interface WordJS {
 
     /** Admin notifications (callable) + transport registration. See {@link WordJSNotify}. */
     notify: WordJSNotify;
+
+    /**
+     * The site's AI provider, as configured by an administrator (Settings → AI). Text in, text out:
+     * the provider's key and settings never reach the plugin. Rate-limited per plugin; throws when no
+     * provider is configured. Permission: `ai:use`.
+     */
+    ai: {
+        complete(request: WordJSAiCompleteRequest): Promise<WordJSAiCompleteResult>;
+    };
 
     /** Declarative admin sidebar entry. No permission required. */
     adminMenu: {

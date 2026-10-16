@@ -432,6 +432,10 @@ const wordjs = {
         mailProvider = handler;
         send({ kind: 'register-mail-provider' });
     },
+    // Text completion through the site's AI provider (host-side gate: ai:use). Text in, text out.
+    ai: {
+        complete: (req) => callHost('ai.complete', [req]),
+    },
     notify: Object.assign((n) => callHost('notify', [n]), {
         // Register a notification transport (e.g. 'email') whose handler lives in this isolate.
         registerTransport(name, handler) {
