@@ -246,6 +246,8 @@ function createDispatch({ backendApp, handle, proto, edge }) {
         const scheme = (edge && typeof edge.scheme === 'function' && edge.scheme(req)) || proto;
         // Pin forwarded headers so backend CSRF/origin sees the address the edge judged (gateway parity).
         pinForwardedHost(req);
+        // Multisite: the site the edge judged, for Next to render (never a client's own value).
+        hostEdge.pinSiteHeader(req);
         req.headers['x-forwarded-proto'] = scheme;
         // SEO rewrites (gateway parity).
         if (req.url === '/sitemap.xml') req.url = '/api/v1/seo/sitemap.xml';

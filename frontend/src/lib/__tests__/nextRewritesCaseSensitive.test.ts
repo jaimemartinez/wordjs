@@ -23,7 +23,8 @@ const target = createRequire(import.meta.url)("../../../backend-proxy-target.js"
 describe("the backend-prefix rewrites", () => {
     it("are case-sensitive, so no other spelling of a backend prefix is proxied back into the listener", async () => {
         expect(nextConfig.experimental?.caseSensitiveRoutes).toBe(true);
-        const rewrites = (await nextConfig.rewrites!()) as Rewrite[];
+        // The backend-prefix proxy rules; the multisite beforeFiles rules are internal (multisite.test.ts).
+        const rewrites = ((await nextConfig.rewrites!()) as any).afterFiles as Rewrite[];
         expect(rewrites.length).toBeGreaterThan(0);
         for (const rewrite of rewrites) {
             const match = getPathMatch(rewrite.source, {
@@ -45,7 +46,8 @@ describe("the backend-prefix rewrites", () => {
         // backend's. If one of Next's rewrites then matched it, Next would proxy it to the baked
         // http://localhost:<gatewayPort> — the listener that just handed it over, which hands it over again.
         // `/api/revalidate/x` did exactly that: the Next-owned exception covered everything below the route.
-        const rewrites = (await nextConfig.rewrites!()) as Rewrite[];
+        // The backend-prefix proxy rules; the multisite beforeFiles rules are internal (multisite.test.ts).
+        const rewrites = ((await nextConfig.rewrites!()) as any).afterFiles as Rewrite[];
         const matchers = rewrites.map((r) => getPathMatch(r.source, { removeUnnamedParams: true, strict: true, sensitive: nextConfig.experimental?.caseSensitiveRoutes }));
         // A route handler wins over the rewrites, and its trailing-slash twin is redirected to it first.
         const ownedByNext = new Set(target.NEXT_OWNED_API_PATHS.flatMap((route) => [route, `${route}/`]));

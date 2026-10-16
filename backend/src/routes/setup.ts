@@ -136,6 +136,7 @@ function classifyInstallRequest(req: Request): SiteHost | 'unknown' | null {
         cls: verdict.cls,
         reason: verdict.reason,
         entry: verdict.entry,
+        siteId: hostPolicy.siteIdOf(verdict) ?? 1,
         hop: authority.hop,
         viaTrustedHop: authority.viaTrustedHop,
         scheme: hostPolicy.trustedScheme(req, policy),

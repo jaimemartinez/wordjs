@@ -148,6 +148,11 @@ function evaluateRootExpression(expr: string, consts: Map<string, string>, seen 
     // The one deliberate exception, documented at the call site: the operator-configured uploads dir,
     // resolved exactly as every writer and io-guard's configuredUploadsRoot() resolve it.
     if (expr === 'path.resolve(config.uploads.dir)') return path.resolve(config.uploads.dir);
+    // Multisite: another site serves /uploads from its own data directory (core/private-media
+    // publicUploadsRoot, which is core/network siteDataDir(id)/uploads). Any site id: site 2 stands for all.
+    if (expr === "require('./core/private-media').publicUploadsRoot()") {
+        return path.join(require('../core/network').siteDataDir(2), 'uploads');
+    }
     // An identifier: follow it to its own declaration in this file (cycles fail through to assert.fail).
     if (/^[A-Za-z_$][\w$]*$/.test(expr) && consts.has(expr) && !seen.has(expr)) {
         seen.add(expr);
@@ -241,6 +246,9 @@ describe('the installation anchor (class: cwd-resolved paths)', () => {
             const { roots, consts } = scanMounts(SRC);
             for (const { where, expr } of roots) {
                 if (expr.includes('config.uploads.dir')) continue;   // see the follow-up note at the top
+                // Multisite: the other sites' uploads live next to the CONFIGURED database (config.dbPath),
+                // the same operator-configured class as the uploads dir above.
+                if (expr === 'root' && consts.get('root') === "require('./core/private-media').publicUploadsRoot()") continue;
                 const resolved = evaluateRootExpression(expr, consts);
                 assert.ok(
                     SERVED_ROOTS.some((r: string) => resolved === r || resolved.startsWith(r + path.sep)),

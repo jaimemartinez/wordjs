@@ -218,6 +218,23 @@ async function runCron() {
     // Single-runner across nodes. The lease is HEARTBEAT-renewed for the whole run, so a long job
     // (full backup, ACME renewal) is never preempted and can't double-run on another node.
     await distLock.runAsLeader('wordjs:cron', { ttlMs: 90000, renewMs: 30000 }, () => runCronInner());
+    // Multisite: every other active site's own events, each in its own context (one at a time). A no-op
+    // on a single site. Multisite runs on one SQLite host in this phase, so no lease is needed.
+    await require('./network-sites').forEachSecondarySite('cron', () => runCronInner());
+}
+
+/**
+ * Multisite: the hooks an event of a site other than the main one may run. A plugin's own event runs
+ * there (only that site's worker of the plugin answers it — core/hooks doActionForPlugin). Of the core
+ * jobs, only those that act on the site's own data run; the others (backups, version checks,
+ * certificates, maintenance) act on the main site's database and files — an event naming one of them on
+ * another site is dropped, not run.
+ */
+const SECONDARY_SITE_CRON_HOOKS = new Set(['publish_future_post', 'wordjs_analytics_prune']);
+function cronHookAllowedHere(event: any): boolean {
+    if (!require('./multisite-guards').onSecondarySite()) return true;
+    if (event.pluginSlug) return true;
+    return SECONDARY_SITE_CRON_HOOKS.has(String(event.hook));
 }
 
 async function runCronInner() {
@@ -246,6 +263,11 @@ async function runCronInner() {
         for (const key of Object.keys(events[timestamp])) {
             const event = events[timestamp][key];
 
+            if (!cronHookAllowedHere(event)) {
+                console.warn(`Cron: removing event '${event.hook}' — it is not available on this site of the network.`);
+                executed.push({ timestamp, key });
+                continue;
+            }
             try {
                 // SECURITY: a plugin-scheduled event runs ONLY that plugin's own callbacks, in its
                 // context — so a plugin cannot schedule a CORE hook with attacker args to trigger core

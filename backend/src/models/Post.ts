@@ -9,6 +9,8 @@ const { doShortcode, doShortcodeAsync, stripShortcodes } = require('../core/shor
 const { sanitizeTitle, sanitizeContent, generateExcerpt, currentTimeGMT, currentTime, formatDate, boundSlug } = require('../core/formatting');
 const config = require('../config/app');
 const cache = require('../core/cache');
+// Multisite: the current site's main address, the base of the absolute URLs below (site 1: config.site.url).
+const network = require('../core/network');
 const { saveRevision } = require('../core/revisions');
 const { randomUUID } = require('crypto');
 // parseLanguageTag validates + canonicalizes a BCP-47 tag, returning null for anything that is not a
@@ -371,10 +373,11 @@ class Post {
      * Equivalent to get_permalink()
      */
     getPermalink() {
+        const siteUrl = network.currentSiteUrl();
         if (this.postType === 'page') {
-            return `${config.site.url}/${this.postName}/`;
+            return `${siteUrl}/${this.postName}/`;
         }
-        return `${config.site.url}/${this.postType}/${this.postName}/`;
+        return `${siteUrl}/${this.postType}/${this.postName}/`;
     }
 
     /**
@@ -516,10 +519,10 @@ class Post {
 
             if (featuredImage.postStatus === privateMedia.PRIVATE_ATTACHMENT_STATUS) {
                 sitePath = privateMedia.privateFileUrl(featuredImage.id);
-                dynamicUrl = `${config.site.url}${sitePath}`;
+                dynamicUrl = `${network.currentSiteUrl()}${sitePath}`;
             } else if (attachedFile) {
                 const safePath = attachedFile.replace(/\\/g, '/');
-                dynamicUrl = `${config.site.url}/uploads/${safePath}`;
+                dynamicUrl = `${network.currentSiteUrl()}/uploads/${safePath}`;
                 // The same file as a SAME-ORIGIN path. `url` stays absolute on the main address (og:image
                 // and API consumers need that), but a page opened through another accepted address (an
                 // alias, the server's LAN IP) must not load every thumbnail from a host the visitor may
@@ -635,7 +638,7 @@ class Post {
         }
 
         // Generate GUID
-        const guid = `${config.site.url}/?p=${Date.now()}`;
+        const guid = `${network.currentSiteUrl()}/?p=${Date.now()}`;
 
         // Postgres requires RETURNING id to get the inserted ID
         const result = await dbAsync.run(`
@@ -672,7 +675,7 @@ class Post {
         const postId = result.lastID;
 
         // Update GUID with actual post ID
-        await dbAsync.run('UPDATE posts SET guid = ? WHERE id = ?', [`${config.site.url}/?p=${postId}`, postId]);
+        await dbAsync.run('UPDATE posts SET guid = ? WHERE id = ?', [`${network.currentSiteUrl()}/?p=${postId}`, postId]);
 
         // Arm the flip event for a scheduled post (only once we know its id).
         if (scheduledWhenMs !== null) {

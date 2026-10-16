@@ -291,7 +291,8 @@ const MEDIA_LIST_QUERY_FIELDS: readonly string[] = Object.freeze([
     'page', 'per_page', 'search', 'mime_type', 'orderby', 'order', 'visibility',
 ]);
 
-// Ensure uploads directory exists
+// Ensure uploads directory exists (the main site's; another site's root is created with the site and
+// on first upload below).
 if (!fs.existsSync(config.uploads.dir)) {
     fs.mkdirSync(config.uploads.dir, { recursive: true });
 }
@@ -308,7 +309,7 @@ const storage = multer.diskStorage({
         // after the file part, and is honoured by moving the files before the row is created.
         const root = requestedVisibility(req.query && req.query.visibility) === 'private'
             ? privateMedia.privateUploadsRoot()
-            : config.uploads.dir;
+            : privateMedia.publicUploadsRoot();
         const uploadPath = path.join(root, subDir);
 
         if (!fs.existsSync(uploadPath)) {
@@ -821,7 +822,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
     }
     const storedPrivate = queryVisibility === 'private';
     const wantPrivate = storedPrivate || bodyVisibility === 'private';
-    const storedRoot = storedPrivate ? privateMedia.privateUploadsRoot() : path.resolve(config.uploads.dir);
+    const storedRoot = storedPrivate ? privateMedia.privateUploadsRoot() : privateMedia.publicUploadsRoot();
 
     // Get relative path from uploads dir
     const relativePath = path.relative(storedRoot, uploaded.path).replace(/\\/g, '/');

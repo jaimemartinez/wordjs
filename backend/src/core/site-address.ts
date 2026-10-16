@@ -159,6 +159,14 @@ function canonicalOrigin(): string | null {
  * choose where a reset token is sent (SPEC §5, the reason this function exists).
  */
 async function linkBase(): Promise<string> {
+    // Multisite: another site's links are built on ITS main address, from the network registry (the
+    // single writer of those addresses) — never from an option its administrators could edit, never
+    // from the request, and never the main site's.
+    if (require('./multisite-guards').onSecondarySite()) {
+        const site = hostPolicy.parseSiteUrl(require('./network').currentSiteUrl());
+        if (site) return site.origin;
+        throw new Error('This site of the network has no valid main address.');
+    }
     const { getOption } = require('./options');
     for (const name of ['siteurl', 'home']) {
         const site = hostPolicy.parseSiteUrl(await getOption(name, null));
@@ -972,6 +980,17 @@ const POLICY_ENV_KEYS = ['WORDJS_ALLOWED_HOSTS', 'WORDJS_IP_HOSTS', 'WORDJS_DEV_
  * `hostPolicy` carries only the two keys buildPolicy reads, with their real types: anything else in a
  * hand-edited file would make the gateway refuse the whole push, where buildPolicy simply ignores it.
  */
+/** Multisite: `{ networkSites }` for the gateway's policy, or nothing on a single site. Never throws. */
+function networkSitesForPush(): { networkSites?: unknown[] } {
+    try {
+        if (!require('./site-context').multisiteEnabled()) return {};
+        return { networkSites: require('./network').policySites() };
+    } catch (e: any) {
+        warn(`the network's sites could not be read for the gateway: ${e && e.message}`);
+        return {};
+    }
+}
+
 function gatewayPolicyPush(cfg: any): { enforce: boolean; config: Record<string, unknown>; env: Record<string, string>; nodeEnv: string | null } {
     const env: Record<string, string> = {};
     for (const key of POLICY_ENV_KEYS) {
@@ -994,6 +1013,8 @@ function gatewayPolicyPush(cfg: any): { enforce: boolean; config: Record<string,
             siteAliases: cfg && Array.isArray(cfg.siteAliases) ? cfg.siteAliases : [],
             hostPolicy: policy,
             ...(cfg && cfg.trustProxy !== undefined && cfg.trustProxy !== null ? { trustProxy: cfg.trustProxy } : {}),
+            // Multisite: the other sites' main addresses, so the edge answers them (and only them) too.
+            ...networkSitesForPush(),
         },
         env,
         nodeEnv,
@@ -1436,7 +1457,7 @@ async function tellAdmins(message: string) {
                 transports: ['db', 'sse'],
             });
         }
-        const send = (global as any).wordjs_send_mail;
+        const send = require('./mail-provider').sendMailFn();
         if (typeof send === 'function') {
             const { getOption } = require('./options');
             const to = String((await getOption('admin_email', '')) || '').trim();

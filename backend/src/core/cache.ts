@@ -157,11 +157,21 @@ if (config.redis && config.redis.enabled !== false) {
     }
 }
 
+// MULTISITE: every key a caller names is stored under the current site's prefix ('' for site 1, `s<id>:`
+// for the others — core/site-context siteKeyPrefix), so `post:id:5` of one site can never answer for
+// `post:id:5` of another, in L1, in Redis or in a peer's invalidation. Site 1's keys, and every key of a
+// single-site install, are exactly what they always were.
+const siteContext = require('./site-context');
+function siteScoped(key: string): string {
+    return siteContext.siteKeyPrefix() + key;
+}
+
 /**
  * Get a value from cache: L1 first (always on), then Redis (which repopulates L1).
  */
-async function get(key: string) {
+async function get(rawKey: string) {
     if (transactionActive()) return null;
+    const key = siteScoped(rawKey);
     const hit = l1Get(key);
     if (hit !== null) {
         try { return JSON.parse(hit); } catch { l1.delete(key); }
@@ -196,6 +206,7 @@ async function set(key: string, value: any, ttl = 3600) {
         if (e && /not permitted/.test(String(e.message))) throw e; // re-throw our own denial; ignore require hiccups
     }
     if (deferUntilCommit(() => set(key, value, ttl))) return true;
+    const scopedKey = siteScoped(key);
     let serialized: string;
     try {
         serialized = JSON.stringify(value);
@@ -205,13 +216,13 @@ async function set(key: string, value: any, ttl = 3600) {
     // Multi-node (Redis configured): L1 is a short front, peers' del broadcasts + the cap keep it
     // honest. Single-node: the caller's TTL stands — every write path calls del(), so in-process
     // invalidation is complete.
-    l1Set(key, serialized, redisConfigured() ? Math.min(ttl || L1_REDIS_TTL_CAP_S, L1_REDIS_TTL_CAP_S) : (ttl || 0));
+    l1Set(scopedKey, serialized, redisConfigured() ? Math.min(ttl || L1_REDIS_TTL_CAP_S, L1_REDIS_TTL_CAP_S) : (ttl || 0));
     if (!redisAvailable || !enabledBySettings) return true;
     try {
         if (ttl) {
-            await redis.set(key, serialized, 'EX', ttl);
+            await redis.set(scopedKey, serialized, 'EX', ttl);
         } else {
-            await redis.set(key, serialized);
+            await redis.set(scopedKey, serialized);
         }
         return true;
     } catch (e) {
@@ -222,8 +233,9 @@ async function set(key: string, value: any, ttl = 3600) {
 /**
  * Delete a value from cache — L1 (this node), the peers' L1 (broadcast), and Redis.
  */
-async function del(key: string) {
-    if (deferUntilCommit(() => del(key))) return true;
+async function del(rawKey: string) {
+    if (deferUntilCommit(() => del(rawKey))) return true;
+    const key = siteScoped(rawKey);
     l1.delete(key);
     if (redisConfigured()) publish('wordjs:cache-del', key).catch(() => { /* degraded — TTL cap bounds it */ });
     if (!redisAvailable || !enabledBySettings) return true;
@@ -240,11 +252,36 @@ async function del(key: string) {
  */
 async function flush() {
     if (deferUntilCommit(() => flush())) return true;
+    // A site other than site 1 flushes only its own keyspace: FLUSHDB (and clearing every L1 entry)
+    // would empty the other sites' caches too.
+    const prefix = siteContext.siteKeyPrefix();
+    if (prefix) return flushPrefix(prefix);
     l1.clear();
     if (redisConfigured()) publish('wordjs:cache-del', '*').catch(() => { /* degraded */ });
     if (!redisAvailable || !enabledBySettings) return true;
     try {
         await redis.flushdb();
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+function l1DeletePrefix(prefix: string) {
+    for (const k of Array.from(l1.keys())) if (k.startsWith(prefix)) l1.delete(k);
+}
+
+async function flushPrefix(prefix: string) {
+    l1DeletePrefix(prefix);
+    if (redisConfigured()) publish('wordjs:cache-del', prefix + '*').catch(() => { /* degraded */ });
+    if (!redisAvailable || !enabledBySettings) return true;
+    try {
+        let cursor = '0';
+        do {
+            const [next, keys] = await redis.scan(cursor, 'MATCH', prefix + '*', 'COUNT', 500);
+            cursor = next;
+            if (keys.length) await redis.del(...keys);
+        } while (cursor !== '0');
         return true;
     } catch (e) {
         return false;
@@ -299,6 +336,24 @@ function getClient(): any {
     return rateLimitClient;
 }
 
+// MULTISITE: a message published while working for a site other than site 1 carries that site, so the
+// receiving nodes handle it as that site. Site 1's messages (and every single-site message) are sent as
+// they always were. The marker starts with a control character no payload of ours begins with.
+const SITE_MARK = '\u0001wjs-site:';
+const SITE_MARK_END = '\u0001';
+function siteEnvelope(serialized: string): string {
+    if (!siteContext.multisiteEnabled()) return serialized;
+    const id = siteContext.currentSiteId();
+    return id === siteContext.PRIMARY_SITE_ID ? serialized : `${SITE_MARK}${id}${SITE_MARK_END}${serialized}`;
+}
+function openSiteEnvelope(raw: string): { siteId: number; msg: string } {
+    if (typeof raw !== 'string' || !raw.startsWith(SITE_MARK)) return { siteId: 1, msg: raw };
+    const end = raw.indexOf(SITE_MARK_END, SITE_MARK.length);
+    const id = end > 0 ? raw.slice(SITE_MARK.length, end) : '';
+    if (!/^[1-9][0-9]{0,8}$/.test(id)) return { siteId: 1, msg: raw };
+    return { siteId: Number(id), msg: raw.slice(end + SITE_MARK_END.length) };
+}
+
 /** Publish a message to a channel. Returns false if Redis isn't available (caller stays in-process). */
 async function publish(channel: string, payload: any): Promise<boolean> {
     if (deferUntilCommit(() => publish(channel, payload))) return true;
@@ -316,7 +371,7 @@ async function publish(channel: string, payload: any): Promise<boolean> {
         return false;
     }
     try {
-        await redis.publish(channel, typeof payload === 'string' ? payload : JSON.stringify(payload));
+        await redis.publish(channel, siteEnvelope(typeof payload === 'string' ? payload : JSON.stringify(payload)));
         return true;
     } catch (e: any) {
         log.warn({ channel, err: e }, `[Cache] publish('${channel}') failed: ${e && e.message} — cross-node coherence DEGRADED for this event.`);
@@ -337,9 +392,17 @@ function subscribe(channel: string, handler: (message: string) => void): void {
             db: config.redis.db || 0,
             retryStrategy: (times: number) => Math.min(times * 200, 3000)
         });
-        subscriber.on('message', (ch: string, msg: string) => {
+        subscriber.on('message', (ch: string, raw: string) => {
             const hs = subHandlers.get(ch);
-            if (hs) for (const h of hs) { try { h(msg); } catch (e: any) { log.warn({ err: e }, '[Cache] sub handler error'); } }
+            if (!hs) return;
+            const { siteId, msg } = openSiteEnvelope(raw);
+            const run = () => {
+                for (const h of hs) { try { h(msg); } catch (e: any) { console.warn('[Cache] sub handler error:', e && e.message); } }
+            };
+            // Multisite: a peer's message is handled as the site it was published for (site 1 when it
+            // names none), so the handler's reads and invalidations land on that site's data.
+            if (siteContext.multisiteEnabled()) siteContext.runWithSite(siteId, run);
+            else run();
         });
         subscriber.on('error', (e: any) => log.warn({ err: e }, '[Cache] Subscriber error'));
         // ioredis emits 'ready' at the top of its ready handler and writes the automatic re-SUBSCRIBE right
@@ -406,7 +469,9 @@ async function closeAll() {
 // invalidation is already complete via the direct l1.delete in del().
 if (redisConfigured()) {
     subscribe('wordjs:cache-del', (key: string) => {
-        if (key === '*') l1.clear(); else l1.delete(key);
+        if (key === '*') l1.clear();
+        else if (key.endsWith(':*')) l1DeletePrefix(key.slice(0, -1)); // one site's keyspace (flushPrefix)
+        else l1.delete(key);
     });
 }
 

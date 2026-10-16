@@ -53,7 +53,15 @@ const DEFAULT_ROLES: Record<string, { name: string; capabilities: string[] }> = 
 const defaultRoles = (): Record<string, any> => JSON.parse(JSON.stringify(DEFAULT_ROLES));
 
 // Cache roles in memory for synchronous access (required by User.toJSON)
-let _rolesCache: Record<string, any> | null = null;
+// One cache per site in a multisite network (each site has its own roles option). Site 1's state is
+// the one a single-site install has always had. Every field below is read through rolesState().
+const rolesStateBySite = require('./site-context').perSite(() => ({
+    cache: null as Record<string, any> | null,
+    loadedAt: 0,
+    refreshInFlight: false,
+    localWriteEpoch: 0,
+}));
+const rolesState = (): { cache: Record<string, any> | null; loadedAt: number; refreshInFlight: boolean; localWriteEpoch: number } => rolesStateBySite.get();
 
 // Freshness fallback (multi-node safety net): the primary invalidation path is the Redis pub/sub
 // signal handled in coherence.ts. But if Redis is down (or a publish is missed), a role/capability
@@ -67,17 +75,14 @@ let _rolesCache: Record<string, any> | null = null;
 // is corrected quickly. The dedupe is handled by the in-flight flag, not by pre-bumping the stamp,
 // so a FAILED background reload does NOT extend staleness for another full TTL.
 const ROLES_CACHE_TTL_MS = 10_000; // 10s
-let _rolesCacheLoadedAt = 0;
-let _rolesRefreshInFlight = false;
 
 // Monotonic local-write epoch (DATA-05). Bumped whenever a LOCAL setRole/updateRoleCapabilities/
-// syncRoles mutates _rolesCache. The background TTL refresh captures this epoch before its DB read and
+// syncRoles mutates the roles cache. The background TTL refresh captures this epoch before its DB read and
 // applies the result ONLY if the epoch is unchanged when the read returns — so a stale read (e.g. from
 // a lagging replica, or one that started before a local roles write committed) can never clobber a
 // just-applied local edit (the fail-OPEN direction for a capability revocation). The genuine self-heal
 // for cross-node changes is preserved: when NO local write raced the refresh, the fresh DB value is
 // applied exactly as before.
-let _localWriteEpoch = 0;
 
 /**
  * Initialize roles from DB (Async)
@@ -86,22 +91,22 @@ let _localWriteEpoch = 0;
 async function loadRoles() {
     const stored = await getOption(ROLES_OPTION_NAME);
     if (stored && Object.keys(stored).length > 0) {
-        _rolesCache = stored;
+        rolesState().cache = stored;
     } else {
         // Empty/missing option: fall back to the built-in defaults (operator config.roles overrides)
         // and backfill the option so the roles are durable and visible to anything reading the DB. The
         // backfill is a roles write like any other (writeRoles): it saves the defaults only while the
         // stored map is still empty, so a map another node saved after this (cached) read is adopted,
         // never overwritten.
-        _rolesCache = { ...defaultRoles(), ...(config.roles || {}) };
+        rolesState().cache = { ...defaultRoles(), ...(config.roles || {}) };
         try {
             await withRolesWriteLock(() => writeRoles(async (current) => ({ next: current, result: undefined })));
         } catch (e: any) {
             log.warn({ err: e }, 'Could not persist default roles');
         }
     }
-    _rolesCacheLoadedAt = Date.now(); // stamp freshness on every (re)load
-    return _rolesCache;
+    rolesState().loadedAt = Date.now(); // stamp freshness on every (re)load
+    return rolesState().cache;
 }
 
 /**
@@ -109,38 +114,38 @@ async function loadRoles() {
  * stale reads triggers at most one DB re-read. Errors are swallowed (the current cache stays usable).
  *
  * DATA-05: unlike the startup loadRoles() (which always applies), this background path is a
- * compare-and-set on _localWriteEpoch — it reads the DB and applies the result ONLY if no LOCAL write
+ * compare-and-set on the local-write epoch — it reads the DB and applies the result ONLY if no LOCAL write
  * (setRole/updateRoleCapabilities/syncRoles) landed while the read was in flight. That closes the
  * lost-update window where a stale DB read could overwrite a just-applied local revocation. When no
  * local write raced it, the fresh value is applied exactly as the old loadRoles()-based path did.
  */
 function maybeRefreshStaleRoles() {
-    if (_rolesRefreshInFlight) return;
-    if (Date.now() - _rolesCacheLoadedAt < ROLES_CACHE_TTL_MS) return;
-    // The in-flight flag alone dedupes concurrent refreshes — do NOT pre-bump _rolesCacheLoadedAt.
+    if (rolesState().refreshInFlight) return;
+    if (Date.now() - rolesState().loadedAt < ROLES_CACHE_TTL_MS) return;
+    // The in-flight flag alone dedupes concurrent refreshes — do NOT pre-bump the load stamp.
     // The stamp is advanced ONLY on a successful, applied read below. If this background reload FAILS
     // (or is superseded by a local write), the stamp stays old so the very next sync access re-attempts
     // the refresh immediately, instead of believing the cache is fresh and extending stale (over-broad)
     // capabilities for another full TTL (a fail-open authorization window).
-    _rolesRefreshInFlight = true;
-    const epochAtStart = _localWriteEpoch;
+    rolesState().refreshInFlight = true;
+    const epochAtStart = rolesState().localWriteEpoch;
     Promise.resolve()
         .then(() => getOption(ROLES_OPTION_NAME))
         .then((stored: any) => {
             // A local write landed while we were reading — it is strictly fresher than this DB snapshot
             // (which may even predate the local write's commit), so DROP the read and keep the local
-            // value. The local write already stamped _rolesCacheLoadedAt, so the cache is fresh.
-            if (_localWriteEpoch !== epochAtStart) return;
+            // value. The local write already stamped the load stamp, so the cache is fresh.
+            if (rolesState().localWriteEpoch !== epochAtStart) return;
             if (stored && Object.keys(stored).length > 0) {
-                _rolesCache = stored;
-                _rolesCacheLoadedAt = Date.now();
+                rolesState().cache = stored;
+                rolesState().loadedAt = Date.now();
             }
             // Empty/missing option: leave the current in-memory cache (which already holds the seeded
             // defaults) untouched — matching loadRoles()'s "never return an empty map" guarantee. We do
             // NOT re-seed/backfill the option here; the startup loadRoles() owns that.
         })
         .catch((e: any) => log.warn({ err: e }, '[roles] background TTL refresh failed'))
-        .finally(() => { _rolesRefreshInFlight = false; });
+        .finally(() => { rolesState().refreshInFlight = false; });
 }
 
 /**
@@ -149,13 +154,13 @@ function maybeRefreshStaleRoles() {
 function getRoles() {
     // If not loaded yet, fall back to the built-in defaults merged with operator config (safe for
     // startup/tests). Never return an empty map — that strips every user of their capabilities.
-    if (!_rolesCache) {
+    if (!rolesState().cache) {
         return { ...defaultRoles(), ...(config.roles || {}) };
     }
     // Bound staleness: kick a background re-read if the cache aged past the TTL (self-heals a missed
     // cross-node invalidation). Non-blocking — returns the current cache immediately.
     maybeRefreshStaleRoles();
-    return _rolesCache;
+    return rolesState().cache;
 }
 
 // ── Plugin-declared roles ────────────────────────────────────────────────────────────────────────────
@@ -308,9 +313,9 @@ async function readStoredRoles(): Promise<{ raw: string | null; roles: Record<st
 
 /** Make `roles` this node's cache: a local write is fresh (TTL clock reset) and wins over an in-flight refresh. */
 function adoptRoles(roles: Record<string, any>): void {
-    _rolesCache = roles;
-    _rolesCacheLoadedAt = Date.now(); // local write is fresh — reset the TTL clock
-    _localWriteEpoch++;               // DATA-05: an in-flight background refresh must not clobber this
+    rolesState().cache = roles;
+    rolesState().loadedAt = Date.now(); // local write is fresh — reset the TTL clock
+    rolesState().localWriteEpoch++;               // DATA-05: an in-flight background refresh must not clobber this
 }
 
 interface RolesDecision<T> {

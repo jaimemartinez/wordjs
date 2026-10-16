@@ -376,6 +376,10 @@ export interface Plugin {
     roles?: DeclaredPluginRole[];     // roles the manifest declares (registered only with the roles:declare grant)
     requestedPermissions?: string[];  // "scope:access" tokens the manifest requests (the togglable set)
     grantedPermissions?: string[];    // tokens the admin has granted (subset of requested + optional "network")
+    // Multisite, on a site other than the main one only: does the network offer this plugin here, and the
+    // most this site may grant it (the network administrator's ceiling). Absent on the main site.
+    offered?: boolean;
+    grantCeiling?: string[];
     // Would activating it now grant every permission its manifest declares? (no grant record, or an empty
     // one no administrator decided). false after an administrator revoked every grant: activation grants nothing.
     activationSeedsGrants?: boolean;
@@ -1494,6 +1498,47 @@ export const webhooksApi = {
     /** Send the signed `ping` test delivery to one endpoint; it is attempted at once. */
     ping: (id: number) =>
         apiPost<{ delivered: boolean; delivery: WebhookDelivery | null }>(`/webhooks/${id}/ping`, {}),
+};
+
+// ── Network (multisite): the sites of the network, for network administrators ─────────────────────
+export interface NetworkSite {
+    id: number;
+    slug: string;
+    url: string;
+    host: string;
+    status: "active" | "suspended";
+    main: boolean;
+    createdAt: string;
+    updatedAt: string;
+}
+export interface NewNetworkSite {
+    slug: string;
+    url: string;
+    title: string;
+    adminUsername: string;
+    adminEmail: string;
+    adminPassword: string;
+    currentPassword: string;
+}
+export interface NetworkPlugin {
+    slug: string;
+    name: string;
+    version: string;
+    requestedPermissions: string[];
+    /** The most any other site may grant it; null = not offered (main site only). */
+    ceiling: string[] | null;
+}
+export const networkApi = {
+    status: () => apiGet<{ enabled: boolean; networkAdmin: boolean }>("/network/status"),
+    plugins: () => apiGet<{ plugins: NetworkPlugin[] }>("/network/plugins"),
+    offerPlugin: (slug: string, tokens: string[], currentPassword: string) =>
+        apiPut<{ slug: string; ceiling: string[] }>(`/network/plugins/${encodeURIComponent(slug)}/ceiling`, { tokens, currentPassword }),
+    withdrawPlugin: (slug: string, currentPassword: string) =>
+        api<{ slug: string; withdrawn: boolean; deactivatedOn: number[] }>(`/network/plugins/${encodeURIComponent(slug)}/ceiling`, { method: "DELETE", body: { currentPassword } }),
+    sites: () => apiGet<{ sites: NetworkSite[] }>("/network/sites"),
+    create: (data: NewNetworkSite) => apiPost<{ site: NetworkSite }>("/network/sites", data),
+    suspend: (id: number, currentPassword: string) => apiPost<{ site: NetworkSite }>(`/network/sites/${id}/suspend`, { currentPassword }),
+    resume: (id: number, currentPassword: string) => apiPost<{ site: NetworkSite }>(`/network/sites/${id}/resume`, { currentPassword }),
 };
 
 // ── Form submissions (Webflow "Forms + submissions" parity) ────────────────────────────────────────

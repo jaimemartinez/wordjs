@@ -221,6 +221,36 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   `GET`/`PUT /api/v1/ai/settings`, `POST /api/v1/ai/test` and `POST /api/v1/ai/suggest` (20/minute per
   user); new audit action `ai.settings.update`. See `documentation/ai-provider.md`.
 
+## [Unreleased]
+
+### Added
+
+- **Multisite, phase 1: one install can serve a network of sites.** Off unless turned on with
+  `npm run network -- enable --admin <login>`; a single-site install keeps the same database, files,
+  URLs, cache keys and tokens. Once on, the existing install is site 1, the main site, and network
+  administrators (listed administrators of the main site) create, suspend and resume sites from
+  **Admin → Network**. Each site has its own main address, its own SQLite database and its own uploads
+  under `<data dir>/sites/<id>/`, and its own users, roles, sessions, settings, menus and theme choice.
+  A request belongs to the site whose address it was sent to (an unknown address is still a 421); one
+  site's sessions and API tokens are refused on every other (a per-site signing key and a site claim),
+  in-process caches, cache keys, purge tags and the frontend's Data Cache and Full Route Cache are kept
+  per site, and work that loses track of its site fails instead of touching the main site. Phase 1 needs
+  the `sqlite-native` driver and one backend host; plugins, theme server code, backups, certificates and
+  real-time collaboration stay on the main site. The design, the isolation guarantees and the next
+  phases are in `documentation/multisite-design.md`; running a network is in
+  `documentation/multisite.md`.
+- **Multisite, phase 2: plugins and theme code run per site.** Plugin code stays network-wide (installed,
+  updated and deleted on the main site), but every site can now activate plugins and grant them
+  permissions on its own. A network administrator first **offers** a plugin to the sites from
+  **Admin → Network → Plugins for the sites**, choosing a grant ceiling; a site administrator can never
+  grant beyond it (`403 plugin_grant_beyond_ceiling`), and lowering it takes effect at once. Each site
+  runs its **own sandboxed worker** of each plugin it activates, keyed by site: its routes, hooks,
+  shortcodes, scheduled events, notification transports and mail provider answer only for that site, its
+  bridge calls read and write only that site's database, and its private storage is that site's. On
+  Postgres and MySQL the per-plugin database principal is per site too. Each site also runs its own
+  theme server code (`functions.js`). New isolation tests prove guarantees I5 (a plugin active on one site
+  cannot act on another) and I8 (the ceiling). See `documentation/multisite.md`.
+
 ## [2.5.0] - 2026-10-15
 
 ### Added

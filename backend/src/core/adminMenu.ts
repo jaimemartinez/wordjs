@@ -5,7 +5,11 @@
 
 const log = require('./module-logger').moduleLogger('core/adminMenu');
 
-const adminMenuItems = new Map();
+// One registry per site in a multisite network: each site's core entries follow its own post types
+// (initCoreMenus runs per site), and plugin entries exist only on the main site, where plugins run.
+// Site 1's registry is the one a single-site install has always had.
+const menusBySite = require('./site-context').perSite(() => new Map());
+const adminMenuItems = (): Map<string, any> => menusBySite.get();
 
 // Cap admin-menu items per plugin: the dedupe below is by `href`, which an untrusted plugin fully
 // controls and can vary infinitely to grow this host-side Map unboundedly (memory DoS). 'core' (host
@@ -132,12 +136,12 @@ function registerAdminMenu(pluginSlug: string, item: any) {
     }
 
     // Clear existing items for this plugin to avoid duplicates on hot reload
-    if (!adminMenuItems.has(pluginSlug)) {
-        adminMenuItems.set(pluginSlug, []);
+    if (!adminMenuItems().has(pluginSlug)) {
+        adminMenuItems().set(pluginSlug, []);
     }
 
     // Check if this exact href is already registered for this plugin
-    const existingItems = adminMenuItems.get(pluginSlug);
+    const existingItems = adminMenuItems().get(pluginSlug);
     // Bound per-plugin accumulation (the href dedupe below is attacker-defeatable). 'core' is host code.
     if (pluginSlug !== 'core' && existingItems.length >= MAX_ADMIN_MENU_ITEMS) {
         log.warn({ pluginSlug }, `[Security] admin-menu cap reached for plugin '${pluginSlug}' (${MAX_ADMIN_MENU_ITEMS}); ignoring further items.`);
@@ -161,7 +165,9 @@ function registerAdminMenu(pluginSlug: string, item: any) {
             // plugin's own route gate reads (user_meta.professional_mailbox — see core/mailbox.ts; it
             // is deliberately NOT derived from the account's email domain, which the account itself can
             // write). Slug-agnostic — ANY plugin can set it, so it is not tied to the bundled mail-server.
-            requiresProfessionalMailbox: !!item.requiresProfessionalMailbox
+            requiresProfessionalMailbox: !!item.requiresProfessionalMailbox,
+            // Multisite: an entry only a NETWORK administrator sees (GET /plugins/menus). Core only.
+            networkAdmin: pluginSlug === 'core' && item.networkAdmin === true,
         });
     }
 }
@@ -171,7 +177,7 @@ function registerAdminMenu(pluginSlug: string, item: any) {
  * @param {string} pluginSlug
  */
 function unregisterAdminMenu(pluginSlug: string) {
-    adminMenuItems.delete(pluginSlug);
+    adminMenuItems().delete(pluginSlug);
 }
 
 /**
@@ -180,7 +186,7 @@ function unregisterAdminMenu(pluginSlug: string) {
  */
 function getAdminMenuItems() {
     const items: any[] = [];
-    for (const [slug, menus] of adminMenuItems) {
+    for (const [slug, menus] of adminMenuItems()) {
         for (const menu of menus) {
             items.push({ ...menu, plugin: slug });
         }
@@ -252,6 +258,10 @@ function initCoreMenus() {
         capability: 'switch_themes'
     });
 
+    // Multisite: the hooks registry is the main site's. Plugins are listed on every site (phase 2): another
+    // site activates and grants the plugins the network offers it.
+    const mainSite = !require('./multisite-guards').onSecondarySite();
+
     // 6. Plugins
     registerAdminMenu('core', {
         href: '/admin/plugins',
@@ -279,8 +289,19 @@ function initCoreMenus() {
         capability: 'manage_options'
     });
 
+    // Multisite: the network screen (sites, network administrators), on the main site, for network
+    // administrators only (the menu route hides it from everyone else; the API enforces it).
+    if (mainSite && require('./site-context').multisiteEnabled()) registerAdminMenu('core', {
+        href: '/admin/network',
+        label: 'Network',
+        icon: 'fa-sitemap',
+        order: 85,
+        capability: 'manage_options',
+        networkAdmin: true
+    });
+
     // 9. Tools (Hooks Registry)
-    registerAdminMenu('core', {
+    if (mainSite) registerAdminMenu('core', {
         href: '/admin/hooks',
         label: 'Hooks Registry',
         icon: 'fa-microscope',
@@ -291,7 +312,7 @@ function initCoreMenus() {
 
 function getAllRegisteredCapabilities() {
     const caps = new Set();
-    for (const [slug, menus] of adminMenuItems) {
+    for (const menus of adminMenuItems().values()) {
         for (const menu of menus) {
             if (menu.cap) caps.add(menu.cap);
         }

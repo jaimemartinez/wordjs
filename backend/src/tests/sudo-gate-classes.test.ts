@@ -50,11 +50,25 @@ const B = config.api.prefix;
 const SECRET = config.jwt.secret;
 const PASSWORD = 'Correct-Horse-9!';
 
+const siteContext = require('../core/site-context');
+const network = require('../core/network');
+const NETWORK_DB = path.join(os.tmpdir(), `wjs-sudo-classes-network-${process.pid}-${Date.now()}.db`);
+
 const app = express();
+// The real app runs every request as the site it was addressed to (core/site-resolver); this suite has
+// one site, the main one. A no-op while multisite is off, which is every door but the network ones.
+app.use((req: any, res: any, next: any) => siteContext.runWithSite(1, next));
 app.use(express.json());
 app.use(cookieParser());
 app.use(B, csrfProtection);
 app.use(B, require('../routes'));
+
+/** Multisite on for one call (the network doors exist only then), and off again before the next. */
+async function withMultisite(fn: () => Promise<any>) {
+    const saved = config.multisite;
+    config.multisite = { enabled: true, networkDbPath: NETWORK_DB };
+    try { return await fn(); } finally { config.multisite = saved; }
+}
 
 const U: Record<string, number> = {};
 let dbAsync: any;
@@ -85,6 +99,8 @@ const metaOf = (userId: number, key: string) => dbAsync.get(
 const DOOR_PERSONAS = ['doorMe', 'doorTwin', 'doorMfa', 'doorMfaEnable', 'doorSessions', 'doorPassword'];
 /** …and the doors that need a privileged caller to be reachable at all (DELETE /plugins/:slug is isAdmin). */
 const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy'];
+/** …and the network doors (routes/network.ts), whose caller must also be a NETWORK administrator. */
+const NETWORK_DOOR_PERSONAS = ['doorNetworkCreate', 'doorNetworkSuspend', 'doorNetworkResume', 'doorNetworkOffer', 'doorNetworkWithdraw'];
 
 before(async () => {
     await database.init({ driver: 'sqlite-native' });
@@ -100,12 +116,18 @@ before(async () => {
     await seedUser('blankVictim', 'author');// CLASS 3 — its own account, so the blank/null matrix starts clean
     for (const p of DOOR_PERSONAS) await seedUser(p, 'author');
     for (const p of ADMIN_DOOR_PERSONAS) await seedUser(p, 'administrator');
+    for (const p of NETWORK_DOOR_PERSONAS) {
+        await seedUser(p, 'administrator');
+        await withMultisite(async () => network.addNetworkAdmin(U[p]));
+    }
 });
 
 after(async () => {
     try { const db = database.getDbAsync(); if (db && db.close) await db.close(); } catch { /* */ }
     try { fs.rmSync(TMP_DB, { force: true }); } catch { /* */ }
     try { fs.rmSync(TMP_DB + '-wal', { force: true }); fs.rmSync(TMP_DB + '-shm', { force: true }); } catch { /* */ }
+    try { network.closeNetworkStore(); } catch { /* */ }
+    for (const f of [NETWORK_DB, NETWORK_DB + '-wal', NETWORK_DB + '-shm']) { try { fs.rmSync(f, { force: true }); } catch { /* */ } }
 });
 
 // ─── CLASS 1 · no string an outsider can supply may reach the sudo bucket ─────────────────────────
@@ -658,6 +680,37 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
                 .send({ currentPassword: pw }),
             alsoExpect: (r: any) => r.status === 400 && JSON.stringify(r.body.data && r.body.data.params) === '["rev"]',
         })),
+        // The network writes (routes/network.ts, multisite): the password is checked BEFORE the body, so a
+        // create with no fields is refused on the merits (the title comes first) and a status change on a
+        // site that does not exist is a 404 — nothing is created or changed.
+        {
+            site: 'network.ts POST /sites', name: 'POST /network/sites', persona: 'doorNetworkCreate',
+            send: (p: string, pw: string) => withMultisite(() => request(app).post(`${B}/network/sites`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw })),
+            alsoExpect: (r: any) => r.status === 400 && r.body.code === 'network_invalid_title',
+        },
+        ...(['suspend', 'resume'] as const).map((what) => ({
+            site: `network.ts POST /sites/:id/${what}`, name: `POST /network/sites/:id/${what}`,
+            persona: `doorNetwork${what[0].toUpperCase()}${what.slice(1)}`,
+            send: (p: string, pw: string) => withMultisite(() => request(app).post(`${B}/network/sites/999/${what}`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw })),
+            alsoExpect: (r: any) => r.status === 404 && r.body.code === 'network_site_not_found',
+        })),
+        // Offering a plugin to the sites, and withdrawing it (multisite phase 2): the password is checked
+        // first; a plugin that is not installed is then a 404, and withdrawing an offer that was never made
+        // changes nothing (200, `withdrawn: false`).
+        {
+            site: 'network.ts PUT /plugins/:slug/ceiling', name: 'PUT /network/plugins/:slug/ceiling', persona: 'doorNetworkOffer',
+            send: (p: string, pw: string) => withMultisite(() => request(app).put(`${B}/network/plugins/zz-door-probe/ceiling`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw, tokens: [] })),
+            alsoExpect: (r: any) => r.status === 404 && r.body.code === 'plugin_not_found',
+        },
+        {
+            site: 'network.ts DELETE /plugins/:slug/ceiling', name: 'DELETE /network/plugins/:slug/ceiling', persona: 'doorNetworkWithdraw',
+            send: (p: string, pw: string) => withMultisite(() => request(app).delete(`${B}/network/plugins/zz-door-probe/ceiling`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw })),
+            alsoExpect: (r: any) => r.status === 200 && r.body.withdrawn === false,
+        },
     ];
 
     // ── THE BIJECTION: the rows and the call sites are the same set ──────────────────────────────

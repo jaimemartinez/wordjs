@@ -998,7 +998,7 @@ function createPluginApi(slug: string) {
 
         async mail(msg: any) {
             verifyPermission('email', 'admin');
-            const send = (global as any).wordjs_send_mail;
+            const send = require('./mail-provider').sendMailFn();
             if (typeof send !== 'function') throw new Error('Mail server not available');
             return send(msg);
         },
@@ -1012,7 +1012,7 @@ function createPluginApi(slug: string) {
             // bypass — re-checked here AND at the register-mail-provider IPC handler.
             verifyPermission('email', 'provider');
             if (typeof handler !== 'function') throw new Error('provideMail requires a function');
-            (global as any).wordjs_send_mail = handler;
+            require('./mail-provider').setMailProvider(handler);
         },
 
         // The site's AI provider (core/ai-provider), gated on ai:use. The plugin sends text and gets text

@@ -20,10 +20,27 @@
 const config = require('../config/app');
 const crypto = require('crypto');
 const log = require('./module-logger').moduleLogger('core/plugin-db-isolation');
+const siteContext = require('./site-context');
 
-// Slugs whose DB principal is provisioned in THIS process → their DML/SELECT routes through it.
+/*
+ * MULTISITE: one principal per (site, plugin). Each site has its own database, and each site's worker of
+ * a plugin runs its queries under that SITE's principal for the plugin: `wjp_role_<slug>` / `wjp_<slug>`
+ * on site 1 (unchanged), `…__s<id>` on any other site. A slug cannot produce a double underscore
+ * (normalizeSlug collapses every run of other characters into one), so no site-1 plugin's principal can
+ * ever be named like another site's. The tables themselves keep the plugin's prefix in every site's
+ * database. Every function below takes the plugin SLUG and acts for the current site.
+ */
+function principalSuffix(siteId: number = siteContext.currentSiteId()): string {
+    return siteId === siteContext.PRIMARY_SITE_ID ? '' : `__s${siteId}`;
+}
+/** The registry key of the current site's principal for `slug`. */
+function principalKey(slug: string): string {
+    return `${slug}${principalSuffix()}`;
+}
+
+// Principal keys (slug + site suffix) provisioned in THIS process → their DML/SELECT routes through it.
 const provisioned = new Set<string>();
-// MySQL only: the per-process password for each plugin's login user (never persisted).
+// MySQL only: the per-process password for each principal's login user (never persisted).
 const pluginPasswords = new Map<string, string>();
 
 // Strip line breaks before logging an untrusted value (a plugin slug, or a driver error echoing one),
@@ -38,14 +55,15 @@ function clean(v: any): string {
 }
 
 function normalizeSlug(slug: string): string { return String(slug).replace(/[^A-Za-z0-9]+/g, '_').toLowerCase(); }
-function roleName(slug: string): string { return 'wjp_role_' + normalizeSlug(slug); }
+function roleName(slug: string): string { return 'wjp_role_' + normalizeSlug(slug) + principalSuffix(); }
 function tablePrefix(slug: string): string { return 'wjp_' + normalizeSlug(slug) + '_'; }
 
 /** MySQL login-user name for a plugin. Bounded to 32 chars (MySQL's user-name limit) via a short hash. */
 function userName(slug: string): string {
-    const base = 'wjp_' + normalizeSlug(slug);
+    const suffix = principalSuffix();
+    const base = 'wjp_' + normalizeSlug(slug) + suffix;
     if (base.length <= 32) return base;
-    const h = crypto.createHash('sha1').update(String(slug)).digest('hex').slice(0, 8);
+    const h = crypto.createHash('sha1').update(String(slug) + suffix).digest('hex').slice(0, 8);
     return base.slice(0, 23) + '_' + h; // 23 + '_' + 8 = 32
 }
 
@@ -78,16 +96,16 @@ function mysqlDriver(): any {
 
 /** Provision a plugin's DB principal + grants. Idempotent (once per process); no-op on SQLite; graceful. */
 async function provision(slug: string): Promise<void> {
-    if (!enabled() || provisioned.has(slug)) return;
+    if (!enabled() || provisioned.has(principalKey(slug))) return;
     const pg = pgDriver();
     if (pg) {
         const role = roleName(slug);
         try {
             await pg.ensurePluginRole(role);
             await pg.grantPluginPrefix(role, tablePrefix(slug));
-            provisioned.add(slug);
+            provisioned.add(principalKey(slug));
         } catch (e: any) {
-            provisioned.delete(slug);
+            provisioned.delete(principalKey(slug));
             log.warn({ slug: clean(slug), err: e }, `[plugin-db-roles] could not provision role for '${clean(slug)}' (falling back to the SQL text-guard)`);
         }
         return;
@@ -99,11 +117,11 @@ async function provision(slug: string): Promise<void> {
         try {
             await my.ensurePluginUser(user, pw);
             await my.grantPluginPrefixToUser(user, tablePrefix(slug));
-            pluginPasswords.set(slug, pw);
-            provisioned.add(slug);
+            pluginPasswords.set(principalKey(slug), pw);
+            provisioned.add(principalKey(slug));
         } catch (e: any) {
-            provisioned.delete(slug);
-            pluginPasswords.delete(slug);
+            provisioned.delete(principalKey(slug));
+            pluginPasswords.delete(principalKey(slug));
             log.warn({ slug: clean(slug), err: e }, `[plugin-db-users] could not provision user for '${clean(slug)}' (falling back to the SQL text-guard)`);
         }
     }
@@ -118,8 +136,8 @@ async function reconcile(slugs: string[]): Promise<void> {
 
 /** Drop a plugin's DB principal on uninstall (best-effort; its tables are dropped separately). */
 async function deprovision(slug: string): Promise<void> {
-    provisioned.delete(slug);
-    pluginPasswords.delete(slug);
+    provisioned.delete(principalKey(slug));
+    pluginPasswords.delete(principalKey(slug));
     const pg = pgDriver();
     if (pg) {
         try { await pg.dropPluginRole(roleName(slug)); }
@@ -135,7 +153,7 @@ async function deprovision(slug: string): Promise<void> {
 
 /** GRANT a newly-created table to the plugin's DB principal (called right after a plugin CREATE TABLE). */
 async function grantNewTable(slug: string, table: string): Promise<void> {
-    if (!provisioned.has(slug)) return;
+    if (!provisioned.has(principalKey(slug))) return;
     const tbl = String(table).toLowerCase();
     const pg = pgDriver();
     if (pg) {
@@ -157,11 +175,11 @@ async function grantNewTable(slug: string, table: string): Promise<void> {
  */
 async function runScoped(slug: string, method: 'all' | 'get' | 'run', sql: string, params: any[]): Promise<any> {
     const { dbAsync } = require('../config/database');
-    if (provisioned.has(slug)) {
+    if (provisioned.has(principalKey(slug))) {
         const pg = pgDriver();
         if (pg) return pg.runAsRole(roleName(slug), method, sql, params);
         const my = mysqlDriver();
-        const pw = pluginPasswords.get(slug);
+        const pw = pluginPasswords.get(principalKey(slug));
         if (my && pw) return my.runAsUser(userName(slug), pw, method, sql, params);
     }
     return dbAsync[method](sql, params);
@@ -169,5 +187,5 @@ async function runScoped(slug: string, method: 'all' | 'get' | 'run', sql: strin
 
 module.exports = {
     provision, reconcile, deprovision, grantNewTable, runScoped,
-    roleName, userName, tablePrefix, isProvisioned: (s: string) => provisioned.has(s),
+    roleName, userName, tablePrefix, isProvisioned: (s: string) => provisioned.has(principalKey(s)),
 };

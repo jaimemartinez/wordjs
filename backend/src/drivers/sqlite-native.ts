@@ -101,5 +101,7 @@ module.exports = {
     init,
     get,
     save,
-    close
+    close,
+    // Multisite: config/database wraps a secondary site's connection in the same synchronous API.
+    NativeWrapper
 };

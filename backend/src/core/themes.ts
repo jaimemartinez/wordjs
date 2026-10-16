@@ -388,7 +388,8 @@ async function doSwitchTheme(slug: string) {
   await updateOption('active_theme_layout', theme.layout ? JSON.stringify(theme.layout) : '');
   await updateOption('active_theme_mods', '');
 
-  // Trigger engine re-initialization
+  // Trigger engine re-initialization — the current site's engine and theme worker (multisite: each site
+  // runs its own; core/theme-engine).
   const themeEngine = require('./theme-engine');
   await themeEngine.init();
 

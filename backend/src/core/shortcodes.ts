@@ -6,13 +6,43 @@
 const { escAttr, escUrl } = require('./formatting');
 const log = require('./module-logger').moduleLogger('core/shortcodes');
 
-// Registered shortcodes
-const shortcodes = new Map();
-// Owner of each registered tag: a plugin slug, or null for core (no plugin on the stack). Registration
-// is a GLOBAL, site-wide namespace, so without ownership it is last-writer-wins — an untrusted plugin
-// could re-register a core tag (or another plugin's) and silently replace its rendered output on every
-// page that uses it (stored defacement / content-integrity attack). We refuse cross-owner overwrites.
-const shortcodeOwners = new Map<string, string | null>();
+// Registered shortcodes. Core tags (owner null) are one table shared by every site. A plugin's or theme's
+// tags are recorded per SITE: in a multisite network each site runs its own worker of a plugin, and a tag
+// registered by site A's worker must never render on site B, where the plugin may not even be active. On
+// a single site the only plugin table is site 1's, so behaviour is what it always was.
+//
+// Ownership: a tag belongs to a plugin slug, or to core (null). Without ownership registration is
+// last-writer-wins — an untrusted plugin could re-register a core tag (or another plugin's) and silently
+// replace its rendered output on every page that uses it (stored defacement / content-integrity attack).
+// We refuse cross-owner overwrites.
+type PluginShortcode = { callback: (...args: any[]) => any; owner: string };
+const coreShortcodes = new Map<string, (...args: any[]) => any>();
+const siteShortcodes = new Map<number, Map<string, PluginShortcode>>();
+
+const siteContext = require('./site-context');
+/** The plugin tag table of the current site (site 1 outside any context, as the boot is). */
+function pluginTable(create: boolean): Map<string, PluginShortcode> | undefined {
+    const siteId = siteContext.currentSiteIdOrNull() ?? siteContext.PRIMARY_SITE_ID;
+    let t = siteShortcodes.get(siteId);
+    if (!t && create) { t = new Map(); siteShortcodes.set(siteId, t); }
+    return t;
+}
+
+/** The handler and owner of `tag` on the current site: core first, then this site's plugins. */
+function lookup(tag: string): { callback: (...args: any[]) => any; owner: string | null } | undefined {
+    const core = coreShortcodes.get(tag);
+    if (core) return { callback: core, owner: null };
+    const entry = pluginTable(false)?.get(tag);
+    return entry ? { callback: entry.callback, owner: entry.owner } : undefined;
+}
+
+/** Every tag registered for the current site, core tags first (registration order decides prefix matches). */
+function tagsHere(): string[] {
+    const tags = Array.from(coreShortcodes.keys());
+    const site = pluginTable(false);
+    if (site) for (const t of site.keys()) if (!coreShortcodes.has(t)) tags.push(t);
+    return tags;
+}
 
 // Resolve the effective plugin (or null = core) of the CURRENT call, lazily to avoid an init-time cycle.
 function currentOwner(): string | null {
@@ -29,24 +59,19 @@ function currentOwner(): string | null {
  */
 function addShortcode(tag: string, callback: (...args: any[]) => any) {
     const owner = currentOwner();
-    if (shortcodes.has(tag)) {
-        const existing = shortcodeOwners.get(tag) ?? null;
-        // Same owner may re-register (update); core (owner=null) may always (re)claim a tag. But a plugin
-        // must NOT overwrite a tag owned by core or by a DIFFERENT plugin.
-        if (owner !== null && existing !== owner) {
-            log.warn({ owner, tag }, `[Security Block] Plugin '${owner}' tried to override shortcode '[${tag}]' owned by '${existing ?? 'core'}' — refused.`);
-            return;
-        }
+    if (owner === null) {
+        coreShortcodes.set(tag, callback);
+        return;
     }
-    // Wrap the callback so it ALWAYS runs in its owner's security context. Unlike hooks/timers/emitters,
-    // doShortcodeAsync invokes the shortcode callback DIRECTLY, and it is called from Post.toJSON during
-    // render with an EMPTY ALS store — so an unwrapped plugin/theme shortcode would execute as "core"/
-    // trusted and slip past the option/cache/env context-gated guards (#20). Core (owner=null) stays raw.
-    const stored = owner
-        ? function (this: any, ...a: any[]) { const { runWithContext } = require('./plugin-context'); return runWithContext(owner, () => (callback as any).apply(this, a)); }
-        : callback;
-    shortcodes.set(tag, stored);
-    shortcodeOwners.set(tag, owner);
+    const existing = lookup(tag);
+    if (existing && existing.owner !== owner) {
+        console.warn(`[Security Block] Plugin '${owner}' tried to override shortcode '[${tag}]' owned by '${existing.owner ?? 'core'}' — refused.`);
+        return;
+    }
+    // A plugin's handler always runs in that plugin's context (its sandbox), even when the shortcode
+    // is expanded from host code — mirrors how plugin-registered hooks are wrapped (hooks.ts).
+    const stored = function (this: any, ...a: any[]) { const { runWithContext } = require('./plugin-context'); return runWithContext(owner, () => (callback as any).apply(this, a)); };
+    pluginTable(true)!.set(tag, { callback: stored, owner });
 }
 
 /**
@@ -54,15 +79,14 @@ function addShortcode(tag: string, callback: (...args: any[]) => any) {
  * Equivalent to remove_shortcode()
  */
 function removeShortcode(tag: string) {
-    // A plugin may only remove a tag it owns; core may remove any. Prevents one plugin unregistering
-    // another plugin's / core's shortcode.
     const owner = currentOwner();
-    if (owner !== null && shortcodes.has(tag) && (shortcodeOwners.get(tag) ?? null) !== owner) {
-        log.warn({ owner, tag }, `[Security Block] Plugin '${owner}' tried to remove shortcode '[${tag}]' owned by '${shortcodeOwners.get(tag) ?? 'core'}' — refused.`);
+    const existing = lookup(tag);
+    if (owner !== null && existing && existing.owner !== owner) {
+        console.warn(`[Security Block] Plugin '${owner}' tried to remove shortcode '[${tag}]' owned by '${existing.owner ?? 'core'}' — refused.`);
         return;
     }
-    shortcodes.delete(tag);
-    shortcodeOwners.delete(tag);
+    if (owner === null) coreShortcodes.delete(tag);
+    pluginTable(false)?.delete(tag);
 }
 
 /**
@@ -70,7 +94,7 @@ function removeShortcode(tag: string) {
  * Equivalent to shortcode_exists()
  */
 function shortcodeExists(tag: string) {
-    return shortcodes.has(tag);
+    return !!lookup(tag);
 }
 
 /**
@@ -141,8 +165,8 @@ interface ShortcodeMatch {
  */
 function scanShortcodes(content: string, limit: number = MAX_SHORTCODES_PER_DOCUMENT): ShortcodeMatch[] {
     const matches: ShortcodeMatch[] = [];
-    if (!content || shortcodes.size === 0) return matches;
-    const tagPattern = Array.from(shortcodes.keys()).map(escapeRegex).join('|');
+    if (!content) return matches;
+    const tagPattern = tagsHere().map(escapeRegex).join('|');
     if (!tagPattern) return matches;
     // Sticky: tests the tag alternation AT a given '[' only (never searches ahead), in registration order.
     const openRe = new RegExp(`\\[(${tagPattern})`, 'y');
@@ -205,15 +229,20 @@ function spliceMatches(content: string, matches: ShortcodeMatch[], replacements:
  * @param {string} content - Content with shortcodes
  * @returns {string} - Processed content
  */
+/** The handler for `tag` on the current site (another site's plugin tags are not registered here). */
+function runnableShortcode(tag: string): ((...args: any[]) => any) | undefined {
+    return lookup(tag)?.callback;
+}
+
 function doShortcode(content: string) {
-    if (!content || shortcodes.size === 0) return content;
+    if (!content || tagsHere().length === 0) return content;
 
     // Match [tag attrs]content[/tag] or [tag attrs /] or [tag attrs] (see scanShortcodes)
     const matches = scanShortcodes(content);
     if (matches.length === 0) return content;
 
     const replacements = matches.map((mm) => {
-        const callback = shortcodes.get(mm.tag);
+        const callback = runnableShortcode(mm.tag);
         if (!callback) return content.slice(mm.index, mm.end);
 
         const parsedAttrs = parseAttrs(mm.attrs.trim());
@@ -234,7 +263,7 @@ function doShortcode(content: string) {
  * @returns {Promise<string>}
  */
 async function doShortcodeAsync(content: string) {
-    if (!content || shortcodes.size === 0) return content;
+    if (!content || tagsHere().length === 0) return content;
 
     // Collect matches first, then resolve callbacks concurrently, then splice them back in one pass.
     // String.replace can't await, hence this approach.
@@ -243,7 +272,7 @@ async function doShortcodeAsync(content: string) {
 
     const replacements = await Promise.all(matches.map(async (mm) => {
         const full = content.slice(mm.index, mm.end);
-        const callback = shortcodes.get(mm.tag);
+        const callback = runnableShortcode(mm.tag);
         if (!callback) return full;
         const parsedAttrs = parseAttrs((mm.attrs || '').trim());
         try {
@@ -269,7 +298,7 @@ function escapeRegex(str: string) {
  * Equivalent to strip_shortcodes()
  */
 function stripShortcodes(content: string) {
-    if (!content || shortcodes.size === 0) return content;
+    if (!content || tagsHere().length === 0) return content;
 
     // Same linear scanner as doShortcode (this runs on every excerpt, i.e. every Post.toJSON).
     const matches = scanShortcodes(content);

@@ -96,6 +96,20 @@ router.get('/', (req: Request, res: Response) => {
     });
 });
 
+// MULTISITE (phase 1): what is network-wide stays the main site's — see core/multisite-guards. Every
+// guard is a no-op on a single site and on the main site.
+const multisiteGuards = require('../core/multisite-guards');
+router.use('/site-address', multisiteGuards.mainSiteOnly);
+router.use('/plugins', multisiteGuards.pluginsOnSecondarySite);
+router.use('/marketplace', multisiteGuards.mainSiteOnly);
+router.use('/themes', multisiteGuards.themeFilesOnSecondarySite);
+router.use('/setup', multisiteGuards.mainSiteWrites);
+router.use('/system/certs', multisiteGuards.mainSiteOnly);
+router.use('/health/details', multisiteGuards.mainSiteOnly);
+router.use('/hooks', multisiteGuards.mainSiteOnly);
+// The network itself: its sites and administrators (main site, network administrators only).
+router.use('/network', require('./network'));
+
 // Mount routes
 router.use('/auth', authRoutes);
 router.use('/posts', postsRoutes);

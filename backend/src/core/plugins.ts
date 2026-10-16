@@ -51,6 +51,25 @@ function logSafe(v: any): string {
  * install → activation failed with e.g. "Cannot find module 'smtp-server'". Frontend-bundle detection
  * belongs to the loader, not to dependency management.
  */
+/**
+ * MULTISITE. Plugin CODE is network-wide — installed, updated and removed by a network administrator on
+ * the main site, with one shared node_modules. ACTIVATION and GRANTS are per site (they are options, and
+ * options are per site), and each site runs its own worker of each plugin it activates (core/plugin-isolate).
+ * A site other than the main one can activate only a plugin the network OFFERS it (a ceiling recorded by a
+ * network administrator, core/network pluginCeiling), and never installs or prunes dependencies: that is
+ * code installation, the network's job, done when the plugin is offered (offerPluginToSites).
+ */
+const siteContext = require('./site-context');
+function onSecondarySite(): boolean {
+    return siteContext.multisiteEnabled() && siteContext.currentSiteId() !== siteContext.PRIMARY_SITE_ID;
+}
+function notOfferedError(slug: string): Error & { code: string; status: number } {
+    const e = new Error(`Plugin ${slug} is not available on this site: the network administrator has not offered it to the sites of the network.`) as Error & { code: string; status: number };
+    e.code = 'plugin_not_offered';
+    e.status = 403;
+    return e;
+}
+
 function isBundledPlugin(pluginPath: string, manifest: any = {}) {
     // 1. Explicit flag in manifest
     if (manifest.bundled === true) {
@@ -2435,6 +2454,10 @@ async function _activatePluginUnlocked(slug: string) {
         return { success: true, message: 'Plugin already active' };
     }
 
+    // Multisite: another site activates only what the network offers it.
+    const secondary = onSecondarySite();
+    if (secondary && !require('./plugin-permissions').isOfferedHere(slug)) throw notOfferedError(slug);
+
     // 1. Dependency Check & Auto-Install
     const manifestPath = path.join(plugin.path, 'manifest.json');
     if (fs.existsSync(manifestPath)) {
@@ -2467,6 +2490,9 @@ async function _activatePluginUnlocked(slug: string) {
 
             if (isBundled) {
                 log.info({ slug: logSafe(slug) }, `📦 Plugin '${logSafe(slug)}' detected as bundled - no shared dependencies.`);
+            } else if (secondary) {
+                // Multisite: the shared node_modules is the network's — its dependencies were installed when
+                // the network offered it (offerPluginToSites). A site never installs code.
             } else {
                 // 1b. HARD LOCK: Check for dependency conflicts with active plugins
                 const conflictResult = await checkDependencyConflicts(slug, manifest);
@@ -2487,10 +2513,11 @@ async function _activatePluginUnlocked(slug: string) {
         }
     }
 
-    // 2. Run Plugin Tests (if present)
+    // 2. Run Plugin Tests (if present) — once per network: on another site the code is the one the
+    // network already verified when it was installed and offered.
     const { verifyPluginTests } = require('./plugin-test-runner');
     try {
-        const testResult = await verifyPluginTests(slug);
+        const testResult = secondary ? { skipped: true } as any : await verifyPluginTests(slug);
         if (!testResult.skipped) {
             log.info(`   🧪 Tests verified: ${logSafe(testResult.passed)}/${logSafe(testResult.tests)} passed`);
         }
@@ -2571,7 +2598,10 @@ async function deactivatePlugin(slug: string, opts: { prune?: boolean } = {}) {
     // code is only moving aside for a moment and the new version reinstalls its deps immediately; a
     // prune-then-reinstall round trip strands a plugin whose declared range no longer resolves (and the
     // update's rollback can't rescue that). Normal deactivation still prunes (default).
-    if (opts.prune !== false) {
+    // Multisite: never on another site (the shared node_modules is the network's), and not on the main
+    // site while the network offers the plugin to the other sites — their workers still need it.
+    const offered = siteContext.multisiteEnabled() && (() => { try { return require('./network').pluginCeiling(slug) !== null; } catch { return true; } })();
+    if (opts.prune !== false && !onSecondarySite() && !offered) {
         const plugins = scanPlugins();
         const plugin = plugins.find(p => p.slug === slug);
         if (plugin) {
@@ -2726,7 +2756,12 @@ async function loadActivePlugins() {
 
     const activePlugins = await getActivePlugins();
     const plugins = scanPlugins();
-    const CrashGuard = require('./crash-guard');
+    const secondary = onSecondarySite();
+    // CrashGuard watches the BOOT of the process (the main site's plugins load during it); another site's
+    // plugins load when that site is first prepared, long after, so they are not part of its strike count.
+    const CrashGuard = secondary
+        ? { checkPreviousCrash: () => null, startLoading: () => {}, finishLoading: () => {}, MAX_STRIKES: 0 }
+        : require('./crash-guard');
 
     // 1. CRASH RECOVERY CHECK (with 3-Strike Rule)
     // Did we crash last time?
@@ -2783,6 +2818,12 @@ async function loadActivePlugins() {
     for (const slug of activePlugins) {
         const plugin = plugins.find(p => p.slug === slug);
         if (!plugin) continue;
+        // Multisite: a plugin the network stopped offering stays listed (the site's choice is kept) but
+        // does not run here until it is offered again.
+        if (secondary && !require('./plugin-permissions').isOfferedHere(slug)) {
+            console.warn(`   ⚠ Skipping '${logSafe(slug)}' on site ${siteContext.currentSiteId()}: not offered by the network.`);
+            continue;
+        }
 
         const mainFile = findMainFile(plugin.path);
         if (!mainFile) continue;
@@ -2801,7 +2842,7 @@ async function loadActivePlugins() {
                 // across restarts instead of quietly coming back.
                 validatePluginPermissions(slug, plugin.path, manifest, { mode: 'grant' });
 
-                await installPluginDependencies(slug, manifest, plugin.path);
+                if (!secondary) await installPluginDependencies(slug, manifest, plugin.path);
             } catch (e) {
                 log.error({ err: e }, `   ✗ Security Block for ${logSafe(slug)} on load`);
                 // We don't load plugins that fail validation
@@ -2977,6 +3018,99 @@ exports.deactivate = function() {
  * they are. Clearing them and writing back a copy taken from this node's memory undid, on a node that had
  * not heard of it, a revoke or a narrowed allowlist another node had stored.
  */
+// --- Multisite: plugins across the sites of a network ---------------------------------------------
+
+/**
+ * Load the active plugins of the site being prepared (core/network-sites initSiteRuntime): its grants and
+ * egress policy first (they are that site's options), then one worker per active, offered plugin. Runs
+ * inside that site's context. Never throws: a site whose plugins fail to load still serves its content.
+ */
+async function loadSitePlugins(): Promise<void> {
+    try {
+        const perms = require('./plugin-permissions');
+        await perms.loadGrants();
+        await perms.loadEgressHosts();
+        await loadActivePlugins();
+        fixMiddlewareOrder();
+    } catch (e: any) {
+        console.warn(`[plugins] site ${siteContext.currentSiteIdOrNull()}: plugins not loaded: ${logSafe(e && e.message)}`);
+    }
+}
+
+/**
+ * Stop `slug` on every site other than the main one and drop it from their active sets — the plugin is
+ * leaving the network (deleted) or no longer offered. Each site's own record of the deactivation (its
+ * `deactivated_plugin` hook, its active set) is written in that site's context. Grants are kept, so an
+ * offer made again later restores each site's own decisions. Returns the site ids it was active on.
+ */
+async function deactivatePluginOnSecondarySites(slug: string): Promise<number[]> {
+    const done: number[] = [];
+    if (!siteContext.multisiteEnabled()) return done;
+    await require('./network-sites').forEachSecondarySite(`deactivate ${slug}`, async (siteId: number) => {
+        if (!(await isPluginActive(slug))) {
+            // Not in the active set, but a worker may still run (activation in flight): stop it anyway.
+            try { await unloadIsolatedPlugin(slug); } catch { /* not running */ }
+            return;
+        }
+        await deactivatePlugin(slug, { prune: false });
+        done.push(siteId);
+    });
+    // Suspended sites are skipped by forEachSecondarySite; stop any worker they still have.
+    try {
+        const iso = require('./plugin-isolate');
+        for (const key of iso.listIsolateKeys()) {
+            const { siteId, slug: s } = iso.splitIsolateKey(key);
+            if (s === slug && siteId !== siteContext.PRIMARY_SITE_ID) { try { await iso.unloadIsolateKey(key); } catch { /* gone */ } }
+        }
+    } catch { /* isolate layer unavailable */ }
+    return done;
+}
+
+/**
+ * Network administrator: offer `slug` to the other sites with `tokens` as its grant ceiling (or change the
+ * ceiling). Installs its dependencies into the shared node_modules once (the main site's job; sites never
+ * install code), then respawns every running worker of it on the other sites, so a lowered ceiling takes
+ * effect in the children too (the host gates already read it live). Runs as the main site.
+ */
+async function offerPluginToSites(slug: string, tokens: unknown): Promise<string[]> {
+    const plugin = scanPlugins().find((p) => p.slug === slug);
+    if (!plugin) { const e: any = new Error(`Plugin ${slug} not found`); e.code = 'plugin_not_found'; e.status = 404; throw e; }
+    const manifestPath = path.join(plugin.path, 'manifest.json');
+    let manifest: any = null;
+    try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); } catch { /* checked below */ }
+    if (!manifest || !manifest.isolated) { const e: any = new Error(`Plugin ${slug} is not an isolated plugin`); e.code = 'plugin_not_isolated'; e.status = 400; throw e; }
+    const stored = require('./network').setPluginCeiling(slug, tokens);
+    if (!isBundledPlugin(plugin.path, manifest)) {
+        try { await installPluginDependencies(slug, manifest, plugin.path); }
+        catch (e: any) { console.warn(`[plugins] '${logSafe(slug)}' offered, but its dependencies could not be installed: ${logSafe(e && e.message)}`); }
+    }
+    await respawnOnSecondarySites(slug);
+    return stored;
+}
+
+/** Network administrator: stop offering `slug` to the other sites (deactivates it there). */
+async function withdrawPluginFromSites(slug: string): Promise<{ withdrawn: boolean; deactivatedOn: number[] }> {
+    const withdrawn = require('./network').clearPluginCeiling(slug);
+    const deactivatedOn = await deactivatePluginOnSecondarySites(slug);
+    return { withdrawn, deactivatedOn };
+}
+
+/** Respawn every running worker of `slug` on the sites other than the main one (a policy change). */
+async function respawnOnSecondarySites(slug: string): Promise<void> {
+    if (!siteContext.multisiteEnabled()) return;
+    const iso = require('./plugin-isolate');
+    for (const key of iso.listIsolateKeys()) {
+        const { siteId, slug: s } = iso.splitIsolateKey(key);
+        if (s !== slug || siteId === siteContext.PRIMARY_SITE_ID) continue;
+        try {
+            await siteContext.runWithSite(siteId, async () => {
+                await require('./plugin-permissions').loadGrants();
+                await iso.reloadIsolatedPlugin(slug);
+            });
+        } catch (e: any) { console.warn(`[plugins] respawn of '${logSafe(slug)}' on site ${siteId} failed: ${logSafe(e && e.message)}`); }
+    }
+}
+
 async function uninstallPluginData(slug: string, { dropTables = false, keepGrants = false }: { dropTables?: boolean; keepGrants?: boolean } = {}) {
     const result: { grantsRemoved: boolean; strikesCleared: boolean; tablesDropped: string[]; appContainerRetired: boolean } = { grantsRemoved: false, strikesCleared: false, tablesDropped: [], appContainerRetired: false };
     if (!keepGrants) {
@@ -3019,6 +3153,7 @@ async function uninstallPluginData(slug: string, { dropTables = false, keepGrant
 }
 
 module.exports = {
+    loadSitePlugins, deactivatePluginOnSecondarySites, offerPluginToSites, withdrawPluginFromSites, respawnOnSecondarySites, onSecondarySite,
     scanPlugins,
     getActivePlugins,
     isPluginActive,

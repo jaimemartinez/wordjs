@@ -16,6 +16,8 @@ const { resolveWithin } = require('../core/safe-path');
 const { runContentMutation, isContentMutationActive } = require('../core/content-outbox');
 // PRIVATE MEDIA (see core/private-media.ts): post_status 'private' + files outside the served tree.
 const privateMedia = require('../core/private-media');
+// Multisite: the current site's main address (site 1: config.site.url).
+const network = require('../core/network');
 
 /** Which attachment statuses a listing covers, by requested visibility. Public is the default. */
 function statusesForVisibility(visibility: unknown): string[] {
@@ -194,7 +196,7 @@ class Media {
         }
 
         // Build absolute URL for API response (a linked attachment is already absolute, and elsewhere)
-        const absoluteUrl = (!isPrivate && remoteUrl) || `${config.site.url}${relativePath}`;
+        const absoluteUrl = (!isPrivate && remoteUrl) || `${network.currentSiteUrl()}${relativePath}`;
 
         // WHERE THE BYTES ARE SERVED FROM. `sourceUrl` stays the relative /uploads path (what editors
         // persist into content, so content never names a bucket or CDN host); `deliveryUrl` is the URL a
@@ -296,7 +298,7 @@ class Media {
         if (typeof storedFile !== 'string' || storedFile.length === 0) return [];
         // The root the files live under: the public uploads tree by default, or the private one for a
         // private attachment. Every proof below is made against THIS root.
-        const uploadDir = path.resolve(rootDir || config.uploads.dir);
+        const uploadDir = path.resolve(rootDir || privateMedia.publicUploadsRoot());
 
         // Split on BOTH separators, not just '/': a legacy row written on Win32 can carry backslashes,
         // and splitting on them is safe precisely because each resulting segment must still pass

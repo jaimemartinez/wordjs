@@ -30,13 +30,20 @@
  *     `sanitizePuckTree` de la ruta de escritura antes de persistirse y difundirse.
  */
 
-import type { Request, Response } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 
 const express = require('express');
 const log = require('../core/module-logger').moduleLogger('routes/collab');
 const router = express.Router();
 
-const jwt = require('jsonwebtoken');
+// Real-time collaboration keeps its rooms, replica ids and streams per process, keyed by post id. In a
+// multisite network those ids repeat across sites, so phase 1 serves collaboration on the main site
+// only: on any other site every collab route answers 404, and the editor falls back to plain saving.
+router.use((req: Request, res: Response, next: NextFunction) => {
+    if (require('../core/site-context').isPrimarySite()) return next();
+    return res.status(404).json({ code: 'rest_no_route', message: 'Real-time collaboration is not available on this site.', data: { status: 404 } });
+});
+
 const { authenticate, trustedHost, originMatchesHost, sameOriginAllowList, hostlessAmbientRequest, sessionAddressStillAccepted } = require('../middleware/auth');
 const { asyncHandler, offStack } = require('../middleware/errorHandler');
 const { canEditPostRecord, isRestExposedPostType } = require('../core/post-capabilities');
@@ -246,7 +253,7 @@ function makeRevalidate(req: Request, postId: number): () => Promise<boolean> {
         } else {
             let decoded: any;
             try {
-                decoded = jwt.verify(rawToken, config.jwt.secret, { algorithms: ['HS256'] });
+                decoded = require('../core/site-keys').verifyForSite(rawToken);
             } catch {
                 return false; // caducado, revocado por firma, manipulado… o simplemente no es un JWT
             }
