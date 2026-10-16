@@ -173,7 +173,10 @@ describe('api.ts under WORDJS_HERMETIC_BUILD=1', () => {
 describe('next.config rewrites under WORDJS_HERMETIC_BUILD=1', () => {
     async function rewrites(): Promise<Array<{ source: string; destination: string }>> {
         const { default: nextConfig } = await import('../../../next.config');
-        return (await (nextConfig.rewrites as () => Promise<any>)()) as Array<{ source: string; destination: string }>;
+        // The backend proxy rules are the afterFiles phase; beforeFiles holds the multisite rewrite
+        // (src/lib/__tests__/multisite.test.ts covers it).
+        const all = await (nextConfig.rewrites as () => Promise<any>)();
+        return all.afterFiles as Array<{ source: string; destination: string }>;
     }
 
     const rewritesTo = (target: string) =>

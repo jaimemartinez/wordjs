@@ -512,10 +512,21 @@ Phase 1 follows the plan above with these narrowings and departures, each delibe
   the installer, the hooks inspector, the database migration tool, real-time collaboration (its rooms are
   keyed by post id per process) and the cron jobs that act on the main site's files (backups, version
   checks, maintenance). Another site's cron runs scheduled publishing and analytics retention only.
-- **The frontend**: `src/proxy.ts` rewrites another site's public pages to an internal
-  `wjs-site/[siteHost]` route tree whose pages wrap the `(public)` ones and declare the site before any
-  read, so each site's pages have their own Full Route Cache paths and Data Cache tags. The site comes
-  from `x-wordjs-site-host`, which only the edge sets (from its own verdict; a client's value is removed).
+- **The frontend**: another site's public pages are rewritten to an internal `wjs-site/[siteHost]`
+  route tree whose pages wrap the `(public)` ones and declare the site before any read, so each site's
+  pages have their own Full Route Cache paths and Data Cache tags. The site comes from
+  `x-wordjs-site-host`, which only the edge sets (from its own verdict; a client's value is removed, and
+  the frontend's replica dispatcher drops it from any peer but the gateway). `src/proxy.ts` only marks
+  the request (`x-wordjs-site-route`) and a `beforeFiles` rewrite in `next.config.ts` does the rewrite:
+  a rewrite returned by the proxy function is internal only when its origin matches the one Next built
+  for the request, which behind the gateway's mTLS hop it does not.
+- **Server-side reads reach the right site in every mode.** The frontend fetches a site's data naming
+  it in `X-Forwarded-Host`: the backend believes that from a loopback hop (monolith, split), and the
+  gateway believes it from a **registered frontend node** (separate mode) when the address the node
+  connected to and the address it names are both addresses of the network. With multisite on, every
+  backend response names the site that answered (`X-WordJS-Site-Host`), and another site's page refuses
+  data from any other site, so a deployment path that loses the site fails closed (not found) instead of
+  showing one site's content under another's address.
   The root layout cannot know the site (it takes no params): another site's pages override its metadata
   (title, description, icon, base URL), and the admin sets its own title from the request; the `lang`
   attribute of `<html>`, the server-rendered `@font-face` rules and the title of the sign-in pages still

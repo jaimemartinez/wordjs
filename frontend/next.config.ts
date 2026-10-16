@@ -264,6 +264,23 @@ const nextConfig: NextConfig = {
     ];
   },
   async rewrites() {
+    // MULTISITE: another site of the network is served from the internal `wjs-site/[siteHost]` route
+    // tree. src/proxy.ts sets `x-wordjs-site-route` (the site's validated main hostname) on that site's
+    // public page requests only — never from a client's own header, which it removes — and these rules do
+    // the rewrite. Declared here they are always INTERNAL: a rewrite returned by the proxy function is
+    // internal only when its URL's origin matches the one Next built for the request, which is not the
+    // case behind the gateway's mTLS hop. `beforeFiles`, because `/` and the feed and sitemap routes are
+    // static routes the filesystem would otherwise answer first. Inert without the header (every
+    // single-site request, and every main-site request).
+    const SITE_ROUTE_HAS = [{ type: 'header' as const, key: 'x-wordjs-site-route', value: '(?<siteHost>[a-z0-9_][a-z0-9_.-]{0,252})' }];
+    // ORDER MATTERS: Next applies matching beforeFiles rules one after another, so with '/' first its
+    // result (/wjs-site/<host>) was rewritten again by '/:path+' into a path that does not exist. With
+    // '/:path+' first, neither rule matches what the other produced.
+    const multisiteRewrites = [
+      { source: '/:path+', has: SITE_ROUTE_HAS, destination: '/wjs-site/:siteHost/:path+' },
+      { source: '/', has: SITE_ROUTE_HAS, destination: '/wjs-site/:siteHost' },
+    ];
+
     // RELEASE BUILD: the rewrite is baked into the shipped .next/routes-manifest.json, so it must be
     // the compiled-in default a clean CI build produces — never this machine's gatewayPort,
     // WORDJS_BACKEND_URL or WORDJS_MODE. Operators repoint a release at runtime (server.js honours
@@ -273,7 +290,7 @@ const nextConfig: NextConfig = {
 
     // Monolith mode: the single-process server dispatches /api and /uploads to the backend in-process
     // before Next sees them, so no proxy rewrite is needed (and there's no gateway port to target).
-    if (process.env.WORDJS_MODE === 'mono' && !hermetic) return [];
+    if (process.env.WORDJS_MODE === 'mono' && !hermetic) return { beforeFiles: multisiteRewrites, afterFiles: [] };
 
     // WHERE /api AND /uploads GO. Resolution + precedence + validation live in one shared module
     // (./backend-proxy-target.js) because `server.js` has to reach the same answer: Next bakes these
@@ -314,10 +331,13 @@ const nextConfig: NextConfig = {
 
     // Every prefix the backend owns, not just /api and /uploads — see PROXIED_PREFIXES. The list is
     // shared with server.js so the build-time and runtime paths forward exactly the same things.
-    return rewriteSources().map((source: string) => ({
-      source,
-      destination: `${backendUrl}${source}`,
-    }));
+    return {
+      beforeFiles: multisiteRewrites,
+      afterFiles: rewriteSources().map((source: string) => ({
+        source,
+        destination: `${backendUrl}${source}`,
+      })),
+    };
   },
   reactStrictMode: false,
 };

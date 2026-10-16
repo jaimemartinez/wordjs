@@ -146,6 +146,13 @@ describe('sites and addresses', () => {
         }
     });
 
+    test('every response names the site that answered it, for the frontend to check', async () => {
+        for (const [host, expected] of [['main.example.com', 'main.example.com'], [TWO, TWO], [THREE, THREE]]) {
+            const res = await direct('get', `${API}/settings`, host);
+            assert.strictEqual(res.headers['x-wordjs-site-host'], expected, host);
+        }
+    });
+
     test('an address no site declares gets 421 (I6)', async () => {
         const res = await direct('get', `${API}/settings`, 'four.example.com');
         assert.strictEqual(res.status, 421);

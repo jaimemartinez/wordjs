@@ -38,6 +38,22 @@ function resolveSiteId(req: Request, getPolicy: () => any): number | null {
     return hostPolicy.siteIdOf(hostPolicy.classify(authority.parsed, pol, { proxied: authority.proxied }));
 }
 
+/**
+ * Every response of a network says which site answered it (`X-WordJS-Site-Host`: that site's main
+ * hostname). The frontend renders another site's pages from data it fetches server-side, through
+ * whatever path the deployment gives it to the backend; it refuses data that came from any other site
+ * (lib/server-api), so a topology that loses the site on the way fails closed instead of showing one
+ * site's content under another's address. Names nothing a visitor of that site does not know already.
+ */
+const SITE_HEADER = 'X-WordJS-Site-Host';
+function stateSite(res: Response, hostname: string | null): void {
+    if (hostname) res.setHeader(SITE_HEADER, hostname);
+}
+function mainSiteHostname(): string | null {
+    const site = hostPolicy.parseSiteUrl(require('../config/app').siteUrl);
+    return site ? site.hostname : null;
+}
+
 function siteResolver(opts: { getPolicy: () => any }) {
     return function resolveSite(req: Request, res: Response, next: NextFunction) {
         if (!siteContext.multisiteEnabled()) return next();
@@ -57,7 +73,10 @@ function siteResolver(opts: { getPolicy: () => any }) {
             // network-wide and is answered as it always was.
             siteId = siteContext.PRIMARY_SITE_ID;
         }
-        if (siteId === siteContext.PRIMARY_SITE_ID) return siteContext.runWithSite(siteId, next);
+        if (siteId === siteContext.PRIMARY_SITE_ID) {
+            stateSite(res, mainSiteHostname());
+            return siteContext.runWithSite(siteId, next);
+        }
 
         const network = require('./network');
         const site = network.getSite(siteId);
@@ -71,6 +90,7 @@ function siteResolver(opts: { getPolicy: () => any }) {
             return res.status(503).json({ code: 'rest_site_suspended', message: 'This site is suspended.', data: { status: 503 } });
         }
         const id = siteId;
+        stateSite(res, site.mainHost);
         siteContext.runWithSite(id, () => {
             require('./network-sites').prepareSite(id)
                 .then(() => next())

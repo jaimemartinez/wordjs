@@ -2,13 +2,13 @@ import { describe, it, expect } from "vitest";
 import { NextRequest } from "next/server";
 import { proxy } from "../../proxy";
 import { canOpenAdminPath, sidebarSections, type AdminAccessUser } from "../adminAccess";
-import { normalizeSiteHost, siteTags } from "../server-api";
+import { fromRequestedSite, normalizeSiteHost, siteTags } from "../server-api";
 
 /**
  * MULTISITE IN THE FRONTEND (documentation/multisite-design.md).
  *
- *   · src/proxy.ts sends another site's public pages to the `wjs-site/[siteHost]` tree, ONLY on the
- *     edge's own header, and never lets the main site reach that tree directly;
+ *   · src/proxy.ts routes another site's public pages to the `wjs-site/[siteHost]` tree (next.config's
+ *     internal rewrite), ONLY on the edge's own header, and never lets the main site reach that tree;
  *   · the admin shell offers each site only the screens it has, and the network screen to network
  *     administrators on the main site;
  *   · another site's data-cache entries carry tags of their own.
@@ -17,27 +17,39 @@ import { normalizeSiteHost, siteTags } from "../server-api";
 const req = (path: string, headers: Record<string, string> = {}) =>
     new NextRequest(new URL(path, "http://example.com"), { headers });
 
-/** Where the proxy sends a request: the rewrite target's path, "next" or the status it answers. */
+/**
+ * What the proxy decided: the site a request is routed to (the internal `x-wordjs-site-route` it set on
+ * the request), "next" for a request it leaves alone, or the status it answered.
+ */
 function outcome(res: Response): string {
-    const rewrite = res.headers.get("x-middleware-rewrite");
-    if (rewrite) return new URL(rewrite).pathname;
+    const route = res.headers.get("x-middleware-request-x-wordjs-site-route");
+    if (route) return `site:${route}`;
     if (res.headers.get("x-middleware-next")) return "next";
     return String(res.status);
+}
+
+/** The request headers the proxy passes on (Next's override list), lower-case. */
+function passedHeaders(res: Response): string[] {
+    return String(res.headers.get("x-middleware-override-headers") || "").split(",").map((h) => h.trim()).filter(Boolean);
 }
 
 describe("proxy: another site of the network", () => {
     const site = { "x-wordjs-site-host": "two.example.org" };
 
-    it("rewrites that site's public pages and documents to its tree", () => {
-        expect(outcome(proxy(req("/", site)))).toBe("/wjs-site/two.example.org");
-        expect(outcome(proxy(req("/hello", site)))).toBe("/wjs-site/two.example.org/hello");
-        expect(outcome(proxy(req("/category/news/2", site)))).toBe("/wjs-site/two.example.org/category/news/2");
-        expect(outcome(proxy(req("/feed.xml", site)))).toBe("/wjs-site/two.example.org/feed.xml");
-        expect(outcome(proxy(req("/sitemap/posts-1.xml", site)))).toBe("/wjs-site/two.example.org/sitemap/posts-1.xml");
+    it("routes that site's public pages and documents to its tree", () => {
+        for (const p of ["/", "/hello", "/category/news/2", "/feed.xml", "/sitemap/posts-1.xml", "/tag/x/feed.xml"]) {
+            expect(outcome(proxy(req(p, site))), p).toBe("site:two.example.org");
+        }
+    });
+
+    it("never returns a rewrite of its own: the internal rewrite is next.config's", () => {
+        // A rewrite returned here is external behind the gateway's mTLS hop (lab finding, split mode).
+        const res = proxy(req("/hello", site));
+        expect(res.headers.get("x-middleware-rewrite")).toBeNull();
     });
 
     it("leaves the admin, sign-in, API and asset paths alone", () => {
-        for (const p of ["/admin", "/admin/posts", "/login", "/api/v1/settings", "/uploads/2026/10/a.png", "/install", "/portal/x", "/logo.png"]) {
+        for (const p of ["/admin", "/admin/posts", "/login", "/api/v1/settings", "/uploads/2026/10/a.png", "/install", "/portal/x", "/logo.png", "/fonts/Inter.woff2"]) {
             expect(outcome(proxy(req(p, site))), p).toBe("next");
         }
     });
@@ -56,6 +68,43 @@ describe("proxy: the main site (and every single site)", () => {
     it("cannot reach another site's tree directly", () => {
         expect(outcome(proxy(req("/wjs-site/two.example.org")))).toBe("404");
         expect(outcome(proxy(req("/wjs-site/two.example.org/hello")))).toBe("404");
+    });
+
+    it("removes a client's own routing header, on every path", () => {
+        for (const headers of [{ "x-wordjs-site-route": "two.example.org" }, { "x-wordjs-site-route": "two.example.org", "x-wordjs-site-host": "three.example.org" }] as Record<string, string>[]) {
+            const res = proxy(req("/admin", headers));
+            expect(passedHeaders(res)).not.toContain("x-wordjs-site-route");
+        }
+        expect(outcome(proxy(req("/hello", { "x-wordjs-site-route": "two.example.org" })))).toBe("next");
+    });
+});
+
+describe("next.config: the multisite rewrite", () => {
+    async function rewrites(mode?: string) {
+        const saved = process.env.WORDJS_MODE;
+        if (mode === undefined) delete process.env.WORDJS_MODE; else process.env.WORDJS_MODE = mode;
+        try {
+            const { default: nextConfig } = await import("../../../next.config");
+            return await (nextConfig.rewrites as () => Promise<any>)();
+        } finally {
+            if (saved === undefined) delete process.env.WORDJS_MODE; else process.env.WORDJS_MODE = saved;
+        }
+    }
+
+    it("is a beforeFiles rule on the routing header, with an INTERNAL destination, in every mode", async () => {
+        for (const mode of [undefined, "mono"]) {
+            const { beforeFiles } = await rewrites(mode);
+            expect(beforeFiles.map((r: any) => [r.source, r.destination]), String(mode)).toEqual([
+                // '/:path+' first: Next chains matching beforeFiles rules, and '/' first had its result
+                // rewritten again (the home page of another site was a 404 in a production build).
+                ["/:path+", "/wjs-site/:siteHost/:path+"],
+                ["/", "/wjs-site/:siteHost"],
+            ]);
+            for (const r of beforeFiles) {
+                expect(r.destination.startsWith("/"), "relative: Next never proxies it").toBe(true);
+                expect(r.has).toEqual([{ type: "header", key: "x-wordjs-site-route", value: "(?<siteHost>[a-z0-9_][a-z0-9_.-]{0,252})" }]);
+            }
+        }
     });
 });
 
@@ -101,6 +150,15 @@ describe("data cache per site", () => {
         expect(siteTags(["posts", "settings"], "two.example.org")).toEqual(["site:two.example.org:posts", "site:two.example.org:settings"]);
         expect(siteTags(["posts"], null)).toEqual(["posts"]);
         expect(siteTags(undefined, "two.example.org")).toBeUndefined();
+    });
+
+    it("refuses another site's read that came back from a different site (fails closed)", () => {
+        const answered = (host?: string) => new Response("{}", { headers: host ? { "x-wordjs-site-host": host } : {} });
+        expect(fromRequestedSite(answered("two.example.org"), "two.example.org")).not.toBeNull();
+        expect(fromRequestedSite(answered("main.example.org"), "two.example.org")).toBeNull();
+        expect(fromRequestedSite(answered(), "two.example.org")).toBeNull();
+        // The main site's reads are not checked, as before multisite.
+        expect(fromRequestedSite(answered(), null)).not.toBeNull();
     });
 
     it("accepts only hostnames as a site", () => {
