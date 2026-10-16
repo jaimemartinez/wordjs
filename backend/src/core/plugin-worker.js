@@ -363,6 +363,17 @@ const routeHandlers = new Map();   // routeId -> route handler (req,res) living 
 const shortcodeHandlers = new Map(); // scId -> shortcode handler (attrs,content,tag)=>string living here
 let mailProvider = null;           // the send(msg) function this isolate provides, if any
 const notifyTransports = new Map(); // transport name -> handler(notification) living here
+let smtpHandlers = null;           // { connect, mailFrom, rcptTo, data, close } for the host's inbound listener
+const smtpSessions = new Map();    // host session id -> the session object the plugin's handlers see (and annotate)
+
+// Ask the host something outside the generic 'call' channel (a dedicated message kind) and wait for its reply.
+function askHost(kind, payload) {
+    return new Promise((resolve, reject) => {
+        const id = ++_id;
+        pending.set(id, { resolve, reject });
+        send({ kind, id, ...payload });
+    });
+}
 
 function callHost(method, args) {
     return new Promise((resolve, reject) => {
@@ -428,6 +439,17 @@ const wordjs = {
             send({ kind: 'register-notify-transport', name });
         }
     }),
+    // smtp:inbound — have the HOST listen on the internet's SMTP port for this plugin (an exclusive,
+    // admin-granted capability; isolated plugins may not open sockets themselves). `handlers` are async
+    // (connect, mailFrom, rcptTo, data, close): resolve nothing to accept, or { code, message } to refuse.
+    // `data` receives the raw message as a Buffer. Resolves with the listener status ({ ok, granted, boundPort, … }).
+    smtp: {
+        listen(handlers, opts) {
+            smtpHandlers = handlers || null;
+            return askHost('register-smtp-listener', { opts: opts || {} });
+        },
+        status: () => askHost('smtp-status', {}),
+    },
     adminMenu: { add: (item) => callHost('adminMenu.add', [item]) },
     cron: { schedule: (ts, rec, hook, args) => callHost('cron.schedule', [ts, rec, hook, args]) },
     // CSPRNG bridge — the static validator blocks crypto/globalThis in plugin CODE, so a plugin that
@@ -605,6 +627,35 @@ onMessage(async (msg) => {
             send({ kind: 'mail-reply', id: msg.id, ok: true, value: out });
         } catch (e) {
             send({ kind: 'mail-reply', id: msg.id, ok: false, error: String(e && e.message || e) });
+        }
+    } else if (msg.kind === 'invoke-smtp') {
+        // The host's inbound SMTP listener asks what to do with one step of a transaction.
+        const args = Array.isArray(msg.args) ? msg.args : [];
+        const view = args[args.length - 1] || {};
+        // One session object per connection, so a handler can annotate it (e.g. an SPF verdict at MAIL
+        // FROM read back at DATA). Bounded: a host that never sends 'close' cannot grow it forever.
+        let session = smtpSessions.get(view.id);
+        if (!session) {
+            if (smtpSessions.size >= 500) smtpSessions.delete(smtpSessions.keys().next().value);
+            session = {};
+            smtpSessions.set(view.id, session);
+        }
+        Object.assign(session, view);
+        const fn = smtpHandlers && smtpHandlers[msg.phase];
+        try {
+            let value = null;
+            if (msg.phase === 'close') smtpSessions.delete(view.id);
+            if (typeof fn === 'function') {
+                if (msg.phase === 'data') value = await fn(Buffer.from(String(args[0] || ''), 'base64'), session);
+                else if (msg.phase === 'mailFrom' || msg.phase === 'rcptTo') value = await fn(args[0], session);
+                else value = await fn(session);
+            }
+            const verdict = value && typeof value === 'object' && (value.code || value.message)
+                ? { code: Number(value.code) || 550, message: String(value.message || '') }
+                : null;
+            send({ kind: 'smtp-reply', id: msg.id, ok: true, value: verdict });
+        } catch (e) {
+            send({ kind: 'smtp-reply', id: msg.id, ok: false, error: String(e && e.message || e) });
         }
     } else if (msg.kind === 'invoke-notify-transport') {
         // Core's notification loop is dispatching through a transport this isolate registered.

@@ -550,6 +550,10 @@ const KNOWN_PERMISSIONS: Record<string, string[]> = {
     // Register the roles the manifest's `roles` block declares (core/plugin-roles.ts). Every such role and
     // capability lives in the plugin's own namespace; the grant cannot reach a core capability.
     roles: ['declare'],
+    // smtp:inbound — the HOST opens the public SMTP port (25) for this plugin and hands it every inbound
+    // message (core/inbound-smtp.ts). EXCLUSIVE: at most one plugin may hold it (core/plugin-permissions
+    // EXCLUSIVE_GRANTS). A special verb — nothing implies it.
+    smtp: ['inbound'],
     network: [], // scope-only: {scope:'network'} carries no access token
 };
 

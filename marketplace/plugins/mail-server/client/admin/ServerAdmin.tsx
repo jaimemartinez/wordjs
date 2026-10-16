@@ -91,7 +91,7 @@ function Overview({ t, locale, data, settings, go, reload }: any) {
     const dkim = settings?.mail_security_dkim_enabled === '1';
     const health = [
         data.inbound?.ok
-            ? { ok: true, icon: 'fa-solid fa-inbox', text: t('srv.inboundOk') }
+            ? { ok: true, icon: 'fa-solid fa-inbox', text: t('srv.inboundOk'), detail: data.inbound.mode === 'host' ? t('srv.inboundViaHost') : null }
             : data.inbound?.boundPort
                 ? { ok: false, icon: 'fa-solid fa-inbox', text: t('srv.inboundDegraded', { port: data.inbound.boundPort }), detail: data.inbound.reason, action: () => go('config') }
                 : { ok: false, icon: 'fa-solid fa-inbox', text: t('srv.inboundUnknown'), action: () => go('config') },
@@ -572,11 +572,31 @@ function InboundStatus({ settings, setSettings, t, confirm }: any) {
         finally { setFreeing(false); }
     };
     if (settings.inbound_bound_port === null || settings.inbound_bound_port === undefined) {
-        return <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600"><i className="fa-solid fa-circle-info text-slate-400"></i>{t('srv.inboundUnknown')}</div>;
+        return (
+            <div className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                <span className="flex items-center gap-3"><i className="fa-solid fa-circle-info text-slate-400"></i>{t('srv.inboundUnknown')}</span>
+                {settings.inbound_reason && <code className="block whitespace-pre-wrap break-words rounded-lg bg-white px-3 py-2 font-mono text-xs leading-relaxed">{settings.inbound_reason}</code>}
+                {settings.inbound_mode !== 'host' && (
+                    <span className="flex flex-wrap items-center gap-2 text-xs"><i className="fa-solid fa-key text-slate-400"></i><span className="flex-1">{t('srv.grantInbound')}</span><a href="/admin/plugins?permissions=mail-server" className="font-semibold text-violet-700 hover:underline">{t('srv.openPermissions')}</a></span>
+                )}
+            </div>
+        );
     }
     if (settings.inbound_ok) {
-        return <div className="flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800"><i className="fa-solid fa-circle-check text-emerald-500"></i>{t('srv.inboundOk')}</div>;
+        return (
+            <div className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+                <i className="fa-solid fa-circle-check mt-0.5 text-emerald-500"></i>
+                <span><span className="font-medium">{t('srv.inboundOk')}</span>{settings.inbound_mode === 'host' && <span className="block text-xs text-emerald-700">{t('srv.inboundViaHost')}</span>}</span>
+            </div>
+        );
     }
+    const grantHint = settings.inbound_mode !== 'host' && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg bg-white/70 px-3 py-2 text-xs">
+            <i className="fa-solid fa-key text-amber-600"></i>
+            <span className="min-w-0 flex-1">{t('srv.grantInbound')}</span>
+            <a href="/admin/plugins?permissions=mail-server" className="font-semibold text-violet-700 hover:underline">{t('srv.openPermissions')}</a>
+        </div>
+    );
     return (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-900">
             <div className="flex items-start gap-3">
@@ -584,6 +604,7 @@ function InboundStatus({ settings, setSettings, t, confirm }: any) {
                 <div className="grid min-w-0 gap-2">
                     <span className="text-sm font-semibold">{t('srv.inboundDegraded', { port: settings.inbound_bound_port })}</span>
                     {settings.inbound_reason && <code className="block whitespace-pre-wrap break-words rounded-lg bg-amber-100/70 px-3 py-2 font-mono text-xs leading-relaxed">{settings.inbound_reason}</code>}
+                    {grantHint}
                     <div><Button size="sm" variant="secondary" icon="fa-solid fa-unlock" loading={freeing} onClick={free}>Free port 25</Button></div>
                     {msg && <div className="whitespace-pre-wrap text-xs">{msg}</div>}
                 </div>

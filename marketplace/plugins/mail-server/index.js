@@ -1174,9 +1174,10 @@ function inboundPortReason(code) {
     }
     if (code === 'EPERM') {
         return 'the operating system refused this plugin a listening socket (EPERM). On Linux this is the plugin ' +
-            'sandbox: its seccomp filter does not let an isolated plugin bind or listen on any port, so inbound SMTP ' +
-            'cannot run on this host while that confinement is active, and no port, sysctl or capability setting ' +
-            'changes it. Sending and local mail are unaffected.';
+            'sandbox: its seccomp filter does not let an isolated plugin bind or listen on any port, so this plugin ' +
+            'cannot run its own SMTP listener here, and no port, sysctl or capability setting changes it. Grant the ' +
+            'plugin the "Receive internet email (port 25)" permission (smtp:inbound) in Plugins → Permissions: WordJS ' +
+            'then listens on port 25 for it. Sending and local mail are unaffected.';
     }
     if (code === 'EADDRINUSE') return 'port 25 is already in use by another mail server — stop it, or map 25 → 2525';
     return `could not bind port 25 (${code || 'unknown error'})`;
@@ -1204,7 +1205,7 @@ async function initSMTPServer() {
     // parsed client IP then flows into session.remoteAddress, so DNSBL/SPF/logging see the real sender.
     const trustedProxyIps = parseTrustedProxyIps(await getOption('smtp_proxy_ips', ''));
 
-    smtpServer = new SMTPServer({
+    const serverOptions = {
         // Only ever an explicit IP allowlist, never `true` (see parseTrustedProxyIps for why).
         ...(trustedProxyIps.length ? { useProxy: trustedProxyIps } : {}),
         authOptional: true,
@@ -1542,7 +1543,42 @@ async function initSMTPServer() {
                 }
             });
         }
-    });
+    };
+
+    // smtp:inbound — on every platform the plugin sandbox refuses an isolated plugin a listening socket, so
+    // the HOST opens port 25 for the one plugin an administrator granted this exclusive capability and asks
+    // these same handlers what to do at each step (core/inbound-smtp.ts). Without the grant (or on an older
+    // core) the plugin keeps its own listener below, which works only where its platform allows one.
+    if (wordjs && wordjs.smtp && typeof wordjs.smtp.listen === 'function') {
+        const viaCallback = (fn, ...args) => new Promise((resolve) => {
+            try {
+                fn(...args, (err) => resolve(err ? { code: err.responseCode || 550, message: err.message } : null));
+            } catch (e) {
+                resolve({ code: 451, message: 'Temporary local problem, try again later' });
+            }
+        });
+        const res = await wordjs.smtp.listen({
+            connect: (session) => viaCallback(serverOptions.onConnect, session),
+            mailFrom: (address, session) => viaCallback(serverOptions.onMailFrom, address, session),
+            rcptTo: (address, session) => viaCallback(serverOptions.onRcptTo, address, session),
+            // mailparser takes the raw message Buffer directly.
+            data: (raw, session) => viaCallback(serverOptions.onData, raw, session),
+            close: () => { },
+        }, { port, fallbackPort: 2525, maxSize: serverOptions.size, maxClients: serverOptions.maxClients, proxyIps: trustedProxyIps }).catch((e) => ({ ok: false, granted: false, error: e && e.message }));
+        if (res && res.granted) {
+            inboundStatus = {
+                requestedPort: res.requestedPort || port, boundPort: res.boundPort || null, degraded: !!res.degraded,
+                reason: res.ok ? (res.reason || null) : (res.reason || res.error || 'the host could not open the inbound SMTP port'),
+                proxyIps: res.proxyIps || trustedProxyIps, mode: 'host'
+            };
+            if (res.ok) console.log(`   ✓ Inbound SMTP: the host is listening on port ${res.boundPort} for this plugin (smtp:inbound).`);
+            else console.warn(`   ⚠️  Inbound SMTP: the host could not listen for this plugin: ${inboundStatus.reason}`);
+            return;
+        }
+    }
+
+    smtpServer = new SMTPServer(serverOptions);
+
 
     inboundStatus = { requestedPort: port, boundPort: null, degraded: false, reason: null, proxyIps: trustedProxyIps };
 
@@ -3579,6 +3615,8 @@ exports.init = async function (bridge) {
             inbound_degraded: inboundStatus.degraded,
             inbound_reason: inboundStatus.reason,
             inbound_ok: inboundStatus.boundPort === 25,
+            // 'host' = WordJS listens for this plugin (smtp:inbound); 'plugin' = the plugin's own listener.
+            inbound_mode: inboundStatus.mode || 'plugin',
             smtp_catch_all: o.smtp_catch_all,
             mail_helo_host: o.mail_helo_host,
             // Relay / smarthost (optional). Without these exposed the relay path was unreachable and
@@ -4177,6 +4215,7 @@ exports.init = async function (bridge) {
                 aliases: aliases.length,
                 inbound: {
                     boundPort: inboundStatus.boundPort,
+                    mode: inboundStatus.mode || 'plugin',
                     ok: inboundStatus.boundPort === 25,
                     degraded: inboundStatus.degraded,
                     reason: inboundStatus.reason

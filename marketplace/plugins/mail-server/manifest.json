@@ -87,7 +87,12 @@
         },
         {
             "scope": "network",
-            "reason": "Resolve MX records (DNS) and deliver mail directly to remote MTAs / a configured relay (NET/TLS) and run the inbound SMTP listener."
+            "reason": "Resolve MX records (DNS) and deliver mail directly to remote MTAs / a configured relay (NET/TLS)."
+        },
+        {
+            "scope": "smtp",
+            "access": "inbound",
+            "reason": "Receive email from the internet: WordJS opens SMTP port 25 for this plugin and hands it each incoming message, which it filters (SPF, DNSBL, spam) and delivers to the right mailbox. Only one plugin can hold this permission."
         },
         {
             "scope": "express",

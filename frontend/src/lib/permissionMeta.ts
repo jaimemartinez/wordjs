@@ -99,6 +99,12 @@ export const PERMISSION_META: Record<string, PermissionMeta> = {
         risk: 'high',
         icon: 'fa-paper-plane',
     },
+    'smtp:inbound': {
+        label: 'Receive internet email (port 25)',
+        description: 'WordJS opens the public SMTP port 25 for this plugin and hands it every email that arrives from the internet. Only ONE plugin can hold this permission at a time: revoke it from the current holder first.',
+        risk: 'high',
+        icon: 'fa-inbox',
+    },
     'notifications:send': {
         label: 'Send notifications',
         description: 'Emit in-app notifications to admins.',

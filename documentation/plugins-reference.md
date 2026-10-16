@@ -94,6 +94,7 @@ Two enforcement gates live on the host (`backend/src/core/plugin-isolate.ts`):
 | `shortcodes.add(tag, handler)` | `register-shortcode` | Capped per-plugin; handler resolves HTML over RPC (`doShortcodeAsync`). |
 | `provideMail(handler)` | `register-mail-provider` | `email:provider` grant — becomes the host-wide mail sender (sandboxed). |
 | `notify.registerTransport(name, handler)` | `register-notify-transport` | `notifications:provider` grant — registers a core notification transport (sandboxed). |
+| `smtp.listen(handlers, opts)` / `smtp.status()` | `register-smtp-listener` / `smtp-status` (host → child `invoke-smtp`) | `smtp:inbound` grant — EXCLUSIVE (one plugin at a time); the host opens the plugin's `claimPorts` SMTP port (core/inbound-smtp.ts) and asks the plugin for a verdict at each step; a plugin error or a 25 s timeout answers the sender a temporary 451. |
 
 All registrations are tracked and torn down on unload/reload (routes are unmounted by matching the HANDLER
 the host installed, never the registration verb — `app.all()` expands to every method, so a verb match
