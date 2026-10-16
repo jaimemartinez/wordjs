@@ -211,6 +211,20 @@ class ApiToken {
     }
 
     /**
+     * Active (non-revoked, unexpired) token counts per owner — metadata only. Feeds the admin's view of
+     * which tokens the MFA-by-role policy reaches (core/mfa.ts tokenExposure).
+     */
+    static async activeCountsByOwner(): Promise<{ userId: number; count: number }[]> {
+        const rows = await dbAsync.all(
+            `SELECT user_id, COUNT(*) AS n FROM api_tokens
+             WHERE revoked = 0 AND (expires_at IS NULL OR expires_at > ?)
+             GROUP BY user_id`,
+            [Math.floor(Date.now() / 1000)]
+        );
+        return (rows || []).map((r: any) => ({ userId: Number(r.user_id), count: Number(r.n) }));
+    }
+
+    /**
      * Stamp the user's JWT security epoch — every session token issued at or before this second stops
      * authenticating (middleware/auth.ts compares `decoded.iat <= token_valid_after`). Best-effort by
      * design: the token rows are already revoked by the time this runs, which is the primary guarantee.

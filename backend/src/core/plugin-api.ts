@@ -72,6 +72,10 @@ const PROTECTED_OPTION_NAMES = new Set([
     // roles and owns the enforcement clock; written raw — by a settings:write plugin, or by a site import,
     // which skips every name on this list — it dropped the requirement and could back-date the clock.
     'mfa_policy',
+    // 'mfa_policy_fresh_install' marks a site CREATED by the install wizard, so its first MFA policy turns
+    // API-token enforcement on by default (core/mfa). Written by a plugin or carried in by a site import it
+    // would flip that default on a site that was upgraded, not installed.
+    'mfa_policy_fresh_install',
     // 'site_address_rev' is the mirror of the config's site-address revision; core/site-address compares
     // it with the file to decide whether a change made at the server still has to be applied. A plugin
     // that could write it could make the backend skip (or replay) a change of the site's address.

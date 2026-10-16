@@ -17,7 +17,7 @@ const User = require('../models/User');
 // refuseRetiringSignIn likewise for an address retired a few seconds ago (503 rest_address_retiring).
 // sessionBoundToSecondaryAddress keeps an address-bound session from minting an unbound API token, and
 // unboundSessionOnly from changing which accounts need a second factor (PUT /mfa/policy).
-const { authenticate, generateToken, verifyToken, issueSessionCookie, sessionOnly, sessionCookie, sessionCookieOptions, clearSessionCookies, refuseInsecureSignIn, refuseRetiringSignIn, signInRefusal, sessionBoundToSecondaryAddress, unboundSessionOnly, sessionAddressStillAccepted } = require('../middleware/auth');
+const { authenticate, generateToken, verifyToken, issueSessionCookie, sessionOnly, sessionCookie, sessionCookieOptions, clearSessionCookies, refuseInsecureSignIn, refuseRetiringSignIn, signInRefusal, sessionBoundToSecondaryAddress, unboundSessionOnly, sessionAddressStillAccepted, sessionMfaVerified } = require('../middleware/auth');
 const { isAdmin, can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 // THE ROUTE-ID CONTRACT — see core/query-params: one definition of "a route id" for the whole tree.
@@ -484,6 +484,29 @@ function withSignInEligibility(req: Request, res: Response, next: () => void): v
  *           description: Epoch seconds at which enforcement started, or null while no role requires MFA.
  *         enforceForApiTokens:
  *           type: boolean
+ *           description: >-
+ *             Off by default. When off, a `wjt_` API token is exempt from the compliance gate even if its
+ *             owner's role requires 2FA; when on, a token whose owner is past grace and not enrolled is
+ *             refused with mfa_enrollment_required. Independently of this flag, POST /auth/tokens requires
+ *             a required-role user to be enrolled AND to have signed in with the second factor (or send a
+ *             fresh code) before a token can be minted.
+ *     MfaTokenExposure:
+ *       type: object
+ *       description: >-
+ *         Counts (never token data) of ACTIVE API tokens the policy reaches. All zero while no role
+ *         requires MFA.
+ *       properties:
+ *         requiredRoleTokens:
+ *           type: integer
+ *           description: Active tokens owned by users whose role requires 2FA.
+ *         unenrolledOwnerTokens:
+ *           type: integer
+ *           description: >-
+ *             Of those, tokens whose owner has NOT enrolled in 2FA. With enforceForApiTokens off these keep
+ *             working without a second factor ever being used.
+ *         unenrolledOwners:
+ *           type: integer
+ *           description: How many distinct un-enrolled owners hold those tokens.
  *     ApiTokenSummary:
  *       type: object
  *       description: API token metadata. The secret itself is returned once, by POST /auth/tokens, and never again.
@@ -1811,6 +1834,14 @@ router.get('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), async
  *               expiresInDays:
  *                 type: number
  *                 description: Positive number of days until expiry; omit for a token that never expires.
+ *               mfaCode:
+ *                 type: string
+ *                 description: >-
+ *                   Step-up code (current TOTP or an unused backup code). Only consulted when the caller's
+ *                   role requires 2FA under the MFA policy AND the session was not signed in with the second
+ *                   factor; a session signed in through POST /auth/mfa does not need it. The outcome is
+ *                   recorded on the `auth.token.create` audit row as `mfa` (session, step_up or
+ *                   not_required).
  *     responses:
  *       201:
  *         description: Token created — this is the only time the secret is disclosed
@@ -1829,7 +1860,8 @@ router.get('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), async
  *       400:
  *         description: >-
  *           rest_token_limit (100 active tokens already), rest_invalid_param (expiresInDays is not a
- *           positive number) or rest_invalid_scope.
+ *           positive number), rest_invalid_scope, or rest_mfa_invalid (the step-up `mfaCode` was wrong;
+ *           recorded as an `auth.token.create_refused` audit row).
  *         content:
  *           application/json:
  *             schema:
@@ -1844,9 +1876,17 @@ router.get('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), async
  *         description: >-
  *           The caller is headless, rest_forbidden (no manage_api_tokens), rest_csrf_token /
  *           rest_csrf_invalid, mfa_enrollment_required, or rest_mfa_required_for_tokens — the account's
- *           role requires 2FA and it has not enrolled, so it may not mint a token even during grace — or
- *           rest_token_bound_session: the session was started at an address other than the main one (an
- *           alias, an IP, a tunnel name); API tokens can only be created from a main-address session.
+ *           role requires 2FA and it has not enrolled, so it may not mint a token even during grace —
+ *           rest_mfa_step_up_required: the role requires 2FA, the account is enrolled, but this session was
+ *           not signed in with the second factor and no `mfaCode` was sent — or rest_token_bound_session:
+ *           the session was started at an address other than the main one (an alias, an IP, a tunnel
+ *           name); API tokens can only be created from a main-address session.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RestError'
+ *       429:
+ *         description: "rest_login_throttled — too many simultaneous step-up code attempts."
  *         content:
  *           application/json:
  *             schema:
@@ -1910,6 +1950,44 @@ router.post('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), asyn
         });
     }
 
+    // STEP-UP AT CREATION. Being enrolled is not the same as having USED the second factor: a session
+    // signed in before the account enrolled (or before its role came under the policy) never answered a
+    // code, and a token minted from it is a long-lived credential the compliance gate exempts by default.
+    // So for a role that requires 2FA the mint must come from a session that signed in WITH the second
+    // factor (`amr`), or carry a fresh TOTP/backup code in `mfaCode`. Users outside the policy are unchanged.
+    let mfaAssurance: 'not_required' | 'session' | 'step_up' = 'not_required';
+    if (mfaStatus.required) {
+        if (sessionMfaVerified(req)) {
+            mfaAssurance = 'session';
+        } else {
+            const mfaCode = req.body && req.body.mfaCode;
+            if (typeof mfaCode !== 'string' || !mfaCode.trim()) {
+                return res.status(403).json({
+                    code: 'rest_mfa_step_up_required',
+                    message: 'Your role requires two-factor authentication. Enter a current authentication code to create an API token.',
+                    data: { status: 403 }
+                });
+            }
+            // Same throttle as the other code-checking account doors (/auth/mfa/disable): the count-only
+            // 'mfa_manage' bucket plus an in-flight cap, never the 'mfa' bucket POST /auth/mfa refuses on.
+            const lk = lockBucket('mfa_manage', req.user.id);
+            const slot = inflightBucket('mfa_manage', req.user.id, req);
+            if (!(await beginLoginAttempt(slot))) return res.status(429).json({ code: 'rest_login_throttled', message: 'Too many simultaneous attempts. Try again in a moment.', data: { status: 429 } });
+            try {
+                await payFailureDelay(lk);
+                if (!(await mfa.verifyLoginCode(req.user.id, mfaCode))) {
+                    await recordLoginFail(lk);
+                    await recordAudit(req.user.id, 'auth.token.create_refused', 'user', req.user.id, { reason: 'mfa_step_up_failed' });
+                    return res.status(400).json({ code: 'rest_mfa_invalid', message: 'Invalid authentication code.', data: { status: 400 } });
+                }
+                await clearLoginFails(lk);
+            } finally {
+                await endLoginAttempt(slot);
+            }
+            mfaAssurance = 'step_up';
+        }
+    }
+
     const created = await ApiToken.generate({
         userId: req.user.id,
         name,
@@ -1920,7 +1998,10 @@ router.post('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), asyn
     // A new long-lived credential exists. The plaintext and the `tokenPrefix` are deliberately NOT in
     // the detail — what an investigator needs is WHICH token id, minted by whom, with what reach.
     await recordAudit(req.user.id, 'auth.token.create', 'api_token', created.id, {
-        label: auditText(created.name), scopes: created.scopes, expiresAt: created.expiresAt
+        label: auditText(created.name), scopes: created.scopes, expiresAt: created.expiresAt,
+        // How the creator proved the second factor: 'session' (signed in with it), 'step_up' (a fresh
+        // code on this request) or 'not_required' (the role is outside the MFA policy).
+        mfa: mfaAssurance
     });
 
     // `token` is the plaintext — surface it now; it can never be shown again.
@@ -2147,7 +2228,9 @@ router.post('/mfa', asyncHandler(async (req: Request, res: Response) => {
         await recordAudit(user.id, 'auth.login.success', 'user', user.id, {
             username: auditText(user.userLogin), method: 'mfa', ip: auditText(clientIp(req), 45)
         });
-        const token = generateToken(user, req);
+        // `mfa: true` stamps the session as second-factor verified (`amr`), which is what lets a user whose
+        // role requires 2FA mint an API token from it without typing a fresh code (POST /auth/tokens).
+        const token = generateToken(user, req, { mfa: true });
         if (issueSessionCookie(req, res, token, COOKIE_OPTIONS(req))) return;
         res.json({ user: user.toJSON(), mfa: await mfa.evaluate(user) });
     } finally {
@@ -2615,6 +2698,15 @@ router.post('/mfa/backup-codes', authenticate, sessionOnly, asyncHandler(async (
  *               properties:
  *                 policy:
  *                   $ref: '#/components/schemas/MfaPolicy'
+ *                 tokenExposure:
+ *                   $ref: '#/components/schemas/MfaTokenExposure'
+ *                 enforceForApiTokensDefault:
+ *                   type: boolean
+ *                   description: >-
+ *                     True only on a site created by the install wizard whose policy has not yet required
+ *                     any role: the first PUT that requires a role then turns enforceForApiTokens ON unless
+ *                     the body says false explicitly. Always false on a site upgraded from an earlier
+ *                     version. The admin screen pre-checks the switch when this is true.
  *       401:
  *         description: "rest_not_logged_in — no valid credential."
  *         content:
@@ -2630,7 +2722,9 @@ router.post('/mfa/backup-codes', authenticate, sessionOnly, asyncHandler(async (
  *               $ref: '#/components/schemas/RestError'
  */
 router.get('/mfa/policy', authenticate, sessionOnly, isAdmin, asyncHandler(async (_req: Request, res: Response) => {
-    res.json({ policy: await mfa.getPolicy() });
+    // The exposure counts let the policy screen say how many existing tokens the policy does NOT reach
+    // while API tokens are exempt — the trade-off the admin is choosing when they leave the flag off.
+    res.json({ policy: await mfa.getPolicy(), tokenExposure: await mfa.tokenExposure(), enforceForApiTokensDefault: await mfa.tokenEnforcementDefault() });
 }));
 
 /**
@@ -2643,8 +2737,11 @@ router.get('/mfa/policy', authenticate, sessionOnly, isAdmin, asyncHandler(async
  *   put:
  *     summary: Set the MFA-by-role enforcement policy
  *     description: >-
- *       FULL REPLACE — an omitted field means "off", not "unchanged". Role slugs are validated against
- *       the live role map and unknown ones are dropped. Administrator only, interactive-session only, and
+ *       FULL REPLACE — an omitted field means "off", not "unchanged". One exception: on a site created
+ *       by the install wizard, the FIRST save that requires a role treats an omitted enforceForApiTokens
+ *       as true (see enforceForApiTokensDefault on GET); an explicit false is stored as false, and that
+ *       first save spends the default either way. A site upgraded from an earlier version never gets it.
+ *       Role slugs are validated against the live role map and unknown ones are dropped. Administrator only, interactive-session only, and
  *       not on the enrollment allowlist.
  *     tags: [Auth]
  *     security:
@@ -2675,7 +2772,8 @@ router.get('/mfa/policy', authenticate, sessionOnly, isAdmin, asyncHandler(async
  *                 type: boolean
  *                 description: >-
  *                   Must be a real boolean — "false", 0 and "on" are REJECTED rather than coerced,
- *                   because this flag can start refusing existing headless clients.
+ *                   because this flag can start refusing existing headless clients. Omitted means false,
+ *                   except on a fresh install's first policy that requires a role (true).
  *     responses:
  *       200:
  *         description: The stored policy
@@ -2686,6 +2784,12 @@ router.get('/mfa/policy', authenticate, sessionOnly, isAdmin, asyncHandler(async
  *               properties:
  *                 policy:
  *                   $ref: '#/components/schemas/MfaPolicy'
+ *                 tokenExposure:
+ *                   $ref: '#/components/schemas/MfaTokenExposure'
+ *                 enforceForApiTokensDefault:
+ *                   type: boolean
+ *                   description: >-
+ *                     Same as on GET — false once a policy requiring a role has been saved.
  *       400:
  *         description: >-
  *           rest_invalid_param — requiredRoles is not an array, graceDays is negative or not a number, or
@@ -2724,7 +2828,15 @@ router.put('/mfa/policy', authenticate, sessionOnly, isAdmin, unboundSessionOnly
         return res.status(400).json({ code: 'rest_invalid_param', message: 'enforceForApiTokens must be a boolean.', data: { status: 400 } });
     }
     // setPolicy validates role slugs against the live role map + manages enforcedAt.
-    res.json({ policy: await mfa.setPolicy({ requiredRoles, graceDays, enforceForApiTokens }) });
+    const policy = await mfa.setPolicy({ requiredRoles, graceDays, enforceForApiTokens });
+    // Who changed which roles need a second factor, and whether API tokens were brought under it, is a
+    // security-policy decision an investigator needs to see.
+    // (`apiClientsEnforced`, not the field's own name: a detail key containing "token" is dropped whole
+    // by the audit sanitizer as a would-be secret.)
+    await recordAudit(req.user.id, 'auth.mfa.policy_update', 'settings', '', {
+        requiredRoles: policy.requiredRoles, graceDays: policy.graceDays, apiClientsEnforced: policy.enforceForApiTokens
+    });
+    res.json({ policy, tokenExposure: await mfa.tokenExposure(), enforceForApiTokensDefault: await mfa.tokenEnforcementDefault() });
 }));
 
 module.exports = router;

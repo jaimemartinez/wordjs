@@ -43,6 +43,9 @@ export default function TokensPage() {
     const [expiry, setExpiry] = useState("");
     const [creating, setCreating] = useState(false);
     const [revealed, setRevealed] = useState<string | null>(null);
+    // Step-up: shown once the backend says this role must prove the second factor to mint a token.
+    const [needsStepUp, setNeedsStepUp] = useState(false);
+    const [mfaCode, setMfaCode] = useState("");
 
     const load = async () => {
         try {
@@ -82,15 +85,25 @@ export default function TokensPage() {
                 name: name.trim() || t("tokens.defaultName"),
                 scopes,
                 expiresInDays: expiry ? Number(expiry) : null,
+                ...(needsStepUp && mfaCode.trim() ? { mfaCode: mfaCode.trim() } : {}),
             });
             setRevealed(res.token);
+            setNeedsStepUp(false);
+            setMfaCode("");
             setName("");
             setScopeMode("read");
             setResourceScopes({});
             setExpiry("");
             await load();
         } catch (e: any) {
-            addToast(e?.message || t("tokens.createFailed"), "error");
+            if (e?.code === "rest_mfa_step_up_required") {
+                // Not a failure the user caused: ask for the code instead of showing an error.
+                setNeedsStepUp(true);
+                addToast(t("tokens.stepUpHelp"), "info");
+            } else {
+                if (e?.code === "rest_mfa_invalid") setMfaCode("");
+                addToast(e?.message || t("tokens.createFailed"), "error");
+            }
         } finally {
             setCreating(false);
         }
@@ -183,6 +196,24 @@ export default function TokensPage() {
                                 ]}
                             />
                         </div>
+                        {needsStepUp && (
+                            <div className="rounded-2xl border border-amber-200 bg-amber-50/60 p-3 space-y-2">
+                                <p className="text-[11px] text-amber-800 leading-relaxed flex items-start gap-2">
+                                    <i className="fa-solid fa-shield-halved mt-0.5"></i>
+                                    <span>{t("tokens.stepUpHelp")}</span>
+                                </p>
+                                <Input
+                                    label={t("tokens.stepUpLabel")}
+                                    icon="fa-mobile-screen"
+                                    value={mfaCode}
+                                    onChange={(e) => setMfaCode(e.target.value)}
+                                    placeholder={t("tokens.stepUpPlaceholder")}
+                                    autoComplete="one-time-code"
+                                    inputMode="text"
+                                    required
+                                />
+                            </div>
+                        )}
                         <Button type="submit" icon="fa-plus" className="w-full" loading={creating}>
                             {t("tokens.createToken")}
                         </Button>

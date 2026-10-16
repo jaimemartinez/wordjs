@@ -79,6 +79,20 @@ function noteAuthenticatedUse(req: Request): void {
 const SESSION_MINTED_ON = new WeakMap<object, string | null>();
 
 /**
+ * Whether the session JWT that authenticated this request was issued by a sign-in that completed a
+ * second factor (`amr` contains 'mfa' — RFC 8176 authentication-method reference). Set by
+ * verifyAndAttachUser only, same WeakMap discipline as SESSION_MINTED_ON. POST /auth/tokens reads it to
+ * decide whether a user whose role requires 2FA may mint an API token without a fresh code (step-up).
+ */
+const SESSION_MFA = new WeakMap<object, boolean>();
+const MFA_AMR = 'mfa';
+
+/** Was this request authenticated by a session that was signed in WITH a second factor? */
+function sessionMfaVerified(req: Request): boolean {
+    return SESSION_MFA.get(req) === true;
+}
+
+/**
  * THE ADDRESS A SESSION WAS MINTED ON (REDTEAM R2) — so that retiring an address retires its sessions.
  *
  * A session JWT is a 7-day bearer token that says nothing about where it came from. Minted on an alias, a
@@ -556,6 +570,9 @@ async function verifyAndAttachUser(token: string, req: Request, res: Response, n
         // Remember which address this session is bound to, so a credential minted from it (refresh) keeps
         // the binding and POST /auth/tokens can refuse a session from a secondary address.
         SESSION_MINTED_ON.set(req, typeof decoded.mh === 'string' ? decoded.mh : null);
+        // ...and whether it was signed in with a second factor, so a refresh keeps that assurance and
+        // POST /auth/tokens can tell an MFA-verified session from one that never answered a code.
+        SESSION_MFA.set(req, Array.isArray(decoded.amr) && decoded.amr.includes(MFA_AMR));
         req.user = user;
         noteAuthenticatedUse(req);
         next();
@@ -1286,8 +1303,14 @@ async function optionalAuth(req: Request, res: Response, next: NextFunction) {
  * (`mh`) and capped at that alias's expiry, and one minted from an authenticated session keeps that
  * session's binding — see sessionAddressClaims.
  */
-function generateToken(user: any, req?: Request) {
+/**
+ * Sign a session JWT. `opts.mfa` marks a session issued by a sign-in that completed a second factor
+ * (POST /auth/mfa); a session minted FROM an authenticated one (POST /auth/refresh) inherits the marker of
+ * the session presented, so refreshing never upgrades — nor silently drops — that assurance.
+ */
+function generateToken(user: any, req?: Request, opts?: { mfa?: boolean }) {
     const claims: Record<string, unknown> = { userId: user.id, username: user.userLogin };
+    if ((opts && opts.mfa === true) || (req && sessionMfaVerified(req))) claims.amr = [MFA_AMR];
     const address = sessionAddressClaims(req);
     if (address) claims.mh = address.mh;
     const token = jwt.sign(claims, config.jwt.secret, { expiresIn: config.jwt.expiresIn });
@@ -1548,6 +1571,9 @@ module.exports = {
     // and the question POST /auth/tokens asks before minting an unbound credential from a session.
     sessionAddressStillAccepted,
     sessionBoundToSecondaryAddress,
+    // Whether the presenting session signed in with a second factor (`amr`) — the step-up question
+    // POST /auth/tokens asks of a user whose role requires 2FA.
+    sessionMfaVerified,
     // ...and what such a session may not do to accounts, roles and registration (rest_account_bound_session).
     refuseBoundSession,
     unboundSessionOnly,

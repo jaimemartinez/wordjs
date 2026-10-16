@@ -28,6 +28,31 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   installs: the fallback, its admin notice and `/health/details` report work as before. See
   `documentation/database.md`.
 
+## [Unreleased]
+
+### Security
+
+- **API tokens and the MFA-by-role policy: a deliberate, visible choice.** Personal API tokens (`wjt_…`)
+  stay exempt from the two-factor compliance gate by default, so existing integrations keep working, but
+  the trade-off is no longer silent. A user whose role requires 2FA can now create a token only from a
+  session that signed in with the second factor, or by confirming a current authenticator or backup
+  code when creating it (`mfaCode` on `POST /auth/tokens`; otherwise `403 rest_mfa_step_up_required`, and
+  a wrong code is `400 rest_mfa_invalid`). Sessions issued by a two-factor sign-in carry an `amr: ["mfa"]`
+  claim, which `/auth/refresh` keeps. Roles outside the policy create tokens exactly as before. The
+  `auth.token.create` audit row now records how the second factor was proven (`mfa`: `session`,
+  `step_up` or `not_required`), a failed step-up writes `auth.token.create_refused`, and policy changes
+  write `auth.mfa.policy_update`. `GET /auth/mfa/policy` also returns `tokenExposure`: how many active
+  tokens belong to users in a required role, and how many of their owners have not enrolled. The
+  Security screen shows a notice with those numbers while the policy requires 2FA and tokens are
+  exempt, and explains the "Also enforce for personal API tokens" switch. The API tokens screen asks for
+  the code when it is needed.
+- **New installs hold API tokens to the MFA policy by default; upgraded sites keep them exempt.** On a site
+  created by the install wizard, the first time an administrator requires 2FA for a role the "Also enforce
+  for personal API tokens" switch is on (pre-checked on the Security screen, and the default when
+  `PUT /auth/mfa/policy` omits the field); the administrator can still turn it off. A site upgraded from an
+  earlier version keeps it off, even on its first policy save after the upgrade, so no existing token
+  starts failing. `GET /auth/mfa/policy` reports this as `enforceForApiTokensDefault`.
+
 ## [2.5.0] - 2026-10-15
 
 ### Added
