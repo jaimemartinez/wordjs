@@ -187,6 +187,16 @@ test('only an administrator grants, only within the request, and an empty grant 
     assert.strictEqual(back.body.connection.status, 'pending');
 });
 
+test('an administrator binds a connection to another user by numeric or string id', async () => {
+    for (const userId of [U.editor, String(U.editor)]) {
+        const res = await request(app).post('/api/v1/agents').set(as('admin')).send({ name: 'bot', requested: ['content:read'], userId });
+        assert.strictEqual(res.status, 201, `userId ${JSON.stringify(userId)}: ${JSON.stringify(res.body)}`);
+        assert.strictEqual(res.body.connection.userId, U.editor);
+    }
+    const missing = await request(app).post('/api/v1/agents').set(as('admin')).send({ requested: ['content:read'], userId: 999999 });
+    assert.strictEqual(missing.status, 400);
+});
+
 test('a non-admin cannot bind a connection to another user; nobody sees a stranger\'s connection', async () => {
     const res = await request(app).post('/api/v1/agents').set(as('editor')).send({ name: 'x', requested: ['content:read'], userId: U.admin });
     assert.strictEqual(res.status, 403);
@@ -266,9 +276,14 @@ test('an agent never exceeds its user: a contributor\'s agent granted content:pu
     const client = await mcp(token);
     const created = parse(await client.callTool({ name: 'create_draft', arguments: { title: 'Contrib agent' } }));
     const id = created.created.id;
-    await client.callTool({ name: 'publish_content', arguments: { id } });
+    const pub = await client.callTool({ name: 'publish_content', arguments: { id } });
     const status = (await dbAsync.get('SELECT post_status FROM posts WHERE id = ?', [id])).post_status;
     assert.notStrictEqual(status, 'publish', 'the contributor cannot publish, so neither can the agent');
+    // …and the tool says so: never a "published" result for something that did not go live.
+    const answer = parse(pub);
+    assert.strictEqual(answer.published, undefined, JSON.stringify(answer));
+    assert.strictEqual(answer.submittedForReview.status, status);
+    assert.match(answer.notice, /Not published/);
     // …and cannot create a page (contributors hold no page capabilities).
     const page = await client.callTool({ name: 'create_draft', arguments: { type: 'page', title: 'Page' } });
     assert.ok(page.isError);

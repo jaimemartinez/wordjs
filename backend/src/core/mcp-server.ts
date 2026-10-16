@@ -350,12 +350,24 @@ function buildMcpServer(ctx: AgentCallContext): any {
     if (has('content:publish')) {
         server.registerTool('publish_content', {
             title: 'Publish',
-            description: 'Publish an existing draft or pending item, making it publicly visible.',
+            description: 'Publish an existing draft or pending item, making it publicly visible. If the user this agent acts for may not publish this content, the site files it for review instead and the result says so (`submittedForReview`).',
             inputSchema: { id: idArg },
             annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: true },
         }, guarded('publish_content', ['content:publish'], true, async (a) => {
             const r = await rest('PUT', `/posts/${a.id}`, { body: { status: 'publish' } });
-            return audited('post', a.id, r, () => ok({ published: projectEntry(r.body, false) }));
+            // The REST route downgrades a publish it does not allow (e.g. a contributor's) to `pending`
+            // instead of refusing it. Report what actually happened — never "published" for something
+            // that did not go live.
+            return audited('post', a.id, r, () => {
+                const entry = projectEntry(r.body, false);
+                const status = r.body && r.body.status;
+                if (status === 'publish') return ok({ published: entry });
+                if (status === 'future') return ok({ scheduled: entry });
+                return ok({
+                    submittedForReview: entry,
+                    notice: `Not published: the user this agent acts for cannot publish this content, so it was submitted for review (status "${status}").`,
+                });
+            });
         }));
     }
 

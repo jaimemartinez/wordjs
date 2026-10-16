@@ -152,7 +152,8 @@ router.post('/', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandl
     let boundId = req.user.id;
     if (userId != null && userId !== '' && Number(userId) !== req.user.id) {
         if (!isAdministrator(req)) return forbidden(res, 'Only an administrator can create an agent connection for another user.');
-        const target = await User.findById(routeIdOrNull(userId));
+        // JSON gives a number, a form gives a string; routeIdOrNull's contract is the string shape.
+        const target = await User.findById(routeIdOrNull(typeof userId === 'number' ? String(userId) : userId));
         if (!target) return res.status(400).json({ code: 'rest_invalid_param', message: 'That user does not exist.', data: { status: 400 } });
         boundId = target.id;
     }

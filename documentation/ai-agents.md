@@ -67,7 +67,7 @@ Every tool call runs **as the bound user** with `req.user` replaced by a narrowe
 | `create_draft` | `content:draft` | status is **always** `draft` |
 | `update_draft` | `content:draft` | never changes status; editing live content needs `content:publish` |
 | `submit_for_review` | `content:draft` | sets `pending` — how an agent *proposes* publication |
-| `publish_content` | `content:publish` | |
+| `publish_content` | `content:publish` | answers `published`, `scheduled`, or — when the bound user may not publish that content and the site files it for review instead — `submittedForReview` with a notice; never "published" for something that did not go live |
 | `create_term` | `taxonomy:write` | categories and tags |
 | `upload_media` | `media:upload` | base64, ≤ 10 MB, optional title/caption/alt text |
 | `list_comments`, `moderate_comment` | `comments:moderate` | approve or spam |
