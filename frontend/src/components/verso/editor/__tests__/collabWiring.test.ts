@@ -295,3 +295,68 @@ describe("Cableado de colaboración del editor", () => {
         expect(data(B)).toBe(original);
     });
 });
+
+describe("Cableado de colaboración — `welcome` de una sala sin documento", () => {
+    /**
+     * Un registro sin `_puck_data` siembra la sala con `{}`: el `welcome` publica un documento cuya
+     * clave `content` está AUSENTE. El `onChange` de la página lee `data.content.length` desde un
+     * suscriptor del store; si el store publicara la forma ausente, lanzaría en cada edición y
+     * cortaría la notificación al resto de suscriptores (el lienzo no se enteraba de nada).
+     */
+    it.each([
+        ["snapshot vacío (\"\")", ""],
+        ["snapshot `{}`", {}],
+        ["snapshot con root y sin `content`", { root: { props: { title: "Solo root" } } }],
+    ])("%s: el onChange de la página recibe content como array, antes y después de editar", async (_label, base) => {
+        const server = new FakeCollabServer(base);
+        server.register({ siteId: "s_a", userId: 1, name: "Ana" });
+        const timers = new ManualTimers();
+        const handle = createEditor({ initialData: initialData(), isSlot });
+        const lengths: number[] = [];
+        // El onChange de la página, tal y como lo cablea VersoEditor (suscriptor con selector doc).
+        handle.subscribe(() => lengths.push(handle.getData().content.length), (s) => s.doc);
+        const canvas: unknown[] = [];
+        handle.subscribe(() => canvas.push(handle.getDoc()), (s) => s.doc);
+
+        const session = new VersoCollabSession(
+            {
+                postId: 9,
+                transport: server.transport(),
+                siteId: "s_a",
+                isSlot,
+                isRichText,
+                now: () => 1_700_000_000_000,
+                setTimer: timers.set,
+                clearTimer: timers.clear,
+            },
+            {
+                onReady: (doc) => {
+                    handle.applyRemoteDoc(doc, { resetHistory: true });
+                },
+                onRemoteDoc: (doc) => {
+                    handle.applyRemoteDoc(doc);
+                },
+            },
+        );
+        handle.subscribeCommands(({ commands }) => {
+            for (const command of commands) session.sendCommand(command);
+        });
+        session.start();
+        for (let i = 0; i < 6; i++) {
+            await timers.run();
+            server.drain();
+            await settleMicrotasks();
+        }
+
+        expect(session.snapshot().status).toBe("live");
+        expect(lengths).toEqual([0]);
+        expect(canvas).toHaveLength(1);
+
+        // Y la edición SIGUIENTE (la que antes lanzaba en cada campo) también publica un array.
+        handle.transact((tx) => tx.setRootProps({ title: "Editado" }), { label: "x" });
+        expect(lengths).toEqual([0, 0]);
+        expect(canvas).toHaveLength(2);
+        expect(Array.isArray(handle.getData().content)).toBe(true);
+        session.stop();
+    });
+});

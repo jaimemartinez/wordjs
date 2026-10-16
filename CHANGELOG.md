@@ -59,6 +59,20 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 - **`GET /api/v1/pages` answered `404 rest_post_invalid_id`.** The alias forced `type=page` but handed the request to the posts router with its URL still `/pages`, so it matched the single-post route instead of the list. It now reaches the list route and behaves as documented: the same filters, authorization, `X-WP-Total`/`X-WP-TotalPages` headers and refusal of repeated scalars as `GET /posts`, with any caller-supplied `type` overwritten.
 
+## [Unreleased]
+
+### Fixed
+
+- **Opening a post or page in the editor no longer crashes or blanks the canvas when live collaboration
+  is on.** A record with no saved editor document (an imported or legacy post, one created through the
+  API, or the demo posts of a fresh install) joined the collaboration room, whose snapshot for it is
+  `{}`. The room's welcome then replaced the locally seeded document: the canvas, title, slug and
+  excerpt opened empty, and every field edit threw `Cannot read properties of undefined (reading
+  'length')`. The Verso store now always publishes `content` as an array (a document whose `content`
+  key is absent is published as `[]`; a corrupt one is still passed through untouched), and an editor
+  whose record has no saved document stays out of the room until it has been saved once. Records that
+  already have a saved document collaborate as before.
+
 ## [2.5.0] - 2026-10-15
 
 ### Added
