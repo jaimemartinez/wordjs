@@ -519,3 +519,79 @@ test('PUT /auth/mfa/policy records who changed the policy, including the API-tok
     assert.strictEqual(row.detail.apiClientsEnforced, true);
     await policyOff();
 });
+
+// ── Fresh-install default for enforceForApiTokens (owner-approved: new installs ON, upgrades OFF) ──────
+// The mark is what POST /setup/install writes (setup-install-browser-capability.test.ts proves the call
+// site); this suite's database was created WITHOUT the wizard, i.e. exactly like an upgraded site.
+async function resetPolicyRow() {
+    await dbAsync.run('DELETE FROM options WHERE option_name IN (?, ?)', [mfa.POLICY_OPTION, mfa.FRESH_INSTALL_OPTION]);
+    await mfa.setPolicy({ requiredRoles: [], graceDays: 0 }); // also refreshes the in-process policy cache
+}
+const adminBearer = () => ({ Authorization: `Bearer ${plainSession('boss')}` });
+
+test('an UPGRADED site (no install mark) keeps API tokens exempt on its first policy save, and its tokens keep working', async () => {
+    await resetPolicyRow();
+    await dbAsync.run('UPDATE api_tokens SET revoked = 1');
+    const tok = await ApiToken.generate({ userId: U.boss, name: 'pre-upgrade-ci', scopes: 'read' });
+
+    const before = await request(app).get('/api/v1/auth/mfa/policy').set(adminBearer());
+    assert.strictEqual(before.status, 200);
+    assert.strictEqual(before.body.enforceForApiTokensDefault, false, 'no default on an upgraded site');
+
+    // First save ever, field omitted (an API client that predates the field) — stays OFF.
+    const saved = await request(app).put('/api/v1/auth/mfa/policy').set(adminBearer())
+        .send({ requiredRoles: ['administrator'], graceDays: 0 });
+    assert.strictEqual(saved.status, 200);
+    assert.strictEqual(saved.body.policy.enforceForApiTokens, false);
+
+    // Graceless enforcement, owner not enrolled: the pre-existing token still works.
+    const use = await request(app).get('/api/v1/users').set('Authorization', `Bearer ${tok.token}`);
+    assert.strictEqual(use.status, 200, 'an existing token must not start failing on upgrade');
+    await dbAsync.run('UPDATE api_tokens SET revoked = 1');
+    await policyOff();
+});
+
+test('a FRESH install: the first policy that requires a role turns API-token enforcement ON, once', async () => {
+    await resetPolicyRow();
+    await mfa.recordFreshInstall();
+
+    const before = await request(app).get('/api/v1/auth/mfa/policy').set(adminBearer());
+    assert.strictEqual(before.body.enforceForApiTokensDefault, true, 'the screen is told to pre-check the switch');
+
+    // A save that requires NO role does not spend the default.
+    await mfa.setPolicy({ requiredRoles: [], graceDays: 3 });
+    assert.strictEqual(await mfa.tokenEnforcementDefault(), true);
+
+    const first = await request(app).put('/api/v1/auth/mfa/policy').set(adminBearer())
+        .send({ requiredRoles: ['administrator'], graceDays: 3650 });
+    assert.strictEqual(first.status, 200);
+    assert.strictEqual(first.body.policy.enforceForApiTokens, true, 'omitted → ON on the first save');
+    assert.strictEqual(first.body.enforceForApiTokensDefault, false, 'the default is spent');
+    assert.strictEqual((await mfa.getPolicy()).enforceForApiTokens, true);
+
+    // From then on the PUT is the plain full replace: omitted means off again.
+    const second = await request(app).put('/api/v1/auth/mfa/policy').set(adminBearer())
+        .send({ requiredRoles: ['administrator'], graceDays: 3650 });
+    assert.strictEqual(second.body.policy.enforceForApiTokens, false);
+    await policyOff();
+});
+
+test('an explicit admin choice always wins, and still spends the fresh-install default', async () => {
+    // Fresh install, admin unchecks the pre-checked switch before the first save → stored OFF.
+    await resetPolicyRow();
+    await mfa.recordFreshInstall();
+    const off = await request(app).put('/api/v1/auth/mfa/policy').set(adminBearer())
+        .send({ requiredRoles: ['administrator'], graceDays: 3650, enforceForApiTokens: false });
+    assert.strictEqual(off.body.policy.enforceForApiTokens, false);
+    assert.strictEqual(await mfa.tokenEnforcementDefault(), false, 'an explicit first choice spends the default');
+    // Turning the policy off and on later is not a "first time" again.
+    await policyOff();
+    assert.strictEqual((await mfa.setPolicy({ requiredRoles: ['administrator'], graceDays: 3650 })).enforceForApiTokens, false);
+
+    // Upgraded site, admin opts in explicitly → stored ON.
+    await resetPolicyRow();
+    const on = await request(app).put('/api/v1/auth/mfa/policy').set(adminBearer())
+        .send({ requiredRoles: ['administrator'], graceDays: 3650, enforceForApiTokens: true });
+    assert.strictEqual(on.body.policy.enforceForApiTokens, true);
+    await policyOff();
+});

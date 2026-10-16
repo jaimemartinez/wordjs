@@ -21,7 +21,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   tokens belong to users in a required role, and how many of their owners have not enrolled. The
   Security screen shows a notice with those numbers while the policy requires 2FA and tokens are
   exempt, and explains the "Also enforce for personal API tokens" switch. The API tokens screen asks for
-  the code when it is needed. The switch is still off by default.
+  the code when it is needed.
+- **New installs hold API tokens to the MFA policy by default; upgraded sites keep them exempt.** On a site
+  created by the install wizard, the first time an administrator requires 2FA for a role the "Also enforce
+  for personal API tokens" switch is on (pre-checked on the Security screen, and the default when
+  `PUT /auth/mfa/policy` omits the field); the administrator can still turn it off. A site upgraded from an
+  earlier version keeps it off, even on its first policy save after the upgrade, so no existing token
+  starts failing. `GET /auth/mfa/policy` reports this as `enforceForApiTokensDefault`.
 
 ## [2.5.0] - 2026-10-15
 

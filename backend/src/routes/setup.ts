@@ -767,6 +767,15 @@ router.post('/install', async (req: Request, res: Response) => {
             // and granted it back to plugins whose browser:script the administrator had revoked (core/plugins
             // migrateBrowserCapabilityGrants). Best-effort: the upgrade also never touches a plugin whose
             // grants an administrator decided, so a failure here does not reopen that.
+            // Same reasoning for the MFA policy: a site created HERE has no API token that predates it, so the
+            // first time its administrator requires 2FA for a role, API tokens are held to it too by default
+            // (core/mfa recordFreshInstall). An upgraded site never gets this mark and keeps the exemption.
+            try {
+                await require('../core/mfa').recordFreshInstall();
+            } catch (e: any) {
+                console.warn('⚠️ Setup: could not record the MFA token-enforcement default:', e && e.message);
+            }
+
             try {
                 await require('../core/plugins').recordFreshInstallBrowserCapability();
             } catch (e: any) {

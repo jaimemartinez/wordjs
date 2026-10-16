@@ -1585,8 +1585,10 @@ export const mfaApi = {
         apiPost<{ enabled: boolean; backupCodes: string[]; message: string }>("/auth/mfa/enable", { code, currentPassword: requireCurrentPassword(currentPassword) }),
     disable: (code: string) => apiPost<{ disabled: boolean }>("/auth/mfa/disable", { code }),
     regenerateBackupCodes: (code: string) => apiPost<{ backupCodes: string[]; message: string }>("/auth/mfa/backup-codes", { code }),
-    getPolicy: () => apiGet<{ policy: MfaPolicy; tokenExposure?: MfaTokenExposure }>("/auth/mfa/policy"),
-    savePolicy: (policy: { requiredRoles: string[]; graceDays: number; enforceForApiTokens: boolean }) => apiPut<{ policy: MfaPolicy; tokenExposure?: MfaTokenExposure }>("/auth/mfa/policy", policy),
+    // `enforceForApiTokensDefault`: true only on a freshly installed site whose policy has never required a
+    // role — the screen then pre-checks the API-token switch (the admin can still uncheck it).
+    getPolicy: () => apiGet<{ policy: MfaPolicy; tokenExposure?: MfaTokenExposure; enforceForApiTokensDefault?: boolean }>("/auth/mfa/policy"),
+    savePolicy: (policy: { requiredRoles: string[]; graceDays: number; enforceForApiTokens: boolean }) => apiPut<{ policy: MfaPolicy; tokenExposure?: MfaTokenExposure; enforceForApiTokensDefault?: boolean }>("/auth/mfa/policy", policy),
     /**
      * Administrative two-factor reset — the way OUT of a 2FA lockout, and the reason enrolment above can
      * be password-gated without creating an unrecoverable state. It lives under the USERS router

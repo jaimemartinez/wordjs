@@ -14,7 +14,7 @@ const jwt = require('jsonwebtoken');
 const config = require('../config/app');
 const User = require('../models/User');
 const totp = require('./totp');
-const { getOption, updateOption } = require('./options');
+const { getOption, updateOption, deleteOption } = require('./options');
 const { getRoles } = require('./roles');
 
 const META = { enabled: 'mfa_enabled', secret: 'mfa_totp_secret', pending: 'mfa_pending_secret', backup: 'mfa_recovery_codes', lastStep: 'mfa_totp_last_step' };
@@ -178,6 +178,30 @@ try {
     });
 } catch { /* hooks unavailable in isolated unit tests */ }
 const DEFAULT_POLICY: MfaPolicy = { requiredRoles: [], graceDays: 0, enforcedAt: null, enforceForApiTokens: false };
+
+/**
+ * FRESH-INSTALL DEFAULT for `enforceForApiTokens`.
+ *
+ * The flag is off on every site that existed before it, because turning it on can start refusing tokens
+ * that work today. A site created by the install wizard has no such tokens, so there the FIRST policy that
+ * requires a role brings API tokens under it unless the administrator says otherwise. The signal is a mark
+ * the install itself writes (routes/setup.ts) — never inferred from "no policy saved yet", which is also
+ * true of every upgraded site whose administrator has simply not opened the screen. It is consumed by the
+ * first save that requires ≥1 role, whatever that save chose, so from then on the policy is the plain
+ * full-replace it always was. The option name is on the plugin bridge's protected list (core/plugin-api),
+ * which also keeps a site import from carrying it into an upgraded site.
+ */
+const FRESH_INSTALL_OPTION = 'mfa_policy_fresh_install';
+
+/** Called once by the install wizard. */
+async function recordFreshInstall(): Promise<void> {
+    await updateOption(FRESH_INSTALL_OPTION, '1');
+}
+
+/** Would the next policy that requires a role default `enforceForApiTokens` to ON? (fresh install, first time) */
+async function tokenEnforcementDefault(): Promise<boolean> {
+    return String(await getOption(FRESH_INSTALL_OPTION, '')) === '1';
+}
 // Cap the grace window (~10 years) so a fat-fingered huge value can't silently turn enforcement into a
 // permanent no-op (adversarial review #5).
 const MAX_GRACE_DAYS = 3650;
@@ -216,8 +240,12 @@ async function setPolicy(input: any): Promise<MfaPolicy> {
         ? ([...new Set(input.requiredRoles.map((r: any) => String(r)))] as string[])
         : []).filter((r: string) => Object.prototype.hasOwnProperty.call(validRoles, r));
     const graceDays = clampGraceDays(input && input.graceDays);
-    // Same full-replace contract as requiredRoles/graceDays: an omitted field means "off", not "unchanged".
-    const enforceForApiTokens = (input && input.enforceForApiTokens) === true;
+    // Same full-replace contract as requiredRoles/graceDays: an omitted field means "off", not "unchanged" —
+    // except on a freshly INSTALLED site's first policy that requires a role, where omitted means "on" (see
+    // tokenEnforcementDefault). An explicit true/false is always what is stored.
+    const explicit = input && typeof input.enforceForApiTokens === 'boolean' ? input.enforceForApiTokens : null;
+    const freshDefault = requiredRoles.length > 0 && await tokenEnforcementDefault();
+    const enforceForApiTokens = explicit !== null ? explicit : freshDefault;
 
     const prev = await getPolicy();
     let enforcedAt = prev.enforcedAt;
@@ -227,6 +255,8 @@ async function setPolicy(input: any): Promise<MfaPolicy> {
     const policy = { requiredRoles, graceDays, enforcedAt, enforceForApiTokens };
     await updateOption(POLICY_OPTION, policy);
     _policyCache = { value: policy, at: Date.now() };  // write-through: this node enforces instantly
+    // The first policy that requires a role has been decided, whatever it chose: the fresh-install default is spent.
+    if (requiredRoles.length > 0 && await tokenEnforcementDefault()) await deleteOption(FRESH_INSTALL_OPTION);
     return policy;
 }
 
@@ -304,5 +334,6 @@ module.exports = {
     META, N_BACKUP,
     signChallenge, verifyChallenge, isEnabled, verifyLoginCode,
     beginEnroll, completeEnroll, regenerateBackupCodes, disable, backupCount, hashBackup,
-    getPolicy, setPolicy, evaluate, tokenExposure, POLICY_OPTION, DEFAULT_POLICY
+    getPolicy, setPolicy, evaluate, tokenExposure, POLICY_OPTION, DEFAULT_POLICY,
+    recordFreshInstall, tokenEnforcementDefault, FRESH_INSTALL_OPTION
 };

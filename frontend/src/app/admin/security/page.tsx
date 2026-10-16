@@ -381,11 +381,13 @@ function MfaPolicyForm() {
     useEffect(() => {
         (async () => {
             try {
-                const [rolesData, { policy, tokenExposure }] = await Promise.all([rolesApi.list(), mfaApi.getPolicy()]);
+                const [rolesData, { policy, tokenExposure, enforceForApiTokensDefault }] = await Promise.all([rolesApi.list(), mfaApi.getPolicy()]);
                 setRoles(rolesData);
                 setRequired(policy.requiredRoles || []);
                 setGraceDays(typeof policy.graceDays === "number" ? policy.graceDays : 7);
-                setEnforceForApiTokens(policy.enforceForApiTokens === true);
+                // A freshly installed site that has never required a role starts with the switch ON; the
+                // admin can still uncheck it before the first save. Everywhere else it shows what is stored.
+                setEnforceForApiTokens(policy.enforceForApiTokens === true || enforceForApiTokensDefault === true);
                 setSavedRoles(policy.requiredRoles || []);
                 setSavedEnforceTokens(policy.enforceForApiTokens === true);
                 setExposure(tokenExposure ?? null);
@@ -471,7 +473,8 @@ function MfaPolicyForm() {
                 <span>
                     <span className="block font-bold text-gray-800 dark:text-gray-100">Also enforce for personal API tokens</span>
                     <span className="block text-[11px] text-gray-400 mt-0.5">
-                        Off by default, so existing integrations keep working. While it is off, a <code>Bearer wjt_…</code> token
+                        Starts on for a new site; a site upgraded from an earlier version keeps it off, so existing integrations
+                        keep working. While it is off, a <code>Bearer wjt_…</code> token
                         keeps working even when its owner&apos;s role requires 2FA and the owner never enrolled — for example a token
                         created before this policy, or before the owner&apos;s role changed. Turning it on blocks those tokens once
                         the grace period ends; a token can&apos;t answer a 2FA challenge, so the fix is for its owner to enrol (or

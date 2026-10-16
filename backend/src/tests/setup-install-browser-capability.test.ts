@@ -130,6 +130,13 @@ describe('POST /setup/install and the browser:script upgrade', () => {
         assert.ok(typeof marker === 'string' && marker.startsWith('install:'), `marker: ${JSON.stringify(marker)}`);
     });
 
+    // Same call site, the MFA policy's fresh-install default: the site the wizard created is marked, so its
+    // first policy that requires a role holds API tokens to it (core/mfa tokenEnforcementDefault). Delete the
+    // recordFreshInstall call from routes/setup.ts and this is false.
+    it("the site the wizard created is marked for the MFA policy's API-token default", async () => {
+        assert.strictEqual(await require('../core/mfa').tokenEnforcementDefault(), true);
+    });
+
     it('the first restart after real use grants browser:script to nothing', async () => {
         await updateOption('active_plugins', [LEGACY]);
         await perms.setGrants(LEGACY, []); // written by no administrator: no decision mark

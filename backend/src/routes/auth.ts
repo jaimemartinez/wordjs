@@ -2700,6 +2700,13 @@ router.post('/mfa/backup-codes', authenticate, sessionOnly, asyncHandler(async (
  *                   $ref: '#/components/schemas/MfaPolicy'
  *                 tokenExposure:
  *                   $ref: '#/components/schemas/MfaTokenExposure'
+ *                 enforceForApiTokensDefault:
+ *                   type: boolean
+ *                   description: >-
+ *                     True only on a site created by the install wizard whose policy has not yet required
+ *                     any role: the first PUT that requires a role then turns enforceForApiTokens ON unless
+ *                     the body says false explicitly. Always false on a site upgraded from an earlier
+ *                     version. The admin screen pre-checks the switch when this is true.
  *       401:
  *         description: "rest_not_logged_in — no valid credential."
  *         content:
@@ -2717,7 +2724,7 @@ router.post('/mfa/backup-codes', authenticate, sessionOnly, asyncHandler(async (
 router.get('/mfa/policy', authenticate, sessionOnly, isAdmin, asyncHandler(async (_req: Request, res: Response) => {
     // The exposure counts let the policy screen say how many existing tokens the policy does NOT reach
     // while API tokens are exempt — the trade-off the admin is choosing when they leave the flag off.
-    res.json({ policy: await mfa.getPolicy(), tokenExposure: await mfa.tokenExposure() });
+    res.json({ policy: await mfa.getPolicy(), tokenExposure: await mfa.tokenExposure(), enforceForApiTokensDefault: await mfa.tokenEnforcementDefault() });
 }));
 
 /**
@@ -2730,8 +2737,11 @@ router.get('/mfa/policy', authenticate, sessionOnly, isAdmin, asyncHandler(async
  *   put:
  *     summary: Set the MFA-by-role enforcement policy
  *     description: >-
- *       FULL REPLACE — an omitted field means "off", not "unchanged". Role slugs are validated against
- *       the live role map and unknown ones are dropped. Administrator only, interactive-session only, and
+ *       FULL REPLACE — an omitted field means "off", not "unchanged". One exception: on a site created
+ *       by the install wizard, the FIRST save that requires a role treats an omitted enforceForApiTokens
+ *       as true (see enforceForApiTokensDefault on GET); an explicit false is stored as false, and that
+ *       first save spends the default either way. A site upgraded from an earlier version never gets it.
+ *       Role slugs are validated against the live role map and unknown ones are dropped. Administrator only, interactive-session only, and
  *       not on the enrollment allowlist.
  *     tags: [Auth]
  *     security:
@@ -2762,7 +2772,8 @@ router.get('/mfa/policy', authenticate, sessionOnly, isAdmin, asyncHandler(async
  *                 type: boolean
  *                 description: >-
  *                   Must be a real boolean — "false", 0 and "on" are REJECTED rather than coerced,
- *                   because this flag can start refusing existing headless clients.
+ *                   because this flag can start refusing existing headless clients. Omitted means false,
+ *                   except on a fresh install's first policy that requires a role (true).
  *     responses:
  *       200:
  *         description: The stored policy
@@ -2773,6 +2784,12 @@ router.get('/mfa/policy', authenticate, sessionOnly, isAdmin, asyncHandler(async
  *               properties:
  *                 policy:
  *                   $ref: '#/components/schemas/MfaPolicy'
+ *                 tokenExposure:
+ *                   $ref: '#/components/schemas/MfaTokenExposure'
+ *                 enforceForApiTokensDefault:
+ *                   type: boolean
+ *                   description: >-
+ *                     Same as on GET — false once a policy requiring a role has been saved.
  *       400:
  *         description: >-
  *           rest_invalid_param — requiredRoles is not an array, graceDays is negative or not a number, or
@@ -2819,7 +2836,7 @@ router.put('/mfa/policy', authenticate, sessionOnly, isAdmin, unboundSessionOnly
     await recordAudit(req.user.id, 'auth.mfa.policy_update', 'settings', '', {
         requiredRoles: policy.requiredRoles, graceDays: policy.graceDays, apiClientsEnforced: policy.enforceForApiTokens
     });
-    res.json({ policy, tokenExposure: await mfa.tokenExposure() });
+    res.json({ policy, tokenExposure: await mfa.tokenExposure(), enforceForApiTokensDefault: await mfa.tokenEnforcementDefault() });
 }));
 
 module.exports = router;
