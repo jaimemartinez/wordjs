@@ -35,6 +35,7 @@
 
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert');
+const { captureLogLines } = require('./fixtures/log-capture');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -122,11 +123,16 @@ async function quietly<T>(fn: () => Promise<T> | T): Promise<{ value: T; output:
         saved[m] = (console as any)[m];
         (console as any)[m] = (...args: any[]) => { lines.push(args.map((a) => (a instanceof Error ? a.stack : String(a))).join(' ')); };
     }
+    // Backend modules log through core/module-logger: read what the real logger emitted as well.
+    const logged = captureLogLines(undefined, { raw: true });
+    let value: T;
     try {
-        return { value: await fn(), output: lines.join('\n') };
+        value = await fn();
     } finally {
         for (const m of methods) (console as any)[m] = saved[m];
+        lines.push(...logged.stop());
     }
+    return { value, output: lines.join('\n') };
 }
 
 /** Start a "process": config/app.ts runs its boot-time load against whatever is on disk now. */

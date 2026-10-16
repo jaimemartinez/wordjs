@@ -33,6 +33,7 @@
 import type { Request, Response } from 'express';
 
 const express = require('express');
+const log = require('../core/module-logger').moduleLogger('routes/collab');
 const router = express.Router();
 
 const jwt = require('jsonwebtoken');
@@ -402,7 +403,7 @@ router.get('/:postId/stream', authenticate, asyncHandler(async (req: Request, re
     // manejador sobre la `ServerResponse` ⇒ `uncaughtException` ⇒ `process.exit(1)`. Con él, lo peor
     // que puede pasar es que se caiga ESTA sesión colaborativa.
     res.on('error', (e: any) => offStack(res, null, () => {
-        console.warn('[collab] stream roto:', e && e.message);
+        log.warn({ err: e }, '[collab] stream roto');
         if (conn) return collab.leave(conn); // mismo rechazo descartado que en `onClose`
     }));
     req.on('error', () => { /* aborto del cliente: lo recoge `onClose` */ });

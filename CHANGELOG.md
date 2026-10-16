@@ -153,6 +153,24 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   on, backend nodes no longer need a shared uploads directory for media. Private media stays on local
   disk. See `documentation/media-storage.md`.
 
+## [Unreleased]
+
+### Changed
+
+- **Backend log lines go through per-module structured loggers instead of `console`.** A new
+  `core/module-logger` gives each backend module `moduleLogger('<dir>/<file>')`: every line carries a
+  `mod` field and, inside a request, the request's `requestId`; errors are logged as `{ err }` instead
+  of being pasted into the message; values such as a slug, a table or a path travel as fields; and the
+  message keeps its wording, so existing greps still match. Message text still goes through the same
+  credential scrub the console bridge applies, and `err` is now serialized by allow-list (type, message,
+  stack, `code`/`errno`/`syscall`/`status`/`statusCode`, `cause`), so an HTTP-client error can no
+  longer carry its request headers into the log. All of `backend/src` is migrated except an explicit
+  allowlist — the modules loaded inside the isolated plugin child (their output is still captured and
+  slug-tagged by the host), `config/app` and the two first-boot banners — and
+  `src/tests/no-console-in-backend.test.ts` fails on any new `console.*` call outside it. The
+  development-only per-request line (`NODE_ENV=development`) is now `debug`: the access log already
+  records every request at `info`. See `documentation/observability.md`.
+
 ## [2.5.0] - 2026-10-15
 
 ### Added

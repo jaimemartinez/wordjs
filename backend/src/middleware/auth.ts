@@ -22,6 +22,7 @@ const ApiToken = require('../models/ApiToken');
 const mfa = require('../core/mfa');
 const hostPolicy: typeof import('../core/host-policy') = require('../core/host-policy');
 const { logSafe } = require('../core/log-safe');
+const log = require('../core/module-logger').moduleLogger('middleware/auth');
 
 /**
  * THE SITE'S ADDRESS POLICY — one memoised provider for the whole backend process.
@@ -46,6 +47,7 @@ const siteHostPolicy: PolicyProvider = hostPolicy.createPolicyProvider({
     getConfig: () => require('../core/configManager').getConfig(),
     nodeEnv: () => config.nodeEnv,
     ownAddresses: () => require('../core/site-address').publicOwnAddresses(),
+    logger: require('../core/module-logger').moduleLogger('core/host-policy'),
 });
 
 
@@ -404,7 +406,7 @@ async function mfaComplianceGate(req: Request, res: Response, next: NextFunction
     // (blocking everyone on a transient option-store blip would be worse than skipping enforcement once).
     let policy: any;
     try { policy = await mfa.getPolicy(); }
-    catch (e: any) { console.warn('[mfa] gate: policy read failed, skipping:', e && e.message); return next(); }
+    catch (e: any) { log.warn({ err: e }, '[mfa] gate: policy read failed, skipping'); return next(); }
     if (!policy.requiredRoles.length) return next();
 
     // Resolve the interactive session token from EITHER transport, mirroring authenticate()'s priority
@@ -462,7 +464,7 @@ async function mfaComplianceGate(req: Request, res: Response, next: NextFunction
         }
         return next();
     } catch (e: any) {
-        console.warn('[mfa] gate: compliance check failed, failing closed:', e && e.message);
+        log.warn({ err: e }, '[mfa] gate: compliance check failed, failing closed');
         return res.status(503).json({
             code: 'mfa_check_failed',
             message: 'Could not verify two-factor compliance. Please try again.',
@@ -509,7 +511,7 @@ async function enforceApiTokenMfa(raw: string, req: Request, res: Response, next
             data: { status: 403, graceDeadline: status.graceDeadline }
         });
     } catch (e: any) {
-        console.warn('[mfa] gate: token compliance check failed, failing closed:', e && e.message);
+        log.warn({ err: e }, '[mfa] gate: token compliance check failed, failing closed');
         return res.status(503).json({
             code: 'mfa_check_failed',
             message: 'Could not verify two-factor compliance. Please try again.',
@@ -934,7 +936,7 @@ function csrfTokenGate(req: Request, res: Response, next: NextFunction) {
     const cookieToken = csrfCookie(req);
     const headerToken = req.get(CSRF_HEADER);
     if (!cookieToken || !headerToken || !timingSafeStringEqual(cookieToken, headerToken)) {
-        console.warn(`[CSRF] Missing or mismatched ${CSRF_HEADER} on ${logSafe(req.method)} ${logSafe(req.path)}`);
+        log.warn({ method: logSafe(req.method), path: logSafe(req.path) }, `[CSRF] Missing or mismatched ${CSRF_HEADER} on ${logSafe(req.method)} ${logSafe(req.path)}`);
         return res.status(403).json({
             code: 'rest_csrf_token',
             message: 'Missing or invalid CSRF token. Reload the page and try again.',
@@ -1467,7 +1469,7 @@ function csrfProtection(req: Request, res: Response, next: NextFunction) {
     // No host of its own (an HTTP/1.0 request without Host): fails whatever its Origin says — see
     // hostlessAmbientRequest. A Bearer caller keeps the rules below, unchanged.
     if (hostlessAmbientRequest(req, host)) {
-        console.warn(`[CSRF] Blocked host-less request to ${logSafe(req.path)}`);
+        log.warn({ path: logSafe(req.path) }, `[CSRF] Blocked host-less request to ${logSafe(req.path)}`);
         return res.status(403).json({
             code: 'rest_csrf_invalid',
             message: 'Cross-site request blocked.',
@@ -1506,7 +1508,7 @@ function csrfProtection(req: Request, res: Response, next: NextFunction) {
             // future change to the gate's exemptions cannot silently miss this branch.
             return csrfTokenGate(req, res, next);
         }
-        console.warn(`[CSRF] Blocked header-less cookie request to ${logSafe(req.path)}`);
+        log.warn({ path: logSafe(req.path) }, `[CSRF] Blocked header-less cookie request to ${logSafe(req.path)}`);
         return res.status(403).json({
             code: 'rest_csrf_invalid',
             message: 'Cross-site request blocked.',
@@ -1527,7 +1529,7 @@ function csrfProtection(req: Request, res: Response, next: NextFunction) {
         return csrfTokenGate(req, res, next);
     }
 
-    console.warn(`[CSRF] Blocked request from ${logSafe(requestOrigin || 'unknown')} to ${logSafe(req.path)}`);
+    log.warn({ path: logSafe(req.path) }, `[CSRF] Blocked request from ${logSafe(requestOrigin || 'unknown')} to ${logSafe(req.path)}`);
     return res.status(403).json({
         code: 'rest_csrf_invalid',
         message: 'Cross-site request blocked.',

@@ -10,6 +10,7 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const config = require('../config/app');
 const { AsyncLocalStorage } = require('async_hooks');
+const log = require('../core/module-logger').moduleLogger('drivers/sqlite-native-async');
 
 class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
     db: any;
@@ -35,7 +36,7 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
 
     async connect() {
         try {
-            console.log(`🔌 SQLite Native Async: Connecting to ${this.dbPath}...`);
+            log.info({ dbPath: this.dbPath }, `🔌 SQLite Native Async: Connecting to ${this.dbPath}...`);
             this.db = new Database(this.dbPath);
             // Enable WAL mode for better concurrency. Every query in the app runs on THIS connection,
             // so the perf pragmas must live here (the sync driver configuring its own connection does
@@ -46,9 +47,9 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
             this.db.pragma('cache_size = -64000');      // 64 MB page cache
             this.db.pragma('mmap_size = 268435456');    // 256 MB mmap window
             this.db.pragma('temp_store = MEMORY');
-            console.log('✅ SQLite Native Async: Connected.');
+            log.info('✅ SQLite Native Async: Connected.');
         } catch (err) {
-            console.error('❌ SQLite Native Async: Connection failed:', err.message);
+            log.error({ err }, '❌ SQLite Native Async: Connection failed');
             throw err;
         }
     }
@@ -205,7 +206,7 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
             try {
                 this.db.exec('ROLLBACK');
             } catch (rbErr: any) {
-                console.error('❌ SQLite ROLLBACK failed:', rbErr && rbErr.message);
+                log.error({ err: rbErr }, '❌ SQLite ROLLBACK failed');
             }
             throw err;
         } finally {
@@ -263,7 +264,7 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
             this._stmtCache.clear();
             this.db.close();
             this.db = null;
-            console.log('🔌 SQLite Native Async: Closed.');
+            log.info('🔌 SQLite Native Async: Closed.');
         }
     }
 }

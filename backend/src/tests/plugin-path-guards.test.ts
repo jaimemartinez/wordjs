@@ -351,23 +351,52 @@ describe('core/plugin-permissions — a remote slug may not choose a property na
 
 // ─────────────────────────────────────────────────────────── D. tainted format string
 
+// routes/plugins logs through core/module-logger. A pino message is a FORMAT only when further
+// arguments follow it (`log.warn(obj, msg, ...args)`); the module logger never forwards any, and no
+// call site passes any, so a `%s` in an interpolated slug stays text. The slug also travels as a field.
 describe('routes/plugins — data never becomes the format string', () => {
-    it('no console call takes a template literal with an interpolation as its first argument', () => {
-        const src = codeOnly(readSrc('routes/plugins.ts'));
+    it('no console call, and no log call with format arguments after the message', () => {
+        const ts = require('typescript');
+        const text = readSrc('routes/plugins.ts');
+        const sf = ts.createSourceFile('plugins.ts', text, ts.ScriptTarget.Latest, true);
         const offenders: string[] = [];
-        const re = /console\.(?:log|warn|error|info|debug)\(`[^`]*\$\{/g;
-        let hit: RegExpExecArray | null;
-        while ((hit = re.exec(src))) {
-            offenders.push(src.slice(hit.index, hit.index + 90).split('\n')[0]);
-        }
+        const visit = (n: any): void => {
+            if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && ts.isIdentifier(n.expression.expression)) {
+                const target = n.expression.expression.text;
+                const method = n.expression.name.text;
+                if (target === 'console') offenders.push(`console.${method} at ${n.getStart(sf)}`);
+                if (target === 'log' && /^(trace|debug|info|warn|error|fatal)$/.test(method) && n.arguments.length > 2) {
+                    offenders.push(n.getText(sf).slice(0, 90));
+                }
+            }
+            ts.forEachChild(n, visit);
+        };
+        visit(sf);
         assert.deepStrictEqual(offenders, [],
-            'arg 0 of console.* is a FORMAT for util.format — a %s in a slug would eat the next argument');
+            'a message followed by more arguments is a FORMAT — a %s in a slug would eat the next argument');
     });
 
     it('the slug-bearing log lines pass the slug as DATA', () => {
         const src = readSrc('routes/plugins.ts');
-        assert.match(src, /console\.warn\("\[EgressHosts\] reload of '%s' after egress change failed:", logSafe\(slug\), e && e\.message\)/);
-        assert.match(src, /console\.warn\("\[Permissions\] reload of '%s' after grant change failed:", logSafe\(slug\), e && e\.message\)/);
+        assert.match(src, /log\.warn\(\{ slug: logSafe\(slug\), err: e \}, `\[EgressHosts\] reload of '\$\{logSafe\(slug\)\}' after egress change failed`\)/);
+        assert.match(src, /log\.warn\(\{ slug: logSafe\(slug\), err: e \}, `\[Permissions\] reload of '\$\{logSafe\(slug\)\}' after grant change failed`\)/);
+    });
+
+    it('a %s-bearing slug reaches the module logger\'s line literally, and the error is kept', () => {
+        const { addLogSink } = require('../core/logger');
+        const log = require('../core/module-logger').moduleLogger('routes/plugins');
+        const slug = 'evil%s';
+        const records: any[] = [];
+        const remove = addLogSink((line: string) => records.push(JSON.parse(line)));
+        try {
+            log.warn({ slug, err: new Error('the real error') }, `[EgressHosts] reload of '${slug}' after egress change failed`);
+        } finally {
+            remove();
+        }
+        assert.strictEqual(records.length, 1);
+        assert.strictEqual(records[0].msg, "[EgressHosts] reload of 'evil%s' after egress change failed");
+        assert.strictEqual(records[0].slug, 'evil%s');
+        assert.strictEqual(records[0].err.message, 'the real error');
     });
 
     it('proves the behaviour: a %s-bearing value is inert as an argument and hostile as a format', () => {

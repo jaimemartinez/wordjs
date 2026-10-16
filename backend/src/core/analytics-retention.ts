@@ -21,6 +21,7 @@
 const { dbAsync } = require('../config/database');
 const { getOption } = require('./options');
 const { addAction } = require('./hooks');
+const log = require('./module-logger').moduleLogger('core/analytics-retention');
 
 const TABLE = 'wordjs_analytics';
 const HOOK = 'wordjs_analytics_prune';
@@ -214,17 +215,15 @@ function initAnalyticsRetention(): void {
     addAction(HOOK, async () => {
         try {
             const removed = await pruneAnalytics();
-            if (removed > 0) console.log(`⏰ analytics: pruned ${removed} row(s) past the retention window`);
+            if (removed > 0) log.info({ removed }, `⏰ analytics: pruned ${removed} row(s) past the retention window`);
             if (state.behind) {
-                console.warn(
-                    `⚠️  analytics retention is BEHIND the ingest: ${removed} row(s) removed and the table ` +
+                log.warn(`⚠️  analytics retention is BEHIND the ingest: ${removed} row(s) removed and the table ` +
                     'still holds rows outside the window. Lower analytics_retention_days, tighten the ' +
-                    'per-IP analytics limiter, or run the prune more often — otherwise the table grows for ever.'
-                );
+                    'per-IP analytics limiter, or run the prune more often — otherwise the table grows for ever.');
             }
         } catch (e: any) {
             state = { ...state, lastRunAt: Date.now(), lastError: String(e && e.message) };
-            console.error('Analytics retention prune failed:', e && e.message);
+            log.error({ err: e }, 'Analytics retention prune failed');
         }
     });
 }

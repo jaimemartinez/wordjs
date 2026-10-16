@@ -6,6 +6,7 @@
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const log = require('./module-logger').moduleLogger('core/plugin-test-runner');
 
 const PLUGINS_DIR = path.resolve('./plugins');
 
@@ -50,7 +51,7 @@ async function runCoreTests() {
         return { success: true, tests: 0, passed: 0, failed: 0 };
     }
 
-    console.log('🧪 Running CMS core tests...');
+    log.info('🧪 Running CMS core tests...');
 
     let totalTests = 0;
     let totalPassed = 0;
@@ -89,9 +90,9 @@ async function runCoreTests() {
     const success = totalFailed === 0;
 
     if (success) {
-        console.log(`✅ Core tests passed: ${totalPassed}/${totalTests}`);
+        log.info({ totalTests }, `✅ Core tests passed: ${totalPassed}/${totalTests}`);
     } else {
-        console.error(`❌ Core tests failed: ${totalFailed}/${totalTests}`);
+        log.error({ totalFailed, totalTests }, `❌ Core tests failed: ${totalFailed}/${totalTests}`);
     }
 
     return {

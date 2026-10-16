@@ -8,6 +8,7 @@ const { verifyPermission, runWithContext } = require('./plugin-context');
 const { doAction } = require('./hooks');
 const cache = require('./cache');
 const { logSafe, logSafeError } = require('./log-safe');
+const log = require('./module-logger').moduleLogger('core/options');
 
 // Core-level backstop for the security-critical option-NAME denylist that otherwise lives ONLY in the
 // bridge (createPluginApi.isProtectedOption). Scoped to THEME context specifically — isolated plugins never
@@ -86,7 +87,7 @@ async function getOption(name: string, defaultValue: any = null) {
             // A constant format string: the name can come from a request (a widget id, a setting
             // key), and inside the format position its '%s' would consume the next argument. The
             // values go in as arguments, each reduced to one line.
-            console.error('Error getting option %s: %s', logSafe(name), logSafeError(e));
+            log.error({ option: logSafe(name), err: e }, 'Error getting option');
             return defaultValue;
         }
     });
@@ -305,7 +306,7 @@ async function preloadAutoloadedOptions(): Promise<number> {
         }
         return rows.length;
     } catch (e: any) {
-        console.warn('[Options] autoload preload skipped:', e && e.message);
+        log.warn({ err: e }, '[Options] autoload preload skipped');
         return 0;
     }
 }
@@ -396,7 +397,7 @@ async function initCacheSetting() {
         const enabled = await getOption('redis_cache_enabled', 0);
         cache.setEnabled(enabled);
     } catch (e) {
-        console.error('[Options] Failed to init cache setting:', e.message);
+        log.error({ err: e }, '[Options] Failed to init cache setting');
     }
 }
 

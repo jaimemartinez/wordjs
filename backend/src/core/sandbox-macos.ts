@@ -82,6 +82,7 @@
 const fsm = require('fs');
 const pathm = require('path');
 const { spawn } = require('child_process');
+const log = require('./module-logger').moduleLogger('core/sandbox-macos');
 
 /**
  * The Seatbelt front-end. An absolute literal, never resolved through PATH: this argv is a security
@@ -856,7 +857,7 @@ function runProbeChild(pre: string[], target: string, forbidden: string, denyNet
         proc.on('close', (code: number, signal: string) => {
             clearTimeout(overall);
             if (pre.length > 0 && (code !== 0 || signal || spawnFailure)) {
-                console.warn('[Sandbox] Seatbelt probe child failed: ' + logSafe(JSON.stringify({
+                log.warn('[Sandbox] Seatbelt probe child failed: ' + logSafe(JSON.stringify({
                     code, signal: signal || '', spawn: spawnFailure,
                     lastMessage: msg || null, stderr,
                 })));
@@ -895,7 +896,7 @@ function probeSeatbelt(): Promise<'active' | 'degraded' | 'unsupported' | 'disab
         if (!enabled) { seatbeltState = 'disabled'; return 'disabled'; }
         if (!fsm.existsSync(SEATBELT_BIN)) {
             seatbeltState = 'unsupported';
-            console.warn('[Sandbox] Seatbelt requested but /usr/bin/sandbox-exec is absent — isolated plugins keep the existing (process separation + Node permission model + JS guards) confinement.');
+            log.warn('[Sandbox] Seatbelt requested but /usr/bin/sandbox-exec is absent — isolated plugins keep the existing (process separation + Node permission model + JS guards) confinement.');
             return 'unsupported';
         }
 
@@ -973,11 +974,11 @@ function probeSeatbelt(): Promise<'active' | 'degraded' | 'unsupported' | 'disab
         if (selfAudit.length === 0 && ipcOk && controlRan && controlClean && controlOk
             && readRefused && homeRefused && descendantConfined && netRefused && allowedShape) {
             seatbeltState = 'active';
-            console.log('[Sandbox] macOS Seatbelt confinement ACTIVE for both network policies: deny-by-default reads, scoped writes, trusted Node descendants inherit confinement; only outbound network changes with the grant.');
+            log.info('[Sandbox] macOS Seatbelt confinement ACTIVE for both network policies: deny-by-default reads, scoped writes, trusted Node descendants inherit confinement; only outbound network changes with the grant.');
             return 'active';
         }
         seatbeltState = 'degraded';
-        console.warn('[Sandbox] macOS Seatbelt probe did NOT certify confinement on this host — isolated plugins keep the existing (process separation + Node permission model + JS guards) floor. '
+        log.warn('[Sandbox] macOS Seatbelt probe did NOT certify confinement on this host — isolated plugins keep the existing (process separation + Node permission model + JS guards) floor. '
             + `selfAudit=${selfAudit.length === 0 ? 'clean' : logSafe(selfAudit.length) + ' violation(s)'} `
             + `control=${controlClean ? 'clean' : controlRan ? 'UNUSABLE' : 'FAILED'} `
             + `ipc=${ipcOk ? 'ok' : 'FAILED'} writeControl=${controlOk ? 'ok' : 'FAILED'} `
@@ -1085,7 +1086,7 @@ function probeMacosMemoryCapEnforcement(): Promise<MemCapEnforcement> {
         const verdict: MemCapEnforcement = cappedBooted ? 'inert' : 'enforced';
         memCapState = verdict;
         if (verdict === 'inert') {
-            console.warn('[Sandbox] RLIMIT_AS (`ulimit -v`) is NOT enforced on this host — Darwin aliases it to RLIMIT_RSS and enforces neither. '
+            log.warn('[Sandbox] RLIMIT_AS (`ulimit -v`) is NOT enforced on this host — Darwin aliases it to RLIMIT_RSS and enforces neither. '
                 + 'The isolated-plugin address-space cap is therefore decorative here; the resident cap is the reactive RSS poll alone, '
                 + 'and there is no preventive per-child memory cap on macOS without a privileged native helper.');
         }

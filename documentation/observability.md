@@ -42,7 +42,9 @@ stdout and the supervisor (systemd, Docker, Kubernetes, PM2) owns rotation and s
 | `pid` | yes | process id — the discriminator between replicas on one host |
 | `msg` | yes | the message |
 | `requestId` | inside a request | correlation id, see below |
-| `legacy` | on bridged lines | `true` when the line came from a not-yet-migrated `console.*` call |
+| `mod` | on module lines | the backend module that logged it, as its path under `src/` (`core/cron`, `routes/plugins`) |
+| `err` | when an error is logged | `{ type, message, stack, code?, errno?, syscall?, status?, statusCode?, cause? }` — nothing else, see below |
+| `legacy` | on bridged lines | `true` when the line came from a `console.*` call (see the allowlist below) |
 
 ### Levels
 
@@ -152,53 +154,69 @@ included, so an ANSI sequence loses its introducer), the Unicode line/paragraph 
 bidirectional controls are removed, so the value cannot split or forge a log entry or rewrite what a
 terminal shows. `logSafeError()` keeps an error's message (and its `code`) and leaves out the stack.
 
-### The console bridge, and the migration plan
+### Logging from backend code
 
-The backend has ~800 `console.*` calls across ~100 files. Rewriting them is a separate change, so
-until then `consoleBridge()` — installed from `index.ts` immediately after the config loads — replaces
-`console.log/info/warn/error/debug` with functions that emit through the logger:
+Every backend module logs through its own module logger:
+
+```ts
+const log = require('../core/module-logger').moduleLogger('core/cron');
+
+log.info({ hook, nextRun }, 'cron event scheduled');
+log.warn({ slug, err }, `[plugins] cross-node load of '${logSafe(slug)}' failed`);
+log.error(err); // an Error alone: msg is its message, the error goes under `err`
+```
+
+- Every line carries `mod` and, when it is emitted while a request is being served, that request's
+  `requestId` — the module logger resolves the request-bound logger at **call** time, so code far from
+  the route handler gets the correlation id without being handed anything.
+- Errors go under `err`, never pasted into the message. `err` is serialized by **allow-list**: type,
+  message, stack, `code`/`errno`/`syscall`/`status`/`statusCode` and the `cause` chain. Every other
+  property is dropped, because the errors a backend catches are not all its own: an HTTP-client error
+  carries the request it made, headers included, at a depth and capitalisation no redact path matches.
+  The message and the stack go through the textual scrub below.
+- Variable context (a slug, a table, a path, a count) goes in fields. Messages keep the wording, emoji
+  prefixes included, that operators already grep for.
+- The message string still goes through the textual scrub described under **Redaction → Messages**:
+  moving a line off the console bridge must not make it leakier. A value from the request still goes
+  through `logSafe()` before it is interpolated into the message.
+- `core/module-logger` loads `core/logger` **lazily**, on the first line logged: `core/logger` reads
+  `config/app` at load time and `config/app` loads modules that log, so an eager require would hand
+  the logger a half-initialised config.
+- A logging call never throws into its caller.
+
+### The console bridge and the `console.*` allowlist
+
+`consoleBridge()` — installed from `index.ts` immediately after the config loads — still replaces
+`console.log/info/warn/error/debug` with functions that emit through the logger, for the few call
+sites that legitimately stay on `console` and for anything a dependency prints:
 
 - `console.log` and `console.info` → `info`, `console.warn` → `warn`, `console.error` → `error`,
   `console.debug` → `debug`.
-- The message is built with `util.format`, exactly as `console` does, so `%s`/`%d` formatting and
-  object inspection are unchanged. **Emoji prefixes are preserved** — they are the message, and the
-  greps operators already have keep working.
-- The message is then run through the textual scrub described under **Redaction → Messages**. The
-  bridge collapses its arguments into `msg`, and `redact` never touches `msg`, so for these lines the
-  structured redaction above is not weak — it is inapplicable.
-- Each bridged line carries `legacy: true`, so `count_over_time({legacy="true"})` measures how much of
-  the migration is left.
-- Inside a request the bridged line goes through the request-bound logger, so it carries `requestId`
-  like everything else — without touching the call site.
-- `console.table`, `console.dir` and `console.trace` are left alone; they are developer-console
-  shapes, not log records.
+- The message is built with `util.format`, exactly as `console` does, then run through the textual
+  scrub. The bridge collapses its arguments into `msg`, and `redact` never touches `msg`, so for these
+  lines the structured redaction above is not weak — it is inapplicable.
+- Each bridged line carries `legacy: true`; inside a request it also carries `requestId`.
+- `console.table`, `console.dir` and `console.trace` are left alone.
 
 The bridge is **not** installed under the test runner (`NODE_TEST_CONTEXT` set, or `NODE_ENV=test`):
 the suites read `node:test`'s own output off the same stream, and JSON-ifying it would make a failing
-assertion unreadable. Under the same condition the logger's **destination** is silenced too — gating
-only the bridge left the access-log middleware writing a JSON object to fd 1 for every request a
-supertest case made, which is the same readability problem arriving by the other door. Tests that
-assert on emitted lines read the in-process sink, not stdout, so they are unaffected.
+assertion unreadable. Under the same condition the logger's **destination** is silenced too. Tests that
+assert on emitted lines read the in-process sink (`addLogSink`), not stdout.
 
-**Migration plan.** The follow-up change replaces call sites module by module with
-`logger.child({ module: '<name>' })` (or `getRequestLogger()` inside a request), moving the variable
-parts of the message into fields. `legacy: true` disappears from a module's lines as it is converted,
-which is the completion signal. The bridge stays until the count reaches zero, then is removed.
+**What stays on `console`, and the gate.** `src/tests/no-console-in-backend.test.ts` parses every
+source file under `backend/src` and fails on any reference to `console` (a call, `console[level]`, a
+`|| console` fallback) outside an allowlist kept in
+that file, per file and with an exact count. The allowlist holds:
 
-### Logging from your own code
+- the console bridge itself (`core/logger`), and `core/host-policy.js`, which is shared verbatim with the
+  gateway and defaults to `console` (the backend passes it a module logger);
+- the modules loaded **inside the isolated plugin child** (`core/plugin-context`, `core/io-guard`,
+  `core/secure-require`): their output is the child's stdio, which the host captures, tags with the
+  plugin's slug and rate-limits — that is the plugin-facing behaviour and it is unchanged;
+- `config/app`, which runs before the logger can exist (the logger reads it);
+- the operator-facing banners printed once at first boot — the install link in `core/install-token`
+  and the bootstrap administrator in `index.ts` — which are gated on whether stdout is a terminal.
 
-```ts
-const { logger, getRequestLogger } = require('./core/logger');
-
-const log = logger.child({ module: 'wxr-import' });   // module-scoped, outside a request
-log.info({ posts: 412 }, 'import finished');
-
-getRequestLogger().warn({ slug }, 'theme has no template for this post type'); // inside a request
-```
-
-`getRequestLogger()` returns the request-bound child when called anywhere inside a request — including
-from a core module far from the route handler, which is exactly the code that cannot be handed a
-logger through its arguments — and the root logger otherwise.
 
 ---
 

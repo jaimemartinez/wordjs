@@ -5,7 +5,7 @@
       "routeFiles": 39,
       "endpointDeclarations": 243,
       "mountDeclarations": 84,
-      "semanticSha256": "b92ec9de2ca4dbf18adb8f65d218d2e5fe5bc8fb02c8b8d49fdabac587beea99"
+      "semanticSha256": "7e1a83c2e2e332d2b8321716f04201de928ca4f6267f1b81549821689945d9bd"
     },
     "openapi": {
       "paths": 190,

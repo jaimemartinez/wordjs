@@ -4,6 +4,7 @@
  */
 
 const database = require('../config/database');
+const log = require('../core/module-logger').moduleLogger('models/Media');
 const { db, dbAsync } = database;
 const Post = require('./Post');
 const config = require('../config/app');
@@ -303,7 +304,7 @@ class Media {
         const segments = storedFile.split(/[/\\]+/).filter((s: string) => s.length > 0);
         const mainPath = segments.length > 0 ? resolveWithin(uploadDir, ...segments) : null;
         if (!mainPath) {
-            console.warn(`Media.delete: refusing to unlink an attachment path that escapes the uploads directory: ${JSON.stringify(storedFile)}`);
+            log.warn(`Media.delete: refusing to unlink an attachment path that escapes the uploads directory: ${JSON.stringify(storedFile)}`);
             return [];
         }
 
@@ -324,7 +325,7 @@ class Media {
                 ? resolveWithin(uploadDir, ...dirSegments, ...fileSegments)
                 : null;
             if (!resolved) {
-                console.warn(`Media.delete: refusing to unlink a ${kind} path that escapes the uploads directory: ${JSON.stringify(file)}`);
+                log.warn({ kind }, `Media.delete: refusing to unlink a ${kind} path that escapes the uploads directory: ${JSON.stringify(file)}`);
                 return;
             }
             targets.push(resolved);
@@ -401,7 +402,7 @@ class Media {
             database.afterCommit(() => {
                 for (const target of targets) {
                     try { if (fs.existsSync(target)) fs.unlinkSync(target); }
-                    catch (error: any) { console.warn(`Media.delete: post-commit unlink failed for ${target}: ${error?.message || error}`); }
+                    catch (error: any) { log.warn({ target, err: error }, `Media.delete: post-commit unlink failed for ${target}`); }
                 }
                 if (ms && store.driver === 's3' && remoteRels.length) {
                     void ms.removeFiles(ms.getMediaStorage(store), remoteRels);

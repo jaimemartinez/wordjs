@@ -16,6 +16,7 @@
  */
 
 const { dbAsync } = require('../config/database');
+const log = require('./module-logger').moduleLogger('core/audit');
 
 /**
  * THE ACTION CATALOGUE — one place where every action name in the product is written down.
@@ -263,7 +264,7 @@ async function recordAudit(actorId: any, action: AuditAction, targetType: string
     } catch (e: any) {
         // Log-and-continue: the mutation already happened (or is about to answer) — auditing must not
         // change its outcome.
-        console.warn(`[audit] failed to record '${action}': ${e && e.message}`);
+        log.warn({ action, err: e }, `[audit] failed to record '${action}'`);
     }
     // The mutation happened whether or not its row could be written, so observers hear about it either
     // way. Inside a pinned transaction they run only after COMMIT (the same rule as hooks.doAction): an
@@ -443,7 +444,7 @@ async function runAuditRetention(): Promise<number> {
     try {
         const removed = await pruneAuditLog();
         if (removed > 0) {
-            console.log(`⏰ audit: pruned ${removed} row(s) past the retention window`);
+            log.info({ removed }, `⏰ audit: pruned ${removed} row(s) past the retention window`);
             // The prune is the ONE thing that removes evidence, so it leaves evidence of itself: an
             // operator reading a thin log must be able to tell "nothing happened" from "it was pruned".
             await recordAudit(null, AUDIT_ACTIONS.AUDIT_PRUNE, 'audit_log', '', {
@@ -451,15 +452,13 @@ async function runAuditRetention(): Promise<number> {
             });
         }
         if (pruneState.behind) {
-            console.warn(
-                `⚠️  audit retention is BEHIND: ${removed} row(s) removed and the table still holds rows ` +
-                'outside the window. Lower audit_retention_days or run the prune more often.'
-            );
+            log.warn(`⚠️  audit retention is BEHIND: ${removed} row(s) removed and the table still holds rows ` +
+                'outside the window. Lower audit_retention_days or run the prune more often.');
         }
         return removed;
     } catch (e: any) {
         pruneState = { ...pruneState, lastRunAt: Date.now(), lastError: String(e && e.message) };
-        console.error('Audit retention prune failed:', e && e.message);
+        log.error({ err: e }, 'Audit retention prune failed');
         return 0;
     }
 }

@@ -28,6 +28,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const log = require('./module-logger').moduleLogger('core/install-token');
 
 // Where the token is mirrored to disk for headless/containerized installs (see below). Same data dir
 // the rest of the runtime uses (crash-guard.ts / cert-manager.ts resolve it the same way).
@@ -123,7 +124,7 @@ function generateInstallToken(): string {
     const MIN_ENV_TOKEN_LEN = 16;
     const envTok = String(process.env.WORDJS_INSTALL_TOKEN || '').trim();
     if (envTok && envTok.length < MIN_ENV_TOKEN_LEN) {
-        console.warn(`[install-token] WORDJS_INSTALL_TOKEN is too short (< ${MIN_ENV_TOKEN_LEN} chars); ignoring it and generating a random token instead.`);
+        log.warn(`[install-token] WORDJS_INSTALL_TOKEN is too short (< ${MIN_ENV_TOKEN_LEN} chars); ignoring it and generating a random token instead.`);
     }
     const tok: string = (envTok.length >= MIN_ENV_TOKEN_LEN ? envTok : crypto.randomBytes(24).toString('hex'));
     installToken = tok;
@@ -137,7 +138,7 @@ function generateInstallToken(): string {
         fs.writeFileSync(TOKEN_FILE, tok, { mode: 0o600 });
         try { fs.chmodSync(TOKEN_FILE, 0o600); } catch { /* chmod is a no-op on some filesystems (e.g. Windows) */ }
     } catch (e: any) {
-        console.warn('[install-token] could not write token file:', e && e.message);
+        log.warn({ err: e }, '[install-token] could not write token file');
     }
 
     // One clickable URL beats hunting a 48-char token in interleaved service logs: the installer

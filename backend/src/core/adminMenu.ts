@@ -3,6 +3,8 @@
  * Allows plugins to register admin menu items
  */
 
+const log = require('./module-logger').moduleLogger('core/adminMenu');
+
 const adminMenuItems = new Map();
 
 // Cap admin-menu items per plugin: the dedupe below is by `href`, which an untrusted plugin fully
@@ -112,7 +114,7 @@ function registerAdminMenu(pluginSlug: string, item: any) {
     // SECURITY: validate the plugin-controlled href BEFORE it can enter the registry. Drop the item on a
     // non-relative / dangerous-scheme href rather than register a phishable link (host 'core' is trusted).
     if (pluginSlug !== 'core' && !SAFE_ADMIN_HREF.test(typeof item.href === 'string' ? item.href : '')) {
-        console.warn(`[Security] admin-menu item from plugin '${pluginSlug}' rejected: unsafe href ${JSON.stringify(item.href)} (must be a relative /admin path, no scheme).`);
+        log.warn({ pluginSlug }, `[Security] admin-menu item from plugin '${pluginSlug}' rejected: unsafe href ${JSON.stringify(item.href)} (must be a relative /admin path, no scheme).`);
         return;
     }
     // A plugin's menu item may point at ITS OWN admin page only: the page whose owner (adminPageOwner — the
@@ -124,7 +126,7 @@ function registerAdminMenu(pluginSlug: string, item: any) {
     if (pluginSlug !== 'core') {
         const target = pluginPageSlugOf(item.href);
         if (target !== null && adminPageOwner(target) !== pluginSlug) {
-            console.warn(`[Security] admin-menu item from plugin '${pluginSlug}' rejected: ${JSON.stringify(item.href)} is not this plugin's own admin page.`);
+            log.warn({ pluginSlug }, `[Security] admin-menu item from plugin '${pluginSlug}' rejected: ${JSON.stringify(item.href)} is not this plugin's own admin page.`);
             return;
         }
     }
@@ -138,7 +140,7 @@ function registerAdminMenu(pluginSlug: string, item: any) {
     const existingItems = adminMenuItems.get(pluginSlug);
     // Bound per-plugin accumulation (the href dedupe below is attacker-defeatable). 'core' is host code.
     if (pluginSlug !== 'core' && existingItems.length >= MAX_ADMIN_MENU_ITEMS) {
-        console.warn(`[Security] admin-menu cap reached for plugin '${pluginSlug}' (${MAX_ADMIN_MENU_ITEMS}); ignoring further items.`);
+        log.warn({ pluginSlug }, `[Security] admin-menu cap reached for plugin '${pluginSlug}' (${MAX_ADMIN_MENU_ITEMS}); ignoring further items.`);
         return;
     }
     const alreadyExists = existingItems.some((existing: any) => existing.href === item.href);

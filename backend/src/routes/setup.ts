@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import type { SiteHost, SiteUrl } from '../core/host-policy';
 const express = require('express');
+const log = require('../core/module-logger').moduleLogger('routes/setup');
 const router = express.Router();
 const { getConfig, updateConfig, restoreConfigText, siteAddressRev, isInstalled } = require('../core/configManager');
 const config = require('../config/app');
@@ -35,7 +36,7 @@ const NATIVE_SQLITE_UNAVAILABLE = 'The native SQLite driver (better-sqlite3) can
 
 function nativeSqliteUnavailable(): boolean {
     const error = require('../config/database').nativeSqliteLoadError();
-    if (error) console.error('❌ Setup: the native SQLite driver cannot load:', error.message);
+    if (error) log.error({ err: error }, '❌ Setup: the native SQLite driver cannot load');
     return !!error;
 }
 
@@ -655,7 +656,7 @@ router.post('/install', async (req: Request, res: Response) => {
         !!enrolledConfig.mtls?.cert && fs.existsSync(clusterCertPaths(enrolledConfig).cert)
     );
     if (isEnrolledNode) {
-        console.log(`🔗 Setup: cluster-enrolled node detected (advertiseHost=${enrolledConfig.advertiseHost}) — preserving enrollment identity and gateway wiring.`);
+        log.info(`🔗 Setup: cluster-enrolled node detected (advertiseHost=${enrolledConfig.advertiseHost}) — preserving enrollment identity and gateway wiring.`);
     }
 
     // Frontend URL — the origin visitors use, stored as the `home` option.
@@ -733,14 +734,14 @@ router.post('/install', async (req: Request, res: Response) => {
         let adminReady = false;
         const undoInstall = (): boolean => {
             const undone = restoreConfigText(written.previousText, { expectRev: siteAddressRev(written.config) });
-            if (!undone) console.error('❌ Setup: the configuration of the failed install could not be undone; remove backend/wordjs-config.json before running the wizard again.');
+            if (!undone) log.error('❌ Setup: the configuration of the failed install could not be undone; remove backend/wordjs-config.json before running the wizard again.');
             return undone;
         };
         const failedText = (e: any, fallback: string) => publicErrorText(e, fallback)
             + (!adminReady && undoInstall() ? ' Nothing was kept: fix the cause and run the wizard again.' : '');
         try {
             // Initialize DB connection dynamically
-            console.log(`📦 Setup: Initializing database (driver: ${dbDriver})...`);
+            log.info(`📦 Setup: Initializing database (driver: ${dbDriver})...`);
             // Reflect the just-saved config into the live config object so the driver layer reads the
             // chosen dbDriver / dbPath / Postgres connection (require('../config/app') was loaded with
             // the pre-install defaults).
@@ -779,7 +780,7 @@ router.post('/install', async (req: Request, res: Response) => {
             try {
                 await require('../core/plugins').recordFreshInstallBrowserCapability();
             } catch (e: any) {
-                console.warn('⚠️ Setup: could not record the browser:script upgrade as done:', e && e.message);
+                log.warn({ err: e }, '⚠️ Setup: could not record the browser:script upgrade as done');
             }
 
             // SECURITY: Generate mTLS Certificates — but NEVER on a cluster-enrolled node. There the
@@ -789,15 +790,15 @@ router.post('/install', async (req: Request, res: Response) => {
             // serving only until its next restart, then every mTLS handshake with the gateway fails and
             // the whole cluster goes dark. Keep the enrolled identity; enrollment is the source of truth.
             if (isEnrolledNode) {
-                console.log('🔐 Setup: cluster-enrolled node — keeping the gateway-issued mTLS identity (not re-minting a CA).');
+                log.info('🔐 Setup: cluster-enrolled node — keeping the gateway-issued mTLS identity (not re-minting a CA).');
                 newConfig.mtls = enrolledConfig.mtls;
             } else {
-                console.log('🔐 Setup: Generating mTLS certificates...');
+                log.info('🔐 Setup: Generating mTLS certificates...');
                 try {
                     issueLocalClusterIdentity(newConfig);
-                    console.log('✅ mTLS certificates generated for the local services (localhost, 127.0.0.1).');
+                    log.info('✅ mTLS certificates generated for the local services (localhost, 127.0.0.1).');
                 } catch (e) {
-                    console.error('❌ Setup failed during mTLS generation:', e);
+                    log.error({ err: e }, '❌ Setup failed during mTLS generation');
                     res.status(500).json({ error: failedText(e, 'Setup failed during mTLS generation.') });
                     return; // Exit if mTLS generation fails
                 }
@@ -808,24 +809,24 @@ router.post('/install', async (req: Request, res: Response) => {
             // certs/config to — so this cluster step is a no-op there. Skip it (this also avoids
             // needing the root setup/ package, which the compiled monolith release doesn't ship deps for).
             if (process.env.WORDJS_EMBEDDED === '1') {
-                console.log('ℹ️ Monolith (embedded) — skipping cluster artifact distribution (single process, not needed).');
+                log.info('ℹ️ Monolith (embedded) — skipping cluster artifact distribution (single process, not needed).');
             } else if (isEnrolledNode) {
                 // Separate mode: the gateway and frontend are on OTHER machines and were provisioned by
                 // their own join. There is nothing local to distribute to, and the distributor rewrites
                 // sibling gateway/frontend cert dirs that do not exist here.
-                console.log('ℹ️ Cluster-enrolled node — skipping local artifact distribution (peers provisioned by their own join).');
+                log.info('ℹ️ Cluster-enrolled node — skipping local artifact distribution (peers provisioned by their own join).');
             } else {
-                console.log('🏗️ Setup: Orchestrating cluster via standalone service...');
+                log.info('🏗️ Setup: Orchestrating cluster via standalone service...');
                 try {
                     // Three levels up from backend/{src,dist}/routes/ to reach the repo-root setup/ package
                     // (the previous two-level path resolved to backend/setup, which does not exist).
                     const WordJSSetup = require('../../../setup/index');
                     const orchestrator = new WordJSSetup(path.resolve(__dirname, '../../../'));
                     await orchestrator.distribute(newConfig);
-                    console.log('✅ Cluster artifacts distributed via autonomous Setup service');
+                    log.info('✅ Cluster artifacts distributed via autonomous Setup service');
                 } catch (err) {
-                    console.error('❌ Failed to trigger autonomous setup:', err.message);
-                    console.warn('⚠️ Manual distribution might be required: npm run setup');
+                    log.error({ err }, '❌ Failed to trigger autonomous setup');
+                    log.warn('⚠️ Manual distribution might be required: npm run setup');
                 }
             }
 
@@ -885,9 +886,9 @@ router.post('/install', async (req: Request, res: Response) => {
                     const seededAdmin = await User.findByLogin(adminUser) || await User.findByEmail(adminEmailDisplay);
                     const { seedStarterContent } = require('../core/starter-content');
                     const seeded = await seedStarterContent(seededAdmin ? seededAdmin.id : 1, String(siteName));
-                    console.log('🌱 Starter content:', JSON.stringify(seeded));
+                    log.info({ starterContent: seeded }, '🌱 Starter content');
                 } catch (e: any) {
-                    console.warn('⚠️ Starter content seeding failed (install continues):', e && e.message);
+                    log.warn({ err: e }, '⚠️ Starter content seeding failed (install continues)');
                 }
             }
 
@@ -904,7 +905,7 @@ router.post('/install', async (req: Request, res: Response) => {
             const testResults = await runCoreTests();
 
             if (!testResults.success) {
-                console.warn(`⚠️ CMS core tests had failures (${testResults.failed}/${testResults.tests})`);
+                log.warn(`⚠️ CMS core tests had failures (${testResults.failed}/${testResults.tests})`);
                 // We don't block installation, just warn
             }
 
@@ -952,7 +953,7 @@ router.post('/install', async (req: Request, res: Response) => {
                     autoLoggedIn = true;
                 }
             } catch (e: any) {
-                console.warn('Auto-login after install failed (user can log in manually):', e && e.message);
+                log.warn({ err: e }, 'Auto-login after install failed (user can log in manually)');
             }
 
             // Install complete — remove the on-disk install-token mirror so the bootstrap secret does
@@ -970,7 +971,7 @@ router.post('/install', async (req: Request, res: Response) => {
             // gated on isInstalled()), so run it in THIS process: it releases the gateway sync waiting on
             // whenReconciled(), arms the gateway's host edge (split / separate) and starts the CLI watcher.
             // Not awaited and never fatal — the install already succeeded.
-            require('../core/site-address').ensureStarted().catch((e: any) => console.warn('[site-address] post-install start failed:', e && e.message));
+            require('../core/site-address').ensureStarted().catch((e: any) => log.warn({ err: e }, '[site-address] post-install start failed'));
 
             // Same reason, for plugin routes: the boot releases the /api/v1/plugin/* guard (503
             // plugins_starting) only after loading the active plugins, and a boot in setup mode loads none.
@@ -991,7 +992,7 @@ router.post('/install', async (req: Request, res: Response) => {
             });
 
         } catch (e) {
-            console.error('❌ Setup failed:', e);
+            log.error({ err: e }, '❌ Setup failed');
             res.status(500).json({ error: failedText(e, 'Setup failed during the install.') });
         }
     } else {

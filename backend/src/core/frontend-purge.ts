@@ -41,6 +41,7 @@ import * as path from 'path';
 const crypto = require('crypto');
 const { getConfig, saveConfig } = require('./configManager');
 const { addAction } = require('./hooks');
+const log = require('./module-logger').moduleLogger('core/frontend-purge');
 
 const FLUSH_DELAY_MS = 1500;
 const PURGE_TIMEOUT_MS = 3000;
@@ -153,7 +154,7 @@ function purgeTransport(
 function warnOnce(message: string) {
     if (Date.now() - lastFailureLog > 3600_000) {
         lastFailureLog = Date.now();
-        console.warn(`[Purge] ${message} (content stays TTL-fresh)`);
+        log.warn(`[Purge] ${message} (content stays TTL-fresh)`);
     }
 }
 
@@ -172,7 +173,7 @@ function failPermanent(key: string, message: string) {
     // Re-observing the SAME fault refreshes its clock (it is still true) without repeating the line.
     permanentFailures.set(key, { message, at: Date.now() });
     if (known) return;
-    console.error(`[Purge] MISCONFIGURED — on-demand purging is DEAD until this is fixed: ${message}`);
+    log.error(`[Purge] MISCONFIGURED — on-demand purging is DEAD until this is fixed: ${message}`);
 }
 
 /**
@@ -184,7 +185,7 @@ function failPermanent(key: string, message: string) {
  */
 function clearPermanent(key: string) {
     if (permanentFailures.delete(key)) {
-        console.log(`[Purge] recovered — the reported fault is gone (${key}); on-demand purging works again.`);
+        log.info(`[Purge] recovered — the reported fault is gone (${key}); on-demand purging works again.`);
     }
 }
 
@@ -194,7 +195,7 @@ function purgeFailureState(): string[] {
     for (const [key, fault] of permanentFailures) {
         if (fault.at < cutoff) {
             permanentFailures.delete(key);
-            console.log(`[Purge] retiring an unconfirmed fault (${key}): it has not been observed for ` +
+            log.info(`[Purge] retiring an unconfirmed fault (${key}): it has not been observed for ` +
                 `${Math.round(PERMANENT_TTL_MS / 60000)} min. The next purge re-reports it if it is still true.`);
         }
     }

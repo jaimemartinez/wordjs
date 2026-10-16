@@ -6,6 +6,7 @@
 const config = require('./app');
 const path = require('path');
 const { AsyncLocalStorage } = require('async_hooks');
+const log = require('../core/module-logger').moduleLogger('config/database');
 
 // 1. Load the Configured Driver
 // 1. Driver State
@@ -158,7 +159,7 @@ async function runTransaction<T>(fn: (tx: TransactionQuery) => Promise<T>): Prom
   for (const callback of committedCallbacks) {
     try { await callback(); }
     catch (error: any) {
-      console.warn(`[database] after-commit effect failed (non-fatal): ${error?.message || error}`);
+      log.warn({ err: error }, '[database] after-commit effect failed (non-fatal)');
     }
   }
   return result;
@@ -201,7 +202,7 @@ async function loadDriver(overrideName: string | null = null) {
   driverLoadError = null;
 
   try {
-    console.log(`🔌 DB Manager: Loading driver '${name}'...`);
+    log.info(`🔌 DB Manager: Loading driver '${name}'...`);
     driver = require(`../drivers/${name}`);
     driverAsync = null; // Reset
 
@@ -209,10 +210,10 @@ async function loadDriver(overrideName: string | null = null) {
     try {
       if (name === 'sqlite-native') {
         driverAsync = require('../drivers/sqlite-native-async');
-        console.log(`🔌 DB Manager: Loaded Async Driver for '${name}'`);
+        log.info(`🔌 DB Manager: Loaded Async Driver for '${name}'`);
       } else if (name === 'postgres') {
         driverAsync = require('../drivers/postgres');
-        console.log(`🔌 DB Manager: Loaded Async Driver for '${name}'`);
+        log.info(`🔌 DB Manager: Loaded Async Driver for '${name}'`);
 
         // Mock sync driver for Postgres
         driver = {
@@ -222,7 +223,7 @@ async function loadDriver(overrideName: string | null = null) {
         };
       } else if (name === 'mysql' || name === 'mariadb') {
         driverAsync = require('../drivers/mysql');
-        console.log(`🔌 DB Manager: Loaded Async Driver for '${name}'`);
+        log.info(`🔌 DB Manager: Loaded Async Driver for '${name}'`);
 
         // Mock sync driver for MySQL (async-only, like Postgres).
         driver = {
@@ -238,11 +239,11 @@ async function loadDriver(overrideName: string | null = null) {
       // host without a working binary got a warning here and then died later in init(). Rethrow for
       // exactly that case so the recoverable path below runs; other drivers keep the warn-only behaviour.
       if (name === 'sqlite-native') throw e;
-      console.warn(`⚠️  Async driver not found for '${name}': ${e.message}`);
+      log.warn({ err: e }, `⚠️  Async driver not found for '${name}'`);
     }
 
   } catch (e) {
-    console.error(`❌ Failed to load driver '${name}':`, e.message);
+    log.error({ err: e }, `❌ Failed to load driver '${name}'`);
     // SQLite is always recoverable: 'sqlite-native' (better-sqlite3) needs a native binary that may
     // be missing, while 'sqlite-legacy' (sql.js / pure-JS WASM) reads the SAME file format. Fall back
     // to it whenever ANY sqlite driver fails (even an explicit one) or on the default path. A failed
@@ -259,8 +260,8 @@ async function loadDriver(overrideName: string | null = null) {
       throw driverLoadError;
     }
     if (recoverable) {
-      console.warn(`⚠️  DB Manager: '${name}' unavailable — falling back to pure-JS 'sqlite-legacy'.`);
-      console.warn(`⚠️  DB Manager: 'sqlite-legacy' has no FTS5 — ranked full-text search is DISABLED and site search falls back to LIKE matching.`);
+      log.warn(`⚠️  DB Manager: '${name}' unavailable — falling back to pure-JS 'sqlite-legacy'.`);
+      log.warn('⚠️  DB Manager: \'sqlite-legacy\' has no FTS5 — ranked full-text search is DISABLED and site search falls back to LIKE matching.');
       driver = require('../drivers/sqlite-legacy');
       driverName = 'sqlite-legacy';
       driverAsync = null;
@@ -334,7 +335,7 @@ const closeDatabase = async () => {
 
 // 3. Schema Management (Core Tables)
 async function initializeSchema(db: any, isAsync = false) {
-  console.log('🏗️  Verifying Database Schema...');
+  log.info('🏗️  Verifying Database Schema...');
 
   // Helper to run exec
   const exec = async (sql: string) => {
@@ -612,11 +613,11 @@ async function initializeSchema(db: any, isAsync = false) {
     } catch (e: any) {
       // Should not happen on a fresh schema, but never let a unique-index hiccup abort boot — the
       // schema-migration path will retry/dedupe on existing data. Log loudly so it's visible.
-      console.warn(`⚠️  Could not create unique index (continuing): ${e && e.message}`);
+      log.warn({ err: e }, '⚠️  Could not create unique index (continuing)');
     }
   }
 
-  console.log('✅ Database Schema verified.');
+  log.info('✅ Database Schema verified.');
 }
 
 const { runSchemaMigrations } = require('../core/schema-migrations');
@@ -636,7 +637,7 @@ async function initializeDatabase() {
   try {
     await require('../models/Analytics').init();
   } catch (e) {
-    console.warn('[DB] Analytics table init skipped:', e.message);
+    log.warn({ err: e }, '[DB] Analytics table init skipped');
   }
   await checkDbDivergence();
   // The options table exists from here on, so this is the first moment a persistent notice can be
@@ -677,7 +678,7 @@ async function reportDriverDegradation(degradation: DriverDegradation | null = d
     }
     await flushPendingAdminNotices();
   } catch (e: any) {
-    console.warn(`[DB] the driver-degradation notice could not be recorded: ${e && e.message}`);
+    log.warn({ err: e }, '[DB] the driver-degradation notice could not be recorded');
   }
 }
 
@@ -712,13 +713,11 @@ async function checkDbDivergence() {
         other.close();
       } catch { /* better-sqlite3 unavailable — best-effort skip */ }
       if (otherUsers > 0) {
-        console.warn('');
-        console.warn('⚠️  ⚠️  DB DIVERGENCE DETECTED ⚠️  ⚠️');
-        console.warn(`   Active driver '${driverName}' is using an EMPTY database (${activePath}),`);
-        console.warn(`   but ${f} contains ${otherUsers} user(s) of real data.`);
-        console.warn(`   You likely switched dbDriver without migrating. To move the data:  npm run migrate`);
-        console.warn(`   (or restore the previous dbDriver/dbPath in backend/wordjs-config.json).`);
-        console.warn('');
+        log.warn('⚠️  ⚠️  DB DIVERGENCE DETECTED ⚠️  ⚠️');
+        log.warn(`   Active driver '${driverName}' is using an EMPTY database (${activePath}),`);
+        log.warn({ otherUsers }, `   but ${f} contains ${otherUsers} user(s) of real data.`);
+        log.warn('   You likely switched dbDriver without migrating. To move the data:  npm run migrate');
+        log.warn('   (or restore the previous dbDriver/dbPath in backend/wordjs-config.json).');
         return;
       }
     }
@@ -902,7 +901,7 @@ function getDbType() {
 
 async function clearDatabase(db: any = null) {
   const targetDb = db || driverAsync || getDb();
-  console.log('🧹 DB Manager: Clearing database content...');
+  log.info('🧹 DB Manager: Clearing database content...');
 
   // Tables to clear (Order matters for foreign keys if enforced, though SQLite usually permissive)
   const tables = [
@@ -946,10 +945,10 @@ async function clearDatabase(db: any = null) {
       if (table === 'content_outbox' || table === 'webhook_deliveries') {
         throw new Error(`Refusing to clear content while stale external work remains in ${table}: ${message}`, { cause: e });
       }
-      console.warn(`⚠️ Failed to clear table ${table}: ${message}`);
+      log.warn({ table }, `⚠️ Failed to clear table ${table}: ${message}`);
     }
   }
-  console.log('✅ Database cleared.');
+  log.info('✅ Database cleared.');
 }
 
 module.exports = {

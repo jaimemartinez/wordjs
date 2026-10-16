@@ -4,6 +4,7 @@
  */
 
 const EventEmitter = require('events');
+const log = require('./module-logger').moduleLogger('core/hooks');
 
 class Hooks {
     actions: Map<string, any[]>;
@@ -130,7 +131,7 @@ class Hooks {
                 // worker and returns a Promise. The sync path cannot await it, so running it here would
                 // either silently drop the result or, worse, partially apply it. Skip with a warning —
                 // callers needing plugin participation must use the async doAction().
-                console.warn(`[Hooks] doActionSync('${hook}'): skipping isolate plugin callback for '${pluginSlug}' (async-only; use doAction).`);
+                log.warn({ hook }, `[Hooks] doActionSync('${hook}'): skipping isolate plugin callback for '${pluginSlug}' (async-only; use doAction).`);
                 continue;
             }
             callback(...args);
@@ -202,7 +203,7 @@ class Hooks {
                 // Isolate shim: returns a Promise the sync path can't await. Assigning it to `result`
                 // would corrupt the value (a Promise, not the filtered value). Skip with a warning;
                 // sync filters only honor core (non-plugin) callbacks. Use applyFilters() for plugins.
-                console.warn(`[Hooks] applyFiltersSync('${hook}'): skipping isolate plugin callback for '${pluginSlug}' (async-only; use applyFilters).`);
+                log.warn({ hook }, `[Hooks] applyFiltersSync('${hook}'): skipping isolate plugin callback for '${pluginSlug}' (async-only; use applyFilters).`);
                 continue;
             }
             result = callback(result, ...args);

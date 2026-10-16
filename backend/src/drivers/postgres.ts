@@ -6,6 +6,7 @@
 const DatabaseDriverInterface = require('./interface');
 const { Pool, escapeIdentifier, escapeLiteral } = require('pg');
 const config = require('../config/app');
+const log = require('../core/module-logger').moduleLogger('drivers/postgres');
 
 /**
  * ── SQLite/generic DDL → Postgres translation ──────────────────────────────────────────────────
@@ -156,7 +157,7 @@ class PostgresDriver extends DatabaseDriverInterface {
 
     async connect() {
         const dbConfig = this.config || config.db;
-        console.log(`🔌 Postgres: Connecting to ${dbConfig.host}:${dbConfig.port || 5432}/${dbConfig.name}...`);
+        log.info(`🔌 Postgres: Connecting to ${dbConfig.host}:${dbConfig.port || 5432}/${dbConfig.name}...`);
 
         try {
             const num = (v: any, d: number) => (Number.isFinite(Number(v)) ? Number(v) : d);
@@ -187,10 +188,10 @@ class PostgresDriver extends DatabaseDriverInterface {
             const res = await client.query('SELECT NOW()');
             client.release();
 
-            console.log('✅ Postgres: Connected successfully at', res.rows[0].now);
+            log.info({ serverTime: res.rows[0].now }, '✅ Postgres: Connected successfully');
 
         } catch (err) {
-            console.error('❌ Postgres: Connection failed:', err.message);
+            log.error({ err }, '❌ Postgres: Connection failed');
             throw err;
         }
     }
@@ -212,7 +213,7 @@ class PostgresDriver extends DatabaseDriverInterface {
             const res = await this.pool.query(normalizedSql, params);
             return res.rows[0];
         } catch (err) {
-            console.error('❌ Postgres Query Error (get):', err.message, '\nSQL:', sql);
+            log.error({ err, sql }, '❌ Postgres Query Error (get)');
             throw err;
         }
     }
@@ -224,7 +225,7 @@ class PostgresDriver extends DatabaseDriverInterface {
             const res = await this.pool.query(normalizedSql, params);
             return res.rows;
         } catch (err) {
-            console.error('❌ Postgres Query Error (all):', err.message, '\nSQL:', sql);
+            log.error({ err, sql }, '❌ Postgres Query Error (all)');
             throw err;
         }
     }
@@ -253,7 +254,7 @@ class PostgresDriver extends DatabaseDriverInterface {
                 changes: res.rowCount
             };
         } catch (err) {
-            console.error('❌ Postgres Query Error (run):', err.message, '\nSQL:', sql);
+            log.error({ err, sql }, '❌ Postgres Query Error (run)');
             throw err;
         }
     }
@@ -266,7 +267,7 @@ class PostgresDriver extends DatabaseDriverInterface {
         try {
             await this.pool.query(translateSql(sql));
         } catch (err) {
-            console.error('❌ Postgres Exec Error:', err.message, '\nSQL:', sql);
+            log.error({ err, sql }, '❌ Postgres Exec Error');
             throw err;
         }
     }
@@ -323,7 +324,7 @@ class PostgresDriver extends DatabaseDriverInterface {
             try {
                 await client.query('ROLLBACK');
             } catch (rbErr: any) {
-                console.error('❌ Postgres ROLLBACK failed:', rbErr && rbErr.message);
+                log.error({ err: rbErr }, '❌ Postgres ROLLBACK failed');
             }
             throw err;
         } finally {
@@ -393,7 +394,7 @@ class PostgresDriver extends DatabaseDriverInterface {
             );
             return res.rows.map((r: any) => r.table_name);
         } catch (err) {
-            console.error('❌ Postgres getTables Error:', err.message);
+            log.error({ err }, '❌ Postgres getTables Error');
             throw err;
         }
     }
@@ -447,7 +448,7 @@ class PostgresDriver extends DatabaseDriverInterface {
                 columns: columns
             };
         } catch (err) {
-            console.error('❌ Postgres getTableSchema Error:', err.message);
+            log.error({ err }, '❌ Postgres getTableSchema Error');
             throw err;
         }
     }
@@ -455,7 +456,7 @@ class PostgresDriver extends DatabaseDriverInterface {
     async close() {
         if (this.pool) {
             await this.pool.end();
-            console.log('🔌 Postgres: Pool Closed.');
+            log.info('🔌 Postgres: Pool Closed.');
         }
     }
 }
