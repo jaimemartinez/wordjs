@@ -2171,6 +2171,9 @@ async function sendMail(data) {
                 parentId,
                 threadId,
                 userId: senderUserId,
+                // Remembered on the row so a queued retry goes out as an auto-reply again (null
+                // return path + Auto-Submitted), not as the user's own mail.
+                isAutoReply: data.isAutoReply ? 1 : 0,
                 attachments: data.attachments
             });
             sentRecordId = sentRec ? sentRec.id : 0;
@@ -2388,7 +2391,7 @@ async function sendMail(data) {
         const extraHeaders = (data.isAutoReply || data.extraHeaders)
             ? { ...(data.extraHeaders || {}), ...(data.isAutoReply ? { 'Auto-Submitted': 'auto-replied' } : {}) }
             : undefined;
-        const mailObj = { fromEmail: wireFrom, fromName, replyTo: wireReplyTo, subject: data.subject, text: data.text, html: data.html, attachments, messageId: outboundMessageId, headers: extraHeaders };
+        const mailObj = { fromEmail: wireFrom, envelopeFrom: envelopeSenderOf(data, wireFrom), fromName, replyTo: wireReplyTo, subject: data.subject, text: data.text, html: data.html, attachments, messageId: outboundMessageId, headers: extraHeaders };
 
         if (relay) {
             // Relay/smarthost path (used only if a relay is configured). NOTE: wireFrom === fromEmail
@@ -2396,14 +2399,7 @@ async function sendMail(data) {
             console.log(`[MailServer] Delivering ${externalRecipients.length} recipient(s) via configured relay...`);
             for (const extR of externalRecipients) {
                 try {
-                    const info = await relay.sendMail({
-                        envelope: { from: wireFrom, to: extR },
-                        from: `"${fromName}" <${wireFrom}>`, to: extR,
-                        replyTo: wireReplyTo,
-                        messageId: outboundMessageId,
-                        subject: data.subject, text: data.text, html: data.html, attachments, dkim: dkimOptions,
-                        headers: extraHeaders
-                    });
+                    const info = await deliverViaRelay(relay, extR, mailObj, dkimOptions);
                     delivered.push({ recipient: extR, via: 'relay', response: info.response });
                 } catch (e) {
                     console.error(`[MailServer] ❌ Relay delivery to ${extR} failed: ${e.message}`);
@@ -2661,6 +2657,39 @@ function isStartTlsRefused(e) {
 }
 
 /**
+ * The SMTP envelope sender (MAIL FROM) for an outbound message. RFC 3834 §3.3: an automatic response
+ * (the vacation responder) goes out with a NULL return path, MAIL FROM:<>, so a reply that cannot be
+ * delivered is dropped by the remote MTA instead of bouncing back into the vacationing user's inbox —
+ * which is what happened while the envelope carried the user's address. The header From, Reply-To,
+ * DKIM signature and Auto-Submitted header are unaffected; only the envelope changes. Everything else
+ * (normal sends, and forwards, which keep the forwarding address for SPF alignment) uses the wire From.
+ * nodemailer turns `envelope.from: ''` into exactly `MAIL FROM:<>` on both the direct and relay paths.
+ */
+function envelopeSenderOf(data, wireFrom) {
+    return data && data.isAutoReply ? '' : wireFrom;
+}
+
+// A mail object without envelopeFrom keeps the historical behaviour: the envelope sender is the wire From.
+function envelopeFromOf(mail) {
+    return typeof mail.envelopeFrom === 'string' ? mail.envelopeFrom : mail.fromEmail;
+}
+
+/**
+ * Deliver ONE message to ONE recipient through the configured relay/smarthost. Resolves with
+ * nodemailer's info; a rejection carries nodemailer's responseCode for the caller to classify.
+ */
+async function deliverViaRelay(relay, recipient, mail, dkimOptions) {
+    return await relay.sendMail({
+        envelope: { from: envelopeFromOf(mail), to: recipient },
+        from: `"${mail.fromName}" <${mail.fromEmail}>`, to: recipient,
+        replyTo: mail.replyTo,
+        messageId: mail.messageId,
+        subject: mail.subject, text: mail.text, html: mail.html, attachments: mail.attachments, dkim: dkimOptions,
+        headers: mail.headers
+    });
+}
+
+/**
  * Deliver ONE message to ONE recipient by connecting directly to its domain's MX servers.
  * Resolves on success ({ ok, mx, response }); rejects with err.permanent set (5xx = permanent,
  * 4xx/network = temporary so the caller may retry).
@@ -2705,8 +2734,9 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
         });
         try {
             const info = await transport.sendMail({
-                // Envelope (MAIL FROM / RCPT TO) drives SPF alignment & bounces; keep it our domain.
-                envelope: { from: mail.fromEmail, to: recipient },
+                // Envelope (MAIL FROM / RCPT TO) drives SPF alignment & bounces; keep it our domain
+                // (or the null return path for an auto-reply — see envelopeSenderOf).
+                envelope: { from: envelopeFromOf(mail), to: recipient },
                 from: `"${mail.fromName}" <${mail.fromEmail}>`,
                 to: recipient,
                 replyTo: mail.replyTo,
@@ -2836,6 +2866,7 @@ async function retryFailedDelivery(email, rateKey) {
             threadId: email.thread_id,
             userId: email.user_id || 0,
             isRetry: true,
+            isAutoReply: Number(email.is_auto_reply) === 1,
             sentRecordId: email.id,
             deliveryAttempts: 0, // manual retry → fresh cycle, not stuck at max attempts
             attachments
@@ -3053,6 +3084,7 @@ exports.init = async function (bridge) {
                         userId: email.user_id || 0,
                         // Reuse the existing Sent record instead of creating a duplicate copy.
                         isRetry: true,
+                        isAutoReply: Number(email.is_auto_reply) === 1,
                         sentRecordId: email.id,
                         deliveryAttempts: email.delivery_attempts || 0,
                         attachments: formattedAttachments
