@@ -266,7 +266,7 @@ async function loadDriver(overrideName: string | null = null) {
       driver = null;
       driverAsync = null;
       driverLoadError = strictDriverError(name, e);
-      console.error(`❌ DB Manager: ${driverLoadError.message}`);
+      log.error(`❌ DB Manager: ${driverLoadError.message}`);
       throw driverLoadError;
     }
     if (recoverable) {

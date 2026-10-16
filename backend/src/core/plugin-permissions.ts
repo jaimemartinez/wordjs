@@ -265,7 +265,7 @@ function withoutForeignExclusive(stored: any, slug: string, tokens: string[]): s
     const conflicts = exclusiveConflictsIn(stored, slug, tokens);
     if (!conflicts.length) return tokens;
     for (const c of conflicts) {
-        console.warn("[PluginPermissions] Not granting '%s' to plugin '%s': plugin '%s' already holds it (an exclusive capability).", c.token, logSafeKey(slug), logSafeKey(c.holder));
+        log.warn("[PluginPermissions] Not granting '%s' to plugin '%s': plugin '%s' already holds it (an exclusive capability).", c.token, logSafeKey(slug), logSafeKey(c.holder));
     }
     const drop = new Set(conflicts.map(c => c.token));
     return tokens.filter(t => !drop.has(t));
@@ -1039,7 +1039,7 @@ async function loadEgressHostsUnlocked(): Promise<void> {
     } catch (e: any) {
         // Not touched here: still FALSE if no load ever succeeded (fail CLOSED — the spawn path denies
         // egress for network plugins until a re-sync loads it), still the last-known-good policy otherwise.
-        console.warn(policyState.get().egressPolicyLoaded
+        log.warn({ err: e }, policyState.get().egressPolicyLoaded
             ? '[PluginPermissions] Failed to re-read plugin_egress_hosts (the allowlists already in memory stay in force):'
             : '[PluginPermissions] Failed to load plugin_egress_hosts option (egress fails CLOSED for network-granted plugins until it loads):');
     }

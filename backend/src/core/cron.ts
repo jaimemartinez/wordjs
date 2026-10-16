@@ -264,7 +264,7 @@ async function runCronInner() {
             const event = events[timestamp][key];
 
             if (!cronHookAllowedHere(event)) {
-                console.warn(`Cron: removing event '${event.hook}' — it is not available on this site of the network.`);
+                log.warn(`Cron: removing event '${event.hook}' — it is not available on this site of the network.`);
                 executed.push({ timestamp, key });
                 continue;
             }

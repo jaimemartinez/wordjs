@@ -775,7 +775,7 @@ router.post('/install', async (req: Request, res: Response) => {
             try {
                 await require('../core/mfa').recordFreshInstall();
             } catch (e: any) {
-                console.warn('⚠️ Setup: could not record the MFA token-enforcement default:', e && e.message);
+                log.warn({ err: e }, '⚠️ Setup: could not record the MFA token-enforcement default');
             }
 
             try {

@@ -2821,7 +2821,7 @@ async function loadActivePlugins() {
         // Multisite: a plugin the network stopped offering stays listed (the site's choice is kept) but
         // does not run here until it is offered again.
         if (secondary && !require('./plugin-permissions').isOfferedHere(slug)) {
-            console.warn(`   ⚠ Skipping '${logSafe(slug)}' on site ${siteContext.currentSiteId()}: not offered by the network.`);
+            log.warn(`   ⚠ Skipping '${logSafe(slug)}' on site ${siteContext.currentSiteId()}: not offered by the network.`);
             continue;
         }
 
@@ -3033,7 +3033,7 @@ async function loadSitePlugins(): Promise<void> {
         await loadActivePlugins();
         fixMiddlewareOrder();
     } catch (e: any) {
-        console.warn(`[plugins] site ${siteContext.currentSiteIdOrNull()}: plugins not loaded: ${logSafe(e && e.message)}`);
+        log.warn(`[plugins] site ${siteContext.currentSiteIdOrNull()}: plugins not loaded: ${logSafe(e && e.message)}`);
     }
 }
 
@@ -3082,7 +3082,7 @@ async function offerPluginToSites(slug: string, tokens: unknown): Promise<string
     const stored = require('./network').setPluginCeiling(slug, tokens);
     if (!isBundledPlugin(plugin.path, manifest)) {
         try { await installPluginDependencies(slug, manifest, plugin.path); }
-        catch (e: any) { console.warn(`[plugins] '${logSafe(slug)}' offered, but its dependencies could not be installed: ${logSafe(e && e.message)}`); }
+        catch (e: any) { log.warn(`[plugins] '${logSafe(slug)}' offered, but its dependencies could not be installed: ${logSafe(e && e.message)}`); }
     }
     await respawnOnSecondarySites(slug);
     return stored;
@@ -3107,7 +3107,7 @@ async function respawnOnSecondarySites(slug: string): Promise<void> {
                 await require('./plugin-permissions').loadGrants();
                 await iso.reloadIsolatedPlugin(slug);
             });
-        } catch (e: any) { console.warn(`[plugins] respawn of '${logSafe(slug)}' on site ${siteId} failed: ${logSafe(e && e.message)}`); }
+        } catch (e: any) { log.warn(`[plugins] respawn of '${logSafe(slug)}' on site ${siteId} failed: ${logSafe(e && e.message)}`); }
     }
 }
 

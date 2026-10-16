@@ -249,7 +249,7 @@ function onAuditRecorded(fn: AuditObserver): () => void {
 async function notifyObservers(event: AuditEvent): Promise<void> {
     for (const fn of _observers.slice()) {
         try { await fn(event); } catch (e: any) {
-            console.warn(`[audit] observer failed for '${event.action}' (non-fatal): ${e && e.message}`);
+            log.warn(`[audit] observer failed for '${event.action}' (non-fatal): ${e && e.message}`);
         }
     }
 }

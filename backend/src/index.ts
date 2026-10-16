@@ -1573,9 +1573,9 @@ async function initializeMainSite() {
                 const network = require('./core/network');
                 const main = network.normalizeSiteUrl(config.siteUrl);
                 if (main) network.registerPrimarySite(main.url);
-                console.log(`🌐 Multisite: ${network.listSites().length} site(s) in the network.`);
+                log.info(`🌐 Multisite: ${network.listSites().length} site(s) in the network.`);
             } catch (e: any) {
-                console.error(`❌ Multisite: the network store could not be opened (${e && e.message}); only the main site is answered.`);
+                log.error(`❌ Multisite: the network store could not be opened (${e && e.message}); only the main site is answered.`);
             }
         }
 

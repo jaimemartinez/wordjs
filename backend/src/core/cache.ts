@@ -397,7 +397,7 @@ function subscribe(channel: string, handler: (message: string) => void): void {
             if (!hs) return;
             const { siteId, msg } = openSiteEnvelope(raw);
             const run = () => {
-                for (const h of hs) { try { h(msg); } catch (e: any) { console.warn('[Cache] sub handler error:', e && e.message); } }
+                for (const h of hs) { try { h(msg); } catch (e: any) { log.warn({ err: e }, '[Cache] sub handler error'); } }
             };
             // Multisite: a peer's message is handled as the site it was published for (site 1 when it
             // names none), so the handler's reads and invalidations land on that site's data.

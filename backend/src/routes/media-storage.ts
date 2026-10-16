@@ -22,6 +22,7 @@ const mediaStorage = require('../core/media-storage');
 const migration = require('../core/media-storage-migrate');
 const s3offload = require('../core/s3-offload');
 const { logSafeError } = require('../core/log-safe');
+const log = require('../core/module-logger').moduleLogger('routes/media-storage');
 
 const TEXT_FIELDS = ['bucket', 'region', 'endpoint', 'prefix', 'publicUrl', 'accessKeyId'] as const;
 const MAX_FIELD = 512;
@@ -330,7 +331,7 @@ router.post('/migrate', authenticate, isAdmin, asyncHandler(async (req: Request,
     // Background: the request answers now; progress is the media_storage_migration option.
     migration.runMigration(body.direction, { deleteLocal: body.deleteLocal === true, restart: body.restart === true })
         .then(() => { purgeDelivery(); })
-        .catch((e: any) => console.warn(`media storage migration did not run: ${logSafeError(e)}`));
+        .catch((e: any) => log.warn(`media storage migration did not run: ${logSafeError(e)}`));
     res.status(202).json(await statePayload());
 }));
 

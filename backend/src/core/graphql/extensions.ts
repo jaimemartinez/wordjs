@@ -42,6 +42,7 @@
 import { extendSchema, parse, GraphQLSchema, isObjectType, isInterfaceType } from 'graphql';
 import type { GraphQLFieldResolver } from 'graphql';
 import type { FieldCost } from './limits';
+const log = require('../module-logger').moduleLogger('core/graphql/extensions');
 
 export interface GraphQLResolverSpec {
     resolve: GraphQLFieldResolver<any, any, any>;
@@ -90,7 +91,7 @@ function collectHookExtensions(): GraphQLExtension[] {
             if (ext && typeof ext.owner === 'string' && typeof ext.typeDefs === 'string') collected.push(ext);
         });
     } catch (err: any) {
-        console.warn(`[graphql] ${REGISTER_HOOK} callback failed: ${err && err.message}`);
+        log.warn(`[graphql] ${REGISTER_HOOK} callback failed: ${err && err.message}`);
     }
     return collected;
 }
@@ -144,7 +145,7 @@ export function applyExtensions(core: GraphQLSchema): GraphQLSchema {
         try {
             schema = applyOne(schema, ext);
         } catch (err: any) {
-            console.warn(`[graphql] extension from "${ext.owner}" skipped: ${err && err.message}`);
+            log.warn(`[graphql] extension from "${ext.owner}" skipped: ${err && err.message}`);
         }
     }
     return schema;

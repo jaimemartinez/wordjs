@@ -66,7 +66,7 @@ function withNetworkSites(file: any): any {
     if (!file || !siteContext.multisiteEnabled()) return file;
     let sites: unknown;
     try { sites = require('../core/network').policySites(); } catch (e: any) {
-        console.error(`[multisite] the network store could not be read (${e && e.message}); other sites are not answered until it can.`);
+        log.error(`[multisite] the network store could not be read (${e && e.message}); other sites are not answered until it can.`);
         return file;
     }
     if (networkConfigMemo && networkConfigMemo.file === file && networkConfigMemo.sites === sites) return networkConfigMemo.value;

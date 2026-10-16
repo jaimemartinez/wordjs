@@ -65,7 +65,7 @@ function addShortcode(tag: string, callback: (...args: any[]) => any) {
     }
     const existing = lookup(tag);
     if (existing && existing.owner !== owner) {
-        console.warn(`[Security Block] Plugin '${owner}' tried to override shortcode '[${tag}]' owned by '${existing.owner ?? 'core'}' — refused.`);
+        log.warn(`[Security Block] Plugin '${owner}' tried to override shortcode '[${tag}]' owned by '${existing.owner ?? 'core'}' — refused.`);
         return;
     }
     // A plugin's handler always runs in that plugin's context (its sandbox), even when the shortcode
@@ -82,7 +82,7 @@ function removeShortcode(tag: string) {
     const owner = currentOwner();
     const existing = lookup(tag);
     if (owner !== null && existing && existing.owner !== owner) {
-        console.warn(`[Security Block] Plugin '${owner}' tried to remove shortcode '[${tag}]' owned by '${existing.owner ?? 'core'}' — refused.`);
+        log.warn(`[Security Block] Plugin '${owner}' tried to remove shortcode '[${tag}]' owned by '${existing.owner ?? 'core'}' — refused.`);
         return;
     }
     if (owner === null) coreShortcodes.delete(tag);

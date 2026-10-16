@@ -20,6 +20,7 @@ const express = require('express');
 const { createHandler } = require('graphql-http/lib/use/express');
 const { specifiedRules, GraphQLError } = require('graphql');
 const graphql = require('../core/graphql');
+const log = require('../core/module-logger').moduleLogger('routes/graphql');
 
 const router = express.Router();
 
@@ -36,7 +37,7 @@ const handler = createHandler({
         // A resolver crash is a bug, not a contract: do not hand its message (or stack) to the client.
         // GraphQLErrors raised on purpose (REST refusals, bad input, limits) keep their message/extensions.
         if (err && err.originalError && !(err.originalError instanceof GraphQLError)) {
-            console.error('[graphql] resolver error:', err.originalError);
+            log.error({ err: err.originalError }, '[graphql] resolver error');
             return new GraphQLError('Internal server error.', {
                 nodes: err.nodes, path: err.path, extensions: { code: 'INTERNAL_SERVER_ERROR' },
             });

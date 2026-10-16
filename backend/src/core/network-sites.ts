@@ -16,6 +16,7 @@ const path = require('path');
 const config = require('../config/app');
 const siteContext = require('./site-context');
 const network = require('./network');
+const log = require('./module-logger').moduleLogger('core/network-sites');
 
 const prepared = new Map<number, Promise<void>>();
 
@@ -30,7 +31,7 @@ async function initSiteRuntime(): Promise<void> {
     // throws: a site whose plugins or theme code fail to start still serves its content.
     await require('./plugins').loadSitePlugins();
     try { await require('./theme-engine').init(); }
-    catch (e: any) { console.warn(`[multisite] site ${siteContext.currentSiteIdOrNull()}: theme engine not started: ${e && e.message}`); }
+    catch (e: any) { log.warn(`[multisite] site ${siteContext.currentSiteIdOrNull()}: theme engine not started: ${e && e.message}`); }
 }
 
 /**
@@ -191,7 +192,7 @@ async function forEachSecondarySite(label: string, fn: (siteId: number) => Promi
     if (!siteContext.multisiteEnabled()) return;
     let sites: any[];
     try { sites = network.listSites(); } catch (e: any) {
-        console.warn(`[multisite] ${label}: the network store could not be read (${e && e.message}).`);
+        log.warn(`[multisite] ${label}: the network store could not be read (${e && e.message}).`);
         return;
     }
     for (const site of sites) {
@@ -202,7 +203,7 @@ async function forEachSecondarySite(label: string, fn: (siteId: number) => Promi
                 await fn(site.id);
             });
         } catch (e: any) {
-            console.warn(`[multisite] ${label} failed for site ${site.id}: ${e && e.message}`);
+            log.warn(`[multisite] ${label} failed for site ${site.id}: ${e && e.message}`);
         }
     }
 }
