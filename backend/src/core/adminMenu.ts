@@ -309,7 +309,7 @@ function initCoreMenus() {
 
 function getAllRegisteredCapabilities() {
     const caps = new Set();
-    for (const [slug, menus] of adminMenuItems()) {
+    for (const menus of adminMenuItems().values()) {
         for (const menu of menus) {
             if (menu.cap) caps.add(menu.cap);
         }

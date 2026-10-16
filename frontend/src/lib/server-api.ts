@@ -251,9 +251,9 @@ export function configuredPublicHost(): { host: string; proto: string } | null {
 /** A site's main hostname as the route carries it: lower-case DNS labels only. Null for anything else. */
 export function normalizeSiteHost(raw: unknown): string | null {
     if (typeof raw !== 'string') return null;
-    let value = raw;
-    try { value = decodeURIComponent(raw); } catch { return null; }
-    value = value.toLowerCase();
+    let decoded: string;
+    try { decoded = decodeURIComponent(raw); } catch { return null; }
+    const value = decoded.toLowerCase();
     if (value.length < 1 || value.length > 253) return null;
     return /^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?(?:\.[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?)*$/.test(value) ? value : null;
 }
