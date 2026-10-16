@@ -2693,6 +2693,22 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         const pendingTransport = new Map<number, any>();
         const invokeNotifyTransport = (name: string, notification: any) => rpcSend(pendingTransport, { kind: 'invoke-notify-transport', name, notification });
 
+        // smtp:inbound — the HOST listens on the plugin's behalf (core/inbound-smtp.ts) and asks the plugin
+        // what to do at each SMTP step over this channel.
+        const pendingSmtp = new Map<number, any>();
+        const invokeSmtp = (phase: string, args: any[]) => rpcSend(pendingSmtp, { kind: 'invoke-smtp', phase, args });
+        const claimedPortsOf = (): number[] => {
+            // The ports the plugin's manifest declares (`claimPorts`), read from its own directory.
+            for (const dir of [path.dirname(entryFile), path.dirname(path.dirname(entryFile))]) {
+                try {
+                    const m = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
+                    if (m && Array.isArray(m.claimPorts)) return m.claimPorts.filter((p: any) => Number.isInteger(p) && p > 0 && p < 65536);
+                    if (m) return [];
+                } catch { /* try the parent */ }
+            }
+            return [];
+        };
+
         worker.on('message', async (msg: any) => {
           // A malicious child can postMessage ANY object. An uncaught throw in a branch below would
           // reject this async handler → unhandledRejection → host process crash (Node >= 15 default).
@@ -3077,6 +3093,26 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 }
             } else if (msg.kind === 'notify-transport-reply') {
                 rpcSettle(pendingTransport, msg, msg.value);
+            } else if (msg.kind === 'register-smtp-listener') {
+                // Receiving the internet's mail is the EXCLUSIVE smtp:inbound capability (one plugin at a
+                // time, admin-granted). Without it the answer says so and the plugin may fall back to its
+                // own listener where its platform allows one.
+                let value: any;
+                if (!isGrantedFor(slug, 'smtp', 'inbound')) {
+                    value = { ok: false, granted: false, error: 'the smtp:inbound permission is not granted (grant it in /admin/plugins)' };
+                } else {
+                    try {
+                        value = { granted: true, ...(await require('./inbound-smtp').start(slug, msg.opts || {}, claimedPortsOf(), invokeSmtp)) };
+                    } catch (e: any) {
+                        value = { ok: false, granted: true, error: String((e && e.message) || e) };
+                    }
+                }
+                worker.postMessage({ kind: 'reply', id: msg.id, ok: true, value });
+            } else if (msg.kind === 'smtp-status') {
+                const st = require('./inbound-smtp').getStatus();
+                worker.postMessage({ kind: 'reply', id: msg.id, ok: true, value: { ...st, mine: st.owner === slug } });
+            } else if (msg.kind === 'smtp-reply') {
+                rpcSettle(pendingSmtp, msg, msg.value);
             }
           } catch (e: any) {
             console.error(`[Isolate ${logSafe(slug)}] dropped malformed/poison IPC message (kind=${logSafe(msg && msg.kind)}): ${logSafe(e && e.message)}`);
@@ -3121,6 +3157,8 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             if (providedMail && (global as any).wordjs_send_mail) { try { delete (global as any).wordjs_send_mail; } catch { /* */ } }
             try { require('./notifications').unregisterPluginTransports(slug); } catch { /* */ }
             try { require('./adminMenu').unregisterAdminMenu(slug); } catch { /* */ }
+            // The inbound SMTP listener the host opened for this plugin (no-op if it owns none).
+            try { require('./inbound-smtp').stop(slug).catch(() => { /* */ }); } catch { /* */ }
         };
 
         /**

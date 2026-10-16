@@ -241,6 +241,7 @@ const GATED_ROUTES: [string, any][] = [
     ['put /prefs', { body: { signature: 'x' } }],
     ['post /upload/attachment', { file: { path: '/tmp/x', originalname: 'x.txt', mimetype: 'text/plain', size: 1 } }],
     ['get /attachments/:fileId', { params: { fileId: 'abc' } }],
+    ['get /quota', {}],
 ];
 
 // Admin CONFIGURATION routes. These are NOT mailbox use and must never be mailbox-gated: at first
@@ -248,7 +249,11 @@ const GATED_ROUTES: [string, any][] = [
 // (chicken-and-egg). The host enforces `admin: true` on them.
 const ADMIN_CONFIG_ROUTES = [
     'get /settings', 'post /settings', 'post /test',
-    'get /security/dns-records', 'get /security/dns-check', 'post /security/dkim/generate'
+    'get /security/dns-records', 'get /security/dns-check', 'post /security/dkim/generate',
+    // Server administration: overview, mailboxes + quotas, aliases, outbound queue.
+    'get /admin/overview', 'get /admin/mailboxes', 'put /admin/mailboxes/:userId',
+    'get /admin/aliases', 'post /admin/aliases', 'put /admin/aliases/:id', 'delete /admin/aliases/:id',
+    'get /admin/queue', 'post /admin/queue/:id/retry', 'delete /admin/queue/:id'
 ];
 
 // Routes that are neither mailbox use nor configuration. Each entry must carry the REASON.
