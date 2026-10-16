@@ -85,7 +85,10 @@ Point the new name at the server the main site runs on, exactly as you did for t
 
 - **Monolith and split mode**: nothing else; the backend's address check answers the new name.
 - **Separate mode**: the backend pushes the network's addresses to the gateway with the rest of the
-  address policy, immediately after a change and every half minute.
+  address policy, immediately after a change and every half minute. A frontend node renders another
+  site by fetching that site's data through the gateway; the gateway lets a node it has registered name
+  the site (only one of the network's addresses). A node registered by a DNS name rather than an IP
+  address is not recognised that way: register nodes by address.
 - **TLS**: in this version a site's address is covered by the install's one certificate. With ACME, add
   the new names to `acme.domains` (one certificate, up to 100 names), or terminate TLS in a reverse proxy
   in front of WordJS. A certificate per site (SNI) is planned.
@@ -131,5 +134,6 @@ Allowed while the main site is the only site. Restart the backend afterwards.
 | `421` on a new site's address | The backend was not restarted after `enable`, or the address is not the site's main address, or (separate mode) the gateway has not received the network's addresses yet: check the backend log for "could not tell the gateway". |
 | `npm run network -- enable` refuses | The install is not finished, the driver is not `sqlite-native`, or a login given to `--admin` is not an administrator of the main site. |
 | A site answers `503` | It is suspended (Admin → Network). |
+| Another site's pages are "not found" while its API answers | The frontend's server-side reads reached the backend as another site (they are refused rather than shown). In separate mode, check that the frontend node is registered with the gateway by IP address. |
 | A site's admin has no Plugins screen | Plugins are the main site's in this version (see above). |
 | Log: "the network store could not be opened" | `<data dir>/network.db` is unreadable; only the main site is answered until it is fixed. |
