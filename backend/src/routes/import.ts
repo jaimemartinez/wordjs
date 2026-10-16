@@ -19,7 +19,7 @@ const fs = require('fs');
 // refuseAccountAuthority).
 const { authenticate, accountAuthorityOnly } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
-const { asyncHandler } = require('../middleware/errorHandler');
+const { asyncHandler, UploadRejectedError } = require('../middleware/errorHandler');
 const { analyzeWxr, importWxr } = require('../core/wxr-import');
 
 /**
@@ -44,7 +44,7 @@ const upload = multer({
         if (okType || name.endsWith('.xml') || name.endsWith('.wxr')) {
             cb(null, true);
         } else {
-            cb(new Error('Only WordPress WXR .xml files are allowed'));
+            cb(new UploadRejectedError(415, 'rest_upload_invalid_type', 'Only WordPress WXR .xml files are allowed'));
         }
     },
 });

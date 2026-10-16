@@ -6,6 +6,24 @@ import type { Request, Response, NextFunction } from 'express';
 const crypto = require('crypto');
 
 /**
+ * An upload refused for something the CLIENT sent — a file type the route does not take, an SVG from a
+ * non-administrator. Multer hands a fileFilter's error straight to `next(err)`, so a plain `new Error`
+ * there reached the handler below with no `status` and was answered as a 500 `rest_internal_error`: a
+ * client mistake reported as a server failure, and its message thrown away. This carries the status and
+ * the stable code the route chose, which makes it an intentional error (isIntentionalApiError).
+ */
+class UploadRejectedError extends Error {
+    status: number;
+    code: string;
+    constructor(status: number, code: string, message: string) {
+        super(message);
+        this.name = 'UploadRejectedError';
+        this.status = status;
+        this.code = code;
+    }
+}
+
+/**
  * Not found handler
  */
 function notFound(req: Request, res: Response, next: NextFunction) {
@@ -92,6 +110,18 @@ function errorHandler(err: any, req: Request, res: Response, next: NextFunction)
             code: 'rest_invalid_param',
             message: err.message,
             data: { status: 400 }
+        });
+    }
+
+    // Multer's own refusals (too large, too many files/fields/parts, an unexpected field) are about the
+    // request, never the server. Its messages are fixed library strings ("File too large"), so they are
+    // contract, not disclosure.
+    if (err && err.name === 'MulterError') {
+        const status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+        return res.status(status).json({
+            code: status === 413 ? 'rest_upload_too_large' : 'rest_upload_invalid',
+            message: err.message || 'Invalid upload.',
+            data: { status }
         });
     }
 
@@ -194,5 +224,6 @@ module.exports = {
     asyncHandler,
     offStack,
     isIntentionalApiError,
-    publicErrorText
+    publicErrorText,
+    UploadRejectedError
 };
