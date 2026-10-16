@@ -15,6 +15,7 @@ const Post = require('../models/Post');
 const config = require('../config/app');
 // PRIVATE MEDIA — files outside the served /uploads tree, hidden from every public listing.
 const privateMedia = require('../core/private-media');
+const { recordAudit } = require('../core/audit');
 const {
     canViewAttachment, filterVisibleMediaItems, resolveAttachmentParent, attachmentWriteRefusal,
 } = require('../core/attachment-visibility');
@@ -997,6 +998,9 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
         alt
     });
 
+    await recordAudit(req.user.id, 'media.upload', 'media', media && media.id, {
+        mimeType: uploaded.mimetype, size: uploaded.size, visibility: wantPrivate ? 'private' : 'public'
+    });
     res.status(201).json(media);
 }));
 
@@ -1119,6 +1123,10 @@ router.put('/:id', authenticate, can('upload_files'), asyncHandler(async (req: R
         alt
     });
 
+    // Field NAMES only (the values are in the media row itself) — see core/audit's "small" contract.
+    const fields = Object.entries({ title, description, caption, alt, visibility })
+        .filter(([, v]) => v !== undefined && v !== null).map(([k]) => k);
+    await recordAudit(req.user.id, 'media.update', 'media', mediaId, { fields });
     res.json(updated);
 }));
 
@@ -1201,6 +1209,9 @@ router.delete('/:id', authenticate, can('upload_files'), asyncHandler(async (req
     // The force parameter was causing files to be orphaned since the frontend doesn't send it
     await Media.delete(mediaId, true);
 
+    await recordAudit(req.user.id, 'media.delete', 'media', mediaId, {
+        title: media.title, mimeType: media.mimeType, visibility: media.visibility
+    });
     res.json({ deleted: true, previous: media });
 }));
 

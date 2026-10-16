@@ -1,8 +1,16 @@
 /**
  * WordJS - outgoing webhook dispatcher (roadmap: open the platform / headless).
  *
- * Subscribes to the internal content hooks, derives semantic events (post.created/published/updated/
- * deleted, comment.created/deleted), and delivers HMAC-signed POSTs to registered endpoints.
+ * Derives semantic events from TWO existing seams — never from emit calls of its own scattered through
+ * the routes — and delivers HMAC-signed POSTs to registered endpoints:
+ *   - the action hooks core already fires (wp_insert_post / post_updated / deleted_post for every post
+ *     write including imports and scheduled publishing, wp_insert_comment / deleted_comment,
+ *     activated_plugin / deactivated_plugin, switch_theme);
+ *   - core/audit's in-process observer: every lifecycle moment the product audits (users, sign-ins,
+ *     comment moderation, media, terms, menus, plugin install/uninstall, settings) is already one
+ *     recordAudit call, made after the mutation succeeded, so the audit row IS the event.
+ * The full catalogue lives in models/Webhook.ts; each payload is built by an allowlisted serializer in
+ * core/webhook-payloads.ts, and documentation/webhooks.md documents every one.
  *
  * Two hard constraints from the hook bus (see core/hooks.ts): doAction is awaited INLINE in the content
  * write path with NO error isolation. So every listener here is:
@@ -27,6 +35,8 @@ const Webhook = require('../models/Webhook');
 const WebhookDelivery = require('../models/WebhookDelivery');
 const Post = require('../models/Post');
 const Comment = require('../models/Comment');
+const payloads = require('./webhook-payloads');
+const { postPayload, commentPayload } = payloads;
 
 const nowSec = () => Math.floor(Date.now() / 1000);
 
@@ -186,40 +196,17 @@ async function pump(): Promise<void> {
     finally { _pumping = false; }
 }
 
-function postPayload(post: any) {
-    return {
-        id: post.id,
-        type: post.postType,
-        status: post.postStatus,
-        title: post.postTitle,
-        slug: post.postName,
-        author: post.authorId,
-        date: post.postDate,
-        modified: post.postModified
-    };
-}
-
-// Deliberately EXCLUDES author email + IP (PII) — a webhook payload should not leak commenter contact data.
-function commentPayload(c: any) {
-    return {
-        id: c.id,
-        postId: c.commentPostId,
-        author: c.commentAuthor,
-        content: c.commentContent,
-        approved: c.commentApproved,
-        userId: c.userId
-    };
-}
-
 /** Enqueue a durable delivery per matching active endpoint, then (in prod) kick an immediate pump. */
-async function fanout(event: string, data: any): Promise<void> {
+async function fanout(event: string, data: any, meta: { actorId?: number | null } = {}): Promise<void> {
     const ids = await Webhook.activeIdsForEvent(event);
     if (!ids.length) return;
     // A content outbox retry replays hooks at-least-once. Carry its immutable id into the delivery
     // queue so fan-out is idempotent per endpoint+semantic event; comment/legacy hooks use NULL and
     // retain their existing behavior.
     const sourceEventId = require('./content-outbox').currentContentEventId();
-    const body = JSON.stringify({ event, eventId: sourceEventId || undefined, timestamp: nowSec(), data });
+    // `actor` (the acting user's id) is known for audit-derived events; absent otherwise.
+    const actor = meta.actorId != null ? meta.actorId : undefined;
+    const body = JSON.stringify({ event, eventId: sourceEventId || undefined, timestamp: nowSec(), actor, data });
     const now = nowSec();
     for (const id of ids) await WebhookDelivery.enqueue(id, event, body, now, sourceEventId);
     // Low-latency kick — only when the poller is running (prod). In tests (poller off) delivery is driven
@@ -235,6 +222,7 @@ async function onPostInsert(postId: number, _data: any): Promise<void> {
         const payload = postPayload(post);
         await fanout('post.created', payload);
         if (post.postStatus === 'publish') await fanout('post.published', payload);
+        if (post.postStatus === 'future') await fanout('post.scheduled', payload);
     } catch (e) { warn('wp_insert_post', e); }
 }
 async function onPostUpdated(id: number, _data: any, prevStatus?: string): Promise<void> {
@@ -242,14 +230,25 @@ async function onPostUpdated(id: number, _data: any, prevStatus?: string): Promi
         const post = await Post.findById(id);
         if (!post || SKIP_TYPES.has(post.postType)) return;
         const now = post.postStatus;
+        const payload = postPayload(post);
         // Events are derived from a real TRANSITION (prevStatus → now), not the post-write state, so a
         // plain re-save of an already-published/-trashed post does not re-fire published/deleted.
         if (now === 'trash') {
-            if (prevStatus !== 'trash') await fanout('post.deleted', postPayload(post)); // the app's soft-delete
+            if (prevStatus !== 'trash') {
+                await fanout('post.trashed', { ...payload, previousStatus: prevStatus ?? null });
+                // The app's soft-delete has always been announced as post.deleted too; kept so existing
+                // receivers keep working. post.trashed is the specific signal.
+                await fanout('post.deleted', payload);
+            }
             return;
         }
-        await fanout('post.updated', postPayload(post));
-        if (now === 'publish' && prevStatus !== 'publish') await fanout('post.published', postPayload(post));
+        await fanout('post.updated', payload);
+        if (prevStatus === 'trash') await fanout('post.restored', payload);
+        if (now === 'publish' && prevStatus !== 'publish') await fanout('post.published', payload);
+        if (now === 'future' && prevStatus !== 'future') await fanout('post.scheduled', payload);
+        if (prevStatus === 'publish' && now !== 'publish') {
+            await fanout('post.unpublished', { ...payload, previousStatus: prevStatus });
+        }
     } catch (e) { warn('post_updated', e); }
 }
 async function onPostDeleted(id: number, prevStatus?: string): Promise<void> {
@@ -269,6 +268,163 @@ async function onCommentDeleted(id: number): Promise<void> {
     try { await fanout('comment.deleted', { id }); } catch (e) { warn('deleted_comment', e); }
 }
 
+// ── Extension lifecycle hooks ───────────────────────────────────────────────────────────────────────
+// activated_plugin / deactivated_plugin fire on every real state change (including the brief
+// deactivate → activate an in-place update performs), wherever it was requested from.
+async function onPluginActivated(slug: string): Promise<void> {
+    try { await fanout('plugin.activated', payloads.pluginPayload(slug)); } catch (e) { warn('activated_plugin', e); }
+}
+async function onPluginDeactivated(slug: string): Promise<void> {
+    try { await fanout('plugin.deactivated', payloads.pluginPayload(slug)); } catch (e) { warn('deactivated_plugin', e); }
+}
+async function onSwitchTheme(slug: string, previous?: string): Promise<void> {
+    try { await fanout('theme.activated', payloads.themePayload(slug, previous)); } catch (e) { warn('switch_theme', e); }
+}
+
+// ── Audit-derived events ────────────────────────────────────────────────────────────────────────────
+// Audit action → webhook event. Only actions NOT already announced by a hook above appear here (post.*
+// and plugin.activate/deactivate audit rows would be duplicates); an unlisted action is ignored.
+const AUDIT_EVENT_MAP: Readonly<Record<string, string>> = Object.freeze({
+    'auth.login.success': 'user.login',
+    'user.create': 'user.created',
+    'user.update': 'user.updated',
+    // A role-ONLY change has no user.update row; when other fields were saved too, the user.update row
+    // (which lists 'role') is the event and this one is skipped (profileUpdate: true) — see routes/users.ts.
+    'user.role_change': 'user.updated',
+    'user.delete': 'user.deleted',
+    'comment.update': 'comment.updated',
+    'comment.approve': 'comment.approved',
+    'comment.spam': 'comment.spam',
+    'comment.trash': 'comment.trashed',
+    'media.upload': 'media.uploaded',
+    'media.update': 'media.updated',
+    'media.delete': 'media.deleted',
+    'term.create': 'term.created',
+    'term.update': 'term.updated',
+    'term.delete': 'term.deleted',
+    'menu.create': 'menu.updated',
+    'menu.update': 'menu.updated',
+    'menu.delete': 'menu.updated',
+    'plugin.install': 'plugin.installed',
+    'marketplace.install': 'plugin.installed',
+    'plugin.uninstall': 'plugin.uninstalled',
+    'settings.update': 'settings.updated'
+});
+
+/** Field names of a profile/media edit, as a receiver may see them (names only; never a credential). */
+function fieldNames(v: any): string[] {
+    return (Array.isArray(v) ? v : []).map((f) => String(f)).filter((f) => !/passw|secret|token|key|hash|mfa/i.test(f));
+}
+
+/** Build the payload of an audit-derived event, or null when there is nothing (left) to announce. */
+async function auditEventPayload(ev: any): Promise<any> {
+    const d = ev.detail || {};
+    const id = Number(ev.targetId);
+    const hasId = ev.targetId !== '' && Number.isFinite(id);
+    switch (ev.action) {
+        case 'auth.login.success':
+        case 'user.create':
+        case 'user.role_change':
+        case 'user.update': {
+            if (ev.action === 'user.role_change' && d.profileUpdate) return null;
+            const User = require('../models/User');
+            const u = hasId ? await User.findById(id) : null;
+            if (!u) return null;
+            const out: any = payloads.userPayload(u);
+            if (ev.action === 'user.update') out.changed = fieldNames(d.fields);
+            if (ev.action === 'user.role_change') out.changed = ['role'];
+            if (ev.action === 'user.create' && d.via) out.via = String(d.via).slice(0, 32);
+            return out;
+        }
+        case 'user.delete':
+            return { id: hasId ? id : null, username: d.username ?? null, role: d.role ?? null };
+        case 'comment.update':
+        case 'comment.approve':
+        case 'comment.spam':
+        case 'comment.trash': {
+            const c = hasId ? await Comment.findById(id) : null;
+            if (!c) return null;
+            return { ...commentPayload(c), previousStatus: d.from ?? null };
+        }
+        case 'media.upload':
+        case 'media.update': {
+            const Media = require('../models/Media');
+            const m = hasId ? await Media.findById(id) : null;
+            if (!m) return null;
+            const out: any = payloads.mediaPayload(m);
+            if (ev.action === 'media.update') out.changed = fieldNames(d.fields);
+            return out;
+        }
+        case 'media.delete':
+            return {
+                id: hasId ? id : null,
+                title: d.title ?? null,
+                mimeType: d.mimeType ?? null,
+                visibility: d.visibility === 'private' ? 'private' : 'public'
+            };
+        case 'term.create':
+        case 'term.update': {
+            const Term = require('../models/Term');
+            const t = hasId ? await Term.findById(id, d.taxonomy || null) : null;
+            if (!t) return null;
+            return payloads.termPayload(t);
+        }
+        case 'term.delete':
+            return payloads.termPayload({ id: hasId ? id : null, name: d.name, slug: d.slug, taxonomy: d.taxonomy });
+        case 'menu.create':
+        case 'menu.update': {
+            const { Menu } = require('../models/Menu');
+            const m = hasId ? await Menu.findById(id) : null;
+            return payloads.menuPayload(m || { id: hasId ? id : null }, d);
+        }
+        case 'menu.delete':
+            return payloads.menuPayload({ id: hasId ? id : null, name: d.name, slug: d.slug }, d);
+        case 'plugin.install':
+            return payloads.pluginPayload(ev.targetId, { via: d.via || 'upload' });
+        case 'marketplace.install':
+            if (!d.ok) return null; // a failed install is audited, but nothing was installed
+            return payloads.pluginPayload(ev.targetId, { via: 'marketplace', source: d.source, version: d.version });
+        case 'plugin.uninstall':
+            return payloads.pluginPayload(ev.targetId);
+        case 'settings.update': {
+            const out = payloads.settingsPayload(d.keys);
+            return out.keys.length ? out : null;
+        }
+        default:
+            return null;
+    }
+}
+
+/** core/audit observer. TOTAL-CATCH, like every listener here: it must never surface into a route. */
+async function onAuditRecorded(ev: any): Promise<void> {
+    try {
+        const event = AUDIT_EVENT_MAP[ev && ev.action];
+        if (!event) return;
+        // Cheap pre-check before any model read: nobody subscribed → nothing to build.
+        if (!(await Webhook.activeIdsForEvent(event)).length) return;
+        const data = await auditEventPayload(ev);
+        if (data) await fanout(event, data, { actorId: ev.actorId });
+    } catch (e) { warn(`audit:${ev && ev.action}`, e); }
+}
+
+/**
+ * Send the `ping` test delivery to ONE endpoint (the admin's "Send test" button) and deliver it at once
+ * through the normal signed, SSRF-guarded path, so the result is exactly what a real event would get.
+ * Returns the delivery id (0 if it could not be queued).
+ */
+async function sendPing(webhookId: number, actorId?: number | null): Promise<number> {
+    const now = nowSec();
+    const body = JSON.stringify({
+        event: Webhook.PING_EVENT,
+        timestamp: now,
+        actor: actorId != null ? actorId : undefined,
+        data: { webhookId, message: 'Test delivery from WordJS. If this signature verifies, the endpoint is set up correctly.' }
+    });
+    const id = await WebhookDelivery.enqueue(webhookId, Webhook.PING_EVENT, body, now, null);
+    if (id) await deliverOne(id);
+    return id;
+}
+
 function warn(hook: string, e: any): void {
     try { console.warn(`[webhooks] listener ${hook} failed (non-fatal): ${(e && e.message) || e}`); } catch { /* */ }
 }
@@ -278,14 +434,21 @@ const LISTENERS: Array<[string, (...a: any[]) => any]> = [
     ['post_updated', onPostUpdated],
     ['deleted_post', onPostDeleted],
     ['wp_insert_comment', onCommentInsert],
-    ['deleted_comment', onCommentDeleted]
+    ['deleted_comment', onCommentDeleted],
+    ['activated_plugin', onPluginActivated],
+    ['deactivated_plugin', onPluginDeactivated],
+    ['switch_theme', onSwitchTheme]
 ];
+
+let _unobserveAudit: null | (() => void) = null;
 
 function registerListeners(): void {
     for (const [hook, fn] of LISTENERS) addAction(hook, fn);
+    if (!_unobserveAudit) _unobserveAudit = require('./audit').onAuditRecorded(onAuditRecorded);
 }
 function unregisterListeners(): void {
     for (const [hook, fn] of LISTENERS) removeAction(hook, fn);
+    if (_unobserveAudit) { _unobserveAudit(); _unobserveAudit = null; }
 }
 
 function startPoller(): void {
@@ -316,6 +479,7 @@ module.exports = {
     deliverOne,
     signPayload,
     fanout,
+    sendPing,
     WEBHOOK_EVENTS: Webhook.EVENTS,
     MAX_ATTEMPTS
 };

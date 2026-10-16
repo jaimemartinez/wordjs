@@ -297,6 +297,11 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
         return res.status(400).json({ error: 'No file uploaded' });
     }
     const result = await installPluginFromZip(req.file.path, req.file.originalname, undefined, req.user && req.user.id);
+    // The marketplace path records its own `marketplace.install`; a direct zip upload is the same
+    // lifecycle mutation and is recorded too (only when it actually installed something).
+    if (result.ok && result.body && result.body.slug) {
+        await recordAudit(req.user && req.user.id, 'plugin.install', 'plugin', result.body.slug, { via: 'upload' });
+    }
     res.status(result.status).json(result.body);
 }));
 
@@ -2622,6 +2627,7 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request,
         // Regenerate registry to remove traces
         regenerateRegistry();
 
+        await recordAudit(req.user && req.user.id, 'plugin.uninstall', 'plugin', slug, { dropData: !!dropData });
         res.json({ success: true, message: `Plugin ${slug} deleted successfully`, cleanup });
     } catch (err) {
         throw new Error(`Failed to delete plugin: ${err.message}`, { cause: err });

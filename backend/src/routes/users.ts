@@ -1025,6 +1025,37 @@ function isPrivilegedTarget(user: any): boolean {
 }
 
 /**
+ * The audit rows of a profile write (PUT /me and PUT /:id): one `user.update` naming the fields the
+ * request wrote — names only, never values — and, when a new password was stored, the reserved
+ * `auth.password.change`. The password is deliberately absent from the `user.update` field list: it has
+ * its own action, so "who changed whose password" is one query. Consumers of these rows (the audit log,
+ * outgoing webhooks) therefore never see a credential, only that one was set.
+ *
+ * A role change keeps its own `user.role_change` row (one row per role change). When the same request
+ * also wrote other fields, `user.update` lists `role` among them and the role_change row says so with
+ * `profileUpdate: true`, so a consumer that wants one event per profile write (core/webhooks) can tell
+ * the two rows describe the same save; a role-ONLY change writes no `user.update` row at all.
+ */
+function profileWriteFields(updateData: any): string[] {
+    const fields: string[] = [];
+    for (const [k, v] of Object.entries(updateData || {})) {
+        if (v === undefined || k === 'password') continue;
+        if (k === 'meta') {
+            if (v && typeof v === 'object') for (const m of Object.keys(v)) fields.push(m === 'personal_email' ? 'personalEmail' : m);
+            continue;
+        }
+        fields.push(k);
+    }
+    return fields;
+}
+
+async function recordProfileWriteAudit(actorId: number, userId: number, updateData: any): Promise<void> {
+    const fields = profileWriteFields(updateData);
+    if (updateData && updateData.password) await recordAudit(actorId, 'auth.password.change', 'user', userId, {});
+    if (fields.some((f) => f !== 'role')) await recordAudit(actorId, 'user.update', 'user', userId, { fields });
+}
+
+/**
  * THE PRIMARY-EMAIL CHECKS, IN TWO HALVES — and the half that reads OTHER accounts runs after the sudo gate.
  *
  * Both answer the same uniform 400 rest_invalid_email: User.update() used to throw 'Email already in use'
@@ -1109,6 +1140,7 @@ router.put('/me', asyncHandler(async (req: Request, res: Response) => {
     const updated = await User.update(req.user.id, updateData);
     // A changed recovery address invalidates any reset link already in flight to the old one.
     if (recoveryChanged) await invalidatePendingPasswordReset(req.user.id);
+    await recordProfileWriteAudit(req.user.id, req.user.id, updateData);
     res.json(updated.toJSON());
 }));
 
@@ -1407,8 +1439,10 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
 
     // AUDIT: exactly one row per security-relevant change — a role change. No secret material.
     if (updateData.role !== undefined) {
-        await recordAudit(req.user.id, 'user.role_change', 'user', userId, { from: previousRole, to: updateData.role });
+        const profileUpdate = profileWriteFields(updateData).some((f) => f !== 'role');
+        await recordAudit(req.user.id, 'user.role_change', 'user', userId, { from: previousRole, to: updateData.role, profileUpdate });
     }
+    await recordProfileWriteAudit(req.user.id, userId, updateData);
     res.json(updated.toJSON());
 }));
 

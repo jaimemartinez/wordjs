@@ -802,6 +802,9 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
         await User.hashPassword(password);
         return registrationFailed();
     }
+    // Self-service sign-up is an account creation like the admin path's `user.create` — same row, so
+    // "who joined, and how" is one query (and outgoing webhooks see every new account, not just some).
+    await recordAudit(user.id, 'user.create', 'user', user.id, { via: 'register' });
 
     const token = generateToken(user, req);
     if (issueSessionCookie(req, res, token, COOKIE_OPTIONS(req))) return;
@@ -1685,13 +1688,14 @@ router.post('/verify-email', asyncHandler(async (req: Request, res: Response) =>
     const pending = await consumePendingRegistration(token);
     if (pending) {
         try {
-            await User.create({
+            const created = await User.create({
                 username: pending.username,
                 email: pending.email,
                 passwordHash: pending.passwordHash,
                 displayName: pending.displayName,
                 role: await getOption('default_role', 'subscriber')
             });
+            await recordAudit(created.id, 'user.create', 'user', created.id, { via: 'register' });
         } catch (error) {
             const taken = error && (error.code === 'username_taken' || error.code === 'email_taken'
                 || String(error.message).includes('already exists'));

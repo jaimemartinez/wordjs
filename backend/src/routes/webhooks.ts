@@ -138,7 +138,7 @@ function parseId(v: any): number | null {
  * /webhooks/events:
  *   get:
  *     summary: List the event names a webhook can subscribe to
- *     description: The catalog is fixed. A subscription may also use a family wildcard such as post.* or a bare * for everything.
+ *     description: The catalog is fixed and grouped by the entity each event concerns. A subscription may also use a family wildcard such as post.* or a bare * for everything. An opt-in event (user.login) is delivered only to an endpoint that names it exactly - no wildcard includes it. The payload of every event is documented in documentation/webhooks.md.
  *     tags: [Webhooks]
  *     security:
  *       - bearerAuth: []
@@ -154,14 +154,32 @@ function parseId(v: any): number | null {
  *                   type: array
  *                   items:
  *                     type: string
- *                     enum: [post.created, post.published, post.updated, post.deleted, comment.created, comment.deleted]
+ *                     enum: [post.created, post.published, post.updated, post.scheduled, post.unpublished, post.trashed, post.restored, post.deleted, comment.created, comment.updated, comment.approved, comment.spam, comment.trashed, comment.deleted, user.created, user.updated, user.deleted, user.login, media.uploaded, media.updated, media.deleted, term.created, term.updated, term.deleted, menu.updated, plugin.installed, plugin.activated, plugin.deactivated, plugin.uninstalled, theme.activated, settings.updated]
+ *                 groups:
+ *                   type: array
+ *                   description: The same events grouped by entity, in display order.
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       entity:
+ *                         type: string
+ *                         enum: [post, comment, user, media, term, menu, plugin, theme, settings]
+ *                       events:
+ *                         type: array
+ *                         items:
+ *                           type: string
+ *                 optIn:
+ *                   type: array
+ *                   description: Events a wildcard subscription does not include.
+ *                   items:
+ *                     type: string
  *       401:
  *         description: Not logged in (rest_not_logged_in)
  *       403:
  *         description: Not an administrator
  */
 router.get('/events', (_req: Request, res: Response) => {
-    res.json({ events: Webhook.EVENTS });
+    res.json({ events: Webhook.EVENTS, groups: Webhook.EVENT_GROUPS, optIn: Webhook.OPT_IN_EVENTS });
 });
 
 // Redeliver a specific delivery (literal prefix — declared before the /:id routes).
@@ -399,6 +417,58 @@ router.post('/:id/rotate-secret', sessionOnly, asyncHandler(async (req: Request,
     const rotated = await Webhook.rotateSecret(id);
     if (!rotated) return res.status(404).json({ code: 'rest_not_found', message: 'Webhook not found.', data: { status: 404 } });
     res.json({ ...rotated, message: 'Save this signing secret now — it will not be shown again.' });
+}));
+
+// Send a signed `ping` test delivery to one endpoint and report how it went.
+/**
+ * @swagger
+ * /webhooks/{id}/ping:
+ *   post:
+ *     summary: Send a signed test delivery (event ping) to one webhook
+ *     description: The ping goes only to this endpoint, whatever its subscriptions, through the same signing, SSRF guard and delivery log as a real event, and is attempted immediately. Its body is {"event":"ping","timestamp":...,"actor":<admin id>,"data":{"webhookId":<id>,"message":"..."}}. A failed ping is retried like any other delivery.
+ *     tags: [Webhooks]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: The ping was attempted. delivery is its row in the delivery log (status success, or pending with an error when the endpoint refused it and a retry is scheduled).
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 delivered:
+ *                   type: boolean
+ *                 delivery:
+ *                   $ref: '#/components/schemas/WebhookDelivery'
+ *       400:
+ *         description: Unusable id (rest_invalid_param)
+ *       401:
+ *         description: Not logged in (rest_not_logged_in)
+ *       403:
+ *         description: Not an administrator, or an API token tried to manage webhooks (rest_token_management_forbidden)
+ *       404:
+ *         description: Webhook not found (rest_not_found)
+ *       409:
+ *         description: The webhook is paused (rest_webhook_inactive) - a paused endpoint receives nothing, pings included
+ */
+router.post('/:id/ping', sessionOnly, asyncHandler(async (req: Request, res: Response) => {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ code: 'rest_invalid_param', message: 'Invalid id.', data: { status: 400 } });
+    const wh = await Webhook.findById(id);
+    if (!wh) return res.status(404).json({ code: 'rest_not_found', message: 'Webhook not found.', data: { status: 404 } });
+    if (!wh.active) {
+        return res.status(409).json({ code: 'rest_webhook_inactive', message: 'This webhook is paused. Activate it to send a test delivery.', data: { status: 409 } });
+    }
+    const deliveryId = await require('../core/webhooks').sendPing(id, req.user && req.user.id);
+    const delivery = deliveryId ? await WebhookDelivery.get(deliveryId) : null;
+    res.json({ delivered: !!(delivery && delivery.status === 'success'), delivery });
 }));
 
 // Get one webhook.

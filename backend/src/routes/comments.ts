@@ -50,6 +50,22 @@ router.param('id', requireRouteId({ code: 'rest_comment_invalid_id', message: 'I
 
 // Shared, length-capped email validator (the one shape rule) — guards against ReDoS on unbounded input.
 const { isValidAddress } = require('../core/mailbox');
+const { recordAudit } = require('../core/audit');
+
+/**
+ * One audit row per moderation write, naming the most specific transition — `comment.approve`,
+ * `comment.spam`, `comment.trash` — or `comment.update` for an edit that is none of those (a content
+ * edit, or a move back to pending). Statuses only: never the comment body or the commenter's personal
+ * data. Outgoing webhooks derive comment.approved / .spam / .trashed / .updated from these rows.
+ */
+async function recordCommentAudit(actorId: any, commentId: number, from: any, to: any): Promise<void> {
+    const detail = { from: from == null ? null : String(from), to: to == null ? null : String(to) };
+    const changed = detail.from !== detail.to;
+    if (changed && detail.to === '1') return recordAudit(actorId, 'comment.approve', 'comment', commentId, detail);
+    if (changed && detail.to === 'spam') return recordAudit(actorId, 'comment.spam', 'comment', commentId, detail);
+    if (changed && detail.to === 'trash') return recordAudit(actorId, 'comment.trash', 'comment', commentId, detail);
+    return recordAudit(actorId, 'comment.update', 'comment', commentId, detail);
+}
 
 /**
  * Validate a guest-supplied author URL: only http/https are permitted, and the value must be a
@@ -1098,6 +1114,7 @@ router.put('/:id', authenticate, can('edit_comments'), asyncHandler(async (req: 
         status
     });
 
+    await recordCommentAudit(req.user.id, commentId, comment.commentApproved, updated.commentApproved);
     res.json(updated.toJSON(true)); // moderation route (edit/approve/spam) — moderator sees full PII
 }));
 
@@ -1172,6 +1189,7 @@ router.delete('/:id', authenticate, can('moderate_comments'), asyncHandler(async
     await Comment.delete(commentId, force);
 
     if (force) {
+        await recordAudit(req.user.id, 'comment.delete', 'comment', commentId, { from: String(comment.commentApproved) });
         res.json({ deleted: true, previous: comment.toJSON(true) });
     } else {
         const fresh = await Comment.findById(commentId);
@@ -1182,6 +1200,7 @@ router.delete('/:id', authenticate, can('moderate_comments'), asyncHandler(async
                 data: { status: 404 }
             });
         }
+        await recordCommentAudit(req.user.id, commentId, comment.commentApproved, fresh.commentApproved);
         res.json(fresh.toJSON(true)); // moderation route — moderator sees full PII
     }
 }));
@@ -1238,6 +1257,7 @@ router.delete('/:id', authenticate, can('moderate_comments'), asyncHandler(async
  */
 router.post('/:id/approve', authenticate, can('moderate_comments'), asyncHandler(async (req: Request, res: Response) => {
     const commentId = parseInt(String(req.params.id), 10);
+    const before = await Comment.findById(commentId);
     const updated = await Comment.approve(commentId);
 
     if (!updated) {
@@ -1247,6 +1267,7 @@ router.post('/:id/approve', authenticate, can('moderate_comments'), asyncHandler
             data: { status: 404 }
         });
     }
+    await recordCommentAudit(req.user.id, commentId, before && before.commentApproved, updated.commentApproved);
 
     res.json(updated.toJSON(true)); // moderation route (edit/approve/spam) — moderator sees full PII
 }));
@@ -1302,6 +1323,7 @@ router.post('/:id/approve', authenticate, can('moderate_comments'), asyncHandler
  */
 router.post('/:id/spam', authenticate, can('moderate_comments'), asyncHandler(async (req: Request, res: Response) => {
     const commentId = parseInt(String(req.params.id), 10);
+    const before = await Comment.findById(commentId);
     const updated = await Comment.spam(commentId);
 
     if (!updated) {
@@ -1311,6 +1333,7 @@ router.post('/:id/spam', authenticate, can('moderate_comments'), asyncHandler(as
             data: { status: 404 }
         });
     }
+    await recordCommentAudit(req.user.id, commentId, before && before.commentApproved, updated.commentApproved);
 
     res.json(updated.toJSON(true)); // moderation route (edit/approve/spam) — moderator sees full PII
 }));
