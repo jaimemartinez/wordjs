@@ -137,6 +137,11 @@ Edit `theme.json`, run `build theme` and the doctor, and zip it again. Then, on 
 
 The card shows the new version number.
 
+> **After 2.6.0:** releases after 2.6.0 update in place. Package the theme with
+> `node backend/cli/wordjs.js pack theme corner-roasters` and install the newer zip; WordJS offers to
+> update the installed theme, even while it is active. See
+> [themes.md → Updating a theme](../themes.md#updating-a-theme-upload-a-newer-zip).
+
 ## Where next
 
 - [themes.md](../themes.md): every `theme.json` key, page templates, header and footer composition

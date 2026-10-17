@@ -12,6 +12,7 @@ import { reloadActivePlugins } from "@/lib/plugins";
 import { deepLinkedPlugin, withoutPermissionsDeepLink } from "@/lib/pluginPermissionsLink";
 import { useMenu } from "@/contexts/MenuContext";
 import { useToast } from "@/contexts/ToastContext";
+import { useModal } from "@/contexts/ModalContext";
 import { useI18n, useOptionalI18n } from "@/contexts/I18nContext";
 import { t as translate } from "@/lib/i18n";
 import { FaPlug, FaTrash, FaDownload, FaPowerOff, FaCheck, FaExclamationTriangle, FaSlidersH, FaSearch, FaSyncAlt, FaInfoCircle, FaTimes, FaShieldAlt, FaBan, FaUnlock, FaStore, FaPalette, FaFileArchive } from "react-icons/fa";
@@ -308,6 +309,7 @@ export default function PluginsPage() {
         !!(plugin.permissions || []).find(p => permToken(p) === token)?.undeclared;
 
     const { addToast } = useToast();
+    const { confirm } = useModal();
 
     useEffect(() => {
         loadPlugins();
@@ -631,6 +633,46 @@ export default function PluginsPage() {
         }
     };
 
+    // The zip is a version of an installed plugin: confirm, then update it in place. The backend stages
+    // and validates the new code before touching the installed one, keeps data/tables/grants, and reports
+    // the permissions the new version declares that are not granted — the permissions dialog then opens
+    // on that plugin so the admin decides about exactly those (they stay off until granted).
+    const offerPluginUpdate = async (file: File, refusal: { data?: Record<string, unknown> }) => {
+        const info = refusal.data || {};
+        const slug = typeof info.slug === "string" ? info.slug : "";
+        if (!slug) return;
+        const installed = plugins.find((p) => p.slug === slug);
+        const name = installed?.name || slug;
+        const version = (v: unknown) => (typeof v === "string" && v ? `v${v}` : "?");
+        const body = t('plugins.update.body')
+            .replace('{name}', name)
+            .replace('{from}', version(info.installedVersion))
+            .replace('{to}', version(info.incomingVersion));
+        if (!await confirm(body, t('plugins.update.title'), false, { confirmText: t('plugins.update.confirm') })) return;
+        const formData = new FormData();
+        formData.append('plugin', file);
+        try {
+            const res = await pluginsApi.update(slug, formData);
+            addToast(t('plugins.update.success').replace('{name}', name).replace('{to}', version(res.toVersion)), "success");
+            refreshMenus();
+            if (res.reactivated) reloadActivePlugins();
+            const fresh = await pluginsApi.list();
+            setPlugins(fresh);
+            if (res.ungrantedPermissions && res.ungrantedPermissions.length) {
+                const updated = fresh.find((p) => p.slug === slug);
+                if (updated) {
+                    addToast(t('plugins.update.newPermissions'), "info", 0);
+                    openPermissions(updated);
+                }
+            }
+        } catch (error: any) {
+            const sandbox = sandboxRefusalFrom(error);
+            loadPlugins();
+            if (sandbox) setRejection({ pluginName: name, message: sandbox.message, sandbox });
+            else addToast(t('plugins.update.failed') + ": " + (error.message || "Unknown error"), "error", 0);
+        }
+    };
+
     const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
@@ -650,8 +692,14 @@ export default function PluginsPage() {
             loadPlugins();
             refreshMenus();
         } catch (error: any) {
-            console.error("Upload failed:", error);
-            addToast(t('plugins.upload.failed') + ": " + (error.message || "Unknown error"), "error");
+            // 409 plugin_exists: the zip is a version of an installed plugin. Offer the in-place update
+            // (POST /plugins/:slug/update) instead of the old dead end ("deactivate", then "uninstall").
+            if (error?.status === 409 && error?.code === 'plugin_exists') {
+                await offerPluginUpdate(file, error);
+            } else {
+                console.error("Upload failed:", error);
+                addToast(t('plugins.upload.failed') + ": " + (error.message || "Unknown error"), "error");
+            }
         } finally {
             setUploading(false);
             e.target.value = "";

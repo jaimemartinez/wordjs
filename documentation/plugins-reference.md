@@ -333,16 +333,11 @@ runs as core, never in the plugin sandbox.) See **[Database](database.md)**.
 ---
 
 ## 7. Hello World 👋
-**ID:** `hello-world` | **Version:** 1.0.0
+**ID:** `hello-world` | **Version:** 1.1.0
 
-The smallest possible isolated plugin: a manifest with `"isolated": true` and no permissions, an
-`index.js` exporting `init(wordjs)` and `deactivate()`, and a `tests/hello-world.test.js` (`node:test`)
-that checks those exports. It has no visible effect: its one registration, a `the_content` filter, names a
-hook the backend never applies, so the filter is accepted as one of the plugin's own hooks and never
-called. The test file is not run at activation either — pre-activation plugin tests are skipped
-(`backend/src/core/plugin-test-runner.ts`), since they would run on the host outside the sandbox. For a
-working plugin with a route, an admin page and a hook, follow the tutorial in
-[plugins.md §2](plugins.md).
+A reference implementation for developers. Registers a `[hello]` shortcode through the bridge (`[hello]`
+or `[hello name="Ada"]` in a post renders a greeting; no permissions), and ships its own `node:test`
+file (`tests/hello-world.test.js`) that you run yourself — WordJS never executes a plugin's tests.
 
 *   **Purpose:** Development / Education.
 *   **Sandbox:** isolated (like every plugin).

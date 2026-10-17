@@ -217,7 +217,7 @@ describe('hook-access policy', () => {
         assert.strictEqual(ok('wordjs_future_core_hook'), false);
         assert.strictEqual(ok('users:registered'), false);
         assert.strictEqual(ok('my_plugin_event'), true);
-        assert.strictEqual(ok('the_content'), true, 'backend/plugins/hello-world subscribes to it (unclassified, not core-fired)');
+        assert.strictEqual(ok('the_content'), true, 'an unclassified hook core does not fire (no core hook named the_content)');
         assert.strictEqual(ok('constructor'), true, 'a magic name is just an unclassified own hook');
         assert.strictEqual(ok(''), false);
         // admin does not imply pii (explicit only).

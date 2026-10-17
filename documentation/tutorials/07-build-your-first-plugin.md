@@ -170,6 +170,10 @@ To change the plugin, edit it, raise `version` in `manifest.json` and pack again
 Your items survive. Options and the plugin's tables are kept unless you tick the data box. The
 permission grants are always removed with the plugin, so you confirm them again on activation.
 
+> **After 2.6.0:** releases after 2.6.0 update in place. Upload the newer zip from **Upload Plugin**
+> and confirm **Update**. The plugin keeps its data, tables and grants, and only permissions the new
+> version adds are asked about. See [plugins.md → Updating a plugin](../plugins.md#updating-a-plugin-upload-a-newer-zip).
+
 ## Where next
 
 - [plugins.md](../plugins.md): the full guide, covering hooks, shortcodes, the plugin's own database

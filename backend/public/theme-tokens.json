@@ -3,7 +3,7 @@
   "source": "backend/public/css/wordjs-ui.css",
   "counts": {
     "tokens": 778,
-    "varUses": 1777,
+    "varUses": 1779,
     "elements": 51
   },
   "tokens": {
@@ -7791,12 +7791,17 @@
       "group": "hero",
       "declaredDefault": null,
       "fallbacks": [
-        "var(--wjs-bg-muted)"
+        "var(--wjs-bg-muted)",
+        "var(--wjs-bg-canvas)"
       ],
       "consumers": [
         {
           "selector": ".wp-block-hero",
           "property": "background-color"
+        },
+        {
+          "selector": ".wp-block-hero",
+          "property": "background-image"
         }
       ]
     },
@@ -7804,7 +7809,7 @@
       "group": "hero",
       "declaredDefault": null,
       "fallbacks": [
-        "var(--wjs-hero-gradient, linear-gradient(var(--wjs-hero-gradient-angle, 135deg), var(--wjs-hero-gradient-from, var(--wjs-bg-muted)), var(--wjs-hero-gradient-to, var(--wjs-bg-canvas))))"
+        "var(--wjs-hero-gradient, linear-gradient(var(--wjs-hero-gradient-angle, 135deg), var(--wjs-hero-gradient-from, var(--wjs-hero-bg, var(--wjs-bg-muted))), var(--wjs-hero-gradient-to, var(--wjs-hero-bg, var(--wjs-bg-canvas)))))"
       ],
       "consumers": [
         {
@@ -8020,7 +8025,7 @@
       "group": "hero",
       "declaredDefault": null,
       "fallbacks": [
-        "linear-gradient(var(--wjs-hero-gradient-angle, 135deg), var(--wjs-hero-gradient-from, var(--wjs-bg-muted)), var(--wjs-hero-gradient-to, var(--wjs-bg-canvas)))"
+        "linear-gradient(var(--wjs-hero-gradient-angle, 135deg), var(--wjs-hero-gradient-from, var(--wjs-hero-bg, var(--wjs-bg-muted))), var(--wjs-hero-gradient-to, var(--wjs-hero-bg, var(--wjs-bg-canvas))))"
       ],
       "consumers": [
         {
@@ -8046,7 +8051,7 @@
       "group": "hero",
       "declaredDefault": null,
       "fallbacks": [
-        "var(--wjs-bg-muted)"
+        "var(--wjs-hero-bg, var(--wjs-bg-muted))"
       ],
       "consumers": [
         {
@@ -8059,7 +8064,7 @@
       "group": "hero",
       "declaredDefault": null,
       "fallbacks": [
-        "var(--wjs-bg-canvas)"
+        "var(--wjs-hero-bg, var(--wjs-bg-canvas))"
       ],
       "consumers": [
         {

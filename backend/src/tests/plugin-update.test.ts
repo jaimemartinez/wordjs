@@ -78,13 +78,22 @@ describe('plugin in-place update', () => {
         try { await dbAsync.run(`DROP TABLE IF EXISTS ${table}`); } catch { /* */ }
     });
 
+    // This slug's update scratch dirs: the stash (named at random, its slug in a marker file, or the legacy
+    // `plugin-update-<slug>-<hex>` form) and any staging dir left behind.
+    function ownScratch(): string[] {
+        let names: string[];
+        try { names = fs.readdirSync(OS_TMP_DIR); } catch { return []; }
+        return names.filter((n: string) => {
+            if (n.startsWith(`plugin-update-${SLUG}-`)) return true;
+            if (n.startsWith('plugin-stage-')) return true;
+            if (!/^plugin-update-[A-Za-z0-9]{6}$/.test(n)) return false;
+            try { return fs.readFileSync(path.join(OS_TMP_DIR, n, '.wordjs-stash-slug'), 'utf8') === SLUG; } catch { return false; }
+        });
+    }
+
     function cleanupSlug() {
         try { fs.rmSync(pluginDir(), { recursive: true, force: true }); } catch { /* */ }
-        try {
-            for (const n of fs.readdirSync(OS_TMP_DIR)) {
-                if (n.startsWith(`plugin-update-${SLUG}-`)) fs.rmSync(path.join(OS_TMP_DIR, n), { recursive: true, force: true });
-            }
-        } catch { /* */ }
+        for (const n of ownScratch()) { try { fs.rmSync(path.join(OS_TMP_DIR, n), { recursive: true, force: true }); } catch { /* */ } }
     }
 
     const BENIGN_INDEX = "'use strict';\nmodule.exports = { register() {} };\n";
@@ -163,7 +172,7 @@ describe('plugin in-place update', () => {
         assert.deepStrictEqual(r.body.ungrantedPermissions, ['settings:read'], 'new perm is declared but not granted');
         assert.ok(!fs.existsSync(path.join(pluginDir(), 'data', 'nope')));
         // stash cleaned up
-        assert.strictEqual(fs.readdirSync(OS_TMP_DIR).some((n: string) => n.startsWith(`plugin-update-${SLUG}-`)), false);
+        assert.deepStrictEqual(ownScratch(), [], 'no stash or staging dir left behind');
     });
 
     it('origin gate: an UNBOUND plugin (no recorded origin) cannot be updated from a catalog', async () => {
@@ -217,7 +226,7 @@ describe('plugin in-place update', () => {
         assert.strictEqual(await rowCount(), 1, 'tables preserved');
         assert.deepStrictEqual(perms.getGrants(SLUG), ['database:write'], 'grants restored after rollback');
         assert.deepStrictEqual(perms.getEgressAllowlist(SLUG), ['api.one.com'], 'egress restored after rollback');
-        assert.strictEqual(fs.readdirSync(OS_TMP_DIR).some((n: string) => n.startsWith(`plugin-update-${SLUG}-`)), false, 'stash cleaned up on rollback');
+        assert.deepStrictEqual(ownScratch(), [], 'stash cleaned up on rollback');
     });
 
     // An existing grant record is handed back exactly as it was found (an empty one stays empty). A plugin
@@ -271,6 +280,23 @@ describe('plugin in-place update', () => {
 
         assert.strictEqual(installedVersion(), '1.0.0', 'previous version restored from stash');
         assert.strictEqual(dataPreserved(), 'PRESERVE-ME', 'data/ kept');
+        assert.strictEqual(fs.existsSync(stash), false, 'stash consumed');
+    });
+
+    it('boot recovery: RESTORES from a stash named at random, reading its slug from the marker file', async () => {
+        const dir = pluginDir();
+        fs.mkdirSync(path.join(dir, 'data'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'data', 'secret.key'), 'PRESERVE-ME');
+        const stash = fs.mkdtempSync(path.join(OS_TMP_DIR, 'plugin-update-'));
+        fs.writeFileSync(path.join(stash, '.wordjs-stash-slug'), SLUG);
+        fs.writeFileSync(path.join(stash, 'manifest.json'), JSON.stringify({ name: 'Upd Test', isolated: true, version: '1.0.0', permissions: [] }));
+        fs.writeFileSync(path.join(stash, 'index.js'), BENIGN_INDEX);
+
+        await recoverInterruptedPluginUpdates();
+
+        assert.strictEqual(installedVersion(), '1.0.0', 'previous version restored from stash');
+        assert.strictEqual(dataPreserved(), 'PRESERVE-ME', 'data/ kept');
+        assert.strictEqual(fs.existsSync(path.join(dir, '.wordjs-stash-slug')), false, 'the marker is not plugin code');
         assert.strictEqual(fs.existsSync(stash), false, 'stash consumed');
     });
 
