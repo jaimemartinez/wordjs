@@ -824,6 +824,8 @@ function syncRoleMap(dbRoles: Record<string, any>, configRoles: any, installedPl
 }
 
 module.exports = {
+    // The built-in role map (a fresh copy). backend/cli/force-sync-roles.js resets the stored core roles to it.
+    defaultRoles,
     loadRoles,
     getRoles,
     getRole,

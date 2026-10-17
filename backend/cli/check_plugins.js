@@ -9,32 +9,51 @@ const path = require('path');
 const DATA_DIR = path.resolve(__dirname, '..', 'data');
 
 // The two SQLite drivers keep SEPARATE files (native → wordjs-native.db, legacy → wordjs.db), so
-// hardcoding one of them reports the wrong install's plugins. Prefer whatever the config selects.
-function candidateDatabases() {
-    const named = [];
+// hardcoding one of them reports the wrong install's plugins. Prefer what backend/wordjs-config.json
+// selects: its `dbPath`, else the default file of its `dbDriver` (the same rule as src/config/app.ts).
+// A relative dbPath is resolved against backend/, where the server is started from.
+const BACKEND_DIR = path.resolve(__dirname, '..');
+
+function readConfig() {
     try {
-        const configPath = path.resolve(__dirname, '..', '..', 'wordjs-config.json');
-        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-        const configured = config && config.database && config.database.path;
-        if (configured) named.push(path.resolve(path.dirname(configPath), configured));
-    } catch { /* no config (fresh checkout) — fall back to the well-known names */ }
+        return JSON.parse(fs.readFileSync(path.join(BACKEND_DIR, 'wordjs-config.json'), 'utf8')) || {};
+    } catch {
+        return {}; // no config (fresh checkout) — fall back to the driver defaults
+    }
+}
+
+function candidateDatabases(config = readConfig()) {
+    const named = [];
+    const driver = config.dbDriver || 'sqlite-native';
+    if (config.dbPath) named.push(path.resolve(BACKEND_DIR, config.dbPath));
+    else named.push(path.join(DATA_DIR, driver === 'sqlite-legacy' ? 'wordjs.db' : 'wordjs-native.db'));
     named.push(path.join(DATA_DIR, 'wordjs-native.db'), path.join(DATA_DIR, 'wordjs.db'));
     return named.filter((file, i) => named.indexOf(file) === i && fs.existsSync(file));
 }
 
-const files = candidateDatabases();
-if (files.length === 0) {
-    console.error(`Error: no SQLite database found (looked in ${DATA_DIR}).`);
-    process.exit(1);
+function main() {
+    const config = readConfig();
+    if (config.dbDriver && !String(config.dbDriver).startsWith('sqlite')) {
+        console.error(`Error: this install uses the '${config.dbDriver}' driver; check_plugins only reads SQLite files.`);
+        return 1;
+    }
+    const files = candidateDatabases(config);
+    if (files.length === 0) {
+        console.error(`Error: no SQLite database found (looked in ${DATA_DIR}).`);
+        return 1;
+    }
+    for (const file of files) {
+        try {
+            const db = new Database(file, { readonly: true });
+            const row = db.prepare("SELECT option_value FROM options WHERE option_name = 'active_plugins'").get();
+            console.log(`${path.basename(file)}:`, row ? row.option_value : 'option "active_plugins" not found.');
+            db.close();
+        } catch (e) {
+            console.error(`${path.basename(file)}: ${e.message}`);
+        }
+    }
+    return 0;
 }
 
-for (const file of files) {
-    try {
-        const db = new Database(file, { readonly: true });
-        const row = db.prepare("SELECT option_value FROM options WHERE option_name = 'active_plugins'").get();
-        console.log(`${path.basename(file)}:`, row ? row.option_value : 'option "active_plugins" not found.');
-        db.close();
-    } catch (e) {
-        console.error(`${path.basename(file)}: ${e.message}`);
-    }
-}
+module.exports = { candidateDatabases, main };
+if (require.main === module) process.exit(main());

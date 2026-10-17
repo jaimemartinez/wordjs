@@ -38,6 +38,10 @@ function register(app) {
     router.post('/migrate', accountAuthorityOnly, migration.runMigration);
     router.post('/cleanup', accountAuthorityOnly, migration.cleanup);
 
+    // Multisite: the database the tool migrates (and the config it rewrites) is the main site's — the
+    // whole network's, like backups — so on any other site the subtree does not exist (404), exactly as
+    // /backups answers there. A no-op on a single site and on the main site.
+    app.use('/api/v1/db-migration', require('../multisite-guards').mainSiteOnly);
     app.use('/api/v1/db-migration', router);
 
     log.info('✅ DB Admin (core) loaded.');

@@ -211,12 +211,89 @@ export interface WordJSNotify {
 }
 
 /**
+ * The SMTP transaction as an `smtp:inbound` handler sees it: data only, never the socket. `id` is
+ * stable for the connection, and the object is the SAME one across the phases of a connection, so a
+ * handler may annotate it (e.g. store an SPF verdict at `mailFrom` and read it back at `data`).
+ */
+export interface WordJSSmtpSession {
+    id: number | string;
+    remoteAddress?: string;
+    remotePort?: number;
+    clientHostname?: string;
+    hostNameAppearsAs?: string;
+    secure: boolean;
+    transmissionType?: string;
+    envelope: {
+        mailFrom: { address: string } | false;
+        rcptTo: { address: string }[];
+    };
+    [annotation: string]: any;
+}
+
+/** A handler's answer: resolve nothing to accept the step, or `{ code, message }` to refuse it (code defaults to 550). */
+export type WordJSSmtpVerdict = void | null | undefined | { code?: number; message?: string };
+
+/**
+ * Handlers for the host-run inbound SMTP listener. All optional and async. A handler that throws or
+ * takes longer than ~25 s turns into a temporary failure (451) for the sending server.
+ */
+export interface WordJSSmtpHandlers {
+    connect?(session: WordJSSmtpSession): WordJSSmtpVerdict | Promise<WordJSSmtpVerdict>;
+    mailFrom?(address: { address: string }, session: WordJSSmtpSession): WordJSSmtpVerdict | Promise<WordJSSmtpVerdict>;
+    rcptTo?(address: { address: string }, session: WordJSSmtpSession): WordJSSmtpVerdict | Promise<WordJSSmtpVerdict>;
+    /** `raw` is the whole RFC 5322 message (a Buffer). Messages over `maxSize` are refused (552) by the host and never reach this handler. */
+    data?(raw: Uint8Array, session: WordJSSmtpSession): WordJSSmtpVerdict | Promise<WordJSSmtpVerdict>;
+    /** Called once when the connection ends; its return value is ignored. */
+    close?(session: WordJSSmtpSession): void | Promise<void>;
+}
+
+/** Options for `smtp.listen`. The ports must be declared in the manifest's `claimPorts`. */
+export interface WordJSSmtpListenOptions {
+    /** Port to bind (default 25). */
+    port?: number;
+    /** Port tried when `port` cannot be bound (default 2525). */
+    fallbackPort?: number;
+    /** Largest accepted message in bytes (default 25 MB, clamped to 1-50 MB). */
+    maxSize?: number;
+    /** Concurrent connections (default 50, clamped to 1-200). */
+    maxClients?: number;
+    /** Addresses of trusted PROXY-protocol front ends. */
+    proxyIps?: string[];
+    /** Greeting banner text (single line, at most 120 characters). */
+    banner?: string;
+}
+
+/** State of the host's inbound SMTP listener. */
+export interface WordJSSmtpStatus {
+    /** Slug of the plugin that owns the listener, or null. */
+    owner: string | null;
+    requestedPort: number | null;
+    boundPort: number | null;
+    /** True when the listener fell back to `fallbackPort`. */
+    degraded: boolean;
+    reason: string | null;
+    proxyIps: string[];
+}
+
+/**
  * The injected capability bridge. Destructure what you need in `init`:
  *   `const { options, http, adminMenu } = wordjs;`
  */
 export interface WordJS {
     /** Your plugin's slug (the folder / manifest id). */
     slug: string;
+
+    /**
+     * Host-derived, per-plugin storage directories (absolute paths, frozen). They never point at the
+     * shared data/log/temp roots. An empty string means the host did not provide that directory.
+     * Knowing the path grants nothing by itself: reading or writing there still needs the
+     * corresponding `fs` grant.
+     */
+    paths: Readonly<{
+        data: string;
+        logs: string;
+        tmp: string;
+    }>;
 
     /**
      * Site options (key/value). Keys are GLOBAL — always prefix yours with your slug
@@ -388,6 +465,19 @@ export interface WordJS {
         resolve6(host: string): Promise<string[]>;
         /** Like Node's `dns.promises.resolve()` with no rrtype: A records (string IPs). */
         resolve(host: string): Promise<string[]>;
+    };
+
+    /**
+     * Receive the internet's mail. The HOST listens on the SMTP port on your behalf (an isolated
+     * plugin may not open sockets) and calls your handlers for each step of a transaction.
+     * Permission: `smtp:inbound` (exclusive: one plugin at a time; main site only in a multisite
+     * network). `listen` resolves with the listener status; without the grant it resolves with
+     * `{ ok: false, granted: false, error }` instead of throwing.
+     */
+    smtp: {
+        listen(handlers: WordJSSmtpHandlers, opts?: WordJSSmtpListenOptions): Promise<WordJSSmtpStatus & { ok: boolean; granted: boolean; error?: string }>;
+        /** The listener's current state; `mine` says whether this plugin (on this site) owns it. */
+        status(): Promise<WordJSSmtpStatus & { mine: boolean }>;
     };
 
     /**

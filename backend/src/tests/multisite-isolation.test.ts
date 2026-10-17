@@ -323,6 +323,16 @@ describe('what stays the main site\'s', () => {
         assert.strictEqual((await bearer('post', `${API}/setup/install`, TWO, tokens.two).send({})).status, 403);
     });
 
+    test('the database migration tool, like backups, is available on the main site only', async () => {
+        // A secondary site's administrator gets the same refusal as for /backups: the subtree is not there.
+        assert.strictEqual((await bearer('get', `${API}/db-migration/status`, TWO, tokens.two)).status, 404);
+        assert.strictEqual((await bearer('post', `${API}/db-migration/migrate`, TWO, tokens.two).send({})).status, 404);
+        assert.strictEqual((await bearer('post', `${API}/db-migration/cleanup`, TWO, tokens.two).send({})).status, 404);
+        // The main site's administrator still reaches it.
+        const status = await bearer('get', `${API}/db-migration/status`, 'main.example.com', tokens.main);
+        assert.strictEqual(status.status, 200, JSON.stringify(status.body));
+    });
+
     test('theme files cannot be created or deleted from another site', async () => {
         assert.strictEqual((await bearer('delete', `${API}/themes/default`, TWO, tokens.two)).status, 403);
         assert.strictEqual((await bearer('post', `${API}/themes/default`, TWO, tokens.two)).status, 403);
