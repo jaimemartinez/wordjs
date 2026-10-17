@@ -56,6 +56,9 @@ const getBaseUrl = () => {
             // which this deliberately mirrors — every SSR path must agree on the base).
             const backendCert = path.resolve(path.dirname(configPath), 'certs', 'backend.crt');
             if (fs.existsSync(backendCert)) {
+                // The gateway on this machine over loopback first, as in lib/server-api.ts.
+                const local = String(process.env.WORDJS_LOCAL_GATEWAY_ORIGIN || '').replace(/\/+$/, '');
+                if (local) return `${local}/api/v1`;
                 const front = String(config.gatewayUrl || config.siteUrl || '').replace(/\/+$/, '');
                 if (front) return `${front}/api/v1`;
             }

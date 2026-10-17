@@ -442,3 +442,29 @@ describe('an INSTALLED site whose jwtSecret is a published placeholder refuses t
         });
     });
 });
+
+describe('the install keeps the ports the config already names', () => {
+    // It wrote port 4000 / frontendPort 3001 / gatewayPort 3000 over whatever was there, so a backend set
+    // up on another port moved back to 4000 at its next restart.
+    //
+    // MUTATION PROOF: put back `port: 4000, frontendPort: 3001, gatewayPort: 3000` in routes/setup.ts and
+    // the first case fails.
+    it('a pre-install config with its own ports keeps them', async () => {
+        freshMachine();
+        realFs.writeFileSync(SANDBOX_CONFIG, JSON.stringify({ port: 4100, frontendPort: 3101, gatewayPort: 8443 }));
+        await boot();
+        const { res } = await install();
+        assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+        const cfg = persisted();
+        assert.deepStrictEqual([cfg.port, cfg.frontendPort, cfg.gatewayPort], [4100, 3101, 8443]);
+    });
+
+    it('a config without ports records the defaults, as before', async () => {
+        freshMachine();
+        await boot();
+        const { res } = await install();
+        assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+        const cfg = persisted();
+        assert.deepStrictEqual([cfg.port, cfg.frontendPort, cfg.gatewayPort], [4000, 3001, 3000]);
+    });
+});

@@ -537,6 +537,11 @@ jobs:
       - name: Install dependencies
         working-directory: backend
         run: npm ci || npm install
+      # setup/index.js (the cluster installer, required by the suite's installer tests) has its own
+      # dependencies, which nothing else here installs.
+      - name: Install setup/ dependencies
+        working-directory: setup
+        run: npm ci || npm install
       - name: Build (the suite's dist/ checks see the same tree as in backend-gates)
         working-directory: backend
         run: npm run build
@@ -635,6 +640,11 @@ jobs:
           cache-dependency-path: backend/package-lock.json
       - name: Install dependencies
         working-directory: backend
+        run: npm ci || npm install
+      # setup/index.js (the cluster installer, required by the suite's installer tests) has its own
+      # dependencies, which nothing else here installs.
+      - name: Install setup/ dependencies
+        working-directory: setup
         run: npm ci || npm install
       - name: Build (the suite's dist/ checks see the same tree as in backend-gates)
         working-directory: backend

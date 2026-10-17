@@ -471,7 +471,10 @@ async function main() {
         console.log('');
         console.log(`✅ WordJS MONOLITH (${dev ? 'dev' : 'prod'}) — one process on ${proto}://localhost:${PUBLIC_PORT}`);
         console.log('   backend + frontend + isolated plugins in-process · no gateway, no extra ports');
-        console.log('   switch to split anytime: npm run dev   (or npm start)');
+        // The split commands for the mode this process runs in: `npm run dev` is the development stack.
+        console.log(dev
+            ? '   switch to split anytime: npm run dev'
+            : '   switch to split anytime: npm start   (production: gateway + backend + frontend)');
     });
 
     // 5) Loopback-only HTTP listener for the frontend's server-side (SSR) API calls — keeps SSR on

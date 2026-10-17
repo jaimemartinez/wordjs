@@ -33,52 +33,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Changed
 
-- **Multisite: the database migration tool, like backups, is now available on the main site only in a
-  multisite network.** `/api/v1/db-migration/*` answers 404 on every other site, exactly as `/backups`
-  does there (the admin screen already hid it). Single-site installs and the main site are unchanged.
-
-- **`GET /api/v1/` reports the product version and the full route map.** `version` now comes from the
-  release manifest (the same value `/api-docs` publishes) instead of a fixed `1.0.0`, and `routes` lists
-  every mounted route group, including the ones added since the map was written (AI, MCP, agents,
-  webhooks, audit, forms, collab, presence, media storage, site address, network, backups,
-  db-migration, ...). A test fails when a mounted group is missing from the map. Compatibility: the
-  API index now reports the product version and every mounted route group; every key it published
-  before is still there with the same path, so clients that read it only see additional keys and a
-  real version number.
-
-- **Theme logic: the default permission declaration uses the real vocabulary.** A theme without a
-  `manifest.json` declared a `content:read` scope that no permission gate knows; it now declares only
-  `settings:read`, from one shared definition used by both the runtime gate and the static scan. No
-  effective behaviour changes: a theme's `functions.js` still holds no permission grant.
-
-- **Mail Server 3.0.2: a relay that does not answer is reported, not bypassed.** When the configured
-  relay failed its check, outgoing mail silently went direct-to-MX instead. Now it waits in the retry
-  queue and the console says **Relay unavailable: <reason>** (server health, the Configuration tab and
-  the Test tab; `relay_status` in `GET /settings`); a failed relay is re-checked at most once a minute.
-  The Configuration tab has a **Sandbox access** section to approve a private relay's exact address. A
-  relay given by name now works inside the sandbox (the plugin resolves it and keeps the name for TLS),
-  and relay credentials are optional, for a smarthost that relays for its network by address. With
-  **Require STARTTLS** off, a relay that advertises STARTTLS and then refuses it with an SMTP reply gets
-  the mail without TLS, as direct-to-MX delivery already does.
-
-- **Mail Server: password recovery works with a relay.** Recovery (and e-mail verification) waited for
-  the DNS check to find MX, A, SPF, DKIM and DMARC on the site's own domain, which a site that sends
-  through a relay never passes. Now a relay that answers its check is what makes mail ready, and one
-  that does not turns recovery off again.
-
-- **Mail Server: switched-off settings stay off.** A setting saved as `0` came back from the host as a
-  number and was read as on, so **Require STARTTLS: No** (and other switches turned off in the console)
-  had no effect and showed as **Yes** again after saving.
-
-- **Mail Server: a non-standard `smtp_listen_port` works with "Receive internet email".** WordJS now
-  opens any unprivileged port (1024 and up) for the plugin, besides the ones its manifest declares. A port
-  it refuses no longer leaves the server without a listener: the plugin listens on 25 and the console
-  says which port was refused and why.
-
-- **Mail Server: the console warns when the mail domain is not a public domain.** On a site reached by
-  IP, `localhost` or a LAN name, mailboxes become `@localhost` (or similar) and no other server can
-  deliver to them. Server health, the Configuration tab and the startup log now say so and how to fix it
-  (`mail_domain` / `mail_domain_public` in `GET /settings`).
+- **The release smoke gate deploys split mode with the default HTTPS too**, installing, restarting and
+  requesting a content page, and checks that the frontend listens on loopback only. The release
+  workflow's jobs run on `ubuntu-24.04` instead of `ubuntu-latest`, which moves to Ubuntu 26.04 on
+  2026-10-19; pull-request CI keeps `ubuntu-latest`, so the new image is met there first.
 
 - **AI provider: a longer, configurable timeout for local models.** A loopback OpenAI-compatible
   provider (Ollama, LM Studio…) now gets 300 s per request instead of 60 s, enough for a CPU model's first
@@ -113,50 +71,113 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   language and falls back to `description`. The four bundled themes ship English descriptions with Spanish
   and Portuguese translations (Circuito's was Spanish only).
 
+- **Mail Server 3.0.2: a relay that does not answer is reported, not bypassed.** When the configured
+  relay failed its check, outgoing mail silently went direct-to-MX instead. Now it waits in the retry
+  queue and the console says **Relay unavailable: <reason>** (server health, the Configuration tab and
+  the Test tab; `relay_status` in `GET /settings`); a failed relay is re-checked at most once a minute.
+  The Configuration tab has a **Sandbox access** section to approve a private relay's exact address. A
+  relay given by name now works inside the sandbox (the plugin resolves it and keeps the name for TLS),
+  and relay credentials are optional, for a smarthost that relays for its network by address. With
+  **Require STARTTLS** off, a relay that advertises STARTTLS and then refuses it with an SMTP reply gets
+  the mail without TLS, as direct-to-MX delivery already does.
+
+- **Mail Server: password recovery works with a relay.** Recovery (and e-mail verification) waited for
+  the DNS check to find MX, A, SPF, DKIM and DMARC on the site's own domain, which a site that sends
+  through a relay never passes. Now a relay that answers its check is what makes mail ready, and one
+  that does not turns recovery off again.
+
+- **Mail Server: switched-off settings stay off.** A setting saved as `0` came back from the host as a
+  number and was read as on, so **Require STARTTLS: No** (and other switches turned off in the console)
+  had no effect and showed as **Yes** again after saving.
+
+- **Mail Server: a non-standard `smtp_listen_port` works with "Receive internet email".** WordJS now
+  opens any unprivileged port (1024 and up) for the plugin, besides the ones its manifest declares. A port
+  it refuses no longer leaves the server without a listener: the plugin listens on 25 and the console
+  says which port was refused and why.
+
+- **Mail Server: the console warns when the mail domain is not a public domain.** On a site reached by
+  IP, `localhost` or a LAN name, mailboxes become `@localhost` (or similar) and no other server can
+  deliver to them. Server health, the Configuration tab and the startup log now say so and how to fix it
+  (`mail_domain` / `mail_domain_public` in `GET /settings`).
+
+- **Multisite: the database migration tool, like backups, is now available on the main site only in a
+  multisite network.** `/api/v1/db-migration/*` answers 404 on every other site, exactly as `/backups`
+  does there (the admin screen already hid it). Single-site installs and the main site are unchanged.
+
+- **`GET /api/v1/` reports the product version and the full route map.** `version` now comes from the
+  release manifest (the same value `/api-docs` publishes) instead of a fixed `1.0.0`, and `routes` lists
+  every mounted route group, including the ones added since the map was written (AI, MCP, agents,
+  webhooks, audit, forms, collab, presence, media storage, site address, network, backups,
+  db-migration, ...). A test fails when a mounted group is missing from the map. Compatibility: the
+  API index now reports the product version and every mounted route group; every key it published
+  before is still there with the same path, so clients that read it only see additional keys and a
+  real version number.
+
+- **Theme logic: the default permission declaration uses the real vocabulary.** A theme without a
+  `manifest.json` declared a `content:read` scope that no permission gate knows; it now declares only
+  `settings:read`, from one shared definition used by both the runtime gate and the static scan. No
+  effective behaviour changes: a theme's `functions.js` still holds no permission grant.
+
 ### Fixed
 
-- **Diagnostic scripts in `backend/cli` run again.** `inspect-roles.js`, `inspect-user.js`,
-  `verify-roles.js` and `force-sync-roles.js` use the backend's current database initialization (the same
-  driver and `dbPath` as the server) and are run from `backend/` as
-  `node -r ts-node/register cli/<name>.js`. `force-sync-roles.js` resets the built-in roles to the
-  server's defaults (plus any `roles` override in the config) and keeps plugin and custom roles;
-  `inspect-user.js` takes the login as an argument and never prints credential columns.
-  `check_plugins.js` reads `dbPath` (or the `dbDriver` default file) from `backend/wordjs-config.json`.
-  `backend/scripts/migrate-media-urls.js` loads the TypeScript sources by itself (compiled `dist/` when
-  present), so a plain `node scripts/migrate-media-urls.js` works.
+- **A split install keeps serving HTTPS after its first restart, and its content pages render.** Two
+  problems hit a split-mode site installed from the release bundle with the default self-signed HTTPS
+  (no `WORDJS_HTTP=1`). First, the installer rewrote `gateway/gateway-config.json` with `ssl` taken
+  from the backend's config, which has none, so the key was dropped and the gateway came back from its
+  next restart serving plain HTTP on a site whose address is `https://`. The installer now only replaces
+  gateway keys the backend config actually sets. Second, once the cluster certificates exist the
+  frontend's server-side reads go through the gateway's public origin, but the frontend trusted only the
+  cluster CA, not the gateway's own self-signed certificate, so every read failed and pages such as
+  `/about` or a post answered 404 while the home page fell back to defaults. The frontend now also
+  trusts the certificate the gateway on the same machine serves (`gateway/ssl-auto.crt`, or the one set
+  in `gateway-config.json`), and nothing wider. Sites behind a TLS-terminating proxy with
+  `WORDJS_HTTP=1`, monolith installs and separate mode were not affected.
 
-- **Plugin bridge typings.** `backend/types/wordjs-bridge.d.ts` now describes `wordjs.paths`
-  (`data`, `logs`, `tmp`) and the `wordjs.smtp` namespace (`listen`, `status`) used with the
-  `smtp:inbound` permission, with its session, handler, option and status types.
+- **Behind a reverse proxy on the same machine, visitors keep their own address.** The gateway's public
+  rate limit counted per connection address and the gateway never trusted a fronting proxy, so behind
+  nginx every visitor was `127.0.0.1`: the whole site shared one 1000-requests-a-minute bucket, and the
+  backend was told the proxy's address for everyone. `trustProxy` in `gateway/gateway-config.json` (or
+  `WORDJS_TRUST_PROXY` for the gateway; same syntax as the backend's, e.g. `"loopback"`) now sets which
+  proxy the gateway believes, and the gateway then forwards the client it resolved to the backend.
+  Unset, nothing changes. Both the gateway and the backend now log one warning the first time a request
+  arrives from a local proxy that nothing trusts, naming the setting to add.
 
-- `wordjs.js pack <slug> --build` on a production install stopped with a raw `Cannot find module
-  'esbuild'`; it now says the backend's development dependencies are missing and how to build instead.
-  Its closing hint names the real button (**Upload Plugin**, not "Add New").
+- **The gateway honours `LOG_LEVEL` and `logging.level`.** Its logger was fixed at `info`; it now follows
+  the backend's order (`LOG_LEVEL`, then the config, then `info`) and understands the backend's level
+  names too.
 
-- A theme generated from valid seeds could get a `--wjs-color-text-muted` under AA (4.42:1 for
-  `#2b211c` on `#fbf7f2`), which the doctor then flagged. The derivation now washes the text less when
-  needed and always reaches 4.5:1; palettes that already passed are unchanged.
+- **AI requests are no longer cut at 60 s in split mode.** The gateway gave every proxied request 60 s;
+  `/api/v1/ai/…` now waits the AI provider timeout plus 30 s (`WORDJS_AI_TIMEOUT_MS`, default 300 s), so
+  a slow local model answers, or the backend reports its own timeout.
 
-- A theme's `styles.hero.bg` / `--wjs-hero-bg` never showed: the framework's default hero gradient was
-  painted over it. Both ends of that default gradient now fall back to `--wjs-hero-bg`; an explicit
-  gradient or image still wins. A bundled theme that set only `--wjs-hero-bg` now shows that colour.
+- **Split mode on one machine stays on the machine.** The frontend's server-side reads went to the
+  gateway's public address, so behind a proxy they left the server and came back through it; they now go
+  to the gateway next to it over loopback (when its certificate covers a loopback name, which the
+  auto-generated one does). The frontend also listened on every interface and registered the site's
+  public name with the gateway; it now listens on `127.0.0.1` and registers that, unless its config sets
+  a routable `advertiseHost` (or `WORDJS_FRONTEND_BIND` names the address). And a split site installed
+  with the default HTTPS no longer renders default content until its first restart: the frontend trusts
+  the local gateway's own certificate from its first boot, not only once the install has issued the
+  cluster certificates.
 
-- After activating a theme, the first visit to each cached page still got the previous theme
-  (stale-while-revalidate). Activation, and updating the active theme, now expire those pages at once.
+- **The backend honours `PORT`, and the install keeps the configured ports.** In split and development
+  mode the backend ignored `PORT`, and `POST /setup/install` wrote `port: 4000` (and the default
+  frontend and gateway ports) over the values the config already had. `PORT` now wins over `port` in
+  `wordjs-config.json` (not in the monolith, where `PORT` is the public port), and the install keeps the
+  ports it finds.
 
-- An isolated plugin's `comments:pre_insert` filter that threw or timed out was skipped and the comment
-  accepted, against the hook's contract. That hook now fails closed: the comment is refused with the
-  plugin's own 4xx status and `rest_*` code when it gave one, `503 rest_plugin_check_failed` otherwise.
-  Other filters keep falling back to the unchanged value.
+- **Command-line tools no longer lock the service out of its own files.** Run as root in an install that
+  belongs to another account, `npm run network`, `npm run site`, `npm run media` and `npm run migrate`
+  left `wordjs-config.json` and new database files owned by root, and the service could no longer write
+  them (creating a site failed with "attempt to write a readonly database"). They now refuse and print
+  the command to run as the owner (`WORDJS_ALLOW_ROOT=1` overrides). `npx create-wordjs upgrade` run as
+  root now gives the files it wrote back to the owner of the site directory, so `frontend/.next/cache`
+  can be created again.
 
-- `backend/types/wordjs-bridge.d.ts` declares `WordJSRouteUser.pluginCapabilities`,
-  `res.sendPrivateMedia()` and `wordjs.media.getPrivate()`.
-
-- The `hello-world` sample filtered `the_content`, a hook core never applies, and its test claimed to
-  run before activation; it now registers a `[hello]` shortcode and says its tests are the author's to
-  run. `POST /plugins/sample` writes the same isolated sample (it wrote an in-process one without a
-  manifest). The `test-schema` fixture declares `database:write` instead of an access level the upload
-  refuses, and drops its unused `main` / `active` keys.
+- **Small output fixes.** The install banner printed its hint as `WORDJS_PRINT_INSTALL_TOKEN=[redacted]`
+  (the log scrubber took the `=1` for a credential); the production monolith suggested `npm run dev` to
+  switch to split mode instead of `npm start`; `create-wordjs` printed npm's own "new major version"
+  notice in the middle of its output.
 
 - **MCP: a call to a tool the agent connection was not granted** is answered with a tool error that names
   the missing grant and is recorded as `agent.denied` in the audit trail, as documented.
@@ -272,6 +293,50 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   fixtures or if a built bundle contains one. `create-wordjs upgrade` also treats `backend/backups/`
   as site state, like `backend/data/` and `backend/uploads/`: it never adds to or replaces the site's
   own backups.
+
+- `wordjs.js pack <slug> --build` on a production install stopped with a raw `Cannot find module
+  'esbuild'`; it now says the backend's development dependencies are missing and how to build instead.
+  Its closing hint names the real button (**Upload Plugin**, not "Add New").
+
+- A theme generated from valid seeds could get a `--wjs-color-text-muted` under AA (4.42:1 for
+  `#2b211c` on `#fbf7f2`), which the doctor then flagged. The derivation now washes the text less when
+  needed and always reaches 4.5:1; palettes that already passed are unchanged.
+
+- A theme's `styles.hero.bg` / `--wjs-hero-bg` never showed: the framework's default hero gradient was
+  painted over it. Both ends of that default gradient now fall back to `--wjs-hero-bg`; an explicit
+  gradient or image still wins. A bundled theme that set only `--wjs-hero-bg` now shows that colour.
+
+- After activating a theme, the first visit to each cached page still got the previous theme
+  (stale-while-revalidate). Activation, and updating the active theme, now expire those pages at once.
+
+- An isolated plugin's `comments:pre_insert` filter that threw or timed out was skipped and the comment
+  accepted, against the hook's contract. That hook now fails closed: the comment is refused with the
+  plugin's own 4xx status and `rest_*` code when it gave one, `503 rest_plugin_check_failed` otherwise.
+  Other filters keep falling back to the unchanged value.
+
+- `backend/types/wordjs-bridge.d.ts` declares `WordJSRouteUser.pluginCapabilities`,
+  `res.sendPrivateMedia()` and `wordjs.media.getPrivate()`.
+
+- The `hello-world` sample filtered `the_content`, a hook core never applies, and its test claimed to
+  run before activation; it now registers a `[hello]` shortcode and says its tests are the author's to
+  run. `POST /plugins/sample` writes the same isolated sample (it wrote an in-process one without a
+  manifest). The `test-schema` fixture declares `database:write` instead of an access level the upload
+  refuses, and drops its unused `main` / `active` keys.
+
+- **Diagnostic scripts in `backend/cli` run again.** `inspect-roles.js`, `inspect-user.js`,
+  `verify-roles.js` and `force-sync-roles.js` use the backend's current database initialization (the same
+  driver and `dbPath` as the server) and are run from `backend/` as
+  `node -r ts-node/register cli/<name>.js`. `force-sync-roles.js` resets the built-in roles to the
+  server's defaults (plus any `roles` override in the config) and keeps plugin and custom roles;
+  `inspect-user.js` takes the login as an argument and never prints credential columns.
+  `check_plugins.js` reads `dbPath` (or the `dbDriver` default file) from `backend/wordjs-config.json`.
+  `backend/scripts/migrate-media-urls.js` loads the TypeScript sources by itself (compiled `dist/` when
+  present), so a plain `node scripts/migrate-media-urls.js` works.
+
+- **Plugin bridge typings.** `backend/types/wordjs-bridge.d.ts` now describes `wordjs.paths`
+  (`data`, `logs`, `tmp`) and the `wordjs.smtp` namespace (`listen`, `status`) used with the
+  `smtp:inbound` permission, with its session, handler, option and status types.
+
 
 ## [2.6.0] - 2026-10-16
 

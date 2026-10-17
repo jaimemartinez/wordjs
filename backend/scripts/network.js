@@ -128,6 +128,10 @@ function run(argv) {
         return 0;
     }
     process.chdir(flags.dir ? path.resolve(flags.dir) : BACKEND);
+    // Every command opens the network store, and SQLite creates files beside a database it opens: as root
+    // in an install another account owns, they would lock that account out (scripts/install-owner.js).
+    const rootProblem = require('./install-owner').rootWriteProblem(process.cwd(), require('./install-owner').scriptHint(__filename, argv));
+    if (rootProblem) throw new Error(rootProblem);
     const m = loadModules();
 
     if (command === 'status') {

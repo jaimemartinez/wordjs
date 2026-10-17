@@ -337,9 +337,29 @@ if (!fileConfig.jwtSecret) {
     console.warn('⚠️  No JWT secret configured — using an ephemeral random secret (tokens reset on restart). Completing setup persists it.');
 }
 
+/**
+ * The backend's own listen port: PORT from the environment, then `port` in wordjs-config.json, then 4000.
+ * PORT used to be ignored outright, so `PORT=4100 npm run dev` still listened on 4000. NOT in the
+ * monolith (WORDJS_EMBEDDED=1): there PORT is the PUBLIC port monolith.js listens on, and config.port
+ * is only the loopback SSR listener it derives from the file. An unusable value falls through.
+ */
+function resolveBackendPort(fromFile: unknown): number {
+    const valid = (v: unknown): number | null => {
+        const n = Number(String(v ?? '').trim());
+        return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : null;
+    };
+    if (process.env.WORDJS_EMBEDDED !== '1') {
+        const fromEnv = valid(process.env.PORT);
+        if (fromEnv) return fromEnv;
+    }
+    return valid(fromFile) || defaultConfig.port;
+}
+
 const config: AppConfig = {
     ...defaultConfig,
     ...fileConfig,
+
+    port: resolveBackendPort(fileConfig.port),
 
     // Database file path. The native (better-sqlite3) and legacy (sql.js) drivers deliberately use
     // DIFFERENT default filenames so switching drivers never silently clobbers the other's data
@@ -659,3 +679,4 @@ module.exports = config;
 // Not part of the config object: the boot-time secret gate, exported for its regression test.
 Object.defineProperty(module.exports, 'assertInstalledJwtSecretIsNotPublished', { value: assertInstalledJwtSecretIsNotPublished, enumerable: false });
 Object.defineProperty(module.exports, 'resolveDbStrictDriver', { value: resolveDbStrictDriver, enumerable: false });
+Object.defineProperty(module.exports, 'resolveBackendPort', { value: resolveBackendPort, enumerable: false });

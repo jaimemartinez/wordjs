@@ -21,13 +21,18 @@
 #             and it must still do so after a restart, when the backend switches to HTTPS + mTLS
 #             the session the installer auto-issues must still authenticate after that restart
 #             admin/admin123 must not log in
+#   split-https  the same split install with the gateway's DEFAULT HTTPS (`{"ssl": true}`, what
+#             create-wordjs writes): install, restart, and a content page must still render — the
+#             plain-HTTP leg above could not see the gateway losing its TLS at install or SSR failing
+#             to trust its certificate after the restart. Also: the frontend listens on loopback only.
 #   enroll  a node carrying an enrollment-shaped config must ask for the wizard,
 #             not come up installed and seed an administrator
 #
 # Usage: scripts/smoke-deploy.sh <app-root>          (the root of an extracted, release:install'ed bundle)
 #
-# The HTTP legs run against the gateway's plain-HTTP mode: this gate is about wiring, and the TLS paths
-# have their own tests. Exits non-zero with the relevant log on the first failure.
+# The split leg runs against the gateway's plain-HTTP mode; split-https repeats the install with the
+# default self-signed HTTPS (curl -k: the certificate is the gateway's own auto-generated one). Exits
+# non-zero with the relevant log on the first failure.
 
 set -uo pipefail
 
@@ -117,7 +122,7 @@ fail() {
 wait_for_url() { # wait_for_url <url> [tries]
     local url="$1" tries="${2:-60}" i
     for ((i = 1; i <= tries; i++)); do
-        curl -fsS -o /dev/null --max-time 5 "$url" 2>/dev/null && { echo "   ✓ $url after ~$((i * 2))s"; return 0; }
+        curl -kfsS -o /dev/null --max-time 5 "$url" 2>/dev/null && { echo "   ✓ $url after ~$((i * 2))s"; return 0; }
         sleep 2
     done
     return 1
@@ -130,8 +135,9 @@ wait_for_log() { # wait_for_log <file> <grep-pattern> [tries]
     done
     return 1
 }
-code() { curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -H "Origin: $GW" "$1" 2>/dev/null; }
-body() { curl -sS --max-time 15 -H "Origin: $GW" "$1" 2>/dev/null; }
+# -k: the split-https leg talks to the gateway's self-signed certificate; it changes nothing over HTTP.
+code() { curl -ksS -o /dev/null -w '%{http_code}' --max-time 15 -H "Origin: $GW" "$1" 2>/dev/null; }
+body() { curl -ksS --max-time 15 -H "Origin: $GW" "$1" 2>/dev/null; }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. MONOLITH — the original gate: does the compiled bundle boot at all?
@@ -196,8 +202,8 @@ for svc in backend gateway frontend; do
 done
 echo "   ✓ all three services hold their certificates"
 
-assert_serving() { # assert_serving <label> <logfile>
-    local when="$1" log="$2" i html
+assert_serving() { # assert_serving <label> <logfile> [tries — 2 s apiece for the site name, default 12]
+    local when="$1" log="$2" tries="${3:-12}" i html
     # The frontend registers a moment after the install; give the registry a beat to settle.
     for ((i = 1; i <= 30; i++)); do
         [ "$(code "$GW/")" = 200 ] && break
@@ -212,14 +218,14 @@ assert_serving() { # assert_serving <label> <logfile>
     # name instead of asserting the first body — same lesson as the v1.12.12 theme-switch check.
     # A missing/broken purge still fails here: the shell never converges inside the window.
     html=""
-    for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    for ((i = 1; i <= tries; i++)); do
         html="$(body "$GW/")"
         case "$html" in *"$SITE_NAME"*) break ;; esac
         sleep 2
     done
     case "$html" in
         *"$SITE_NAME"*) ;;
-        *) fail "[$when] the home page does not contain the site name after 24s — the install purge/revalidation never landed and SSR is stuck on DEFAULT settings" "$log" ;;
+        *) fail "[$when] the home page does not contain the site name after $((tries * 2))s — the install purge/revalidation never landed and SSR is stuck on DEFAULT settings" "$log" ;;
     esac
     case "$html" in
         *'<title>'*undefined*'</title>'*)
@@ -237,7 +243,7 @@ assert_serving "fresh install" "$LOGS/split.log"
 session_me() {
     local code i
     for ((i = 1; i <= 20; i++)); do
-        code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -H "Origin: $GW" -b "$SESSION_JAR" "$GW/api/v1/auth/me" 2>/dev/null)"
+        code="$(curl -ksS -o /dev/null -w '%{http_code}' --max-time 15 -H "Origin: $GW" -b "$SESSION_JAR" "$GW/api/v1/auth/me" 2>/dev/null)"
         case "$code" in 502|000|'') sleep 1 ;; *) break ;; esac
     done
     echo "$code"
@@ -275,6 +281,63 @@ login="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -X POST "$GW/api/
 echo "   ✓ admin/admin123 is refused ($login)"
 echo "✅ split installs through the gateway and serves real content"
 stop_all
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2b. SPLIT WITH THE DEFAULT HTTPS — what create-wordjs and the docs actually deploy
+# ─────────────────────────────────────────────────────────────────────────────
+# The leg above seeds {"ssl": false}, so it could never see the two failures this one exists for: the
+# installer rewriting gateway-config.json without its `ssl` (the gateway came back on plain HTTP after
+# the first restart, under a site address that says https://), and the frontend's SSR refusing the
+# gateway's self-signed certificate once it routes through the gateway (every content page 404'd).
+echo
+echo "── split-https: install, restart, serve with the default HTTPS ──────────"
+rm -f  "$APP"/backend/data/*.db "$APP"/backend/data/install-token "$APP"/backend/wordjs-config.json "$APP"/frontend/wordjs-config.json
+rm -rf "$APP"/backend/certs "$APP"/frontend/certs "$APP"/gateway/certs "$APP"/gateway/ssl-auto.key "$APP"/gateway/ssl-auto.crt
+printf '{"ssl": true}' > "$APP/gateway/gateway-config.json"
+printf '{}'            > "$APP/gateway/gateway-registry.json"
+GW="https://localhost:3000"
+SITE_NAME="Smoke Gate TLS $$"
+
+start_group "$LOGS/split-https.log" "$APP" "npm start"
+wait_for_url "$GW/healthz" 90 || fail "split mode with the default HTTPS never served /healthz over https" "$LOGS/split-https.log"
+assert_role gateway "$LOGS/split-https.log"
+wait_for_url "$GW/api/v1/setup/status" 60     || fail "the HTTPS gateway could not reach the backend on a fresh instance" "$LOGS/split-https.log"
+token="$(cat "$APP/backend/data/install-token" 2>/dev/null)"
+[ -n "$token" ] || fail "no install token was minted" "$LOGS/split-https.log"
+SESSION_JAR="$LOGS/install-session-https.jar"
+install_out="$(curl -ksS --max-time 180 -X POST "$GW/api/v1/setup/install" -c "$SESSION_JAR"     -H 'Content-Type: application/json' -H "Origin: $GW" -H "x-install-token: $token"     -d "{\"siteName\":\"$SITE_NAME\",\"adminUser\":\"$ADMIN_USER\",\"adminEmail\":\"smoke@example.test\",\"adminPassword\":\"$ADMIN_PASS\",\"dbDriver\":\"sqlite-native\",\"siteUrl\":\"$GW\"}" 2>&1)"
+case "$install_out" in
+    *'"success":true'*) ;;
+    *) fail "the install through the HTTPS gateway failed: $install_out" "$LOGS/split-https.log" ;;
+esac
+echo "   ✓ installed through the HTTPS gateway"
+grep -q '"ssl"' "$APP/gateway/gateway-config.json"     || fail "the install rewrote gateway-config.json WITHOUT its ssl setting — the gateway will serve plain HTTP after a restart: $(cat "$APP/gateway/gateway-config.json")" "$LOGS/split-https.log"
+# 80 s, not 24: before the restart the frontend still listens on the plain-HTTP socket it opened before the
+# install, and the backend's purge to the https:// frontendUrl cannot reach it, so the home page changes on
+# its 60 s ISR window. What this proves is that SSR reaches the HTTPS gateway before any restart.
+assert_serving "https, fresh install" "$LOGS/split-https.log" 40
+
+echo "   restarting: the gateway must keep its HTTPS and SSR must trust it"
+stop_all
+start_group "$LOGS/split-https-restart.log" "$APP" "npm start"
+wait_for_url "$GW/healthz" 90     || fail "after a restart the gateway no longer answers HTTPS — the install dropped its TLS setting" "$LOGS/split-https-restart.log"
+assert_role gateway "$LOGS/split-https-restart.log"
+assert_serving "https, after restart" "$LOGS/split-https-restart.log"
+me="$(session_me)"
+[ "$me" = 200 ]     || fail "the install-time session was rejected after the HTTPS restart (GET /auth/me answered $me)" "$LOGS/split-https-restart.log"
+echo "   ✓ the install-time session survives the restart"
+
+# With the gateway on the same machine only the gateway talks to the frontend: it must not listen on
+# every interface (3001 used to be reachable from the network, around the gateway).
+listen_3001="$(ss -ltnH 2>/dev/null | awk '{print $4}' | grep -E ':3001$' || true)"
+[ -n "$listen_3001" ] || fail "nothing listens on :3001 after the restart" "$LOGS/split-https-restart.log"
+if echo "$listen_3001" | grep -qvE '^(127\.0\.0\.1|\[::1\]):3001$'; then
+    fail "the frontend listens beyond loopback with the gateway on the same machine: $listen_3001" "$LOGS/split-https-restart.log"
+fi
+echo "   ✓ the frontend listens on loopback only ($listen_3001)"
+echo "✅ split with the default HTTPS installs, survives a restart and serves real content"
+stop_all
+GW="http://localhost:3000"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. ENROLLMENT — a joined node must ask for the wizard, not self-install
@@ -319,4 +382,4 @@ echo "   ✓ reports uninstalled and seeded no administrator"
 echo "✅ enrollment leaves the node awaiting setup"
 
 echo
-echo "✅ deploy-mode smoke gate passed (mono + split + enrollment)"
+echo "✅ deploy-mode smoke gate passed (mono + split + split-https + enrollment)"

@@ -28,6 +28,13 @@ process.chdir(BACKEND); // config / data / uploads resolve relative to backend/,
 // stdout is this command's output (`status` prints JSON meant for jq): the backend modules it loads
 // log to stderr instead (core/logger).
 process.env.WORDJS_LOG_TO_STDERR = '1';
+// Not as root in an install another account owns: the database files and uploads it writes would lock
+// the service out (scripts/install-owner.js).
+if (require.main === module) {
+    const owner = require('./install-owner');
+    const args = process.argv.slice(2);
+    if (!args.includes('-h') && !args.includes('--help') && args[0] !== 'help') owner.refuseRootInForeignInstall(BACKEND, owner.scriptHint(__filename, args));
+}
 
 const USAGE = [
     'Usage: npm run media -- <command> [options]',

@@ -13,6 +13,7 @@ const {
 } = require('./backend-proxy-target.js');
 // The configured media/CDN origin joins img-src/media-src at response time (the build cannot know it).
 const { installMediaCsp } = require('./media-csp.js');
+const { frontendListenHost } = require('./local-gateway.js');
 
 const dev = process.env.NODE_ENV !== 'production';
 
@@ -65,6 +66,25 @@ const certPath = path.join(certDir, 'frontend.crt');
 
 const port = process.env.PORT || 3001;
 
+// Which address to listen on. With the gateway on this machine only the gateway talks to this server, so
+// it listens on loopback (local-gateway.js frontendListenHost); null keeps every interface, as before.
+// Published for src/instrumentation.ts, which then registers 127.0.0.1 with the gateway instead of the
+// site's public name.
+const listenHost = (() => {
+    try {
+        let dir = process.cwd();
+        if (!fs.existsSync(path.join(dir, 'wordjs-config.json'))) dir = path.resolve(dir, '..', 'backend');
+        let cfg = {};
+        try { cfg = JSON.parse(fs.readFileSync(path.join(dir, 'wordjs-config.json'), 'utf8')); } catch { /* none yet */ }
+        return frontendListenHost(dir, cfg);
+    } catch {
+        return null;
+    }
+})();
+if (listenHost) process.env.WORDJS_FRONTEND_LISTEN_HOST = listenHost;
+const listenArgs = listenHost ? [port, listenHost] : [port];
+const shownHost = listenHost ? (listenHost.includes(':') ? `[${listenHost}]` : listenHost) : 'localhost';
+
 // Decided ONCE, before Next starts, and published for src/instrumentation.ts: the gateway registration
 // advertises this node's URL in the scheme chosen here (advertisedUrl). Certificates the installer writes
 // later do not change the socket this process already listens on — only a restart does.
@@ -97,9 +117,9 @@ app.prepare().then(() => {
             dispatchGateway(req, res, parsedUrl);
         });
         if (onUpgradeGateway) server.on('upgrade', onUpgradeGateway);
-        server.listen(port, (err) => {
+        server.listen(...listenArgs, (err) => {
             if (err) throw err;
-            console.log(`> Ready on https://localhost:${port} (mTLS)`);
+            console.log(`> Ready on https://${shownHost}:${port} (mTLS)`);
         });
     } else {
         // Fallback to HTTP for safety if certs are gone
@@ -111,9 +131,9 @@ app.prepare().then(() => {
             dispatchFrontDoor(req, res, parsedUrl);
         });
         if (onUpgradeFrontDoor) server.on('upgrade', onUpgradeFrontDoor);
-        server.listen(port, (err) => {
+        server.listen(...listenArgs, (err) => {
             if (err) throw err;
-            console.log(`> Ready on http://localhost:${port} (HTTP Fallback)`);
+            console.log(`> Ready on http://${shownHost}:${port} (HTTP Fallback)`);
         });
     }
 });
