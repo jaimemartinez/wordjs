@@ -12,16 +12,36 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   it is now remapped to the imported attachment, also when the attachment is listed after the post or was
   matched on a re-run, and a re-run repairs posts an earlier import left pointing at the source id. A
   reference that resolves to no imported attachment is dropped instead of naming an unrelated row.
+
 - **Imported comments keep their dates.** `wp:comment_date` / `wp:comment_date_gmt` are restored instead of
   the import time.
+
 - **Re-importing content re-links menus.** When a menu is matched on a re-run, an item whose page, post or
   term no longer exists (deleted and imported again under a new id) is re-pointed at the re-imported copy;
   items whose target still exists, including ones edited by hand, are left alone. The summary reports them
   as `menus.items.relinked`.
+
 - **Public dates follow the site language.** Post dates on single posts, the home page and search results,
   and comment dates, are formatted in the site's language (`WPLANG`, the same value as `<html lang>`)
   instead of the visitor's browser or the server's locale, so an English site no longer shows `2/3/2024`
   for 2 March to a Spanish reader.
+
+- **A freshly installed site runs cron and outgoing webhooks without a restart.** The process that
+  finished the install wizard (or `POST /api/v1/setup/install`) had booted in setup mode, and the boot
+  starts cron, the coherence and cluster buses, the webhook dispatcher and the content outbox only on an
+  installed site. Until the first restart, webhooks delivered only the manual test ping (no post,
+  comment, term or settings event was ever queued) and scheduled posts were not published. The install
+  now starts these services in the running process, as the boot does (`core/runtime-services`).
+
+- **Release bundles no longer include a stray test backup in `backend/backups/`.** The 2.6.0 bundle
+  carried a backup left over from a local test run (a throwaway test database, no site data), and
+  `npx create-wordjs upgrade` copied it into the upgraded site, where it listed under Admin → Settings →
+  Backups. If a site upgraded to 2.6.0 shows a backup dated 2026-10-15 that it did not create, delete it
+  from that page; do not restore it. The packager now excludes `backend/backups/` by name,
+  `.gitignore` covers it, and CI fails if the repository tracks a backup or a database file outside test
+  fixtures or if a built bundle contains one. `create-wordjs upgrade` also treats `backend/backups/`
+  as site state, like `backend/data/` and `backend/uploads/`: it never adds to or replaces the site's
+  own backups.
 
 ## [2.6.0] - 2026-10-16
 
