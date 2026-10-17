@@ -1,4 +1,4 @@
-import { notFound } from "next/navigation";
+import { contentNotFound } from "@/lib/server-api";
 import type { Metadata } from "next";
 import ArchivePage, { archiveMetadata, type ArchiveSpec } from "@/lib/public/archiveRoute";
 import {
@@ -84,6 +84,6 @@ export async function generateMetadata({ params }: { params: Promise<RouteParams
 
 export default async function DateArchive({ params }: { params: Promise<RouteParams> }) {
     const spec = await resolveRoute(params);
-    if (!spec) notFound();
+    if (!spec) contentNotFound();
     return <ArchivePage {...spec} />;
 }

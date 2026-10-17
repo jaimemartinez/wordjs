@@ -11,7 +11,9 @@
  * Fetches are wrapped in React `cache()` so generateMetadata() and the page body share a single
  * request-scoped backend call instead of fetching the same post twice.
  */
+import { normalizeMediaBase, rewriteMediaString } from './mediaDelivery';
 import { cache } from 'react';
+import { notFound } from 'next/navigation';
 import type { Metadata } from 'next';
 import type { Post } from './api';
 import { THEME_CONTRACT } from '@/generated/visual-contract.generated';
@@ -423,11 +425,54 @@ export async function serverResponse(endpoint: string, options: ServerFetchOptio
 
     try {
         const res = await fetch(url, { headers, ...cacheInit });
+        if (res.status === 502 || res.status === 504) noteBackendUnavailable(); // the gateway's "no upstream"
         return fromRequestedSite(res, requestSiteHost());
     } catch {
         // Backend unreachable during SSR — caller decides how to degrade.
+        noteBackendUnavailable();
         return null;
     }
+}
+
+/**
+ * BACKEND OUTAGES MUST NOT BE CACHED. Every read here degrades to null, so a public page rendered while
+ * the backend gave no answer (stopped, restarting, busy preparing a site it just created) came out as a
+ * 200 with the defaults — title "WordJS", no menus — or as a 404 for a post that exists, and ISR cached
+ * that page and kept serving it after the backend was back. The render now records that it got no
+ * answer (a failed connection, or the gateway's 502/504; never a status the backend chose, such as the
+ * install guard's or a suspended site's 503), and the public layout and the public pages' not-found
+ * decisions throw instead of rendering it: Next keeps serving the last good copy, or answers an error
+ * that is not cached, and the next request renders again. A build never throws: `next build`
+ * prerenders against a backend that cannot answer by design (hermetic-build.js).
+ */
+const backendOutage = cache((): { unavailable: boolean } => ({ unavailable: false }));
+
+function noteBackendUnavailable(): void {
+    try { backendOutage().unavailable = true; } catch { /* outside a render: nothing to protect */ }
+}
+
+/** Did a read of THIS render get no answer from the backend? Always false while building. */
+export function backendUnavailableInThisRender(): boolean {
+    if (isHermeticBuild() || process.env.NEXT_PHASE === 'phase-production-build') return false;
+    try { return backendOutage().unavailable; } catch { return false; }
+}
+
+export class BackendUnavailableError extends Error {
+    constructor() {
+        super('The backend did not answer while rendering this page; it is not rendered (or cached) until it does.');
+        this.name = 'BackendUnavailableError';
+    }
+}
+
+/** Throw BackendUnavailableError when this render got no answer from the backend. */
+export function assertBackendAnswered(): void {
+    if (backendUnavailableInThisRender()) throw new BackendUnavailableError();
+}
+
+/** notFound() for a public page — unless the "not found" is really "the backend did not answer". */
+export function contentNotFound(): never {
+    assertBackendAnswered();
+    notFound();
 }
 
 /**
@@ -515,13 +560,28 @@ export const getSettings = siteCache((): Promise<Record<string, string> | null> 
 );
 
 /**
+ * How long a value read by refreshMediaCdnOrigin outranks the one a page render publishes: the
+ * settings Data Cache entry (revalidate 60) a render reads can predate the purge for that long.
+ */
+const MEDIA_ORIGIN_REFRESH_WINS_MS = 60_000;
+
+/**
  * The media/CDN origin, published process-wide for the custom server's CSP amendment
  * (frontend/media-csp.js): the build-time header cannot know where this site's media lives.
+ *
+ * `fresh` marks a value read from the backend with no cache (refreshMediaCdnOrigin). For a minute after
+ * one, a page render's value is ignored: after a purge, getSettings still answers from the stale cache
+ * entry (stale-while-revalidate) and would put the OLD origin back, so the admin's CSP lagged ~20 s
+ * behind a media storage change even with the refresh. Exported for the tests.
  */
-function publishMediaCdnOrigin(settings: unknown): void {
+export function publishMediaCdnOrigin(settings: unknown, fresh = false): void {
     if (!settings || typeof settings !== 'object') return;
+    const g = globalThis as Record<string, unknown>;
+    const now = Date.now();
+    if (!fresh && now - Number(g.__WORDJS_MEDIA_CDN_REFRESHED_AT__ || 0) < MEDIA_ORIGIN_REFRESH_WINS_MS) return;
     const origin = (settings as Record<string, unknown>).media_cdn_origin;
-    (globalThis as Record<string, unknown>).__WORDJS_MEDIA_CDN_ORIGIN__ = typeof origin === 'string' ? origin : '';
+    g.__WORDJS_MEDIA_CDN_ORIGIN__ = typeof origin === 'string' ? origin : '';
+    if (fresh) g.__WORDJS_MEDIA_CDN_REFRESHED_AT__ = now;
 }
 
 /**
@@ -537,7 +597,7 @@ export async function refreshMediaCdnOrigin(): Promise<void> {
     try {
         const res = await fetch(url, { cache: 'no-store' });
         if (!res.ok) return;
-        publishMediaCdnOrigin(await res.json().catch(() => null));
+        publishMediaCdnOrigin(await res.json().catch(() => null), true);
     } catch {
         /* keep the published value */
     }
@@ -864,7 +924,16 @@ export function htmlToText(html: string | undefined | null, max = 160): string {
  * fallback for imported/legacy content. '/'-relative values are accepted because the root
  * layout sets metadataBase, which absolutizes them in the rendered tags.
  */
-function pickOgImage(post: Post): string[] | undefined {
+function pickOgImage(post: Post, mediaBase = ''): string[] | undefined {
+    // With the whole library in the bucket (`media_public_base`), the share image is the CDN copy, as the
+    // page body's <img> already is: the featured image's relative `path` rewritten like the body.
+    // Otherwise `url` (absolute on the main address) as before.
+    const base = normalizeMediaBase(mediaBase);
+    const path = (post.featuredMedia as { path?: unknown } | undefined)?.path;
+    if (base && typeof path === 'string' && path.startsWith('/uploads/')) {
+        const rewritten = rewriteMediaString(path, base);
+        if (rewritten !== path) return [rewritten];
+    }
     if (post.featuredMedia?.url && /^(https?:\/\/|\/)/i.test(post.featuredMedia.url)) {
         return [post.featuredMedia.url];
     }
@@ -934,7 +1003,7 @@ function metaFlag(value: unknown): boolean {
  */
 export function buildPostMetadata(
     post: Post,
-    opts: { siteName?: string; canonicalPath?: string } = {}
+    opts: { siteName?: string; canonicalPath?: string; mediaBase?: string } = {}
 ): Metadata {
     const meta = postMetaRecord(post);
     const title = metaText(meta.seo_title) || post.title || 'Untitled';
@@ -943,7 +1012,7 @@ export function buildPostMetadata(
         || undefined;
     const noindex = metaFlag(meta.noindex);
     const isArticle = post.type !== 'page';
-    const images = pickOgImage(post);
+    const images = pickOgImage(post, opts.mediaBase);
     const canonical = opts.canonicalPath || `/${post.slug || post.id}`;
 
     // Branch on a *literal* `type` so TS narrows the OpenGraph discriminated union (article-only
@@ -1048,9 +1117,9 @@ export function buildWebSiteJsonLd(siteUrl: string, siteName: string, descriptio
 }
 
 /** BlogPosting (posts) / WebPage (pages) schema for a single content item. */
-export function buildPostJsonLd(post: Post, siteUrl: string, siteName?: string) {
+export function buildPostJsonLd(post: Post, siteUrl: string, siteName?: string, mediaBase?: string) {
     const url = `${siteUrl}/${post.slug || post.id}`;
-    const images = pickOgImage(post)?.map((u) => (u.startsWith('/') ? `${siteUrl}${u}` : u));
+    const images = pickOgImage(post, mediaBase)?.map((u) => (u.startsWith('/') ? `${siteUrl}${u}` : u));
     const description = htmlToText(post.excerpt || post.content || '', 160) || undefined;
     return {
         '@context': 'https://schema.org',

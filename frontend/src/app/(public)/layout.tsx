@@ -9,7 +9,7 @@ import ViewTransitions from "@/components/public/ViewTransitions";
 import ChromeRenderer from "@/components/chrome/ChromeRenderer";
 import { buildChromeBindings, resolveEffectiveChrome } from "@/lib/chromeData";
 import { parseThemeLayout } from "@/lib/themeLayout";
-import { getSettings, getPublicAssets, getMenuByLocation, getThemeChrome, checkSetupRequired } from "@/lib/server-api";
+import { getSettings, getPublicAssets, getMenuByLocation, getThemeChrome, checkSetupRequired, assertBackendAnswered } from "@/lib/server-api";
 
 export default async function PublicLayout({
     children,
@@ -33,6 +33,8 @@ export default async function PublicLayout({
     // the production build (no backend there): the static shell ISR-refreshes on first traffic.
     // /install lives outside this (public) group, so this cannot loop.
     if (!settings && process.env.NEXT_PHASE !== 'phase-production-build' && await checkSetupRequired()) redirect("/install");
+    // No settings because the backend did not answer: never render (and cache) the defaults as this page.
+    if (!settings) assertBackendAnswered();
     let layout: Record<string, unknown> = {};
     try {
         // The settings endpoint JSON-parses option values, so this arrives as an OBJECT (a string

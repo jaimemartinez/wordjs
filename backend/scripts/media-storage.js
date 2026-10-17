@@ -43,6 +43,8 @@ const USAGE = [
     '  test                                     write, read and delete a probe object in the bucket',
     '  offload [--delete-local] [--restart] [--limit N]',
     '  restore [--restart] [--limit N]',
+    '',
+    'On a network of sites, every command works on the main site.',
 ].join('\n');
 
 function parseArgs(argv) {
@@ -67,7 +69,15 @@ if (!useDist) {
 }
 const mod = (rel) => useDist ? require(path.join(BACKEND, 'dist', rel + '.js')) : require(path.join(BACKEND, 'src', rel));
 
-(async () => {
+// On a network (multisite) every read of site data needs a site context, and a CLI process has none:
+// without one, `status` failed with "No site context". The media library this command manages is the
+// main site's, so the work runs as site 1 (a no-op on a single-site install).
+const runAsMainSite = (fn) => {
+    const site = mod('core/site-context');
+    return site.runWithSite(site.PRIMARY_SITE_ID, fn);
+};
+
+runAsMainSite(async () => {
     let args;
     try { args = parseArgs(process.argv.slice(2)); } catch (e) { console.error(`${e.message}\n\n${USAGE}`); process.exit(2); }
     if (!args.command || args.command === 'help') { console.log(USAGE); process.exit(args.command ? 0 : 2); }
@@ -118,4 +128,4 @@ const mod = (rel) => useDist ? require(path.join(BACKEND, 'dist', rel + '.js')) 
         console.error(e && e.message ? e.message : e);
         process.exit(1);
     }
-})();
+});

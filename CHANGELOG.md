@@ -120,6 +120,34 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **A page rendered while the backend was down is no longer cached.** Public pages rendered with the
+  defaults (title "WordJS", no menus) or as a 404 when the backend did not answer, and the page cache kept
+  serving that copy after the backend was back; a site created a moment earlier could answer its own
+  address with it. A render that gets no answer (a failed connection, or the gateway's 502/504) now
+  fails instead: the last good copy keeps being served, or an error that is not cached, and the next
+  request renders the page again.
+
+- **The share image of a post follows the media library to the CDN.** With the library in an
+  S3-compatible bucket, the page body already loaded images from the CDN, but `og:image`,
+  `twitter:image` and the JSON-LD image still named `<site>/uploads/…`, which only answers with a
+  redirect to the bucket. They now use the same CDN URL as the body.
+
+- **The admin's media CSP no longer slips back to the old origin after a storage change.** The settings
+  purge re-read the media origin at once, but the next page render put the stale cached value back, so a
+  reload within about 20 seconds of saving could still refuse the new bucket. The fresh value now holds
+  until the cache has caught up.
+
+- **The Verso canvas links the theme stylesheet once.** The site chrome drawn inside the canvas added its
+  own copy of the theme and framework stylesheets, and the canvas's theme check then compared against the
+  wrong one and added a third.
+
+- **The WordPress import summary points at Menus.** It said "Appearance → Menus" (WordPress's name); it
+  now links to **Menus** in the admin sidebar.
+
+- **`npm run media -- …` works on a network of sites.** With multisite on, every command failed with
+  "No site context: this work did not say which site it belongs to.", because the CLI process never said
+  which site it was working for. It now works on the main site's media library, as its help text says.
+
 - **`npm run media -- status` prints only JSON on stdout.** The config boot notes ("Config loaded from
   wordjs-config.json", the secret auto-generation lines) still went to stdout ahead of the command's
   output, so piping it to `jq` failed. With `WORDJS_LOG_TO_STDERR=1`, which the CLI sets, they go to

@@ -1440,7 +1440,7 @@ export default function VersoEditor({
                                                 jamás entra en _puck_data). Sin esto el canvas no enseñaba
                                                 header/footer y los espaciados del contenedor público
                                                 divergían (defecto reportado por el usuario). */}
-                                            <PublicLayoutShell>
+                                            <PublicLayoutShell stylesheets={false}>
                                                 <VersoThemeTemplate handle={handle} kind={templateKind} postType={templatePostType}>
                                                     <EditorRenderer
                                                         handle={handle}
