@@ -140,6 +140,9 @@ test('an entry is exactly one host and one port; metadata, link-local, unspecifi
     assert.deepStrictEqual(perms.normalizePrivateDestinations(['192.168.1.20:587', ' 192.168.1.20:587 ', '[FD00::25]:25', '169.254.169.254:80']),
         ['192.168.1.20:587', '[fd00::25]:25']);
     assert.strictEqual(perms.normalizePrivateDestinations(['10.0.0.1:1', '10.0.0.1:2', '10.0.0.1:3', '10.0.0.1:4', '10.0.0.1:5']).length, 4);
+    // The host ships approvals inside the allowlist it hands the child; they never switch the allowlist on.
+    try { eg.setAllowedHosts(['192.168.1.20:587']); assert.strictEqual(eg.isHostAllowed('any.example.com'), true); }
+    finally { eg.setAllowedHosts(null); }
 });
 
 test('without an approval a network-granted plugin reaches no private address', async () => {

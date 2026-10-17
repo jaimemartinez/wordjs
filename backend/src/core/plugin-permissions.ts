@@ -59,7 +59,7 @@ function isValidEgressHost(h: string): boolean {
 const MAX_PRIVATE_DESTINATIONS = 4;
 function privateDestinationOf(h: string): string | null {
     if (isValidEgressHost(h)) return null;
-    let d: any = null;
+    let d: any;
     try { d = require('./egress-guard').parsePrivateDestination(h); } catch { return null; }
     if (!d) return null;
     return (d.host.includes(':') ? `[${d.host}]` : d.host) + ':' + d.port;

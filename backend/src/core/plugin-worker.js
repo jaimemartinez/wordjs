@@ -163,9 +163,6 @@ Object.defineProperty(global, '__WORDJS_PLUGIN_ALLOWED_HOSTS__', { value: Object
 // so this network-granted plugin must reach NO public host (private/loopback already blocked) until it
 // reloads. Immutable so a plugin can't clear it.
 Object.defineProperty(global, '__WORDJS_PLUGIN_EGRESS_DENY_ALL__', { value: !!cfg.egressDenyAll, writable: false, configurable: false, enumerable: false });
-// Administrator-approved private destinations (exact host:port, e.g. a LAN SMTP smarthost) — the only
-// non-public addresses this plugin may reach. Host-resolved at spawn, immutable like the allowlist.
-Object.defineProperty(global, '__WORDJS_PLUGIN_PRIVATE_DESTINATIONS__', { value: Object.freeze(Array.isArray(cfg.privateDestinations) ? cfg.privateDestinations.slice() : []), writable: false, configurable: false, enumerable: false });
 const netAllowed = !!global.__WORDJS_PLUGIN_NETWORK__;
 if (!netAllowed) {
     for (const name of ['fetch', 'WebSocket', 'EventSource']) {
@@ -190,7 +187,6 @@ if (!netAllowed) {
             if (global.__WORDJS_PLUGIN_EGRESS_DENY_ALL__) eg.setDenyAllEgress();
             else eg.setAllowedHosts(global.__WORDJS_PLUGIN_ALLOWED_HOSTS__);
         } catch { /* best-effort */ }
-        try { if (!global.__WORDJS_PLUGIN_EGRESS_DENY_ALL__) eg.setPrivateDestinations(global.__WORDJS_PLUGIN_PRIVATE_DESTINATIONS__); } catch { /* best-effort: none approved */ }
         // PRIMARY enforcement: patch net.Socket.prototype.connect so EVERY outbound TCP connection in
         // this child is validated AT THE REAL CONNECT against the resolved IP — covers raw net/tls,
         // http/https (incl. custom agent/createConnection), the net.Stream alias, prototype-chain

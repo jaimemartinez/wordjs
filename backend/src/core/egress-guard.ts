@@ -183,9 +183,14 @@ let denyAllEgress = false;
 export function setDenyAllEgress(): void { denyAllEgress = true; }
 export function setAllowedHosts(list: any): void {
     if (!Array.isArray(list)) { allowedHosts = null; return; }
+    // `host:port` entries are the administrator-approved PRIVATE destinations, which the host ships in the
+    // same list (plugin-isolate getEgressAllowlistFor). They are installed separately and never count as
+    // allowlist entries, so a list holding only approvals still means "every public host".
+    setPrivateDestinations(list.filter((h) => parsePrivateDestination(h) !== null));
+    list = list.filter((h) => parsePrivateDestination(h) === null);
     // Normalize each entry to a bare host: lowercase, trim, strip a leading '*.'/'.' and a trailing dot.
     const clean = list
-        .map((h) => String(h).toLowerCase().trim().replace(/^\*?\./, '').replace(/\.$/, ''))
+        .map((h: any) => String(h).toLowerCase().trim().replace(/^\*?\./, '').replace(/\.$/, ''))
         .filter(Boolean);
     allowedHosts = clean.length ? Array.from(new Set(clean)) : null;
 }

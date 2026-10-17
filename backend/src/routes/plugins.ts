@@ -1990,6 +1990,8 @@ router.post('/:slug/egress-hosts', authenticate, isAdmin, asyncHandler(async (re
  *                   type: string
  *       400:
  *         description: The slug is not a well-formed plugin slug.
+ *       404:
+ *         description: No plugin with this slug is installed.
  *       401:
  *         description: Not authenticated.
  *       403:
@@ -2012,8 +2014,12 @@ router.get('/:slug/private-egress', authenticate, isAdmin, asyncHandler(async (r
 }));
 
 router.post('/:slug/private-egress', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
-    const slug = safeSlugParam(req.params.slug);
-    if (!slug) return res.status(400).json({ error: 'Invalid plugin slug' });
+    const requested = safeSlugParam(req.params.slug);
+    if (!requested) return res.status(400).json({ error: 'Invalid plugin slug' });
+    // Approvals are for an INSTALLED plugin, and the slug used below (store key, reload) is the one read from
+    // the installed list — never the request's own string.
+    const slug = (await getAllPlugins()).map((p: any) => String(p.slug)).find((s: string) => s === requested);
+    if (!slug) return res.status(404).json({ error: 'Plugin not installed' });
     const { applyPrivateDestinations, getPrivateDestinations } = require('../core/plugin-permissions');
     const body = req.body || {};
     const entries: string[] = Array.isArray(body.destinations) ? body.destinations.slice(0, 32).map((h: any) => String(h)) : [];
