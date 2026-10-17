@@ -1,38 +1,37 @@
 /**
  * Hello World Plugin - Unit Tests
- * These tests run BEFORE the plugin is activated.
- * If any test fails, the plugin will NOT be activated.
+ *
+ * The plugin's own tests, for its author: run them with
+ *   node --test backend/plugins/hello-world/tests/hello-world.test.js
+ * WordJS does NOT run them at activation — a plugin's test files are code, and the host never executes
+ * plugin code outside the sandbox. Keep tests like these in your plugin and run them in your own CI.
  */
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 
+const plugin = require('../index.js');
+
 describe('Hello World Plugin', () => {
 
-    it('should export init function', () => {
-        const plugin = require('../index.js');
-        assert.ok(typeof plugin.init === 'function', 'Plugin must export init function');
+    it('exports init, deactivate and metadata', () => {
+        assert.strictEqual(typeof plugin.init, 'function');
+        assert.strictEqual(typeof plugin.deactivate, 'function');
+        assert.ok(plugin.metadata && plugin.metadata.name);
+        assert.match(plugin.metadata.version, /^\d+\.\d+\.\d+$/);
     });
 
-    it('should export deactivate function', () => {
-        const plugin = require('../index.js');
-        assert.ok(typeof plugin.deactivate === 'function', 'Plugin must export deactivate function');
+    it('registers the [hello] shortcode through the bridge', () => {
+        const registered = {};
+        const bridge = { shortcodes: { add: (tag, handler) => { registered[tag] = handler; } } };
+        plugin.init(bridge);
+        assert.strictEqual(typeof registered.hello, 'function');
+        assert.strictEqual(registered.hello({ name: 'Ada' }, '', 'hello'), '<p class="hello-world-greeting">Hello, Ada!</p>');
     });
 
-    it('should export metadata', () => {
-        const plugin = require('../index.js');
-        assert.ok(plugin.metadata, 'Plugin must export metadata');
-        assert.ok(plugin.metadata.name, 'Metadata must have name');
-        assert.ok(plugin.metadata.version, 'Metadata must have version');
-    });
-
-    it('should have valid version format', () => {
-        const plugin = require('../index.js');
-        const versionRegex = /^\d+\.\d+\.\d+$/;
-        assert.ok(
-            versionRegex.test(plugin.metadata.version),
-            `Version "${plugin.metadata.version}" must match semver format (x.y.z)`
-        );
+    it('greets the world by default and escapes the name', () => {
+        assert.strictEqual(plugin.renderHello({}), '<p class="hello-world-greeting">Hello, world!</p>');
+        assert.strictEqual(plugin.renderHello({ name: '<b>x</b>' }), '<p class="hello-world-greeting">Hello, &lt;b&gt;x&lt;/b&gt;!</p>');
     });
 
 });

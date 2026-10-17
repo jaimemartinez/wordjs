@@ -159,6 +159,7 @@ node backend/cli/wordjs.js create theme  neon-shop --primary "#7c3aed" --seconda
   --bg "#0b1020" --text "#e5e7eb" --archetype cyber  # …or generate it from 4 seed colors
 node backend/cli/wordjs.js build theme  neon-shop    # recompile theme.json → style.css block
 node backend/cli/wordjs.js pack my-plugin --build    # zip a plugin for distribution
+node backend/cli/wordjs.js pack theme neon-shop      # zip a theme for distribution
 node backend/cli/wordjs.js doctor theme default      # lint a theme against the token contract
 node backend/cli/wordjs.js import stitch neon-shop   # Stitch design system → theme.json tokens
 node backend/cli/wordjs.js verify theme neon-shop    # compiled CSS vs. the design it came from
@@ -258,9 +259,17 @@ Closes with `N matched, M mismatched, K not comparable.` and exits `1` on any mi
 
 ### `pack <slug> [--build] [--out <dir>]`
 
-Zips `backend/plugins/<slug>` into `<slug>.zip` with a single `<slug>/` root folder — the exact layout `POST /api/v1/plugins/upload` (Admin → Plugins → Add New) expects — excluding `node_modules/`, `data/`, `.git/` and `os-tmp/` (dependencies reinstall automatically on activation), and prints the resulting size. Output defaults to the current directory (`--out <dir>` to change; the directory is created if needed).
+Zips `backend/plugins/<slug>` into `<slug>.zip` with a single `<slug>/` root folder — the exact layout `POST /api/v1/plugins/upload` (Admin → Plugins → **Upload Plugin**) and the in-place update `POST /api/v1/plugins/<slug>/update` expect — excluding `node_modules/`, `data/`, `.git/` and `os-tmp/` (dependencies reinstall automatically on activation), and prints the resulting size. Output defaults to the current directory (`--out <dir>` to change; the directory is created if needed).
 
 It aborts if `backend/plugins/<slug>/manifest.json` does not exist, and if `adm-zip` cannot be resolved (*"run `npm install` inside backend/ first"*) — it is a backend dependency, resolved from `backend/node_modules`. With `--build` it first runs `backend/scripts/build-plugin.js <slug>` to pre-compile the frontend bundles into `dist/`, aborting if that build fails; if the builder script is missing the flag is skipped with a warning instead.
+
+`--build` needs the backend's **development** dependencies (`esbuild`, `tailwindcss`). A production install (the release bundle, `npm ci --omit=dev`) does not have them, so `pack --build` there stops with a message naming what is missing instead of a `Cannot find module` stack: build in a repository checkout (clone, `npm install` inside `backend/`, pack, then upload the zip), or install them in place with `npm install --include=dev` inside `backend/`. Without `--build` the plugin is zipped as it is.
+
+To install the zip on a site where the plugin is already installed, upload it the same way and choose **Update** — see [plugins.md → Updating a plugin](plugins.md#updating-a-plugin-upload-a-newer-zip).
+
+### `pack theme <slug> [--out <dir>]`
+
+Zips `backend/themes/<slug>` into `<slug>.zip` with a single `<slug>/` root folder — what `POST /api/v1/themes/upload` (Appearance → Themes → **Install Theme**) and the in-place update `POST /api/v1/themes/<slug>/update` expect — excluding `node_modules/`, `.git/`, `.design/` (a Stitch export kept beside the theme), `os-tmp/` and OS junk. It aborts when the folder has neither `theme.json` nor `style.css`. Output defaults to the current directory (`--out <dir>` to change). A theme downloaded from the admin (`GET /themes/<slug>/download`) has the same layout, so it can be uploaded back as it is.
 
 ## 4. Role Manager (`cli/force-sync-roles.js`)
 

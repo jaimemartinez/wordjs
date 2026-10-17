@@ -4,6 +4,48 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [Unreleased]
+
+### Added
+
+- **Update a plugin or a theme by uploading a newer zip.** Uploading a zip whose plugin is already
+  installed used to fail twice — "deactivate it", then "uninstall it" — and uninstalling dropped the
+  plugin's grants. Now **Plugins → Upload Plugin** answers `409 plugin_exists` with both versions and the
+  screen offers **Update** (`POST /api/v1/plugins/:slug/update`): the new code is extracted to a staging
+  directory and validated there first (a bad zip leaves the installed plugin running, untouched), then
+  swapped in and restarted if it was active. `data/`, the plugin's tables, its grants and its egress list
+  are kept; permissions the new version adds are reported and stay off, and the permissions dialog opens
+  on them. Themes get the same: **Install Theme** with an installed theme's zip offers **Update**
+  (`POST /api/v1/themes/:slug/update`, staged and compiled first, then swapped; an active theme stays
+  active and keeps its customizer settings). See `documentation/plugins.md` and `documentation/themes.md`.
+- **`wordjs.js pack theme <slug>`** zips a theme with the single `<slug>/` root folder the upload and the
+  update expect. The admin's theme download now has the same layout, so it can be uploaded back.
+
+### Fixed
+
+- `wordjs.js pack <slug> --build` on a production install stopped with a raw `Cannot find module
+  'esbuild'`; it now says the backend's development dependencies are missing and how to build instead.
+  Its closing hint names the real button (**Upload Plugin**, not "Add New").
+- A theme generated from valid seeds could get a `--wjs-color-text-muted` under AA (4.42:1 for
+  `#2b211c` on `#fbf7f2`), which the doctor then flagged. The derivation now washes the text less when
+  needed and always reaches 4.5:1; palettes that already passed are unchanged.
+- A theme's `styles.hero.bg` / `--wjs-hero-bg` never showed: the framework's default hero gradient was
+  painted over it. Both ends of that default gradient now fall back to `--wjs-hero-bg`; an explicit
+  gradient or image still wins. A bundled theme that set only `--wjs-hero-bg` now shows that colour.
+- After activating a theme, the first visit to each cached page still got the previous theme
+  (stale-while-revalidate). Activation, and updating the active theme, now expire those pages at once.
+- An isolated plugin's `comments:pre_insert` filter that threw or timed out was skipped and the comment
+  accepted, against the hook's contract. That hook now fails closed: the comment is refused with the
+  plugin's own 4xx status and `rest_*` code when it gave one, `503 rest_plugin_check_failed` otherwise.
+  Other filters keep falling back to the unchanged value.
+- `backend/types/wordjs-bridge.d.ts` declares `WordJSRouteUser.pluginCapabilities`,
+  `res.sendPrivateMedia()` and `wordjs.media.getPrivate()`.
+- The `hello-world` sample filtered `the_content`, a hook core never applies, and its test claimed to
+  run before activation; it now registers a `[hello]` shortcode and says its tests are the author's to
+  run. `POST /plugins/sample` writes the same isolated sample (it wrote an in-process one without a
+  manifest). The `test-schema` fixture declares `database:write` instead of an access level the upload
+  refuses, and drops its unused `main` / `active` keys.
+
 ## [2.6.0] - 2026-10-16
 
 ### Added

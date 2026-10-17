@@ -307,6 +307,99 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
 }));
 
 /**
+ * @swagger
+ * /plugins/{slug}/update:
+ *   post:
+ *     summary: Update an installed plugin from a new zip (in place)
+ *     description: >-
+ *       The zip's root folder must be the plugin's slug. The new code is extracted to a private staging
+ *       directory and validated there first, so a zip that fails validation leaves the installed plugin
+ *       untouched (and running). Only then is the plugin stopped, its code swapped, and the plugin restarted
+ *       if it was active. Its data/ directory, its database tables, its stored grants and its egress list
+ *       are kept. Permissions the new version declares that are not granted are reported in
+ *       `ungrantedPermissions` (and the ones the previous version did not declare in `newPermissions`) —
+ *       they stay off until an administrator grants them. A plugin installed from a catalog loses its
+ *       recorded catalog origin: its code now comes from this upload.
+ *     tags: [Plugins]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               plugin:
+ *                 type: string
+ *                 format: binary
+ *     responses:
+ *       200:
+ *         description: Updated ({ updated, fromVersion, toVersion, reactivated, newPermissions, ungrantedPermissions })
+ *       400:
+ *         description: Invalid zip, or its root folder names a different plugin (nothing was changed)
+ *       404:
+ *         description: The plugin is not installed
+ *       409:
+ *         description: Another operation on this plugin is in progress, or the sandbox refused to start the new version (rolled back)
+ */
+// Multisite: not in core/multisite-guards' SITE_PLUGIN_ROUTES, so another site gets the network's 403.
+router.post('/:slug/update', authenticate, isAdmin, upload.single('plugin'), asyncHandler(async (req: Request, res: Response) => {
+    const slug = safeSlugParam(req.params.slug);
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    if (!slug) {
+        try { fs.unlinkSync(path.resolve(OS_TMP_DIR, path.basename(req.file.path))); } catch { /* */ }
+        return res.status(400).json({ error: 'Invalid plugin slug' });
+    }
+    const result = await runPluginUpdate(slug, req.file.path, null, { via: 'upload' });
+    if (result.ok) {
+        await recordAudit(req.user && req.user.id, 'plugin.update', 'plugin', slug, {
+            via: 'upload', fromVersion: result.body.fromVersion, toVersion: result.body.toVersion,
+            newPermissions: result.body.newPermissions,
+        });
+    }
+    res.status(result.status).json(result.body);
+}));
+
+/**
+ * The 409 for a zip whose plugin is already installed. It used to tell an admin with an ACTIVE plugin to
+ * "Deactivate it before re-uploading" — and then, once deactivated, refuse again with "Uninstall it",
+ * whose uninstall drops the plugin's grants. Neither was the way to update. Now it names the way that is:
+ * POST /plugins/:slug/update with the same zip (the Plugins screen offers it from this answer, keyed on
+ * `code`, with the two versions to show).
+ */
+function alreadyInstalled(slug: string, active: boolean, zip: any): { ok: boolean; status: number; body: any } {
+    let installedVersion: string | null = null;
+    let incomingVersion: string | null = null;
+    try {
+        const m = JSON.parse(fs.readFileSync(path.join(resolveSafePluginDir(slug), 'manifest.json'), 'utf8'));
+        if (m && m.version != null) installedVersion = String(m.version).slice(0, 64);
+    } catch { /* unreadable manifest — no version to show */ }
+    try {
+        const entry = zip.getEntry(`${slug}/manifest.json`) || zip.getEntry('manifest.json');
+        const m = entry && entry.header && entry.header.size <= 64 * 1024 ? JSON.parse(entry.getData().toString('utf8')) : null;
+        if (m && m.version != null) incomingVersion = String(m.version).slice(0, 64);
+    } catch { /* the update validates the manifest properly */ }
+    const v = installedVersion ? ` (v${installedVersion})` : '';
+    return {
+        ok: false,
+        status: 409,
+        body: {
+            error: `Plugin '${slug}'${v} is already installed${active ? ' and active' : ''}. To replace it with this zip, update it `
+                + `instead — its data, tables and permissions are kept (Plugins → Upload Plugin offers the update; API: POST /api/v1/plugins/${slug}/update).`,
+            code: 'plugin_exists',
+            // Under `data`, the member the admin's API client keeps on a thrown error (lib/api.ts).
+            data: { slug, active, installedVersion, incomingVersion },
+        },
+    };
+}
+
+/**
  * Shared plugin-zip install pipeline — the SINGLE implementation of every security check
  * (zip bomb, Zip Slip, slug validation, squat/clobber refusal, manifest + AST validation),
  * used by BOTH the direct upload above and the marketplace installer (routes/marketplace.ts).
@@ -328,7 +421,15 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
  *   pass `req.user.id`; the update path leaves it undefined — it cannot reach an orphan, because it
  *   refuses a slug with no manifest.json long before this.
  */
-async function installPluginFromZip(zipPathIn: string, originalName: string, expectedSlug?: string, actorId?: any): Promise<{ ok: boolean; status: number; body: any }> {
+/**
+ * @param opts.stageRoot STAGING mode (the update path). Extract into `<stageRoot>/<slug>/` — a private
+ *   directory under os-tmp that runPluginUpdate created — and run every validation THERE, so a zip that
+ *   fails validation never touches the installed plugin, which keeps running. The live-plugin checks
+ *   (orphan reclaim, "already active", "directory already exists") do not apply: replacing that plugin is
+ *   the point, and runPluginUpdate owns the swap. The case/Unicode squat check still runs against
+ *   PLUGINS_DIR. The zip is consumed either way; the staged files are what the caller moves into place.
+ */
+async function installPluginFromZip(zipPathIn: string, originalName: string, expectedSlug?: string, actorId?: any, opts: { stageRoot?: string } = {}): Promise<{ ok: boolean; status: number; body: any }> {
     // CONTENCION PRIMERO — INLINE, Y AQUI SE QUEDA.
     //
     // POR QUE AQUI Y NO EN UN HELPER (no lo refactorices a una utilidad). Esta funcion borra su zip
@@ -447,8 +548,21 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
         // PLUGINS_DIR; files-at-root extract into installedDir. Confinement is checked against installedDir
         // either way — so cross-plugin overwrite (my-plugin/../victim/evil.js) is blocked by CONTAINMENT,
         // not merely by a '..' substring heuristic.
-        const installedDir = resolveSafePluginDir(intendedSlug);
-        const targetDir = singleRoot ? PLUGINS_DIR : installedDir;
+        const staging = typeof opts.stageRoot === 'string' && opts.stageRoot.length > 0;
+        let installRoot = PLUGINS_DIR;
+        let installedDir: string;
+        if (staging) {
+            // The stage root is ours (makeStageDir), but prove it anyway: a child of os-tmp, and the
+            // plugin dir a proper child of it.
+            const stageRoot = path.resolve(String(opts.stageRoot));
+            const stagedDir = stageRoot.startsWith(OS_TMP_DIR + path.sep) ? resolveWithin(stageRoot, intendedSlug) : null;
+            if (!stagedDir) { discardZip(); return refuseUncontainedZip(); }
+            installRoot = stageRoot;
+            installedDir = stagedDir;
+        } else {
+            installedDir = resolveSafePluginDir(intendedSlug);
+        }
+        const targetDir = singleRoot ? installRoot : installedDir;
         const confineDir = path.resolve(installedDir);
 
         // SECURITY: Zip Slip — every content entry must resolve INSIDE the plugin's own dir. Segment-level
@@ -490,7 +604,7 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
         // show and therefore could not deactivate. So reconcile FIRST: reclaimOrphanedPlugin drops the
         // stale entry atomically and returns null for anything that is a real plugin, which is what
         // leaves the live-plugin refusal below exactly as strict as it was.
-        const orphan = await reclaimOrphanedPlugin(intendedSlug);
+        const orphan = staging ? null : await reclaimOrphanedPlugin(intendedSlug);
         if (orphan) {
             // Remove the RESIDUE — and only a residue. `residual` is core's proof that the directory
             // holds no manifest.json and no entry file; a merely unreadable manifest is a broken
@@ -507,29 +621,32 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
                 droppedActiveEntry: orphan.droppedActiveEntry, removedResidue,
             });
             await clearOrphanNotice(intendedSlug);
-        } else if (await isPluginActive(intendedSlug)) {
+        } else if (!staging && await isPluginActive(intendedSlug)) {
+            const refusal = alreadyInstalled(intendedSlug, true, zip);
             discardZip();
-            return { ok: false, status: 409, body: { error: `Plugin '${intendedSlug}' is currently active. Deactivate it before re-uploading (this prevents corrupting a running plugin).` } };
+            return refusal;
         }
 
         // INTEGRITY: refuse to install over an EXISTING (even inactive) plugin directory. The extract
         // overwrites in place and, if post-extract validation fails, the catch below rmSync's the whole
         // dir — which would destroy a legitimate same-named plugin's files that were there first (audit
-        // LOW). To update a plugin, remove the old one first (uninstall), then install.
+        // LOW). To update a plugin, POST /plugins/:slug/update (runPluginUpdate stages the new code,
+        // validates it, then swaps it in) — the refusal below says so.
         //
         // EXCEPTION — residual runtime data: uninstall preserves plugins/<slug>/data/ (encryption keys,
         // attachments — see removePluginDirPreservingData). A dir containing NOTHING but data/ is not a
         // plugin (no manifest, no code); adopt it and extract around it so reinstall reconnects with the
         // preserved state instead of 409ing.
         let hadResidualData = false;
-        if (fs.existsSync(installedDir)) {
+        if (!staging && fs.existsSync(installedDir)) {
             let residualOnly = false;
             try {
                 residualOnly = fs.readdirSync(installedDir).every((e: string) => e === 'data');
             } catch { /* unreadable → treat as a real plugin and refuse */ }
             if (!residualOnly) {
+                const refusal = alreadyInstalled(intendedSlug, false, zip);
                 discardZip();
-                return { ok: false, status: 409, body: { error: `A plugin directory '${intendedSlug}' already exists. Uninstall it before installing this one (this prevents overwriting or deleting an existing plugin).` } };
+                return refusal;
             }
             hadResidualData = fs.existsSync(path.join(installedDir, 'data'));
         }
@@ -620,6 +737,7 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
         // Cleanup temp file
         discardZip();
 
+        if (staging) return { ok: true, status: 200, body: { success: true, staged: true, slug: pluginSlug } };
         return { ok: true, status: 200, body: { success: true, message: 'Plugin installed successfully', slug: pluginSlug } };
     } catch (error: any) {
         // Cleanup temp file on error
@@ -648,16 +766,19 @@ const STASH_RE = /^plugin-update-([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})-[0-9a-f]{16}$/
 const pluginOpInProgress = new Set<string>();
 
 /** A CodeQL-clean stash path: fixed base (os-tmp) + validated slug + random hex, containment-checked. */
-function makeStashDir(slug: string): string {
+function makeStashDir(slug: string, kind: 'update' | 'stage' = 'update'): string {
     fs.mkdirSync(OS_TMP_DIR, { recursive: true });
     const base = path.resolve(OS_TMP_DIR);
-    const dir = path.resolve(base, `plugin-update-${slug}-${crypto.randomBytes(8).toString('hex')}`);
+    const dir = path.resolve(base, `plugin-${kind}-${slug}-${crypto.randomBytes(8).toString('hex')}`);
     if (dir !== base && !dir.startsWith(base + path.sep)) {
         throw new Error('stash path escaped os-tmp');
     }
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     return dir;
 }
+// The STAGING dir an update extracts and validates the new code in, before the installed plugin is touched.
+// Never the only copy of anything: boot recovery just deletes a leftover one.
+const STAGE_RE = /^plugin-stage-([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})-[0-9a-f]{16}$/;
 
 /**
  * A manifest declares permissions as {scope, access} objects; grants are "scope:access" tokens (or the
@@ -688,11 +809,22 @@ function moveEntriesInto(from: string, to: string): void {
  * In-place update of an installed plugin from a new zip. `origin` is the catalog provenance that gates
  * the update (must match what the plugin was installed from). Returns the same {ok,status,body} contract
  * as installPluginFromZip. Always consumes `newZipPath`.
+ *
+ * `opts.via === 'upload'`: an administrator uploaded the zip by hand (POST /plugins/:slug/update). There
+ * is no catalog to match, so the origin gate does not apply — the admin choosing the file IS the
+ * provenance, exactly as for a fresh upload — and a recorded catalog origin is DROPPED afterwards: the code
+ * no longer comes from that catalog, so a later one-click update must not present itself as one.
+ *
+ * Order: the new code is extracted and VALIDATED in a private staging dir first (installPluginFromZip in
+ * staging mode). A zip that fails there changes nothing — the installed plugin keeps running. Only then
+ * is the plugin stopped and its code swapped (old code to a stash, staged code in, manifest.json LAST so
+ * boot recovery reads "no manifest" as "the swap did not finish" and restores the stash).
  */
 async function runPluginUpdate(
     slug: string,
     newZipPath: string,
-    origin: { source: string; catalogId: string; version?: any } | null
+    origin: { source: string; catalogId: string; version?: any } | null,
+    opts: { via?: 'upload' } = {}
 ): Promise<{ ok: boolean; status: number; body: any }> {
     const perms = require('../core/plugin-permissions');
     const core = require('../core/plugins');
@@ -764,9 +896,11 @@ async function runPluginUpdate(
         try { await core.activatePlugin(slug); return true; } catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[plugin-update ${logSafe(slug)}] rollback reactivate failed`); return false; }
     };
 
+    let stageDir: string | null = null;
     try {
-        // ORIGIN GATE — before any destructive action (no rollback needed if this throws).
-        await origins.assertUpdatableFrom(slug, origin);
+        // ORIGIN GATE — before any destructive action (no rollback needed if this throws). A hand upload
+        // has no catalog to match (see the doc comment).
+        if (opts.via !== 'upload') await origins.assertUpdatableFrom(slug, origin);
 
         // A GRANT RECORD BEFORE ANYTHING MOVES, so neither the new version nor a crash half-way through
         // the update finds the plugin without one. An ACTIVE plugin with no record is granted, at the next
@@ -779,14 +913,28 @@ async function runPluginUpdate(
         // here fails the update before anything has moved.
         await perms.ensureGrantRecord(slug);
 
+        // 0. STAGE + VALIDATE the new version while the installed one keeps running. Every check of a
+        //    fresh install runs here (zip bomb, Zip Slip, manifest, permissions, AST scan, page
+        //    conflicts), and the destination is pinned to THIS plugin: a zip whose root folder names
+        //    another plugin is refused before anything moves. installPluginFromZip consumes the zip.
+        stageDir = makeStashDir(slug, 'stage');
+        zipConsumed = true;
+        const staged = await installPluginFromZip(newZipPath, `${slug}.zip`, slug, undefined, { stageRoot: stageDir });
+        if (!staged.ok) {
+            // Nothing was touched; `rolledBack`/`restoredVersion` keep their meaning for callers: the
+            // previous version is what is installed.
+            return { ok: false, status: staged.status, body: { ...staged.body, unchanged: true, rolledBack: true, restoredVersion: fromVersion } };
+        }
+        const stagedPluginDir = resolveWithin(stageDir, slug);
+        if (!stagedPluginDir) throw new Error('staging path escaped os-tmp');
+
         // SNAPSHOT the state we must replay.
         wasActive = await core.isPluginActive(slug);
 
         // 1. Nothing runs while the files move (don't prune deps — the new version reinstalls them).
         if (wasActive) await core.deactivatePlugin(slug, { prune: false });
 
-        // 2. Stash the old CODE aside, keeping plugins/<slug>/data/ (mail keys, DKIM, attachments) so the
-        //    installer sees a residual-data-only dir and ADOPTS it.
+        // 2. Stash the old CODE aside, keeping plugins/<slug>/data/ (mail keys, DKIM, attachments).
         stashDir = makeStashDir(slug);
         for (const entry of fs.readdirSync(installedDir)) {
             if (entry === 'data') continue;
@@ -797,23 +945,29 @@ async function runPluginUpdate(
         //    stored grants and egress allowlist.
         await core.uninstallPluginData(slug, { dropTables: false, keepGrants: true });
 
-        // 4. Install the new version (adopts the preserved data/). installPluginFromZip consumes the zip.
-        zipConsumed = true;
-        // Pin the destination to THIS plugin: the target is otherwise taken from the zip's own root
-        // folder, and a mismatch here lands the new code in a different directory while the real one
-        // sits stashed and about to be deleted.
-        const installRes = await installPluginFromZip(newZipPath, `${slug}.zip`, slug);
-        if (!installRes.ok) {
-            await rollback();
-            return { ok: false, status: installRes.status, body: { ...installRes.body, rolledBack: true, restoredVersion: fromVersion } };
+        // 4. SWAP the validated staged code in. The preserved data/ always wins over a data/ the zip
+        //    ships (only a plugin that had none receives the zip's). manifest.json goes LAST: until it
+        //    lands, boot recovery sees an unfinished swap and restores the stash.
+        const hasData = fs.existsSync(path.join(installedDir, 'data'));
+        const stagedEntries = fs.readdirSync(stagedPluginDir)
+            .filter((e: string) => !(e === 'data' && hasData))
+            .sort((a: string, b: string) => (a === 'manifest.json' ? 1 : 0) - (b === 'manifest.json' ? 1 : 0));
+        for (const entry of stagedEntries) {
+            fs.renameSync(path.join(stagedPluginDir, entry), path.join(installedDir, entry));
         }
+        // The swap rewrote the manifest from outside the sandbox — drop io-guard's cached declaration.
+        try { require('../core/io-guard').forgetDeclaredPermissions(slug); } catch { /* io-guard optional */ }
 
         // 5. Adopt the STORED grants + egress BEFORE reactivating — they are baked into the isolate at
         //    spawn time. A database error here is thrown (and rolls back): nothing starts on a guess.
         await perms.adoptStoredPolicy(slug);
 
         // 6. Re-record the origin under the lease (so it can't land on a slug a concurrent op just removed).
+        //    A hand upload drops it instead: the code on disk is no longer that catalog's.
         if (origin) { try { await origins.setPluginOrigin(slug, origin); } catch { /* */ } }
+        else if (opts.via === 'upload') {
+            try { await origins.removePluginOrigin(slug); } catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[plugin-update ${logSafe(slug)}] the catalog origin could not be cleared`); }
+        }
 
         // 7. Reactivate if it was running. activatePlugin can throw AFTER loadIsolatedPlugin registered the
         //    child — that orphan must be torn down BEFORE rolling back, or its hooks/routes/providers stay
@@ -867,6 +1021,7 @@ async function runPluginUpdate(
         log.error({ slug: logSafe(slug), err: e }, `[plugins] update of '${logSafe(slug)}' failed`);
         return { ok: false, status: e.status || 500, body: e.body || { error: publicErrorText(e, `Failed to update plugin '${slug}'.`) } };
     } finally {
+        if (stageDir) { try { fs.rmSync(stageDir, { recursive: true, force: true }); } catch { /* */ } }
         try { await lease.release(); } catch { /* */ }
         pluginOpInProgress.delete(slug);
     }
@@ -885,6 +1040,17 @@ async function recoverInterruptedPluginUpdates(): Promise<void> {
     const distLock = require('../core/dist-lock');
     const base = path.resolve(OS_TMP_DIR);
     for (const name of names) {
+        // A leftover STAGING dir is never the only copy of anything (the swap moves out of it). Remove it
+        // once it is clearly abandoned — an hour old, so a replica's in-flight update keeps its own.
+        if (STAGE_RE.test(name)) {
+            const stage = path.resolve(base, name);
+            try {
+                if (stage.startsWith(base + path.sep) && Date.now() - fs.statSync(stage).mtimeMs > 3600_000) {
+                    fs.rmSync(stage, { recursive: true, force: true });
+                }
+            } catch { /* best-effort */ }
+            continue;
+        }
         const m = STASH_RE.exec(name);
         if (!m) continue;
         const slug = m[1];
@@ -899,6 +1065,9 @@ async function recoverInterruptedPluginUpdates(): Promise<void> {
                 fs.rmSync(stashDir, { recursive: true, force: true });
                 log.info({ slug: logSafe(slug) }, `[plugin-update] discarded a completed update's stash for '${logSafe(slug)}'.`);
             } else {
+                // No manifest: the swap did not finish (it moves manifest.json last). Clear whatever part
+                // of the new code landed — data/ stays — then put the previous version back.
+                if (fs.existsSync(installedDir)) removePluginDirPreservingData(installedDir);
                 moveEntriesInto(stashDir, installedDir);
                 fs.rmSync(stashDir, { recursive: true, force: true });
                 log.info({ slug: logSafe(slug) }, `[plugin-update] recovered an interrupted update for '${logSafe(slug)}' — restored the previous version.`);

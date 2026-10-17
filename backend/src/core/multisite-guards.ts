@@ -63,6 +63,7 @@ function pluginsOnSecondarySite(req: Request, res: Response, next: NextFunction)
 /** Theme files are network-wide: creating, editing, uploading, restoring or deleting them is the main site's. */
 const THEME_FILE_WRITES = [
     { method: 'POST', re: /^\/upload\/?$/ },
+    { method: 'POST', re: /^\/[^/]+\/update\/?$/ },
     { method: 'POST', re: /^\/?$/ },
     { method: 'POST', re: /^\/default\/?$/ },
     { method: 'PUT', re: /^\/[^/]+\/?$/ },

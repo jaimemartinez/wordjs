@@ -548,6 +548,8 @@ app.use(`${config.api.prefix}/auth/verify-email`, authLimiter); // public token-
 app.use(`${config.api.prefix}/media`, uploadLimiter);
 app.use(`${config.api.prefix}/themes/upload`, uploadLimiter);
 app.use(`${config.api.prefix}/plugins/upload`, uploadLimiter);
+app.use(`${config.api.prefix}/plugins/:slug/update`, uploadLimiter);
+app.use(`${config.api.prefix}/themes/:slug/update`, uploadLimiter);
 app.use(`${config.api.prefix}/backups`, uploadLimiter); // Apply limiter to backups too
 // #26: /setup/migrate used to authenticate attacker-supplied admin credentials, an oracle this strict
 // authLimiter (10/hr/IP) capped. The route is now a 410 stub that evaluates no credential (routes/setup.ts);

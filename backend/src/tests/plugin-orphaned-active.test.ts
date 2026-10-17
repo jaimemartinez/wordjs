@@ -337,7 +337,8 @@ describe('orphaned active plugins', () => {
 
             assert.strictEqual(res.ok, false);
             assert.strictEqual(res.status, 409);
-            assert.match(res.body.error, /currently active/);
+            assert.match(res.body.error, /already installed and active/);
+            assert.strictEqual(res.body.code, 'plugin_exists');
             assert.deepStrictEqual(await active(), ['real-one'], 'the active entry survives');
             assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dirOf('real-one'), 'manifest.json'), 'utf8')).version,
                 '1.0.0', 'the running code was not overwritten');
@@ -350,7 +351,7 @@ describe('orphaned active plugins', () => {
 
             assert.strictEqual(res.ok, false);
             assert.strictEqual(res.status, 409);
-            assert.match(res.body.error, /already exists/);
+            assert.match(res.body.error, /already installed/);
             assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dirOf('real-one'), 'manifest.json'), 'utf8')).version, '1.0.0');
             assert.ok(fs.existsSync(path.join(dirOf('real-one'), 'index.js')), 'its code is still there');
         });
@@ -369,7 +370,7 @@ describe('orphaned active plugins', () => {
             // … but the refusal that protects real files stands, and the files are intact.
             assert.strictEqual(res.ok, false);
             assert.strictEqual(res.status, 409);
-            assert.match(res.body.error, /already exists/);
+            assert.match(res.body.error, /already installed/);
             assert.strictEqual(fs.readFileSync(path.join(dir, 'index.js'), 'utf8'), BENIGN_INDEX);
             assert.strictEqual(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'), '{ this is not json');
         });

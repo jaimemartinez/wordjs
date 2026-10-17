@@ -25,6 +25,7 @@ const {
     deleteTheme,
     createThemeZip,
     installThemeFromDir,
+    updateThemeFromZip,
     invalidateThemeScanCache,
     getActiveTheme,
     THEMES_DIR
@@ -259,9 +260,16 @@ router.post('/upload', authenticate, isAdmin, upload.single('theme'), asyncHandl
         }
 
         // Check if theme already exists — now against the directory extraction will actually create.
+        // 409 with the way forward: the Themes screen offers the in-place update from `code`, which
+        // keeps the theme active and its customizer settings (POST /themes/:slug/update).
         if (fs.existsSync(targetDir)) {
             fs.unlinkSync(zipPath);
-            return res.status(400).json({ error: `Theme "${zipName}" already exists` });
+            return res.status(409).json({
+                error: `Theme "${zipName}" is already installed. To replace it with this zip, update it instead `
+                    + `(Appearance → Themes → Install Theme offers it; API: POST /api/v1/themes/${zipName}/update).`,
+                code: 'theme_exists',
+                slug: zipName,
+            });
         }
 
         // SECURITY: Verify EVERY entry resolves inside the theme's OWN directory before extracting
@@ -297,6 +305,55 @@ router.post('/upload', authenticate, isAdmin, upload.single('theme'), asyncHandl
         if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
         throw error;
     }
+}));
+
+/**
+ * @swagger
+ * /themes/{slug}/update:
+ *   post:
+ *     summary: Update an installed theme from a new zip (in place)
+ *     description: >-
+ *       Every entry of the zip must live under `<slug>/` (what `wordjs.js pack theme <slug>` produces).
+ *       The new version is extracted to a private staging directory and checked there first (a style.css
+ *       or theme.json; a theme.json must compile without errors), so a zip that fails leaves the installed
+ *       theme untouched. Then the directories are swapped. The theme stays active if it was, its
+ *       customizer settings are kept, and the cached public pages are expired at once.
+ *     tags: [Themes]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               theme:
+ *                 type: string
+ *                 format: binary
+ *     responses:
+ *       200:
+ *         description: Updated ({ updated, slug, fromVersion, toVersion, active })
+ *       400:
+ *         description: Invalid zip, or it does not name this theme (nothing was changed)
+ *       404:
+ *         description: The theme is not installed
+ */
+router.post('/:slug/update', authenticate, isAdmin, upload.single('theme'), asyncHandler(async (req: Request, res: Response) => {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    // updateThemeFromZip proves the temp file sits in os-tmp and deletes it on every path.
+    const result = await updateThemeFromZip(req.file.path, String(req.params.slug));
+    if (result.ok) {
+        await recordAudit(req.user && req.user.id, 'theme.update', 'theme', result.body.slug, {
+            via: 'upload', fromVersion: result.body.fromVersion, toVersion: result.body.toVersion,
+        });
+    }
+    res.status(result.status).json(result.body);
 }));
 
 /**

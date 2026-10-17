@@ -217,7 +217,23 @@ export default function ThemesPage() {
             setMessage({ type: "success", text: result.message });
             loadThemes();
         } catch (error: any) {
-            setMessage({ type: "error", text: error.message || t('themes.uploadError') });
+            // 409 theme_exists: offer the in-place update instead of "activate another, delete, re-upload".
+            if (error?.status === 409 && error?.code === "theme_exists" && typeof error.slug === "string") {
+                const name = themes.find((th) => th.slug === error.slug)?.name || error.slug;
+                const ok = await confirm(t('themes.update.body').replace('{name}', name), t('themes.update.title'), false, { confirmText: t('themes.update.confirm') });
+                if (ok) {
+                    try {
+                        setUploadProgress(0);
+                        const updated = await themesApi.update(error.slug, file, (progress) => setUploadProgress(progress));
+                        setMessage({ type: "success", text: updated.message });
+                        loadThemes();
+                    } catch (updateError: any) {
+                        setMessage({ type: "error", text: updateError.message || t('themes.uploadError') });
+                    }
+                }
+            } else {
+                setMessage({ type: "error", text: error.message || t('themes.uploadError') });
+            }
         } finally {
             setUploading(false);
             if (fileInputRef.current) fileInputRef.current.value = "";

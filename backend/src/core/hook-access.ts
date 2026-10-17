@@ -45,6 +45,14 @@ interface HookPolicy {
     why: string;
     /** For `data`: returns the arguments a plugin may see (a COPY — never mutates the caller's values). */
     sanitize?: (slug: string, args: any[]) => any[];
+    /**
+     * For a FILTER whose contract says a failing callback must stop the operation (a spam/captcha
+     * verdict): an isolated plugin's callback that throws or does not answer in time REJECTS the filter
+     * instead of handing back the unchanged value. Without this, a broken anti-spam plugin waved every
+     * comment through — the isolate shim's ordinary fail-soft fallback, right for a content filter,
+     * inverted the meaning of this one.
+     */
+    failClosed?: boolean;
 }
 
 const REDACTED = '[redacted]';
@@ -195,6 +203,8 @@ const POLICY_TABLE: Record<string, HookPolicy> = {
         why: 'carries every comment about to be written, with the commenter\'s personal data',
         // filter: args[0] is the verdict (true) and is passed through untouched; args[1] is the comment.
         sanitize: COMMENT_HOOK_ARGS,
+        // routes/comments COMMENT_PRE_INSERT_FILTER: a callback that throws refuses the comment.
+        failClosed: true,
     },
     'notification_sent': {
         kind: 'data', requires: [['notifications', 'read']],
@@ -235,6 +245,12 @@ const RAW_HTML_HOOKS: ReadonlySet<string> = new Set(
 
 function getHookPolicy(hook: string): HookPolicy | null {
     return Object.prototype.hasOwnProperty.call(CORE_HOOK_POLICY, hook) ? CORE_HOOK_POLICY[hook] : null;
+}
+
+/** Whether a failing isolated-plugin callback must reject this hook rather than fall back (see HookPolicy). */
+function isFailClosedHook(hook: string): boolean {
+    const policy = getHookPolicy(hook);
+    return !!(policy && policy.failClosed);
 }
 
 type Decision = { ok: true } | { ok: false; reason: string };
@@ -279,6 +295,6 @@ function argsForPlugin(slug: string, hook: string, args: any[]): any[] | null {
 
 module.exports = {
     CORE_HOOK_POLICY, RESERVED_CORE_HOOK_RE, RAW_HTML_HOOKS,
-    getHookPolicy, checkHookSubscription, assertHookSubscribable, argsForPlugin,
+    getHookPolicy, isFailClosedHook, checkHookSubscription, assertHookSubscribable, argsForPlugin,
     redactNotificationForHook,
 };

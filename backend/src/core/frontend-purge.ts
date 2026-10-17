@@ -568,9 +568,20 @@ function siteQualifiedPurge(tags: string[], paths: string[]): { tags: string[]; 
     };
 }
 
+/**
+ * The prefix that asks the frontend's /api/revalidate to EXPIRE a tag now instead of marking it stale.
+ * A plain purge is stale-while-revalidate: the first visit after it still gets the cached page and
+ * triggers the re-render in the background. That is right for content, wrong for a theme switch — the
+ * first visitor to every cached page saw the previous theme. `{ immediate: true }` sends the tag BOTH
+ * plain (so a frontend that predates the prefix still purges) and prefixed. A prefix, not a new body
+ * field, because the gateway's fan-out forwards exactly `{ tags, paths }`.
+ */
+const EXPIRE_NOW_PREFIX = 'now:';
+
 /** Queue tags/paths for the next debounced flush. */
-function purgeFrontend(rawTags: string[] = [], rawPaths: string[] = []) {
+function purgeFrontend(rawTags: string[] = [], rawPaths: string[] = [], opts: { immediate?: boolean } = {}) {
     const { tags, paths } = siteQualifiedPurge(rawTags, rawPaths);
+    if (opts.immediate) for (const t of tags) if (t) pendingTags.add(EXPIRE_NOW_PREFIX + String(t));
     for (const t of tags) if (t) pendingTags.add(String(t));
     for (const p of paths) if (p && String(p).startsWith('/')) pendingPaths.add(String(p));
     if (!flushTimer) {
