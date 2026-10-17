@@ -12,7 +12,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import nextConfig from '../../../next.config';
 import { normalizeMediaBase, rewriteMediaString, rewriteMediaUrls, mediaBaseFromSettings } from '../mediaDelivery';
-import { refreshMediaCdnOrigin } from '../server-api';
+import { refreshMediaCdnOrigin, publishMediaCdnOrigin } from '../server-api';
 import mediaCsp from '../../../media-csp.js';
 
 const { withMediaOrigin, installMediaCsp, currentMediaOrigin, GLOBAL_KEY } = mediaCsp as {
@@ -131,7 +131,25 @@ describe('mediaDelivery: SSR rewrite of /uploads to the CDN base', () => {
 describe('media-csp: a settings purge refreshes the published origin at once', () => {
     afterEach(() => {
         vi.unstubAllGlobals();
+        vi.useRealTimers();
         delete (globalThis as Record<string, unknown>)[GLOBAL_KEY];
+        delete (globalThis as Record<string, unknown>).__WORDJS_MEDIA_CDN_REFRESHED_AT__;
+    });
+
+    it('a page render cannot put the stale origin back for a minute after a refresh', async () => {
+        vi.useFakeTimers({ now: 1_000_000, toFake: ['Date'] });
+        publishMediaCdnOrigin({ media_cdn_origin: 'https://old-cdn.example.com' });
+        expect(currentMediaOrigin({})).toBe('https://old-cdn.example.com');
+        vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ media_cdn_origin: 'http://media.lan:3900' }), { status: 200 }));
+        await refreshMediaCdnOrigin();
+        // getSettings, answering from the stale cache entry after the purge:
+        vi.setSystemTime(1_000_000 + 20_000);
+        publishMediaCdnOrigin({ media_cdn_origin: 'https://old-cdn.example.com' });
+        expect(currentMediaOrigin({})).toBe('http://media.lan:3900');
+        // ...and once the window is over, renders publish again (a later change without a purge):
+        vi.setSystemTime(1_000_000 + 61_000);
+        publishMediaCdnOrigin({ media_cdn_origin: 'https://next-cdn.example.com' });
+        expect(currentMediaOrigin({})).toBe('https://next-cdn.example.com');
     });
 
     it('re-reads media_cdn_origin from the backend with no cache, and keeps the old value on failure', async () => {

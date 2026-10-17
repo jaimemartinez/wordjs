@@ -246,7 +246,7 @@ Menu items are deliberately **not** created by the generic item loop: `nav_menu_
 
 **Resolved URLs.** An object reference carries no URL in the export (WordPress resolves it at render time), so the importer resolves it against *this* install's public routes: `/{slug}` for a post or page, and `/category/{slug}`, `/tag/{slug}` or `/taxonomy/{taxonomy}/{term}` for a taxonomy archive. An object that could not be mapped keeps whatever `_menu_item_url` the export carried, and otherwise gets an empty url — which renders as `#`, i.e. visibly unresolved rather than silently wrong.
 
-**Theme locations.** WXR 1.2 has no options section, so a stock WordPress export carries no `nav_menu_locations` and every menu is imported **unassigned** — `summary.menus.locations.reason` says exactly that. Assign them under **Appearance → Menus**. If the export *was* widened with a `<wp:option>` named `nav_menu_locations` whose value is JSON, it is honoured (values may be the menu's WXR term id or its slug); a PHP-serialized value is deliberately not parsed.
+**Theme locations.** WXR 1.2 has no options section, so a stock WordPress export carries no `nav_menu_locations` and every menu is imported **unassigned** — `summary.menus.locations.reason` says exactly that. Assign them under **Menus** in the admin sidebar (`/admin/menus`). If the export *was* widened with a `<wp:option>` named `nav_menu_locations` whose value is JSON, it is honoured (values may be the menu's WXR term id or its slug); a PHP-serialized value is deliberately not parsed.
 
 ## What is *not* imported
 
@@ -278,5 +278,5 @@ This means you can analyze, do a partial import, fix something, and run again wi
 
 *   **Reset author passwords.** Tell imported authors to use the password-reset flow (their accounts exist but have unknown random passwords).
 *   **Check `summary.media.failures`** and re-run the import for anything that failed (a retry costs nothing for the files that already landed). If a handful of files are simply gone from the old host, copy them into `uploads/` at the path the summary names.
-*   **Assign your menus to theme locations** under **Appearance → Menus** — a stock WXR carries no `nav_menu_locations`, so the menus and their items are imported but not yet placed.
+*   **Assign your menus to theme locations** under **Menus** in the admin sidebar (`/admin/menus`) — a stock WXR carries no `nav_menu_locations`, so the menus and their items are imported but not yet placed.
 *   **Spot-check content**, especially classic-editor posts (paragraph wrapping) and any custom fields your theme/plugins rely on.

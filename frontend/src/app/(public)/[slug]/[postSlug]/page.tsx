@@ -25,6 +25,7 @@ export async function generateMetadata({ params }: { params: Promise<RouteParams
     // don't compete as duplicate content.
     return buildPostMetadata(post, {
         siteName: settings?.blogname,
+        mediaBase: settings?.media_public_base,
         canonicalPath: `/${post.slug || post.id}`,
     });
 }
@@ -37,7 +38,7 @@ export default async function CategoryPostPage({ params }: { params: Promise<Rou
     const withBlocks = await withResolvedBlocks(post);
     return (
         <>
-            <JsonLd data={buildPostJsonLd(post, base, settings?.blogname)} />
+            <JsonLd data={buildPostJsonLd(post, base, settings?.blogname, settings?.media_public_base)} />
             {/* Same post, same template chain as /[slug] — the category segment is a path, not a
                 different kind of thing, so it must not resolve to a different arrangement. */}
             <ThemeTemplate

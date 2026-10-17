@@ -36,6 +36,7 @@ export async function generateMetadata(
     const settings = await getSettings();
     return buildPostMetadata(post, {
         siteName: settings?.blogname,
+        mediaBase: settings?.media_public_base,
         canonicalPath: `/${post.slug || post.id}`,
     });
 }
@@ -54,7 +55,7 @@ export default async function SinglePostPage(
     const withBlocks = await withResolvedBlocks(post);
     return (
         <>
-            <JsonLd data={buildPostJsonLd(post, base, settings?.blogname)} />
+            <JsonLd data={buildPostJsonLd(post, base, settings?.blogname, settings?.media_public_base)} />
             {/* The hierarchy needs what this route knows: single-<type>-<slug> → single-<type> →
                 single → page. The post's own slug, not the URL param, so /42 and /hello-world (the
                 numeric-id fallback) resolve to the same template. */}
