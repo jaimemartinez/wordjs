@@ -1474,7 +1474,6 @@ async function updateThemeFromZip(zipPath: string, slug: string): Promise<{ ok: 
   }
 
   let stageRoot: string | null = null;
-  let asideDir: string | null = null;
   try {
     const zip = new AdmZip(zipAbs);
     const entries = zip.getEntries();
@@ -1529,13 +1528,12 @@ async function updateThemeFromZip(zipPath: string, slug: string): Promise<{ ok: 
 
     // SWAP. Two renames inside one filesystem (os-tmp is THEMES_DIR's sibling); the old version is
     // removed only once the new one is in place, and put back if that second rename fails.
-    asideDir = path.join(stageRoot as string, '.previous');
+    const asideDir = path.join(stageRoot as string, '.previous');
     fs.renameSync(targetDir, asideDir);
     try {
       fs.renameSync(stagedDir, targetDir);
     } catch (e) {
       fs.renameSync(asideDir, targetDir);
-      asideDir = null;
       throw e;
     }
     invalidateThemeScanCache();
