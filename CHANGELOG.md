@@ -120,6 +120,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **`npm run media -- status` prints only JSON on stdout.** The config boot notes ("Config loaded from
+  wordjs-config.json", the secret auto-generation lines) still went to stdout ahead of the command's
+  output, so piping it to `jq` failed. With `WORDJS_LOG_TO_STDERR=1`, which the CLI sets, they go to
+  stderr like every other log line.
+
 - **Edits show on a split site right after an HTTPS install, and on any single-host split site behind
   a public name.** The backend sent its on-demand cache purges to `frontendUrl`, which the installer
   derives from the site address (`https://example.com`, or `https://example.com:3001`): not this
