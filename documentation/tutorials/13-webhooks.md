@@ -102,19 +102,15 @@ Payloads never carry passwords, tokens, email addresses or option values.
 
 ## Troubleshooting
 
-- **Only the test arrives, never real events, on a site you just installed:** restart WordJS once
-  (for example `systemctl restart wordjs`).
 - **Nothing arrives at all:** the WordJS server must be able to reach your receiver. A private
   address is refused, and so is a host name that resolves to one. Check **Deliveries** for the error.
 
 ---
-*Tested on 2026-10-17 with WordJS 2.6.0.
+*Tested on 2026-10-17.
 
-- **Admin screens, in a browser:** creating a webhook, the one-time secret, the refusal of a private
-  IP address, **Deliveries**, **Send test** and **Delete**.
-- **Events:** on a fresh install, a post published and then trashed queued `post.published` and
-  `post.trashed`, with the payloads shown above, after one restart of the service. Before that
-  restart only the test was delivered, hence the troubleshooting note.
-- **Receiver:** the receiver in this tutorial verified a real signed delivery from WordJS. Production
-  WordJS never delivers to private addresses, so in the lab this delivery came from a development
-  build of the same version with the documented test-only switch for private targets.*
+- **WordJS 2.6.0 (the first pass), admin screens in a browser:** creating a webhook, the one-time
+  secret, the refusal of a private IP address, **Deliveries**, **Send test** and **Delete**. The receiver
+  verified a real signed delivery from a development build of the same version with the documented
+  test-only switch for private targets, because production WordJS never delivers to private addresses.
+- **WordJS 2.7.0 release build, on a freshly installed site and without any restart:** a published
+  post queued its `post.published` delivery with the payload shown above.*
