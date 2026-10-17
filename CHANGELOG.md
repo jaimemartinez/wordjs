@@ -120,6 +120,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **`npm run media -- …` works on a network of sites.** With multisite on, every command failed with
+  "No site context: this work did not say which site it belongs to.", because the CLI process never said
+  which site it was working for. It now works on the main site's media library, as its help text says.
+
 - **`npm run media -- status` prints only JSON on stdout.** The config boot notes ("Config loaded from
   wordjs-config.json", the secret auto-generation lines) still went to stdout ahead of the command's
   output, so piping it to `jq` failed. With `WORDJS_LOG_TO_STDERR=1`, which the CLI sets, they go to
