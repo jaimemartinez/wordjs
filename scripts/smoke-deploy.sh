@@ -202,8 +202,8 @@ for svc in backend gateway frontend; do
 done
 echo "   ✓ all three services hold their certificates"
 
-assert_serving() { # assert_serving <label> <logfile>
-    local when="$1" log="$2" i html
+assert_serving() { # assert_serving <label> <logfile> [tries — 2 s apiece for the site name, default 12]
+    local when="$1" log="$2" tries="${3:-12}" i html
     # The frontend registers a moment after the install; give the registry a beat to settle.
     for ((i = 1; i <= 30; i++)); do
         [ "$(code "$GW/")" = 200 ] && break
@@ -218,14 +218,14 @@ assert_serving() { # assert_serving <label> <logfile>
     # name instead of asserting the first body — same lesson as the v1.12.12 theme-switch check.
     # A missing/broken purge still fails here: the shell never converges inside the window.
     html=""
-    for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    for ((i = 1; i <= tries; i++)); do
         html="$(body "$GW/")"
         case "$html" in *"$SITE_NAME"*) break ;; esac
         sleep 2
     done
     case "$html" in
         *"$SITE_NAME"*) ;;
-        *) fail "[$when] the home page does not contain the site name after 24s — the install purge/revalidation never landed and SSR is stuck on DEFAULT settings" "$log" ;;
+        *) fail "[$when] the home page does not contain the site name after $((tries * 2))s — the install purge/revalidation never landed and SSR is stuck on DEFAULT settings" "$log" ;;
     esac
     case "$html" in
         *'<title>'*undefined*'</title>'*)
@@ -312,7 +312,10 @@ case "$install_out" in
 esac
 echo "   ✓ installed through the HTTPS gateway"
 grep -q '"ssl"' "$APP/gateway/gateway-config.json"     || fail "the install rewrote gateway-config.json WITHOUT its ssl setting — the gateway will serve plain HTTP after a restart: $(cat "$APP/gateway/gateway-config.json")" "$LOGS/split-https.log"
-assert_serving "https, fresh install" "$LOGS/split-https.log"
+# 80 s, not 24: before the restart the frontend still listens on the plain-HTTP socket it opened before the
+# install, and the backend's purge to the https:// frontendUrl cannot reach it, so the home page changes on
+# its 60 s ISR window. What this proves is that SSR reaches the HTTPS gateway before any restart.
+assert_serving "https, fresh install" "$LOGS/split-https.log" 40
 
 echo "   restarting: the gateway must keep its HTTPS and SSR must trust it"
 stop_all
