@@ -17,7 +17,6 @@ const AdmZip = require('adm-zip');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 const { getAllPlugins, activatePlugin, deactivatePlugin, createSamplePlugin, isPluginActive, validatePluginPermissions, validateManifestPermissions, validateManifestRoles, syncPluginRoles, validateManifestDependencies, validateBrowserCapability, browserCodeSources, BROWSER_SCRIPT_TOKEN, listOrphanedPlugins, reclaimOrphanedPlugin, clearOrphanNotice, PLUGINS_DIR } = require('../core/plugins');
 const { assertZipWithinBudget } = require('../core/zip-guard');
 // refusePluginGrantByToken: an API token may revoke a plugin's grants or narrow its egress, never add to
@@ -757,28 +756,33 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
 
 // The stash of the old code lives in OS_TMP_DIR (a project dir backups exclude), not the OS temp — so a
 // crash mid-update leaves it where `recoverInterruptedPluginUpdates()` can find it at the next boot.
-// Stash dir name: `plugin-update-<slug>-<16 hex>`; slug is a validated single segment, the hex is random.
-const STASH_RE = /^plugin-update-([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})-[0-9a-f]{16}$/;
+// Stash dir name: `plugin-update-<random>` (mkdtemp), with the slug it belongs to in a marker file inside
+// (STASH_SLUG_FILE). The name carries no request value at all, so no path built under it depends on one.
+// STASH_RE_LEGACY is the earlier `plugin-update-<slug>-<16 hex>` form, still recovered at boot.
+const STASH_RE = /^plugin-update-[A-Za-z0-9]{6}$/;
+const STASH_RE_LEGACY = /^plugin-update-([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})-[0-9a-f]{16}$/;
+const STASH_SLUG_FILE = '.wordjs-stash-slug';
 
 // Single-node mutual exclusion: install / update / uninstall of ONE slug are mutually exclusive within a
 // process. (Cross-node exclusion is the dist-lock lease below; it is a no-op on single-host SQLite, so the
 // in-process guard is what actually serializes the common single-node case.)
 const pluginOpInProgress = new Set<string>();
 
-/** A CodeQL-clean stash path: fixed base (os-tmp) + validated slug + random hex, containment-checked. */
+/**
+ * A private scratch dir under os-tmp for an update: `plugin-update-<random>` (the stash of the old code)
+ * or `plugin-stage-<random>` (where the new code is validated). Created exclusively by mkdtemp at 0700,
+ * from a fixed prefix only — the plugin's slug never becomes part of the path. The stash records its slug
+ * in STASH_SLUG_FILE (validated again when read back) so boot recovery knows where to restore it.
+ */
 function makeStashDir(slug: string, kind: 'update' | 'stage' = 'update'): string {
-    fs.mkdirSync(OS_TMP_DIR, { recursive: true });
-    const base = path.resolve(OS_TMP_DIR);
-    const dir = path.resolve(base, `plugin-${kind}-${slug}-${crypto.randomBytes(8).toString('hex')}`);
-    if (dir !== base && !dir.startsWith(base + path.sep)) {
-        throw new Error('stash path escaped os-tmp');
-    }
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(OS_TMP_DIR, { recursive: true, mode: 0o700 });
+    const dir = fs.mkdtempSync(path.join(OS_TMP_DIR, kind === 'stage' ? 'plugin-stage-' : 'plugin-update-'));
+    if (kind === 'update') fs.writeFileSync(path.join(dir, STASH_SLUG_FILE), slug, { flag: 'wx', mode: 0o600 });
     return dir;
 }
 // The STAGING dir an update extracts and validates the new code in, before the installed plugin is touched.
-// Never the only copy of anything: boot recovery just deletes a leftover one.
-const STAGE_RE = /^plugin-stage-([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})-[0-9a-f]{16}$/;
+// Never the only copy of anything: boot recovery just deletes a leftover one (new and legacy names).
+const STAGE_RE = /^plugin-stage-(?:[A-Za-z0-9]{6}|[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}-[0-9a-f]{16})$/;
 
 /**
  * A manifest declares permissions as {scope, access} objects; grants are "scope:access" tokens (or the
@@ -799,6 +803,7 @@ function manifestPermTokens(manifest: any): string[] {
 function moveEntriesInto(from: string, to: string): void {
     fs.mkdirSync(to, { recursive: true });
     for (const entry of fs.readdirSync(from)) {
+        if (entry === STASH_SLUG_FILE) continue; // the stash's own marker, not plugin code
         const dest = path.join(to, entry);
         try { fs.rmSync(dest, { recursive: true, force: true }); } catch { /* nothing there */ }
         fs.renameSync(path.join(from, entry), dest);
@@ -1060,11 +1065,15 @@ async function recoverInterruptedPluginUpdates(): Promise<void> {
             } catch { /* best-effort */ }
             continue;
         }
-        const m = STASH_RE.exec(name);
-        if (!m) continue;
-        const slug = m[1];
+        const legacy = STASH_RE_LEGACY.exec(name);
+        if (!legacy && !STASH_RE.test(name)) continue;
         const stashDir = path.resolve(base, name);
         if (stashDir !== base && !stashDir.startsWith(base + path.sep)) continue; // containment
+        let slug = legacy ? legacy[1] : '';
+        if (!legacy) {
+            try { slug = fs.readFileSync(path.join(stashDir, STASH_SLUG_FILE), 'utf8').trim(); } catch { /* no marker */ }
+            if (!isValidSlug(slug)) { log.warn({ name: logSafe(name) }, `[plugin-update] stash '${logSafe(name)}' names no valid plugin — left in place.`); continue; }
+        }
         let installedDir: string;
         try { installedDir = resolveSafePluginDir(slug); } catch { continue; }
         const lease = await distLock.acquireBlocking(`wordjs:plugin-op:${slug}`, { ttlMs: 60000, renewMs: 20000, timeoutMs: 1500 });
