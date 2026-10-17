@@ -95,7 +95,7 @@ const app = express();
 setApp(app);
 
 const rateLimit = require('express-rate-limit');
-const { clientIpBucket, resolveTrustProxy } = require('./core/client-ip');
+const { clientIpBucket, resolveTrustProxy, untrustedProxyWarning } = require('./core/client-ip');
 
 // TRUST PROXY — from the single source of truth, NOT a hard-coded `1`. In the monolith there is no
 // fronting proxy, so trusting one X-Forwarded-For hop trusted a header the CLIENT wrote: an attacker
@@ -125,6 +125,8 @@ const { requestContext } = require('./middleware/request-context');
 const siteContext = require('./core/site-context');
 const { httpMetrics } = require('./core/metrics');
 app.use(requestContext, httpMetrics);
+// Say so, once, when a reverse proxy on this machine is in front that nothing trusts (core/client-ip.ts).
+app.use(untrustedProxyWarning(log));
 
 // Security Headers
 const helmet = require('helmet');

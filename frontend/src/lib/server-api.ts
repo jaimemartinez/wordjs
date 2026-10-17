@@ -16,6 +16,7 @@ import type { Metadata } from 'next';
 import type { Post } from './api';
 import { THEME_CONTRACT } from '@/generated/visual-contract.generated';
 import { HERMETIC_BACKEND_BASE, isHermeticBuild } from '../../hermetic-build.js';
+import { localGatewayOrigin } from '../../local-gateway.js';
 
 const THEME_ASSET_NAME = new RegExp(THEME_CONTRACT.assetNamePattern);
 
@@ -137,8 +138,13 @@ function backendBaseCandidates(): string[] {
             // default settings and content pages 404'd, while client-side calls through the gateway
             // worked. Go through the gateway instead: it is the front door, it already terminates the
             // mTLS hop to the backend, and its cert chains to the cluster CA the frontend trusts.
+            // The gateway on THIS machine is dialled over loopback (local-gateway.js): its public address
+            // sent every read out through the site's public name — and, behind nginx, through the proxy —
+            // and back in. The public address remains for a gateway loopback cannot verify or reach.
             const backendCert = path.resolve(path.dirname(configPath), 'certs', 'backend.crt');
             if (fs.existsSync(backendCert)) {
+                const local = localGatewayOrigin(path.dirname(configPath), cfg);
+                if (local) candidates.push(`${local}/api/v1`);
                 const front = String(cfg.gatewayUrl || cfg.siteUrl || '').replace(/\/+$/, '');
                 if (front) candidates.push(`${front}/api/v1`);
             }

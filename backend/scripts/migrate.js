@@ -14,6 +14,11 @@ const fs = require('fs');
 
 const BACKEND = path.resolve(__dirname, '..');
 process.chdir(BACKEND); // config / data / certs resolve relative to backend/, like a normal boot
+// Not as root in an install another account owns (scripts/install-owner.js).
+{
+  const owner = require('./install-owner');
+  owner.refuseRootInForeignInstall(BACKEND, owner.scriptHint(__filename, []));
+}
 
 const distDb = path.join(BACKEND, 'dist', 'config', 'database.js');
 const useDist = fs.existsSync(distDb);

@@ -636,6 +636,10 @@ router.post('/install', async (req: Request, res: Response) => {
     // re-binding the listener to localhost where a remote gateway cannot reach it. Enrollment values are
     // authoritative here; the wizard only supplies what enrollment does not know (site identity, DB).
     const enrolledConfig = getConfig() || {};
+    const validPort = (v: unknown): number | null => {
+        const n = Number(v);
+        return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : null;
+    };
     // WHERE the certificate is, is NOT a question this call site may answer for itself.
     //
     // THE CLASS: "one declaration" of a path that is in fact two values computed differently. This line
@@ -676,9 +680,12 @@ router.post('/install', async (req: Request, res: Response) => {
         installedAt: new Date().toISOString(),
         siteUrl,
         frontendUrl,
-        port: 4000,
-        frontendPort: 3001,
-        gatewayPort: 3000,
+        // The ports the config file already names survive the install; it used to write 4000/3001/3000
+        // back over them, so a backend set up on another port moved to 4000 at its next restart. A file
+        // without a backend port records the one this process listens on (config/app.ts: PORT, then 4000).
+        port: validPort(enrolledConfig.port) || config.port || 4000,
+        frontendPort: validPort(enrolledConfig.frontendPort) || 3001,
+        gatewayPort: validPort(enrolledConfig.gatewayPort) || 3000,
         gatewayInternalPort: enrolledConfig.gatewayInternalPort || 3100,
         // Host for the backend server listen binding (usually localhost or 0.0.0.0). An enrolled node
         // MUST keep the binding enrollment chose — the gateway lives on another machine.

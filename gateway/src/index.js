@@ -12,6 +12,7 @@
 require('dotenv').config();
 const express = require('express');
 const rateLimit = require('express-rate-limit');
+const proxyAddr = require('proxy-addr');
 const morgan = require('morgan');
 const compression = require('compression');
 const axios = require('axios');
@@ -51,9 +52,19 @@ const GW_CERTS = path.resolve(__dirname, '../certs');
 const BE_CERTS = path.resolve(__dirname, '../../backend/certs');
 const CERTS_DIR = fs.existsSync(path.join(GW_CERTS, 'gateway-internal.crt')) ? GW_CERTS : BE_CERTS;
 
+// LOG_LEVEL / logging.level and trustProxy / WORDJS_TRUST_PROXY (src/runtime-settings.js). The logger
+// exists before the config block below, so the file is read here once for these two keys.
+const runtimeSettings = require('./runtime-settings');
+const earlyConfig = (() => {
+    try { return JSON.parse(fs.readFileSync(path.resolve(__dirname, '../gateway-config.json'), 'utf8')) || {}; } catch { return {}; }
+})();
+const LOG_LEVEL = runtimeSettings.resolveLogLevel(process.env, earlyConfig);
+const TRUST_PROXY = runtimeSettings.resolveTrustProxy(process.env, earlyConfig);
+
 // --- LOGGER SETUP ---
 const logger = winston.createLogger({
-    level: 'info',
+    level: LOG_LEVEL.level,
+    silent: LOG_LEVEL.silent,
     format: winston.format.combine(
         winston.format.timestamp(),
         winston.format.json()
@@ -922,6 +933,12 @@ if (cluster.isPrimary) {
     });
 
     const app = express();
+    // Which fronting proxy the public listener believes for the client address (unset: none, the socket
+    // peer is the client). req.ip — the rate limit's key — and the X-Forwarded-For the backend reads
+    // both follow it (src/runtime-settings.js).
+    app.set('trust proxy', TRUST_PROXY);
+    const trustsProxy = runtimeSettings.trustsAnyProxy(TRUST_PROXY);
+    const warnUntrustedProxy = runtimeSettings.createUntrustedProxyWarning(TRUST_PROXY, logger);
     let workerRegistry = new Map();
 
     // THE WORKER IS THE PROCESS THAT ROUTES, so it is the process whose registry view must be DERIVED
@@ -1031,6 +1048,7 @@ if (cluster.isPrimary) {
     // rate-limit.js), and keys on the socket peer (Express default trust proxy = false) so a client
     // cannot rotate X-Forwarded-For past it. Mounted before routing so it covers proxied traffic too.
     const { createPublicLimiter } = require('./rate-limit');
+    app.use((req, res, next) => { warnUntrustedProxy(req); next(); });
     app.use(createPublicLimiter(config, logger));
 
     app.get('/gateway-status', requireAuth, (req, res) => {
@@ -1135,9 +1153,12 @@ if (cluster.isPrimary) {
         if (target) {
             const isHttps = target.startsWith('https:');
             const isSSE = (req.headers['accept'] || '').includes('text/event-stream');
+            // Behind a trusted proxy the backend is told the client Express resolved, not the proxy.
+            if (trustsProxy) runtimeSettings.stateForwardedHeaders(req, req.ip);
 
             logger.debug(`[Gateway] Proxying ${req.method} ${req.url} to ${target}`);
             proxy.web(req, res, {
+                ...(trustsProxy ? { xfwd: false } : {}),
                 target,
                 agent: isHttps ? proxyAgent : httpKeepAliveAgent,
                 secure: false,
@@ -1248,6 +1269,8 @@ if (cluster.isPrimary) {
         // never relays a forged one.
         if (edge.handleUpgrade(req, socket)) return;
         hostEdge.pinUpgradeHeaders(req);
+        // Upgrades skip Express, so req.ip is computed here with the same trust function.
+        if (trustsProxy) runtimeSettings.stateForwardedHeaders(req, proxyAddr(req, app.get('trust proxy fn')), { upgrade: true });
         // The same pre-install bootstrap as the HTTP path. Without it, a fresh split install in dev had its
         // Next.js HMR socket (/_next/hmr) destroyed until the frontend registered — which it cannot do
         // before the wizard has issued the cluster identity — so the wizard page never became interactive.
@@ -1256,7 +1279,7 @@ if (cluster.isPrimary) {
         const target = getTarget(req.url) || bootstrapTarget(req.url);
         if (target) {
             const isHttps = target.startsWith('https:');
-            proxy.ws(req, socket, head, { target, agent: isHttps ? proxyAgent : httpKeepAliveAgent, secure: false }, (err) => {
+            proxy.ws(req, socket, head, { ...(trustsProxy ? { xfwd: false } : {}), target, agent: isHttps ? proxyAgent : httpKeepAliveAgent, secure: false }, (err) => {
                 // Skip benign client-close noise (ECONNRESET/EPIPE), like the HTTP/SSE path; guard err deref.
                 if (err && err.code !== 'ECONNRESET' && err.code !== 'EPIPE') {
                     logger.error(`[Gateway] WebSocket Error [${target}]: ${err && err.message}`);

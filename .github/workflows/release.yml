@@ -45,7 +45,11 @@ jobs:
   verify:
     name: Verify before publishing (audit + typecheck + tests)
     if: inputs.publish_tag == ''
-    runs-on: ubuntu-latest
+    # PINNED, not ubuntu-latest: GitHub moves ubuntu-latest to Ubuntu 26.04 on 2026-10-19, and a release
+    # must not be the first job to meet a new image (Node from setup-node is unaffected, but the smoke
+    # gate drives ss, setsid, unzip and native builds from the image). ci.yml stays on ubuntu-latest, so
+    # every pull request tries the new image first; move this pin once ci.yml has been green on it.
+    runs-on: ubuntu-24.04
     # GitHub's default job timeout is SIX HOURS: a hung step would look like a slow one
     # forever. See the long note in ci.yml.
     #
@@ -185,7 +189,7 @@ jobs:
     name: Build & publish compiled bundle
     needs: verify # nothing is built, and nothing is published, unless the gate above is green
     if: inputs.publish_tag == ''
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # pinned: see the verify job
     # GitHub's default job timeout is SIX HOURS: a hung step would look like a slow one
     # forever. See the long note in ci.yml.
     timeout-minutes: 20
@@ -377,7 +381,7 @@ jobs:
         (startsWith(github.ref, 'refs/tags/') && needs.build-release.result == 'success') ||
         inputs.publish_tag != ''
       )
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # pinned: see the verify job
     # GitHub's default job timeout is SIX HOURS: a hung step would look like a slow one
     # forever. See the long note in ci.yml.
     timeout-minutes: 20

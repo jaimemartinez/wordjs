@@ -1,6 +1,7 @@
 import { applyCsrfHeader, csrfHeaders } from './csrf';
 import { createContentClient } from './generated/content-client.generated';
 import { HERMETIC_BACKEND_BASE, isHermeticBuild } from '../../hermetic-build.js';
+import { localGatewayOrigin } from '../../local-gateway.js';
 export type {
     ContentCreateInput,
     ContentRecord,
@@ -56,6 +57,9 @@ const getBaseUrl = () => {
             // which this deliberately mirrors — every SSR path must agree on the base).
             const backendCert = path.resolve(path.dirname(configPath), 'certs', 'backend.crt');
             if (fs.existsSync(backendCert)) {
+                // The gateway on this machine over loopback first, as in lib/server-api.ts.
+                const local = localGatewayOrigin(path.dirname(configPath), config);
+                if (local) return `${local}/api/v1`;
                 const front = String(config.gatewayUrl || config.siteUrl || '').replace(/\/+$/, '');
                 if (front) return `${front}/api/v1`;
             }

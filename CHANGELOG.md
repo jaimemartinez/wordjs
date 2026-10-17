@@ -21,6 +21,47 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   in `gateway-config.json`), and nothing wider. Sites behind a TLS-terminating proxy with
   `WORDJS_HTTP=1`, monolith installs and separate mode were not affected.
 
+- **Behind a reverse proxy on the same machine, visitors keep their own address.** The gateway's public
+  rate limit counted per connection address and the gateway never trusted a fronting proxy, so behind
+  nginx every visitor was `127.0.0.1`: the whole site shared one 1000-requests-a-minute bucket, and the
+  backend was told the proxy's address for everyone. `trustProxy` in `gateway/gateway-config.json` (or
+  `WORDJS_TRUST_PROXY` for the gateway; same syntax as the backend's, e.g. `"loopback"`) now sets which
+  proxy the gateway believes, and the gateway then forwards the client it resolved to the backend.
+  Unset, nothing changes. Both the gateway and the backend now log one warning the first time a request
+  arrives from a local proxy that nothing trusts, naming the setting to add.
+- **The gateway honours `LOG_LEVEL` and `logging.level`.** Its logger was fixed at `info`; it now follows
+  the backend's order (`LOG_LEVEL`, then the config, then `info`) and understands the backend's level
+  names too.
+- **Split mode on one machine stays on the machine.** The frontend's server-side reads went to the
+  gateway's public address, so behind a proxy they left the server and came back through it; they now go
+  to the gateway next to it over loopback (when its certificate covers a loopback name, which the
+  auto-generated one does). The frontend also listened on every interface and registered the site's
+  public name with the gateway; it now listens on `127.0.0.1` and registers that, unless its config sets
+  a routable `advertiseHost` (or `WORDJS_FRONTEND_BIND` names the address).
+- **The backend honours `PORT`, and the install keeps the configured ports.** In split and development
+  mode the backend ignored `PORT`, and `POST /setup/install` wrote `port: 4000` (and the default
+  frontend and gateway ports) over the values the config already had. `PORT` now wins over `port` in
+  `wordjs-config.json` (not in the monolith, where `PORT` is the public port), and the install keeps the
+  ports it finds.
+- **Command-line tools no longer lock the service out of its own files.** Run as root in an install that
+  belongs to another account, `npm run network`, `npm run site`, `npm run media` and `npm run migrate`
+  left `wordjs-config.json` and new database files owned by root, and the service could no longer write
+  them (creating a site failed with "attempt to write a readonly database"). They now refuse and print
+  the command to run as the owner (`WORDJS_ALLOW_ROOT=1` overrides). `npx create-wordjs upgrade` run as
+  root now gives the files it wrote back to the owner of the site directory, so `frontend/.next/cache`
+  can be created again.
+- **Small output fixes.** The install banner printed its hint as `WORDJS_PRINT_INSTALL_TOKEN=[redacted]`
+  (the log scrubber took the `=1` for a credential); the production monolith suggested `npm run dev` to
+  switch to split mode instead of `npm start`; `create-wordjs` printed npm's own "new major version"
+  notice in the middle of its output.
+
+### Changed
+
+- **The release smoke gate deploys split mode with the default HTTPS too**, installing, restarting and
+  requesting a content page, and checks that the frontend listens on loopback only. The release
+  workflow's jobs run on `ubuntu-24.04` instead of `ubuntu-latest`, which moves to Ubuntu 26.04 on
+  2026-10-19; pull-request CI keeps `ubuntu-latest`, so the new image is met there first.
+
 ## [2.6.0] - 2026-10-16
 
 ### Added
