@@ -5,16 +5,25 @@
  * from absolute URLs (e.g., https://old-domain.com/uploads/image.jpg) to
  * relative paths (e.g., /uploads/image.jpg) to ensure portability across domains.
  * 
- * Usage: node scripts/migrate-media-urls.js [--dry-run]
+ * Usage (from anywhere; it switches to backend/): node scripts/migrate-media-urls.js [--dry-run]
  * 
  * Options:
  *   --dry-run    Show what would be changed without making actual updates
  */
 
 const path = require('path');
+const fs = require('fs');
 
-// Load database configuration from backend root
-const database = require('../src/config/database');
+// Like scripts/migrate.js: run from backend/ (config and data resolve there, as on a normal boot), use
+// the compiled dist/ when it exists, otherwise register ts-node to load the TypeScript sources — so a
+// plain `node scripts/migrate-media-urls.js` works without `-r ts-node/register`.
+const BACKEND = path.resolve(__dirname, '..');
+process.chdir(BACKEND);
+const distDb = path.join(BACKEND, 'dist', 'config', 'database.js');
+if (!fs.existsSync(distDb)) {
+    require(require.resolve('ts-node/register', { paths: [BACKEND] }));
+}
+const database = fs.existsSync(distDb) ? require(distDb) : require('../src/config/database');
 
 const isDryRun = process.argv.includes('--dry-run');
 

@@ -30,6 +30,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   server's defaults (plus any `roles` override in the config) and keeps plugin and custom roles;
   `inspect-user.js` takes the login as an argument and never prints credential columns.
   `check_plugins.js` reads `dbPath` (or the `dbDriver` default file) from `backend/wordjs-config.json`.
+  `backend/scripts/migrate-media-urls.js` loads the TypeScript sources by itself (compiled `dist/` when
+  present), so a plain `node scripts/migrate-media-urls.js` works.
 - **Plugin bridge typings.** `backend/types/wordjs-bridge.d.ts` now describes `wordjs.paths`
   (`data`, `logs`, `tmp`) and the `wordjs.smtp` namespace (`listen`, `status`) used with the
   `smtp:inbound` permission, with its session, handler, option and status types.
