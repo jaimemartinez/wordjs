@@ -125,3 +125,7 @@ transport Claude Code uses) against the site's `/api/v1/mcp`:
 
 `claude mcp add` with the dialog's command registered the server. A live Claude Code session was not
 part of this run.*
+
+*Re-tested on 2026-10-17 with WordJS 2.7.0 on a fresh install, with the same client: the tools listed
+match the table above, `create_draft` worked, `publish_content` was refused with the message above,
+and the audit trail showed an `agent.denied` row for it.*
