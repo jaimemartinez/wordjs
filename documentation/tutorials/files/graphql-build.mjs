@@ -16,6 +16,12 @@ async function graphql(query, variables = {}) {
 
 const escape = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
+// Only link to pages on the site itself: anything else (another origin, a javascript: URL) is dropped.
+const siteOrigin = new URL(SITE).origin;
+const safeLink = (link) => {
+  try { const u = new URL(link, SITE); return u.origin === siteOrigin ? u.href : '#'; } catch { return '#'; }
+};
+
 const posts = [];
 let after = null;
 do {
@@ -39,7 +45,7 @@ const html = `<!doctype html>
 <title>${escape(settings.title)}</title>
 <h1>${escape(settings.title)}</h1>
 <ul>
-${posts.map((p) => `  <li><a href="${escape(p.link)}">${escape(p.title)}</a> · ${escape(p.author?.name)} · ${escape(p.date.slice(0, 10))}</li>`).join('\n')}
+${posts.map((p) => `  <li><a href="${escape(safeLink(p.link))}">${escape(p.title)}</a> · ${escape(p.author?.name)} · ${escape(p.date.slice(0, 10))}</li>`).join('\n')}
 </ul>
 `;
 await writeFile('index.html', html);

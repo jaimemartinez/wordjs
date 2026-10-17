@@ -7,6 +7,10 @@ const SECRET = process.env.WEBHOOK_SECRET;
 const PORT = Number(process.env.PORT || 8787);
 if (!SECRET) { console.error('Set WEBHOOK_SECRET to the whsec_… signing secret.'); process.exit(1); }
 
+// Values from the request are logged on one line: strip control characters (line breaks included) so a
+// crafted event name or header can't forge extra log lines.
+const clean = (v) => String(v ?? '').replace(/[\u0000-\u001f\u007f]/g, '');
+
 function verify(headers, rawBody, toleranceSec = 300) {
   const ts = Number(headers['x-wordjs-timestamp']);
   if (!Number.isFinite(ts) || Math.abs(Date.now() / 1000 - ts) > toleranceSec) return false;
@@ -27,7 +31,7 @@ http.createServer((req, res) => {
       return;
     }
     const event = JSON.parse(raw);
-    console.log(`${event.event}  delivery=${req.headers['x-wordjs-delivery']}  data=${JSON.stringify(event.data)}`);
+    console.log(`${clean(event.event)}  delivery=${clean(req.headers['x-wordjs-delivery'])}  data=${clean(JSON.stringify(event.data))}`);
     res.writeHead(204).end();
   });
 }).listen(PORT, () => console.log(`Listening on :${PORT}/hook`));
