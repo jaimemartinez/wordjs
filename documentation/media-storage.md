@@ -4,8 +4,13 @@ By default WordJS writes uploads under `backend/uploads/` (`config.uploads.dir`)
 `/uploads/...`. Nothing about that changes unless you turn on **media offload**: public media — the
 original file **and every stored derivative** (the thumbnail/medium/large sizes, the `w640…w1920` width
 ladder and their WebP/AVIF siblings) — is then written to an **S3-compatible bucket** (AWS S3,
-Cloudflare R2, MinIO, Backblaze B2, …) and served from a **public base URL** (the bucket itself or a CDN
-in front of it).
+Cloudflare R2, Backblaze B2, a self-hosted Garage, SeaweedFS or MinIO, …) and served from a **public
+base URL** (the bucket itself or a CDN in front of it).
+
+> **Self-hosted S3.** Any server that speaks the S3 API with path-style requests works. MinIO is still
+> compatible, but its project no longer publishes ready-made server binaries; for a new self-hosted
+> bucket, [Garage](https://garagehq.deuxfleurs.fr/) and [SeaweedFS](https://github.com/seaweedfs/seaweedfs)
+> (its S3 gateway) are maintained alternatives that ship binaries and container images.
 
 Code: `backend/src/core/media-storage.ts` (config, adapters, URLs), `backend/src/core/media-storage-migrate.ts`
 (offload / restore of an existing library), `backend/src/routes/media-storage.ts` (admin API), the
@@ -36,7 +41,9 @@ bucket, CDN host or domain — or roll the offload back — without rewriting a 
    answers `302` to `<publicBase>/<rel>` (`Cache-Control: public, max-age=300`). Every reference ever
    written — post HTML, persisted `srcset`s, theme settings, the site logo — keeps working on any node.
    A file that IS on disk (local storage, `keepLocalCopy`, after a restore) is served locally as before.
-   `302`, not `301`, because a restore makes the local file authoritative again.
+   `302`, not `301`, because a restore makes the local file authoritative again. In a multisite
+   network the other sites redirect the same way: each serves `/uploads` from its own directory first,
+   and a file it does not hold goes to the bucket (their uploads go there too) before it is a 404.
 2. **SSR rewrite (once the library is fully offloaded).** When the library state is `offloaded` the
    public settings carry `media_public_base`, and the public SSR (`withResolvedBlocks`) rewrites
    `/uploads/` URLs in the page's block data and HTML body to it, so browsers fetch the CDN directly.
@@ -49,9 +56,12 @@ The configured media origin — **one origin, nothing else** — is added to the
 `media-src` (`media-src 'self' <origin>` is created when the build set none). `next.config.ts` bakes the
 header at build time, so the custom servers (`frontend/server.js`, `monolith.js`) amend it per response
 (`frontend/media-csp.js`). The origin comes from, in order: the `WORDJS_MEDIA_CDN_ORIGIN` env var on the
-frontend, the `media_cdn_origin` public setting the SSR last read from the backend (follows an admin
-change within the 60 s settings cache), then the `mediaStorage` block of the nearest
-`wordjs-config.json`. With offload off the header is byte-for-byte what it was. The backend's own CSP
+frontend, the `media_cdn_origin` public setting the frontend last read from the backend, then the
+`mediaStorage` block of the nearest
+`wordjs-config.json`. Saving the media storage settings purges the frontend's `settings` cache, and
+the purge handler (`/api/revalidate`) re-reads `media_cdn_origin` from the backend at once, so the new
+origin is in the header within a couple of seconds of the save (the purge is debounced) — not after the
+60 s settings cache. With offload off the header is byte-for-byte what it was. The backend's own CSP
 (helmet) adds the same origin to `media-src`.
 
 Use a CDN/bucket host that is **not** the site's own origin (a separate, cookie-less domain): objects are
@@ -65,7 +75,9 @@ mirroring the `/uploads` denylist.
 `backend/wordjs-config.json` through the same atomic writer as every other credential the backend holds
 (the backup offload's `s3` block, the database password). The secret access key and session token are
 **write-only**: the API answers only whether they are set and their last four characters (the access key
-id likewise as a hint); leaving the field empty keeps the stored value. Every save and every migration is
+id likewise as a hint); leaving the field empty keeps the stored value, and a `PUT` with
+`clearCredentials: true` (API only; the screen has no button for it) removes the stored access key id,
+secret and session token. Every save and every migration is
 recorded in the audit log (`media.storage.update`, `media.storage.migrate`) without credentials.
 
 | Field | Env override | Notes |
@@ -73,24 +85,42 @@ recorded in the audit log (`media.storage.update`, `media.storage.migrate`) with
 | `driver` | `WORDJS_MEDIA_STORAGE` | `local` (default) or `s3` |
 | `bucket` | `WORDJS_MEDIA_S3_BUCKET` | AWS bucket-naming rules |
 | `region` | `WORDJS_MEDIA_S3_REGION` | default `us-east-1`; R2 uses `auto`; B2 e.g. `us-west-004` |
-| `endpoint` | `WORDJS_MEDIA_S3_ENDPOINT` | S3-compatible origin (path style), e.g. `https://<account>.r2.cloudflarestorage.com`, `https://s3.us-west-004.backblazeb2.com`, `http://minio.lan:9000`. Empty = AWS virtual-hosted |
+| `endpoint` | `WORDJS_MEDIA_S3_ENDPOINT` | S3-compatible origin (path style), e.g. `https://<account>.r2.cloudflarestorage.com`, `https://s3.us-west-004.backblazeb2.com`, `http://garage.lan:3900`, `http://seaweedfs.lan:8333`, `http://minio.lan:9000`. Empty = AWS virtual-hosted |
 | `accessKeyId` / `secretAccessKey` | `WORDJS_MEDIA_S3_ACCESS_KEY_ID` / `WORDJS_MEDIA_S3_SECRET_ACCESS_KEY` | write-only in the UI |
 | `sessionToken` | `WORDJS_MEDIA_S3_SESSION_TOKEN` | optional, temporary credentials |
 | `prefix` | `WORDJS_MEDIA_S3_PREFIX` | key prefix, default `uploads` |
 | `publicUrl` | `WORDJS_MEDIA_PUBLIC_URL` | the URL that maps to the **bucket root** (a CDN domain). Empty = the bucket's own URL (`https://<bucket>.s3.<region>.amazonaws.com` or `<endpoint>/<bucket>`) |
 | `keepLocalCopy` | `WORDJS_MEDIA_KEEP_LOCAL_COPY` | also keep each new upload on local disk |
 
-The public URL of an object is `<publicUrl>/<prefix>/<rel>`. Objects must be **publicly readable** there
+The public URL of an object is `<publicUrl>/<prefix>/<rel>`: `publicUrl` is the base of the **bucket root**,
+and the object keys already start with the prefix (`uploads/` by default), so do not add `/uploads` to
+`publicUrl` yourself. With the defaults, `/uploads/2026/10/a.jpg` is served from
+`<publicUrl>/uploads/2026/10/a.jpg`. Objects must be **publicly readable** there
 (a public bucket or a CDN with read access to it); the bucket itself needs no public write. A partial
 configuration (a bucket without keys, an unusable public URL, a prefix with `..`) counts as **not
 configured**: the effective driver stays `local` and the screen says which fields are missing.
+
+**The public URL is the bucket ROOT; WordJS adds the prefix.** With the default prefix `uploads`, a public
+URL of `https://cdn.example.com/uploads` makes every media URL `https://cdn.example.com/uploads/uploads/…`.
+The server cannot fetch the public URL (see below), but it does flag the mistakes it can see: the
+answers of `GET`/`PUT /media-storage` and `POST /media-storage/test` carry `warnings`, each
+`{ field, code, message }`:
+
+| `code` | Meaning |
+|---|---|
+| `media_public_url_doubled_prefix` | the public URL already ends with `/<prefix>` |
+| `media_public_url_missing_bucket` | the public URL is the path-style endpoint without `/<bucket>` |
+| `media_public_url_mixed_content` | plain `http://` public URL on an `https://` site (browsers block or downgrade it) |
+
+Warnings never block a save or a test: they name likely mistakes, not certain ones.
 
 **Test connection** has the server write a small PNG probe object and read it back (using the unsaved
 values on screen merged over the stored ones); then **your browser** loads the probe from the public URL
 — from the viewer's network, exactly as visitors will fetch media — and the server deletes it, reporting
 each step. The server never fetches the operator-typed public URL itself. (A plain-`http://` CDN that is
 not saved yet is not in the admin page's CSP, so save first and test again.) `npm run media -- test`
-does the server half: write, read, delete.
+does the server half: write, read, delete. The CLI's output is its stdout and only that — backend log
+lines go to stderr — so `npm run media -- status | jq .state` works.
 
 ## Moving an existing library
 
@@ -110,7 +140,10 @@ Both directions are **idempotent** (an item already where it belongs is skipped;
 the bucket with the same size is not uploaded again) and **resumable** (progress — the last attachment
 finished, counters, failures — is the `media_storage_migration` option; an interrupted run continues from
 its cursor, `--restart` walks from the start; `--limit N` processes N items and stops). One run at a time
-across the cluster (`core/dist-lock` on Postgres/MySQL, a process flag on SQLite). Attachments imported
+across the cluster (`core/dist-lock` on Postgres/MySQL, a process flag on SQLite). A running migration
+refreshes its progress record at least every 30 s, so every node — not only the one running it — answers
+`409 rest_media_storage_busy` to a second start and reports `running: true`; a `running` record nobody
+has refreshed for two minutes is shown as `interrupted` (and resumes on the next start). Attachments imported
 in WXR **link** mode (bytes on the old site) are skipped.
 
 The library **state** (`media_storage_state`): `local` → `migrating` → `offloaded` (only after a complete
@@ -118,6 +151,20 @@ run with no failures — this is what turns on the SSR rewrite) → `restoring` 
 state back FIRST, so no page is rendered against a bucket being drained. Switching the driver back to
 `local` is refused (409 `rest_media_storage_in_use`) while any attachment still has its files in the
 bucket.
+
+## REST API
+
+The screen is backed by `/api/v1/media-storage` (`backend/src/routes/media-storage.ts`). Every route is
+administrator-only (`authenticate` + `isAdmin`). Bodies are JSON; an unsupported field value answers
+`400 rest_invalid_param` with `data.params` naming the fields.
+
+| Method | Endpoint | Body | Answer |
+|---|---|---|---|
+| `GET` | `/` | — | The masked configuration (`driver`, `bucket`, `region`, `endpoint`, `prefix`, `publicUrl`, `keepLocalCopy`, `accessKeyIdHint`, `secretAccessKeySet`, `secretAccessKeyHint`, `sessionTokenSet`, `sources`, `effective: { driver, incomplete, publicBase, publicOrigin }`), plus `state`, `migration` (the progress record) and `running` |
+| `PUT` | `/` | Any of `driver` (`local` \| `s3`), `bucket`, `region`, `endpoint`, `prefix`, `publicUrl`, `accessKeyId`, `secretAccessKey`, `sessionToken`, `keepLocalCopy`, `clearCredentials` | Merges the fields over the stored block and saves it; answers the same shape as `GET`. An empty text field clears it; an empty secret keeps the stored one. `400` when `driver: s3` is asked for with an incomplete configuration (`data.params` lists what is missing). `409 rest_media_storage_in_use` when switching to `local` while items are still in the bucket, the library is not `local` or an offload / restore run is in progress. `500 rest_config_write_failed` when `wordjs-config.json` could not be written (nothing changed) |
+| `POST` | `/test` | The same fields (unsaved), merged over the stored ones | Writes a probe object and reads it back: `{ ok, steps: [{ step, ok, detail }], probe, publicUrl }`. The browser then loads `publicUrl` |
+| `POST` | `/test` | `{ probe }` (the name the first call answered), plus the same fields | Deletes that probe: `{ ok, steps }`. Only names of the shape the first call writes are accepted (`400` otherwise) |
+| `POST` | `/migrate` | `{ direction: "offload" \| "restore", deleteLocal?, restart? }` | Starts the run in the background and answers `202` with the current state at once; poll `GET /` for progress. `400` without a complete, saved S3 configuration. `409 rest_media_storage_busy` while another run is in progress |
 
 ## Multi-node and the three deploy modes
 

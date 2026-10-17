@@ -13,7 +13,8 @@ const ROLES_OPTION_NAME = 'wordjs_user_roles';
 // Built-in WordPress-style roles. These are the source of truth when the stored wordjs_user_roles
 // option is empty/missing — which it was on every install, because options seeded it from the
 // hardcoded-empty config.roles, leaving every role (administrator included) with NO capabilities
-// and the admin Roles page showing nothing. config.roles, when an operator sets it, still wins.
+// and the admin Roles page showing nothing. config.roles is merged over them, but it is always empty
+// (config/app explains: there is no operator setting behind it), so in practice these ARE the seed.
 const DEFAULT_ROLES: Record<string, { name: string; capabilities: string[] }> = {
     administrator: {
         name: 'Administrator',
@@ -93,7 +94,7 @@ async function loadRoles() {
     if (stored && Object.keys(stored).length > 0) {
         rolesState().cache = stored;
     } else {
-        // Empty/missing option: fall back to the built-in defaults (operator config.roles overrides)
+        // Empty/missing option: fall back to the built-in defaults (config.roles, always empty, merged over)
         // and backfill the option so the roles are durable and visible to anything reading the DB. The
         // backfill is a roles write like any other (writeRoles): it saves the defaults only while the
         // stored map is still empty, so a map another node saved after this (cached) read is adopted,
@@ -768,7 +769,8 @@ async function syncRolesUnlocked(configRoles: any, installedPluginIds?: string[]
 function syncRoleMap(dbRoles: Record<string, any>, configRoles: any, installedPluginIds?: string[]): boolean {
     let changed = false;
 
-    // Built-in defaults guarantee the core roles always exist; operator config.roles overrides them.
+    // Built-in defaults guarantee the core roles always exist (config.roles, always empty — see
+    // config/app — is merged over them).
     const effective = { ...defaultRoles(), ...(configRoles || {}) };
 
     // Check subscriber specifically for the access_admin_panel capability

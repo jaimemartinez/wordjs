@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- Cross-references a WXR carries as SOURCE-site ids: a featured image listed AFTER the post that uses
+     it, a dated comment, and a header menu item pointing at a page. Mirrors the tutorial sample export. -->
+<rss version="2.0"
+	xmlns:excerpt="http://wordpress.org/export/1.2/excerpt/"
+	xmlns:content="http://purl.org/rss/1.0/modules/content/"
+	xmlns:dc="http://purl.org/dc/elements/1.1/"
+	xmlns:wp="http://wordpress.org/export/1.2/">
+<channel>
+	<title>Remap Roasters</title>
+	<link>https://old.example.com</link>
+	<wp:wxr_version>1.2</wp:wxr_version>
+	<wp:base_site_url>https://old.example.com</wp:base_site_url>
+	<wp:term><wp:term_id>904</wp:term_id><wp:term_taxonomy><![CDATA[nav_menu]]></wp:term_taxonomy><wp:term_slug><![CDATA[remap-header]]></wp:term_slug><wp:term_name><![CDATA[Remap Header]]></wp:term_name></wp:term>
+
+	<item>
+		<title><![CDATA[Remap pour-over]]></title>
+		<dc:creator><![CDATA[admin]]></dc:creator>
+		<content:encoded><![CDATA[<p>Rinse the filter first.</p>]]></content:encoded>
+		<excerpt:encoded><![CDATA[]]></excerpt:encoded>
+		<wp:post_id>911</wp:post_id>
+		<wp:post_date><![CDATA[2024-03-02 10:00:00]]></wp:post_date>
+		<wp:post_date_gmt><![CDATA[2024-03-02 09:00:00]]></wp:post_date_gmt>
+		<wp:comment_status><![CDATA[open]]></wp:comment_status>
+		<wp:post_name><![CDATA[remap-pour-over]]></wp:post_name>
+		<wp:status><![CDATA[publish]]></wp:status>
+		<wp:post_parent>0</wp:post_parent>
+		<wp:post_type><![CDATA[post]]></wp:post_type>
+		<wp:postmeta><wp:meta_key><![CDATA[_thumbnail_id]]></wp:meta_key><wp:meta_value><![CDATA[910]]></wp:meta_value></wp:postmeta>
+		<wp:comment>
+			<wp:comment_id>1</wp:comment_id>
+			<wp:comment_author><![CDATA[Leo]]></wp:comment_author>
+			<wp:comment_author_email><![CDATA[leo@example.com]]></wp:comment_author_email>
+			<wp:comment_date><![CDATA[2024-03-03 08:00:00]]></wp:comment_date>
+			<wp:comment_date_gmt><![CDATA[2024-03-03 07:00:00]]></wp:comment_date_gmt>
+			<wp:comment_content><![CDATA[Great tip about the rinse!]]></wp:comment_content>
+			<wp:comment_approved><![CDATA[1]]></wp:comment_approved>
+			<wp:comment_parent>0</wp:comment_parent>
+		</wp:comment>
+		<wp:comment>
+			<wp:comment_id>2</wp:comment_id>
+			<wp:comment_author><![CDATA[Ana]]></wp:comment_author>
+			<wp:comment_author_email><![CDATA[ana@example.com]]></wp:comment_author_email>
+			<wp:comment_date><![CDATA[not a date]]></wp:comment_date>
+			<wp:comment_content><![CDATA[A comment whose date is unreadable.]]></wp:comment_content>
+			<wp:comment_approved><![CDATA[1]]></wp:comment_approved>
+			<wp:comment_parent>0</wp:comment_parent>
+		</wp:comment>
+	</item>
+
+	<item>
+		<title><![CDATA[remap-beans]]></title>
+		<dc:creator><![CDATA[admin]]></dc:creator>
+		<content:encoded><![CDATA[]]></content:encoded>
+		<excerpt:encoded><![CDATA[]]></excerpt:encoded>
+		<wp:post_id>910</wp:post_id>
+		<wp:post_date><![CDATA[2024-03-01 09:00:00]]></wp:post_date>
+		<wp:post_name><![CDATA[remap-beans]]></wp:post_name>
+		<wp:status><![CDATA[inherit]]></wp:status>
+		<wp:post_parent>0</wp:post_parent>
+		<wp:post_type><![CDATA[attachment]]></wp:post_type>
+		<wp:post_mime_type><![CDATA[image/png]]></wp:post_mime_type>
+		<wp:attachment_url><![CDATA[https://old.example.com/wp-content/uploads/2024/03/remap-beans.png]]></wp:attachment_url>
+	</item>
+
+	<item>
+		<title><![CDATA[Remap Wholesale]]></title>
+		<dc:creator><![CDATA[admin]]></dc:creator>
+		<content:encoded><![CDATA[<p>Write to us for wholesale prices.</p>]]></content:encoded>
+		<excerpt:encoded><![CDATA[]]></excerpt:encoded>
+		<wp:post_id>913</wp:post_id>
+		<wp:post_date><![CDATA[2024-03-06 10:00:00]]></wp:post_date>
+		<wp:post_name><![CDATA[remap-wholesale]]></wp:post_name>
+		<wp:status><![CDATA[publish]]></wp:status>
+		<wp:post_parent>0</wp:post_parent>
+		<wp:post_type><![CDATA[page]]></wp:post_type>
+	</item>
+
+	<item>
+		<title><![CDATA[Wholesale]]></title>
+		<content:encoded><![CDATA[]]></content:encoded>
+		<wp:post_id>914</wp:post_id>
+		<wp:post_name><![CDATA[914]]></wp:post_name>
+		<wp:status><![CDATA[publish]]></wp:status>
+		<wp:menu_order>1</wp:menu_order>
+		<wp:post_parent>0</wp:post_parent>
+		<wp:post_type><![CDATA[nav_menu_item]]></wp:post_type>
+		<category domain="nav_menu" nicename="remap-header"><![CDATA[Remap Header]]></category>
+		<wp:postmeta><wp:meta_key><![CDATA[_menu_item_type]]></wp:meta_key><wp:meta_value><![CDATA[post_type]]></wp:meta_value></wp:postmeta>
+		<wp:postmeta><wp:meta_key><![CDATA[_menu_item_object]]></wp:meta_key><wp:meta_value><![CDATA[page]]></wp:meta_value></wp:postmeta>
+		<wp:postmeta><wp:meta_key><![CDATA[_menu_item_object_id]]></wp:meta_key><wp:meta_value><![CDATA[913]]></wp:meta_value></wp:postmeta>
+		<wp:postmeta><wp:meta_key><![CDATA[_menu_item_menu_item_parent]]></wp:meta_key><wp:meta_value><![CDATA[0]]></wp:meta_value></wp:postmeta>
+	</item>
+</channel>
+</rss>

@@ -39,12 +39,19 @@ function purgeDelivery() {
     try { require('../core/frontend-purge').purgeFrontend(['settings'], ['/']); } catch { /* best effort */ }
 }
 
+/** Likely mistakes in the public URL the server can see without fetching it (core/media-storage). */
+function warningsFor(store: any) {
+    const config = require('../config/app');
+    return mediaStorage.publicUrlWarnings(store, config.site && config.site.url);
+}
+
 async function statePayload() {
     return {
         ...mediaStorage.describeForAdmin(),
+        warnings: warningsFor(mediaStorage.resolveMediaStorage()),
         state: await migration.getState(),
         migration: await migration.getProgress(),
-        running: migration.isRunning(),
+        running: await migration.isRunningAnywhere(),
     };
 }
 
@@ -105,7 +112,7 @@ function candidateStore(block: Record<string, any>) {
  * /media-storage:
  *   get:
  *     summary: Media storage configuration, state and migration progress
- *     description: The configuration with credentials masked (the secret key and session token are never returned, only whether they are set and their last four characters), where each field comes from (file, env or default), the effective driver and public base URL, the library state (local, migrating, offloaded, restoring) and the last migration's progress.
+ *     description: The configuration with credentials masked (the secret key and session token are never returned, only whether they are set and their last four characters), where each field comes from (file, env or default), the effective driver and public base URL, the library state (local, migrating, offloaded, restoring) and the last migration's progress. `warnings` lists likely mistakes in the public URL (see POST /media-storage/test). `running` is true while a migration runs on any node.
  *     tags: [Media storage]
  *     security:
  *       - bearerAuth: []
@@ -168,7 +175,7 @@ router.put('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
     } else {
         const state = await migration.getState();
         const inBucket = await migration.countOffloaded();
-        if (state !== 'local' || inBucket > 0 || migration.isRunning()) {
+        if (state !== 'local' || inBucket > 0 || await migration.isRunningAnywhere()) {
             return res.status(409).json({
                 code: 'rest_media_storage_in_use',
                 message: 'Media is still served from the bucket. Run a restore (Media storage → Move back to local disk) before switching to local storage.',
@@ -210,7 +217,7 @@ router.put('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
  *               probe: { type: string, description: "The probe name a first call answered; deletes that probe" }
  *     responses:
  *       200:
- *         description: "{ ok, steps: [{ step, ok, detail }], probe?, publicUrl? }"
+ *         description: "{ ok, steps: [{ step, ok, detail }], probe?, publicUrl?, warnings: [{ field, code, message }] } - warnings name likely mistakes in the public URL (the key prefix doubled, a path-style endpoint without the bucket, plain http on an https site); they do not fail the test"
  *       400:
  *         description: The configuration is incomplete or invalid, or `probe` is not a probe name
  */
@@ -229,7 +236,7 @@ router.post('/test', authenticate, isAdmin, asyncHandler(async (req: Request, re
         if (typeof probe !== 'string' || !PROBE_RE.test(probe)) return badRequest(res, 'probe is not a connection-test probe name.', ['probe']);
         return res.json(await removeProbe(store, probe));
     }
-    res.json(await testConnection(store, {}, { keepProbe: true }));
+    res.json({ ...(await testConnection(store, {}, { keepProbe: true })), warnings: warningsFor(store) });
 }));
 
 /** The only object names the cleanup call may delete: the probes testConnection writes. */
@@ -322,7 +329,9 @@ router.post('/migrate', authenticate, isAdmin, asyncHandler(async (req: Request,
     const body = req.body || {};
     if (body.direction !== 'offload' && body.direction !== 'restore') return badRequest(res, 'direction must be offload or restore.', ['direction']);
     if (mediaStorage.resolveMediaStorage().driver !== 's3') return badRequest(res, 'Save a complete S3 configuration first.');
-    if (migration.isRunning()) {
+    // Any node: this process's flag, or a run another node keeps refreshing (the dist lock would refuse
+    // that run anyway, but only after this request had answered 202).
+    if (await migration.isRunningAnywhere()) {
         return res.status(409).json({ code: 'rest_media_storage_busy', message: 'A media storage migration is already running.', data: { status: 409 } });
     }
     await recordAudit(req.user && req.user.id, AUDIT_ACTIONS.MEDIA_STORAGE_MIGRATE, 'config', 'mediaStorage', {

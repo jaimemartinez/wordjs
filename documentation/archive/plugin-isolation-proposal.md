@@ -5,7 +5,7 @@
 > boundary was chosen, with inline "As built" notes marking where reality diverged from it. The **status
 > banner** immediately below, and those "As built" notes, are the **current** as-built description. For
 > the operator-facing reference — what each knob is called, what its default is, and what happens when
-> the host can't support it — read [plugins.md §7.3](./plugins.md) and the commented `sandbox` block in
+> the host can't support it — read [plugins.md §7.3](../plugins.md) and the commented `sandbox` block in
 > `backend/src/config/app.ts`, which is the authoritative list of the config surface.
 
 > This document started life as a design *proposal* for hard plugin isolation. It is now **shipped and
@@ -82,7 +82,7 @@
 >   family, stacked statements, `RETURNING`, a data-modifying CTE on the read path, and DDL on any object
 >   class other than TABLE/INDEX/VIEW/TRIGGER are rejected outright; core tables
 >   `users`/`options`/`sessions`/… are off-limits as a second barrier. (Full rule list:
->   [plugin-database.md](./plugin-database.md).) Non-secret options only. Routes always namespaced under `/api/v1/plugin/<slug>/*`. It
+>   [plugin-database.md](../plugin-database.md).) Non-secret options only. Routes always namespaced under `/api/v1/plugin/<slug>/*`. It
 >   cannot shim the raw-HTML output hooks (`wordjs_head`/`wordjs_footer`/`wp_head`/`wp_footer`); the host
 >   auth JWT cookie (`wordjs_token`) is stripped from forwarded route requests and dangerous response
 >   headers (Set-Cookie/CSP/HSTS/Location) are stripped from its replies; fs read/write is confined to its

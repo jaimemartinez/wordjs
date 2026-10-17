@@ -548,6 +548,8 @@ app.use(`${config.api.prefix}/auth/verify-email`, authLimiter); // public token-
 app.use(`${config.api.prefix}/media`, uploadLimiter);
 app.use(`${config.api.prefix}/themes/upload`, uploadLimiter);
 app.use(`${config.api.prefix}/plugins/upload`, uploadLimiter);
+app.use(`${config.api.prefix}/plugins/:slug/update`, uploadLimiter);
+app.use(`${config.api.prefix}/themes/:slug/update`, uploadLimiter);
 app.use(`${config.api.prefix}/backups`, uploadLimiter); // Apply limiter to backups too
 // #26: /setup/migrate used to authenticate attacker-supplied admin credentials, an oracle this strict
 // authLimiter (10/hr/IP) capped. The route is now a 410 stub that evaluates no credential (routes/setup.ts);
@@ -602,8 +604,11 @@ const EXECUTABLE_DOC_EXTS = new Set(['.html', '.htm', '.xhtml', '.xht', '.shtml'
 // falls through to express.static below, which serves the original exactly as before.
 const { imageNegotiation } = require('./middleware/image-negotiation');
 // MULTISITE: another site of the network serves /uploads from ITS OWN root (core/private-media
-// publicUploadsRoot), and a miss there is a 404 — never a fall-through to the main site's tree below.
+// publicUploadsRoot), and a miss there never falls through to the main site's tree below. With S3 media
+// storage it is redirected to the bucket exactly as on the main site (the same uploadsRedirect, mounted
+// at the end of this chain) — that site's uploads go to the bucket too — and only then is it a 404.
 const siteUploadHandlers = new Map<string, any[]>();
+const secondarySiteUploadsRedirect = require('./core/media-storage').uploadsRedirect();
 app.use('/uploads', (req: Request, res: Response, next: NextFunction) => {
     if (!multisiteGuards.onSecondarySite()) return next();
     const root = require('./core/private-media').publicUploadsRoot();
@@ -615,7 +620,10 @@ app.use('/uploads', (req: Request, res: Response, next: NextFunction) => {
     const [negotiate, serve] = handlers;
     negotiate(req, res, (err?: any) => {
         if (err) return next(err);
-        serve(req, res, (err2?: any) => (err2 ? next(err2) : res.status(404).end()));
+        serve(req, res, (err2?: any) => {
+            if (err2) return next(err2);
+            secondarySiteUploadsRedirect(req, res, (err3?: any) => (err3 ? next(err3) : res.status(404).end()));
+        });
     });
 });
 app.use('/uploads', imageNegotiation(config.uploads.dir));
@@ -1854,43 +1862,10 @@ async function initializeMainSite() {
             log.warn({ err: e }, '[boot] sandbox hardening probe skipped');
         }
 
-        // Start cron system
-        const { startCron, initDefaultCronEvents, scheduleEvent, scheduleSingleEvent, unscheduleEvent, nextScheduled } = require('./core/cron');
-        await initDefaultCronEvents();
-        // (#21) Daily analytics prune. Armed here rather than inside initDefaultCronEvents so the
-        // retention policy stays in one module with its handler; the guard is the same "only if not
-        // already scheduled" shape every default event uses, so a restart never duplicates it.
-        try {
-            const { HOOK: ANALYTICS_PRUNE_HOOK } = require('./core/analytics-retention');
-            if (!(await nextScheduled(ANALYTICS_PRUNE_HOOK))) {
-                await scheduleEvent(Date.now(), 'daily', ANALYTICS_PRUNE_HOOK);
-            }
-        } catch (e: any) {
-            log.error({ err: e }, 'Failed to schedule the analytics retention prune');
-        }
-        startCron();
-
-        // Multi-node coherence: refresh in-process caches (roles) on cross-node option changes, and
-        // join the cluster notification bus so SSE pushes reach clients on any node. No-op w/o Redis.
-        require('./core/coherence').initCoherence();
-        require('./core/notifications').initClusterBus();
-        // Salas de edición colaborativa (Verso F8): el gateway hace round-robin en cada petición, así
-        // que dos editores de la misma página caen en nodos distintos por construcción. El bus reparte
-        // sus ops entre nodos; sin Redis (mononodo) es un no-op y el fan-out se queda en memoria.
-        require('./core/collab-rooms').initClusterBus();
-
-        // Outgoing webhooks: subscribe the dispatcher to content hooks and start the delivery poller.
-        require('./core/webhooks').initWebhooks();
-        // F3 content outbox: pending events from this or a crashed peer are leased and delivered only
-        // after their content transaction committed. Start it after hook consumers are registered.
-        require('./core/content-outbox').initContentOutbox();
-
-        // Expose Cron API to Plugins via global.wordjs
-        global.wordjs = global.wordjs || {};
-        global.wordjs.scheduleEvent = scheduleEvent;
-        global.wordjs.scheduleSingleEvent = scheduleSingleEvent;
-        global.wordjs.unscheduleEvent = unscheduleEvent;
-        global.wordjs.nextScheduled = nextScheduled;
+        // Cron, the coherence and cluster buses, the webhook dispatcher and the content outbox. One
+        // module (core/runtime-services) because POST /setup/install starts the same services in a
+        // process that booted in setup mode — otherwise a fresh site ran without them until a restart.
+        await require('./core/runtime-services').startRuntimeServices();
 
         // Initialize Robust Theme Engine
         log.info('🎨 Initializing Theme Engine...');

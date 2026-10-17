@@ -52,6 +52,22 @@ export interface WordJSRouteUser {
     userLogin: string;
     /** Same admin-owned grant as {@link WordJSSafeUser.hasProfessionalMailbox} — gate on this, don't re-derive it. */
     hasProfessionalMailbox: boolean;
+    /**
+     * The caller's capabilities that belong to THIS plugin: those in its own namespace (`<slug>_*`),
+     * from any role the user holds, including roles this plugin declared. Never a core capability and
+     * never another plugin's. An administrator receives every capability the plugin's roles confer.
+     * Gate your routes on these (e.g. `req.user.pluginCapabilities.includes('my_plugin_manage')`).
+     */
+    pluginCapabilities: string[];
+}
+
+/** A private media-library attachment as {@link WordJS.media} describes it — never a path. */
+export interface WordJSPrivateMedia {
+    id: number;
+    title: string;
+    mimeType: string;
+    filesize: number;
+    filename: string;
 }
 
 /**
@@ -99,6 +115,13 @@ export interface WordJSRouteResponse {
     send(body: any): this;
     /** Settle the request with no body. */
     end(): this;
+    /**
+     * Settle the request by having the HOST stream a PRIVATE media-library file as the response.
+     * Permission: `media:private_read`. The host sets the download headers and refuses anything that is
+     * not a private attachment; the file's bytes never enter the isolate. `filename` (max 200 chars) is
+     * the download name offered to the browser.
+     */
+    sendPrivateMedia(mediaId: number, opts?: { filename?: string }): this;
 }
 
 export type WordJSRouteHandler = (
@@ -445,6 +468,15 @@ export interface WordJS {
         url(): Promise<string>;
         domain(): Promise<string>;
         adminEmail(): Promise<string>;
+    };
+
+    /**
+     * Private media-library attachments. Permission: `media:private_read`. `getPrivate(id)` describes
+     * the file (or resolves `null` when it is not a private attachment); deliver it from a route with
+     * {@link WordJSRouteResponse.sendPrivateMedia}.
+     */
+    media: {
+        getPrivate(id: number): Promise<WordJSPrivateMedia | null>;
     };
 
     /**

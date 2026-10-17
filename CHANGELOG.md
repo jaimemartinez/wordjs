@@ -6,11 +6,37 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+
+- **Update a plugin or a theme by uploading a newer zip.** Uploading a zip whose plugin is already
+  installed used to fail twice — "deactivate it", then "uninstall it" — and uninstalling dropped the
+  plugin's grants. Now **Plugins → Upload Plugin** answers `409 plugin_exists` with both versions and the
+  screen offers **Update** (`POST /api/v1/plugins/:slug/update`): the new code is extracted to a staging
+  directory and validated there first (a bad zip leaves the installed plugin running, untouched), then
+  swapped in and restarted if it was active. `data/`, the plugin's tables, its grants and its egress list
+  are kept; permissions the new version adds are reported and stay off, and the permissions dialog opens
+  on them. Themes get the same: **Install Theme** with an installed theme's zip offers **Update**
+  (`POST /api/v1/themes/:slug/update`, staged and compiled first, then swapped; an active theme stays
+  active and keeps its customizer settings). See `documentation/plugins.md` and `documentation/themes.md`.
+
+- **`wordjs.js pack theme <slug>`** zips a theme with the single `<slug>/` root folder the upload and the
+  update expect. The admin's theme download now has the same layout, so it can be uploaded back.
+
+- **A plugin can reach an administrator-approved private address — one host, one port.** Plugins still
+  reach public addresses only, but an administrator can now approve an exact `host:port` for a plugin
+  (`GET`/`POST /api/v1/plugins/:slug/private-egress`, at most 4 entries). The case it exists for is an
+  SMTP smarthost on the LAN, which the Mail Server could not use at all. An approval opens that host on
+  that port and nothing else; link-local addresses (including `169.254.169.254`), unspecified and
+  multicast addresses cannot be approved; it lives beside the egress allowlist without changing it; saving
+  restarts the plugin and is recorded in the audit log (`plugin.private_egress`); and an API token may
+  withdraw an approval but never make one. See `documentation/plugins.md` and `documentation/api.md`.
+
 ### Changed
 
 - **Multisite: the database migration tool, like backups, is now available on the main site only in a
   multisite network.** `/api/v1/db-migration/*` answers 404 on every other site, exactly as `/backups`
   does there (the admin screen already hid it). Single-site installs and the main site are unchanged.
+
 - **`GET /api/v1/` reports the product version and the full route map.** `version` now comes from the
   release manifest (the same value `/api-docs` publishes) instead of a fixed `1.0.0`, and `routes` lists
   every mounted route group, including the ones added since the map was written (AI, MCP, agents,
@@ -19,10 +45,73 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   API index now reports the product version and every mounted route group; every key it published
   before is still there with the same path, so clients that read it only see additional keys and a
   real version number.
+
 - **Theme logic: the default permission declaration uses the real vocabulary.** A theme without a
   `manifest.json` declared a `content:read` scope that no permission gate knows; it now declares only
   `settings:read`, from one shared definition used by both the runtime gate and the static scan. No
   effective behaviour changes: a theme's `functions.js` still holds no permission grant.
+
+- **Mail Server 3.0.2: a relay that does not answer is reported, not bypassed.** When the configured
+  relay failed its check, outgoing mail silently went direct-to-MX instead. Now it waits in the retry
+  queue and the console says **Relay unavailable: <reason>** (server health, the Configuration tab and
+  the Test tab; `relay_status` in `GET /settings`); a failed relay is re-checked at most once a minute.
+  The Configuration tab has a **Sandbox access** section to approve a private relay's exact address. A
+  relay given by name now works inside the sandbox (the plugin resolves it and keeps the name for TLS),
+  and relay credentials are optional, for a smarthost that relays for its network by address. With
+  **Require STARTTLS** off, a relay that advertises STARTTLS and then refuses it with an SMTP reply gets
+  the mail without TLS, as direct-to-MX delivery already does.
+
+- **Mail Server: password recovery works with a relay.** Recovery (and e-mail verification) waited for
+  the DNS check to find MX, A, SPF, DKIM and DMARC on the site's own domain, which a site that sends
+  through a relay never passes. Now a relay that answers its check is what makes mail ready, and one
+  that does not turns recovery off again.
+
+- **Mail Server: switched-off settings stay off.** A setting saved as `0` came back from the host as a
+  number and was read as on, so **Require STARTTLS: No** (and other switches turned off in the console)
+  had no effect and showed as **Yes** again after saving.
+
+- **Mail Server: a non-standard `smtp_listen_port` works with "Receive internet email".** WordJS now
+  opens any unprivileged port (1024 and up) for the plugin, besides the ones its manifest declares. A port
+  it refuses no longer leaves the server without a listener: the plugin listens on 25 and the console
+  says which port was refused and why.
+
+- **Mail Server: the console warns when the mail domain is not a public domain.** On a site reached by
+  IP, `localhost` or a LAN name, mailboxes become `@localhost` (or similar) and no other server can
+  deliver to them. Server health, the Configuration tab and the startup log now say so and how to fix it
+  (`mail_domain` / `mail_domain_public` in `GET /settings`).
+
+- **AI provider: a longer, configurable timeout for local models.** A loopback OpenAI-compatible
+  provider (Ollama, LM Studio…) now gets 300 s per request instead of 60 s, enough for a CPU model's first
+  load, a queue or an image; `WORDJS_AI_TIMEOUT_MS` overrides it for every provider.
+
+- **AI provider failures say what went wrong.** A timeout (`ai_provider_timeout`, 504), a model that does
+  not accept images asked for alt text (`ai_provider_no_vision`, 422), an unknown model, an unreachable or
+  unavailable server and a refused request now have their own codes and messages, and the editor shows a
+  translated message for each instead of one generic "did not answer correctly".
+
+- **Post and page `link` is the canonical URL.** REST and GraphQL answer `<siteUrl>/<slug>` — what the
+  page declares in `rel=canonical` and the sitemap and feeds publish — instead of `/post/<slug>/`, which
+  answered with a 308 redirect. Other content types keep `/<type>/<slug>`, without the trailing slash.
+
+- **Anonymous `status=draft` (pending, private, future) lists are empty.** `GET /posts` and GraphQL
+  `posts(status:)` used to answer an anonymous request for unpublished entries with the published ones;
+  they now answer an empty list. `status=any` still lists the published entries.
+
+- **The installer no longer reports a fake test run.** It used to "run" the core test suite with a filter
+  that matched none of its TypeScript files and report "0 tests, OK"; the install response now says
+  `tests.skipped: true`. `runCoreTests()` finds `*.test.ts` files, runs them with the secret-free env, and
+  reports `skipped` when there is no suite or no dev dependencies.
+
+- **The admin follows the site's language until you pick one.** With no choice saved in the sidebar's
+  language menu, the admin now speaks the site's own language (`<html lang>`, from the site locale) when it
+  is English, Spanish or Portuguese, instead of always starting in Spanish. An English site no longer
+  shows Spanish Backups or Marketplace screens next to English ones. A language picked in the sidebar still
+  wins, on every site.
+
+- **Bundled theme descriptions are translatable.** `theme.json` accepts
+  `"translations": { "<lang>": { "description": "…" } }`; the admin shows the description for its own
+  language and falls back to `description`. The four bundled themes ship English descriptions with Spanish
+  and Portuguese translations (Circuito's was Spanish only).
 
 ### Fixed
 
@@ -35,9 +124,154 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   `check_plugins.js` reads `dbPath` (or the `dbDriver` default file) from `backend/wordjs-config.json`.
   `backend/scripts/migrate-media-urls.js` loads the TypeScript sources by itself (compiled `dist/` when
   present), so a plain `node scripts/migrate-media-urls.js` works.
+
 - **Plugin bridge typings.** `backend/types/wordjs-bridge.d.ts` now describes `wordjs.paths`
   (`data`, `logs`, `tmp`) and the `wordjs.smtp` namespace (`listen`, `status`) used with the
   `smtp:inbound` permission, with its session, handler, option and status types.
+
+- `wordjs.js pack <slug> --build` on a production install stopped with a raw `Cannot find module
+  'esbuild'`; it now says the backend's development dependencies are missing and how to build instead.
+  Its closing hint names the real button (**Upload Plugin**, not "Add New").
+
+- A theme generated from valid seeds could get a `--wjs-color-text-muted` under AA (4.42:1 for
+  `#2b211c` on `#fbf7f2`), which the doctor then flagged. The derivation now washes the text less when
+  needed and always reaches 4.5:1; palettes that already passed are unchanged.
+
+- A theme's `styles.hero.bg` / `--wjs-hero-bg` never showed: the framework's default hero gradient was
+  painted over it. Both ends of that default gradient now fall back to `--wjs-hero-bg`; an explicit
+  gradient or image still wins. A bundled theme that set only `--wjs-hero-bg` now shows that colour.
+
+- After activating a theme, the first visit to each cached page still got the previous theme
+  (stale-while-revalidate). Activation, and updating the active theme, now expire those pages at once.
+
+- An isolated plugin's `comments:pre_insert` filter that threw or timed out was skipped and the comment
+  accepted, against the hook's contract. That hook now fails closed: the comment is refused with the
+  plugin's own 4xx status and `rest_*` code when it gave one, `503 rest_plugin_check_failed` otherwise.
+  Other filters keep falling back to the unchanged value.
+
+- `backend/types/wordjs-bridge.d.ts` declares `WordJSRouteUser.pluginCapabilities`,
+  `res.sendPrivateMedia()` and `wordjs.media.getPrivate()`.
+
+- The `hello-world` sample filtered `the_content`, a hook core never applies, and its test claimed to
+  run before activation; it now registers a `[hello]` shortcode and says its tests are the author's to
+  run. `POST /plugins/sample` writes the same isolated sample (it wrote an in-process one without a
+  manifest). The `test-schema` fixture declares `database:write` instead of an access level the upload
+  refuses, and drops its unused `main` / `active` keys.
+
+- **MCP: a call to a tool the agent connection was not granted** is answered with a tool error that names
+  the missing grant and is recorded as `agent.denied` in the audit trail, as documented.
+
+- **MCP `get_site_info`** answers the effective language tag and time zone (`en`/`UTC` on a site that never
+  saved them) instead of empty strings.
+
+- **Media storage: the public URL is checked for the mistakes the server can see.** The settings and the
+  connection test answer `warnings` for a public URL that already ends with the key prefix (media URLs
+  would read `…/uploads/uploads/…`), a path-style endpoint without the bucket, and plain http on an https
+  site.
+
+- **Media storage on a multisite network:** a file another site does not hold on disk is redirected to the
+  bucket, like on the main site, instead of a 404.
+
+- **Media storage: "a migration is already running" is cluster-wide.** A node that is not running the
+  migration itself now refuses a second start (409) and reports it as running, from a progress record the
+  running node refreshes at least every 30 s.
+
+- **Media storage: a saved public URL reaches the admin page's CSP at once.** The frontend re-reads the
+  media origin when the backend purges its settings cache, so **Test connection** works right after a save
+  instead of failing for up to a minute.
+
+- **`npm run media -- status` prints only its JSON on stdout**; backend log lines go to stderr
+  (`WORDJS_LOG_TO_STDERR=1`), so it can be piped to `jq`.
+
+- **Backup archives are now created owner-only** (0600, in a 0700 directory), and archives already on disk
+  are tightened at boot.
+
+- **Docs:** `gateway.md` documents `GET /revalidate-secret`, and its endpoint test reads the routes
+  mounted from `gateway/src/purge.js`; `media-storage.md` names Garage and SeaweedFS next to MinIO for a
+  self-hosted bucket; `ai-agents.md` notes that **Last used** is written at most once a minute.
+
+- **Plugins → Marketplace speaks the admin's language.** The catalog tab, its source settings and the
+  install dialog were hard-coded Spanish ("Cargando el catálogo…", "Instalar", "Bloque …", "Permisos que
+  solicitará", "Cancelar", the source line and the toasts); they are translated now, including the
+  catalog's categories and the review badges. The broken-plugin card and its cleanup messages too.
+
+- **The delete-plugin dialog is one sentence.** It read "…This action cannot be undone. Reading List?";
+  the plugin's name now sits inside the question.
+
+- **Restoring a backup says it worked and what to do next.** The page reloaded a second after the restore,
+  throwing away the only feedback; it now stays on a success notice that tells the admin to restart the
+  WordJS service, with a reload button.
+
+- **Webhook delivery times are local.** The delivery log showed UTC database timestamps as if they were
+  local, next to a "Last delivery" in local time.
+
+- **Network → Create site shows why it failed.** A failed create (a server error included) now leaves an
+  error on the form as well as a toast.
+
+- **Media storage shows the server's advice about the public URL.** Non-blocking `warnings` from the media
+  storage API (a URL that repeats the key prefix, misses the bucket, or would be mixed content) are listed
+  under the fields, a failed public check in "Test connection" explains what to try, and the endpoint
+  hints name Garage and SeaweedFS next to MinIO.
+
+- **AI agents → New connection is no longer cramped.** Below 1536 px the form sits above the connection
+  list instead of in a narrow column that cut its labels at 1280 px.
+
+- **The Verso editor speaks the admin language everywhere.** With the admin in English the editor still
+  showed Spanish in many places: the mobile header ("Editando · …"), the canvas and navigation labels,
+  the entrance-animation effects, speeds and delays, the device tabs and every section of the
+  appearance panel (background, border and shadow, spacing and size, typography, hover motion), the
+  image and link fields, the list, menu, symbol and featured-image pickers, the interactions panel and
+  its timeline, collaboration status texts and the block palette's catalogue. All of them now go through
+  the editor dictionary in English, Spanish and Portuguese; a new test parses the editor sources and
+  fails on any visible string without a translation.
+
+- **New blocks start with text in the admin language.** A freshly inserted Hero, Button, Text, Form,
+  pricing table and the other core blocks — and the built-in patterns — used to start with the same
+  starter text whatever the language ("Un titular que atrapa" in an English admin). The starter text
+  now follows the admin language; blocks already on a page keep their text.
+
+- **The main editor button shows the published state.** After publishing, with nothing pending, the
+  button reads "Published" (or "Scheduled") with a check mark instead of offering the "Publish" action
+  again.
+
+- **Plugin blocks have readable names.** A plugin's Verso block can declare an optional `label` in
+  `versoComponentDef` / each `versoComponents` entry; without one the editor splits the block id into
+  words ("ReadingList" → "Reading List") instead of showing the raw id. See `documentation/plugins.md`.
+
+- **WordPress import keeps featured images.** `_thumbnail_id` names the attachment's id on the old site;
+  it is now remapped to the imported attachment, also when the attachment is listed after the post or was
+  matched on a re-run, and a re-run repairs posts an earlier import left pointing at the source id. A
+  reference that resolves to no imported attachment is dropped instead of naming an unrelated row.
+
+- **Imported comments keep their dates.** `wp:comment_date` / `wp:comment_date_gmt` are restored instead of
+  the import time.
+
+- **Re-importing content re-links menus.** When a menu is matched on a re-run, an item whose page, post or
+  term no longer exists (deleted and imported again under a new id) is re-pointed at the re-imported copy;
+  items whose target still exists, including ones edited by hand, are left alone. The summary reports them
+  as `menus.items.relinked`.
+
+- **Public dates follow the site language.** Post dates on single posts, the home page and search results,
+  and comment dates, are formatted in the site's language (`WPLANG`, the same value as `<html lang>`)
+  instead of the visitor's browser or the server's locale, so an English site no longer shows `2/3/2024`
+  for 2 March to a Spanish reader.
+
+- **A freshly installed site runs cron and outgoing webhooks without a restart.** The process that
+  finished the install wizard (or `POST /api/v1/setup/install`) had booted in setup mode, and the boot
+  starts cron, the coherence and cluster buses, the webhook dispatcher and the content outbox only on an
+  installed site. Until the first restart, webhooks delivered only the manual test ping (no post,
+  comment, term or settings event was ever queued) and scheduled posts were not published. The install
+  now starts these services in the running process, as the boot does (`core/runtime-services`).
+
+- **Release bundles no longer include a stray test backup in `backend/backups/`.** The 2.6.0 bundle
+  carried a backup left over from a local test run (a throwaway test database, no site data), and
+  `npx create-wordjs upgrade` copied it into the upgraded site, where it listed under Admin → Settings →
+  Backups. If a site upgraded to 2.6.0 shows a backup dated 2026-10-15 that it did not create, delete it
+  from that page; do not restore it. The packager now excludes `backend/backups/` by name,
+  `.gitignore` covers it, and CI fails if the repository tracks a backup or a database file outside test
+  fixtures or if a built bundle contains one. `create-wordjs upgrade` also treats `backend/backups/`
+  as site state, like `backend/data/` and `backend/uploads/`: it never adds to or replaces the site's
+  own backups.
 
 ## [2.6.0] - 2026-10-16
 

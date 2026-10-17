@@ -9,32 +9,33 @@ This guide will teach you how to create a plugin for WordJS from scratch. WordJS
 A WordJS plugin is simply a folder inside `backend/plugins/`.
 *   **Backend (`index.js`):** Runs on the server **inside a separate OS process** (`child_process.fork`) — its own heap, event loop, and OS memory cap. It cannot `require()` core modules directly — it reaches core ONLY through the `wordjs` capability bridge, which is passed to its `init(wordjs)` function. Defines API routes, hooks, shortcodes via `wordjs.*`.
 *   **Frontend (`client/`):** Runs in the user's browser. Defines the Admin interface and visual blocks for the editor. These are **build-time** React assets and are unaffected by isolation.
-*   **Manifest (`manifest.json`):** The brain. Defines name, version, **`"isolated": true`** (required — non-isolated plugins are rejected), permissions, **npm dependencies**, and **frontend hooks**.
+*   **Manifest (`manifest.json`):** The brain. Defines name, version, **`"isolated": true`** (required — non-isolated plugins are rejected), permissions, **npm dependencies**, and **frontend hooks**. Every field the runtime reads is listed in **§14 (Manifest field reference)**.
 
-> **🔒 Isolated by default.** Every plugin runs sandboxed in its own OS process (`child_process.fork`, IPC over a structured-clone channel). There is no in-process execution path. A crash, OOM, or even a heap escape is contained to the child — the host process always survives. Your backend code talks to core only via the injected `wordjs` bridge; every bridge call is permission-checked on the host. See **§11 (The `wordjs` Capability Bridge)** below and **[Plugin Isolation](plugin-isolation-proposal.md)**.
+> **🔒 Isolated by default.** Every plugin runs sandboxed in its own OS process (`child_process.fork`, IPC over a structured-clone channel). There is no in-process execution path. A crash, OOM, or even a heap escape is contained to the child — the host process always survives. Your backend code talks to core only via the injected `wordjs` bridge; every bridge call is permission-checked on the host. See **§11 (The `wordjs` Capability Bridge)** below and **[Plugin Isolation](archive/plugin-isolation-proposal.md)**.
 
 ---
 
-## 2. Tutorial: Create "Hello World" Plugin
+## 2. Tutorial: Create a "Greeting Card" Plugin
 
-Follow these steps to create a plugin that shows a message in the admin panel.
+Follow these steps to create a plugin that shows a message in the admin panel. (The tutorial plugin is
+called `greeting-card` because `backend/plugins/hello-world` already exists: it is a different, minimal
+reference plugin — see [Plugins Reference §7](plugins-reference.md).)
 
 > **Fast path:** `node backend/cli/wordjs.js create plugin my-plugin` scaffolds everything below in one command — manifest (`"isolated": true`, requested permissions), a bridge-idiomatic `index.js` (typed via `backend/types/wordjs-bridge.d.ts` for JSDoc IntelliSense), an admin page and a Verso block — and prints the activate/regenerate flow. See `documentation/cli.md` §3. The tutorial below explains what each piece is.
 
 ### Step 1: Create the Folder and Manifest
-Create a folder named `hello-world` inside `backend/plugins/`. Inside it, create a `manifest.json`:
+Create a folder named `greeting-card` inside `backend/plugins/`. The folder name is the plugin's
+**slug**: it names its routes (`/api/v1/plugin/greeting-card/…`), its tables (`wjp_greeting_card_…`)
+and its grants. Inside it, create a `manifest.json`:
 
 ```json
 {
-  "id": "hello-world",
-  "name": "Hello World",
+  "id": "greeting-card",
+  "name": "Greeting Card",
   "version": "1.0.0",
   "description": "My first WordJS plugin",
   "author": "Your Name",
   "isolated": true,
-  "dependencies": {
-      "uuid": "^10.0.0" 
-  },
   "permissions": [
       { "scope": "browser", "access": "script", "reason": "To run the admin page and the hooks bundle" },
       { "scope": "settings", "access": "read", "reason": "To display the site title" },
@@ -44,19 +45,23 @@ Create a folder named `hello-world` inside `backend/plugins/`. Inside it, create
   "frontend": {
       "adminPage": {
           "entry": "client/admin/page.tsx",
-          "slug": "hello-ui"
+          "slug": "greeting-card"
       },
       "hooks": "client/hooks.tsx"
   }
 }
 ```
 
+`frontend.adminPage.slug` is the page's URL segment (`/admin/plugin/greeting-card`); the sidebar item
+added in Step 2 must point at exactly that path (§10.1). `id`, when present, must equal the folder name.
+
 > **`"isolated": true` is mandatory.** A plugin without it is rejected at activation/boot
 > (`Plugin '<slug>' must declare "isolated": true and use the wordjs bridge — legacy in-process plugins
 > are no longer supported.`). Inside the child process you must use the `wordjs` bridge instead of `require`ing core.
 
 > **🔥 Auto-Dependency Management:** 
-> WordJS reads the `dependencies` object. When you activate the plugin, the system **automatically installs** missing packages (`npm install`). When you deactivate it, if no other plugin needs them, it **garbage collects** them (`npm uninstall`). Zero manual work.
+> This plugin needs no npm packages. When yours does, list them in a `dependencies` object
+> (`"dependencies": { "some-package": "^1.2.3" }`). WordJS reads it: when you activate the plugin, the system **automatically installs** missing packages (`npm install`). When you deactivate it, if no other plugin needs them, it **garbage collects** them (`npm uninstall`). Zero manual work.
 
 > [!IMPORTANT]
 > **Registry version ranges only.** Each `dependencies` entry must be an npm package name mapped to a
@@ -131,32 +136,43 @@ Create `index.js`. Your `init` function receives the `wordjs` bridge — **use i
 core**. Inside the child process there is no `express`, no `getApp()`, no direct `require('../../src/core/...')`.
 
 ```javascript
-exports.init = function (wordjs) {
-    const { http, adminMenu } = wordjs;
+exports.init = async function (wordjs) {
+    const { http, adminMenu, options } = wordjs;
 
-    // 1. Register a JSON API route. The host namespaces it under /api/v1/plugin/hello-world.
+    // 1. Register a JSON API route. The host namespaces it under /api/v1/plugin/greeting-card.
     //    The handler runs inside the child process with a mock (req, res) forwarded over RPC.
-    http.route('get', '/message', (req, res) => {
-        res.json({ text: "Hello from the sandboxed child process!" });
+    //    { auth: true, admin: true } makes the HOST run its real authentication + administrator check
+    //    before the request reaches your process.
+    http.route('get', '/message', { auth: true, admin: true }, async (req, res) => {
+        // Bridge data calls are RPCs to the host — always await them. settings:read is needed here.
+        const site = await options.get('blogname', 'WordJS');
+        res.json({ text: `Hello from ${site}, served by a sandboxed child process!` });
     });
 
-    // 2. Add a link to the Sidebar (declarative — forwarded to core via the bridge)
-    adminMenu.add({
-        href: '/admin/plugin/hello-world',
-        label: 'Hello World',
+    // 2. Add a link to the Sidebar (declarative — forwarded to core via the bridge). The href must be
+    //    this plugin's own admin page: /admin/plugin/<frontend.adminPage.slug>. `cap` decides who sees
+    //    the item; manage_options keeps it to administrators.
+    await adminMenu.add({
+        href: '/admin/plugin/greeting-card',
+        label: 'Greeting Card',
         icon: 'fa-smile',
         order: 100,
-        cap: 'manage_hello_world'
+        cap: 'manage_options'
     });
 
-    console.log('Hello World plugin initialized (via the wordjs bridge)!');
+    console.log('Greeting Card plugin initialized (via the wordjs bridge)!');
 };
 ```
 
 > **The route is namespaced.** Every plugin's routes always mount under
-> `/api/v1/plugin/<slug>/...` (so the example above is reachable at `/api/v1/plugin/hello-world/message`).
+> `/api/v1/plugin/<slug>/...` (so the example above is reachable at `/api/v1/plugin/greeting-card/message`).
 > There is no absolute-path escape — that was removed with the trusted tier. Fetch it from your admin
 > page using that namespaced URL.
+>
+> **Both calls are permission-checked on the host.** Without a granted `express:register_route` the
+> route is dropped with a host warning; without a granted `admin_menu:register`, `adminMenu.add`
+> throws (and, awaited in `init`, fails the load — which is what you want while developing). Activation
+> grants what the manifest declares (§12).
 
 ### Step 3: Admin Page UI (`client/admin/page.tsx`)
 Create the folder structure `client/admin/` and add `page.tsx`:
@@ -170,13 +186,13 @@ import { api } from "@/lib/api";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
 
-export default function HelloWorldAdmin() {
+export default function GreetingCardAdmin() {
     const [msg, setMsg] = useState("Loading...");
 
     useEffect(() => {
         // The session travels in an HttpOnly cookie — `api()` sends it (credentials: 'include') and
         // prefixes /api/v1, so pass the namespaced plugin path only.
-        api<{ text: string }>('/plugin/hello-world/message')
+        api<{ text: string }>('/plugin/greeting-card/message')
             .then((data) => setMsg(data.text))
             .catch(() => setMsg("Failed to load"));
     }, []);
@@ -184,7 +200,7 @@ export default function HelloWorldAdmin() {
     return (
         <div className="p-8 md:p-12 h-full bg-gray-50/50 overflow-auto">
             <PageHeader 
-                title="Hello World" 
+                title="Greeting Card" 
                 subtitle="My first WordJS plugin"
                 icon="fa-smile"
             />
@@ -208,13 +224,22 @@ If you want to modify existing WordJS pages (like adding a field to the User For
 import React from 'react';
 import { pluginHooks } from '@/lib/plugin-hooks';
 
-// This function is auto-executed when the plugin loads
-export const registerMyHooks = () => {
+// Every export whose name starts with `register` is called when the hooks bundle loads.
+export const registerGreetingCardHooks = () => {
+    // The 4th argument is a stable key: registering again REPLACES the entry instead of stacking it.
     pluginHooks.addAction('user_form_before_email', (data) => (
         <div className="alert">Hello from the hook!</div>
-    ));
+    ), 10, 'greeting-card:user-form-note');
 };
 ```
+
+`user_form_before_email` is rendered by the core user forms (`<PluginHook name="user_form_before_email"
+data={{ formData, setFormData, isNew }} />`), so `data` gives you the form state.
+
+### Step 5: Build, then activate
+Run `node scripts/build-plugin.js greeting-card` from `backend/` (§4), restart the backend once so it
+discovers the new folder, and activate the plugin in `/admin/plugins` (§5). The **Greeting Card**
+sidebar item then opens the page, which shows the message from your route.
 
 ---
 
@@ -257,7 +282,7 @@ Before distributing or deploying your plugin, you MUST compile the frontend.
 ### Step 1: Run the Builder
 From the `backend` directory, run:
 ```bash
-node scripts/build-plugin.js hello-world
+node scripts/build-plugin.js greeting-card
 ```
 
 The builder looks for the plugin in `backend/plugins/` by default. A plugin kept elsewhere — a
@@ -312,7 +337,7 @@ The output is deterministic — rebuilding unchanged sources gives the same byte
 ### 🛑 Critical: The React Singleton
 WordJS is highly sophisticated about how it handles React. 
 - **The Core Problem:** If your plugin bundles its own copy of React, Hooks will fail (Singleton violation).
-- **The WordJS Solution:** The build script never lets React into your bundle. `react`, `react-dom`, `react-dom/client` and the JSX runtimes — plus a fixed list of host modules (`HOST_MODULES` in `backend/scripts/build-plugin.js`: `@/lib/api`, `@/lib/i18n`, `@/lib/plugin-hooks`, `@/lib/sanitize`, the Modal/I18n/Toast/Auth contexts, `@/components/MediaPickerModal`, and the `StatCard`/`PageHeader`/`Card`/`ActionCard` UI components) — are **rewritten to the `WordJS.*` runtime globals** that `frontend/src/lib/pluginBundleLoader.ts` populates. They are deliberately **not** left as plain esbuild `external`: a bare `import … from "react"` cannot be resolved by the blob-URL module the loader evaluates. Any other `@/*` and `next/*` import does stay a genuine external.
+- **The WordJS Solution:** The build script never lets React into your bundle. `react`, `react-dom`, `react-dom/client` and the JSX runtimes — plus a fixed list of host modules (`HOST_MODULES` in `backend/scripts/build-plugin.js`: `@/lib/api`, `@/lib/i18n`, `@/lib/plugin-hooks`, `@/lib/sanitize`, `@/lib/csrf`, the Modal/I18n/Toast/Auth contexts, `@/components/MediaPickerModal`, and the `StatCard`/`PageHeader`/`Card`/`ActionCard` UI components) — are **rewritten to the `WordJS.*` runtime globals** that `frontend/src/lib/pluginBundleLoader.ts` populates. They are deliberately **not** left as plain esbuild `external`: a bare `import … from "react"` cannot be resolved by the blob-URL module the loader evaluates. Any **other** `@/*` import — or a relative path into `frontend/src/` — is a **build error** naming the module (`Plugin imports host module "…" which is not exposed to plugin bundles`), not an external. `next/*` imports are left as plain externals, which a runtime-loaded bundle cannot resolve, so do not rely on them (read `window.location` instead of `next/navigation`, §10.6).
 - **Runtime Injection:** WordJS injects its own unified React instance into the plugin bundle at runtime. **Never try to bundle React yourself.**
 
 ---
@@ -375,8 +400,9 @@ This is also the way to ship a **private** plugin that never goes through the Ma
     packer on the installed plugin (`POST /api/v1/plugins/:slug/pack`) and saves the ZIP; a refusal
     shows its reason, and the full packer output goes to the browser console. Outside development the
     button is hidden and the route answers 404.
-2.  **Upload:** Go to **Plugins** -> **Add New** in the Admin panel and pick the ZIP. Deactivate or
-    uninstall an installed copy first.
+2.  **Upload:** Go to **Plugins** → **Upload Plugin** in the Admin panel and pick the ZIP. If that
+    plugin is already installed, the screen offers to **update** it instead — see
+    [Updating a plugin](#updating-a-plugin-upload-a-newer-zip) below. Nothing to deactivate or uninstall.
 3.  **Activate:** Plugin works instantly using the pre-compiled bundle.
 
 #### Dependencies in the ZIP
@@ -418,10 +444,37 @@ When you upload a plugin ZIP, WordJS validates it **before** reporting success, 
 
 - **Decompression-bomb cap** — the uncompressed size and entry count are bounded (a small ZIP that expands to gigabytes is rejected). Same guard protects theme uploads and backup restores.
 - **Manifest** — must be valid JSON with a `name` and `"isolated": true`.
-- **Permissions** — every `{scope, access}` is checked against the known vocabulary; a typo (`databse`, `readwrite`) is rejected with the valid list.
+- **Permissions** — every `{scope, access}` is checked against the known vocabulary; a typo (`databse`, `readwrite`) is rejected with the valid list, and so is `access: "admin"` on any scope but `email` (§12).
+- **Dependencies** — only registry semver ranges (§2).
+- **Browser code** — a plugin that ships any frontend entry or prebuilt bundle must declare `browser:script` (§2).
+- **Admin and portal pages** — `frontend.adminPage.slug` and `frontend.portalPage.slug` must not be another installed plugin's (`Invalid admin page` / `Invalid portal page`, §10.1, §10.6).
 - **Declared roles** — a `roles` block must stay inside the plugin's namespace and request `roles:declare` (§12a); anything else is rejected with the reason.
 - **AST scan** — the same static scan that runs at activation runs here too; forbidden code (`eval`, `child_process`, dynamic `require`, …) is rejected up front, in your own source and — within the bounds in §7.2 — in any `node_modules/` you ship.
-- **Live-plugin safety** — re-uploading a slug that is currently **active** is refused (409). Deactivate it first so a botched extract can't corrupt a running plugin.
+- **No silent overwrite** — uploading a ZIP whose plugin is already installed (active or not) is refused with 409 `plugin_exists`, which carries the installed and incoming versions; the Plugins screen turns it into the **Update** prompt below. The install path never extracts over an existing plugin.
+
+### Updating a plugin (upload a newer ZIP)
+
+Upload the new ZIP from **Plugins → Upload Plugin**. When the plugin is already installed, the screen
+asks *Update the plugin?* with both versions; confirm and it is replaced in place
+(`POST /api/v1/plugins/:slug/update`, field `plugin`). The ZIP's root folder must be the plugin's slug
+(what `pack` and `pack:plugin` produce).
+
+1. **Staged first.** The new version is extracted to a private staging directory and goes through every
+   check above (bomb cap, Zip Slip, manifest, permissions, AST scan, page conflicts). A ZIP that fails is
+   refused with the reason and **nothing changes** — an active plugin keeps running the old version.
+2. **Then swapped.** The plugin is stopped if it was running, its code is moved aside, the staged code is
+   moved in, and it is started again. If the new version fails to start, the previous one is put back
+   (and restarted). An update interrupted by a crash is recovered at the next boot.
+3. **Kept:** the plugin's `data/` directory (keys, attachments — a `data/` inside the ZIP is ignored when
+   one exists), its `wjp_<slug>_*` tables, its stored grants and its egress allowlist.
+4. **New permissions are asked about, not granted.** The answer lists `newPermissions` (declared by this
+   version, not by the previous one) and `ungrantedPermissions` (declared and not granted). When there are
+   any, the Plugins screen opens the plugin's permissions dialog on them; they stay off until an
+   administrator grants them. A version that asks for nothing new keeps working exactly as granted.
+
+A plugin installed from a catalog loses its catalog binding when updated by hand (its code no longer
+comes from that catalog); install it from the Marketplace again to get one-click updates back. On a
+multisite network, updating is the main site's job, like installing.
 
 ### Runtime health & auto-restart
 
@@ -434,7 +487,7 @@ Each active plugin runs in its own OS process, and WordJS now **supervises** it:
 
 ### Uninstalling a plugin (and its data)
 
-Deleting a plugin (admin **Plugins** → delete, password-confirmed) removes its folder **and** always purges its permission grants (so a later re-upload of the same slug can't silently inherit old, possibly-revoked grants) and its crash-guard strikes.
+Deleting a plugin (admin **Plugins** → delete, password-confirmed) removes its folder **and** always purges its permission grants (so a later re-upload of the same slug can't silently inherit old, possibly-revoked grants) and its crash-guard strikes. To install a newer version, **update** instead (above): deleting is not needed and drops the grants.
 
 By default your plugin's **data tables are kept** (WordPress parity). Tick **"Also delete this plugin's data / tables"** in the delete dialog to additionally `DROP` the plugin's own `wjp_<slug>_*` tables. Only those prefixed tables are dropped — core and other plugins are never touched.
 
@@ -650,7 +703,7 @@ path against the cwd; `wordjs.fs.read`/`write` paths are relative to your own pl
 > The honest remaining platform difference is preventive resident-memory enforcement: Windows has a Job
 > Object and systemd Linux can use cgroup v2, while macOS relies on process separation, the V8 heap cap
 > and a reactive RSS poll. The sandbox has not had an independent external audit.
-> See **[Plugin Isolation](plugin-isolation-proposal.md)** — read its status banner for the as-built
+> See **[Plugin Isolation](archive/plugin-isolation-proposal.md)** — read its status banner for the as-built
 > detail; sections 1–7 of that file are the original design record, kept for the threat model.
 
 > **The AST scan runs on every plugin — there is no skip.** With the trusted tier removed, no plugin is exempt from the scan, and `system:admin` no longer exists as a scan-skip. The scan re-runs on **every server boot** to catch code poisoning. (`db-migration` is no longer a plugin — it moved into core; see below.)
@@ -747,14 +800,27 @@ exports.init = function (wordjs) {
 };
 ```
 
-**Using Filters (Modify something):**
+**Using Filters (Modify something):** the filter core applies that a plugin may join is
+`comments:pre_insert`, the anti-spam / captcha extension point of `POST /comments`
+(`backend/src/routes/comments.ts`). It needs `{ "scope": "comments", "access": "read" }` declared and
+granted. Your callback receives the verdict (`true`) and a plain description of the comment about to be
+written (`postId`, `author`, `authorUrl`, `content`, `status`, `parent`, `userId`, `isAuthenticated`;
+`authorEmail`, `authorIp` and `agent` only with `comments:pii`):
 ```javascript
 exports.init = function (wordjs) {
-    wordjs.hooks.addFilter('the_content', (content) => {
-        return content + '<p>Modified by my plugin!</p>';
+    wordjs.hooks.addFilter('comments:pre_insert', (verdict, comment) => {
+        const links = (String(comment.content || '').match(/https?:\/\//g) || []).length;
+        // false = discard the comment exactly as a tripped honeypot does (the commenter is told nothing).
+        return links > 3 ? false : verdict;
     });
 };
 ```
+Return `false` to discard; anything else lets the insert proceed. A callback that throws or does not
+answer within 2 seconds leaves the value unchanged, so the comment is written.
+
+A filter name core never applies is simply never called. `the_content`, for instance, is not applied by
+the backend (the public site is rendered by the Next.js frontend): registering it is accepted, as one of
+your own hook names, and does nothing.
 
 **Which hooks you may subscribe to.** A subscription is a *read* of everything the hook carries
 (the host serializes its arguments into your process), so core hooks follow the host's hook access
@@ -768,6 +834,13 @@ policy (`backend/src/core/hook-access.ts`; full table in [security.md §8.1](sec
 | `notification_sent` | `notifications:read` | The notification with tokens, codes and reset/verification text redacted. |
 | `updated_option` | `settings:read` | Name and value; secret and protected option values arrive as `'[redacted]'`. |
 | `wordjs_head`, `wordjs_footer`, `wp_head`, `wp_footer`, `dynamic_sidebar`, `admin_menu_items`, core cron hooks | denied to every plugin | — |
+
+**Filters that fail closed.** For most filters, a callback of yours that throws or does not answer within
+2 s is skipped: the value goes on unchanged, so a broken plugin cannot break the page. `comments:pre_insert`
+is the exception, because it is a verdict: a callback that throws (or times out) **refuses the comment**.
+Throw an error with a 4xx `status` and a `rest_*` `code` to refuse with your own answer (e.g.
+`422 rest_captcha_required`); any other failure is answered as `503 rest_plugin_check_failed`, without
+your error text. Return `false` to discard the comment silently as spam.
 
 Your **own** hook names need no permission. Names in a core namespace that core does not define
 (`wp_*`, `wordjs_*`, `core:*`, `comments:*`, `posts:*`, `users:*`, …) are reserved and refused. A refused
@@ -841,14 +914,17 @@ Every call is permission-checked on the host against your manifest.
 | `wordjs.options.get(key, default)` / `set(key, value)` | `settings:read` / `write` | Secret-named keys (`*secret*`, `*password*`, `*key*`, `*token*`, `dkim`, certs…) are **never** exposed — to any plugin. |
 | `wordjs.db.all(sql, params)` / `get(...)` / `run(...)` | `database:read` / `write` | Always scoped to your own `wjp_<slug>_` tables; SQL referencing core tables (`users`, `options`, `sessions`, …) is rejected. There is no unscoped mode. DDL is limited to your OWN `TABLE`/`INDEX`/`VIEW`/`TRIGGER` (SCHEMA/DATABASE/ROLE/FUNCTION/EXTENSION/… denied), an `ALTER … RENAME TO` target must keep your prefix, and a data-modifying `WITH` (a CTE containing insert/update/delete/replace/merge) counts as a write and needs `database:write`. |
 | `wordjs.db.batch(statements)` | `database:read` / `write` | Up to 200 `[sql, params]` pairs in ONE host round-trip — a transport optimisation only: each statement is re-checked with the same permission + SQL guard as the single-statement call, and DDL is refused (use `db.run` / `db.createTable`). Validated as a whole before anything runs, but **not** a transaction — a mid-batch failure leaves the earlier statements applied. |
-| `wordjs.db.createTable(name, columns)` | `database:write` | Always creates a `wjp_<slug>_`-prefixed table; core table names blocked. |
+| `wordjs.db.createTable(name, columns)` | `database:write` | Does **not** add the prefix for you: `name` must already start with `wordjs.db.tablePrefix`, or the call throws (`Plugin tables must be named with the 'wjp_<slug>_' prefix`). Build it as `wordjs.db.tablePrefix + 'items'`. Emits `CREATE TABLE IF NOT EXISTS` and records your plugin as the table's creator. |
+| `wordjs.db.tablePrefix` | — | A plain string property, not an RPC: `wjp_` + your slug with every run of non-alphanumerics turned into `_`, lowercased, + `_` (`greeting-card` → `wjp_greeting_card_`). |
+| `wordjs.slug` | — | Your plugin's slug (its folder name). |
+| `wordjs.paths.data` / `.logs` / `.tmp` | — (raw `fs` on them needs `filesystem:read` / `write`) | Frozen absolute paths of your plugin's private storage directories (`backend/data/plugins/<key>`, `backend/logs/plugins/<key>`, `backend/os-tmp/plugins/<key>`, `<key>` derived from the slug) — a directory of your own under each shared root, never the root itself. They are created when the plugin holds a `filesystem` grant. |
 | `wordjs.db.getType()` | `database:read` | Returns `{ isPostgres, isMySQL, isSQLite, driver }` (`driver` is the full driver name, e.g. `'sqlite-native'`, `'sqlite-legacy'`, `'postgres'`, `'mysql'`, or `'mariadb'`) — branch your DDL on the `isPostgres`/`isMySQL` booleans rather than the raw `driver` string (`isMySQL` is `true` for both `'mysql'` and `'mariadb'`). Note `isSQLite` stays `true` under MySQL (the MySQL driver translates the SQLite dialect), so gate SQLite-only queries (`PRAGMA`/`sqlite_master`) on `isMySQL` explicitly. |
 | `wordjs.users.findByEmail / findByLogin / findById / search(...)` | `users:read` | **Safe projection** only: `{ id, userLogin, username, userEmail, displayName, role, hasProfessionalMailbox, pluginCapabilities }` — never `user_pass` or other credential fields. `pluginCapabilities` is the account's capabilities in your own namespace (§12a), the same list a route gets as `req.user.pluginCapabilities`. The sanctioned way to read users without core-table access. (`hasProfessionalMailbox` is the admin-owned corporate-mailbox grant as a boolean — read it, never re-derive it from `userEmail`, which the account itself can write.) |
 | `wordjs.site.url / domain / adminEmail` | `settings:read` | Read-only site identity. |
 | `wordjs.media.getPrivate(id)` · `res.sendPrivateMedia(id, { filename })` | `media:private_read` | PRIVATE media (`documentation/security.md` §1.5). `getPrivate` returns `{ id, title, mimeType, filesize, filename }` (never a path) or `null`; replying with `res.sendPrivateMedia` from one of your routes makes the HOST stream that file as a download (`no-store`, attachment). Your route decides who may download (e.g. a paid, unexpired token); the file never gets a public URL. Without the grant the call throws and the reply is `403`. |
 | `wordjs.dns.resolveMx / resolveTxt / resolve4 / resolve6 / resolve(...)` | `network` | Host-mediated DNS. The raw resolver (`dns.resolve*`) is denied inside the child, so MX (direct delivery) and TXT (SPF/DKIM/DMARC) lookups go through here. The host strips every A/AAAA answer pointing at a private/internal address, so the address lookups return public IPs only. The name being resolved must be inside the plugin's egress allowlist when one is set, and a name containing a control character (a NUL, which the resolver would stop at) is always refused. |
 | `wordjs.hooks.addAction/addFilter(hook, cb, priority)` · `doAction(hook, ...args)` | — | Callback runs in the child process; host installs an RPC shim. Core hooks that carry other parties' data need the matching grant — `comments:read` (`comments:pii` for commenter email/IP/agent), `posts:read`, `notifications:read`, `settings:read` — and arrive minimized (see §10.5); reserved core-namespace names are refused. Raw-HTML output hooks — `wordjs_head`/`wordjs_footer` and their WordPress-compat aliases `wp_head`/`wp_footer` and `dynamic_sidebar` — are denied to every plugin (the registration is dropped with a host-side warning; no trust tier exempts anyone). `doAction` fires only your OWN registered callbacks — never core's or another plugin's. |
-| `wordjs.http.route(method, path, [opts,] handler)` | `express:register_route` | Mounted at `/api/v1/plugin/<slug>/path` (always namespaced — no absolute mode). The host checks the grant on every registration: without a granted `express:register_route` the route is dropped with a host warning (`denied route registration: express:register_route not granted`) and nothing is mounted — `scope: "admin"` does NOT imply it, declare it explicitly. `opts`: `{ auth, admin }` (host runs the real auth middleware), `{ multipart: 'field' }`. Handler gets a mock `(req,res)` over RPC. With `auth`, `req.user` is `{ id, role, userEmail, userLogin, hasProfessionalMailbox, pluginCapabilities }` — `pluginCapabilities` being the caller's capabilities in your own namespace (§12a). |
+| `wordjs.http.route(method, path, [opts,] handler)` | `express:register_route` | Mounted at `/api/v1/plugin/<slug>/path` (always namespaced — no absolute mode). The host checks the grant on every registration: without a granted `express:register_route` the route is dropped with a host warning (`denied route registration: express:register_route not granted`) and nothing is mounted — `access: "admin"` does NOT imply it, declare it explicitly. `opts`: `{ auth, admin }` (host runs the real auth middleware), `{ multipart: 'field' }`. Handler gets a mock `(req,res)` over RPC. `req` carries `method`, `path`, `query`, `params`, `body`, plus `clientKey` (a stable HMAC of the caller's IP — rate-limit or dedup by caller without seeing the IP), `cookies` (the host's auth/session cookies always stripped), `headers` (only `x-portal-token` is forwarded) and, for a `multipart` route, `file` (`{ path, originalname, mimetype, size, filename }` of the saved upload, removed when the response finishes). With `auth`, `req.user` is `{ id, role, userEmail, userLogin, hasProfessionalMailbox, pluginCapabilities }` — `pluginCapabilities` being the caller's capabilities in your own namespace (§12a); `null` for an anonymous request. `res` offers `status`, `set` (headers — `Set-Cookie`, CSP, HSTS, `Location`, `Content-Type`, `Refresh` and `Access-Control-*` are dropped by the host), `cookie` / `clearCookie` (renamed into your `wjp_<slug>_` namespace, path-confined to your routes, lifetime capped at 7 days, at most 20 per reply), `json`, `send`, `end`, and `sendPrivateMedia` (row above). |
 | `wordjs.shortcodes.add(tag, handler)` | — | Handler may be async; expanded via `doShortcodeAsync`. |
 | `wordjs.fs.read(relPath, enc)` / `write(relPath, data)` | `filesystem:read` / `write` | Confined to your **own** plugin dir only (realpath-checked) — never the shared `uploads/` dir. `manifest.json` is immutable, and so is everything under `public/` and `dist/` (§11a). |
 | `wordjs.mail(msg)` | `email:admin` | Sends via the active mail provider. (Distinct from `email:provider`, which only `wordjs.provideMail` needs.) |
@@ -857,7 +933,7 @@ Every call is permission-checked on the host against your manifest.
 | `wordjs.ai.complete({ prompt, system?, maxTokens? })` | `ai:use` | Text completion through the site's AI provider → `{ text, model }`. The key never reaches the plugin; 30 calls/minute (`ai-provider.md` §4). |
 | `wordjs.notify.registerTransport(name, handler)` | `notifications:provider` | Register a notification transport (sandboxed; needs the `notifications:provider` grant). |
 | `wordjs.smtp.listen(handlers, opts)` / `wordjs.smtp.status()` | `smtp:inbound` | Have the HOST listen on the SMTP port (a `claimPorts` entry, default 25; falls back to 2525 with the reason recorded) and call `handlers.connect/mailFrom/rcptTo/data/close` for each step — resolve nothing to accept or `{ code, message }` to refuse; `data` receives the raw message as a Buffer. **Exclusive:** at most one plugin may hold `smtp:inbound` (a second grant is refused with `409 plugin_grant_exclusive` naming the holder). Plugins never get a listening socket themselves on any platform. |
-| `wordjs.adminMenu.add(item)` | `admin_menu:register` | Declarative sidebar item. Gated host-side like every other bridge call: the manifest must declare `admin_menu:register` **and** the admin must grant it, or the call throws a `Security Block` (`scope: "admin"` does not imply it). `item.href` must be a same-origin relative path (a single leading `/`, no scheme, no `//` — e.g. `/admin/plugin/<slug>`) or the item is dropped with a warning; capped at 50 items per plugin. |
+| `wordjs.adminMenu.add(item)` | `admin_menu:register` | Declarative sidebar item. Gated host-side like every other bridge call: the manifest must declare `admin_menu:register` **and** the admin must grant it, or the call throws a `Security Block` (`access: "admin"` does not imply it). `item.href` must be a same-origin relative path (a single leading `/`, no scheme, no `//` — e.g. `/admin/plugin/<slug>`) or the item is dropped with a warning; capped at 50 items per plugin. |
 | `wordjs.cron.schedule(ts, recurrence, hook, args)` | — | Host fires the hook back into the child process — only **your** callbacks, never core's. `recurrence` is a registered schedule name (`'hourly'`, `'twicedaily'`, `'daily'`, `'weekly'`, `'off'`); pass `false` for a one-off event at `ts`. An unregistered name is stored with a 0 interval, so it never repeats. |
 | `wordjs.crypto.randomToken(bytes=16)` / `randomInt(min, max)` | — | CSPRNG (no data access, no permission gate). Use instead of `Math.random` for tokens/access codes. **Async** in an isolated plugin (RPC to host) — `await` it. |
 | `wordjs.assets.enqueueScript(spec)` / `enqueueStyle(spec)` | `assets:write` | Load a `<script>`/`<style>` onto public pages. `spec = { handle, src, inFooter?, strategy?:'async'\|'defer', media? }`. **`src` must be a relative path inside your plugin's `public/` directory** with a servable extension — see §11a; anything else throws. The host verifies the file exists + can't escape and emits a **sanitized** tag served from `/plugins/<slug>/public/…` — you never control raw markup (the raw-HTML head/footer hooks stay denied). |
@@ -928,10 +1004,15 @@ the capability is BOTH declared in the manifest AND granted.
 **Grantable capabilities** (the canonical manifest vocabulary is `KNOWN_PERMISSIONS` in
 `backend/src/core/plugins.ts`): `database` (read/write — own tables only), `settings` (read/write —
 non-secret options), `filesystem` (read/write — own dir), `users:read` (the safe user projection, with the
-account's capabilities in your own namespace — §12a),
+account's capabilities in your own namespace — §12a), `posts:read` (the post hooks, drafts and private
+posts included), `comments:read` (the comment hooks, without the commenter's personal data) /
+`comments:pii` (also the commenter's email, IP and user agent — never implied), `notifications:read`
+(the `notification_sent` hook, secrets redacted),
 `assets:write` (enqueue own scripts/styles on public pages), `email:admin` (send through the active mail
-provider) / `email:provider` (*become* the provider), `notifications:send` / `notifications:provider`, `ai:use` (text completions through the site's AI provider — the key
-never reaches the plugin),
+provider) / `email:provider` (*become* the provider), `notifications:send` / `notifications:provider`,
+`media:private_read` (describe a private media item and have the host stream it from one of your
+routes), `smtp:inbound` (the host listens on the SMTP port for you — exclusive, one plugin at a time),
+`ai:use` (text completions through the site's AI provider — the key never reaches the plugin),
 `express:register_route`, `admin_menu:register`, `browser:script` (serve and run the plugin's compiled
 frontend bundles in the browser — **not sandboxed**, see `security.md` §1.3b), `roles:declare` (register the user roles of
 the manifest's `roles` block — §12a), and **`network`** (outbound access to **public IPs only**
@@ -945,9 +1026,20 @@ is egress too), and under a list a host is only matched when it is a plain ASCII
 digits, `-`, `_`, dots) or an IP literal: pass the punycode form of an internationalised name (`fetch` and
 `URL` already do). If the host cannot load the egress policy, a `network` plugin reaches no public host
 and resolves no name until it reloads.
+The one exception to public-only is an **approved private destination**: an administrator may approve
+exactly one host on exactly one port for a plugin (`GET`/`POST /api/v1/plugins/:slug/private-egress`, body
+`{ destinations: ["192.168.1.20:587"] }`, at most 4) — for example a LAN SMTP relay. It is matched on the
+host and the port together (a hostname entry also covers the addresses the guard itself resolved for that
+name, so approving a name trusts its DNS), it never opens a range or another port, link-local (`169.254.169.254`), unspecified and multicast
+addresses cannot be approved, and an API token may withdraw an approval but never make one.
 
-> `scope: "admin"` on a capability implies only its ordinary `read`+`write` verbs — it never subsumes the
-> high-power verbs (`provider`, `register`, `register_route`), which must be granted explicitly.
+> **`access: "admin"`** on a scope (a grant token such as `database:admin`) implies only that scope's
+> ordinary `read`+`write` verbs — it never subsumes the special verbs (`provider`, `register`,
+> `register_route`, `pii`, `private_read`, `inbound`, `use`, `script`, `declare`), which must be granted
+> explicitly. It is not part of the manifest vocabulary either: `validateManifestPermissions` rejects
+> `access: "admin"` at upload (marketplace installs included) and in the marketplace submission gate
+> (`backend/scripts/scan-plugin.mjs`) for every scope except `email`, where `admin` is the ordinary send
+> verb. Only a plugin copied onto the disk by hand can carry it. Declare `read` and `write` instead.
 > `express:register_route` and `admin_menu:register` are enforced grants, not just manifest vocabulary:
 > the host's `register-route` IPC handler (`backend/src/core/plugin-isolate.ts`) checks
 > `express:register_route` first and, if it is not granted, logs
@@ -968,8 +1060,9 @@ the same checks.
 Changing a plugin's grants **hot-reloads its child process** so the bridge gates re-evaluate and a
 `network` change takes effect — no server restart. Granting a higher-risk capability is a real security
 decision, and the UI says so: `frontend/src/lib/permissionMeta.ts` classifies `database:write`,
-`settings:write`, `filesystem:write`, `email:admin`, `email:provider`, `notifications:provider`,
-`assets:write` and `network` as **high risk**, and both grant screens (the activation dialog and the per-permission
+`settings:write`, `filesystem:write`, `comments:pii`, `email:admin`, `email:provider`, `smtp:inbound`,
+`notifications:provider`, `media:private_read`, `assets:write`, `browser:script` and `network` as
+**high risk**, and both grant screens (the activation dialog and the per-permission
 toggles) render those rows with a high-risk badge, a platform-authored explanation, and — separately
 labelled — the plugin's own stated reason from its manifest. The platform's label and explanation of each
 token, the risk badges and those labels are in the admin's language (`permMeta(token, t)` reads
@@ -1133,13 +1226,14 @@ If you omit it, a convention fallback is tried: `client/verso/<Pascal>Verso.tsx`
 
 `frontend/scripts/generate-verso-plugin-registry.js` reads your entry file and supports exactly two shapes:
 
-**One block** — `export const versoComponentDef` (category/fields/defaultProps) **plus** a default-exported render component. The block is registered under the PascalCase of your manifest `id` (`card-gallery` → `CardGallery`):
+**One block** — `export const versoComponentDef` (label/category/fields/defaultProps) **plus** a default-exported render component. The block is registered under the PascalCase of your manifest `id` (`card-gallery` → `CardGallery`):
 
 ```tsx
 // @ts-nocheck
 "use client";
 
 export const versoComponentDef = {
+    label: "Card gallery",
     category: "My Plugin",
     fields: {
         title: { type: "text" as const, label: "Title" }
@@ -1156,10 +1250,12 @@ export default function MyPluginVerso({ title = "" }) {
 
 ```tsx
 export const versoComponents = {
-    PriceTable: { ...priceTableDef, render: PriceTable },
-    FaqList:    { ...faqListDef,   render: FaqList },
+    PriceTable: { ...priceTableDef, label: "Price table", render: PriceTable },
+    FaqList:    { ...faqListDef,   label: "FAQ list",    render: FaqList },
 };
 ```
+
+**Block name (`label`, optional)** — the name the editor shows in the block palette, the outline and the properties panel. Without it, the editor splits the block id into words (`ReadingList` → "Reading List", `FAQSection` → "FAQ Section"); set `label` when that is not the name you want users to see. It is shown as written — the editor does not translate plugin labels.
 
 > Export **only** the shape you use. The generated registry does `import * as X` and statically references either `X.versoComponents` **or** `X.versoComponentDef` + `X.default` — referencing a member that isn't a real export is a hard build error under Turbopack. The generator reads which name your file actually declares, so a bundle exporting the deprecated names is referenced by *those* names.
 
@@ -1168,10 +1264,19 @@ export const versoComponents = {
 The registry (`frontend/src/lib/versoPluginRegistry.ts`) is **generated, not dynamic**, and includes **active plugins only**:
 
 1. Activate the plugin in `/admin/plugins`.
-2. Run `node frontend/scripts/generate-verso-plugin-registry.js`. It queries `GET /api/v1/plugins/active` on `localhost:3000` to filter — if the backend isn't reachable it falls back to including **all** plugins that have a block entry. Regenerate the admin-page registry too: `node frontend/scripts/generate-admin-plugin-registry.js`.
-3. Restart (or let Fast Refresh reload) the frontend dev server; production needs a rebuild.
+2. **Development:** nothing to run. On every activation, deactivation and deletion a backend that is not
+   running with `NODE_ENV=production` re-runs all four generators (`generate-plugin-registry.js`,
+   `generate-admin-plugin-registry.js`, `generate-verso-plugin-registry.js`,
+   `generate-portal-plugin-registry.js`) with the active list in `WORDJS_ACTIVE_PLUGINS`
+   (`regenerateRegistry()` in `backend/src/routes/plugins.ts`, §3.1). Run one by hand —
+   `node frontend/scripts/generate-verso-plugin-registry.js` — only after editing a manifest's entry
+   points without re-activating; run that way it asks `GET /api/v1/plugins/active` on `localhost:3000`
+   and, if the backend isn't reachable, falls back to including **all** plugins that have a block entry.
+3. Let Fast Refresh reload the frontend dev server (restart it if it does not pick the change up); a
+   self-built production frontend needs a rebuild, while a plugin installed at runtime is loaded from its
+   prebuilt `dist/component.bundle.js` (§3.2).
 
-Your block then appears in the editor's component list and renders both in the editor iframe and on the live SSR site. Deactivating a plugin and regenerating removes its blocks again.
+Your block then appears in the editor's component list and renders both in the editor iframe and on the live SSR site. Deactivating a plugin removes its blocks again.
 
 ### 13.4 Theming with `--wjs-*` tokens
 
@@ -1189,5 +1294,63 @@ Blocks render inside the public site **and** the editor iframe — both load `wo
 Two reminders for committed plugin client files: start every `.tsx` with `// @ts-nocheck` (the frontend CI type-checks the generated registries, which import these files directly from `backend/plugins/`), and mark interactive blocks `"use client"`.
 
 > **Scaffold all of this:** `node backend/cli/wordjs.js create plugin my-plugin` generates a working single-block Verso component wired to the manifest — see `documentation/cli.md` §3.
+
+---
+
+## 14. Manifest field reference 📋
+
+Every `manifest.json` key something in WordJS reads, and what reads it (`backend/src/core/plugins.ts`,
+`backend/src/routes/plugins.ts`, `backend/src/routes/plugin-bundles.ts`, `backend/src/core/inbound-smtp.ts`,
+`backend/scripts/build-plugin.js`, `backend/scripts/pack-plugin.js`, the `frontend/scripts/generate-*-registry.js`
+generators and the marketplace scripts). The manifest may be at most 64 KB.
+
+**Identity**
+
+| Key | Required | Meaning |
+| :-- | :-- | :-- |
+| *(folder name)* | — | The plugin's **slug**: its routes (`/api/v1/plugin/<slug>`), tables (`wjp_<slug>_`), grants, `wordjs.slug`. It is not a manifest key. |
+| `id` | no | When present it must equal the folder name (`npm run pack:plugin` and the marketplace gate refuse a mismatch). The registry generators and the Verso block name (PascalCase of `id`) use it, falling back to the folder. |
+| `name` | **yes** | Display name; the upload refuses a manifest without it. |
+| `version` | no (marketplace: semver) | Shown in the admin list (`1.0.0` when absent); names the packed ZIP (`<slug>-<version>.zip`). |
+| `description`, `author` | no (marketplace: yes) | Shown in the admin list and the marketplace catalog. |
+| `isolated` | **yes** | Must be `true`; anything else is refused at upload, activation and boot. |
+
+**Capabilities and dependencies**
+
+| Key | Meaning |
+| :-- | :-- |
+| `permissions` | Array of `{ "scope", "access", "reason" }` (`network` takes no `access`). Checked against `KNOWN_PERMISSIONS` (§12); the activation dialog and permission screens show `reason` next to the platform's own explanation. The marketplace gate also accepts a `permissions_rationale` object keyed by grant token instead of inline reasons. |
+| `dependencies` | npm package → registry semver range, installed by the host on activation (§2). |
+| `bundled` | `true` = the plugin ships its own `node_modules/`; the host skips shared install/garbage-collection. |
+| `roles` | User roles the plugin declares (§12a); requires `roles:declare`. |
+| `claimPorts` | Array of port numbers the plugin needs (`[25]` for a mail server). Only these ports are eligible for the admin's port-conflict screen (`/api/v1/plugins/:slug/port-conflicts`), and they are the ports `wordjs.smtp.listen` may ask the host for. |
+
+**Frontend (`frontend.*`)** — any of these needs `browser:script` (§2).
+
+| Key | Meaning |
+| :-- | :-- |
+| `frontend.adminPage` | `{ "entry", "slug" }` — the admin page at `/admin/plugin/<slug>` (§2 Step 3, §10.1). |
+| `frontend.hooks` | Path (a string) of the hooks file whose `register*` exports run on admin load (§2 Step 4). |
+| `frontend.portalPage` | `{ "entry", "slug", "title"?, "themeColor"?, "viewportFit"? }` — the public page at `/portal/<slug>` (§10.6). |
+| `frontend.versoComponents` | `{ "entry" }` — the Verso block file (§13); the deprecated `frontend.puckComponents` is still read. `null` or absent → the `client/verso/<Pascal>Verso.tsx` convention. |
+| `frontend.components` | Legacy *location* components, `[{ "name", "entry", "locations", "props" }]`; the development registry takes the first `entry`. |
+| `style`, `theme` | Admin-page styling, returned by `GET /api/v1/plugins/<slug>/admin-style` (§11a): `style` is a string, `theme` an object whose keys become `--plugin-<key>` variables. |
+
+**Marketplace submission only** — `license` (an accepted OSI SPDX identifier, with a `LICENSE` file) and
+`repository` (an `https://` URL) are checked by `backend/scripts/scan-plugin.mjs`
+([`marketplace/REVIEW.md`](../marketplace/REVIEW.md) §2); the runtime does not read them.
+
+**Present in shipped manifests, ignored by the runtime:**
+
+| Key | Status |
+| :-- | :-- |
+| `adminMenu` | Read only by `build-marketplace.js`, for the catalog card's label and icon. The sidebar item comes from `wordjs.adminMenu.add` in your code. |
+| `api`, `shortcodes` | Not read. Routes and shortcodes exist only when your code registers them. |
+| `backend.entry`, `main` | Not read. The backend entry is the first of `index.js`, `main.js`, `plugin.js` found in the plugin folder. |
+| `active` | Not read. Whether a plugin is active is the core's state, not the manifest's. |
+| `themeSurfaces` | Not read at runtime; a frontend CI test (`frontend/src/lib/__tests__/pluginSelectorContract.test.ts`) checks the declarations of the plugins committed to the repository. |
+
+An `exports.metadata` object in the entry file is not read either: the admin list takes name, version,
+description and author from the manifest.
 
 

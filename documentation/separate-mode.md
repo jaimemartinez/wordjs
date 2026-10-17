@@ -168,7 +168,7 @@ node scripts/cluster.js token frontend --host <frontend-ip>
 
 Each prints the exact `node-join` command to paste on the target machine, including the gateway address,
 enroll port, the token, and the CA fingerprint (`--ca-hash` — **required**; see the note in the
-[Quickstart](#quickstart--one-command-per-machine-recommended) for what it guards and the opt-out). Tokens default to a 60-minute
+[Quickstart](#quickstart--one-command-per-machine-recommended) for what it guards — there is no opt-out). Tokens default to a 60-minute
 TTL (`--ttl <minutes>`) and are single-use.
 
 ### 3. Backend machine
@@ -186,6 +186,11 @@ node scripts/node-join.js --role backend --gateway <gateway-ip> \
 `node-join` generates the keypair + CSR, enrolls, writes `backend/certs/*` and `backend/wordjs-config.json`
 (with `host: 0.0.0.0`, `advertiseHost`, `gatewayHost`, the shared secret, and the mTLS paths), then
 installs deps and starts the backend, which registers with the gateway.
+
+Other `node-join` flags: `--enroll-port` (default `3101`), `--advertise` (default = this machine's first
+LAN IP), `--port <svc-port>` (the port this node's service listens on and registers with the gateway;
+default `4000` for a backend, `3001` for a frontend), `--install` (`npm install`), `--build` (`next build`
+on a frontend, `tsc` on a backend) and `--start`.
 
 ### 4. Frontend machine
 

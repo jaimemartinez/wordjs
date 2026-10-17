@@ -46,6 +46,8 @@ class FakeSMTPServer {
 /** `net` double whose servers fail every listen with `code` (or succeed when code is null). */
 function fakeNet(code: string | null) {
     return {
+        // The address classifier stays real: the settings route uses it to judge the mail domain.
+        isIP: require('net').isIP,
         createServer() {
             const server: any = new EventEmitter();
             server.listen = () => {

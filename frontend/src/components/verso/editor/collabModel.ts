@@ -16,6 +16,8 @@
  */
 
 import type { CollabMember, CollabNotice, CollabStatus } from "@/lib/verso/collab";
+import { trFmt, trStr } from "@/lib/editorI18n";
+import type { Language } from "@/lib/i18n";
 
 /* ------------------------------------------------------------------ */
 /* Identidad visible de un participante                                */
@@ -60,9 +62,9 @@ export function onColor(color: string): "#ffffff" | "#111827" {
 }
 
 /** Texto accesible de un avatar: el color no dice nada a quien no lo ve. */
-export function memberLabel(member: Pick<CollabMember, "name" | "sel">): string {
-    const name = String(member.name || "").trim() || "Alguien";
-    return member.sel?.nodeId ? `${name} — editando un bloque` : `${name} — en la página`;
+export function memberLabel(member: Pick<CollabMember, "name" | "sel">, lang: Language = "es"): string {
+    const name = String(member.name || "").trim() || trStr("Alguien", lang);
+    return trFmt(member.sel?.nodeId ? "{name} — editando un bloque" : "{name} — en la página", lang, { name });
 }
 
 /* ------------------------------------------------------------------ */
@@ -221,10 +223,15 @@ export function selectionsByNode(
  * Resumen para el `role="status"` de la barra: quién está y en qué estado va el canal. Es lo que
  * oye un lector de pantalla — de ahí que el estado vaya en TEXTO y no en el color del chip.
  */
-export function presenceAnnouncement(status: CollabStatus, members: readonly CollabMember[]): string {
+export function presenceAnnouncement(status: CollabStatus, members: readonly CollabMember[], lang: Language = "es"): string {
     const view = statusView(status);
-    if (members.length === 0) return `${view.text}. Nadie más está editando esta página.`;
-    const names = members.map((m) => String(m.name || "").trim() || "Alguien");
-    const quienes = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} y ${names[names.length - 1]}`;
-    return `${view.text}. ${quienes} ${names.length === 1 ? "está editando" : "están editando"} esta página.`;
+    const state = trStr(view.text, lang);
+    if (members.length === 0) return trFmt("{state}. Nadie más está editando esta página.", lang, { state });
+    const names = members.map((m) => String(m.name || "").trim() || trStr("Alguien", lang));
+    if (names.length === 1) return trFmt("{state}. {name} está editando esta página.", lang, { state, name: names[0] });
+    return trFmt("{state}. {names} y {last} están editando esta página.", lang, {
+        state,
+        names: names.slice(0, -1).join(", "),
+        last: names[names.length - 1],
+    });
 }

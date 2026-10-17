@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { networkApi, type NetworkPlugin, type NetworkSite } from "@/lib/api";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
+import { formatServerTimestamp } from "@/lib/serverTimestamp";
 import { PageHeader, Button, Card, EmptyState, Input, StatusBadge } from "@/components/ui";
 
 /**
@@ -23,10 +24,7 @@ import { PageHeader, Button, Card, EmptyState, Input, StatusBadge } from "@/comp
 
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
 
-const fmtDate = (v: string) => {
-    const ms = Date.parse(v);
-    return Number.isFinite(ms) ? new Date(ms).toLocaleString() : "—";
-};
+const fmtDate = formatServerTimestamp;
 
 const EMPTY_FORM = { slug: "", url: "", title: "", adminUsername: "", adminEmail: "", adminPassword: "", currentPassword: "" };
 
@@ -38,6 +36,8 @@ export default function NetworkPage() {
     const [loading, setLoading] = useState(true);
     const [form, setForm] = useState(EMPTY_FORM);
     const [creating, setCreating] = useState(false);
+    // Why the last create failed ("" when the server gave no reason); null when there is nothing to show.
+    const [createError, setCreateError] = useState<string | null>(null);
     const [actionPassword, setActionPassword] = useState("");
     const [busyId, setBusyId] = useState<number | null>(null);
     const [netPlugins, setNetPlugins] = useState<NetworkPlugin[]>([]);
@@ -72,6 +72,7 @@ export default function NetworkPage() {
 
     const handleCreate = async (e: React.FormEvent) => {
         e.preventDefault();
+        setCreateError(null);
         if (!SLUG_RE.test(form.slug)) {
             addToast(t("network.slugInvalid"), "error");
             return;
@@ -83,6 +84,9 @@ export default function NetworkPage() {
             setForm(EMPTY_FORM);
             await load();
         } catch (err: any) {
+            // Also kept on the form: a toast alone was easy to miss on a long form, and a failed create
+            // that leaves the form unchanged otherwise looks like nothing happened.
+            setCreateError(err?.message || "");
             addToast(err?.message || t("network.createFailed"), "error");
         } finally {
             setCreating(false);
@@ -184,6 +188,12 @@ export default function NetworkPage() {
                             <Button type="submit" icon="fa-plus" loading={creating}>{t("network.createSite")}</Button>
                         </div>
                     </div>
+                    {createError !== null && (
+                        <div role="alert" data-testid="network-create-error" className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
+                            <p className="font-bold"><i className="fa-solid fa-triangle-exclamation mr-2" aria-hidden="true"></i>{t("network.createFailed")}</p>
+                            {createError && <p className="mt-1 break-words">{createError}</p>}
+                        </div>
+                    )}
                 </form>
             </Card>
 

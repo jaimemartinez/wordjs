@@ -22,10 +22,39 @@ const PRIVATE_UPLOADS_ARCHIVE_ROOT = 'private-uploads';
 
 const BACKUPS_DIR = path.resolve(__dirname, '../../backups');
 
+/**
+ * A backup archive is the whole site (the database, password hashes, tokens, private media), so the
+ * directory is owner-only (0700) and every archive is created 0600, whatever the process umask.
+ * Archives written by an older version keep the mode they were created with, so the directory and
+ * every archive in it are tightened when this module loads (boot). POSIX only: Windows has no mode
+ * bits, and the directory inherits the install's ACL.
+ */
+const BACKUP_FILE_MODE = 0o600;
+const BACKUP_DIR_MODE = 0o700;
+
+function hardenBackupPermissions(dir: string = BACKUPS_DIR): number {
+    if (process.platform === 'win32') return 0;
+    let fixed = 0;
+    try {
+        if ((fs.statSync(dir).mode & 0o777) !== BACKUP_DIR_MODE) { fs.chmodSync(dir, BACKUP_DIR_MODE); fixed++; }
+        for (const f of fs.readdirSync(dir)) {
+            if (!f.endsWith('.zip')) continue;
+            const file = path.join(dir, f);
+            const st = fs.lstatSync(file);
+            if (!st.isFile()) continue; // never chmod through a symlink
+            if ((st.mode & 0o777) !== BACKUP_FILE_MODE) { fs.chmodSync(file, BACKUP_FILE_MODE); fixed++; }
+        }
+    } catch (e: any) {
+        log.warn({ err: e }, '   ⚠️ Could not tighten the permissions of the backups directory');
+    }
+    return fixed;
+}
+
 // Ensure backups dir exists
 if (!fs.existsSync(BACKUPS_DIR)) {
-    fs.mkdirSync(BACKUPS_DIR, { recursive: true });
+    fs.mkdirSync(BACKUPS_DIR, { recursive: true, mode: BACKUP_DIR_MODE });
 }
+hardenBackupPermissions();
 
 /**
  * Run `fn` with a PRIVATE scratch directory under the OS temp dir, and delete it afterwards.
@@ -214,7 +243,9 @@ async function createBackup() {
     const filename = `backup-${timestamp}.zip`;
     const filepath = path.join(BACKUPS_DIR, filename);
 
-    zip.writeZip(filepath);
+    // Created owner-only and exclusively (adm-zip's writeZip would create it with the process umask).
+    fs.writeFileSync(filepath, zip.toBuffer(), { mode: BACKUP_FILE_MODE, flag: 'wx' });
+    if (process.platform !== 'win32') fs.chmodSync(filepath, BACKUP_FILE_MODE);
 
     log.info({ filename }, `✅ Backup created: ${filename}`);
 
@@ -563,6 +594,8 @@ async function restoreBackup(filename: string) {
 }
 
 module.exports = {
+    hardenBackupPermissions,
+    BACKUP_FILE_MODE,
     createBackup,
     listBackups,
     deleteBackup,

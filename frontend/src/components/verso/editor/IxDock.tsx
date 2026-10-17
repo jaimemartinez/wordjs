@@ -280,9 +280,9 @@ function DockMotion({
             st.tracks.map((t) => {
                 const props = new Set<IxPropKey>();
                 for (const s of t.steps) for (const k of usedProps(s)) props.add(k);
-                return [...props].slice(0, 2).map((k) => IX_PROP_LABELS[k]).join(" · ") || undefined;
+                return [...props].slice(0, 2).map((k) => trStr(IX_PROP_LABELS[k], language)).join(" · ") || undefined;
             }),
-        [st.tracks],
+        [st.tracks, language],
     );
     // El PLAYHEAD del escenario: la posición del recorrido manual, para la línea vertical del
     // timeline. `null` = nadie recorre (el scrubber suelta con null).
@@ -377,7 +377,7 @@ function DockMotion({
                         className="inline-flex h-8 shrink-0 whitespace-nowrap items-center gap-1 rounded-lg bg-[var(--ed-primary-solid,var(--ed-primary))] px-3 text-[11px] font-medium text-[var(--ed-on-primary,#fff)] hover:bg-[var(--ed-primary-hover)] disabled:opacity-40 disabled:pointer-events-none transition-colors"
                         disabled={!st.active}
                         title={trStr("Reproducir la interacción de este bloque en el lienzo", language)}
-                        aria-label="Probar la interacción de este bloque"
+                        aria-label={trStr("Probar la interacción de este bloque", language)}
                         onClick={() => requestIxPreview("block")}
                     >
                         <MSym name="play_arrow" size={14} className="align-[-3px]" /> {trStr("Probar", language)}
@@ -387,7 +387,7 @@ function DockMotion({
                         className="inline-flex h-8 shrink-0 whitespace-nowrap items-center rounded-lg border border-[var(--ed-outline-variant)] bg-[var(--ed-surface)] px-3 text-[11px] font-medium text-[var(--ed-on-surface)] hover:border-[var(--ed-primary)] hover:text-[var(--ed-primary)] disabled:opacity-40 disabled:pointer-events-none transition-colors"
                         disabled={!st.active}
                         title={trStr("Reproducir todas las interacciones de la página en el lienzo", language)}
-                        aria-label="Probar todas las interacciones de la página"
+                        aria-label={trStr("Probar todas las interacciones de la página", language)}
                         onClick={() => requestIxPreview("page")}
                     >
                         {trStr("Probar todo", language)}
@@ -427,7 +427,7 @@ function DockMotion({
                             }}
                             onClick={() => onFieldChange("ix", addTrackFromPreset(ix, c.value, ixCtx))}
                         >
-                            {c.label}
+                            {trStr(c.label, language)}
                         </button>
                     ))}
                 </div>

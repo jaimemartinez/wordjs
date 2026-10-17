@@ -14,6 +14,7 @@ or changes. The design, the isolation guarantees and the road ahead are in
 - [Suspending a site](#suspending-a-site)
 - [What stays on the main site in this version](#what-stays-on-the-main-site-in-this-version)
 - [Where a site's data lives](#where-a-sites-data-lives)
+- [REST API](#rest-api)
 - [Turning it off](#turning-it-off)
 - [Troubleshooting](#troubleshooting)
 
@@ -90,13 +91,14 @@ Point the new name at the server the main site runs on, exactly as you did for t
   the site (only one of the network's addresses). A node registered by a DNS name rather than an IP
   address is not recognised that way: register nodes by address.
 - **TLS**: in this version a site's address is covered by the install's one certificate. With ACME, add
-  the new names to `acme.domains` (one certificate, up to 100 names), or terminate TLS in a reverse proxy
+  the new names to `acme.domains` (one certificate; WordJS enforces Let's Encrypt's limit of 100 names per
+  certificate), or terminate TLS in a reverse proxy
   in front of WordJS. A certificate per site (SNI) is planned.
 
 ## Suspending a site
 
-Admin → Network → Suspend (your password confirms it). A suspended site answers `503` to every request,
-pages and API alike; its data is kept. Resume brings it back. The main site cannot be suspended.
+Admin → Network → Suspend (your password confirms it). A suspended site answers `503` (code `rest_site_suspended`) to
+every request, pages and API alike; its data is kept. Resume brings it back. The main site cannot be suspended.
 
 ## Plugins on the sites
 
@@ -133,6 +135,14 @@ These screens are the main site's, and are not offered elsewhere: installing, up
 plugins and themes, backups, the site address, certificates, the hooks inspector, the database migration
 tool, and the network screen. Real-time collaboration in the editor is available on the main site only.
 
+On another site the API enforces this too. The site address, marketplace, certificates, system health
+details, hooks and backups routes answer `404 rest_no_route`, as if they did not exist. A write that would
+change network-wide files answers `403 rest_network_only`: uploading, deleting, packing or downloading
+plugin code, installing a plugin's bundled theme or freeing a port for it, generating the sample plugin,
+creating, rebuilding, uploading, restoring or deleting theme files, and every write to the installer
+(`/setup`). Activating, deactivating, granting, setting the egress allowlist of and reloading the offered
+plugins stay the site's.
+
 ## Where a site's data lives
 
 Everything a site other than the main one owns is in **one directory**, `<data dir>/sites/<id>/` (the data
@@ -142,6 +152,27 @@ stopped. The network's own records (sites, addresses, network administrators and
 in `<data dir>/network.db`.
 
 The main site's backups (Settings → Backups) cover the main site only.
+
+## REST API
+
+The network screen is backed by `/api/v1/network` (`backend/src/routes/network.ts`). `GET /status` answers
+any signed-in user. Every other route is for network administrators, on the main site, with an
+interactive session (an API token is refused with `403 rest_token_management_forbidden`). A caller who is
+not a network administrator gets `403 rest_forbidden_network`. With multisite off, or on another site,
+the route answers `404 rest_no_route`. Every write re-authenticates with `currentPassword` in the body: a
+wrong one is `403 rest_bad_current_password`.
+
+| Method | Endpoint | Body | Answer |
+|---|---|---|---|
+| `GET` | `/status` | — | `{ enabled, networkAdmin }` |
+| `GET` | `/sites` | — | `{ sites: [{ id, slug, url, host, status, main, createdAt, updatedAt }] }`, the main site first |
+| `POST` | `/sites` | `{ slug, url, title, adminUsername, adminEmail, adminPassword, currentPassword }` | `201 { site }`. `400` for an invalid field (`network_invalid_url`, `network_invalid_slug`, `network_invalid_title`, `network_invalid_admin`, `network_weak_password`), `409 network_host_taken` / `network_slug_taken` |
+| `POST` | `/sites/:id/suspend` | `{ currentPassword }` | `{ site }`. `400 network_primary_site` for the main site, `404 network_site_not_found` |
+| `POST` | `/sites/:id/resume` | `{ currentPassword }` | `{ site }` |
+| `GET` | `/audit` | — (`?limit=` 1–500, default 100) | `{ entries }`, newest first: sites created, suspended and resumed, network administrators |
+| `GET` | `/plugins` | — | `{ plugins: [{ slug, name, version, requestedPermissions, ceiling }] }`; `ceiling: null` means not offered |
+| `PUT` | `/plugins/:slug/ceiling` | `{ tokens: ["scope:access" \| "network", …], currentPassword }` | `{ slug, ceiling }`. Offers the plugin to the sites up to that ceiling (replacing a previous one) and restarts its workers on the other sites. `400 network_invalid_ceiling` for a malformed token, `404 plugin_not_found` |
+| `DELETE` | `/plugins/:slug/ceiling` | `{ currentPassword }` | `{ slug, withdrawn, deactivatedOn }`. Stops offering it and deactivates it on every other site |
 
 ## Turning it off
 

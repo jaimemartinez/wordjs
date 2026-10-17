@@ -4,7 +4,8 @@ How to see what a WordJS backend is doing: structured logs, request correlation,
 metrics. Everything here is on by default except the metrics endpoint, which stays disabled until you
 give it a scrape token.
 
-- **Logs** — JSON on stdout, one object per line, with levels and a correlation id.
+- **Logs** — JSON on stdout, one object per line, with levels and a correlation id. (The gateway and
+  the split-mode frontend log in other formats; see [Gateway and frontend logs](#gateway-and-frontend-logs).)
 - **Request ids** — `X-Request-Id` on every response; an incoming one is honoured only when a proxy is
   trusted **and** the value is sane.
 - **Metrics** — `GET /metrics`, token-gated, Prometheus text format.
@@ -217,6 +218,25 @@ that file, per file and with an exact count. The allowlist holds:
 - the operator-facing banners printed once at first boot — the install link in `core/install-token`
   and the bootstrap administrator in `index.ts` — which are gated on whether stdout is a terminal.
 
+### Gateway and frontend logs
+
+Everything above is the **backend**. In split and separate mode the other two processes log
+differently, so a log pipeline has to parse three shapes:
+
+- **Gateway** (`gateway/src/index.js`) — Winston, not pino, at a fixed `info` level (`LOG_LEVEL` and
+  `logging.level` do not apply to it). It writes each line twice: to **stdout** as colourised plain
+  text (`info: …`), and to a **file**, `logs/gateway-%DATE%.log` relative to the gateway's working
+  directory (`gateway/logs/` when started by the root scripts, which `cd gateway`), as one JSON object
+  per line with a `timestamp`, rotated daily, gzipped, capped at 20 MB per file and kept for 14 days.
+  Its access log is morgan's `combined` format, logged as the `message` of an `info` line. There is no
+  `requestId` on the gateway's own lines.
+- **Frontend** (`frontend/server.js`, started by `frontend/scripts/start-frontend.js`) — plain
+  `console` output from the custom server and Next.js on stdout/stderr: unstructured text, no JSON and
+  no file. Ship it as text.
+- **Monolith** — one process. The frontend runs inside the backend's process, so once the backend has
+  loaded, its `console` output goes through the same console bridge and comes out as JSON on stdout
+  like the rest. There is no gateway process and no gateway log file.
+
 
 ---
 
@@ -378,15 +398,32 @@ scrape_configs:
       type: Bearer
       credentials_file: /etc/prometheus/wordjs-metrics-token   # not `credentials:` — keep it off disk in plain config
     static_configs:
-      - targets: ['wordjs-1.internal:4000', 'wordjs-2.internal:4000']
+      - targets: ['cms.example.com']
         labels:
           env: production
 ```
 
 Every node exports **its own** counters and gauges (`wordjs_sse_clients`, `wordjs_db_pool` and the
-process family are per-process), so scrape each backend directly rather than through the load
-balancer — going through the LB samples a random node each interval and produces a graph that means
-nothing. See [multi-node.md](multi-node.md).
+process family are per-process). Where the scrape can reach depends on the deployment mode:
+
+- **Monolith.** One process, so one target: the public port (`:3000` by default, `scheme: http` when
+  it serves plain HTTP). The `:4000` listener a monolith also opens is loopback-only, for the
+  frontend's server-side calls.
+- **Split or separate, before the cluster certificates exist.** The backend listens on plain HTTP and
+  can be scraped on its own port (`:4000`) from wherever that port is reachable.
+- **Split or separate, with cluster certificates** (the normal state once installed). The backend's
+  listener requires a client certificate from the cluster CA **and** drops any peer whose certificate
+  CN is not `gateway` or `gateway-internal` (`backend/src/index.ts`): only the gateway may address a
+  backend, so a Prometheus server cannot scrape `:4000` directly. Scrape **through the gateway** — the
+  public origin, with the token, as in the example above. `/metrics` is one of the backend's
+  registered routes, so the gateway answers it on any address and round-robins it like any other
+  backend request: with one backend that is exactly that backend. With N replicas each scrape samples
+  whichever replica the gateway picked, so successive samples of one series come from different nodes
+  and `rate()` over a counter reads every switch as a reset. That is an accepted trade-off of this
+  setup, not a per-node view: the gateway scrape is exact on a single-backend topology, and with
+  several replicas it is good for `wordjs_ready` and for coarse trends only.
+
+See [multi-node.md](multi-node.md).
 
 ### Useful queries
 

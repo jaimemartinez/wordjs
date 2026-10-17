@@ -1,6 +1,6 @@
 /**
  * Isolated plugin — runs in its own OS process (child_process sandbox) and uses ONLY the injected
- * `wordjs` capability bridge (no direct core requires). See documentation/plugin-isolation-proposal.md.
+ * `wordjs` capability bridge (no direct core requires). See documentation/archive/plugin-isolation-proposal.md.
  */
 exports.init = function (wordjs) {
     wordjs.hooks.addAction('init', async () => {

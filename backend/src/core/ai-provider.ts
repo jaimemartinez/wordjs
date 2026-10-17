@@ -36,7 +36,31 @@ const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-5-5';
 /** Models that accept `fallbacks: "default"` (Claude Haiku 5.5 has no server-side fallback). */
 const ANTHROPIC_FALLBACK_MODELS = new Set(['claude-sonnet-5-5', 'claude-opus-5-5']);
 
-const REQUEST_TIMEOUT_MS = 60_000;
+/**
+ * How long one provider request may take. A hosted API answers in seconds; a model on this machine
+ * (Ollama, LM Studio on a CPU) can need minutes on its first load, behind a queue, or for an image. So
+ * a loopback provider gets a longer default, and `WORDJS_AI_TIMEOUT_MS` overrides both (1 s–30 min).
+ */
+const DEFAULT_TIMEOUT_MS = 60_000;
+const DEFAULT_LOCAL_TIMEOUT_MS = 300_000;
+const MIN_TIMEOUT_MS = 1_000;
+const MAX_TIMEOUT_MS = 30 * 60_000;
+
+function requestTimeoutMs(baseUrl = ''): number {
+    const raw = Number(process.env.WORDJS_AI_TIMEOUT_MS);
+    if (Number.isFinite(raw) && raw > 0) return Math.min(Math.max(Math.round(raw), MIN_TIMEOUT_MS), MAX_TIMEOUT_MS);
+    let host: string;
+    try { host = baseUrl ? new URL(baseUrl).hostname : ''; } catch { host = ''; }
+    return host && isLoopbackHost(host) ? DEFAULT_LOCAL_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
+}
+
+function timeoutError(ms: number): AiError {
+    return new AiError(
+        `The AI provider took too long to answer (more than ${Math.round(ms / 1000)} s). A local model may still be loading; try again, or raise WORDJS_AI_TIMEOUT_MS.`,
+        504,
+        'ai_provider_timeout',
+    );
+}
 
 interface AiSettings {
     provider: AiProviderId | '';
@@ -185,7 +209,7 @@ async function isConfigured(): Promise<boolean> {
 function anthropicClient(apiKey: string): any {
     const mod = require('@anthropic-ai/sdk');
     const Anthropic = mod.default || mod.Anthropic || mod;
-    return new Anthropic({ apiKey, maxRetries: 1, timeout: REQUEST_TIMEOUT_MS });
+    return new Anthropic({ apiKey, maxRetries: 1, timeout: requestTimeoutMs() });
 }
 
 function mapAnthropicError(e: any): AiError {
@@ -194,6 +218,7 @@ function mapAnthropicError(e: any): AiError {
     if (A && e instanceof A.AuthenticationError) return new AiError('The AI provider rejected the API key.', 502, 'ai_provider_auth');
     if (A && e instanceof A.PermissionDeniedError) return new AiError('The API key is not allowed to use this model.', 502, 'ai_provider_auth');
     if (A && e instanceof A.NotFoundError) return new AiError('The configured model was not found.', 502, 'ai_provider_model');
+    if (A && A.APIConnectionTimeoutError && e instanceof A.APIConnectionTimeoutError) return timeoutError(requestTimeoutMs());
     if (A && e instanceof A.RateLimitError) return new AiError('The AI provider is rate limiting this site. Try again shortly.', 429, 'ai_provider_rate_limited');
     if (A && e instanceof A.BadRequestError) return new AiError('The AI provider refused the request as invalid.', 502, 'ai_provider_bad_request');
     if (A && e instanceof A.APIConnectionError) return new AiError('Could not reach the AI provider.', 502, 'ai_provider_unreachable');
@@ -233,6 +258,35 @@ async function completeAnthropic(model: string, apiKey: string, req: AiCompleteR
     return text;
 }
 
+/** Words a server uses when the model it runs cannot read images (Ollama, vLLM, LM Studio, OpenAI). */
+const NO_VISION_RE = /\b(image|images|vision|multimodal|multi-modal|image_url)\b/i;
+
+/**
+ * Turn a non-2xx answer into an error that says what to do. The provider's body is only inspected
+ * (first 2 KB) to classify it, never echoed: it can quote the request.
+ */
+async function mapOpenAiCompatibleStatus(res: any, sentImage: boolean): Promise<AiError> {
+    const status = Number(res.status) || 0;
+    if (status === 401 || status === 403) return new AiError('The AI provider rejected the API key.', 502, 'ai_provider_auth');
+    if (status === 429) return new AiError('The AI provider is rate limiting this site. Try again shortly.', 429, 'ai_provider_rate_limited');
+    let detail: string;
+    try { detail = String(await res.text()).slice(0, 2048); } catch { detail = ''; }
+    if (status === 404 || (/\bmodel\b/i.test(detail) && /not (be )?found|does not exist|unknown model|no such model/i.test(detail))) {
+        return new AiError('The configured model was not found on the AI server. Check the model name under Settings → AI.', 502, 'ai_provider_model');
+    }
+    if (sentImage && status >= 400 && status <= 500 && (NO_VISION_RE.test(detail) || (status === 400 && !detail.trim()))) {
+        return new AiError('The configured model does not accept images. Choose a vision-capable model under Settings → AI to suggest alt text.', 422, 'ai_provider_no_vision');
+    }
+    if (status === 400 || status === 413 || status === 422) {
+        return new AiError(`The AI provider refused the request as invalid (HTTP ${status}).`, 502, 'ai_provider_bad_request');
+    }
+    if (status === 408 || status === 504) return timeoutError(requestTimeoutMs());
+    if (status === 502 || status === 503) {
+        return new AiError(`The AI provider is unavailable right now (HTTP ${status}). Try again shortly.`, 502, 'ai_provider_unavailable');
+    }
+    return new AiError(`The AI provider answered with an error (HTTP ${status}).`, 502, 'ai_provider_error');
+}
+
 async function completeOpenAiCompatible(s: AiSettings, apiKey: string, req: AiCompleteRequest): Promise<string> {
     const userContent: any = req.image
         ? [
@@ -240,6 +294,7 @@ async function completeOpenAiCompatible(s: AiSettings, apiKey: string, req: AiCo
             { type: 'text', text: req.prompt },
         ]
         : req.prompt;
+    const timeoutMs = requestTimeoutMs(s.baseUrl);
     let res: any;
     try {
         res = await fetch(`${s.baseUrl}/chat/completions`, {
@@ -254,16 +309,18 @@ async function completeOpenAiCompatible(s: AiSettings, apiKey: string, req: AiCo
                 messages: [{ role: 'system', content: req.system }, { role: 'user', content: userContent }],
             }),
             redirect: 'error',
-            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+            signal: AbortSignal.timeout(timeoutMs),
         });
-    } catch {
+    } catch (e: any) {
+        if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) throw timeoutError(timeoutMs);
         throw new AiError('Could not reach the AI provider.', 502, 'ai_provider_unreachable');
     }
-    if (res.status === 401 || res.status === 403) throw new AiError('The AI provider rejected the API key.', 502, 'ai_provider_auth');
-    if (res.status === 429) throw new AiError('The AI provider is rate limiting this site. Try again shortly.', 429, 'ai_provider_rate_limited');
-    if (!res.ok) throw new AiError(`The AI provider answered with an error (HTTP ${res.status}).`, 502);
+    if (!res.ok) throw await mapOpenAiCompatibleStatus(res, !!req.image);
     let body: any;
-    try { body = await res.json(); } catch { throw new AiError('The AI provider answered with something that is not JSON.', 502); }
+    try { body = await res.json(); } catch (e: any) {
+        if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) throw timeoutError(timeoutMs);
+        throw new AiError('The AI provider answered with something that is not JSON.', 502, 'ai_provider_bad_response');
+    }
     const choice = body && Array.isArray(body.choices) ? body.choices[0] : null;
     const msg = choice && choice.message ? choice.message.content : '';
     const text = typeof msg === 'string' ? msg : Array.isArray(msg) ? msg.map((p: any) => (p && p.text) || '').join('') : '';
@@ -335,6 +392,7 @@ module.exports = {
     complete,
     completeForPlugin,
     validateBaseUrl,
+    requestTimeoutMs,
     SETTINGS_OPTION,
     KEY_OPTION,
     _resetPluginAiLimits: () => pluginWindows.clear(),

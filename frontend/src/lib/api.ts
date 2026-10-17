@@ -830,6 +830,12 @@ export const pluginsApi = {
         body: formData,
         headers: {} // Let browser set boundary
     }),
+    /** Replace an installed plugin's code with a newer zip (field `plugin`); data, tables and grants are kept. */
+    update: (slug: string, formData: FormData) => api<{ success: boolean; updated: boolean; slug: string; fromVersion: string | null; toVersion: string | null; reactivated: boolean; newPermissions: string[]; ungrantedPermissions: string[] }>(`/plugins/${encodeURIComponent(slug)}/update`, {
+        method: "POST",
+        body: formData,
+        headers: {}
+    }),
 };
 
 // ---------------------------------------------------------------------------
@@ -943,9 +949,53 @@ export interface Theme {
     name: string;
     version: string;
     description: string;
+    /** theme.json `translations`: per-language metadata, e.g. { es: { description } }. */
+    translations?: Record<string, { description?: string }> | null;
     author: string;
     screenshot?: string;
     active: boolean;
+}
+
+/**
+ * POST a theme zip (field `theme`) with upload progress. A refusal rejects with the backend's message,
+ * and its stable `code` and `slug` (e.g. `theme_exists` on a re-upload — the Themes screen offers the
+ * in-place update from it).
+ */
+function uploadThemeZip<T>(url: string, file: File, onProgress?: (percent: number) => void): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+        const formData = new FormData();
+        formData.append("theme", file);
+
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", url);
+        xhr.withCredentials = true; // Use HttpOnly cookies
+        applyCsrfHeader(xhr); // cookie-authenticated mutation — must carry X-CSRF-Token (after open())
+
+        if (onProgress) {
+            xhr.upload.onprogress = (event) => {
+                if (event.lengthComputable) {
+                    onProgress((event.loaded / event.total) * 100);
+                }
+            };
+        }
+
+        xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+                resolve(JSON.parse(xhr.responseText));
+            } else {
+                let err: { error?: string; message?: string; code?: string; slug?: string } | null = null;
+                try { err = JSON.parse(xhr.responseText); } catch { /* non-JSON body */ }
+                const thrown: Error & { code?: string; slug?: string; status?: number } = new Error((err && (err.error || err.message)) || "Upload failed");
+                if (err && typeof err.code === "string") thrown.code = err.code;
+                if (err && typeof err.slug === "string") thrown.slug = err.slug;
+                thrown.status = xhr.status;
+                reject(thrown);
+            }
+        };
+
+        xhr.onerror = () => reject(new Error("Network error"));
+        xhr.send(formData);
+    });
 }
 
 export const themesApi = {
@@ -963,41 +1013,12 @@ export const themesApi = {
      * escape hatch the backend names in its own error messages and boot warnings.
      */
     restoreDefault: () => apiPost<{ success: boolean; message: string }>("/themes/default", {}),
-    upload: (file: File, onProgress?: (percent: number) => void) => {
-        return new Promise<{ success: boolean; message: string; slug: string }>((resolve, reject) => {
-            const formData = new FormData();
-            formData.append("theme", file);
-
-            const xhr = new XMLHttpRequest();
-            xhr.open("POST", `${API_URL}/themes/upload`);
-            xhr.withCredentials = true; // Use HttpOnly cookies
-            applyCsrfHeader(xhr); // cookie-authenticated mutation — must carry X-CSRF-Token (after open())
-
-            if (onProgress) {
-                xhr.upload.onprogress = (event) => {
-                    if (event.lengthComputable) {
-                        onProgress((event.loaded / event.total) * 100);
-                    }
-                };
-            }
-
-            xhr.onload = () => {
-                if (xhr.status >= 200 && xhr.status < 300) {
-                    resolve(JSON.parse(xhr.responseText));
-                } else {
-                    try {
-                        const err = JSON.parse(xhr.responseText);
-                        reject(new Error(err.error || err.message || "Upload failed"));
-                    } catch {
-                        reject(new Error("Upload failed"));
-                    }
-                }
-            };
-
-            xhr.onerror = () => reject(new Error("Network error"));
-            xhr.send(formData);
-        });
-    },
+    upload: (file: File, onProgress?: (percent: number) => void) =>
+        uploadThemeZip<{ success: boolean; message: string; slug: string }>(`${API_URL}/themes/upload`, file, onProgress),
+    /** Replace an installed theme with a newer zip (rooted at `<slug>/`); it stays active and keeps its customizer settings. */
+    update: (slug: string, file: File, onProgress?: (percent: number) => void) =>
+        uploadThemeZip<{ success: boolean; updated: boolean; message: string; slug: string; fromVersion: string | null; toVersion: string | null; active: boolean }>(
+            `${API_URL}/themes/${encodeURIComponent(slug)}/update`, file, onProgress),
     delete: (slug: string) => apiDelete(`/themes/${slug}`),
     download: (slug: string) => {
         const baseUrl = getBaseUrl();

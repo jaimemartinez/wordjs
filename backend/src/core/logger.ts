@@ -296,9 +296,17 @@ function underTestRunner(): boolean {
     return Boolean(process.env.NODE_TEST_CONTEXT) || config.nodeEnv === 'test';
 }
 
+/**
+ * A command-line tool whose stdout IS its output (`npm run media -- status` prints JSON for `jq`) sets
+ * WORDJS_LOG_TO_STDERR=1 before loading backend modules, so their log lines go to fd 2 instead.
+ */
+const LOG_FD = /^(1|true|yes)$/i.test(String(process.env.WORDJS_LOG_TO_STDERR || '')) ? 2 : 1;
+
 const baseStream = underTestRunner()
     ? { write(): void { /* the test runner owns fd 1 */ } }
-    : (prettyStream() || pino.destination({ dest: 1, sync: false }));
+    : LOG_FD === 2
+        ? pino.destination({ dest: 2, sync: true })
+        : (prettyStream() || pino.destination({ dest: 1, sync: false }));
 
 /**
  * Every line goes to stdout AND to any registered sink. Sinks exist so a test can assert on what was

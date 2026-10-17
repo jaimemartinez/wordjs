@@ -7,7 +7,7 @@
  * core ONLY via the `wordjs` bridge, whose calls are RPC'd here (over the IPC channel) and run through
  * createPluginApi() (permission-checked, in the plugin's context). Hooks/filters the plugin registers
  * become shims in the real hook system that call back into the isolate. The host's heap (secrets, DB
- * handle, other plugins) is unreachable from the child. See documentation/plugin-isolation-proposal.md.
+ * handle, other plugins) is unreachable from the child. See documentation/archive/plugin-isolation-proposal.md.
  */
 
 const { fork, spawn } = require('child_process');
@@ -1718,8 +1718,15 @@ function fsGrantsFor(slug: string): { read: boolean; write: boolean } {
 // The admin-set per-plugin egress allowlist (bare hosts / IP literals), resolved host-side at spawn and
 // pushed into the child's cfg (→ egress-guard.setAllowedHosts). Empty ⇒ allow-all-public (unchanged
 // behavior). Only meaningful for a network-granted plugin; fail-OPEN (no allowlist) on any error.
+// The admin-approved private destinations (exact `host:port`, plugin-permissions getPrivateDestinations) ride
+// in the same list: egress-guard.setAllowedHosts splits them out, so they never narrow the allowlist. They are
+// fail-CLOSED on their own (none on any error), whatever happens to the allowlist half.
 function getEgressAllowlistFor(slug: string): string[] {
-    try { const l = require('./plugin-permissions').getEgressAllowlist(slug); return Array.isArray(l) ? l : []; } catch { return []; }
+    let hosts: string[];
+    try { const l = require('./plugin-permissions').getEgressAllowlist(slug); hosts = Array.isArray(l) ? l : []; } catch { hosts = []; }
+    let priv: string[];
+    try { const l = require('./plugin-permissions').getPrivateDestinations(slug); priv = Array.isArray(l) ? l : []; } catch { priv = []; }
+    return [...hosts, ...priv];
 }
 // Whether the per-plugin egress policy loaded cleanly at boot. When FALSE (DB/options load failed, or the
 // permissions module can't be required at all), the spawn path below fails egress CLOSED for a
@@ -2746,7 +2753,15 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
             if (!p) return;
             map.delete(msg.id);
             clearTimeout(p.timer);
-            if (!msg.ok) { p.rej(new Error(msg.error)); return; }
+            if (!msg.ok) {
+                const e: any = new Error(typeof msg.error === 'string' ? msg.error.slice(0, 500) : 'plugin callback failed');
+                // A client refusal the plugin chose (see plugin-worker.js 'invoke'): kept only in that
+                // shape, so a worker cannot make the host answer with a 5xx or an arbitrary code.
+                if (Number.isInteger(msg.status) && msg.status >= 400 && msg.status <= 499) e.pluginStatus = msg.status;
+                if (typeof msg.code === 'string' && /^rest_[a-z0-9_]{1,60}$/.test(msg.code)) e.pluginCode = msg.code;
+                p.rej(e);
+                return;
+            }
             if (replySize(value) > MAX_REPLY_BYTES) {
                 log.error({ slug: logSafe(slug) }, `[Isolate ${logSafe(slug)}] terminated: oversized RPC reply.`);
                 try { worker.terminate(); } catch { /* already gone */ }
@@ -2917,6 +2932,21 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                 // hook. The underlying RPC still times out and recycles the wedged worker separately.
                 const HOOK_SHIM_TIMEOUT_MS = 2000;
                 const isFilter = msg.hookType === 'filter';
+                // FAIL CLOSED where the hook's contract says a failing callback stops the operation
+                // (hook-access failClosed: comments:pre_insert). There, a callback that throws — or does
+                // not answer in time — REJECTS the filter instead of returning the value unchanged: a
+                // broken or wedged anti-spam plugin must refuse comments, not wave every one through.
+                // The plugin's own 4xx status and rest_* code are kept (its deliberate, visible refusal);
+                // any other failure is a 503 that names no plugin internals.
+                const failClosed = isFilter && hookAccess.isFailClosedHook(hookName);
+                const refusal = (cause: any) => {
+                    const e: any = new Error(cause && cause.pluginStatus
+                        ? String(cause.message || 'Refused by a plugin.')
+                        : 'This could not be checked right now. Please try again later.');
+                    e.status = (cause && cause.pluginStatus) || 503;
+                    e.code = (cause && cause.pluginCode) || 'rest_plugin_check_failed';
+                    return e;
+                };
                 const shim = (...args: any[]) => {
                     // Re-decided on EVERY delivery, not only at registration: a grant revoked since then
                     // stops the flow at once, and the payload is always minimized for THIS plugin's grants
@@ -2925,12 +2955,22 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                     const safeArgs = hookAccess.argsForPlugin(slug, hookName, args);
                     if (!safeArgs) return Promise.resolve(isFilter ? args[0] : undefined);
                     let t: any;
-                    const fallback = new Promise((resolve) => {
-                        t = setTimeout(() => resolve(args[0]), HOOK_SHIM_TIMEOUT_MS);
+                    const fallback = new Promise((resolve, reject) => {
+                        t = setTimeout(() => {
+                            if (failClosed) {
+                                log.warn({ slug: logSafe(slug), hook: logSafe(hookName) }, `[Isolate ${logSafe(slug)}] '${logSafe(hookName)}' did not answer in ${HOOK_SHIM_TIMEOUT_MS} ms — refusing (fail-closed hook).`);
+                                reject(refusal(null));
+                            } else resolve(args[0]);
+                        }, HOOK_SHIM_TIMEOUT_MS);
                         if (t.unref) t.unref();
                     });
                     return Promise.race([
-                        invokeWorker(msg.cbId, safeArgs).then((v) => { clearTimeout(t); return v; }, () => { clearTimeout(t); return args[0]; }),
+                        invokeWorker(msg.cbId, safeArgs).then((v) => { clearTimeout(t); return v; }, (err: any) => {
+                            clearTimeout(t);
+                            if (!failClosed) return args[0];
+                            if (!(err && err.pluginStatus)) log.warn({ slug: logSafe(slug), hook: logSafe(hookName), err }, `[Isolate ${logSafe(slug)}] '${logSafe(hookName)}' callback failed — refusing (fail-closed hook).`);
+                            throw refusal(err);
+                        }),
                         fallback,
                     ]);
                 };

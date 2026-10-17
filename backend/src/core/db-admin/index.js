@@ -4,7 +4,7 @@
  * Formerly the `db-migration` plugin. It is DB *infrastructure*, not a sandboxable feature plugin:
  * it runs schema migrations. That work must happen in the host process, around the DB lifecycle — it
  * cannot run in an isolated worker — so it lives in core and is wired in at boot instead of being loaded
- * through the plugin system. See documentation/plugin-isolation-proposal.md.
+ * through the plugin system. See documentation/archive/plugin-isolation-proposal.md.
  */
 
 const express = require('express');

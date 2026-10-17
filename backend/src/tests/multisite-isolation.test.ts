@@ -290,6 +290,30 @@ describe('uploads (I3)', () => {
         assert.strictEqual((await direct('get', url, TWO)).status, 200);
     });
 
+    test('with S3 media storage, a miss on another site redirects to the bucket like the main site', async () => {
+        const env: Record<string, string> = {
+            WORDJS_MEDIA_STORAGE: 's3',
+            WORDJS_MEDIA_S3_BUCKET: 'network-media',
+            WORDJS_MEDIA_S3_ACCESS_KEY_ID: 'AKIATESTNETWORK',
+            WORDJS_MEDIA_S3_SECRET_ACCESS_KEY: 'network-secret-key',
+            WORDJS_MEDIA_PUBLIC_URL: 'https://cdn.example.net',
+        };
+        const saved: Record<string, string | undefined> = {};
+        for (const k of Object.keys(env)) { saved[k] = process.env[k]; process.env[k] = env[k]; }
+        try {
+            const missing = '/uploads/2026/10/0b6f0c1e-offloaded.png';
+            const res = await direct('get', missing, TWO);
+            assert.strictEqual(res.status, 302);
+            assert.strictEqual(res.headers.location, 'https://cdn.example.net/uploads/2026/10/0b6f0c1e-offloaded.png');
+            // A file the site holds is still served from its own directory, not redirected.
+            assert.strictEqual((await direct('get', url, TWO)).status, 200);
+            // Paths that are never offloaded stay a 404.
+            assert.strictEqual((await direct('get', '/uploads/.derivatives/x.avif', TWO)).status, 404);
+        } finally {
+            for (const k of Object.keys(env)) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k] as string; }
+        }
+    });
+
     test('the same path is not served on the twin, the main site or an unknown address', async () => {
         assert.strictEqual((await direct('get', url, THREE)).status, 404);
         assert.strictEqual((await direct('get', url, 'main.example.com')).status, 404);

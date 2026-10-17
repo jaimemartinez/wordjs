@@ -133,6 +133,29 @@ function restError(status: number, body: any): string {
     return `The site refused this request (HTTP ${status})${msg ? `: ${String(msg).slice(0, 500)}` : '.'}`;
 }
 
+/**
+ * Every grant-gated tool and the grant words it needs. A tool is only REGISTERED (and so listed) when the
+ * connection holds its words; this map lets a call to a known tool the connection does not hold be
+ * refused as a tool error and audited as `agent.denied`, instead of surfacing as a bare protocol
+ * "Tool … not found". Names outside this map stay a protocol error and are not audited (an agent cannot
+ * fill the audit log with names of its choosing).
+ */
+const TOOL_GRANTS: Record<string, string[]> = {
+    list_content: ['content:read'],
+    get_content: ['content:read'],
+    list_terms: ['content:read'],
+    list_media: ['content:read'],
+    create_draft: ['content:draft'],
+    update_draft: ['content:draft'],
+    submit_for_review: ['content:draft'],
+    publish_content: ['content:publish'],
+    create_term: ['taxonomy:write'],
+    upload_media: ['media:upload'],
+    list_comments: ['comments:moderate'],
+    moderate_comment: ['comments:moderate'],
+    get_site_info: ['settings:read'],
+};
+
 // ─── The server ─────────────────────────────────────────────────────────────────────────────────────
 
 function buildMcpServer(ctx: AgentCallContext): any {
@@ -461,20 +484,45 @@ function buildMcpServer(ctx: AgentCallContext): any {
             annotations: { readOnlyHint: true },
         }, guarded('get_site_info', ['settings:read'], false, async () => {
             const { getOption } = require('./options');
+            const { toLanguageTag } = require('./language-tag');
             const read = async (k: string) => { try { return await getOption(k, ''); } catch { return ''; } };
+            // The EFFECTIVE values, as the public site renders them: a site that never saved a locale
+            // or a time zone still has one (<html lang>, the feed's <language>, dates in UTC).
+            const timezone = String(await read('timezone_string') || '').trim();
             return ok({
                 data: {
                     name: clip(await read('blogname'), 500),
                     tagline: clip(await read('blogdescription'), 1000),
                     url: config.site && config.site.url,
-                    language: await read('WPLANG'),
-                    timezone: await read('timezone_string'),
+                    language: toLanguageTag(String(await read('WPLANG') || '')),
+                    timezone: timezone ? clip(timezone, 64) : 'UTC',
                 },
             }, true);
         }));
     }
 
+    // ── Calls to a known tool this connection was not granted ──────────────────────────────────────
+    // The SDK answers a call to an unregistered tool with "Tool … not found" and never reaches `guarded`.
+    // Put the grant check in front of its tools/call handler so the refusal is a tool result the agent
+    // can read and an `agent.denied` audit row, exactly as for a registered tool.
+    const handlers = server.server && server.server._requestHandlers;
+    const sdkCallTool = handlers && typeof handlers.get === 'function' ? handlers.get('tools/call') : null;
+    if (typeof sdkCallTool === 'function') {
+        handlers.set('tools/call', async (request: any, extra: any) => {
+            const name = request && request.params && request.params.name;
+            if (typeof name === 'string' && Object.prototype.hasOwnProperty.call(TOOL_GRANTS, name)) {
+                const missing = TOOL_GRANTS[name].filter((n) => !grants.has(n));
+                if (missing.length) {
+                    if (overLimit(`c:${agentId}`, CALLS_PER_MINUTE)) return fail('Rate limit reached for this agent. Wait a minute and try again.');
+                    await recordAudit(actorId, 'agent.denied', 'agent', agentId, { tool: name, needs: missing });
+                    return fail(`This agent connection has not been granted ${missing.join(', ')}. Ask a site administrator.`);
+                }
+            }
+            return sdkCallTool(request, extra);
+        });
+    }
+
     return server;
 }
 
-module.exports = { buildMcpServer, CALLS_PER_MINUTE, WRITES_PER_MINUTE, _resetAgentRateLimits: () => windows.clear() };
+module.exports = { buildMcpServer, TOOL_GRANTS, CALLS_PER_MINUTE, WRITES_PER_MINUTE, _resetAgentRateLimits: () => windows.clear() };

@@ -71,9 +71,11 @@ Every tool call runs **as the bound user** with `req.user` replaced by a narrowe
 | `create_term` | `taxonomy:write` | categories and tags |
 | `upload_media` | `media:upload` | base64, ≤ 10 MB, optional title/caption/alt text |
 | `list_comments`, `moderate_comment` | `comments:moderate` | approve or spam |
-| `get_site_info` | `settings:read` | |
+| `get_site_info` | `settings:read` | name, tagline, address, and the EFFECTIVE language tag (`en-US`; `en` when no locale was ever saved) and time zone (`UTC` when none was saved) |
 
-A tool is only **listed** when it is granted; calling an unlisted tool fails at the protocol level.
+A tool is only **listed** when it is granted. Calling one of these tools anyway answers a tool error that
+names the missing grant (and is audited as `agent.denied`, §5); a name that is not a WordJS tool at all
+is answered "Tool … not found" and not audited.
 
 ## 4. How it is wired
 
@@ -103,7 +105,8 @@ id>` so **Admin → AI agents → Audit trail** is one query:
 - `agent.write` — one row per write tool call, success or refusal: `{tool, objectType, objectId,
   httpStatus, ok, status}`. The REST handler the call ran through records its own row as well
   (`post.create`, `post.update`, …) under the bound user;
-- `agent.denied` — a call to a tool the connection was not granted.
+- `agent.denied` — a call to a tool the connection was not granted, listed or not: `{tool, needs}`
+  (the missing grant words).
 
 ## 6. Prompt injection
 
@@ -119,7 +122,11 @@ an audit row.
 - HTTP: 240 requests/minute per agent token (cluster-wide through the shared limiter store), on top of the
   global per-IP API limiter.
 - Per agent, in-process: 120 tool calls/minute and 30 writes/minute.
-- At most 25 live connections per bound user. Tool outputs clip long text fields.
+- At most 25 live connections per bound user.
+- Tool outputs clip long text fields (an entry's body, for example) at 60,000 characters, marked
+  `… [truncated N characters]`; shorter fields (titles, excerpts, comment bodies) have lower caps of their own.
+- **Last used** (`lastUsedAt`) is telemetry, written at most once a minute per connection and per backend
+  process — like API tokens' — so a burst of calls within the same minute shows the time of the first.
 
 ## 8. Deploying
 

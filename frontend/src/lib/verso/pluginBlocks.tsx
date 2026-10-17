@@ -111,6 +111,21 @@ function withPuckCompat(render: LegacyRenderComponent): LegacyRenderComponent {
 const adaptedByRawDef = new WeakMap<object, BlockDefinition>();
 
 /**
+ * Nombre legible de un bloque de plugin que no declara `label`: el id del bloque (PascalCase del
+ * manifest o la clave de `versoComponents`) partido en palabras — "ReadingList" → "Reading List",
+ * "FAQSection" → "FAQ Section", "my_block" → "My block". Nunca el id crudo en la paleta.
+ */
+export function humanizeBlockType(type: string): string {
+  const words = type
+    .replace(/[_-]+/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : type;
+}
+
+/**
  * Adapta UNA entrada del mapa crudo. `null` si la entrada no cumple el contrato mínimo (render
  * función) — se degrada con warn, jamás se lanza: el input es código de terceros.
  */
@@ -128,7 +143,7 @@ export function adaptPluginBlock(type: string, raw: unknown): BlockDefinition | 
   if (hit && hit.type === type) return hit;
 
   const legacy: LegacySingleBlockDef = {
-    label: typeof rawDef.label === "string" ? rawDef.label : undefined,
+    label: typeof rawDef.label === "string" && rawDef.label.trim() ? rawDef.label.trim() : humanizeBlockType(type),
     category: typeof rawDef.category === "string" ? rawDef.category : undefined,
     fields: (rawDef.fields && typeof rawDef.fields === "object"
       ? rawDef.fields

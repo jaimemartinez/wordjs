@@ -184,6 +184,31 @@ describe('media-storage config resolution (pure)', () => {
         assert.strictEqual(cdn.publicOrigin, 'https://cdn.example.com');
     });
 
+    test('public URL warnings: the prefix doubled, a path-style endpoint without the bucket, http on an https site', () => {
+        const creds = { driver: 's3', bucket: 'site-media', accessKeyId: 'a', secretAccessKey: 's' };
+        const codes = (block: any, site = 'https://www.example.com') =>
+            mediaStorage.publicUrlWarnings(mediaStorage.resolveMediaStorage({}, { mediaStorage: { ...creds, ...block } }), site).map((w: any) => w.code);
+        // Correct values warn about nothing — including no publicUrl at all (the bucket's own URL).
+        assert.deepStrictEqual(codes({ publicUrl: 'https://cdn.example.com' }), []);
+        assert.deepStrictEqual(codes({ endpoint: 'https://acct.r2.cloudflarestorage.com' }), []);
+        assert.deepStrictEqual(codes({ endpoint: 'https://s3.lan:3900', publicUrl: 'https://s3.lan:3900/site-media' }), []);
+        assert.deepStrictEqual(codes({ publicUrl: 'https://cdn.example.com/media', prefix: 'media/site1' }), []);
+        // The prefix typed into the public URL as well.
+        const doubled = mediaStorage.publicUrlWarnings(mediaStorage.resolveMediaStorage({}, { mediaStorage: { ...creds, publicUrl: 'https://cdn.example.com/uploads/' } }), 'https://www.example.com');
+        assert.deepStrictEqual(doubled.map((w: any) => w.code), ['media_public_url_doubled_prefix']);
+        assert.strictEqual(doubled[0].field, 'publicUrl');
+        assert.ok(doubled[0].message.includes('https://cdn.example.com/uploads/uploads/'), doubled[0].message);
+        assert.deepStrictEqual(codes({ publicUrl: 'https://cdn.example.com/media/site1', prefix: 'media/site1' }), ['media_public_url_doubled_prefix']);
+        // The endpoint itself, without the bucket.
+        assert.deepStrictEqual(codes({ endpoint: 'https://s3.lan:3900', publicUrl: 'https://s3.lan:3900' }), ['media_public_url_missing_bucket']);
+        // Mixed content only matters on an https site, and not for a loopback bucket.
+        assert.deepStrictEqual(codes({ publicUrl: 'http://media.example.net' }), ['media_public_url_mixed_content']);
+        assert.deepStrictEqual(codes({ publicUrl: 'http://media.example.net' }, 'http://www.example.com'), []);
+        assert.deepStrictEqual(codes({ publicUrl: 'http://127.0.0.1:3900/site-media' }), []);
+        // Local storage has nothing to warn about.
+        assert.deepStrictEqual(mediaStorage.publicUrlWarnings(mediaStorage.resolveMediaStorage({}, {}), 'https://www.example.com'), []);
+    });
+
     test('hostile values are refused, never repaired', () => {
         const creds = { driver: 's3', bucket: 'b-1', accessKeyId: 'a', secretAccessKey: 's' };
         for (const publicUrl of ['javascript:alert(1)', 'https://u:p@cdn.example.com', 'https://cdn.example.com/?x=1', 'https://cdn.example.com/#frag', 'ftp://cdn.example.com']) {
@@ -340,6 +365,7 @@ describe('offloaded uploads over the real routes and a fake S3 bucket', () => {
         assert.deepStrictEqual(first.body.steps.map((s: any) => s.step), ['write', 'read']);
         assert.match(first.body.probe, /^\.wordjs-connection-test-[0-9a-f]{12}\.png$/);
         assert.strictEqual(first.body.publicUrl, `${BASE}/${first.body.probe}`);
+        assert.ok(Array.isArray(first.body.warnings), 'the test answers the public URL warnings');
         // What the admin's browser does: load it anonymously from the public URL — a real PNG.
         const pub = await fetch(first.body.publicUrl);
         assert.strictEqual(pub.status, 200);
@@ -429,6 +455,32 @@ describe('offload / restore of an existing library', () => {
         assert.strictEqual(again.status, 'done');
         assert.strictEqual(again.moved, 0);
         assert.strictEqual(log.filter((l) => l.method === 'PUT').length, puts);
+    });
+
+    test('a migration another node is running makes this node busy; a stale record is an interrupted run', async () => {
+        const options = require('../core/options');
+        const saved = await options.getOptionFresh(migration.PROGRESS_OPTION, null);
+        const record = (updatedAt: string) => ({
+            direction: 'offload', status: 'running', startedAt: updatedAt, updatedAt, finishedAt: null,
+            cursor: 0, total: 1, processed: 0, moved: 0, skipped: 0, failed: 0, failures: [], deleteLocal: false, error: null,
+        });
+        try {
+            // Fresh: another node refreshed it moments ago. This process runs nothing.
+            await options.updateOption(migration.PROGRESS_OPTION, record(new Date().toISOString()), 'no');
+            assert.strictEqual(migration.isRunning(), false);
+            assert.strictEqual(await migration.isRunningAnywhere(), true);
+            assert.strictEqual((await migration.getProgress()).status, 'running');
+            const busy = await asAdmin('post', '/media-storage/migrate').send({ direction: 'offload' });
+            assert.strictEqual(busy.status, 409, JSON.stringify(busy.body));
+            assert.strictEqual(busy.body.code, 'rest_media_storage_busy');
+            assert.strictEqual((await asAdmin('get', '/media-storage')).body.running, true);
+            // Stale: nobody has refreshed it for longer than a live run ever goes without.
+            await options.updateOption(migration.PROGRESS_OPTION, record(new Date(Date.now() - migration.PROGRESS_STALE_MS - 1000).toISOString()), 'no');
+            assert.strictEqual(await migration.isRunningAnywhere(), false);
+            assert.strictEqual((await migration.getProgress()).status, 'interrupted');
+        } finally {
+            await options.updateOption(migration.PROGRESS_OPTION, saved, 'no');
+        }
     });
 
     test('switching to local is refused while items are in the bucket', async () => {

@@ -22,7 +22,7 @@
 import React from "react";
 import MSym from "@/components/editor/MSym";
 import { useI18n } from "@/contexts/I18nContext";
-import { trStr } from "@/lib/editorI18n";
+import { trFmt, trStr } from "@/lib/editorI18n";
 import type { CollabMember, CollabNotice, CollabSelf, CollabStatus } from "@/lib/verso/collab";
 import {
     initialsOf,
@@ -140,7 +140,7 @@ export default function CollabPresence({
             {/* Live region ESTABLE: siempre montada, solo cambia su texto (montarla y desmontarla
                 no anuncia nada en la mayoría de lectores de pantalla). */}
             <div role="status" aria-live="polite" className="sr-only">
-                {tr(presenceAnnouncement(status, members))}
+                {presenceAnnouncement(status, members, language)}
             </div>
 
             <div className="hidden lg:flex items-center gap-1.5" data-wjs-collab-presence="">
@@ -208,7 +208,7 @@ export default function CollabPresence({
                                         <li key={m.siteId} className="flex items-center gap-2 px-2 py-1.5 rounded-lg">
                                             <Avatar name={m.name} color={m.color} size={22} />
                                             <span className="text-[12px] text-[var(--ed-on-surface)] truncate">
-                                                {tr(memberLabel(m))}
+                                                {memberLabel(m, language)}
                                             </span>
                                         </li>
                                     ))}
@@ -231,7 +231,7 @@ export default function CollabPresence({
                     }`}
                 >
                     <MSym name="info" size={16} className="mt-0.5 shrink-0" />
-                    <span className="leading-snug">{tr(notice.message)}</span>
+                    <span className="leading-snug">{notice.template ? trFmt(notice.template, language, notice.vars ?? {}) : tr(notice.message)}</span>
                     <button
                         type="button"
                         onClick={onDismissNotice}

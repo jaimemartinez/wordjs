@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { commentsApi, Comment } from "@/lib/api";
 import { sanitizeHTML } from "@/lib/sanitize";
+import { formatSiteDate } from "@/lib/public/siteDate";
 
 // Local initials avatar — no request to the external avatar service. Background is a
 // deterministic pick (simple char-code hash of the name) over the theme token palette.
@@ -33,7 +34,8 @@ function InitialsAvatar({ name }: { name: string }) {
     );
 }
 
-export default function CommentsSection({ postId }: { postId: number }) {
+/** `lang` is the SITE language (lib/public/siteDate) — comment dates follow it, not the visitor's browser. */
+export default function CommentsSection({ postId, lang }: { postId: number; lang?: string | null }) {
     const [comments, setComments] = useState<Comment[]>([]);
     const [loading, setLoading] = useState(true);
     const [submitting, setSubmitting] = useState(false);
@@ -143,7 +145,7 @@ export default function CommentsSection({ postId }: { postId: number }) {
                                     <div className="wjs-comment-head flex justify-between items-start mb-2 gap-2">
                                         <h4 className="wjs-comment-author font-bold text-[var(--wjs-color-heading,#111827)] break-words min-w-0">{comment.author}</h4>
                                         <span className="wjs-comment-date text-xs text-[var(--wjs-color-text-muted,#6b7280)] shrink-0">
-                                            {new Date(comment.date).toLocaleDateString()}
+                                            {formatSiteDate(comment.date, lang)}
                                         </span>
                                     </div>
                                     <div className="wjs-comment-content prose prose-sm text-[var(--wjs-color-text-main,#374151)] max-w-none break-words overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_pre]:overflow-x-auto" dangerouslySetInnerHTML={{ __html: sanitizeHTML(comment.content) }} />
