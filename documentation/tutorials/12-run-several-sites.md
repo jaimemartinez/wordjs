@@ -28,7 +28,8 @@ To try this without DNS, use a wildcard DNS service: `shop.192-168-1-20.sslip.io
 ## 2. Turn the network on
 
 On the server, run the command **as the `wordjs` user**. It writes the network database and the
-config file, and the service must still be able to write them afterwards:
+config file, and the service must still be able to write them afterwards. Run as root, it refuses
+and prints the command to use instead:
 
 ```bash
 cd /srv/wordjs && sudo -u wordjs npm run network -- enable --admin admin
@@ -119,5 +120,7 @@ Then, over HTTP:
 - a shop session got `401` on the main site;
 - an undeclared host name got `421`.
 
-During the test, running `network enable` as root left the network database owned by root, and site
-creation then failed with a server error. Hence the `sudo -u wordjs` in step 2.*
+On the 2.6.0 run, `network enable` run as root left the network database owned by root, and site
+creation then failed with a server error. Hence the `sudo -u wordjs` in step 2. On a 2.7.0 release
+build, the command refuses to run as root in an install another account owns, and prints the
+`sudo -u wordjs …` command to use instead.*
