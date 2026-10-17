@@ -33,6 +33,58 @@ const seoRoutes = require('./seo');
 const healthRoutes = require('./health');
 const hooksRoutes = require('./hooks');
 
+// The API index's route map: area name -> path under the API prefix, for EVERY route group the server
+// mounts (this router's groups and the ones src/index.ts and core/db-admin mount on the app directly).
+// tests/route-modules-mounted.test.ts fails when a mounted group is missing here.
+const API_ROUTE_GROUPS: Readonly<Record<string, string>> = Object.freeze({
+    authentication: '/auth',
+    posts: '/posts',
+    pages: '/pages',
+    users: '/users',
+    categories: '/categories',
+    tags: '/tags',
+    comments: '/comments',
+    media: '/media',
+    mediaStorage: '/media-storage',
+    settings: '/settings',
+    siteAddress: '/site-address',
+    network: '/network',
+    plugins: '/plugins',
+    pluginRoutes: '/plugin/{slug}',
+    marketplace: '/marketplace',
+    themes: '/themes',
+    chrome: '/chrome',
+    menus: '/menus',
+    widgets: '/widgets',
+    revisions: '/revisions',
+    types: '/types',
+    taxonomies: '/taxonomies',
+    setup: '/setup',
+    export: '/export',
+    import: '/import',
+    roles: '/roles',
+    notifications: '/notifications',
+    notices: '/notices',
+    fonts: '/fonts',
+    certificates: '/system/certs',
+    health: '/health',
+    seo: '/seo',
+    hooks: '/hooks',
+    webhooks: '/webhooks',
+    audit: '/audit',
+    agents: '/agents',
+    mcp: '/mcp',
+    ai: '/ai',
+    forms: '/forms',
+    presence: '/presence',
+    collab: '/collab',
+    graphql: '/graphql',
+    docs: '/docs',
+    analytics: '/analytics',
+    backups: '/backups',
+    dbMigration: '/db-migration',
+});
+
 // API Info endpoint
 /**
  * @swagger
@@ -63,36 +115,14 @@ const hooksRoutes = require('./hooks');
  *                     type: string
  */
 router.get('/', (req: Request, res: Response) => {
+    const prefix = require('../config/app').api.prefix;
+    const routes: Record<string, string> = {};
+    for (const [name, sub] of Object.entries(API_ROUTE_GROUPS)) routes[name] = `${prefix}${sub}`;
     res.json({
         name: 'WordJS REST API',
         description: 'WordPress-like CMS REST API',
-        version: '1.0.0',
-        routes: {
-            authentication: '/api/v1/auth',
-            posts: '/api/v1/posts',
-            users: '/api/v1/users',
-            categories: '/api/v1/categories',
-            tags: '/api/v1/tags',
-            comments: '/api/v1/comments',
-            media: '/api/v1/media',
-            settings: '/api/v1/settings',
-            plugins: '/api/v1/plugins',
-            themes: '/api/v1/themes',
-            menus: '/api/v1/menus',
-            widgets: '/api/v1/widgets',
-            revisions: '/api/v1/revisions',
-            types: '/api/v1/types',
-            taxonomies: '/api/v1/taxonomies',
-            export: '/api/v1/export',
-            import: '/api/v1/import',
-            roles: '/api/v1/roles',
-            notifications: '/api/v1/notifications',
-            notices: '/api/v1/notices',
-            hooks: '/api/v1/hooks',
-            forms: '/api/v1/forms',
-            chrome: '/api/v1/chrome',
-            graphql: '/api/v1/graphql'
-        }
+        version: require('../config/product-version').resolveProductVersion(),
+        routes
     });
 });
 
@@ -316,3 +346,5 @@ router.use('/docs', authenticate, isAdmin, (req: Request, res: Response, next: N
 });
 
 module.exports = router;
+// Not a route: the index's route map, read by tests/route-modules-mounted.test.ts.
+Object.defineProperty(module.exports, 'API_ROUTE_GROUPS', { value: API_ROUTE_GROUPS, enumerable: false });

@@ -281,7 +281,9 @@ class ThemeEngine {
         try {
             // Static AST pre-scan (defense in depth). The REAL containment is the OS isolation below.
             const { validatePluginPermissions } = require('./plugins');
-            let manifest: any = { permissions: [{ scope: 'settings', access: 'read' }, { scope: 'content', access: 'read' }] };
+            // No manifest.json: the same default declaration the runtime gate applies (plugin-context).
+            const { DEFAULT_THEME_PERMISSIONS } = require('./plugin-context');
+            let manifest: any = { permissions: DEFAULT_THEME_PERMISSIONS.map((p: any) => ({ ...p })) };
             const manifestPath = path.join(this.activeTheme.path, 'manifest.json');
             if (fs.existsSync(manifestPath)) {
                 try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); }

@@ -169,6 +169,20 @@ function getEffectivePlugin(): string | null {
 }
 
 /**
+ * What a theme's functions.js DECLARES when the theme ships no manifest.json (read-only: writing settings
+ * belongs to the admin panel, never to theme logic). Shared with core/theme-engine's static scan so there
+ * is one copy. Every scope here must be one of core/plugins KNOWN_PERMISSIONS: this used to declare a
+ * `content` scope that exists in no permission vocabulary and that nothing checks.
+ *
+ * A declaration is only a request: hasPermission() also needs an administrator's grant, and grants are
+ * keyed by plugin slug (plugin-permissions PLUGIN_SLUG), which a `theme:<slug>` principal never matches.
+ * So a theme's functions.js holds no permission today, with or without this declaration.
+ */
+const DEFAULT_THEME_PERMISSIONS: ReadonlyArray<Readonly<{ scope: string; access: string }>> = Object.freeze([
+    Object.freeze({ scope: 'settings', access: 'read' }),
+]);
+
+/**
  * Check if current context has a specific permission
  */
 function hasPermission(scope: string, access = 'read') {
@@ -198,15 +212,8 @@ function hasPermission(scope: string, access = 'read') {
                 return false;
             }
         } else if (pluginSlug.startsWith('theme:')) {
-            // Default "Safe Mode" Theme Permissions
-            // Themes generally only need to READ content and display options.
-            // Writing settings should be done via the API/Admin Panel, not by backend logic implicitly.
-            manifest = {
-                permissions: [
-                    { scope: 'settings', access: 'read' },
-                    { scope: 'content', access: 'read' }
-                ]
-            };
+            // Default theme declaration (see DEFAULT_THEME_PERMISSIONS above).
+            manifest = { permissions: DEFAULT_THEME_PERMISSIONS.map((p) => ({ ...p })) };
             manifestCache.set(pluginSlug, manifest);
             console.log(`[Security] No manifest for theme '${pluginSlug}', applying RESTRICTED default permissions (Read-Only).`);
         }
@@ -389,5 +396,6 @@ module.exports = {
     getPluginFromStack,
     getEffectivePlugin,
     hasPermission,
-    verifyPermission
+    verifyPermission,
+    DEFAULT_THEME_PERMISSIONS
 };

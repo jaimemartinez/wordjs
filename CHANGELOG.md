@@ -100,6 +100,24 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   deliver to them. Server health, the Configuration tab and the startup log now say so and how to fix it
   (`mail_domain` / `mail_domain_public` in `GET /settings`).
 
+- **Multisite: the database migration tool, like backups, is now available on the main site only in a
+  multisite network.** `/api/v1/db-migration/*` answers 404 on every other site, exactly as `/backups`
+  does there (the admin screen already hid it). Single-site installs and the main site are unchanged.
+
+- **`GET /api/v1/` reports the product version and the full route map.** `version` now comes from the
+  release manifest (the same value `/api-docs` publishes) instead of a fixed `1.0.0`, and `routes` lists
+  every mounted route group, including the ones added since the map was written (AI, MCP, agents,
+  webhooks, audit, forms, collab, presence, media storage, site address, network, backups,
+  db-migration, ...). A test fails when a mounted group is missing from the map. Compatibility: the
+  API index now reports the product version and every mounted route group; every key it published
+  before is still there with the same path, so clients that read it only see additional keys and a
+  real version number.
+
+- **Theme logic: the default permission declaration uses the real vocabulary.** A theme without a
+  `manifest.json` declared a `content:read` scope that no permission gate knows; it now declares only
+  `settings:read`, from one shared definition used by both the runtime gate and the static scan. No
+  effective behaviour changes: a theme's `functions.js` still holds no permission grant.
+
 ### Fixed
 
 - **A split install keeps serving HTTPS after its first restart, and its content pages render.** Two
@@ -304,6 +322,21 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   run. `POST /plugins/sample` writes the same isolated sample (it wrote an in-process one without a
   manifest). The `test-schema` fixture declares `database:write` instead of an access level the upload
   refuses, and drops its unused `main` / `active` keys.
+
+- **Diagnostic scripts in `backend/cli` run again.** `inspect-roles.js`, `inspect-user.js`,
+  `verify-roles.js` and `force-sync-roles.js` use the backend's current database initialization (the same
+  driver and `dbPath` as the server) and are run from `backend/` as
+  `node -r ts-node/register cli/<name>.js`. `force-sync-roles.js` resets the built-in roles to the
+  server's defaults (plus any `roles` override in the config) and keeps plugin and custom roles;
+  `inspect-user.js` takes the login as an argument and never prints credential columns.
+  `check_plugins.js` reads `dbPath` (or the `dbDriver` default file) from `backend/wordjs-config.json`.
+  `backend/scripts/migrate-media-urls.js` loads the TypeScript sources by itself (compiled `dist/` when
+  present), so a plain `node scripts/migrate-media-urls.js` works.
+
+- **Plugin bridge typings.** `backend/types/wordjs-bridge.d.ts` now describes `wordjs.paths`
+  (`data`, `logs`, `tmp`) and the `wordjs.smtp` namespace (`listen`, `status`) used with the
+  `smtp:inbound` permission, with its session, handler, option and status types.
+
 
 ## [2.6.0] - 2026-10-16
 
