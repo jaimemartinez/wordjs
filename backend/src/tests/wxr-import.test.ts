@@ -835,4 +835,103 @@ describe('WXR importer (fast-xml-parser v5)', () => {
                 'an attachment that owns its file must still delete it');
         });
     });
+
+    // ---------------------------------------------------------------------------------------------
+    // Source-site ids a WXR carries as REFERENCES: the featured image, comment dates and menu targets.
+    // ---------------------------------------------------------------------------------------------
+    describe('cross-reference remaps', () => {
+        const REMAP_FIXTURE = path.join(__dirname, 'fixtures', 'sample-remaps.wxr');
+        let remapXml: string;
+        let Post: any;
+        const meta = async (postId: number, key: string): Promise<string | null> => {
+            const row = await dbAsync.get(`SELECT meta_value FROM post_meta WHERE post_id = ? AND meta_key = ?`, [postId, key]);
+            return row ? String(row.meta_value) : null;
+        };
+        const byName = (slug: string, type: string) =>
+            dbAsync.get(`SELECT id FROM posts WHERE post_name = ? AND post_type = ?`, [slug, type]);
+        const menuItem = async () => {
+            const row = await dbAsync.get(
+                `SELECT p.id FROM posts p
+                   JOIN post_meta pm ON pm.post_id = p.id AND pm.meta_key = '_wxr_menu_item_id'
+                  WHERE p.post_type = 'nav_menu_item' AND pm.meta_value = '914'`);
+            return row.id as number;
+        };
+
+        before(() => {
+            remapXml = fs.readFileSync(REMAP_FIXTURE, 'utf-8');
+            Post = require('../models/Post');
+        });
+
+        it('remaps _thumbnail_id to the imported attachment, even when the image is listed after the post', async () => {
+            const summary = await importWxr(remapXml, { defaultAuthorId: adminId, media: 'link' });
+            assert.deepStrictEqual(summary.errors, []);
+            const post = await byName('remap-pour-over', 'post');
+            const attachment = await byName('remap-beans', 'attachment');
+            assert.ok(post && attachment);
+            assert.notStrictEqual(String(attachment.id), '910', 'the fixture needs the two ids to differ');
+            assert.strictEqual(await meta(post.id, '_thumbnail_id'), String(attachment.id),
+                'the featured image names THIS install\'s attachment, not the source site\'s id');
+        });
+
+        it('keeps the comment dates the export carries', async () => {
+            const post = await byName('remap-pour-over', 'post');
+            const leo = await dbAsync.get(`SELECT comment_date, comment_date_gmt FROM comments WHERE comment_post_id = ? AND comment_author = 'Leo'`, [post.id]);
+            assert.strictEqual(leo.comment_date, '2024-03-03 08:00:00');
+            assert.strictEqual(leo.comment_date_gmt, '2024-03-03 07:00:00');
+            const ana = await dbAsync.get(`SELECT comment_date FROM comments WHERE comment_post_id = ? AND comment_author = 'Ana'`, [post.id]);
+            assert.ok(ana, 'a comment with an unreadable date is still imported');
+            assert.notStrictEqual(ana.comment_date, 'not a date', 'an unreadable date is never written into the column');
+        });
+
+        it('points the menu item at the imported page', async () => {
+            const page = await byName('remap-wholesale', 'page');
+            const item = await menuItem();
+            assert.strictEqual(await meta(item, '_menu_item_object_id'), String(page.id));
+            assert.strictEqual(await meta(item, '_menu_item_url'), '/remap-wholesale');
+        });
+
+        it('a plain re-run re-links nothing and leaves a hand-edited menu target alone', async () => {
+            const other = await byName('remap-pour-over', 'post');
+            const item = await menuItem();
+            // An editor re-pointed the item at another LIVE post: that choice must survive a re-run.
+            await dbAsync.run(`UPDATE post_meta SET meta_value = ? WHERE post_id = ? AND meta_key = '_menu_item_object_id'`, [String(other.id), item]);
+            const summary = await importWxr(remapXml, { defaultAuthorId: adminId, media: 'link' });
+            assert.strictEqual(summary.menus.items.created, 0);
+            assert.strictEqual(summary.menus.items.relinked, 0);
+            assert.strictEqual(await meta(item, '_menu_item_object_id'), String(other.id));
+        });
+
+        it('re-points a matched menu item whose page was deleted and imported again', async () => {
+            const oldPage = await byName('remap-wholesale', 'page');
+            const item = await menuItem();
+            await dbAsync.run(`UPDATE post_meta SET meta_value = ? WHERE post_id = ? AND meta_key = '_menu_item_object_id'`, [String(oldPage.id), item]);
+            // Deleted for good, the way the admin's "delete permanently" does it.
+            assert.ok(await Post.delete(oldPage.id, true));
+
+            const summary = await importWxr(remapXml, { defaultAuthorId: adminId, media: 'link' });
+            assert.deepStrictEqual(summary.errors, []);
+            assert.strictEqual(summary.menus.matched, 1, 'the menu itself is matched, not duplicated');
+            assert.strictEqual(summary.menus.items.created, 0);
+            assert.strictEqual(summary.menus.items.relinked, 1);
+            const newPage = await byName('remap-wholesale', 'page');
+            assert.notStrictEqual(newPage.id, oldPage.id);
+            assert.strictEqual(await meta(item, '_menu_item_object_id'), String(newPage.id),
+                'the item follows the re-imported page instead of the deleted id');
+            assert.strictEqual(await meta(item, '_menu_item_url'), '/remap-wholesale');
+        });
+
+        it('a re-run repairs a featured image an earlier import left on the source id — and nothing else', async () => {
+            const post = await byName('remap-pour-over', 'post');
+            const attachment = await byName('remap-beans', 'attachment');
+            // What an import made before the remap existed left behind: the raw source id.
+            await Post.updateMeta(post.id, '_thumbnail_id', '910');
+            await importWxr(remapXml, { defaultAuthorId: adminId, media: 'link' });
+            assert.strictEqual(await meta(post.id, '_thumbnail_id'), String(attachment.id));
+
+            // A featured image the editor chose since then is not the raw source id, so it stays.
+            await Post.updateMeta(post.id, '_thumbnail_id', '424242');
+            await importWxr(remapXml, { defaultAuthorId: adminId, media: 'link' });
+            assert.strictEqual(await meta(post.id, '_thumbnail_id'), '424242');
+        });
+    });
 });
