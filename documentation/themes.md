@@ -1446,8 +1446,10 @@ Any installed theme can be packaged back into a ZIP for backup or transfer via
 1. Go to **Admin → Themes**
 2. Click **Activate** on the desired theme
 3. The public site serves the new theme on the next navigation or full page load: activation purges
-   the `settings` cache tag, so the next server render carries the new slug/version. An already-open
-   public tab keeps the theme it was rendered with until it navigates — nothing re-fetches on tab focus.
+   the `settings` cache tag, so the next server render carries the new slug/version. A cached page is
+   revalidated in the background, so the very first request for it after activation can still get the
+   previous theme; the one after that gets the new one. An already-open public tab keeps the theme it
+   was rendered with until it navigates — nothing re-fetches on tab focus.
 
 Under the hood, activation calls `switchTheme()` in `backend/src/core/themes.ts`, which writes
 the `template` and `stylesheet` options, publishes the new theme's `theme.json` `layout` to the
