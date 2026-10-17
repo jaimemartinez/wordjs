@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-10-17
+
 ### Added
 
 - **Update a plugin or a theme by uploading a newer zip.** Uploading a zip whose plugin is already
