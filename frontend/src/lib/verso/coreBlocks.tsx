@@ -48,6 +48,7 @@ import type { ChromeMenuItem } from "@/lib/chromeData";
 import MediaPickerModal from "@/components/MediaPickerModal";
 import LinkField from "@/components/blocks/LinkField";
 import { CSSPropertiesControl, type CSSData } from "@/components/blocks/CSSControls";
+import { useEditorTr } from "@/lib/verso/useEditorTr";
 import {
     CategoryField,
     TemplateField,
@@ -156,6 +157,7 @@ function MediaUrlField({ value, onChange, placeholder, remember }: {
     remember?: boolean;
 }) {
     const [isModalOpen, setIsModalOpen] = useState(false);
+    const { tr } = useEditorTr();
     const handle = useVersoPanelHandle();
 
     // `src` + las props derivadas de él, juntas o ninguna. Un `src` que no venga del picker (URL
@@ -194,7 +196,7 @@ function MediaUrlField({ value, onChange, placeholder, remember }: {
                 className="p-2 border rounded text-sm w-full"
                 value={(value as string) || ""}
                 onChange={(e) => commitSrc(e.target.value)}
-                placeholder={placeholder}
+                placeholder={tr(placeholder)}
             />
             <button
                 type="button"

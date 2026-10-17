@@ -8,6 +8,28 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **The Verso editor speaks the admin language everywhere.** With the admin in English the editor still
+  showed Spanish in many places: the mobile header ("Editando · …"), the canvas and navigation labels,
+  the entrance-animation effects, speeds and delays, the device tabs and every section of the
+  appearance panel (background, border and shadow, spacing and size, typography, hover motion), the
+  image and link fields, the list, menu, symbol and featured-image pickers, the interactions panel and
+  its timeline, collaboration status texts and the block palette's catalogue. All of them now go through
+  the editor dictionary in English, Spanish and Portuguese; a new test parses the editor sources and
+  fails on any visible string without a translation.
+
+- **New blocks start with text in the admin language.** A freshly inserted Hero, Button, Text, Form,
+  pricing table and the other core blocks — and the built-in patterns — used to start with the same
+  starter text whatever the language ("Un titular que atrapa" in an English admin). The starter text
+  now follows the admin language; blocks already on a page keep their text.
+
+- **The main editor button shows the published state.** After publishing, with nothing pending, the
+  button reads "Published" (or "Scheduled") with a check mark instead of offering the "Publish" action
+  again.
+
+- **Plugin blocks have readable names.** A plugin's Verso block can declare an optional `label` in
+  `versoComponentDef` / each `versoComponents` entry; without one the editor splits the block id into
+  words ("ReadingList" → "Reading List") instead of showing the raw id. See `documentation/plugins.md`.
+
 - **WordPress import keeps featured images.** `_thumbnail_id` names the attachment's id on the old site;
   it is now remapped to the imported attachment, also when the attachment is listed after the post or was
   matched on a re-run, and a re-run repairs posts an earlier import left pointing at the source id. A

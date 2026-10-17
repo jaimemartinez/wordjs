@@ -51,6 +51,8 @@ interface __PASCAL__VersoProps {
 }
 
 export const versoComponentDef = {
+    // Name shown in the block palette (optional: without it the id is split into words).
+    label: "__NAME__",
     category: "__NAME__",
     fields: {
         title: { type: "text" as const, label: "Title" },

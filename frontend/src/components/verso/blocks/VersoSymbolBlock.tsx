@@ -26,6 +26,7 @@ import { RenderSubtree } from "@/components/content/ContentRenderer";
 import { normalizeIxMotion } from "@/lib/verso/interactions";
 import { symbolsApi, SYMBOL_BLOCK_TYPE } from "@/lib/symbols";
 import type { PublicUiStrings } from "@/lib/public/uiStrings";
+import { useEditorTr } from "@/lib/verso/useEditorTr";
 
 /** Cap de profundidad 1: Symbol jamás se renderiza dentro del subárbol de un Symbol. */
 const SYMBOL_SUBTREE_EXCLUDE: ReadonlySet<string> = new Set([SYMBOL_BLOCK_TYPE]);
@@ -52,6 +53,8 @@ export default function VersoSymbolRender({ symbolId, resolvedSymbolItems, isEdi
     /** Textos de UI del sitio público en su idioma (lib/public/uiStrings), cuando los pinta el renderer público. */
     publicUi?: PublicUiStrings;
 }) {
+    // Solo traduce los avisos de EDICIÓN (cromo del editor); el render público no pinta texto propio.
+    const { tr } = useEditorTr();
     const editing = !!isEditing;
     const id = Number(symbolId) || 0;
     const injected = Array.isArray(resolvedSymbolItems) ? resolvedSymbolItems : null;
@@ -70,10 +73,10 @@ export default function VersoSymbolRender({ symbolId, resolvedSymbolItems, isEdi
     const items = injected ?? (fetched && fetched.id === id ? fetched.items : undefined);
 
     // Avisos solo en edición; el render público de un símbolo roto/vacío no pinta nada.
-    if (!id) return editing ? <div style={noticeStyle}>Elige un símbolo en el panel de propiedades.</div> : null;
-    if (items === undefined) return editing ? <div style={noticeStyle}>Cargando símbolo…</div> : null;
-    if (items === null) return editing ? <div style={noticeStyle}>Este símbolo fue eliminado — elige otro.</div> : null;
-    if (!items.length) return editing ? <div style={noticeStyle}>El símbolo está vacío.</div> : null;
+    if (!id) return editing ? <div style={noticeStyle}>{tr("Elige un símbolo en el panel de propiedades.")}</div> : null;
+    if (items === undefined) return editing ? <div style={noticeStyle}>{tr("Cargando símbolo…")}</div> : null;
+    if (items === null) return editing ? <div style={noticeStyle}>{tr("Este símbolo fue eliminado — elige otro.")}</div> : null;
+    if (!items.length) return editing ? <div style={noticeStyle}>{tr("El símbolo está vacío.")}</div> : null;
 
     return <RenderSubtree items={items} exclude={SYMBOL_SUBTREE_EXCLUDE} motion={normalizeIxMotion(ixMotion)} ui={publicUi} />;
 }
