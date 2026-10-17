@@ -37,6 +37,7 @@
  */
 import React, { useCallback, useId, useMemo, useRef, useState } from "react";
 import MSym from "@/components/editor/MSym";
+import { useEditorTr } from "@/lib/verso/useEditorTr";
 import {
   IX_BREAKPOINTS,
   IX_CLIP_DIRS,
@@ -141,6 +142,7 @@ import {
   IX_STAGGER_FROM_LABELS,
   IX_TARGET_LABELS,
   IX_TRIGGER_LABELS,
+  ixSummary,
   type IxPanelTargetKind,
   type IxScrubSrc,
   type IxPanelTriggerKind,
@@ -149,6 +151,7 @@ import { requestIxPreview, requestIxScrub } from "../canvas/IxCanvasEngine";
 import IxCurveEditor, { ixBezSeed, IX_BEZ_SENTINEL, type IxBez } from "./IxCurveEditor";
 import IxScrubberControl from "./IxScrubberControl";
 import IxTimeline from "./IxTimeline";
+import { localizeIxWarning } from "@/lib/verso/interactions/warningsI18n";
 import VersoFieldControl from "./VersoFieldControl";
 
 const BTN =
@@ -258,6 +261,7 @@ export default function InteractionsControl({
   onScrub,
   stage,
 }: InteractionsControlProps) {
+  const { tr, trf, language } = useEditorTr();
   const titleId = useId();
   const amtId = useId();
   // Referencia ESTABLE: el scrubber la usa como dependencia de su efecto de limpieza, y una función
@@ -308,67 +312,76 @@ export default function InteractionsControl({
   const showOrigin = ORIGIN_PROPS.some((k) => trackProps.has(k));
   const showPersp = PERSP_PROPS.some((k) => trackProps.has(k));
 
-  const presetField: SelectVersoField = { type: "select", options: presetOptions };
+  // Las etiquetas de preajuste (nombres del sistema/sitio, «Ninguna», «Personalizada…») y sus
+  // grupos salen del modelo: se traducen aquí, en el sitio donde se pintan.
+  const presetField: SelectVersoField = {
+    type: "select",
+    options: presetOptions.map((o) => ({
+      ...o,
+      label: tr(o.label),
+      ...(o.group ? { group: tr(o.group) } : {}),
+    })),
+  };
   const triggerField: RadioVersoField = {
     type: "radio",
-    options: TRIGGERS.map((on) => ({ label: IX_TRIGGER_LABELS[on], value: on })),
+    options: TRIGGERS.map((on) => ({ label: tr(IX_TRIGGER_LABELS[on]), value: on })),
   };
   const onceField: RadioVersoField = {
     type: "radio",
     options: [
-      { label: "Una vez", value: true },
-      { label: "Cada vez", value: false },
+      { label: tr("Una vez"), value: true },
+      { label: tr("Cada vez"), value: false },
     ],
   };
   const clickToggleField: RadioVersoField = {
     type: "radio",
     options: [
-      { label: "Se queda", value: false },
-      { label: "Se deshace", value: true },
+      { label: tr("Se queda"), value: false },
+      { label: tr("Se deshace"), value: true },
     ],
   };
   const scrubSrcField: RadioVersoField = {
     type: "radio",
     options: [
-      { label: "El recorrido del bloque", value: "self" },
-      { label: "El scroll de la página", value: "page" },
+      { label: tr("El recorrido del bloque"), value: "self" },
+      { label: tr("El scroll de la página"), value: "page" },
       // C5 — dentro de una sección con «Escena fija», el recorrido del bloque se congela: es la
       // escena la que avanza mientras el contenido se queda quieto.
-      { label: "La escena fija que lo contiene", value: "scene" },
+      { label: tr("La escena fija que lo contiene"), value: "scene" },
     ],
   };
   const pointerAreaField: RadioVersoField = {
     type: "radio",
     options: [
-      { label: "El propio bloque", value: "self" },
-      { label: "Toda la página", value: "page" },
+      { label: tr("El propio bloque"), value: "self" },
+      { label: tr("Toda la página"), value: "page" },
     ],
   };
   // Eje del cursor por pista (P6): con la piel de pestañas del radiogrupo, como el resto.
   const axisField: RadioVersoField = {
     type: "radio",
-    options: AXES.map((a) => ({ label: IX_AXIS_LABELS[a], value: a })),
+    options: AXES.map((a) => ({ label: tr(IX_AXIS_LABELS[a]), value: a })),
   };
   const edgeField: SelectVersoField = {
     type: "select",
-    options: EDGES.map((e) => ({ label: IX_EDGE_LABELS[e], value: e })),
+    options: EDGES.map((e) => ({ label: tr(IX_EDGE_LABELS[e]), value: e })),
   };
   const clipDirField: SelectVersoField = {
     type: "select",
-    options: IX_CLIP_DIRS.map((d) => ({ label: IX_CLIP_DIR_LABELS[d], value: d })),
+    options: IX_CLIP_DIRS.map((d) => ({ label: tr(IX_CLIP_DIR_LABELS[d]), value: d })),
   };
   const originField: SelectVersoField = {
     type: "select",
-    options: IX_ORIGINS.map((o) => ({ label: IX_ORIGIN_LABELS[o], value: o })),
+    options: IX_ORIGINS.map((o) => ({ label: tr(IX_ORIGIN_LABELS[o]), value: o })),
   };
   const staggerFromField: SelectVersoField = {
     type: "select",
-    options: STAGGER_FROMS.map((f) => ({ label: IX_STAGGER_FROM_LABELS[f], value: f })),
+    options: STAGGER_FROMS.map((f) => ({ label: tr(IX_STAGGER_FROM_LABELS[f]), value: f })),
   };
   // Selector de pista (P5), con la piel de pestañas del radiogrupo de VersoFieldControl.
   const trackField: RadioVersoField = {
     type: "radio",
-    options: state.tracks.map((_, i) => ({ label: `Pista ${i + 1}`, value: i })),
+    options: state.tracks.map((_, i) => ({ label: trf("Pista {n}", { n: i + 1 }), value: i })),
   };
   const currentTarget = track?.target.kind;
   const targets: IxPanelTargetKind[] = [
@@ -378,7 +391,7 @@ export default function InteractionsControl({
   ];
   const targetField: RadioVersoField = {
     type: "radio",
-    options: targets.map((kind) => ({ label: IX_TARGET_LABELS[kind], value: kind })),
+    options: targets.map((kind) => ({ label: tr(IX_TARGET_LABELS[kind]), value: kind })),
   };
   const msField = (min: number, max: number, step = 50): NumberVersoField => ({
     type: "number",
@@ -398,7 +411,7 @@ export default function InteractionsControl({
           className="text-xs font-semibold text-[var(--ed-on-surface)] flex items-center gap-1"
         >
           <MSym name="animation" size={14} />
-          Interacción
+          {tr("Interacción")}
         </h4>
         <span className="flex shrink-0 gap-1">
           {/* Con escenario externo, el TRANSPORTE (probar + scrubber) vive en el dock. */}
@@ -408,21 +421,21 @@ export default function InteractionsControl({
                 type="button"
                 className={BTN}
                 disabled={!state.active}
-                title="Reproducir la interacción de este bloque en el lienzo"
-                aria-label="Probar la interacción de este bloque"
+                title={tr("Reproducir la interacción de este bloque en el lienzo")}
+                aria-label={tr("Probar la interacción de este bloque")}
                 onClick={() => (onPreview ? onPreview("block") : requestIxPreview("block"))}
               >
-                <MSym name="play_arrow" size={12} className="align-[-2px]" /> Probar
+                <MSym name="play_arrow" size={12} className="align-[-2px]" /> {tr("Probar")}
               </button>
               <button
                 type="button"
                 className={`${BTN} px-1.5`}
                 disabled={!state.active}
-                title="Reproducir todas las interacciones de la página en el lienzo"
-                aria-label="Probar todas las interacciones de la página"
+                title={tr("Reproducir todas las interacciones de la página en el lienzo")}
+                aria-label={tr("Probar todas las interacciones de la página")}
                 onClick={() => (onPreview ? onPreview("page") : requestIxPreview("page"))}
               >
-                Probar todo
+                {tr("Probar todo")}
               </button>
             </>
           )}
@@ -430,24 +443,25 @@ export default function InteractionsControl({
             type="button"
             className={BTN}
             disabled={state.spec === null}
-            aria-label="Quitar la interacción del bloque"
+            aria-label={tr("Quitar la interacción del bloque")}
             onClick={() => onChange(clearIx())}
           >
-            Quitar
+            {tr("Quitar")}
           </button>
         </span>
       </div>
 
-      {/* Lo que hay puesto, en una línea. `role="status"` = aria-live polite implícito. */}
+      {/* Lo que hay puesto, en una línea. `role="status"` = aria-live polite implícito. El resumen
+          lo compone el modelo (ixSummary): búsqueda de la frase entera. */}
       <p role="status" className="text-[10px] text-[var(--ed-on-surface-variant)] mb-2">
-        {state.summary}
+        {ixSummary(state.presetId, state.presetOk, state.trigger, state.tracks, ixCtx, language)}
       </p>
 
       {/* ── Nivel 1 — preajuste ─────────────────────────────────────── */}
       <VersoFieldControl
         field={presetField}
         name="ix-preset"
-        label="Preajuste"
+        label={tr("Preajuste")}
         value={ixPresetChoice(state)}
         onChange={(v) => onChange(setPresetChoice(value, typeof v === "string" ? v : "", ixCtx))}
       />
@@ -477,7 +491,7 @@ export default function InteractionsControl({
               htmlFor={amtId}
               className="block text-xs font-medium text-[var(--ed-on-surface-variant)] mb-1"
             >
-              Intensidad (×{amt.toFixed(1)})
+              {trf("Intensidad (×{amt})", { amt: amt.toFixed(1) })}
             </label>
             <input
               id={amtId}
@@ -491,14 +505,14 @@ export default function InteractionsControl({
               className="w-full accent-[var(--ed-primary)]"
               onChange={(e) => onChange(setIntensity(value, Number(e.target.value), ixCtx))}
             />
-            <p className={HINT}>Multiplica el movimiento (no la opacidad ni el color).</p>
+            <p className={HINT}>{tr("Multiplica el movimiento (no la opacidad ni el color).")}</p>
           </div>
 
           {/* ── Nivel 2 — disparador y objetivo ─────────────────────── */}
           <VersoFieldControl
             field={triggerField}
             name="ix-trigger"
-            label="Cuándo"
+            label={tr("Cuándo")}
             value={trigger.on}
             onChange={(v) => onChange(setTriggerKind(value, v as IxPanelTriggerKind, ixCtx))}
           />
@@ -508,14 +522,12 @@ export default function InteractionsControl({
               <VersoFieldControl
                 field={onceField}
                 name="ix-once"
-                label="Repetición"
+                label={tr("Repetición")}
                 value={trigger.once !== false}
                 onChange={(v) => onChange(setViewOnce(value, v === true, ixCtx))}
               />
               <p className={HINT}>
-                «Cada vez» avanza y retrocede con el scroll sin una línea de JavaScript. «Una vez» se
-                queda puesta al entrar, y eso el CSS no sabe hacerlo: ese bloque carga el runtime
-                mínimo.
+                {tr("«Cada vez» avanza y retrocede con el scroll sin una línea de JavaScript. «Una vez» se queda puesta al entrar, y eso el CSS no sabe hacerlo: ese bloque carga el runtime mínimo.")}
               </p>
             </>
           )}
@@ -527,7 +539,7 @@ export default function InteractionsControl({
             <VersoFieldControl
               field={clickToggleField}
               name="ix-click-toggle"
-              label="Al segundo clic"
+              label={tr("Al segundo clic")}
               value={trigger.toggle === true}
               onChange={(v) => onChange(setClickToggle(value, v === true, ixCtx))}
             />
@@ -537,7 +549,7 @@ export default function InteractionsControl({
             <VersoFieldControl
               field={msField(0, 3000)}
               name="ix-load-delay"
-              label="Retardo del disparador (ms)"
+              label={tr("Retardo del disparador (ms)")}
               value={trigger.delay ?? 0}
               onChange={(v) => onChange(setLoadDelay(value, typeof v === "number" ? v : 0, ixCtx))}
             />
@@ -548,7 +560,7 @@ export default function InteractionsControl({
               <VersoFieldControl
                 field={scrubSrcField}
                 name="ix-scrub-src"
-                label="Qué scroll manda"
+                label={tr("Qué scroll manda")}
                 value={scrubSrcOf(trigger)}
                 onChange={(v) => onChange(setScrubSrc(value, v as IxScrubSrc, ixCtx))}
               />
@@ -556,16 +568,15 @@ export default function InteractionsControl({
               <VersoFieldControl
                 field={msField(0, IX_POINTER_SMOOTH_MAX, 10)}
                 name="ix-scrub-smooth"
-                label="Suavizado (ms)"
+                label={tr("Suavizado (ms)")}
                 value={trigger.smooth ?? 0}
                 onChange={(v) =>
                   onChange(setScrubSmooth(value, typeof v === "number" ? v : 0, ixCtx))
                 }
               />
-              <p className={HINT}>0 = sin suavizado (exactitud nativa 1:1).</p>
+              <p className={HINT}>{tr("0 = sin suavizado (exactitud nativa 1:1).")}</p>
               <p role="note" className={HINT}>
-                Con suavizado el progreso lo persigue el runtime mínimo en JavaScript: se renuncia
-                al camino puro de CSS en el compositor.
+                {tr("Con suavizado el progreso lo persigue el runtime mínimo en JavaScript: se renuncia al camino puro de CSS en el compositor.")}
               </p>
             </>
           )}
@@ -578,16 +589,19 @@ export default function InteractionsControl({
               <VersoFieldControl
                 field={eventNameField}
                 name="ix-event-name"
-                label="Nombre del evento"
+                label={tr("Nombre del evento")}
                 value={trigger.name}
                 onChange={(v) =>
                   onChange(setEventName(value, typeof v === "string" ? v : "", ixCtx))
                 }
               />
               <p className={HINT}>
-                El evento real del DOM es <code>{IX_EVENT_PREFIX}&lt;nombre&gt;</code>. El nombre
-                es un slug: minúsculas, números y guiones — con uno inválido se conserva el último
-                válido.
+                {tr("El evento real del DOM es")}{" "}
+                <code>
+                  {IX_EVENT_PREFIX}&lt;{tr("nombre")}&gt;
+                </code>
+                .{" "}
+                {tr("El nombre es un slug: minúsculas, números y guiones — con uno inválido se conserva el último válido.")}
               </p>
               <label className={CHECK}>
                 <input
@@ -595,7 +609,7 @@ export default function InteractionsControl({
                   checked={trigger.toggle === true}
                   onChange={(e) => onChange(setEventToggle(value, e.target.checked, ixCtx))}
                 />
-                Cada evento alterna (entra/sale)
+                {tr("Cada evento alterna (entra/sale)")}
               </label>
             </>
           )}
@@ -607,7 +621,7 @@ export default function InteractionsControl({
               <VersoFieldControl
                 field={pointerAreaField}
                 name="ix-pointer-area"
-                label="Qué área sigue el cursor"
+                label={tr("Qué área sigue el cursor")}
                 value={trigger.area === "page" ? "page" : "self"}
                 onChange={(v) =>
                   onChange(setPointerArea(value, v === "page" ? "page" : "self", ixCtx))
@@ -616,7 +630,7 @@ export default function InteractionsControl({
               <VersoFieldControl
                 field={msField(0, IX_POINTER_SMOOTH_MAX, 10)}
                 name="ix-pointer-smooth"
-                label="Suavizado (ms)"
+                label={tr("Suavizado (ms)")}
                 value={trigger.smooth ?? IX_POINTER_SMOOTH_DEFAULT}
                 onChange={(v) =>
                   onChange(
@@ -628,10 +642,9 @@ export default function InteractionsControl({
                   )
                 }
               />
-              <p className={HINT}>0 = sigue al cursor sin retraso.</p>
+              <p className={HINT}>{tr("0 = sigue al cursor sin retraso.")}</p>
               <p role="note" className={HINT}>
-                El puntero posiciona la animación (el paso 50 es el reposo). Inerte con
-                reduced-motion y en pantallas táctiles.
+                {tr("El puntero posiciona la animación (el paso 50 es el reposo). Inerte con reduced-motion y en pantallas táctiles.")}
               </p>
             </>
           )}
@@ -639,7 +652,7 @@ export default function InteractionsControl({
           {/* ── Tramo del recorrido (scrub, o view que entra y sale) ── */}
           {range && (
             <fieldset className={GROUP}>
-              <legend className={LEGEND}>Tramo del recorrido</legend>
+              <legend className={LEGEND}>{tr("Tramo del recorrido")}</legend>
               {(["from", "to"] as const).map((which) => (
                 <div key={which} className="flex gap-2">
                   {/* Con el scroll de la página las ARISTAS no significan nada (el compilador emite
@@ -649,7 +662,7 @@ export default function InteractionsControl({
                       <VersoFieldControl
                         field={edgeField}
                         name={`ix-range-${which}-at`}
-                        label={which === "from" ? "Desde" : "Hasta"}
+                        label={tr(which === "from" ? "Desde" : "Hasta")}
                         value={range[which].at}
                         onChange={(v) =>
                           onChange(setRangeEdge(value, which, { at: v as IxEdgeName }, ixCtx))
@@ -661,7 +674,7 @@ export default function InteractionsControl({
                     <VersoFieldControl
                       field={{ type: "number", min: 0, max: 100, step: 5 }}
                       name={`ix-range-${which}-pct`}
-                      label={which === "from" ? "Desde (%)" : "Hasta (%)"}
+                      label={tr(which === "from" ? "Desde (%)" : "Hasta (%)")}
                       value={range[which].pct}
                       onChange={(v) =>
                         onChange(
@@ -683,7 +696,7 @@ export default function InteractionsControl({
                   className={`${BTN} w-full`}
                   onClick={() => onChange(resetRange(value, ixCtx))}
                 >
-                  Restablecer tramo
+                  {tr("Restablecer tramo")}
                 </button>
               )}
             </fieldset>
@@ -694,7 +707,7 @@ export default function InteractionsControl({
               puede llevar, así que se ofrece también enlazado. Marcado = corre en ese dispositivo
               (el dato guarda lo contrario: la lista `off`). */}
           <fieldset className={GROUP}>
-            <legend className={LEGEND}>Dónde corre</legend>
+            <legend className={LEGEND}>{tr("Dónde corre")}</legend>
             <div className="flex flex-wrap items-center gap-x-3">
               {IX_BREAKPOINTS.map((bp) => (
                 <label key={bp} className={CHECK}>
@@ -703,13 +716,12 @@ export default function InteractionsControl({
                     checked={!offList.includes(bp)}
                     onChange={(e) => onChange(setBreakpointOff(value, bp, !e.target.checked, ixCtx))}
                   />
-                  {IX_BREAKPOINT_LABELS[bp]}
+                  {tr(IX_BREAKPOINT_LABELS[bp])}
                 </label>
               ))}
             </div>
             <p className={`${HINT} mt-0`}>
-              Desmarcar los tres es quitarla, no acotarla: el modelo descarta ese gating y la
-              interacción sigue corriendo en todas partes.
+              {tr("Desmarcar los tres es quitarla, no acotarla: el modelo descarta ese gating y la interacción sigue corriendo en todas partes.")}
             </p>
           </fieldset>
 
@@ -718,14 +730,13 @@ export default function InteractionsControl({
               role="note"
               className="mb-3 rounded border border-dashed border-[var(--ed-outline-variant)] px-2 py-1.5 text-[11px] text-[var(--ed-on-surface-variant)]"
             >
-              Los pasos vienen del preajuste y se comparten con los demás bloques que lo usan.
-              Editarlo en Ajustes los cambia todos, sin tocar el contenido de ninguna página.
+              {tr("Los pasos vienen del preajuste y se comparten con los demás bloques que lo usan. Editarlo en Ajustes los cambia todos, sin tocar el contenido de ninguna página.")}
               <button
                 type="button"
                 className={`${BTN} mt-1.5 w-full`}
                 onClick={() => onChange(unlinkPreset(value, ixCtx))}
               >
-                Desvincular y editar solo este bloque
+                {tr("Desvincular y editar solo este bloque")}
               </button>
             </div>
           ) : (
@@ -737,7 +748,7 @@ export default function InteractionsControl({
                 <VersoFieldControl
                   field={trackField}
                   name="ix-track"
-                  label="Pista"
+                  label={tr("Pista")}
                   value={active}
                   onChange={(v) => setTrackSel(typeof v === "number" ? v : 0)}
                 />
@@ -747,27 +758,27 @@ export default function InteractionsControl({
                   <button
                     type="button"
                     className={`${BTN} flex-1`}
-                    title="Añadir una pista nueva (nace neutra: no mueve nada hasta que la edites)"
+                    title={tr("Añadir una pista nueva (nace neutra: no mueve nada hasta que la edites)")}
                     onClick={() => {
                       onChange(addTrack(value, ixCtx));
                       // La pista nueva queda seleccionada: su índice es el recuento ANTES de añadir.
                       setTrackSel(state.tracks.length);
                     }}
                   >
-                    + Añadir pista
+                    {tr("+ Añadir pista")}
                   </button>
                 )}
                 {state.tracks.length > 1 && (
                   <button
                     type="button"
                     className={`${BTN} flex-1`}
-                    aria-label={`Quitar la pista ${active + 1}`}
+                    aria-label={trf("Quitar la pista {n}", { n: active + 1 })}
                     onClick={() => {
                       onChange(removeTrack(value, active, ixCtx));
                       setTrackSel(0);
                     }}
                   >
-                    Quitar pista
+                    {tr("Quitar pista")}
                   </button>
                 )}
               </div>
@@ -775,16 +786,14 @@ export default function InteractionsControl({
               <VersoFieldControl
                 field={targetField}
                 name="ix-target"
-                label="Qué se mueve"
+                label={tr("Qué se mueve")}
                 value={track.target.kind}
                 onChange={(v) => onChange(setTargetKind(value, v as IxPanelTargetKind, ixCtx, active))}
               />
 
               {track.target.kind === "words" && (
                 <p className={HINT}>
-                  El texto se parte en palabras y el bloque conserva su lectura completa para los
-                  lectores de pantalla. No se parte si lleva formato (negritas, enlaces) o si pasa de{" "}
-                  {IX_MAX_WORDS} palabras: entonces se ve igual que siempre, sin movimiento.
+                  {trf("El texto se parte en palabras y el bloque conserva su lectura completa para los lectores de pantalla. No se parte si lleva formato (negritas, enlaces) o si pasa de {n} palabras: entonces se ve igual que siempre, sin movimiento.", { n: IX_MAX_WORDS })}
                 </p>
               )}
 
@@ -793,17 +802,14 @@ export default function InteractionsControl({
                   callárselo al autor sería dejarle buscar un fallo que no existe. */}
               {track.target.kind === "words" && !supportsWords && (
                 <p role="note" className={HINT}>
-                  Este bloque no sabe partir su texto en palabras: con este objetivo no se mueve
-                  nada. Elige otro objetivo, o usa un bloque que lo declare (Título o Cita).
+                  {tr("Este bloque no sabe partir su texto en palabras: con este objetivo no se mueve nada. Elige otro objetivo, o usa un bloque que lo declare (Título o Cita).")}
                 </p>
               )}
 
               {/* ── Honestidad (P12): el trazo SVG exige el contrato del MARKUP del bloque. */}
               {track.target.kind === "svg" && (
                 <p className={HINT}>
-                  Mueve el trazo de los SVG del bloque marcados con la clase wjs-ixd y{" "}
-                  pathLength=&quot;1&quot; (bloques propios o de plugins). Si el bloque no tiene
-                  ninguno, no se anima nada.
+                  {tr('Mueve el trazo de los SVG del bloque marcados con la clase wjs-ixd y pathLength="1" (bloques propios o de plugins). Si el bloque no tiene ninguno, no se anima nada.')}
                 </p>
               )}
 
@@ -817,9 +823,11 @@ export default function InteractionsControl({
                   label={
                     // Con `total` los mismos ms dejan de ser "entre hermanos" y pasan a ser el
                     // tiempo del primero al último: la etiqueta dice lo que el número significa.
-                    track.stagger?.total === true
-                      ? "Tiempo total (ms)"
-                      : "Escalonado entre hermanos (ms)"
+                    tr(
+                      track.stagger?.total === true
+                        ? "Tiempo total (ms)"
+                        : "Escalonado entre hermanos (ms)",
+                    )
                   }
                   value={track.stagger?.each ?? 0}
                   onChange={(v) =>
@@ -836,11 +844,11 @@ export default function InteractionsControl({
                 (track.target.kind === "children" || track.target.kind === "words") &&
                 track.stagger && (
                   <fieldset className={GROUP}>
-                    <legend className={LEGEND}>Escalonado</legend>
+                    <legend className={LEGEND}>{tr("Escalonado")}</legend>
                     <VersoFieldControl
                       field={staggerFromField}
                       name="ix-stagger-from"
-                      label="Orden"
+                      label={tr("Orden")}
                       value={track.stagger.from ?? "start"}
                       readOnly={track.stagger.cols != null}
                       onChange={(v) =>
@@ -855,7 +863,7 @@ export default function InteractionsControl({
                           onChange(setStaggerTotal(value, e.target.checked, ixCtx, active))
                         }
                       />
-                      Repartir como tiempo total
+                      {tr("Repartir como tiempo total")}
                     </label>
                     <div className="flex flex-wrap items-end gap-x-2">
                       <label className={CHECK}>
@@ -873,7 +881,7 @@ export default function InteractionsControl({
                             )
                           }
                         />
-                        En rejilla
+                        {tr("En rejilla")}
                       </label>
                       {track.stagger.cols != null && (
                         <div className="min-w-16 flex-1">
@@ -885,7 +893,7 @@ export default function InteractionsControl({
                               step: 1,
                             }}
                             name="ix-stagger-cols"
-                            label="Columnas"
+                            label={tr("Columnas")}
                             value={track.stagger.cols}
                             onChange={(v) =>
                               onChange(
@@ -912,12 +920,12 @@ export default function InteractionsControl({
                   <VersoFieldControl
                     field={axisField}
                     name="ix-axis"
-                    label="Eje del cursor"
+                    label={tr("Eje del cursor")}
                     value={track.axis ?? "x"}
                     onChange={(v) => onChange(setTrackAxis(value, v === "y" ? "y" : "x", ixCtx, active))}
                   />
                   <p className={HINT}>
-                    Dos pistas, una por eje, componen el efecto 2D (tilt/parallax).
+                    {tr("Dos pistas, una por eje, componen el efecto 2D (tilt/parallax).")}
                   </p>
                 </>
               )}
@@ -928,7 +936,7 @@ export default function InteractionsControl({
                     <VersoFieldControl
                       field={msField(100, 3000)}
                       name="ix-dur"
-                      label="Duración (ms)"
+                      label={tr("Duración (ms)")}
                       value={track.dur ?? 600}
                       onChange={(v) =>
                         onChange(setDuration(value, typeof v === "number" ? v : 600, ixCtx, active))
@@ -939,7 +947,7 @@ export default function InteractionsControl({
                     <VersoFieldControl
                       field={msField(0, 3000)}
                       name="ix-delay"
-                      label="Retardo (ms)"
+                      label={tr("Retardo (ms)")}
                       value={track.delay ?? 0}
                       onChange={(v) =>
                         onChange(setDelay(value, typeof v === "number" ? v : 0, ixCtx, active))
@@ -955,13 +963,13 @@ export default function InteractionsControl({
                   la clave). */}
               {isTimed(trigger.on) && (
                 <fieldset className={GROUP}>
-                  <legend className={LEGEND}>Reproducción</legend>
+                  <legend className={LEGEND}>{tr("Reproducción")}</legend>
                   <div className="flex flex-wrap items-end gap-x-2">
                     <div className="min-w-16 flex-1">
                       <VersoFieldControl
                         field={{ type: "number", min: 1, max: IX_REPEAT_MAX, step: 1 }}
                         name="ix-repeat"
-                        label="Repetición"
+                        label={tr("Repetición")}
                         value={infinite ? undefined : repeatCount}
                         readOnly={infinite}
                         onChange={(v) =>
@@ -977,7 +985,7 @@ export default function InteractionsControl({
                           onChange(setRepeat(value, e.target.checked ? "inf" : 1, ixCtx, active))
                         }
                       />
-                      Infinita
+                      {tr("Infinita")}
                     </label>
                     <label className={CHECK}>
                       <input
@@ -987,7 +995,7 @@ export default function InteractionsControl({
                           onChange(setAlternate(value, e.target.checked, ixCtx, active))
                         }
                       />
-                      Ida y vuelta
+                      {tr("Ida y vuelta")}
                     </label>
                   </div>
                 </fieldset>
@@ -998,7 +1006,7 @@ export default function InteractionsControl({
                 <VersoFieldControl
                   field={clipDirField}
                   name="ix-clip-dir"
-                  label="Revelado"
+                  label={tr("Revelado")}
                   value={track.clipDir ?? "right"}
                   onChange={(v) => onChange(setClipDir(value, v as IxClipDir, ixCtx, active))}
                 />
@@ -1007,7 +1015,7 @@ export default function InteractionsControl({
                 <VersoFieldControl
                   field={originField}
                   name="ix-origin"
-                  label="Origen del giro y la escala"
+                  label={tr("Origen del giro y la escala")}
                   value={track.origin ?? "center"}
                   onChange={(v) => onChange(setOrigin(value, v as IxOrigin, ixCtx, active))}
                 />
@@ -1016,7 +1024,7 @@ export default function InteractionsControl({
                 <VersoFieldControl
                   field={{ type: "number", min: IX_PERSP_MIN, max: IX_PERSP_MAX, step: 50 }}
                   name="ix-persp"
-                  label="Perspectiva 3D (px)"
+                  label={tr("Perspectiva 3D (px)")}
                   value={track.persp ?? IX_PERSP_DEFAULT}
                   onChange={(v) =>
                     onChange(
@@ -1031,13 +1039,14 @@ export default function InteractionsControl({
           {/* ── Nivel 3 — los pasos ─────────────────────────────────── */}
           <details className="mt-1 rounded border border-[var(--ed-outline-variant)]">
             <summary className="cursor-pointer px-2 py-1.5 text-[11px] font-medium text-[var(--ed-on-surface-variant)]">
-              Editar pasos ({track.steps.length})
-              {state.tracks.length > 1 ? ` — pista ${active + 1}` : ""}
+              {state.tracks.length > 1
+                ? trf("Editar pasos ({n}) — pista {t}", { n: track.steps.length, t: active + 1 })
+                : trf("Editar pasos ({n})", { n: track.steps.length })}
             </summary>
             <div className="border-t border-[var(--ed-outline-variant)] p-2">
               {linked && (
                 <p className={`${HINT} mb-2 mt-0`}>
-                  Solo lectura: este bloque usa un preajuste. Desvincúlalo para editar sus pasos.
+                  {tr("Solo lectura: este bloque usa un preajuste. Desvincúlalo para editar sus pasos.")}
                 </p>
               )}
               {/* La LÍNEA DE TIEMPO (P9): un carril por pista sobre una escala compartida (ms con
@@ -1089,13 +1098,12 @@ export default function InteractionsControl({
                   disabled={track.steps.length >= IX_MAX_STEPS}
                   onClick={() => onChange(addStep(value, ixCtx, active))}
                 >
-                  + Añadir paso
+                  {tr("+ Añadir paso")}
                 </button>
               )}
               {track.steps.length >= IX_MAX_STEPS && (
                 <p className={HINT}>
-                  Máximo {IX_MAX_STEPS} pasos: una animación con siete puntos de control ya no es una
-                  animación, es un programa.
+                  {trf("Máximo {n} pasos: una animación con siete puntos de control ya no es una animación, es un programa.", { n: IX_MAX_STEPS })}
                 </p>
               )}
             </div>
@@ -1104,13 +1112,13 @@ export default function InteractionsControl({
           {state.warnings.length > 0 && (
             <ul
               role="note"
-              aria-label="Avisos de la interacción"
+              aria-label={tr("Avisos de la interacción")}
               className="mt-2 space-y-1 text-[10px] text-[var(--ed-on-surface-variant)]"
             >
               {state.warnings.map((w, i) => (
                 <li key={i} className="flex gap-1">
                   <MSym name="info" size={11} className="mt-px shrink-0" />
-                  <span>{w}</span>
+                  <span>{localizeIxWarning(w, language)}</span>
                 </li>
               ))}
             </ul>
@@ -1153,24 +1161,29 @@ function StepRow({
   onTint,
   onRemove,
 }: StepRowProps) {
+  const { tr, trf } = useEditorTr();
   const isFirst = index === 0;
   const isLast = index === total - 1;
   const free = availableProps(step);
   const used = usedProps(step);
-  const label = isFirst ? "Inicio (0 %)" : isLast ? "Final (100 %)" : `Paso ${index + 1}`;
+  const label = isFirst
+    ? tr("Inicio (0 %)")
+    : isLast
+      ? tr("Final (100 %)")
+      : trf("Paso {n}", { n: index + 1 });
 
   // «Curva propia…» es un sentinel de UI (IX_BEZ_SENTINEL), no un IxEase: elegirlo siembra un
   // `bez` con el equivalente de la curva que había puesta, y a partir de ahí manda el dibujo.
   const easeField: SelectVersoField = {
     type: "select",
     options: [
-      ...EASES.map((e) => ({ label: IX_EASE_LABELS[e], value: e as string })),
-      { label: "Curva propia…", value: IX_BEZ_SENTINEL },
+      ...EASES.map((e) => ({ label: tr(IX_EASE_LABELS[e]), value: e as string })),
+      { label: tr("Curva propia…"), value: IX_BEZ_SENTINEL },
     ],
   };
   const addField: SelectVersoField = {
     type: "select",
-    options: free.map((k) => ({ label: IX_PROP_LABELS[k], value: k })),
+    options: free.map((k) => ({ label: tr(IX_PROP_LABELS[k]), value: k })),
   };
 
   return (
@@ -1181,7 +1194,7 @@ function StepRow({
           <button
             type="button"
             className={BTN}
-            aria-label={`Quitar el paso ${index + 1}`}
+            aria-label={trf("Quitar el paso {n}", { n: index + 1 })}
             onClick={onRemove}
           >
             ×
@@ -1196,7 +1209,7 @@ function StepRow({
         <VersoFieldControl
           field={{ type: "number", min: 1, max: 99, step: 1 }}
           name={`ix-step-at-${index}`}
-          label="Momento (%)"
+          label={tr("Momento (%)")}
           value={step.at}
           readOnly={readOnly}
           onChange={(v) => onAt(typeof v === "number" ? v : step.at)}
@@ -1208,7 +1221,7 @@ function StepRow({
           <VersoFieldControl
             field={easeField}
             name={`ix-step-ease-${index}`}
-            label="Curva hasta el siguiente"
+            label={tr("Curva hasta el siguiente")}
             value={step.bez ? IX_BEZ_SENTINEL : (step.ease ?? "out")}
             readOnly={readOnly}
             onChange={(v) => (v === IX_BEZ_SENTINEL ? onBez(ixBezSeed(step.ease)) : onEase(v as IxEase))}
@@ -1230,7 +1243,7 @@ function StepRow({
             {IX_COLOR_PROPS.has(key) ? (
               // Colores: mismo label/id que una fila numérica, con el swatch nativo. Sin unidad.
               <StepColorRow
-                label={IX_PROP_LABELS[key]}
+                label={tr(IX_PROP_LABELS[key])}
                 value={step.set[key] ?? IX_PROP_NEUTRAL[key]}
                 token={step.tint?.[key as IxColorPropKey]}
                 readOnly={readOnly}
@@ -1241,7 +1254,7 @@ function StepRow({
               <VersoFieldControl
                 field={{ type: "number", ...IX_PROP_INPUT[key] }}
                 name={`ix-step-${index}-${key}`}
-                label={`${IX_PROP_LABELS[key]}${IX_PROP_UNITS[key] ? ` (${IX_PROP_UNITS[key]})` : ""}`}
+                label={`${tr(IX_PROP_LABELS[key])}${IX_PROP_UNITS[key] ? ` (${IX_PROP_UNITS[key]})` : ""}`}
                 value={step.set[key]}
                 readOnly={readOnly}
                 onChange={(v) => onProp(key, typeof v === "number" ? v : undefined)}
@@ -1252,7 +1265,7 @@ function StepRow({
             <button
               type="button"
               className={`${BTN} mb-3`}
-              aria-label={`Quitar ${IX_PROP_LABELS[key]} del paso ${index + 1}`}
+              aria-label={trf("Quitar {prop} del paso {n}", { prop: tr(IX_PROP_LABELS[key]), n: index + 1 })}
               onClick={() => onProp(key, undefined)}
             >
               ×
@@ -1265,7 +1278,7 @@ function StepRow({
         <VersoFieldControl
           field={addField}
           name={`ix-step-add-${index}`}
-          label="Añadir propiedad"
+          label={tr("Añadir propiedad")}
           value={undefined}
           onChange={(v) => onProp(v as IxPropKey, IX_PROP_NEUTRAL[v as IxPropKey])}
         />
@@ -1317,6 +1330,7 @@ const IX_TINT_NONE = "";
  * `setStepTint` no borra el número.
  */
 function StepColorRow({ label, value, token, readOnly, onChange, onToken }: StepColorRowProps) {
+  const { tr, trf } = useEditorTr();
   const id = useId();
   const selId = `${id}-tok`;
   return (
@@ -1332,7 +1346,7 @@ function StepColorRow({ label, value, token, readOnly, onChange, onToken }: Step
         <input
           id={id}
           type="color"
-          aria-label={`${label}: color propio`}
+          aria-label={trf("{label}: color propio", { label })}
           className="h-8 w-12 shrink-0 cursor-pointer rounded border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-high)] p-0.5 disabled:cursor-default disabled:opacity-40"
           value={intToHex(value)}
           disabled={readOnly || token !== undefined}
@@ -1340,7 +1354,7 @@ function StepColorRow({ label, value, token, readOnly, onChange, onToken }: Step
         />
         <select
           id={selId}
-          aria-label={`${label}: color del tema`}
+          aria-label={trf("{label}: color del tema", { label })}
           className="h-8 min-w-0 flex-1 rounded border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-high)] px-1 text-xs text-[var(--ed-on-surface)] disabled:cursor-default disabled:opacity-40"
           value={token ?? IX_TINT_NONE}
           disabled={readOnly}
@@ -1348,10 +1362,10 @@ function StepColorRow({ label, value, token, readOnly, onChange, onToken }: Step
             onToken(e.target.value === IX_TINT_NONE ? undefined : (e.target.value as IxColorToken))
           }
         >
-          <option value={IX_TINT_NONE}>Color propio</option>
+          <option value={IX_TINT_NONE}>{tr("Color propio")}</option>
           {IX_COLOR_TOKENS.map((t) => (
             <option key={t} value={t}>
-              Del tema: {IX_COLOR_TOKEN_LABELS[t]}
+              {trf("Del tema: {name}", { name: tr(IX_COLOR_TOKEN_LABELS[t]) })}
             </option>
           ))}
         </select>

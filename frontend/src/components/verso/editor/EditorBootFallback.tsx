@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import "@/components/editor-theme.css";
+import { useEditorTr } from "@/lib/verso/useEditorTr";
 
 const STUCK_AFTER_MS = 15000;
 
@@ -14,11 +15,12 @@ const STUCK_AFTER_MS = 15000;
  * consumidor, sin cambiar una sola clase.
  */
 export function EditorSkeleton() {
+    const { tr } = useEditorTr();
     return (
         <div
             className="verso-container h-full min-h-[100dvh] w-full overflow-hidden flex flex-col bg-[var(--ed-surface-container-low)]"
             aria-busy="true"
-            aria-label="Cargando editor"
+            aria-label={tr("Cargando editor")}
         >
             {/* Header */}
             <div className="verso-header h-14 xl:h-16 flex-shrink-0 border-b border-[var(--ed-outline-variant)] flex items-center justify-between px-3 xl:px-5">
@@ -85,6 +87,7 @@ export function EditorSkeleton() {
  * estado que este editor no se permite. Presentación pura: no toca datos.
  */
 export default function EditorBootFallback() {
+  const { tr } = useEditorTr();
   const [stuck, setStuck] = useState(false);
   useEffect(() => {
     const t = setTimeout(() => setStuck(true), STUCK_AFTER_MS);
@@ -98,14 +101,14 @@ export default function EditorBootFallback() {
         <div className="absolute inset-x-0 bottom-[calc(var(--ed-mobile-nav-height)+16px)] xl:bottom-6 px-3 flex justify-center pointer-events-none">
           <div className="pointer-events-auto flex items-center gap-3 rounded-lg border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-high)] px-4 py-2 shadow-xl">
             <span className="text-[13px] text-[var(--ed-on-surface-variant)]">
-              El editor está tardando más de lo normal.
+              {tr("El editor está tardando más de lo normal.")}
             </span>
             <button
               type="button"
               onClick={() => window.location.reload()}
               className="min-h-11 px-2 text-[13px] font-semibold text-[var(--ed-primary)] hover:underline"
             >
-              Recargar
+              {tr("Recargar")}
             </button>
           </div>
         </div>

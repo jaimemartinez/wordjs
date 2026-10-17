@@ -2,6 +2,7 @@
 
 import React from "react";
 import MSym from "../editor/MSym";
+import { useEditorTr } from "@/lib/verso/useEditorTr";
 import { AnimSpec, AnimationControl, animClasses, useEntranceAnimation } from "./AnimationField";
 import { Appearance, AppearanceControl, appearanceToStyle } from "./AppearanceField";
 
@@ -29,6 +30,7 @@ const DEVICES: { key: keyof Hide; icon: string; label: string }[] = [
 ];
 
 export function VisibilityControl({ value, onChange }: { value: Hide; onChange: (v: Hide) => void }) {
+    const { tr, trf } = useEditorTr();
     const hide = value || {};
     return (
         // wjs-f-hide — marker for the properties panel's AVANZADO tab filter (see editor-theme.css).
@@ -40,7 +42,7 @@ export function VisibilityControl({ value, onChange }: { value: Hide; onChange: 
                         <button
                             key={d.key}
                             type="button"
-                            title={hidden ? `Oculto en ${d.label} — clic para mostrar` : `Visible en ${d.label} — clic para ocultar`}
+                            title={trf(hidden ? "Oculto en {device} — clic para mostrar" : "Visible en {device} — clic para ocultar", { device: tr(d.label) })}
                             onClick={() => onChange({ ...hide, [d.key]: !hidden })}
                             className={`flex-1 flex flex-col items-center gap-0.5 py-1.5 rounded text-[10px] font-medium transition ${
                                 hidden
@@ -49,13 +51,13 @@ export function VisibilityControl({ value, onChange }: { value: Hide; onChange: 
                             }`}
                         >
                             <MSym name={hidden ? "visibility_off" : d.icon} size={16} />
-                            {d.label}
+                            {tr(d.label)}
                         </button>
                     );
                 })}
             </div>
             <p className="text-[10px] text-[var(--ed-outline)] mt-1.5">
-                Los bloques ocultos desaparecen también en la vista previa del dispositivo del editor.
+                {tr("Los bloques ocultos desaparecen también en la vista previa del dispositivo del editor.")}
             </p>
         </div>
     );

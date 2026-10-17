@@ -13,6 +13,7 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   is English, Spanish or Portuguese, instead of always starting in Spanish. An English site no longer
   shows Spanish Backups or Marketplace screens next to English ones. A language picked in the sidebar still
   wins, on every site.
+
 - **Bundled theme descriptions are translatable.** `theme.json` accepts
   `"translations": { "<lang>": { "description": "…" } }`; the admin shows the description for its own
   language and falls back to `description`. The four bundled themes ship English descriptions with Spanish
@@ -24,21 +25,84 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   install dialog were hard-coded Spanish ("Cargando el catálogo…", "Instalar", "Bloque …", "Permisos que
   solicitará", "Cancelar", the source line and the toasts); they are translated now, including the
   catalog's categories and the review badges. The broken-plugin card and its cleanup messages too.
+
 - **The delete-plugin dialog is one sentence.** It read "…This action cannot be undone. Reading List?";
   the plugin's name now sits inside the question.
+
 - **Restoring a backup says it worked and what to do next.** The page reloaded a second after the restore,
   throwing away the only feedback; it now stays on a success notice that tells the admin to restart the
   WordJS service, with a reload button.
+
 - **Webhook delivery times are local.** The delivery log showed UTC database timestamps as if they were
   local, next to a "Last delivery" in local time.
+
 - **Network → Create site shows why it failed.** A failed create (a server error included) now leaves an
   error on the form as well as a toast.
+
 - **Media storage shows the server's advice about the public URL.** Non-blocking `warnings` from the media
   storage API (a URL that repeats the key prefix, misses the bucket, or would be mixed content) are listed
   under the fields, a failed public check in "Test connection" explains what to try, and the endpoint
   hints name Garage and SeaweedFS next to MinIO.
+
 - **AI agents → New connection is no longer cramped.** Below 1536 px the form sits above the connection
   list instead of in a narrow column that cut its labels at 1280 px.
+
+- **The Verso editor speaks the admin language everywhere.** With the admin in English the editor still
+  showed Spanish in many places: the mobile header ("Editando · …"), the canvas and navigation labels,
+  the entrance-animation effects, speeds and delays, the device tabs and every section of the
+  appearance panel (background, border and shadow, spacing and size, typography, hover motion), the
+  image and link fields, the list, menu, symbol and featured-image pickers, the interactions panel and
+  its timeline, collaboration status texts and the block palette's catalogue. All of them now go through
+  the editor dictionary in English, Spanish and Portuguese; a new test parses the editor sources and
+  fails on any visible string without a translation.
+
+- **New blocks start with text in the admin language.** A freshly inserted Hero, Button, Text, Form,
+  pricing table and the other core blocks — and the built-in patterns — used to start with the same
+  starter text whatever the language ("Un titular que atrapa" in an English admin). The starter text
+  now follows the admin language; blocks already on a page keep their text.
+
+- **The main editor button shows the published state.** After publishing, with nothing pending, the
+  button reads "Published" (or "Scheduled") with a check mark instead of offering the "Publish" action
+  again.
+
+- **Plugin blocks have readable names.** A plugin's Verso block can declare an optional `label` in
+  `versoComponentDef` / each `versoComponents` entry; without one the editor splits the block id into
+  words ("ReadingList" → "Reading List") instead of showing the raw id. See `documentation/plugins.md`.
+
+- **WordPress import keeps featured images.** `_thumbnail_id` names the attachment's id on the old site;
+  it is now remapped to the imported attachment, also when the attachment is listed after the post or was
+  matched on a re-run, and a re-run repairs posts an earlier import left pointing at the source id. A
+  reference that resolves to no imported attachment is dropped instead of naming an unrelated row.
+
+- **Imported comments keep their dates.** `wp:comment_date` / `wp:comment_date_gmt` are restored instead of
+  the import time.
+
+- **Re-importing content re-links menus.** When a menu is matched on a re-run, an item whose page, post or
+  term no longer exists (deleted and imported again under a new id) is re-pointed at the re-imported copy;
+  items whose target still exists, including ones edited by hand, are left alone. The summary reports them
+  as `menus.items.relinked`.
+
+- **Public dates follow the site language.** Post dates on single posts, the home page and search results,
+  and comment dates, are formatted in the site's language (`WPLANG`, the same value as `<html lang>`)
+  instead of the visitor's browser or the server's locale, so an English site no longer shows `2/3/2024`
+  for 2 March to a Spanish reader.
+
+- **A freshly installed site runs cron and outgoing webhooks without a restart.** The process that
+  finished the install wizard (or `POST /api/v1/setup/install`) had booted in setup mode, and the boot
+  starts cron, the coherence and cluster buses, the webhook dispatcher and the content outbox only on an
+  installed site. Until the first restart, webhooks delivered only the manual test ping (no post,
+  comment, term or settings event was ever queued) and scheduled posts were not published. The install
+  now starts these services in the running process, as the boot does (`core/runtime-services`).
+
+- **Release bundles no longer include a stray test backup in `backend/backups/`.** The 2.6.0 bundle
+  carried a backup left over from a local test run (a throwaway test database, no site data), and
+  `npx create-wordjs upgrade` copied it into the upgraded site, where it listed under Admin → Settings →
+  Backups. If a site upgraded to 2.6.0 shows a backup dated 2026-10-15 that it did not create, delete it
+  from that page; do not restore it. The packager now excludes `backend/backups/` by name,
+  `.gitignore` covers it, and CI fails if the repository tracks a backup or a database file outside test
+  fixtures or if a built bundle contains one. `create-wordjs upgrade` also treats `backend/backups/`
+  as site state, like `backend/data/` and `backend/uploads/`: it never adds to or replaces the site's
+  own backups.
 
 ## [2.6.0] - 2026-10-16
 
