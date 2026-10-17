@@ -80,7 +80,8 @@ With this grant it is offered these tools:
 It finds *How we brew a pour-over* and creates *Cold brew at home* as a **draft**. Open
 **Admin → Posts** to see the draft and publish it yourself if you like it. The agent has no
 `publish_content` tool, because **Publish** was not granted. If it tries to call that tool anyway,
-the call fails. Nothing it can do deletes content, or touches users, plugins, themes or settings.
+the call fails with `This agent connection has not been granted content:publish. Ask a site
+administrator.` Nothing it can do deletes content, or touches users, plugins, themes or settings.
 
 Everything a tool returns is marked as content written by people, so the agent should treat it as
 data, not instructions. The protection does not depend on the model behaving, though: the grant is
@@ -92,7 +93,9 @@ On the connection, **Audit trail** lists every event:
 
 - `agent.create` and `agent.grant`, showing what was requested and what was granted;
 - one `agent.write` row per write. For example: `tool=create_draft objectType=post objectId=25
-  httpStatus=201 ok=true status=draft`.
+  httpStatus=201 ok=true status=draft`;
+- one `agent.denied` row per refused call, naming the tool and the missing grant. For example:
+  `tool=publish_content needs=content:publish`.
 
 To cut the agent off, click **Revoke** and confirm. It takes effect immediately: the next request with
 that token gets `Invalid, expired or revoked agent token.` Revoking can't be undone. Changing or
