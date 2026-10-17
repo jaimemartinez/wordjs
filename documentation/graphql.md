@@ -94,7 +94,10 @@ type Query {
 `ContentNode` carries the REST post fields (`id`, `type`, `slug`, `status`, `title`, `excerpt`, `content`,
 dates, `link`, `protected`, `menuOrder`, `language`, `translations`, `meta`, …) plus `author`,
 `featuredMedia { id url path title mediaItem }`, `categories`, `tags`, `parent` and a `comments`
-connection. `Term` has a `contentNodes` connection for its category/tag archive. Introspect the schema in
+connection. `link` is the canonical public URL (`<siteUrl>/<slug>` for posts and pages, as REST answers it).
+`posts(status:)` follows REST: an anonymous caller asking for `draft`, `pending`, `private` or `future` gets
+an empty connection (`totalCount: 0`), and `any` lists the published entries. `Term` has a `contentNodes`
+connection for its category/tag archive. Introspect the schema in
 development for the full field list.
 
 Custom post types are read with `contentNodes(type: "book")` / `contentNode(id:, type:)` under the same

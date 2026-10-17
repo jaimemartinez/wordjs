@@ -32,23 +32,35 @@ async function runPluginTests(_slug: string) {
     return { success: true, tests: 0, passed: 0, failed: 0, output: 'Skipped: pre-activation tests are not executed (plugins are sandboxed at load time).', skipped: true };
 }
 
-/**
- * Run all CMS core tests
- * @returns {Promise<{success: boolean, tests: number, passed: number, failed: number}>}
- */
-async function runCoreTests() {
-    const testsDir = path.resolve('./src/tests');
-
-    if (!fs.existsSync(testsDir)) {
-        return { success: true, tests: 0, passed: 0, failed: 0 };
-    }
-
-    const testFiles = fs.readdirSync(testsDir)
-        .filter((f: string) => f.endsWith('.test.js'))
+/** The suite's files: TypeScript (`*.test.ts`, the source tree) or compiled (`*.test.js`). */
+function coreTestFiles(testsDir: string): string[] {
+    if (!fs.existsSync(testsDir)) return [];
+    return fs.readdirSync(testsDir)
+        .filter((f: string) => f.endsWith('.test.ts') || f.endsWith('.test.js'))
+        .sort()
         .map((f: string) => path.join(testsDir, f));
+}
 
+/**
+ * Run all CMS core tests (`src/tests`), one `node --test` child per file with a secret-free env.
+ * TypeScript files run through ts-node, a dev dependency: without it — or without a suite at all, as in
+ * a release build — nothing runs and the answer says `skipped`, never a pass of 0 tests.
+ * Not called by the installer (routes/setup.ts explains why); kept for operators and tooling.
+ * @returns {Promise<{success: boolean, tests: number, passed: number, failed: number, skipped?: boolean, reason?: string}>}
+ */
+async function runCoreTests(testsDir: string = path.resolve('./src/tests')) {
+    const testFiles = coreTestFiles(testsDir);
     if (testFiles.length === 0) {
-        return { success: true, tests: 0, passed: 0, failed: 0 };
+        return { success: true, tests: 0, passed: 0, failed: 0, skipped: true, reason: 'This install has no core test suite.' };
+    }
+    const needsTsNode = testFiles.some((f) => f.endsWith('.ts'));
+    let tsNodeRegister: string | null = null;
+    if (needsTsNode) {
+        try {
+            tsNodeRegister = require.resolve('ts-node/register/transpile-only', { paths: [path.resolve('.')] });
+        } catch {
+            return { success: true, tests: 0, passed: 0, failed: 0, skipped: true, reason: 'The core test suite needs the dev dependencies (ts-node); run npm install in backend/.' };
+        }
     }
 
     log.info('🧪 Running CMS core tests...');
@@ -59,8 +71,12 @@ async function runCoreTests() {
 
     for (const testFile of testFiles) {
         const result = await new Promise<any>((resolve) => {
-            const child = spawn('node', ['--test', testFile], {
+            const args = ['--test', '--test-force-exit'];
+            if (testFile.endsWith('.ts') && tsNodeRegister) args.push('-r', tsNodeRegister);
+            args.push(testFile);
+            const child = spawn(process.execPath, args, {
                 cwd: path.resolve('.'),
+                env: safeTestEnv(),
                 stdio: 'pipe'
             });
 
@@ -124,5 +140,6 @@ async function verifyPluginTests(slug: string) {
 module.exports = {
     runPluginTests,
     runCoreTests,
+    coreTestFiles,
     verifyPluginTests
 };

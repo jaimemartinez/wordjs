@@ -50,8 +50,24 @@ const PROGRESS_OPTION = 'media_storage_migration';
 const LOCK_NAME = 'media-storage-migration';
 const MAX_FAILURES_KEPT = 50;
 const BATCH = 50;
+/**
+ * A run refreshes its progress record at least this often (and after every item), so every node can
+ * tell a run that is alive on ANOTHER node from one that died: a 'running' record older than
+ * PROGRESS_STALE_MS has nobody behind it. (The dist lock answers the same question on Postgres/MySQL,
+ * but only to the node that holds it; the record is what the others can read.)
+ */
+const PROGRESS_HEARTBEAT_MS = 30_000;
+const PROGRESS_STALE_MS = 120_000;
 
 let running = false;
+
+/** Is this 'running' record backed by a live run — here, or on a node that refreshed it recently? */
+function isLiveRecord(v: any, now = Date.now()): boolean {
+    if (!v || typeof v !== 'object' || v.status !== 'running') return false;
+    if (running) return true;
+    const at = Date.parse(String(v.updatedAt || ''));
+    return Number.isFinite(at) && now - at < PROGRESS_STALE_MS;
+}
 
 function deps() {
     return {
@@ -73,11 +89,19 @@ async function getState(): Promise<MigrationState> {
 async function getProgress(): Promise<MigrationProgress | null> {
     const v = await deps().options.getOptionFresh(PROGRESS_OPTION, null);
     if (!v || typeof v !== 'object') return null;
-    // A 'running' record with no run in THIS process and nobody holding it is a run that died.
-    return v.status === 'running' && !running ? { ...v, status: 'interrupted' } : v;
+    // A 'running' record that no run here backs and that no other node has refreshed lately is a run
+    // that died.
+    return v.status === 'running' && !isLiveRecord(v) ? { ...v, status: 'interrupted' } : v;
 }
 
+/** Is a migration running in THIS process? */
 function isRunning(): boolean { return running; }
+
+/** Is a migration running anywhere in the cluster (this process, or a node whose record is fresh)? */
+async function isRunningAnywhere(): Promise<boolean> {
+    if (running) return true;
+    return isLiveRecord(await deps().options.getOptionFresh(PROGRESS_OPTION, null));
+}
 
 /** How many attachments carry the bucket marker (their files are in the s3 store). */
 async function countOffloaded(): Promise<number> {
@@ -200,6 +224,9 @@ async function runMigration(direction: MigrationDirection, opts: {
             await saveProgress(p);
 
             let budget = opts.limit && opts.limit > 0 ? opts.limit : Infinity;
+            // Keep the record fresh while one slow item (a large video) is in flight.
+            const heartbeat = setInterval(() => { saveProgress(p).catch(() => { /* next item saves it */ }); }, PROGRESS_HEARTBEAT_MS);
+            if (typeof heartbeat.unref === 'function') heartbeat.unref();
             try {
                 while (budget > 0) {
                     const rows = await dbAsync.all(
@@ -232,6 +259,8 @@ async function runMigration(direction: MigrationDirection, opts: {
                 p.error = String(e?.message || e).slice(0, 300);
                 await saveProgress(p);
                 return p;
+            } finally {
+                clearInterval(heartbeat);
             }
 
             const finished = budget > 0; // the walk reached the end (not stopped by `limit`)
@@ -261,4 +290,4 @@ async function runMigration(direction: MigrationDirection, opts: {
     }
 }
 
-module.exports = { runMigration, getState, getProgress, isRunning, countOffloaded, migrateOne, STATE_OPTION, PROGRESS_OPTION };
+module.exports = { runMigration, getState, getProgress, isRunning, isRunningAnywhere, isLiveRecord, PROGRESS_STALE_MS, countOffloaded, migrateOne, STATE_OPTION, PROGRESS_OPTION };

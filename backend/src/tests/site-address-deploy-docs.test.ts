@@ -168,11 +168,15 @@ describe('deployment notes the redesign needs', () => {
         const gatewayDoc = read('documentation/gateway.md');
         const index = read('gateway/src/index.js');
         const edge = read('gateway/src/host-edge.js');
+        // Mounted on the internal app from its own module (mountRevalidateSecret), not inline in index.js.
+        const purge = read('gateway/src/purge.js');
         const routes = [
+            ...[...purge.matchAll(/\bapp\.(get|post|put|delete)\('([^']+)'/g)].map((m: RegExpMatchArray) => `${m[1].toUpperCase()} ${m[2]}`),
             ...[...index.matchAll(/internalApp\.(get|post|put|delete)\('([^']+)'/g)].map((m: RegExpMatchArray) => `${m[1].toUpperCase()} ${m[2]}`),
             ...[...edge.matchAll(/\bapp\.(get|post|put|delete)\('([^']+)'/g)].map((m: RegExpMatchArray) => `${m[1].toUpperCase()} ${m[2]}`),
         ];
         assert.ok(routes.includes('POST /register') && routes.includes('POST /host-policy'), `positive control: routes parsed: ${routes}`);
+        assert.ok(routes.includes('GET /revalidate-secret'), `positive control: purge.js routes parsed: ${routes}`);
         for (const route of routes) assert.ok(gatewayDoc.includes(route), `gateway.md does not document ${route}`);
         assert.match(gatewayDoc, /gateway-host-policy\.json/, 'gateway.md must name the file the pushed policy is stored in');
     });

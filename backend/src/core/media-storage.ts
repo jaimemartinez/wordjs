@@ -126,6 +126,57 @@ function normalizePublicUrl(raw: unknown): string | null {
     return `${u.origin}${pathname}`;
 }
 
+/**
+ * Mistakes in an explicit publicUrl that the server CAN see without fetching it (it never fetches an
+ * operator-supplied URL; whether the URL serves the object is the browser half of the connection test).
+ * Each one is a likely wrong URL, not a certain one, so they are WARNINGS: the save and the test still
+ * go ahead and the screen shows them next to the field.
+ *   - the URL already ends with the key prefix, so every media URL would carry it twice
+ *     (`…/uploads/uploads/2026/…`): publicUrl maps to the bucket ROOT and WordJS appends the prefix;
+ *   - the URL is the path-style endpoint itself, without the bucket (`http://garage.lan:3900` instead of
+ *     `http://garage.lan:3900/<bucket>`);
+ *   - plain http while the site is served over https: browsers block or downgrade mixed content.
+ */
+function publicUrlWarnings(store: ResolvedMediaStorage, siteUrl?: string | null): Array<{ field: string; code: string; message: string }> {
+    const out: Array<{ field: string; code: string; message: string }> = [];
+    if (store.driver !== 's3' || !store.s3 || !store.publicBase || store.sources.publicUrl === 'default') return out;
+    const prefix = store.s3.prefix;
+    const base = prefix ? store.publicBase.slice(0, -(prefix.length + 1)) : store.publicBase;
+    let u: URL;
+    try { u = new URL(base); } catch { return out; }
+    const path = u.pathname.replace(/\/+$/, '');
+    if (prefix && (path === `/${prefix}` || path.endsWith(`/${prefix}`))) {
+        out.push({
+            field: 'publicUrl',
+            code: 'media_public_url_doubled_prefix',
+            message: `The public URL already ends with "/${prefix}", and WordJS adds the key prefix itself, so media URLs would read ${store.publicBase}/… . Set the public URL to the bucket root (without "/${prefix}").`,
+        });
+    }
+    if (store.s3.endpoint) {
+        let ep: URL | null;
+        try { ep = new URL(store.s3.endpoint); } catch { ep = null; }
+        const first = path.split('/').filter(Boolean)[0] || '';
+        if (ep && ep.origin === u.origin && first !== store.s3.bucket) {
+            out.push({
+                field: 'publicUrl',
+                code: 'media_public_url_missing_bucket',
+                message: `The public URL is the storage endpoint without the bucket. With a path-style endpoint the bucket root is ${ep.origin}/${store.s3.bucket}.`,
+            });
+        }
+    }
+    let site: URL | null;
+    try { site = siteUrl ? new URL(siteUrl) : null; } catch { site = null; }
+    const loopback = /^(localhost|127\.0\.0\.1|\[::1\])$/i.test(u.hostname) || u.hostname.endsWith('.localhost');
+    if (site && site.protocol === 'https:' && u.protocol === 'http:' && !loopback) {
+        out.push({
+            field: 'publicUrl',
+            code: 'media_public_url_mixed_content',
+            message: 'The public URL is plain http while the site is served over https: browsers block or downgrade mixed content. Put the bucket behind https (a CDN or a reverse proxy).',
+        });
+    }
+    return out;
+}
+
 /** The bucket's own public base when no publicUrl is configured (virtual-hosted S3, or endpoint/bucket). */
 function derivedBucketBase(s3: NonNullable<ResolvedMediaStorage['s3']>): string | null {
     try {
@@ -481,6 +532,7 @@ module.exports = {
     uploadsRedirect,
     resolveMediaStorage,
     normalizePublicUrl,
+    publicUrlWarnings,
     isOffloadablePath,
     objectKeyFor,
     publicUrlFor,
