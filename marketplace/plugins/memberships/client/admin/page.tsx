@@ -13,6 +13,7 @@
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
+import NewsletterTab from "./NewsletterTab";
 
 const STATUS_LABELS = { active: "Activa", past_due: "Pago pendiente", canceled: "Cancelada", incomplete: "Incompleta" };
 const SOURCE_LABELS = { stripe: "Stripe", comped: "Cortesía" };
@@ -181,7 +182,7 @@ export default function MembershipsAdminPage() {
         setBusy(true);
         setMessage("");
         try {
-            const payload = { currencyCode: cfg.currencyCode, currencySymbol: cfg.currencySymbol, freeSignup: !!cfg.freeSignup };
+            const payload = { currencyCode: cfg.currencyCode, currencySymbol: cfg.currencySymbol, freeSignup: !!cfg.freeSignup, newsletterEnabled: cfg.newsletterEnabled !== false, newsletterRate: Number(cfg.newsletterRate) || 60 };
             if (stripeKey.trim() || cfg._clearKey) payload.stripeKey = cfg._clearKey ? "" : stripeKey.trim();
             if (webhookSecret.trim() || cfg._clearWebhook) payload.webhookSecret = cfg._clearWebhook ? "" : webhookSecret.trim();
             const next = await apiPost("/plugin/memberships/config", payload);
@@ -219,6 +220,7 @@ export default function MembershipsAdminPage() {
             <div className="cf-tabs" role="tablist">
                 {tabBtn("tiers", "Planes")}
                 {tabBtn("members", "Miembros")}
+                {tabBtn("newsletter", "Newsletter")}
                 {tabBtn("config", "Ajustes")}
             </div>
 
@@ -335,6 +337,8 @@ export default function MembershipsAdminPage() {
                 </div>
             )}
 
+            {tab === "newsletter" && <NewsletterTab setMessage={setMessage} />}
+
             {tab === "config" && cfg && (
                 <form onSubmit={saveConfig} className="cf-editor" style={{ maxWidth: "46rem" }}>
                     <div className="cf-editor-body">
@@ -353,6 +357,17 @@ export default function MembershipsAdminPage() {
                                     Toda cuenta registrada es miembro gratuito (abre el nivel «Miembros»)
                                 </label>
                                 <p className="cf-help">El registro de cuentas lo controla Ajustes → General («Cualquiera puede registrarse»).</p>
+                            </div>
+                            <div>
+                                <label className="cf-check">
+                                    <input type="checkbox" checked={cfg.newsletterEnabled !== false} onChange={(e) => setCfg({ ...cfg, newsletterEnabled: e.target.checked })} />
+                                    Newsletters a los miembros
+                                </label>
+                                <p className="cf-help">Añade «Enviar por correo al publicar» al editor. Usa el proveedor de correo del sitio.</p>
+                            </div>
+                            <div>
+                                <label className="cf-label" htmlFor="ms-cfg-rate">Ritmo de envío (correos por minuto)</label>
+                                <input id="ms-cfg-rate" className="cf-input" type="number" min="1" max="600" value={cfg.newsletterRate ?? 60} onChange={(e) => setCfg({ ...cfg, newsletterRate: e.target.value })} />
                             </div>
                             <div className="cf-span-2">
                                 <label className="cf-label" htmlFor="ms-cfg-sk">Clave secreta de Stripe — solo modo de PRUEBA {cfg.hasStripeKey ? `(configurada${cfg.stripeMode ? `, ${cfg.stripeMode}` : ""})` : ""}</label>

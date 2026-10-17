@@ -14,6 +14,9 @@ import {
     accessMetaForSave,
     seedAccessRootProps,
     withRecordRootFields,
+    pluginFieldKey,
+    seedPluginFieldProps,
+    pluginMetaForSave,
 } from "@/lib/editorRootFields";
 import { serializeContentFallback } from "@/lib/verso/contentFallback";
 import { safeReturnPath } from "@/lib/safeReturnPath";
@@ -73,5 +76,23 @@ describe("safeReturnPath", () => {
         for (const bad of ["//evil.example/x", "/\\evil.example", "https://evil.example/", "javascript:alert(1)", "evil", "/x\nSet-Cookie", "", undefined, 42, "/a\\b"]) {
             expect(safeReturnPath(bad as any), String(bad)).toBeNull();
         }
+    });
+});
+
+describe("plugin editor fields (backend core/editor-fields)", () => {
+    const FIELDS = [{ metaKey: "newsletter_audience", label: "Send", type: "select" as const, options: [{ value: "", label: "No" }, { value: "all", label: "All" }] }];
+
+    it("are composed as root fields under their own prefix", () => {
+        const out: any = withRecordRootFields({ title: { type: "text" } as any }, { pluginFields: FIELDS });
+        expect(out[pluginFieldKey("newsletter_audience")]).toMatchObject({ type: "select", label: "Send" });
+        expect(out.newsletter_audience).toBeUndefined();
+    });
+
+    it("seed from the entry's meta and save only what the author changed", () => {
+        const seeded = seedPluginFieldProps({ meta: { newsletter_audience: "all" } } as unknown as Post, FIELDS);
+        expect(seeded).toEqual({ wjs_meta__newsletter_audience: "all" });
+        expect(pluginMetaForSave({ wjs_meta__newsletter_audience: "all" }, FIELDS, seeded)).toEqual({});
+        expect(pluginMetaForSave({ wjs_meta__newsletter_audience: "" }, FIELDS, seeded)).toEqual({ newsletter_audience: "" });
+        expect(pluginMetaForSave({}, FIELDS, seeded)).toEqual({});
     });
 });

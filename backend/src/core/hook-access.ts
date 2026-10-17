@@ -161,6 +161,7 @@ const POLICY_TABLE: Record<string, HookPolicy> = {
     // Members-only content (core/content-access). The levels filter carries only the provider's own
     // answer; the grants filter names the viewer (id + role) so a provider can look up what they hold.
     'content_access_levels': PUBLIC('carries only the access levels providers offer to the editor'),
+    'post_editor_fields': PUBLIC('carries only the field declarations plugins contribute to the post editor'),
     'content_access_grants': {
         kind: 'data', requires: [['users', 'read']],
         why: 'identifies the account reading the site (user id and role)',

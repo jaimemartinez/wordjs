@@ -311,6 +311,33 @@ const accountDef = {
     },
 };
 
+/** Newsletter preference of the signed-in member (GET/POST /me/newsletter). */
+function NewsletterToggle() {
+    const [pref, setPref] = useState(null);
+    const [busy, setBusy] = useState(false);
+    useEffect(() => {
+        let active = true;
+        getJson("/me/newsletter").then((r) => { if (active && r.ok) setPref(r.body); });
+        return () => { active = false; };
+    }, []);
+    if (!pref || pref.enabled === false) return null;
+    const toggle = async () => {
+        setBusy(true);
+        const r = await postJson("/me/newsletter", { subscribed: !pref.subscribed });
+        setBusy(false);
+        if (r.ok) setPref({ ...pref, subscribed: !!r.body.subscribed });
+    };
+    return (
+        <div className="wjms-row" style={{ alignItems: "center" }}>
+            <span>Newsletters por correo</span>
+            <label style={{ display: "inline-flex", gap: ".5rem", alignItems: "center", cursor: "pointer" }}>
+                <input type="checkbox" checked={!!pref.subscribed} disabled={busy} onChange={toggle} />
+                {pref.subscribed ? "Suscrito" : "No suscrito"}
+            </label>
+        </div>
+    );
+}
+
 const STATUS_TEXT = { active: "Activa", past_due: "Pago pendiente", canceled: "Cancelada", incomplete: "Incompleta" };
 
 function AccountVerso({ title, isEditing, puck }) {
@@ -415,6 +442,7 @@ function AccountVerso({ title, isEditing, puck }) {
                         )}
                     </>
                 )}
+                {m.me ? <div style={{ marginTop: "1rem" }}><NewsletterToggle /></div> : null}
                 {error || checkout.error ? <p className="wjms-error">{error || checkout.error}</p> : null}
             </div>
         </section>

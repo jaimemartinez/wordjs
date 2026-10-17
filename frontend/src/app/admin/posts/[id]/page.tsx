@@ -29,7 +29,10 @@ import {
     seedAccessRootProps,
     accessMetaForSave,
     ACCESS_META_KEY,
+    seedPluginFieldProps,
+    pluginMetaForSave,
     type AccessLevelOption,
+    type PluginEditorField,
     type TagSelection,
 } from "@/lib/editorRootFields";
 // El productor ÚNICO del estado de categorías del editor (opciones del select = lista contra la que
@@ -111,6 +114,20 @@ export default function PostEditorPage() {
     const [accessLevels, setAccessLevels] = useState<AccessLevelOption[]>([]);
     const [recordAccess, setRecordAccess] = useState("");
     const seededAccessRef = useRef("");
+    // CAMPOS DE PLUGINS (GET /editor/fields): se piden UNA vez y la carga del registro los espera, porque
+    // sembrar sus valores necesita saber qué claves de meta editan.
+    const [pluginFields, setPluginFields] = useState<PluginEditorField[]>([]);
+    const pluginFieldsRef = useRef<Promise<PluginEditorField[]> | null>(null);
+    const seededPluginRef = useRef<Record<string, string>>({});
+    const fetchPluginFields = () => {
+        if (!pluginFieldsRef.current) {
+            pluginFieldsRef.current = apiGet<{ fields?: PluginEditorField[] }>("/editor/fields?type=post")
+                .then((res) => (Array.isArray(res?.fields) ? res.fields : []))
+                .catch(() => []);
+            pluginFieldsRef.current.then(setPluginFields);
+        }
+        return pluginFieldsRef.current;
+    };
     const [saving, setSaving] = useState(false);
     const [isLoading, setIsLoading] = useState(!isNew);
     // Data-safety hydration tracking: `loaded` is true only once the EXISTING post's content has
@@ -170,6 +187,7 @@ export default function PostEditorPage() {
         loadCategories();
         loadTags();
         loadAccessLevels();
+        fetchPluginFields();
         if (postId) {
             loadPost();
         }
@@ -180,7 +198,7 @@ export default function PostEditorPage() {
         setLoaded(false); // never carry a previous record's hydrated state into a new load / retry
         setIsLoading(true);
         try {
-            const post = await postsApi.get(postId!);
+            const [post, fieldsForSeed] = await Promise.all([postsApi.get(postId!), fetchPluginFields()]);
             setTitle(post.title);
             setSlug(post.slug);
             contentRef.current = post.content;
@@ -212,9 +230,12 @@ export default function PostEditorPage() {
             const seededAccess = seedAccessRootProps(post);
             seededAccessRef.current = seededAccess[ACCESS_META_KEY];
             setRecordAccess(seededAccess[ACCESS_META_KEY]);
+            const seededPlugin = seedPluginFieldProps(post, fieldsForSeed);
+            seededPluginRef.current = seededPlugin;
             const seedRoot = {
                 ...seedRootPropsFromPost(post),
                 ...seededAccess,
+                ...seededPlugin,
                 ...seedSeoRootProps(post),
                 category: taxonomy.category,
                 tags: taxonomy.tags,
@@ -447,7 +468,9 @@ export default function PostEditorPage() {
                     // páginas — ver editorRootFields.seoMetaForSave.
                     ...seoMetaForSave(rootProps),
                     // Nivel de acceso: solo si el autor lo cambió (ver accessMetaForSave).
-                    ...accessMetaForSave(rootProps, seededAccessRef.current)
+                    ...accessMetaForSave(rootProps, seededAccessRef.current),
+                    // Campos de plugins: solo los que el autor cambió (ver pluginMetaForSave).
+                    ...pluginMetaForSave(rootProps, pluginFields, seededPluginRef.current)
                 },
                 // Autosaves skip the revision snapshot server-side (see routes/posts.ts).
                 ...(isAutosave ? { autosave: true } : {})
@@ -489,6 +512,10 @@ export default function PostEditorPage() {
             if (excerptPatch !== undefined) seededExcerptRef.current = excerptPatch;
             const accessPatch = finalPostData.meta ? (finalPostData.meta as Record<string, unknown>)[ACCESS_META_KEY] : undefined;
             if (typeof accessPatch === "string") seededAccessRef.current = accessPatch;
+            const savedMeta = (finalPostData.meta || {}) as Record<string, unknown>;
+            for (const f of pluginFields) {
+                if (typeof savedMeta[f.metaKey] === "string") seededPluginRef.current = { ...seededPluginRef.current, [`wjs_meta__${f.metaKey}`]: savedMeta[f.metaKey] as string };
+            }
             if (categoriesPatch !== undefined) seededCategoryIdsRef.current = categoriesPatch;
             if (tagsPatch !== undefined) seededTagsRef.current = tagsPatch.map((id) => ({ tag: String(id) }));
             // Stay in editor - no redirect
@@ -517,8 +544,9 @@ export default function PostEditorPage() {
             recordTags,
             accessLevels,
             currentAccess: recordAccess,
+            pluginFields,
         }),
-        [categories, rootCategory, recordCategories, allTags, recordTags, accessLevels, recordAccess],
+        [categories, rootCategory, recordCategories, allTags, recordTags, accessLevels, recordAccess, pluginFields],
     );
 
     if (isLoading) {

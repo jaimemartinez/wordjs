@@ -151,11 +151,44 @@ Paste the `whsec_…` it prints into Ajustes, and pay with Stripe's published te
 Admin → Membresías → Miembros: grant a tier to an existing account (by e-mail or login), optionally until
 a date; revoke ends it at once (a paid membership is cancelled at Stripe immediately).
 
-### 2.6 Not included (follow-ups)
+### 2.6 Newsletters
 
-- **Newsletter delivery to members** (Ghost's email-per-post): out of scope; the `newsletter` plugin is a
-  separate list today.
+Publishing a post can email it to members, Ghost-style (`lib/newsletter.js`):
+
+- **Choosing.** The post editor shows **Enviar por correo al publicar** (No / all members / free members /
+  paid members). It is a core *editor field* the plugin declares (§4); the value is the post meta
+  `newsletter_audience`. Admins can also send an already published post from Membresías → Newsletter.
+- **Queued, never inline.** The publish request only writes a trigger row (from the `wp_insert_post` /
+  `post_updated` hooks, on the transition into `publish`). A queue worker in the plugin's isolate — every
+  few seconds, or *Procesar la cola ahora* in the admin — reads the post through the posts bridge, builds
+  the recipient list and sends at most **N mails per minute** (Ajustes, default 60) through `wordjs.mail`,
+  i.e. the site's mail provider plugin (`mail-server`): there is no transport of its own. A failed mail is
+  retried after 1 and 2 more minutes, then counted as failed; the admin can retry failed deliveries.
+- **Who receives what.** `all` = every subscribed member with an address; `free` = members without a paid
+  level; `paid` = members with one. For a post that requires an access level, only members who **hold that
+  level** get the full body; everyone else gets the **teaser** (the body before the access break, or the
+  author's own excerpt when there is none — never an excerpt derived from the body) plus *Leer en el sitio*.
+  Site-relative links and images are made absolute; shortcodes are dropped.
+- **Who may send.** Any author can set a meta value, so a post written by an administrator or editor is
+  queued at once, while any other author's request waits in the send log for an admin to approve or
+  discard it. Each post is emailed once.
+- **Unsubscribe.** Every mail ends with a one-click link to `/portal/memberships?u=<id>&t=<token>` (the
+  plugin's portal page); the token is an HMAC of the account id under a per-install secret, so it works for
+  that account only. The page unsubscribes on open and offers to subscribe again; members can also switch
+  newsletters on and off in the **Mi membresía** block. Default: subscribed.
+- **Admin.** Membresías → Newsletter: send log with status and delivered / failed counts (failed
+  addresses with the error), approve / discard, retry failed, a **test send** (as a member with or without
+  access receives it) and sending an already published post.
+
+Without a mail provider nothing is delivered: every delivery fails with the provider's error and shows up
+in the log.
+
+### 2.7 Not included (follow-ups)
+
 - Stripe **live mode**, the Stripe customer portal, coupons/trials, and per-member analytics.
+- `List-Unsubscribe` / `List-Unsubscribe-Post` headers: the mail provider plugin does not accept caller
+  headers yet; the one-click link is in the body.
+- Newsletter open/click tracking and a separate (non-post) campaign editor.
 
 ---
 
@@ -173,3 +206,17 @@ Two core additions any plugin can use, introduced for the Stripe webhook:
   static validator keeps `require('crypto')` out of plugin code.
 
 See `backend/src/core/plugin-webhooks.ts` and `backend/src/tests/plugin-webhook-routes.test.ts`.
+
+## 4. Post editor fields and the posts bridge (generic)
+
+- **Editor fields** (`backend/src/core/editor-fields.ts`, `GET /api/v1/editor/fields?type=post`): a plugin
+  declares fields for the post editor's settings through the `post_editor_fields` filter — data, not code:
+  `{ metaKey, label, type: 'select' | 'radio' | 'text', options?, help?, postTypes? }`. Core validates the
+  declaration (an unprefixed meta key that is not one of core's own, bounded options), renders it, seeds it
+  from the entry's meta and saves it through the normal `meta` bag only when the author changed it. A
+  plugin acting on the value must apply its own policy on *who* may trigger what.
+- **`wordjs.posts.get(id)`** (grant `posts:read`): a PUBLISHED, public, unprotected entry — title, public
+  path and URL, author id, the author's own excerpt, the full `content`, its `accessLevel` and its
+  unprefixed meta; `null` for anything else. A plugin that sends or syndicates content must withhold the
+  gated part itself from recipients who do not hold the level.
+- **`wordjs.users.search(term, limit, offset)`**: `offset` pages through every account (ordered by id).
