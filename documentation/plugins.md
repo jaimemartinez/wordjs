@@ -449,7 +449,7 @@ When you upload a plugin ZIP, WordJS validates it **before** reporting success, 
 - **Admin and portal pages** — `frontend.adminPage.slug` and `frontend.portalPage.slug` must not be another installed plugin's (`Invalid admin page` / `Invalid portal page`, §10.1, §10.6).
 - **Declared roles** — a `roles` block must stay inside the plugin's namespace and request `roles:declare` (§12a); anything else is rejected with the reason.
 - **AST scan** — the same static scan that runs at activation runs here too; forbidden code (`eval`, `child_process`, dynamic `require`, …) is rejected up front, in your own source and — within the bounds in §7.2 — in any `node_modules/` you ship.
-- **Live-plugin safety** — re-uploading a slug that is currently **active** is refused (409). Deactivate it first so a botched extract can't corrupt a running plugin.
+- **No overwrite** — uploading a slug that is currently **active** is refused (409), and so is uploading over an installed (inactive) plugin, so a botched extract can never corrupt or delete an existing plugin. To ship a new version: deactivate, delete (data is kept unless you tick the data box), then upload and activate the new zip. See [Tutorial 7 §7](tutorials/07-build-your-first-plugin.md#7-ship-a-new-version).
 
 ### Runtime health & auto-restart
 
