@@ -285,7 +285,7 @@ Closes with `N matched, M mismatched, K not comparable.` and exits `1` on any mi
 
 ### `pack <slug> [--build] [--out <dir>]`
 
-Zips `backend/plugins/<slug>` into `<slug>.zip` with a single `<slug>/` root folder — the exact layout `POST /api/v1/plugins/upload` (Admin → Plugins → Add New) expects — excluding `node_modules/`, `data/`, `.git/` and `os-tmp/` (dependencies reinstall automatically on activation), and prints the resulting size. Output defaults to the current directory (`--out <dir>` to change; the directory is created if needed).
+Zips `backend/plugins/<slug>` into `<slug>.zip` with a single `<slug>/` root folder — the exact layout `POST /api/v1/plugins/upload` (Admin → Plugins → **Upload Plugin**) expects — excluding `node_modules/`, `data/`, `.git/` and `os-tmp/` (dependencies reinstall automatically on activation), and prints the resulting size. Output defaults to the current directory (`--out <dir>` to change; the directory is created if needed).
 
 It aborts if `backend/plugins/<slug>/manifest.json` does not exist, and if `adm-zip` cannot be resolved (*"run `npm install` inside backend/ first"*) — it is a backend dependency, resolved from `backend/node_modules`. With `--build` it first runs `backend/scripts/build-plugin.js <slug>` to pre-compile the frontend bundles into `dist/`, aborting if that build fails; if the builder script is missing the flag is skipped with a warning instead.
 
