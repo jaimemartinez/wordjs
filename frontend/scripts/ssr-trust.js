@@ -36,16 +36,40 @@ function gatewayPublicCert(gatewayDir) {
 
 /**
  * @param {{ cwd: string }} opts  the frontend directory (start-frontend.js runs from it)
- * @returns {string[]} PEM file paths to trust, cluster CA first; empty before the install issued certs
+ * @returns {string[]} PEM file paths to trust: the cluster CA when the install has issued it, and the
+ *   certificate the local gateway serves whenever there is one.
+ *
+ * The gateway's certificate is trusted from the FIRST boot, before any install: a split site boots,
+ * is installed from the wizard, and from that moment its SSR goes through the HTTPS gateway — while
+ * this process still runs with the trust it was started with (NODE_EXTRA_CA_CERTS is read once). With
+ * the gateway's certificate only added once the cluster CA existed, every page rendered defaults until
+ * the first restart. Trusting exactly that certificate before the install widens nothing.
  */
 function buildSsrTrust({ cwd }) {
     const localCa = path.resolve(cwd, 'certs', 'cluster-ca.crt');
     const ca = fs.existsSync(localCa) ? localCa : path.resolve(cwd, '..', 'backend', 'certs', 'cluster-ca.crt');
-    if (!fs.existsSync(ca)) return [];
-    const files = [ca];
+    const files = fs.existsSync(ca) ? [ca] : [];
     const gw = gatewayPublicCert(path.resolve(cwd, '..', 'gateway'));
     if (gw) files.push(gw);
     return files;
+}
+
+/**
+ * On the very first start the gateway generates ssl-auto.crt while this frontend is starting next to
+ * it (`npm start` launches the three together). Wait for it — briefly, and only when the local gateway
+ * has HTTPS on with no operator certificate — so the trust bundle can include it. Returns whether the
+ * file is there.
+ */
+function waitForGatewayAutoCert({ cwd, timeoutMs = 20000 }) {
+    const dir = path.resolve(cwd, '..', 'gateway');
+    let cfg = null;
+    try { cfg = JSON.parse(fs.readFileSync(path.join(dir, 'gateway-config.json'), 'utf8')); } catch { return false; }
+    const ssl = cfg && cfg.ssl;
+    if (!ssl || (typeof ssl === 'object' && (ssl.enabled === false || (typeof ssl.cert === 'string' && ssl.cert)))) return false;
+    const auto = path.join(dir, 'ssl-auto.crt');
+    const pause = new Int32Array(new SharedArrayBuffer(4));
+    for (const deadline = Date.now() + timeoutMs; !fs.existsSync(auto) && Date.now() < deadline;) Atomics.wait(pause, 0, 0, 250);
+    return fs.existsSync(auto);
 }
 
 /** Write the files into one PEM bundle at `out` and return its path (or the single file, unchanged). */
@@ -58,4 +82,4 @@ function writeTrustBundle(files, out) {
     return out;
 }
 
-module.exports = { buildSsrTrust, gatewayPublicCert, writeTrustBundle };
+module.exports = { buildSsrTrust, gatewayPublicCert, waitForGatewayAutoCert, writeTrustBundle };

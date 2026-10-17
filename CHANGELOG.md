@@ -37,7 +37,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   to the gateway next to it over loopback (when its certificate covers a loopback name, which the
   auto-generated one does). The frontend also listened on every interface and registered the site's
   public name with the gateway; it now listens on `127.0.0.1` and registers that, unless its config sets
-  a routable `advertiseHost` (or `WORDJS_FRONTEND_BIND` names the address).
+  a routable `advertiseHost` (or `WORDJS_FRONTEND_BIND` names the address). And a split site installed
+  with the default HTTPS no longer renders default content until its first restart: the frontend trusts
+  the local gateway's own certificate from its first boot, not only once the install has issued the
+  cluster certificates.
 - **The backend honours `PORT`, and the install keeps the configured ports.** In split and development
   mode the backend ignored `PORT`, and `POST /setup/install` wrote `port: 4000` (and the default
   frontend and gateway ports) over the values the config already had. `PORT` now wins over `port` in
