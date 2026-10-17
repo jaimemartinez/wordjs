@@ -45,10 +45,6 @@ export default function MediaStoragePage() {
     const [testing, setTesting] = useState(false);
     const [test, setTest] = useState<MediaStorageTestResult | null>(null);
     const [deleteLocal, setDeleteLocal] = useState(false);
-    // The media origin a save just introduced. This page's Content-Security-Policy is built by the
-    // frontend server from the settings it caches for up to a minute, so until that refreshes the browser
-    // refuses images from the new origin and the connection test's public check fails. Say so here.
-    const [pendingOrigin, setPendingOrigin] = useState<string | null>(null);
 
     const load = useCallback(async (resetForm: boolean) => {
         try {
@@ -92,10 +88,7 @@ export default function MediaStoragePage() {
     const save = async () => {
         setSaving(true);
         try {
-            const before = view.effective.publicOrigin || null;
             const v = await mediaStorageApi.save(form);
-            const after = v.effective.driver === "s3" ? v.effective.publicOrigin || null : null;
-            setPendingOrigin(after && after !== before && after !== window.location.origin ? after : null);
             setView(v);
             setForm(formFromView(v));
             addToast(t("mediaStorage.toast.saved"), "success");
@@ -213,6 +206,18 @@ export default function MediaStoragePage() {
                                     size="md"
                                 />
                             </div>
+                            {s3 && view.warnings && view.warnings.length > 0 && (
+                                // Advice from the server about the SAVED values (never blocking), e.g. a public
+                                // URL that repeats the key prefix or would be mixed content on this admin.
+                                <ul className="space-y-1 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800" role="status" data-testid="media-storage-warnings">
+                                    {view.warnings.map((w) => (
+                                        <li key={w.code}>
+                                            <i className="fa-solid fa-triangle-exclamation mr-2" aria-hidden="true"></i>
+                                            {w.field === "publicUrl" && <strong>{t("mediaStorage.field.publicUrl")}: </strong>}{w.message}
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
                             <p className="text-xs text-gray-500">{t("mediaStorage.field.help")}</p>
                             <label className="flex items-center gap-2 text-sm">
                                 <input type="checkbox" checked={form.keepLocalCopy} disabled={fromEnv("keepLocalCopy")} onChange={(e) => set("keepLocalCopy", e.target.checked)} />
@@ -227,13 +232,6 @@ export default function MediaStoragePage() {
                             <Button variant="secondary" onClick={runTest} loading={testing} icon="fa-plug-circle-check">{t("mediaStorage.test")}</Button>
                         )}
                     </div>
-
-                    {pendingOrigin && (
-                        <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800" role="status" data-testid="media-storage-csp-pending">
-                            <i className="fa-solid fa-clock mr-2" aria-hidden="true"></i>
-                            {t("mediaStorage.cspPending").replace("{origin}", pendingOrigin)}
-                        </p>
-                    )}
 
                     {test && (
                         <ul className="space-y-1 text-sm" aria-live="polite" data-testid="media-storage-test">

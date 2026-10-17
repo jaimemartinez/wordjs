@@ -33,9 +33,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   local, next to a "Last delivery" in local time.
 - **Network → Create site shows why it failed.** A failed create (a server error included) now leaves an
   error on the form as well as a toast.
-- **Media storage explains the one-minute wait after a new public URL.** The admin's security policy picks
-  up a new media origin within about a minute, and "Test connection" failed its public check until then;
-  the screen now says so after saving, and a failed public check explains what to try.
+- **Media storage shows the server's advice about the public URL.** Non-blocking `warnings` from the media
+  storage API (a URL that repeats the key prefix, misses the bucket, or would be mixed content) are listed
+  under the fields, a failed public check in "Test connection" explains what to try, and the endpoint
+  hints name Garage and SeaweedFS next to MinIO.
 - **AI agents → New connection is no longer cramped.** Below 1536 px the form sits above the connection
   list instead of in a narrow column that cut its labels at 1280 px.
 
