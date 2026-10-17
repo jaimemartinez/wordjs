@@ -15,7 +15,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   release manifest (the same value `/api-docs` publishes) instead of a fixed `1.0.0`, and `routes` lists
   every mounted route group, including the ones added since the map was written (AI, MCP, agents,
   webhooks, audit, forms, collab, presence, media storage, site address, network, backups,
-  db-migration, ...). A test fails when a mounted group is missing from the map.
+  db-migration, ...). A test fails when a mounted group is missing from the map. Compatibility: the
+  API index now reports the product version and every mounted route group; every key it published
+  before is still there with the same path, so clients that read it only see additional keys and a
+  real version number.
 - **Theme logic: the default permission declaration uses the real vocabulary.** A theme without a
   `manifest.json` declared a `content:read` scope that no permission gate knows; it now declares only
   `settings:read`, from one shared definition used by both the runtime gate and the static scan. No

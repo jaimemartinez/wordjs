@@ -126,16 +126,58 @@ describe('F0 live REST characterization', () => {
         assert.strictEqual(response.body.name, 'WordJS REST API');
         // The product version (it was a fixed '1.0.0' until the index read the release manifest).
         assert.strictEqual(response.body.version, require(path.resolve(__dirname, '..', '..', '..', 'package.json')).version);
-        const routeKeys = Object.keys(response.body.routes || {});
-        // Backward compatible: every key the index has always published is still there, with its path.
-        for (const key of [
-            'authentication', 'categories', 'chrome', 'comments', 'export', 'forms', 'graphql', 'hooks', 'import', 'media',
-            'menus', 'notices', 'notifications', 'plugins', 'posts', 'revisions', 'roles', 'settings',
-            'tags', 'taxonomies', 'themes', 'types', 'users', 'widgets',
-        ]) assert.ok(routeKeys.includes(key), `the API index still lists '${key}'`);
-        assert.strictEqual(response.body.routes.authentication, '/api/v1/auth');
-        // ...and it is exactly the route-group map (tests/route-modules-mounted.test.ts keeps that complete).
-        assert.deepStrictEqual(routeKeys.sort(), Object.keys(require('../routes/index').API_ROUTE_GROUPS).sort());
+        // INTENTIONAL CONTRACT CHANGE (the index used to pin version '1.0.0' and a 24-entry map): the index
+        // now reports the product version and every mounted route group. Backward compatible: every key the
+        // old map published is still here, with the same path. The map stays pinned exactly; a new route
+        // group is a contract change and updates this list (tests/route-modules-mounted.test.ts names it).
+        assert.deepStrictEqual(response.body.routes, {
+            authentication: '/api/v1/auth',
+            posts: '/api/v1/posts',
+            pages: '/api/v1/pages',
+            users: '/api/v1/users',
+            categories: '/api/v1/categories',
+            tags: '/api/v1/tags',
+            comments: '/api/v1/comments',
+            media: '/api/v1/media',
+            mediaStorage: '/api/v1/media-storage',
+            settings: '/api/v1/settings',
+            siteAddress: '/api/v1/site-address',
+            network: '/api/v1/network',
+            plugins: '/api/v1/plugins',
+            pluginRoutes: '/api/v1/plugin/{slug}',
+            marketplace: '/api/v1/marketplace',
+            themes: '/api/v1/themes',
+            chrome: '/api/v1/chrome',
+            menus: '/api/v1/menus',
+            widgets: '/api/v1/widgets',
+            revisions: '/api/v1/revisions',
+            types: '/api/v1/types',
+            taxonomies: '/api/v1/taxonomies',
+            setup: '/api/v1/setup',
+            export: '/api/v1/export',
+            import: '/api/v1/import',
+            roles: '/api/v1/roles',
+            notifications: '/api/v1/notifications',
+            notices: '/api/v1/notices',
+            fonts: '/api/v1/fonts',
+            certificates: '/api/v1/system/certs',
+            health: '/api/v1/health',
+            seo: '/api/v1/seo',
+            hooks: '/api/v1/hooks',
+            webhooks: '/api/v1/webhooks',
+            audit: '/api/v1/audit',
+            agents: '/api/v1/agents',
+            mcp: '/api/v1/mcp',
+            ai: '/api/v1/ai',
+            forms: '/api/v1/forms',
+            presence: '/api/v1/presence',
+            collab: '/api/v1/collab',
+            graphql: '/api/v1/graphql',
+            docs: '/api/v1/docs',
+            analytics: '/api/v1/analytics',
+            backups: '/api/v1/backups',
+            dbMigration: '/api/v1/db-migration',
+        });
     });
 
     it('keeps the unauthenticated content-write error contract stable', async () => {
