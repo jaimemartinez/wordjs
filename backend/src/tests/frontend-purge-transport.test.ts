@@ -60,19 +60,19 @@ describe('purgeTransport — the direct path stays the direct path', () => {
         assert.deepStrictEqual(t, { mode: 'direct', origin: 'http://127.0.0.1:3000' });
     });
 
-    test('single-host split purges the co-located frontend directly (no gateway hop)', () => {
-        const t = purgeTransport(split, {}, certPresent);
-        assert.deepStrictEqual(t, { mode: 'direct', origin: 'http://localhost:3001' });
+    test('single-host split purges the co-located frontend directly, on loopback (no gateway hop)', () => {
+        const t = purgeTransport(split, {}, certPresent, true);
+        assert.deepStrictEqual(t, { mode: 'direct', origin: 'http://127.0.0.1:3001', local: true });
     });
 
-    test('a trailing slash on frontendUrl does not produce a double slash', () => {
-        const t = purgeTransport({ ...split, frontendUrl: 'http://localhost:3001/' }, {}, certPresent);
+    test('without a frontend installed next to this backend, frontendUrl is the target (trailing slash dropped)', () => {
+        const t = purgeTransport({ ...split, frontendUrl: 'http://localhost:3001/' }, {}, certPresent, false);
         assert.deepStrictEqual(t, { mode: 'direct', origin: 'http://localhost:3001' });
     });
 
     test('an unconfigured site still resolves to the historical default', () => {
-        assert.deepStrictEqual(purgeTransport({}, {}, certPresent), { mode: 'direct', origin: 'http://localhost:3000' });
-        assert.deepStrictEqual(purgeTransport(null, {}, certPresent), { mode: 'direct', origin: 'http://localhost:3000' });
+        assert.deepStrictEqual(purgeTransport({}, {}, certPresent, false), { mode: 'direct', origin: 'http://localhost:3000' });
+        assert.deepStrictEqual(purgeTransport(null, {}, certPresent, false), { mode: 'direct', origin: 'http://localhost:3000' });
     });
 
     test('MONOLITH WINS over everything: an enrolled config running as mono still goes direct', () => {
@@ -104,8 +104,32 @@ describe('purgeTransport — a cluster node asks the gateway instead of guessing
     });
 
     test('gateway wiring without an enrollment identity (plain split behind a gateway) stays direct', () => {
-        const t = purgeTransport({ ...split, gatewayHost: 'localhost' }, {}, certPresent);
-        assert.deepStrictEqual(t, { mode: 'direct', origin: 'http://localhost:3001' });
+        const t = purgeTransport({ ...split, gatewayHost: 'localhost' }, {}, certPresent, true);
+        assert.deepStrictEqual(t, { mode: 'direct', origin: 'http://127.0.0.1:3001', local: true });
+    });
+});
+
+// The installer derives frontendUrl from the SITE address: `https://example.com` behind a proxy, or
+// `https://example.com:3001`. Neither is this machine's frontend — which, with the gateway local, listens
+// on 127.0.0.1 only — so the purge went out through the public name and never arrived.
+//
+// MUTATION PROOF: return frontendUrl unchanged in the single-host branch and every case below fails.
+describe('purgeTransport — the co-located frontend is dialled where it listens, not at the site address', () => {
+    test('an https:// site address keeps TLS but targets loopback', () => {
+        const cfg = { ...split, siteUrl: 'https://www.example.com', frontendUrl: 'https://www.example.com', frontendPort: 3001 };
+        assert.deepStrictEqual(purgeTransport(cfg, {}, certPresent, true), { mode: 'direct', origin: 'https://127.0.0.1:3001', local: true });
+    });
+
+    test('a frontendUrl the operator pointed at another machine is still the target', () => {
+        const cfg = { ...split, siteUrl: 'https://www.example.com', frontendUrl: 'https://10.0.0.7:3001' };
+        assert.deepStrictEqual(purgeTransport(cfg, {}, certPresent, true), { mode: 'direct', origin: 'https://10.0.0.7:3001' });
+    });
+
+    test("the port is the frontend's own, chosen as start-frontend.js chooses it", () => {
+        const at = (cfg: any) => (purgeTransport({ ...split, siteUrl: 'https://www.example.com', ...cfg }, {}, certPresent, true) as any).origin;
+        assert.strictEqual(at({ frontendPort: 3201, frontendUrl: 'https://www.example.com:3001' }), 'https://127.0.0.1:3201');
+        assert.strictEqual(at({ frontendPort: undefined, frontendUrl: 'https://www.example.com:3101' }), 'https://127.0.0.1:3101');
+        assert.strictEqual(at({ frontendPort: undefined, frontendUrl: 'https://www.example.com' }), 'https://127.0.0.1:3001');
     });
 });
 
