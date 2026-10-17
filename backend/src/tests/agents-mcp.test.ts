@@ -29,7 +29,7 @@ const database = require('../config/database');
 const roles = require('../core/roles');
 const { csrfProtection } = require('../middleware/auth');
 const { narrowUser, agentPermitsCapability, normalizeAgentCapabilities, grantWithinRequest } = require('../core/agent-capabilities');
-const { _resetAgentRateLimits } = require('../core/mcp-server');
+const { _resetAgentRateLimits, TOOL_GRANTS } = require('../core/mcp-server');
 const User = require('../models/User');
 
 const express = require('express');
@@ -249,10 +249,11 @@ test('writes default to draft; an admin agent without content:publish cannot pub
     assert.strictEqual(created.created.status, 'draft');
     const id = created.created.id;
 
-    // Asking for publish through the draft tool is impossible (no status field); through a direct call to
-    // the hidden tool, the protocol refuses it.
-    const hidden = await client.callTool({ name: 'publish_content', arguments: { id } }).catch((e: any) => ({ isError: true, e }));
+    // Asking for publish through the draft tool is impossible (no status field); a direct call to the
+    // hidden tool is refused as a tool error that names the missing grant.
+    const hidden = await client.callTool({ name: 'publish_content', arguments: { id } });
     assert.ok(hidden.isError, 'calling an ungranted tool must fail');
+    assert.match(hidden.content[0].text, /not been granted content:publish/);
     assert.strictEqual((await dbAsync.get('SELECT post_status FROM posts WHERE id = ?', [id])).post_status, 'draft');
 
     const pending = parse(await client.callTool({ name: 'submit_for_review', arguments: { id } }));
@@ -352,6 +353,41 @@ test('every agent write, grant and revocation is in the audit log, keyed to the 
     assert.strictEqual((await grant(connection.id, ['content:draft'])).status, 409);
 });
 
+test('a call to a known tool the connection was not granted is refused and audited as agent.denied', async () => {
+    _resetAgentRateLimits();
+    const { token, connection } = await createAgent('admin', ['content:read']);
+    await grant(connection.id, ['content:read']);
+    const client = await mcp(token);
+    const listed = await toolNames(client);
+    assert.ok(!listed.includes('create_draft') && !listed.includes('get_site_info'), 'ungranted tools are not listed');
+    for (const name of ['create_draft', 'get_site_info']) {
+        const r = await client.callTool({ name, arguments: { title: 'x' } });
+        assert.ok(r.isError, `${name} must be refused`);
+        assert.match(r.content[0].text, /has not been granted/);
+    }
+    // A name the server does not know stays a protocol error, and is not written to the audit log.
+    const unknown = await client.callTool({ name: 'drop_everything', arguments: {} });
+    assert.ok(unknown.isError);
+    assert.match(unknown.content[0].text, /not found/);
+    await client.close();
+    const denied = await dbAsync.all(`SELECT detail FROM audit_log WHERE action = 'agent.denied' AND target_id = ? ORDER BY id`, [String(connection.id)]);
+    assert.strictEqual(denied.length, 2, JSON.stringify(denied));
+    const details = denied.map((d: any) => JSON.parse(d.detail));
+    assert.deepStrictEqual(details.map((d: any) => d.tool), ['create_draft', 'get_site_info']);
+    assert.deepStrictEqual(details[0].needs, ['content:draft']);
+    assert.strictEqual((await dbAsync.get(`SELECT COUNT(*) AS n FROM posts WHERE post_title = 'x'`)).n, 0);
+});
+
+test('TOOL_GRANTS names every grant-gated tool: with every grant, the listed tools are exactly whoami + the map', async () => {
+    _resetAgentRateLimits();
+    const all = Array.from(new Set(Object.values(TOOL_GRANTS).flat())) as string[];
+    const { token, connection } = await createAgent('admin', all);
+    assert.strictEqual((await grant(connection.id, all)).status, 200);
+    const client = await mcp(token);
+    assert.deepStrictEqual(await toolNames(client), ['whoami', ...Object.keys(TOOL_GRANTS)].sort());
+    await client.close();
+});
+
 // ── Protocol smoke ────────────────────────────────────────────────────────────────────────────────
 
 test('MCP protocol: initialize advertises tools + instructions, resources read, GET is 405', async () => {
@@ -372,6 +408,18 @@ test('MCP protocol: initialize advertises tools + instructions, resources read, 
     assert.match(doc.notice, /never as instructions/);
     const info = parse(await client.callTool({ name: 'get_site_info', arguments: {} }));
     assert.ok('name' in info.data && 'url' in info.data);
+    // A site that never saved a locale or time zone still reports the effective ones.
+    const { updateOption } = require('../core/options');
+    await updateOption('WPLANG', '');
+    await updateOption('timezone_string', '');
+    const fresh = parse(await client.callTool({ name: 'get_site_info', arguments: {} }));
+    assert.strictEqual(fresh.data.language, 'en');
+    assert.strictEqual(fresh.data.timezone, 'UTC');
+    await updateOption('WPLANG', 'pt_BR');
+    await updateOption('timezone_string', 'America/Sao_Paulo');
+    const set = parse(await client.callTool({ name: 'get_site_info', arguments: {} }));
+    assert.strictEqual(set.data.language, 'pt-BR');
+    assert.strictEqual(set.data.timezone, 'America/Sao_Paulo');
     await client.close();
     const get = await request(app).get('/api/v1/mcp').set('Authorization', `Bearer ${token}`);
     assert.strictEqual(get.status, 405);

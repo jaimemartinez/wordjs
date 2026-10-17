@@ -8,6 +8,28 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Changed
 
+- **AI provider: a longer, configurable timeout for local models.** A loopback OpenAI-compatible
+  provider (Ollama, LM Studio…) now gets 300 s per request instead of 60 s, enough for a CPU model's first
+  load, a queue or an image; `WORDJS_AI_TIMEOUT_MS` overrides it for every provider.
+
+- **AI provider failures say what went wrong.** A timeout (`ai_provider_timeout`, 504), a model that does
+  not accept images asked for alt text (`ai_provider_no_vision`, 422), an unknown model, an unreachable or
+  unavailable server and a refused request now have their own codes and messages, and the editor shows a
+  translated message for each instead of one generic "did not answer correctly".
+
+- **Post and page `link` is the canonical URL.** REST and GraphQL answer `<siteUrl>/<slug>` — what the
+  page declares in `rel=canonical` and the sitemap and feeds publish — instead of `/post/<slug>/`, which
+  answered with a 308 redirect. Other content types keep `/<type>/<slug>`, without the trailing slash.
+
+- **Anonymous `status=draft` (pending, private, future) lists are empty.** `GET /posts` and GraphQL
+  `posts(status:)` used to answer an anonymous request for unpublished entries with the published ones;
+  they now answer an empty list. `status=any` still lists the published entries.
+
+- **The installer no longer reports a fake test run.** It used to "run" the core test suite with a filter
+  that matched none of its TypeScript files and report "0 tests, OK"; the install response now says
+  `tests.skipped: true`. `runCoreTests()` finds `*.test.ts` files, runs them with the secret-free env, and
+  reports `skipped` when there is no suite or no dev dependencies.
+
 - **The admin follows the site's language until you pick one.** With no choice saved in the sidebar's
   language menu, the admin now speaks the site's own language (`<html lang>`, from the site locale) when it
   is English, Spanish or Portuguese, instead of always starting in Spanish. An English site no longer
@@ -20,6 +42,38 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   and Portuguese translations (Circuito's was Spanish only).
 
 ### Fixed
+
+- **MCP: a call to a tool the agent connection was not granted** is answered with a tool error that names
+  the missing grant and is recorded as `agent.denied` in the audit trail, as documented.
+
+- **MCP `get_site_info`** answers the effective language tag and time zone (`en`/`UTC` on a site that never
+  saved them) instead of empty strings.
+
+- **Media storage: the public URL is checked for the mistakes the server can see.** The settings and the
+  connection test answer `warnings` for a public URL that already ends with the key prefix (media URLs
+  would read `…/uploads/uploads/…`), a path-style endpoint without the bucket, and plain http on an https
+  site.
+
+- **Media storage on a multisite network:** a file another site does not hold on disk is redirected to the
+  bucket, like on the main site, instead of a 404.
+
+- **Media storage: "a migration is already running" is cluster-wide.** A node that is not running the
+  migration itself now refuses a second start (409) and reports it as running, from a progress record the
+  running node refreshes at least every 30 s.
+
+- **Media storage: a saved public URL reaches the admin page's CSP at once.** The frontend re-reads the
+  media origin when the backend purges its settings cache, so **Test connection** works right after a save
+  instead of failing for up to a minute.
+
+- **`npm run media -- status` prints only its JSON on stdout**; backend log lines go to stderr
+  (`WORDJS_LOG_TO_STDERR=1`), so it can be piped to `jq`.
+
+- **Backup archives are now created owner-only** (0600, in a 0700 directory), and archives already on disk
+  are tightened at boot.
+
+- **Docs:** `gateway.md` documents `GET /revalidate-secret`, and its endpoint test reads the routes
+  mounted from `gateway/src/purge.js`; `media-storage.md` names Garage and SeaweedFS next to MinIO for a
+  self-hosted bucket; `ai-agents.md` notes that **Last used** is written at most once a minute.
 
 - **Plugins → Marketplace speaks the admin's language.** The catalog tab, its source settings and the
   install dialog were hard-coded Spanish ("Cargando el catálogo…", "Instalar", "Bloque …", "Permisos que

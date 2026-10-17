@@ -602,8 +602,11 @@ const EXECUTABLE_DOC_EXTS = new Set(['.html', '.htm', '.xhtml', '.xht', '.shtml'
 // falls through to express.static below, which serves the original exactly as before.
 const { imageNegotiation } = require('./middleware/image-negotiation');
 // MULTISITE: another site of the network serves /uploads from ITS OWN root (core/private-media
-// publicUploadsRoot), and a miss there is a 404 — never a fall-through to the main site's tree below.
+// publicUploadsRoot), and a miss there never falls through to the main site's tree below. With S3 media
+// storage it is redirected to the bucket exactly as on the main site (the same uploadsRedirect, mounted
+// at the end of this chain) — that site's uploads go to the bucket too — and only then is it a 404.
 const siteUploadHandlers = new Map<string, any[]>();
+const secondarySiteUploadsRedirect = require('./core/media-storage').uploadsRedirect();
 app.use('/uploads', (req: Request, res: Response, next: NextFunction) => {
     if (!multisiteGuards.onSecondarySite()) return next();
     const root = require('./core/private-media').publicUploadsRoot();
@@ -615,7 +618,10 @@ app.use('/uploads', (req: Request, res: Response, next: NextFunction) => {
     const [negotiate, serve] = handlers;
     negotiate(req, res, (err?: any) => {
         if (err) return next(err);
-        serve(req, res, (err2?: any) => (err2 ? next(err2) : res.status(404).end()));
+        serve(req, res, (err2?: any) => {
+            if (err2) return next(err2);
+            secondarySiteUploadsRedirect(req, res, (err3?: any) => (err3 ? next(err3) : res.status(404).end()));
+        });
     });
 });
 app.use('/uploads', imageNegotiation(config.uploads.dir));

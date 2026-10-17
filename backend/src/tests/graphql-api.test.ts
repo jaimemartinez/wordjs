@@ -157,6 +157,30 @@ describe('GraphQL ↔ REST parity (same caller, same answer)', () => {
         assert.ok((await ids('editor')).includes(P.alicePrivate));
     });
 
+    test('anonymous: a non-published status is an empty list in REST and GraphQL, never the published entries', async () => {
+        for (const status of ['draft', 'pending', 'private', 'future']) {
+            const r = await rest(null, `/posts?status=${status}&per_page=50`);
+            assert.strictEqual(r.status, 200);
+            assert.deepStrictEqual(r.body, [], `REST / ${status}`);
+            assert.strictEqual(Number(r.headers['x-wp-total']), 0, `REST / ${status} total`);
+            const data = await gql(null, `query($s: String) { posts(status: $s, first: 50) { totalCount nodes { id } } }`, { s: status });
+            assert.deepStrictEqual(data.posts, { totalCount: 0, nodes: [] }, `GraphQL / ${status}`);
+        }
+        // `any` still lists what an anonymous caller may see: the published entries.
+        const any = (await rest(null, '/posts?status=any&per_page=50')).body.map((p: any) => p.id);
+        assert.ok(any.includes(P.pub) && !any.includes(P.aliceDraft));
+    });
+
+    test('link is the canonical /<slug> address for posts and pages (no trailing slash, no /post/ prefix)', async () => {
+        const post = (await rest(null, `/posts/${P.pub}`)).body;
+        assert.match(post.link, /^https?:\/\/[^/]+\/[^/]+$/, post.link);
+        assert.ok(post.link.endsWith(`/${post.slug}`), post.link);
+        const page = (await rest(null, `/posts/${P.page}`)).body;
+        assert.ok(page.link.endsWith(`/${page.slug}`) && !page.link.endsWith('/'), page.link);
+        const node = await gql(null, `{ contentNode(id: ${P.pub}) { link } }`);
+        assert.strictEqual(node.contentNode.link, post.link);
+    });
+
     test('post(id:) is null exactly where GET /posts/:id is 404, and equal where it is 200', async () => {
         for (const who of CALLERS) {
             for (const key of ['pub', 'aliceDraft', 'alicePrivate', 'bobDraft', 'locked', 'page']) {
