@@ -66,4 +66,34 @@ describe('route modules', () => {
         assert.ok(mounted.has(path.resolve(ROUTES, 'index.ts')));
         assert.ok(mounted.has(path.resolve(ROUTES, 'posts.ts')));
     });
+
+    // GET /api/v1/ publishes a route map. It used to be a hand-kept literal that went stale (a third of
+    // the mounted groups were missing, and it announced version 1.0.0). Every group the server mounts
+    // (on the routes index, or on the app by src/index.ts and core/db-admin) must be in it.
+    it('the API index route map lists every mounted route group', () => {
+        const groups = require('../routes/index').API_ROUTE_GROUPS;
+        assert.ok(groups && typeof groups === 'object', 'routes/index exposes API_ROUTE_GROUPS');
+        const listed = new Set(Object.values(groups));
+        const mounted = new Set<string>();
+        const indexText = fs.readFileSync(path.join(ROUTES, 'index.ts'), 'utf8');
+        for (const m of indexText.matchAll(/router\.use\(\s*'(\/[^']+)'\s*,(?!\s*multisiteGuards)/g)) mounted.add(m[1]);
+        const appMount = /app\.use\(\s*[`'"](?:\$\{config\.api\.prefix\}|\/api\/v1)(\/[^`'"]+)[`'"]\s*,\s*(?:router\b|require\()/g;
+        for (const file of [path.join(SRC, 'index.ts'), path.join(SRC, 'core', 'db-admin', 'index.js')]) {
+            for (const m of fs.readFileSync(file, 'utf8').matchAll(appMount)) mounted.add(m[1]);
+        }
+        assert.ok(mounted.has('/posts') && mounted.has('/backups') && mounted.has('/db-migration'), 'the scan sees both kinds of mount');
+        const missing = [...mounted].filter((p) => !listed.has(p));
+        assert.deepStrictEqual(missing, [], `route groups missing from GET /api/v1/: ${missing.join(', ')}`);
+    });
+
+    it('the API index announces the product version, not a literal', () => {
+        const router = require('../routes/index');
+        const layer = router.stack.find((l: any) => l.route && l.route.path === '/' && l.route.methods.get);
+        assert.ok(layer, 'GET / is mounted on the routes index');
+        let body: any = null;
+        layer.route.stack[0].handle({}, { json: (b: any) => { body = b; } });
+        const expected = require(path.resolve(SRC, '..', '..', 'package.json')).version;
+        assert.strictEqual(body.version, expected);
+        assert.strictEqual(body.routes.dbMigration, '/api/v1/db-migration');
+    });
 });
