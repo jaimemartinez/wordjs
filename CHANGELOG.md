@@ -32,6 +32,9 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 - **The gateway honours `LOG_LEVEL` and `logging.level`.** Its logger was fixed at `info`; it now follows
   the backend's order (`LOG_LEVEL`, then the config, then `info`) and understands the backend's level
   names too.
+- **AI requests are no longer cut at 60 s in split mode.** The gateway gave every proxied request 60 s;
+  `/api/v1/ai/…` now waits the AI provider timeout plus 30 s (`WORDJS_AI_TIMEOUT_MS`, default 300 s), so
+  a slow local model answers, or the backend reports its own timeout.
 - **Split mode on one machine stays on the machine.** The frontend's server-side reads went to the
   gateway's public address, so behind a proxy they left the server and came back through it; they now go
   to the gateway next to it over loopback (when its certificate covers a loopback name, which the

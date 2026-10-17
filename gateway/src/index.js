@@ -1162,9 +1162,9 @@ if (cluster.isPrimary) {
                 target,
                 agent: isHttps ? proxyAgent : httpKeepAliveAgent,
                 secure: false,
-                // Increase timeout for SSE (1 hour)
-                timeout: isSSE ? 3600000 : 60000,
-                proxyTimeout: isSSE ? 3600000 : 60000
+                // Increase timeout for SSE (1 hour); the AI routes wait for the provider (runtime-settings.js)
+                timeout: isSSE ? 3600000 : runtimeSettings.proxyTimeoutFor(req.url, process.env),
+                proxyTimeout: isSSE ? 3600000 : runtimeSettings.proxyTimeoutFor(req.url, process.env)
             }, (err) => {
                 if (!res.headersSent) {
                     const code = err.code || 'UNKNOWN';

@@ -82,6 +82,15 @@ test('behind a trusted local proxy each visitor has its own rate-limit bucket; u
         'with nothing trusted the proxy is one client, as before — X-Forwarded-For cannot be forged past the cap');
 });
 
+test("the AI routes outlive the backend's provider timeout; everything else keeps 60 s", () => {
+    assert.strictEqual(settings.proxyTimeoutFor('/api/v1/posts', {}), 60000);
+    assert.strictEqual(settings.proxyTimeoutFor('/api/v1/ai/suggest?x=1', {}), 330000);
+    assert.strictEqual(settings.proxyTimeoutFor('/api/v1/ai/suggest', { WORDJS_AI_TIMEOUT_MS: '600000' }), 630000);
+    assert.strictEqual(settings.proxyTimeoutFor('/api/v1/ai/suggest', { WORDJS_AI_TIMEOUT_MS: '5000' }), 60000, 'never below the default');
+    assert.strictEqual(settings.proxyTimeoutFor('/api/v1/ai/suggest', { WORDJS_AI_TIMEOUT_MS: 'abc' }), 330000);
+    assert.strictEqual(settings.proxyTimeoutFor('/api/v1/aim', {}), 60000);
+});
+
 test('the untrusted-proxy warning fires once, only for a loopback peer relaying a real client', () => {
     const lines = [];
     const warn = settings.createUntrustedProxyWarning(false, { warn: (m) => lines.push(m) });

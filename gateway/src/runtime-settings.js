@@ -136,7 +136,28 @@ function stateForwardedHeaders(req, client, { upgrade = false } = {}) {
     if (!upgrade) req.headers['x-forwarded-host'] = req.headers['x-forwarded-host'] || req.headers.host || '';
 }
 
+const DEFAULT_PROXY_TIMEOUT_MS = 60000;
+// The backend's AI provider waits up to 300 s for a loopback provider (a local model on CPU) by default;
+// WORDJS_AI_TIMEOUT_MS overrides it there, and the gateway reads the same variable.
+const DEFAULT_AI_TIMEOUT_MS = 300000;
+const AI_TIMEOUT_MARGIN_MS = 30000;
+
+/**
+ * How long the proxy waits for an upstream answer on this path. 60 s, except the AI routes
+ * (`/api/v1/ai/…`): the backend may legitimately wait longer than that for the provider, and the gateway
+ * used to cut every such request at 60 s in split mode. They get the AI timeout plus a margin, so the
+ * backend's own timeout — with its own error message — always fires first.
+ */
+function proxyTimeoutFor(url, env) {
+    const p = String(url || '/').split('?')[0];
+    if (!p.startsWith('/api/v1/ai/')) return DEFAULT_PROXY_TIMEOUT_MS;
+    const n = Number(String((env && env.WORDJS_AI_TIMEOUT_MS) || '').trim());
+    const ai = Number.isFinite(n) && n > 0 ? n : DEFAULT_AI_TIMEOUT_MS;
+    return Math.max(DEFAULT_PROXY_TIMEOUT_MS, ai + AI_TIMEOUT_MARGIN_MS);
+}
+
 module.exports = {
+    proxyTimeoutFor,
     resolveLogLevel,
     stateForwardedHeaders,
     resolveTrustProxy,
