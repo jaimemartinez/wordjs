@@ -120,6 +120,17 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **Edits show on a split site right after an HTTPS install, and on any single-host split site behind
+  a public name.** The backend sent its on-demand cache purges to `frontendUrl`, which the installer
+  derives from the site address (`https://example.com`, or `https://example.com:3001`): not this
+  machine's frontend, which listens on loopback when the gateway is local. And right after an install
+  with the default HTTPS the frontend still listens on the plain-HTTP socket it opened before the
+  certificates existed, while an `https://` purge target never falls back to plain HTTP, so every purge
+  failed and pages changed only when their cache window ran out (60 s for the home page) or after a
+  restart. A single-host split now purges the frontend installed next to the backend on `127.0.0.1`
+  at its own port, and for that loopback target the purge follows the listener the frontend really
+  opened.
+
 - **A split install keeps serving HTTPS after its first restart, and its content pages render.** Two
   problems hit a split-mode site installed from the release bundle with the default self-signed HTTPS
   (no `WORDJS_HTTP=1`). First, the installer rewrote `gateway/gateway-config.json` with `ssl` taken

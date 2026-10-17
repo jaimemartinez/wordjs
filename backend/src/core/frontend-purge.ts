@@ -104,8 +104,43 @@ function ensureSecret(): string | null {
 }
 
 type PurgeTransport =
-    | { mode: 'direct'; origin: string }
+    | { mode: 'direct'; origin: string; local?: boolean }
     | { mode: 'gateway'; host: string; port: number };
+
+/** Is there a frontend installed next to this backend (the single-host layout)? */
+function hasLocalFrontend(): boolean {
+    return fs.existsSync(path.resolve(BACKEND_ROOT, '..', 'frontend', 'package.json'));
+}
+
+/**
+ * Does `frontendUrl` name the frontend of THIS installation — unset, a loopback name, or the site's own
+ * host (what the installer derives it from)? An operator who points it at another machine (a frontend
+ * on 10.0.0.7, say) keeps that target even though a release bundle has a frontend/ tree on every node.
+ */
+function namesThisSitesFrontend(c: any): boolean {
+    const hostOf = (u: unknown): string | null => {
+        try { return new URL(String(u)).hostname.toLowerCase().replace(/^\[|\]$/g, ''); } catch { return null; }
+    };
+    if (!c || !c.frontendUrl) return true;
+    const host = hostOf(c.frontendUrl);
+    if (!host) return true;
+    if (host === 'localhost' || host === '::1' || /^127\./.test(host)) return true;
+    return host === hostOf(c.siteUrl);
+}
+
+/**
+ * The port the co-located frontend listens on, chosen exactly as frontend/scripts/start-frontend.js
+ * chooses it: `frontendPort`, else the port of `frontendUrl`, else 3001.
+ */
+function localFrontendPort(c: any): number {
+    const fromConfig = Number(c && c.frontendPort);
+    if (Number.isInteger(fromConfig) && fromConfig > 0 && fromConfig < 65536) return fromConfig;
+    try {
+        const p = Number(new URL(String(c && c.frontendUrl)).port);
+        if (p) return p;
+    } catch { /* no usable frontendUrl */ }
+    return 3001;
+}
 
 /**
  * Is the direct target the monolith's OWN in-process Next server (rather than a co-located frontend
@@ -125,7 +160,8 @@ function isMonolithTarget(env: any = process.env): boolean {
 function purgeTransport(
     cfg: any,
     env: any = process.env,
-    certExists: (p: string) => boolean = fs.existsSync
+    certExists: (p: string) => boolean = fs.existsSync,
+    localFrontend: boolean = hasLocalFrontend()
 ): PurgeTransport {
     // Monolith serves Next itself on its public port (monolith.js exports it as PORT) — the
     // config's frontendUrl is the SPLIT-mode frontend (3001) and would be a dead target here.
@@ -145,6 +181,16 @@ function purgeTransport(
     // asking the gateway to fan them out. Purging was dead and nothing said so.
     if (c.advertiseHost && c.mtls && c.mtls.cert && c.gatewayHost && certExists(clusterCertPaths(c).cert)) {
         return { mode: 'gateway', host: String(c.gatewayHost), port: Number(c.gatewayInternalPort) || 3100 };
+    }
+    // SINGLE HOST: the frontend is the one installed next to this backend, so it is dialled on loopback
+    // at the port it listens on. `frontendUrl` is the SITE's address for it — the installer derives it
+    // from the site address (`https://example.com`, or `…:3001`) — which behind a proxy or a public name
+    // is not this machine's frontend at all, and since the frontend binds 127.0.0.1 when the gateway is
+    // local (frontend/local-gateway.js) the public name cannot reach it in any case. Only the scheme is
+    // taken from it. `local` lets deliverDirect follow the listener the frontend really opened.
+    if (localFrontend && namesThisSitesFrontend(c)) {
+        const scheme = /^https:/i.test(String(c.frontendUrl || '')) ? 'https' : 'http';
+        return { mode: 'direct', origin: `${scheme}://127.0.0.1:${localFrontendPort(c)}`, local: true };
     }
     return { mode: 'direct', origin: String(c.frontendUrl || 'http://localhost:3000').replace(/\/+$/, '') };
 }
@@ -426,7 +472,7 @@ function send(
  * @param isMono  true when the target is this very process's Next server: then the origin's scheme is
  *                a fact about a listener we own, and nothing about the frontend's certs applies.
  */
-function deliverDirect(origin: string, body: string, secret: string, cfg: any, isMono: boolean) {
+function deliverDirect(origin: string, body: string, secret: string, cfg: any, isMono: boolean, local = false) {
     let url: URL;
     try { url = new URL(origin + '/api/revalidate'); } catch { return; }
 
@@ -438,6 +484,12 @@ function deliverDirect(origin: string, body: string, secret: string, cfg: any, i
     const configuredHttps = url.protocol === 'https:';
     const inferredHttps = !isMono && !configuredHttps && frontendServesTls();
     const isHttps = configuredHttps || inferredHttps;
+    // The same first-install transition with an https:// frontendUrl: an HTTPS split install writes one,
+    // while the frontend that booted before the install still listens on plain HTTP until its restart,
+    // so every purge failed and pages changed only on their ISR window. Permitted ONLY for the
+    // co-located frontend on loopback (purgeTransport `local`); an https:// origin on any other host
+    // still never downgrades.
+    const mayRetryCleartext = inferredHttps || (configuredHttps && local && url.hostname === '127.0.0.1');
     const requestOptions = (overTls: boolean): any => ({
         protocol: overTls ? 'https:' : 'http:',
         method: 'POST',
@@ -463,7 +515,7 @@ function deliverDirect(origin: string, body: string, secret: string, cfg: any, i
     const onDone = (res: any, _text: string) => {
         if (res.statusCode !== 200) warnOnce(`frontend /api/revalidate answered ${res.statusCode}`);
     };
-    send(options, body, onDone, inferredHttps ? (e: any) => {
+    send(options, body, onDone, mayRetryCleartext ? (e: any) => {
         if (!isTlsAgainstCleartext(e, true)) return false;
         // No TLS attributes are copied. This is the origin's explicitly configured HTTP transport,
         // used only until the co-located frontend restarts and consumes its new certificates.
@@ -544,7 +596,7 @@ function flush() {
     }
     const secret = ensureSecret();
     if (!secret) return;
-    deliverDirect(target.origin, body, secret, cfg, isMonolithTarget());
+    deliverDirect(target.origin, body, secret, cfg, isMonolithTarget(), !!target.local);
 }
 
 /**
@@ -698,7 +750,7 @@ module.exports = {
     initFrontendPurge, purgeFrontend, purgeForPost, siteQualifiedPurge, publicPathsForPost, purgeTransport, gatewayPurgeOptions,
     // Exported for tests and for a future /health/details counter: a purge channel that is permanently
     // broken must be observable, not inferable from a log line an hour old.
-    clusterTlsOptions, frontendServesTls, purgeFailureState,
+    clusterTlsOptions, frontendServesTls, purgeFailureState, localFrontendPort,
     // The installation root every certificate path is resolved against, and the resolver itself:
     // exported so a test can prove they do not depend on the process's cwd.
     clusterCertPaths, BACKEND_ROOT,
