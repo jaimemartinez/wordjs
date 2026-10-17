@@ -84,9 +84,15 @@ describe('release packager — agent/assistant directories never ship', () => {
             'backend/data/gateway-own-addresses.json',
             'marketplace/plugins/faq/index.js',
             '.release-exclude',
+            // Site backups (core/backup.ts): a whole database plus media. Shipped, `create-wordjs upgrade`
+            // copied one into every upgraded site's backup list.
+            'backend/backups/backup-2026-01-01T00-00-00-000Z.zip',
+            'backend/backups',
         ]) {
             assert.strictEqual(shouldIgnore(p(rel)), true, `debería excluirse: ${rel}`);
         }
+        // By name too, not only because git happens not to track it: a committed backup is tracked.
+        assert.ok(IGNORE_PATTERNS.includes('backend/backups'), 'falta en IGNORE_PATTERNS: backend/backups');
     });
 
     /**
@@ -145,6 +151,23 @@ process.stdout.write('\\nRESULT ' + JSON.stringify(rels.map((r) => shouldIgnore(
         for (const rel of tracked.slice(0, 5)) {
             assert.strictEqual(shouldIgnore(p(rel)), false, `trackeado, debería viajar: ${rel}`);
         }
+    });
+
+    /**
+     * The structural rule above ships whatever git TRACKS, so a backup or a database committed by
+     * accident goes out in the next release (a test backup did, in backend/backups/). This keeps both
+     * out of the index itself; test fixtures are the one place a database file may live.
+     */
+    test('git tracks no site backup and no database file outside test fixtures', (t: any) => {
+        if (!runnableOrSkip(t, packagerCanConsultGit(), 'no git work tree: the index cannot be listed')) return;
+        const tracked = spawnSync('git', ['ls-files', '-z'], { cwd: ROOT_DIR, maxBuffer: 64 * 1024 * 1024 })
+            .stdout.toString('utf8').split('\0').filter(Boolean);
+        assert.ok(tracked.length > 0, 'git ls-files returned nothing: the check below is looking at nothing');
+        const isFixture = (rel: string) => rel.split('/').some((seg) => seg === 'fixtures' || seg === '__fixtures__');
+        const stray = tracked.filter((rel: string) =>
+            rel.startsWith('backend/backups/')
+            || (/\.(?:db|sqlite|sqlite3)$/i.test(rel) && !isFixture(rel)));
+        assert.deepStrictEqual(stray, [], 'site backups and database files are local state: remove them from the index');
     });
 
     test('los artefactos de build SÍ viajan, aunque git los ignore', () => {
