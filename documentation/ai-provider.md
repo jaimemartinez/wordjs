@@ -85,6 +85,25 @@ const { text, model } = await wordjs.ai.complete({
 |---|---|---|---|
 | `GET` | `/ai/status` | signed in | `{ enabled, tasks }` |
 | `GET` | `/ai/settings` | administrator, session | settings without the key (`hasKey`, `keyHint`) |
-| `PUT` | `/ai/settings` | administrator, session | `{ provider, model?, baseUrl?, apiKey?, clearKey? }`; `400` on an unknown provider/model or a bad base URL |
+| `PUT` | `/ai/settings` | administrator, session | `{ provider, model?, baseUrl?, apiKey?, clearKey? }`; `400 rest_invalid_param` on an unknown provider/model or a bad base URL or key |
 | `POST` | `/ai/test` | administrator, session | `{ ok, provider, model, ms }` or the provider error |
-| `POST` | `/ai/suggest` | edit rights (see §3) | `{ task, title?, content?, mediaId?, language? }` → `{ suggestion, model }`; `409 ai_not_configured`, `422 ai_refused`, `429 ai_rate_limited` |
+| `POST` | `/ai/suggest` | edit rights (see §3) | `{ task, title?, content?, mediaId?, language? }` → `{ suggestion, model }`; `409 ai_not_configured`, `422 ai_refused`, `429 ai_rate_limited`, or a provider error (below) |
+
+### Errors
+
+Every error has the usual `{ code, message, data: { status } }` shape; the message never carries the key
+or the request.
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `rest_invalid_param` | Saving settings: an unknown provider or Claude model, an OpenAI-compatible provider without a model, a base URL that is not a valid http(s) URL, carries credentials or uses plain http to a host that is not loopback, or a key that is too long or contains whitespace. Also a bad `task`, `title`/`content` or a missing `mediaId` on `/ai/suggest`, and a plugin's malformed `wordjs.ai.complete(...)` input |
+| `409` | `ai_not_configured` | No provider, no stored key (Anthropic), or no base URL or model (OpenAI-compatible) |
+| `422` | `ai_refused` | The model declined to answer (`stop_reason: "refusal"`) |
+| `429` | `ai_rate_limited` | This site's own limit: 20 suggestions per minute per user, 30 calls per minute per plugin |
+| `429` | `ai_provider_rate_limited` | The provider is rate limiting the site's account |
+| `502` | `ai_provider_auth` | The provider rejected the key, or the key may not use this model |
+| `502` | `ai_provider_model` | The configured model was not found (Anthropic) |
+| `502` | `ai_provider_bad_request` | The provider refused the request as invalid (Anthropic) |
+| `502` | `ai_provider_unreachable` | The provider could not be reached (network error or timeout) |
+| `502` | `ai_empty` | The model returned no text |
+| `502` | `ai_provider_error` | Any other provider error, or a response that is not JSON |

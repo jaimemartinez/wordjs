@@ -1,8 +1,8 @@
 # WordJS Mail Server Plugin
 
-The Mail Server is a powerful plugin (source in `marketplace/plugins/mail-server`, installed to `backend/plugins/mail-server`) that adds full MTA capabilities to WordJS: an inbound SMTP server, direct-to-MX outbound delivery, DKIM/SPF/DNSBL/Bayesian security, and a scheduled + retry delivery queue.
+The Mail Server is a powerful plugin (version **3.0.1**; source in `marketplace/plugins/mail-server`, installed to `backend/plugins/mail-server`) that adds full MTA capabilities to WordJS: an inbound SMTP server, direct-to-MX outbound delivery, DKIM/SPF/DNSBL/Bayesian security, and a scheduled + retry delivery queue.
 
-> **Optional, isolated, per-capability grants — no trust tier.** The Mail Server is **not** required to run WordJS. Like every isolated plugin it runs in a **separate OS process** (`child_process.fork` of `plugin-worker.js`, not a `worker_threads` isolate) and reaches core only through the `wordjs` capability bridge, RPC'd over IPC and permission-checked on the host. There is **no "trusted" tier** — no plugin bypasses the sandbox. The Mail Server works purely from the capabilities its `manifest.json` **requests** and an admin **grants** (default-deny, Android-style). Outbound sockets (DNS + TCP to remote MX servers on port 25) require the **`network`** grant, and so does the inbound SMTP listener where the platform lets an isolated plugin listen at all (on Linux the plugin sandbox does not, grant or no grant; see Inbound SMTP below) — without it `net`/`tls`/`dns` are blocked inside the isolate and delivery degrades gracefully. Its secrets (DKIM private key, relay creds) live in the plugin's **own** `wjp_mail_server_secrets` table, not in protected core options; becoming the host-wide mail provider requires the **`email:provider`** grant. Even though it is a first-party plugin, it is **not** privileged: it goes through the same grant path as any plugin. Activating it (`POST /plugins/mail-server/activate`, admin-only) shows the admin the capabilities the manifest requests and grants exactly that declared set — but only while the plugin holds no grants an administrator decided (no record, or an empty one with no administrator decision recorded), so a per-permission revoke in `/admin/plugins` survives a re-activation, a revoke of every grant included. (Plugins that were *already active* when the default-deny model was introduced were grandfathered by the non-breaking boot backfill.) Activate it only if you want a self-hosted mail server.
+> **Optional, isolated, per-capability grants — no trust tier.** The Mail Server is **not** required to run WordJS. Like every isolated plugin it runs in a **separate OS process** (`child_process.fork` of `plugin-worker.js`, not a `worker_threads` isolate) and reaches core only through the `wordjs` capability bridge, RPC'd over IPC and permission-checked on the host. There is **no "trusted" tier** — no plugin bypasses the sandbox. The Mail Server works purely from the capabilities its `manifest.json` **requests** and an admin **grants** (default-deny, Android-style). Outbound sockets (DNS + TCP to remote MX servers on port 25) require the **`network`** grant, and so does the inbound SMTP listener where the platform lets an isolated plugin listen at all (on Linux the plugin sandbox does not, grant or no grant; see Inbound SMTP below) — without it `net`/`tls`/`dns` are blocked inside the isolate and delivery degrades gracefully. Its secrets (DKIM private key, relay creds) live in the plugin's **own** `wjp_mail_server_secrets` table, not in protected core options; becoming the host-wide mail provider requires the **`email:provider`** grant, and having WordJS listen on port 25 for it the exclusive **`smtp:inbound`** grant. Its manifest also requests **`browser:script`**: it ships an admin page (the Email Center, `/admin/plugin/emails`) and a frontend **hooks** file (`client/UserFormExtension.tsx`, the "Professional Mail Account" toggle the core user form renders through the `user_form_before_email` hook), and that compiled code runs in the admin's browser with the viewer's session. Even though it is a first-party plugin, it is **not** privileged: it goes through the same grant path as any plugin. Activating it (`POST /plugins/mail-server/activate`, admin-only) shows the admin the capabilities the manifest requests and grants exactly that declared set — but only while the plugin holds no grants an administrator decided (no record, or an empty one with no administrator decision recorded), so a per-permission revoke in `/admin/plugins` survives a re-activation, a revoke of every grant included. (Plugins that were *already active* when the default-deny model was introduced were grandfathered by the non-breaking boot backfill.) Activate it only if you want a self-hosted mail server.
 
 ## Features
 
@@ -30,7 +30,7 @@ The Mail Server is a powerful plugin (source in `marketplace/plugins/mail-server
 Settings are managed via the Admin Panel -> **Email Center** -> **Mail server** (the server icon; administrators only) and persisted as core options. An administrator without a mailbox of their own lands straight on the console.
 
 *   **From identity:** `mail_from_email`, `mail_from_name`.
-*   **SMTP listen port:** `smtp_listen_port` (default `25`; automatic fallback to `2525` when 25 can't be bound, reported as a degraded status — except under the Linux plugin sandbox, which refuses a listening socket on any port; see Inbound SMTP above). The manifest also declares `claimPorts: [25]`, so when a distro's preinstalled MTA (Postfix/Exim/Sendmail) is squatting the port, the admin UI can show what is occupying it and — after explicit confirmation — permanently disable that known service and reload the plugin (host-side only, admin routes; never reachable from a plugin, and unknown occupants are only reported, never touched).
+*   **SMTP listen port:** `smtp_listen_port` (default `25`; automatic fallback to `2525` when 25 can't be bound, reported as a degraded status — except under the Linux plugin sandbox, which refuses the plugin's own listening socket on any port; see Inbound SMTP above). With the `smtp:inbound` grant the plugin asks the host for this same port, and the host opens only a port the manifest's `claimPorts` declares — `25` for this plugin — so another value is refused and the console shows why. The manifest also declares `claimPorts: [25]`, so when a distro's preinstalled MTA (Postfix/Exim/Sendmail) is squatting the port, the admin UI can show what is occupying it and — after explicit confirmation — permanently disable that known service and reload the plugin (host-side only, admin routes; never reachable from a plugin, and unknown occupants are only reported, never touched).
 *   **Trusted proxy IPs:** `smtp_proxy_ips` — comma/space-separated IPs allowed to send the **PROXY protocol (v1)** header (nginx `stream` with `proxy_protocol on;`, HAProxy `send-proxy`), so the real client IP reaches DNSBL/SPF/logging when inbound mail arrives through a TCP proxy. Only exact IPs are honored, never a blanket trust.
 *   **Catch-All:** `smtp_catch_all` — accept all incoming mail for the domain even when the user doesn't exist.
 *   **HELO host:** `mail_helo_host` — the name announced in EHLO; **must** match the sending IP's reverse DNS (PTR) or Gmail/Outlook will reject or spam your mail.
@@ -63,18 +63,31 @@ Per-user, per-rolling-hour caps guard against an authenticated account blasting 
 
 ## Developer API
 
-Other plugins send mail through the bridge. **Sending** is the everyday path: `wordjs.mail(msg)` is an **allowlisted bridge call** (in `ALLOWED_BRIDGE_METHODS`) available to any plugin — it requires the `email`/`admin` capability and RPCs to the host, which forwards to whatever plugin is the registered mail provider. **Becoming** the host-wide mail provider is the privileged path: only the Mail Server does that, via `wordjs.provideMail(sendMail)` (the `register-mail-provider` IPC kind). That requires the admin-granted **`email:provider`** capability — there is **no trusted bypass**; the grant is re-checked both at the `register-mail-provider` IPC handler and inside `provideMail` itself, so a plugin without it cannot reach it via a generic `call`. The host installs a shim so callers can use `wordjs.mail(...)` (isolated plugins) or the legacy `global.wordjs_send_mail(...)`:
+Other plugins send mail through the bridge. **Sending** is the everyday path: `wordjs.mail(msg)` is an **allowlisted bridge call** (in `ALLOWED_BRIDGE_METHODS`) available to any plugin — it requires the `email`/`admin` capability (declared in the manifest **and** granted) and RPCs to the host, which forwards to whatever plugin is the registered mail provider. **Becoming** the host-wide mail provider is the privileged path: only the Mail Server does that, via `wordjs.provideMail(sendMail)` (the `register-mail-provider` IPC kind). That requires the admin-granted **`email:provider`** capability — there is **no trusted bypass**; the grant is re-checked both at the `register-mail-provider` IPC handler and inside `provideMail` itself, so a plugin without it cannot reach it via a generic `call`.
+
+A plugin sends with `await wordjs.mail({...})`. The call is an RPC, so await it; it throws `Mail server not available` when no provider is registered (the Mail Server inactive, say) and a `Security Block` without the `email:admin` grant:
 
 ```javascript
-if (global.wordjs_send_mail) {
-    await global.wordjs_send_mail({
-        to: 'user@example.com',          // string or array
-        subject: 'Hello',
-        text: 'Sent from another plugin!',
-        html: '<p>Sent from another plugin!</p>'
+// manifest.json permissions: { "scope": "email", "access": "admin", "reason": "Sends booking confirmations" }
+// (plus express:register_route for the route itself)
+exports.init = function (wordjs) {
+    wordjs.http.route('post', '/notify', { auth: true, admin: true }, async (req, res) => {
+        try {
+            const result = await wordjs.mail({
+                to: 'user@example.com',          // string or array
+                subject: 'Hello',
+                text: 'Sent from another plugin!',
+                html: '<p>Sent from another plugin!</p>'
+            });
+            res.json({ ok: true, result });
+        } catch (e) {
+            res.status(503).json({ ok: false, error: e.message });
+        }
     });
-}
+};
 ```
+
+The host side keeps the provider in a host global (`wordjs_send_mail`, see `backend/src/core/mail-provider.ts`); that global exists only in the host process, and plugin code cannot read `global` anyway (the AST scanner refuses it, `plugins.md` §7.2), so always go through `wordjs.mail`.
 
 The Mail Server also registers an **`email` notification transport**, so any `notify({ transports: ['email'] })` is delivered by mail.
 

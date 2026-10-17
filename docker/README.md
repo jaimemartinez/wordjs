@@ -23,9 +23,18 @@ Multi-stage:
    `unhealthy` forever and any `depends_on: condition: service_healthy` would never fire. It is used as
    the Kubernetes `readinessProbe` in `deploy/helm/wordjs` instead.
 
-Because the app reads its **database** settings from `backend/wordjs-config.json` (only Redis + a few
-flags are environment-read), `entrypoint.sh` can materialize that file from environment variables — but
-it does so **only when `WORDJS_PRESEED_CONFIG=1`**, and never over an existing config.
+The app reads its **database** settings, secrets and site address only from `backend/wordjs-config.json`,
+so `entrypoint.sh` can materialize that file from environment variables — but it does so **only when
+`WORDJS_PRESEED_CONFIG=1`**, and never over an existing config. Many other settings are read from the
+environment by the app itself, on every boot and with or without a pre-seed: Redis (`REDIS_ENABLED`,
+`REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_DB` — note these are the app's names, not the
+entrypoint's `WORDJS_REDIS_*` below), media offload (`WORDJS_MEDIA_*`), `METRICS_TOKEN`, `LOG_LEVEL`,
+`WORDJS_DB_STRICT`, `WORDJS_TRUST_PROXY`, the API rate limit (`WORDJS_API_RATELIMIT_MAX` /
+`_WINDOW_MS`), the GraphQL limits (`WORDJS_GRAPHQL_MAX_DEPTH` / `_COST` / `_TOKENS`), the install token
+(`WORDJS_INSTALL_TOKEN`, `WORDJS_PRINT_INSTALL_TOKEN`), `WORDJS_HTTP`, `PORT` and the host-policy
+variables (`WORDJS_ALLOWED_HOSTS`, `WORDJS_IP_HOSTS`). A value in the config file wins over the variable
+for Redis, `METRICS_TOKEN` and `WORDJS_TRUST_PROXY`; the variable wins for the others. The full table,
+with defaults, is in [`documentation/deployment.md`](../documentation/deployment.md#-configuration-reference-environment-variables--config-keys).
 
 > **Why that is opt-in.** `core/configManager.isInstalled()` keys off `installedAt || dbDriver`, so any
 > config written before first boot marks the instance **installed** — and `POST /api/v1/setup/install`

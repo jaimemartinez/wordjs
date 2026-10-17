@@ -7,7 +7,7 @@
  * core ONLY via the `wordjs` bridge, whose calls are RPC'd here (over the IPC channel) and run through
  * createPluginApi() (permission-checked, in the plugin's context). Hooks/filters the plugin registers
  * become shims in the real hook system that call back into the isolate. The host's heap (secrets, DB
- * handle, other plugins) is unreachable from the child. See documentation/plugin-isolation-proposal.md.
+ * handle, other plugins) is unreachable from the child. See documentation/archive/plugin-isolation-proposal.md.
  */
 
 const { fork, spawn } = require('child_process');

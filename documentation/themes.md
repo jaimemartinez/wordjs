@@ -87,9 +87,11 @@ the webfonts* below).
 > no static scan can fully prevent. Any hooks/shortcodes/mail the theme registers now flow through the
 > **same RPC bridge** isolated plugins use (the isolate layer already namespaces `theme:` slugs), and
 > the runtime guards (`secure-require`/`io-guard`) confine `fs`/`require` to the theme's own directory
-> and deny secret/DB files. By default a theme is granted only `settings:read` + `content:read`; a
-> theme that needs more must ship a `manifest.json`. (Handlebars helpers stay built-in and host-side —
-> they are not registered from `functions.js`.)
+> and deny secret/DB files. Its bridge calls are permission-checked on the host the way a plugin's
+> are: a call works only for a capability the theme declares (in an optional `manifest.json` next to
+> `functions.js`) **and** that is granted to it (`theme:<slug>`). Declaring is a request, not a grant —
+> a theme's server code runs sandboxed and gets only what is granted. (Handlebars helpers stay
+> built-in and host-side — they are not registered from `functions.js`.)
 
 ## Available Themes
 
