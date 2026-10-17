@@ -32,7 +32,7 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
         reason: 'shared verbatim with gateway/src/host-policy.js (parity-tested); the backend passes a module logger in',
     },
     'config/app.ts': {
-        count: 10,
+        count: 8,
         reason: 'runs before the logger can exist: core/logger reads config/app at load time',
     },
     'core/plugin-context.ts': {
