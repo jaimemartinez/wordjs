@@ -832,7 +832,16 @@ async function runPluginUpdate(
     const distLock = require('../core/dist-lock');
 
     let zipConsumed = false;
-    const cleanupZip = () => { if (!zipConsumed) { try { fs.unlinkSync(newZipPath); } catch { /* */ } zipConsumed = true; } };
+    // The zip comes from the caller (multer's temp file for POST /:slug/update, the marketplace
+    // download): only a file PROVED to sit inside os-tmp is ever unlinked here — the same inline
+    // form / canonical-resolve / containment check installPluginFromZip makes before its own unlink.
+    const ownZip = typeof newZipPath === 'string' && newZipPath.length > 0 && !newZipPath.includes('\0')
+        ? path.resolve(newZipPath) : '';
+    const cleanupZip = () => {
+        if (zipConsumed) return;
+        zipConsumed = true;
+        if (ownZip.startsWith(OS_TMP_DIR + path.sep)) { try { fs.unlinkSync(ownZip); } catch { /* */ } }
+    };
 
     // Resolve + validate the slug BEFORE anything (CodeQL-clean; guarantees a proper child of PLUGINS_DIR).
     let installedDir: string;
