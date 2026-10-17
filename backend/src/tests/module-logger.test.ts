@@ -129,4 +129,28 @@ describe('core/module-logger', () => {
         assert.deepStrictEqual(JSON.parse(r.stdout), { ok: true }, 'stdout carries only the command output');
         assert.match(r.stderr, /a backend log line/);
     });
+
+    it('WORDJS_LOG_TO_STDERR=1 also sends the config boot notes to stderr', () => {
+        const { spawnSync } = require('child_process');
+        const backend = path.resolve(__dirname, '../..');
+        // Pretend backend/wordjs-config.json exists (without touching the real file), with a database
+        // password missing so the auto-generation notes print too; writing it back is intercepted.
+        const script = [
+            "const fs = require('fs'); const real = { e: fs.existsSync, r: fs.readFileSync, w: fs.writeFileSync };",
+            "const isCfg = (p) => String(p).split(String.fromCharCode(92)).join('/').endsWith('backend/wordjs-config.json');",
+            "fs.existsSync = (p) => isCfg(p) || real.e(p);",
+            "fs.readFileSync = (p, ...a) => isCfg(p) ? JSON.stringify({ jwtSecret: 'a'.repeat(64) + 'b'.repeat(64) }) : real.r(p, ...a);",
+            "fs.writeFileSync = (p, ...a) => isCfg(p) ? undefined : real.w(p, ...a);",
+            "require('ts-node').register({ transpileOnly: true });",
+            "require('./src/config/app');",
+            "process.stdout.write(JSON.stringify({ ok: true }));",
+        ].join('');
+        const env: Record<string, string> = { ...process.env, WORDJS_LOG_TO_STDERR: '1', NODE_ENV: 'production' } as any;
+        delete env.NODE_TEST_CONTEXT;
+        const r = spawnSync(process.execPath, ['-e', script], { cwd: backend, env, encoding: 'utf8', timeout: 60_000 });
+        assert.strictEqual(r.status, 0, r.stderr);
+        assert.deepStrictEqual(JSON.parse(r.stdout), { ok: true }, 'stdout carries only the command output');
+        assert.match(r.stderr, /Config loaded from wordjs-config\.json/);
+        assert.match(r.stderr, /Generated secure Database password/);
+    });
 });

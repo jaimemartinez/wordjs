@@ -248,12 +248,17 @@ function assertInstalledJwtSecretIsNotPublished(cfg: FileConfig, file: string = 
 // isolated plugin worker (global.__WORDJS_ISOLATED__) — that file is outside the worker's sandbox
 // and the worker never needs these host secrets (it reaches config via the bridge). This avoids
 // the noisy (but already-harmless) EACCES blocks config/app would otherwise trigger at worker boot.
+// These boot notes are not log records, but a CLI command (`npm run media -- status`, …) prints its own
+// result on stdout, and they would end up mixed into it: with WORDJS_LOG_TO_STDERR=1 (core/logger), send
+// them to stderr like every other log line.
+const bootNote = /^(1|true|yes)$/i.test(String(process.env.WORDJS_LOG_TO_STDERR || '')) ? console.error : console.log;
+
 if (!(globalThis as any).__WORDJS_ISOLATED__) {
     try {
         if (fs.existsSync(configPath)) {
             const rawData = fs.readFileSync(configPath, 'utf8');
             fileConfig = JSON.parse(rawData);
-            console.log('📄 Config loaded from wordjs-config.json');
+            bootNote('📄 Config loaded from wordjs-config.json');
         } else {
             console.warn('⚠️  wordjs-config.json not found, using defaults.');
         }
@@ -269,19 +274,19 @@ if (!(globalThis as any).__WORDJS_ISOLATED__) {
         if (jwtSecretNeedsReplacing(fileConfig)) {
             fileConfig.jwtSecret = crypto.randomBytes(64).toString('hex');
             configChanged = true;
-            console.log('🔐 Generated secure JWT secret for existing config.');
+            bootNote('🔐 Generated secure JWT secret for existing config.');
         }
 
         if (!fileConfig.dbPassword || fileConfig.dbPassword === 'password') {
             fileConfig.dbPassword = crypto.randomBytes(16).toString('hex');
             configChanged = true;
-            console.log('🔐 Generated secure Database password for existing config.');
+            bootNote('🔐 Generated secure Database password for existing config.');
         }
 
         if (configChanged) {
             try {
                 fs.writeFileSync(configPath, JSON.stringify(fileConfig, null, 2));
-                console.log('💾 wordjs-config.json updated with secure credentials.');
+                bootNote('💾 wordjs-config.json updated with secure credentials.');
             } catch (err) {
                 console.error('❌ Failed to persist secure credentials:', err.message);
             }
