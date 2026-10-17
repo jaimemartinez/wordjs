@@ -531,6 +531,9 @@ router.post('/test-db', async (req: Request, res: Response) => {
  *                     not work until one is loaded.
  *                 tests:
  *                   type: object
+ *                   description: >-
+ *                     Kept for compatibility. The installer does not run the CMS test suite (run
+ *                     npm test in backend/ for that), so this is always zero counts with skipped true.
  *                   properties:
  *                     total:
  *                       type: integer
@@ -538,6 +541,8 @@ router.post('/test-db', async (req: Request, res: Response) => {
  *                       type: integer
  *                     failed:
  *                       type: integer
+ *                     skipped:
+ *                       type: boolean
  *       400:
  *         description: >-
  *           Already installed, or a validation failure — missing site name, a bad admin username or
@@ -636,6 +641,10 @@ router.post('/install', async (req: Request, res: Response) => {
     // re-binding the listener to localhost where a remote gateway cannot reach it. Enrollment values are
     // authoritative here; the wizard only supplies what enrollment does not know (site identity, DB).
     const enrolledConfig = getConfig() || {};
+    const validPort = (v: unknown): number | null => {
+        const n = Number(v);
+        return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : null;
+    };
     // WHERE the certificate is, is NOT a question this call site may answer for itself.
     //
     // THE CLASS: "one declaration" of a path that is in fact two values computed differently. This line
@@ -676,9 +685,12 @@ router.post('/install', async (req: Request, res: Response) => {
         installedAt: new Date().toISOString(),
         siteUrl,
         frontendUrl,
-        port: 4000,
-        frontendPort: 3001,
-        gatewayPort: 3000,
+        // The ports the config file already names survive the install; it used to write 4000/3001/3000
+        // back over them, so a backend set up on another port moved to 4000 at its next restart. A file
+        // without a backend port records the one this process listens on (config/app.ts: PORT, then 4000).
+        port: validPort(enrolledConfig.port) || config.port || 4000,
+        frontendPort: validPort(enrolledConfig.frontendPort) || 3001,
+        gatewayPort: validPort(enrolledConfig.gatewayPort) || 3000,
         gatewayInternalPort: enrolledConfig.gatewayInternalPort || 3100,
         // Host for the backend server listen binding (usually localhost or 0.0.0.0). An enrolled node
         // MUST keep the binding enrollment chose — the gateway lives on another machine.
@@ -915,13 +927,11 @@ router.post('/install', async (req: Request, res: Response) => {
                 );
             } catch { /* best-effort — ISR TTL covers it */ }
 
-            const { runCoreTests } = require('../core/plugin-test-runner');
-            const testResults = await runCoreTests();
-
-            if (!testResults.success) {
-                log.warn(`⚠️ CMS core tests had failures (${testResults.failed}/${testResults.tests})`);
-                // We don't block installation, just warn
-            }
+            // The CMS's own test suite is NOT run here. It used to be "run" (core/plugin-test-runner
+            // runCoreTests) with a filter that matched no file of the TypeScript suite, so every install
+            // reported "0 tests, OK". Running it for real takes minutes, needs the dev dependencies and
+            // proves nothing about this install; the response says it was skipped instead of passing.
+            const testResults = { tests: 0, passed: 0, failed: 0, skipped: true };
 
             // Auto-login: issue the admin's session cookie so the wizard lands straight in /admin — but
             // only where that session could be used and may be minted. The site exists now, so the
@@ -993,6 +1003,17 @@ router.post('/install', async (req: Request, res: Response) => {
             // wizard answers 503 until a restart.
             require('../core/plugins-ready').markPluginsReady();
 
+            // And for the runtime services the boot starts only on an installed site: cron (scheduled
+            // publishing), the coherence and cluster buses, the webhook dispatcher and the content outbox.
+            // Without them a fresh site enqueued no webhook for any post, comment or settings change and
+            // never published a scheduled post until its first restart. Never fatal — the install already
+            // succeeded; a restart starts them through the boot.
+            try {
+                await require('../core/runtime-services').startRuntimeServices();
+            } catch (e: any) {
+                log.warn({ err: e }, '⚠️ Setup: could not start the runtime services (cron, webhooks); they start at the next restart');
+            }
+
             res.json({
                 success: true,
                 autoLoggedIn,
@@ -1002,7 +1023,7 @@ router.post('/install', async (req: Request, res: Response) => {
                 acceptedAddress: currentAddress && 'alias' in currentAddress ? currentAddress.alias.url : null,
                 ...(currentAddress && 'skipped' in currentAddress ? { acceptedAddressSkipped: currentAddress.skipped } : {}),
                 emailProviderAvailable,
-                tests: { total: testResults.tests, passed: testResults.passed, failed: testResults.failed }
+                tests: { total: testResults.tests, passed: testResults.passed, failed: testResults.failed, skipped: testResults.skipped }
             });
 
         } catch (e) {

@@ -49,6 +49,8 @@ const as = (persona: string) => ({ Authorization: `Bearer ${jwt.sign({ userId: U
 // ── Fake providers ───────────────────────────────────────────────────────────────────────────────────
 const seen: { anthropic: any[]; openai: any[] } = { anthropic: [], openai: [] };
 let anthropicReply: (body: any) => any = () => ({ text: 'A short summary of the post.' });
+/** Override the OpenAI-compatible answer: `{ status, body }`, or `{ hang: true }` to never answer. */
+let openaiReply: ((body: any) => any) | null = null;
 let fake: any;
 let fakeUrl = '';
 
@@ -86,6 +88,9 @@ before(async () => {
         }
         if (pathname.endsWith('/chat/completions')) {
             seen.openai.push({ headers: req.headers, body });
+            const r = openaiReply ? openaiReply(body) : null;
+            if (r && r.hang) return; // never answers; the site's timeout must fire
+            if (r) { res.writeHead(r.status, { 'content-type': 'application/json' }); return res.end(JSON.stringify(r.body || {})); }
             res.writeHead(200, { 'content-type': 'application/json' });
             return res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: '"Summary: Una descripción muy útil del contenido."' } }] }));
         }
@@ -255,6 +260,67 @@ test('openai-compatible: bearer key, chat/completions shape, loopback http allow
     assert.strictEqual(seen.openai[0].body.messages[0].role, 'system');
     const test = await request(app).post('/api/v1/ai/test').set(as('admin')).send({});
     assert.strictEqual(test.body.ok, true);
+});
+
+test('provider timeout: longer default for a model on this machine, WORDJS_AI_TIMEOUT_MS overrides and is clamped', () => {
+    const saved = process.env.WORDJS_AI_TIMEOUT_MS;
+    try {
+        delete process.env.WORDJS_AI_TIMEOUT_MS;
+        assert.strictEqual(ai.requestTimeoutMs('http://127.0.0.1:11434/v1'), 300_000);
+        assert.strictEqual(ai.requestTimeoutMs('http://localhost:1234/v1'), 300_000);
+        assert.strictEqual(ai.requestTimeoutMs('https://api.openai.com/v1'), 60_000);
+        assert.strictEqual(ai.requestTimeoutMs(), 60_000);
+        process.env.WORDJS_AI_TIMEOUT_MS = '600000';
+        assert.strictEqual(ai.requestTimeoutMs('https://api.openai.com/v1'), 600_000);
+        process.env.WORDJS_AI_TIMEOUT_MS = '10';
+        assert.strictEqual(ai.requestTimeoutMs(), 1_000);
+        process.env.WORDJS_AI_TIMEOUT_MS = '99999999999';
+        assert.strictEqual(ai.requestTimeoutMs(), 30 * 60_000);
+        process.env.WORDJS_AI_TIMEOUT_MS = 'nonsense';
+        assert.strictEqual(ai.requestTimeoutMs('http://127.0.0.1:11434/v1'), 300_000);
+    } finally {
+        if (saved === undefined) delete process.env.WORDJS_AI_TIMEOUT_MS; else process.env.WORDJS_AI_TIMEOUT_MS = saved;
+    }
+});
+
+test('openai-compatible failures have distinct codes: no vision, timeout, unknown model, unavailable', async () => {
+    aiRoutes._resetAiSuggestLimits();
+    const put = await request(app).put('/api/v1/ai/settings').set(as('admin')).send({ provider: 'openai-compatible', model: 'llama3.2', baseUrl: `${fakeUrl}/v1` });
+    assert.strictEqual(put.status, 200, JSON.stringify(put.body));
+    const sharp = require('sharp');
+    const png = await sharp({ create: { width: 64, height: 64, channels: 3, background: { r: 10, g: 20, b: 30 } } }).png().toBuffer();
+    const up = await request(app).post('/api/v1/media').set(as('admin')).attach('file', png, { filename: 'tile.png', contentType: 'image/png' });
+    assert.strictEqual(up.status, 201, JSON.stringify(up.body));
+    const text = { task: 'excerpt', title: 'Title', content: 'Some content that is long enough to summarise.' };
+    const saved = process.env.WORDJS_AI_TIMEOUT_MS;
+    try {
+        // A text-only model (Ollama answers 400) asked for alt text.
+        openaiReply = () => ({ status: 400, body: { error: 'llama3.2 does not support images' } });
+        let r = await request(app).post('/api/v1/ai/suggest').set(as('admin')).send({ task: 'alt_text', mediaId: up.body.id });
+        assert.strictEqual(r.status, 422, JSON.stringify(r.body));
+        assert.strictEqual(r.body.code, 'ai_provider_no_vision');
+        assert.match(r.body.message, /does not accept images/);
+        assert.ok(!r.body.message.includes('llama3.2 does not support'), 'the provider body is not echoed');
+        // The same 400 on a text task is a plain bad request, not a vision problem.
+        r = await request(app).post('/api/v1/ai/suggest').set(as('admin')).send(text);
+        assert.strictEqual(r.body.code, 'ai_provider_bad_request');
+        openaiReply = () => ({ status: 404, body: { error: { message: 'model "llama9" not found' } } });
+        r = await request(app).post('/api/v1/ai/suggest').set(as('admin')).send(text);
+        assert.strictEqual(r.body.code, 'ai_provider_model');
+        openaiReply = () => ({ status: 503, body: {} });
+        r = await request(app).post('/api/v1/ai/suggest').set(as('admin')).send(text);
+        assert.strictEqual(r.body.code, 'ai_provider_unavailable');
+        // A model that never answers: a timeout, said as such.
+        process.env.WORDJS_AI_TIMEOUT_MS = '1000';
+        openaiReply = () => ({ hang: true });
+        r = await request(app).post('/api/v1/ai/suggest').set(as('admin')).send(text);
+        assert.strictEqual(r.status, 504, JSON.stringify(r.body));
+        assert.strictEqual(r.body.code, 'ai_provider_timeout');
+        assert.match(r.body.message, /took too long/);
+    } finally {
+        openaiReply = null;
+        if (saved === undefined) delete process.env.WORDJS_AI_TIMEOUT_MS; else process.env.WORDJS_AI_TIMEOUT_MS = saved;
+    }
 });
 
 test('status endpoint and turning AI off', async () => {

@@ -3,8 +3,8 @@
  *
  * The Puck body renders through ContentRenderer (server twin of the editor canvas: same shared
  * block components, same SharedBlockShell wrapper), so the page ships as HTML with no body
- * hydration. The interactive pieces are their own small islands: comments, the locale-aware date,
- * the legacy [photo-carousel] initialiser, and whatever interactive/plugin blocks the content
+ * hydration. The interactive pieces are their own small islands: comments, the legacy
+ * [photo-carousel] initialiser, and whatever interactive/plugin blocks the content
  * itself contains (each code-split per page). Before F3 this file was a client component that
  * imported <Render> + the ENTIRE editor config — ~378KB of hydrated JS on every public page.
  */
@@ -12,6 +12,7 @@ import Link from "next/link";
 import PageId from "./PageId";
 import ContentRenderer from "@/components/content/ContentRenderer";
 import { publicUiStrings } from "@/lib/public/uiStrings";
+import { siteDateLanguage } from "@/lib/public/siteDate";
 import LocalizedDate from "@/components/content/LocalizedDate";
 import LegacyCarousels from "@/components/content/LegacyCarousels";
 import CommentsSection from "@/components/CommentsSection";
@@ -128,7 +129,7 @@ export default function PostContent({ post, settings, category, showComments }: 
                                     <span>•</span>
                                 </>
                             )}
-                            <span className="wjs-post-meta-date"><LocalizedDate date={post.date} /></span>
+                            <span className="wjs-post-meta-date"><LocalizedDate date={post.date} lang={siteDateLanguage(settings)} /></span>
                             <span>•</span>
                             <span className="wjs-post-meta-author">{post.author?.displayName || "Admin"}</span>
                         </div>
@@ -165,7 +166,7 @@ export default function PostContent({ post, settings, category, showComments }: 
                 </article>
             )}
 
-            {commentsAllowed && <CommentsSection postId={post.id} />}
+            {commentsAllowed && <CommentsSection postId={post.id} lang={siteDateLanguage(settings)} />}
 
             <div className="max-w-4xl mx-auto mt-12 pt-8 border-t border-[var(--wjs-border-subtle,#e5e7eb)] flex justify-between items-center px-4">
                 <Link href="/" className="text-[var(--wjs-color-text-muted,#6b7280)] hover:text-[var(--wjs-color-primary,#2563eb)] font-medium flex items-center gap-2">

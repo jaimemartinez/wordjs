@@ -691,6 +691,10 @@ async function serializeVisibleContent(post: any, user?: ContentRouteUser) {
  *           type: string
  *       - in: query
  *         name: status
+ *         description: >-
+ *           publish (default), draft, pending, private, future, or any. A caller who may not read
+ *           unpublished entries of the type gets only their own; an anonymous caller asking for a
+ *           non-published status gets an empty list (any lists the published entries).
  *         schema:
  *           type: string
  *       - in: query
@@ -887,9 +891,15 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
             // privilege: only the caller's own posts of that status may be returned.
             authorFilter = req.user.id;
         }
-    } else if (status !== 'publish') {
-        // Anonymous callers may only ever list published content, regardless of requested status.
+    } else if (status === 'any') {
+        // `any` includes the published set, which is all an anonymous caller may ever list.
         effectiveStatus = 'publish';
+    } else if (status !== 'publish') {
+        // An anonymous caller asking for drafts (pending, private, future…) gets what a signed-in user
+        // without such entries gets: an empty list. It used to be silently answered with the PUBLISHED
+        // entries — a different question than the one asked, and indistinguishable from a real answer.
+        effectiveStatus = 'publish';
+        authorFilter = -1; // User ids are positive; keeps the normal count/pagination response semantics.
     }
 
     // A search must not match on the hidden body of a password-protected entry (see Post.buildWhere):

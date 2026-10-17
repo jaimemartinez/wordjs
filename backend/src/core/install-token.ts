@@ -177,8 +177,10 @@ function generateInstallToken(): string {
         console.log('');
         console.log(`      cat ${TOKEN_FILE}`);
         console.log('');
+        // "VAR to 1", never "VAR=1": this banner goes through the console bridge, whose secret scrubber
+        // reads any `…TOKEN=<value>` as a credential and printed the hint as `…TOKEN=[redacted]`.
         console.log('   (0600, this host only. Or set WORDJS_INSTALL_TOKEN to supply your own token,');
-        console.log('    or WORDJS_PRINT_INSTALL_TOKEN=1 to print it here anyway. Held in memory;');
+        console.log('    or set WORDJS_PRINT_INSTALL_TOKEN to 1 to print it here anyway. Held in memory;');
         console.log('    removed once installed.)');
     }
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');

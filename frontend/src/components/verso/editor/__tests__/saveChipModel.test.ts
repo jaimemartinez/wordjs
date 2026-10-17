@@ -4,7 +4,8 @@
  * en el componente); "hace {m}m" queda SIN interpolar para que la traducción matchee el literal.
  */
 import { describe, expect, it } from "vitest";
-import { saveChipModel } from "../saveChipModel";
+import { saveChipModel, settledPrimaryLabel } from "../saveChipModel";
+import { trStr } from "@/lib/editorI18n";
 
 const base = { saving: false, hasChanges: false, status: "draft", savedAtMs: null, wasAuto: false, nowMs: 1_000_000 };
 
@@ -61,5 +62,23 @@ describe("saveChipModel", () => {
 
     it("sin nada que contar → chip vacío pero montable (región aria-live estable)", () => {
         expect(saveChipModel(base)).toMatchObject({ icon: null, text: "" });
+    });
+});
+
+describe("settledPrimaryLabel — the main button reads as a state once nothing is pending", () => {
+    const idle = { saving: false, hasChanges: false, inlineEditing: false };
+
+    it("published / scheduled with no pending changes → state label (translated)", () => {
+        expect(settledPrimaryLabel({ ...idle, status: "publish" })).toBe("Publicado");
+        expect(settledPrimaryLabel({ ...idle, status: "future" })).toBe("Programado");
+        expect(trStr("Publicado", "en")).toBe("Published");
+        expect(trStr("Programado", "en")).toBe("Scheduled");
+    });
+
+    it("anything pending (changes, saving, inline edit) or a draft → the action label", () => {
+        expect(settledPrimaryLabel({ ...idle, status: "publish", hasChanges: true })).toBeNull();
+        expect(settledPrimaryLabel({ ...idle, status: "publish", saving: true })).toBeNull();
+        expect(settledPrimaryLabel({ ...idle, status: "publish", inlineEditing: true })).toBeNull();
+        expect(settledPrimaryLabel({ ...idle, status: "draft" })).toBeNull();
     });
 });

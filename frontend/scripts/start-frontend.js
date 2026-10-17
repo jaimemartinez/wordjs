@@ -34,7 +34,8 @@ try {
     // the CA there rather than frontend/certs, mirroring server.js) — plus, on one machine, the certificate
     // the gateway next to us serves on its public port, which SSR goes through (scripts/ssr-trust.js).
     if (!process.env.NODE_EXTRA_CA_CERTS) {
-        const { buildSsrTrust, writeTrustBundle } = require('./ssr-trust');
+        const { buildSsrTrust, waitForGatewayAutoCert, writeTrustBundle } = require('./ssr-trust');
+        waitForGatewayAutoCert({ cwd: process.cwd() });
         const files = buildSsrTrust({ cwd: process.cwd() });
         const bundle = writeTrustBundle(files, path.resolve(process.cwd(), '.next', 'ssr-trust.pem'));
         if (bundle) {
@@ -46,6 +47,18 @@ try {
     if (fs.existsSync(configPath)) {
         const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
         if (cfg.internalApiUrl && !process.env.INTERNAL_API_URL) process.env.INTERNAL_API_URL = cfg.internalApiUrl;
+    }
+    // (c) the loopback origin of a gateway on this machine, for src/lib/server-api.ts and src/lib/api.ts:
+    // once the install has issued certificates their SSR reads go to it instead of the public address.
+    // Decided here, in plain Node, because those files are bundled and api.ts also runs in the browser.
+    if (!process.env.WORDJS_LOCAL_GATEWAY_ORIGIN) {
+        const { localGatewayOrigin } = require('../local-gateway');
+        let dir = process.cwd();
+        if (!fs.existsSync(path.join(dir, 'wordjs-config.json'))) dir = path.resolve(dir, '..', 'backend');
+        let cfg = {};
+        try { cfg = JSON.parse(fs.readFileSync(path.join(dir, 'wordjs-config.json'), 'utf8')); } catch { /* none yet */ }
+        const origin = localGatewayOrigin(dir, cfg);
+        if (origin) process.env.WORDJS_LOCAL_GATEWAY_ORIGIN = origin;
     }
 } catch (e) { /* best-effort */ }
 

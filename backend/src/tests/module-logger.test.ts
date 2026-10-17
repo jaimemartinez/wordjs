@@ -113,4 +113,20 @@ describe('core/module-logger', () => {
         assert.doesNotThrow(() => log.info(hostile, 'hostile'));
         assert.strictEqual(typeof log.isLevelEnabled('info'), 'boolean');
     });
+
+    it('WORDJS_LOG_TO_STDERR=1 sends every line to stderr, leaving stdout to a CLI command output', () => {
+        const { spawnSync } = require('child_process');
+        const backend = path.resolve(__dirname, '../..');
+        const script = [
+            "require('ts-node').register({ transpileOnly: true });",
+            "require('./src/core/module-logger').moduleLogger('tests/stderr').info('a backend log line');",
+            "process.stdout.write(JSON.stringify({ ok: true }));",
+        ].join('');
+        const env: Record<string, string> = { ...process.env, WORDJS_LOG_TO_STDERR: '1', NODE_ENV: 'production' } as any;
+        delete env.NODE_TEST_CONTEXT;
+        const r = spawnSync(process.execPath, ['-e', script], { cwd: backend, env, encoding: 'utf8', timeout: 60_000 });
+        assert.strictEqual(r.status, 0, r.stderr);
+        assert.deepStrictEqual(JSON.parse(r.stdout), { ok: true }, 'stdout carries only the command output');
+        assert.match(r.stderr, /a backend log line/);
+    });
 });

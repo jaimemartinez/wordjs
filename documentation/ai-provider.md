@@ -21,6 +21,31 @@ Nobody else ever sees the key: not the browser, not plugins, not the logs.
 
 **Test connection** sends one tiny request. Choosing **Off** disables every AI feature.
 
+**Timeout.** One provider request may take 60 s for a remote provider and **300 s for a loopback one** —
+a model on the same machine (Ollama, LM Studio on a CPU) can need minutes on its first load, behind a
+queue, or for an image. `WORDJS_AI_TIMEOUT_MS` on the backend overrides both (clamped to 1 s – 30 min).
+In split and separate mode the gateway sits between the browser and the backend and gives `/api/v1/ai/`
+requests `WORDJS_AI_TIMEOUT_MS` + 30 s, read from **its own** environment (see gateway.md, "Upstream
+timeout"): when you raise the value, set it for the gateway as well as the backend.
+
+**Errors.** A provider failure answers a distinct code with a message that says what to do; the editor
+shows its own wording for each (anything else falls back to "the AI provider did not answer correctly"):
+
+| Code | HTTP | When |
+|---|---|---|
+| `ai_provider_timeout` | 504 | no answer within the timeout (or the server answered 408/504) |
+| `ai_provider_no_vision` | 422 | alt text was asked of a model that does not accept images (the OpenAI-compatible server refused the image) |
+| `ai_provider_model` | 502 | the server does not know the configured model (404, or "model not found") |
+| `ai_provider_auth` | 502 | the key was refused (401/403) |
+| `ai_provider_rate_limited` | 429 | the provider is rate limiting the site |
+| `ai_provider_unreachable` | 502 | the server could not be reached at all |
+| `ai_provider_unavailable` | 502 | the server answered 502/503 |
+| `ai_provider_bad_request` | 502 | any other refusal of the request (400/413/422) |
+| `ai_provider_bad_response` | 502 | the answer was not JSON |
+| `ai_provider_error` | 502 | any other error status |
+
+The provider's own error body is only inspected to classify the failure; it is never echoed back.
+
 ## 2. The key
 
 - Stored as the option `ai_provider_api_key`. It is **write-only**: `GET /api/v1/ai/settings` answers
@@ -87,4 +112,4 @@ const { text, model } = await wordjs.ai.complete({
 | `GET` | `/ai/settings` | administrator, session | settings without the key (`hasKey`, `keyHint`) |
 | `PUT` | `/ai/settings` | administrator, session | `{ provider, model?, baseUrl?, apiKey?, clearKey? }`; `400` on an unknown provider/model or a bad base URL |
 | `POST` | `/ai/test` | administrator, session | `{ ok, provider, model, ms }` or the provider error |
-| `POST` | `/ai/suggest` | edit rights (see §3) | `{ task, title?, content?, mediaId?, language? }` → `{ suggestion, model }`; `409 ai_not_configured`, `422 ai_refused`, `429 ai_rate_limited` |
+| `POST` | `/ai/suggest` | edit rights (see §3) | `{ task, title?, content?, mediaId?, language? }` → `{ suggestion, model }`; `409 ai_not_configured`, `422 ai_refused`, `429 ai_rate_limited`, and the provider codes of §1 |

@@ -351,6 +351,11 @@ function startCron(intervalMs = 60000) {
     runCron(); // Async call, but we don't await it here to not block startup
 }
 
+/** Whether this process runs the cron loop (startCron was called and stopCron was not). */
+function isCronRunning(): boolean {
+    return cronTimer !== null;
+}
+
 /**
  * Stop cron system
  */
@@ -557,6 +562,7 @@ module.exports = {
     runCron,
     startCron,
     stopCron,
+    isCronRunning,
     registerCronJob,
     initDefaultCronEvents,
     computeNextBackupRun, // pure; exported for the reschedule regression test

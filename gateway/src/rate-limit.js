@@ -9,10 +9,11 @@
  *
  * FAIL-OPEN ON STORE LOSS is the established, deliberate choice (see the backend's passOnStoreError):
  * a limiter-store outage must never take the edge down. Unlike the backend we LOG the degradation — a
- * silent fail-open is how "the limiter quietly stopped limiting" hides. The gateway is the true edge,
- * so Express's default `trust proxy = false` already makes req.ip the socket peer: a client cannot forge
- * X-Forwarded-For to rotate past this cap (an operator who fronts the gateway with their own proxy sets
- * `trustProxy` and is responsible for that hop).
+ * silent fail-open is how "the limiter quietly stopped limiting" hides. The limiter keys on req.ip. With
+ * no `trustProxy` (gateway-config.json) / WORDJS_TRUST_PROXY, `trust proxy` stays false and req.ip is the
+ * socket peer: a client cannot forge X-Forwarded-For to rotate past this cap. An operator who fronts the
+ * gateway with their own proxy sets one of them (src/runtime-settings.js) and is responsible for that hop;
+ * without it every visitor behind that proxy shares its bucket.
  */
 
 const rateLimit = require('express-rate-limit');
