@@ -48,7 +48,7 @@ Click **Start import**.
 
 When it finishes, the summary lists what was created, matched and skipped. For the sample: 2 posts, 1
 page, 1 category, 1 tag, 1 author and 1 comment created; **Media (download)** shows 1 file downloaded;
-**Menus** shows 1 menu with 1 item.
+**Menus** shows 1 menu with 1 item, and **Unassigned 1**.
 
 The menu is created but **not placed**: a WordPress export does not carry the theme's menu locations.
 Assign it under **Admin → Menus**.
@@ -60,7 +60,7 @@ matched, not duplicated, and an attachment that already downloaded is never fetc
 
 | URL | What you should see |
 |---|---|
-| `/how-we-brew-a-pour-over` | The post, its original date and author (María), the image served from `/uploads/2024/03/beans.png`, and the imported comment |
+| `/how-we-brew-a-pour-over` | The post, its original date (*March 2, 2024*) and author (María), the image served from `/uploads/2024/03/beans.png`, and the imported comment with its own date (*March 3, 2024*) |
 | `/friday-roast-schedule` | The second post |
 | `/wholesale` | The page |
 | `/category/brewing`, `/tag/pour-over`, `/author/maria` | The archives, listing the imported posts |
@@ -74,8 +74,10 @@ matched, not duplicated, and an attachment that already downloaded is never fetc
   post type or date range) and import the parts one after another.
 
 ---
-*Tested on 2026-10-17 with WordJS 2.6.0 on a fresh install (Debian 12), in a browser, with the sample
-file: analysis counts, import with the default options, then the public URLs in step 5 (the image
-downloaded and served locally, the comment shown on the post). One gap found and logged for a fix: the
-post's featured image is not reassigned to the imported attachment, so this tutorial does not rely on
-it. Comments currently show the import date instead of their original date.*
+*Tested on 2026-10-17 with a WordJS 2.7.0 release build on a fresh install (Debian 12), in a browser,
+with the sample file:
+
+- the analysis counts in step 2;
+- the import with the default options and the summary in step 4;
+- the public URLs in step 5: the image downloaded and served locally, the post's featured image set to
+  the imported attachment, and the post and comment dates kept from the export.*

@@ -14,7 +14,7 @@ email provider or your ISP, or a mail server on your own network.
 **You need:**
 
 - a WordJS site and an administrator account ([Tutorial 1](01-install-on-a-linux-server.md));
-- a WordJS release newer than 2.6.0, with **Mail Server 3.0.2 or newer** (older versions cannot use a
+- WordJS 2.7.0 or newer, with **Mail Server 3.0.2 or newer** (older versions cannot use a
   relay on a private address and do not show relay errors);
 - the relay's host name, port and, if it needs them, a username and password.
 
@@ -193,8 +193,8 @@ link in WordJS mail is built from it.
 
 ---
 *Tested on 2026-10-17 on Proxmox with two Debian 12 containers: one with Mailpit v1.31.6 as the relay
-(SMTP 1025, web 8025), one with WordJS built from the branch that adds private relays (the release after
-2.6.0) and Mail Server 3.0.2, installed with `create-wordjs` as in Tutorial 1.
+(SMTP 1025, web 8025), one with WordJS built from the branch that adds private relays (released as
+2.7.0) and Mail Server 3.0.2, installed with `create-wordjs` as in Tutorial 1.
 
 - **In a browser:** installing Mail Server from the Marketplace, the activation dialog, the two
   Server health warnings, the relay settings, **Relay unavailable** for the private relay before the

@@ -17,7 +17,7 @@ needs the backend's development dependencies, which a production install leaves 
 computer (or any development machine), not on the server:
 
 ```bash
-git clone --depth 1 --branch v2.6.0 https://github.com/jaimemartinez/wordjs.git
+git clone --depth 1 --branch v2.7.0 https://github.com/jaimemartinez/wordjs.git
 ```
 
 ```bash
@@ -113,8 +113,8 @@ API. In `client/verso/ReadingListVerso.tsx`:
    }
    ```
 
-Leave `versoComponentDef` as it is: it declares the block's fields (**Title**, **Body**,
-**ID / anchor**) and their defaults. The block uses the theme's `--wjs-*` tokens, so it follows the
+Leave `versoComponentDef` as it is: it declares the block's name in the editor (`label`), its fields
+(**Title**, **Body**, **ID / anchor**) and their defaults. The block uses the theme's `--wjs-*` tokens, so it follows the
 active theme's colors, radius and fonts.
 
 Optionally, give the plugin a real description in `manifest.json` (it shows on the Plugins screen).
@@ -145,7 +145,8 @@ session: install plugins only from people you trust. Click **Confirm and Activat
 1. Open **Reading List** in the sidebar, type `The Coffee Roaster's Companion` and press **Enter**. Add
    `Water for Coffee` the same way.
 2. Open **Pages → New Page**. In the **Blocks** panel, find the **Reading List** group and click
-   **ReadingList**. (Plugin blocks are named after the plugin's id in PascalCase.)
+   **Reading List**. The name comes from `label` in `versoComponentDef`; without one, the block is named
+   after the plugin's id.
 3. In **Properties**, set **Title** to `On our shelf` and **Body** to
    `Books the roasting team recommends this month.`
 4. In the page settings, set the title `Reading list`, set the status to **Publish** and click **Save**.
@@ -159,20 +160,22 @@ curl -s https://<your-site>/api/v1/plugin/reading-list
 
 ## 7. Ship a new version
 
-To change the plugin, edit it, raise `version` in `manifest.json` and pack again. Then, on the site:
+To change the plugin, edit it, raise `version` in `manifest.json` (for example to `0.2.0`) and pack
+again. On the site, open **Admin → Plugins**, click **Upload Plugin** and choose the new zip.
 
-1. **Deactivate** the plugin. Uploading over an active plugin is refused.
-2. **Delete** it (the bin icon on its card), confirming with your password. Leave **Also delete this
-   plugin's data / tables** unticked. Uploading over an installed plugin is refused too, so the old
-   copy has to go first.
-3. Upload the new zip and activate it again.
+Because **Reading List** is already installed, WordJS asks *Update the plugin?* and shows both versions.
+Click **Update**. The new version is checked before anything changes, then replaces the old one in
+place, even while it is active. The plugin keeps:
 
-Your items survive. Options and the plugin's tables are kept unless you tick the data box. The
-permission grants are always removed with the plugin, so you confirm them again on activation.
+- its data and tables;
+- the permissions you granted.
 
-> **After 2.6.0:** releases after 2.6.0 update in place. Upload the newer zip from **Upload Plugin**
-> and confirm **Update**. The plugin keeps its data, tables and grants, and only permissions the new
-> version adds are asked about. See [plugins.md → Updating a plugin](../plugins.md#updating-a-plugin-upload-a-newer-zip).
+If the new version asks for permissions the old one didn't, the permissions dialog opens for those
+alone, and they stay off until you grant them. The card now shows the new version, still **Running**,
+and your items are still there.
+
+On WordJS 2.6.0 and earlier there is no update in place: deactivate the plugin, delete it (leave
+**Also delete this plugin's data / tables** unticked), upload the new zip and activate it again.
 
 ## Where next
 
@@ -182,9 +185,11 @@ permission grants are always removed with the plugin, so you confirm them again 
 - [cli.md](../cli.md): `create`, `pack` and the other commands.
 
 ---
-*Tested on 2026-10-17 with WordJS 2.6.0. On a clean Debian 12 machine: clone at `v2.6.0`,
-`npm install` in `backend/`, `create plugin`, the block change from step 3, and `pack --build`. On a
-fresh site, in a browser: upload, the permission dialog, activation, the sidebar entry, two items
-added from the admin page, the block placed and published, and `/reading-list` listing both books. The
-public `GET` answered 200 and an anonymous `POST` 401. The update in step 7 (0.1.0 → 0.2.0) kept the
-items.*
+*Tested on 2026-10-17 with a WordJS 2.7.0 release build:
+
+- **Development machine (a clean Debian 12 checkout of the release source):** `npm install` in
+  `backend/`, `create plugin`, the block change from step 3, and `pack --build`.
+- **Fresh site, in a browser:** upload, the permission dialog, activation, an item added, and the
+  block listed as **Reading List** in the editor. Then the update in step 7, uploading 0.2.0 over the
+  active 0.1.0: the *Update the plugin?* dialog with both versions, then 0.2.0 running with its item
+  and grants kept. The public `GET` answered 200 and an anonymous `POST` 401.*

@@ -17,7 +17,7 @@ server. This tutorial uses `www.example.com`.
 | Service | Port | Listens on |
 |---|---|---|
 | gateway | 3000 (public entry, behind nginx here) | all interfaces |
-| frontend | 3001 | all interfaces |
+| frontend | 3001 | loopback (the gateway is on the same machine) |
 | backend | 4000 | loopback |
 | gateway internal (mTLS) | 3100 | loopback |
 
@@ -31,14 +31,17 @@ sudo useradd --system --home-dir /srv/wordjs --shell /usr/sbin/nologin wordjs
 ## 2. Let nginx do TLS
 
 `create-wordjs` prepares the gateway to serve HTTPS with a self-signed certificate. Behind nginx the
-gateway should speak plain HTTP on its local port instead; set that **before the first start**:
+gateway should speak plain HTTP on its local port instead, and trust nginx to tell it each visitor's
+address. Set both **before the first start**:
 
 ```bash
-echo '{ "ssl": false }' | sudo tee /srv/wordjs/gateway/gateway-config.json
+echo '{ "ssl": false, "trustProxy": "loopback" }' | sudo tee /srv/wordjs/gateway/gateway-config.json
 sudo chown -R wordjs: /srv/wordjs
 ```
 
-(The installer adds the gateway's secret, ports and certificate paths to this file later.)
+The installer adds the gateway's secret, ports and certificate paths to this file later, and keeps
+these two settings. `trustProxy: "loopback"` makes the gateway's rate limit count real visitors instead
+of counting every request as coming from nginx's `127.0.0.1`.
 
 ## 3. One systemd unit per service
 
@@ -141,30 +144,14 @@ sudo cat /srv/wordjs/backend/data/install-token
 In the wizard, set the **Site address** to `https://www.example.com`, keep **SQLite**, and create your
 administrator, as in [Tutorial 1, step 5](01-install-on-a-linux-server.md#5-finish-the-setup-in-the-browser).
 During the install WordJS issues the cluster certificates, so from then on the gateway, backend and
-frontend talk to each other over mutual TLS.
+frontend talk to each other over mutual TLS. The frontend renders pages through the gateway next to it,
+over loopback, so the site serves its content as soon as the install finishes. There is nothing to
+point at the gateway by hand.
 
-## 6. Point server-side rendering at the local gateway
+## 6. Close the service ports
 
-After the install, the frontend renders pages by asking the backend **through the gateway**. By default
-it uses the site's public address, so it would leave the server and come back through nginx. Point it at
-the gateway on loopback instead, then restart the frontend. Do it before you browse the public pages:
-
-```bash
-cd /srv/wordjs/backend
-sudo -u wordjs node -e '
-  const fs = require("fs"); const f = "wordjs-config.json";
-  const c = JSON.parse(fs.readFileSync(f, "utf8"));
-  c.internalApiUrl = "http://127.0.0.1:3000/api/v1";
-  fs.writeFileSync(f, JSON.stringify(c, null, 2));'
-sudo systemctl restart wordjs-frontend
-```
-
-> If you opened a content page before this step and it showed "not found", that answer may stay cached
-> for up to a minute; reload after that.
-
-## 7. Close the service ports
-
-Only nginx should reach the gateway and the frontend from outside:
+Only nginx should reach the gateway from outside. The frontend and the backend already listen on
+loopback only.
 
 ```bash
 sudo apt-get install -y nftables
@@ -175,14 +162,14 @@ table inet filter {
   chain input {
     type filter hook input priority 0; policy accept;
     iif "lo" accept
-    tcp dport { 3000, 3001 } drop
+    tcp dport 3000 drop
   }
 }
 EOF
 sudo systemctl enable --now nftables && sudo systemctl restart nftables
 ```
 
-## 8. Check it
+## 7. Check it
 
 ```bash
 curl -I https://www.example.com/                      # 200
@@ -197,20 +184,28 @@ log** records your real IP address for sign-ins.
 
 ## Good to know
 
-- **The gateway's own rate limit** (`rateLimit` in `gateway-config.json`, 1000 requests per minute by
-  default) counts per connecting address. Behind nginx every request comes from `127.0.0.1`, so all
-  visitors share one budget. On a busy site raise `rateLimit.max`. The backend keeps its own per-visitor
-  limits, which see real addresses thanks to `WORDJS_TRUST_PROXY=loopback`.
+- **Rate limits and real addresses:** the gateway's own limit (`rateLimit` in `gateway-config.json`,
+  1000 requests per minute by default) and the backend's limits, account lockout and audit log all see
+  the visitor's address, thanks to `trustProxy` (gateway) and `WORDJS_TRUST_PROXY` (backend). Without
+  them every visitor looks like `127.0.0.1`. The gateway logs a warning when it receives
+  `X-Forwarded-For` from a local proxy it does not trust.
 - **Switching back to the monolith** needs no migration. Stop the three services and run the monolith
   unit from Tutorial 1 instead: both modes share the configuration, database and uploads.
 - **Logs:** `journalctl -u wordjs-gateway`, `-u wordjs-backend`, `-u wordjs-frontend`.
 
 ---
-*Tested on 2026-10-17 with WordJS 2.6.0 on a fresh Debian 12 container (Node.js 22.23, nginx 1.22.1), with
-the domain `split.wordjs.test`. The lab has no public DNS, so the certificate came from a private test
-CA instead of Let's Encrypt, and the install (step 5) was done through the setup API with the token, the
-same request the wizard sends (the wizard itself is browser-tested in Tutorial 1). Checked through nginx
-after a restart of all three services: home, an About page, posts and a category archive at 200; sign-in
-with a `Secure` cookie, a cookie-authenticated write and refusal of a cross-site `Origin`; the
-notifications and collaboration SSE streams; a failed sign-in from another machine recorded with that
-machine's address; and ports 3000/3001 refused from outside while 443 answered.*
+*Tested on 2026-10-17 with a WordJS 2.7.0 release build on a fresh Debian 12 container (Node.js 22.23,
+nginx 1.22.1), with the domain `split.wordjs.test`. The lab has no public DNS, so the certificate came
+from a private test CA instead of Let's Encrypt. The install (step 5) was done through the setup API
+with the token, the same request the wizard sends.
+
+Checked through nginx:
+
+- **Right after the install, with no further step:** home, an About page, a post and a category
+  archive at 200.
+- **After restarting all three services:** the same pages at 200 again, with the gateway still on
+  `ssl: false`, and the frontend listening on `127.0.0.1:3001` only.
+- **Sign-in and writes:** sign-in with a `Secure` cookie, a cookie-authenticated write, and the refusal
+  of a cross-site `Origin`.
+- **Streams:** the notifications and collaboration SSE streams.
+- **Real addresses:** a failed sign-in from another machine was recorded with that machine's address.*

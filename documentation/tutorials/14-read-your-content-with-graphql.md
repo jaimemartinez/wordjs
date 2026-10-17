@@ -60,7 +60,7 @@ curl -s -G https://<your-site>/api/v1/graphql --data-urlencode 'query=query One(
 ```
 
 ```json
-{"data":{"post":{"title":"How we brew a pour-over","link":"https://www.example.com/post/how-we-brew-a-pour-over/",
+{"data":{"post":{"title":"How we brew a pour-over","link":"https://www.example.com/how-we-brew-a-pour-over",
  "excerpt":"Our three-stage pour-over recipe.",
  "comments":{"nodes":[{"authorName":"Leo","content":"Tried it this morning. Great tip about the rinse!"}]}}}}
 ```
@@ -124,15 +124,18 @@ through the REST API.
   `GRAPHQL_COST_LIMIT`.
 
 ---
-*Tested on 2026-10-17 with WordJS 2.6.0 on a fresh install, anonymously:
+*Tested on 2026-10-17, anonymously.
 
-- every query above, including pagination with the cursor;
-- the `null` for a missing post;
-- `posts(status: "draft")` returning only published posts;
-- introspection refused in production;
-- a mutation refused;
-- an anonymous POST without `Origin` refused with `rest_csrf_invalid`, and accepted with a same-origin
-  `Origin`;
-- `graphql-build.mjs` writing a page of the site's 5 posts.
+- **WordJS 2.6.0:**
+  - every query above, including pagination with the cursor;
+  - the `null` for a missing post;
+  - `posts(status: "draft")` returning only published posts;
+  - introspection refused in production;
+  - a mutation refused;
+  - an anonymous POST without `Origin` refused with `rest_csrf_invalid`, and accepted with a
+    same-origin `Origin`.
+- **WordJS 2.7.0 release build, again:** pagination, the `null` lookup, the mutation and POST refusals,
+  `link` now the post's canonical address (answering `200` directly), and `graphql-build.mjs` writing a
+  page of the site's posts with every link kept.
 
-The responses shown are from that run.*
+The responses shown are from those runs.*

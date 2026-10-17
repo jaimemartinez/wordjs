@@ -5,12 +5,12 @@ blocks like the hero. In this tutorial you create a "Corner Roasters" theme from
 it, check it with the theme doctor, and install it on your site from the admin.
 
 **Time:** about 15 minutes.
-**You need:** a WordJS site with an administrator account, and on your computer Git, Node.js 22 or
-newer and the `zip` command. If you did [Tutorial 7](07-build-your-first-plugin.md) you already have
+**You need:** a WordJS site with an administrator account, and on your computer Git and Node.js 22
+or newer. If you did [Tutorial 7](07-build-your-first-plugin.md) you already have
 the repository; otherwise:
 
 ```bash
-git clone --depth 1 --branch v2.6.0 https://github.com/jaimemartinez/wordjs.git
+git clone --depth 1 --branch v2.7.0 https://github.com/jaimemartinez/wordjs.git
 ```
 
 ```bash
@@ -44,12 +44,11 @@ Open `theme.json` and add a `tokens` section and a `styles` section after `layou
   "tokens": {
     "--wjs-font-family-heading": "Georgia, \"Times New Roman\", serif",
     "--wjs-radius-lg": "6px",
-    "--wjs-hero-radius": "6px",
-    "--wjs-hero-gradient-from": "#2b211c",
-    "--wjs-hero-gradient-to": "#5a3a28"
+    "--wjs-hero-radius": "6px"
   },
   "styles": {
     "hero": {
+      "bg": "#2b211c",
       "button": {
         "bg": "#8a4b2a",
         "letter-spacing": "0.04em",
@@ -59,12 +58,14 @@ Open `theme.json` and add a `tokens` section and a `styles` section after `layou
   }
 ```
 
-- **`tokens`** set `--wjs-*` design tokens directly. Here they set a serif for headings, tighter
-  corners, and a dark roasted gradient behind the hero. The full list of tokens is in
-  `backend/public/theme-tokens.json`, and [theming.md](../theming.md) explains them.
-- **`styles`** style a block by its parts. `hero.button.bg` becomes the token
-  `--wjs-hero-button-bg`. `letter-spacing` has no token, so it becomes a CSS rule on the hero button.
-  `hover` becomes a `:hover` rule.
+- **`tokens`** set `--wjs-*` design tokens directly. Here they set a serif for headings and tighter
+  corners. The full list of tokens is in `backend/public/theme-tokens.json`, and
+  [theming.md](../theming.md) explains them.
+- **`styles`** style a block by its parts:
+  - `hero.bg` becomes `--wjs-hero-bg`, the dark roasted background behind the hero;
+  - `hero.button.bg` becomes `--wjs-hero-button-bg`;
+  - `letter-spacing` has no token, so it becomes a CSS rule on the hero button;
+  - `hover` becomes a `:hover` rule.
 
 Compile it:
 
@@ -83,29 +84,18 @@ node backend/cli/wordjs.js doctor theme corner-roasters
 ```
 
 The doctor checks the theme against the token contract and checks the color contrast of every text
-and background pair. With these seeds it reports one warning:
-
-```
-⚠️  [LOW_CONTRAST] muted text on the page: --wjs-color-text-muted on --wjs-bg-canvas is 4.42:1 (needs 4.5:1)
-```
-
-The derived gray for secondary text is a little too light on this paper background. Fix it with
-one more token in `tokens`:
-
-```json
-    "--wjs-color-text-muted": "#6b625c",
-```
-
-Then build again and run the doctor once more. It should end with
-`0 error(s), 0 warning(s), 1 info.`
+and background pair. WordJS darkens or lightens the muted text it derives until it reaches WCAG AA
+(4.5:1), so with these values the doctor ends with `0 error(s), 0 warning(s), 1 info.` If a color you
+set in `tokens` falls below that, the doctor names the pair and its ratio (`LOW_CONTRAST`).
 
 ## 4. Package it
 
-A theme zip contains one folder named after the theme:
-
 ```bash
-cd backend/themes && zip -r ../../corner-roasters.zip corner-roasters && cd ../..
+node backend/cli/wordjs.js pack theme corner-roasters
 ```
+
+This writes `corner-roasters.zip` to the current folder, with the single `corner-roasters/` folder
+that an upload expects.
 
 ## 5. Install and activate
 
@@ -119,28 +109,24 @@ Open any page of your site, for example the `/our-story` page from
 
 - the warm paper background;
 - Georgia headings;
-- the dark brown hero;
+- the dark brown hero (`#2b211c`);
 - the roasted-brown button that turns green on hover;
 - links in the primary color.
 
-Pages are cached, so for a few seconds after you activate a theme, the first visit to a page can
-still show the previous theme. Reload once.
+Activating a theme expires the cached pages, so the very next visit already shows it.
 
 ## 6. Ship a new version
 
-Edit `theme.json`, run `build theme` and the doctor, and zip it again. Then, on the site:
+Edit `theme.json`, run `build theme` and the doctor, and pack it again. Then, on the site, click
+**Install Theme** and choose the new zip. WordJS asks *Update the theme?*; click **Update**. The new
+version replaces the old one in place:
 
-1. Activate another theme for a moment, for example **WordJS**. The active theme can't be deleted.
-2. On the **Corner Roasters** card, click the bin icon and confirm. Uploading over an installed theme is
-   refused (*Theme "corner-roasters" already exists*), so the old copy has to go first.
-3. Install the new zip and activate it.
+- an active theme stays active and keeps its **Customize** settings;
+- the cached pages are expired at once;
+- the card shows the new version.
 
-The card shows the new version number.
-
-> **After 2.6.0:** releases after 2.6.0 update in place. Package the theme with
-> `node backend/cli/wordjs.js pack theme corner-roasters` and install the newer zip; WordJS offers to
-> update the installed theme, even while it is active. See
-> [themes.md → Updating a theme](../themes.md#updating-a-theme-upload-a-newer-zip).
+On WordJS 2.6.0 and earlier there is no update in place: activate another theme, delete this one and
+install the new zip.
 
 ## Where next
 
@@ -150,10 +136,13 @@ The card shows the new version number.
   administrator can override tokens without editing the theme.
 
 ---
-*Tested on 2026-10-17 with WordJS 2.6.0. On a clean Debian 12 machine: clone at `v2.6.0`,
-`npm install` in `backend/`, `create theme` with the four seeds above, the `tokens` and `styles`
-from step 2, `build theme`, and the doctor (which reported the contrast warning in step 3, then
-nothing once fixed). On a fresh site, in a browser: install from the zip, activate, and the update in
-step 6 (1.0.2 → 1.0.3). The computed styles on `/our-story` were checked: page background `#fbf7f2`,
-Georgia headings, hero gradient `#2b211c` → `#5a3a28`, hero button `#8a4b2a` with 0.04em letter
-spacing.*
+*Tested on 2026-10-17 with a WordJS 2.7.0 release build.
+
+- **Clean Debian 12 checkout of the release source:** `create theme` with the four seeds above, the
+  `tokens` and `styles` from step 2, `build theme`, the doctor (no warnings) and `pack theme`.
+- **Fresh site, in a browser:**
+  - **Install and activate:** the first public visit already used the new theme.
+  - **Computed styles:** page background `#fbf7f2`, Georgia headings, links `#8a4b2a`, and a hero on
+    `#2b211c` with its button on `#8a4b2a`.
+  - **Update in step 6:** with a new hero color, 1.0.1 became 1.0.2 while active, and the new color was
+    served.*

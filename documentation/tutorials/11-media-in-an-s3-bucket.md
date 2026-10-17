@@ -86,7 +86,7 @@ For a real site, use **HTTPS** and a public URL on a domain other than the site'
 
 ## 3. Test the connection
 
-Wait a minute, **reload the page**, and click **Test connection**. The server writes a small probe
+**Reload the page** and click **Test connection**. The server writes a small probe
 image to the bucket and reads it back. Then your browser loads it from the public URL, the same way
 visitors will, and the server deletes it:
 
@@ -98,10 +98,11 @@ Delete — HTTP 204
 Connection works: the bucket accepts writes and the public URL serves the files.
 ```
 
-If **Public URL** says *not loadable from this browser* right after you saved, the admin page is
-still running on its old security policy, which doesn't list the bucket's address yet. It refreshes
-within a minute. Reload and test again. If it still fails, open the public URL of any object in a
-browser: an access-denied error means the objects aren't publicly readable.
+The reload matters: the admin page's security policy only lets the browser load images from the
+bucket's address once that address is saved, and a page loaded before the save still carries the old
+policy. If **Public URL** says *not loadable from this browser*, reload once more after a few seconds
+and test again. If it still fails, open the public URL of any object in a browser: an access-denied
+error means the objects aren't publicly readable.
 
 ## 4. Move the existing library
 
@@ -116,7 +117,7 @@ the disk; otherwise the local copies stay as a fallback. Private media is never 
 
 - Open a post with an image, such as `/how-we-brew-a-pour-over`. The image now loads from
   `http://192.168.182.56:8333/media/uploads/2024/03/beans.png`. Pages are cached, so this can take a
-  minute and a reload.
+  few seconds and a reload.
 - Upload a new image in **Admin → Media**. Its file goes straight to the bucket (`storage: s3`) and
   nothing new appears in `backend/uploads/` on the server.
 - Old links keep working. A request for `/uploads/…` that is no longer on the server's disk is
@@ -134,7 +135,7 @@ Nothing in the database changes in either direction.
 The same operations are available on the server, from the installation folder:
 
 ```bash
-npm run media -- status
+npm run media -- status          # JSON on stdout, e.g. npm run media -- status | jq .state
 npm run media -- test
 npm run media -- offload --delete-local
 npm run media -- restore
@@ -144,15 +145,13 @@ All settings can also come from environment variables (`WORDJS_MEDIA_STORAGE=s3`
 `WORDJS_MEDIA_S3_BUCKET`, …), listed in [media-storage.md](../media-storage.md).
 
 ---
-*Tested on 2026-10-17 with WordJS 2.6.0 on a fresh install, with SeaweedFS 4.48 on a second Debian 12
-machine. The steps were done in a browser:
+*Tested on 2026-10-17 on fresh installs, with SeaweedFS 4.48 on a second Debian 12 machine.
 
-- the settings were saved;
-- **Test connection** passed after a reload (before the reload it reported the public URL as not
-  loadable);
-- **Move to the bucket** reported 1/1 moved;
-- the post's image loaded from the bucket;
-- a new upload was stored only in the bucket (`deliveryUrl` on the bucket, nothing on local disk).
-
-`/uploads/…` answered `302` to the bucket, and the object answered `200 image/png` without
-credentials.*
+- **WordJS 2.6.0, in a browser:** the whole tutorial: settings saved, **Test connection**, **Move to the
+  bucket** (1/1), the post's image from the bucket, and a new upload stored only in the bucket.
+  `/uploads/…` answered `302` to the bucket, and the object answered `200 image/png` without
+  credentials.
+- **WordJS 2.7.0 release build, again in a browser:** the labelled fields, then **Test connection**.
+  It passed after a reload; the first reload, a few seconds after saving, still carried the old policy.
+  Then **Move to the bucket** (1/1), the post's image served from the bucket, a new upload stored in
+  the bucket, and the `302` from `/uploads/…`.*

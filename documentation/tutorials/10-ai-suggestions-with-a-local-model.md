@@ -71,14 +71,18 @@ as usual to keep what you accepted.
 In **Admin → Media**, an image's details have a **Suggest with AI** button for the alt text. The
 server sends a downscaled copy of the image to the model. It never sends private media.
 
-`qwen2.5:1.5b` reads text only, so this request fails with *The AI provider did not answer
-correctly*. For alt text, configure a model that accepts images: Claude, an OpenAI vision model, or a
-vision model in Ollama on a machine with enough power. On the 4-core, CPU-only test server, the small
-vision model `moondream` produced unusable text or went past WordJS's 60-second limit, so plan for a
-GPU or a hosted model there.
+`qwen2.5:1.5b` reads text only, so this request is refused with *The configured model does not accept
+images. Choose a vision-capable model under Settings → AI to suggest alt text.* For alt text, configure
+a model that accepts images: Claude, an OpenAI vision model, or a vision model in Ollama on a machine
+with enough power. On a CPU-only server a small vision model like `moondream` is slow and its alt text
+is often unusable, so plan for a GPU or a hosted model there.
 
 ## Good to know
 
+- **Slow machines:** a provider on this machine (`127.0.0.1` or `localhost`) gets up to 5 minutes per
+  request, a hosted one 60 seconds. Set `WORDJS_AI_TIMEOUT_MS` in the service's environment to change
+  both. When a request runs out of time, the editor says so (*The AI provider took too long to
+  answer…*).
 - **Limits:** 20 suggestions per minute per user. The buttons appear only when a provider is
   configured. **Provider: Off** turns every AI feature off.
 - **Untrusted text:** the draft is passed to the model as material, never as instructions, and the
@@ -88,13 +92,14 @@ GPU or a hosted model there.
   permission. They get text back, never the key. See [ai-provider.md](../ai-provider.md).
 
 ---
-*Tested on 2026-10-17 with WordJS 2.6.0 on a fresh install (Debian 12, 4 CPU cores, no GPU) with
-Ollama and `qwen2.5:1.5b`, in a browser:
+*Tested on 2026-10-17 with Ollama and `qwen2.5:1.5b` on fresh Debian 12 installs, CPU only.
 
-- **Test connection:** connected; the first call took 15 s.
-- **Excerpt and meta description:** both suggestions were produced in about 2–3 s. **Use** filled the
-  excerpt field.
-- **Alt text with the text model:** refused as described.
-- **Alt text with `moondream`:** returned gibberish once, then timed out.
-
-The quoted suggestions are the real outputs from that run.*
+- **WordJS 2.6.0, in a browser, 4 cores:**
+  - **Test connection:** connected; the first call took 15 s.
+  - **Excerpt and meta description:** both suggestions were produced in about 2–3 s, and **Use**
+    filled the excerpt field. The quoted suggestions are the real outputs from that run.
+- **WordJS 2.7.0 release build, 2 cores:**
+  - **Test connection:** connected in 13 s.
+  - **Excerpt:** two suggestions came back after 65 s and 101 s, past the old 60-second limit, which
+    no longer applies to a local model.
+  - **Alt text with the text model:** refused with the message quoted in step 4.*
