@@ -6,7 +6,46 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Changed
+
+- **The admin follows the site's language until you pick one.** With no choice saved in the sidebar's
+  language menu, the admin now speaks the site's own language (`<html lang>`, from the site locale) when it
+  is English, Spanish or Portuguese, instead of always starting in Spanish. An English site no longer
+  shows Spanish Backups or Marketplace screens next to English ones. A language picked in the sidebar still
+  wins, on every site.
+
+- **Bundled theme descriptions are translatable.** `theme.json` accepts
+  `"translations": { "<lang>": { "description": "…" } }`; the admin shows the description for its own
+  language and falls back to `description`. The four bundled themes ship English descriptions with Spanish
+  and Portuguese translations (Circuito's was Spanish only).
+
 ### Fixed
+
+- **Plugins → Marketplace speaks the admin's language.** The catalog tab, its source settings and the
+  install dialog were hard-coded Spanish ("Cargando el catálogo…", "Instalar", "Bloque …", "Permisos que
+  solicitará", "Cancelar", the source line and the toasts); they are translated now, including the
+  catalog's categories and the review badges. The broken-plugin card and its cleanup messages too.
+
+- **The delete-plugin dialog is one sentence.** It read "…This action cannot be undone. Reading List?";
+  the plugin's name now sits inside the question.
+
+- **Restoring a backup says it worked and what to do next.** The page reloaded a second after the restore,
+  throwing away the only feedback; it now stays on a success notice that tells the admin to restart the
+  WordJS service, with a reload button.
+
+- **Webhook delivery times are local.** The delivery log showed UTC database timestamps as if they were
+  local, next to a "Last delivery" in local time.
+
+- **Network → Create site shows why it failed.** A failed create (a server error included) now leaves an
+  error on the form as well as a toast.
+
+- **Media storage shows the server's advice about the public URL.** Non-blocking `warnings` from the media
+  storage API (a URL that repeats the key prefix, misses the bucket, or would be mixed content) are listed
+  under the fields, a failed public check in "Test connection" explains what to try, and the endpoint
+  hints name Garage and SeaweedFS next to MinIO.
+
+- **AI agents → New connection is no longer cramped.** Below 1536 px the form sits above the connection
+  list instead of in a narrow column that cut its labels at 1280 px.
 
 - **The Verso editor speaks the admin language everywhere.** With the admin in English the editor still
   showed Spanish in many places: the mobile header ("Editando · …"), the canvas and navigation labels,

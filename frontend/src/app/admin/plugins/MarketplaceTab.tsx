@@ -13,13 +13,34 @@ import DialogLayer from "@/components/DialogLayer";
 import { marketplaceApi, MarketplaceEntry, MarketplaceSourceStatus } from "@/lib/api";
 import { permMeta } from "@/lib/permissionMeta";
 import { useToast } from "@/contexts/ToastContext";
-import { useI18n } from "@/contexts/I18nContext";
+import { useI18n, useOptionalI18n } from "@/contexts/I18nContext";
+import { t as translate } from "@/lib/i18n";
 import { FaSearch, FaSyncAlt, FaDownload, FaCheck, FaThLarge, FaStore, FaCog, FaTrash, FaPlus, FaShieldAlt, FaCodeBranch, FaQuestionCircle } from "react-icons/fa";
 import type { IconType } from "react-icons";
 import { Button, EmptyState } from "@/components/ui";
 
 const permToken = (p: { scope: string; access?: string }) =>
     p.scope === 'network' ? 'network' : `${p.scope}:${p.access || 'read'}`;
+
+/** `{name}` placeholders → values (inserted as text; React escapes them when rendered). */
+const fill = (template: string, values: Record<string, string | number>) =>
+    template.replace(/\{(\w+)\}/g, (m, k) => (k in values ? String(values[k]) : m));
+
+/**
+ * Catalog categories are published as data (backend/scripts/build-marketplace.js writes them in Spanish,
+ * and catalogs already released keep those values), so the tab translates the ones it knows and shows any
+ * other category as the catalog wrote it. The raw value stays the filter key.
+ */
+const CATEGORY_KEYS: Record<string, string> = {
+    formularios: "forms", forms: "forms", marketing: "marketing", eventos: "events", events: "events",
+    legal: "legal", social: "social", contenido: "content", content: "content", seo: "seo",
+    medios: "media", media: "media", comercio: "commerce", commerce: "commerce", email: "email",
+    correo: "email", general: "general",
+};
+export function categoryLabel(category: string, t: (key: string) => string): string {
+    const key = CATEGORY_KEYS[category.trim().toLowerCase()];
+    return key ? t(`plugins.marketplace.category.${key}`) : category;
+}
 
 function fmtKB(bytes: number) {
     return bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -48,34 +69,38 @@ function fmtKB(bytes: number) {
  * Split out (and exported) because the tab itself is a fetch-on-mount client tree: this is the piece a
  * unit test can drive with one entry per status.
  */
-const SANDBOX_NOTE = "Every plugin runs in the same sandbox with only the permissions you grant, badge or no badge.";
+const englishOnly = (key: string) => translate(key, "en");
 
-export function reviewPill(review: MarketplaceEntry["review"], official?: boolean): { label: string; title: string; tone: string; Icon: IconType } {
+export function reviewPill(review: MarketplaceEntry["review"], official?: boolean, t: (key: string) => string = englishOnly): { label: string; title: string; tone: string; Icon: IconType } {
+    const sandbox = t("plugins.marketplace.review.sandboxNote");
     switch (official ? review?.status : undefined) {
         case "reviewed": {
             const by = [review?.reviewer, review?.date].filter(Boolean).join(" · ");
             return {
-                label: "Reviewed",
-                title: `${by ? `Reviewed by ${by}` : "Reviewed by the WordJS maintainers"} — a human read this submission against marketplace/REVIEW.md §4 and recorded the decision. It is not a security audit. ${SANDBOX_NOTE}`,
+                label: t("plugins.marketplace.review.reviewed"),
+                title: fill(t("plugins.marketplace.review.reviewedTitle"), {
+                    by: by ? fill(t("plugins.marketplace.review.reviewedBy"), { by }) : t("plugins.marketplace.review.reviewedByMaintainers"),
+                    sandbox,
+                }),
                 tone: "bg-emerald-50 border-emerald-100/50 text-emerald-600",
                 Icon: FaShieldAlt,
             };
         }
         case "first-party":
             return {
-                label: "First-party",
-                title: review?.notes || "Maintained in the WordJS repository by the WordJS project.",
+                label: t("plugins.marketplace.review.firstParty"),
+                title: review?.notes || t("plugins.marketplace.review.firstPartyTitle"),
                 tone: "bg-slate-50 border-slate-200/40 text-slate-500",
                 Icon: FaCodeBranch,
             };
         default:
             return {
-                label: "Unreviewed",
-                title: official === false
+                label: t("plugins.marketplace.review.unreviewed"),
+                title: fill(t(official === false
                     // Not the official catalog: whatever this index claimed about itself is not a claim
                     // the WordJS maintainers ever made, so say that instead of the generic copy.
-                    ? `Listed by a catalog source other than the official WordJS one, so it carries no review by the WordJS maintainers. ${SANDBOX_NOTE}`
-                    : `Not reviewed by the WordJS maintainers; the sandbox and your permission grants are the safeguards. ${SANDBOX_NOTE}`,
+                    ? "plugins.marketplace.review.unofficialTitle"
+                    : "plugins.marketplace.review.unreviewedTitle"), { sandbox }),
                 // Muted + dashed: reads as an absent certification rather than a granted one.
                 tone: "bg-white/40 border-slate-200 border-dashed text-slate-400",
                 Icon: FaQuestionCircle,
@@ -83,9 +108,13 @@ export function reviewPill(review: MarketplaceEntry["review"], official?: boolea
     }
 }
 
-/** The review pill itself — same shape/typography as the block and permission pills next to it. */
+/**
+ * The review pill itself — same shape/typography as the block and permission pills next to it. Speaks the
+ * admin's language inside the admin; rendered on its own (no I18nProvider) it falls back to English.
+ */
 export function ReviewPill({ review, official }: { review: MarketplaceEntry["review"]; official?: boolean }) {
-    const { label, title, tone, Icon } = reviewPill(review, official);
+    const i18n = useOptionalI18n();
+    const { label, title, tone, Icon } = reviewPill(review, official, i18n?.t);
     return (
         <span title={title} className={`inline-flex items-center gap-1 text-[8px] font-extrabold uppercase tracking-widest px-2.5 py-1 rounded-full border shadow-sm ${tone}`}>
             <Icon className="text-[7px]" /> {label}
@@ -140,7 +169,7 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
             setIsLocal(data.isLocal);
             setSourcesStatus(data.sources || []);
         } catch (e: any) {
-            setError(e?.message || "No se pudo cargar el catálogo.");
+            setError(e?.message || t("plugins.marketplace.loadFailed"));
         } finally {
             setLoading(false);
         }
@@ -156,7 +185,7 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
             setDefaultSrc(s.default);
             setSrcList(s.usingDefault ? [s.default] : s.configured);
         } catch (e: any) {
-            addToast(e?.message || "No se pudieron cargar las fuentes.", "error");
+            addToast(e?.message || t("plugins.marketplace.sourcesLoadFailed"), "error");
         }
     };
 
@@ -164,7 +193,7 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
         const v = newSrc.trim().replace(/\/+$/, "");
         if (!v) return;
         if (!/^https:\/\//i.test(v) && !/^http:\/\/localhost/i.test(v)) {
-            addToast("La fuente debe ser una URL https://", "error");
+            addToast(t("plugins.marketplace.sourceMustBeHttps"), "error");
             return;
         }
         setNewSrc("");
@@ -177,11 +206,11 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
         try {
             const res = await marketplaceApi.setSources(list);
             setSrcList(res.configured);
-            addToast(list.length ? "Fuentes del marketplace guardadas." : "Marketplace sin fuentes — catálogo remoto desactivado.", "success");
+            addToast(t(list.length ? "plugins.marketplace.sourcesSaved" : "plugins.marketplace.sourcesSavedEmpty"), "success");
             setShowSources(false);
             await load(true);
         } catch (e: any) {
-            addToast(e?.message || "No se pudieron guardar las fuentes.", "error");
+            addToast(e?.message || t("plugins.marketplace.sourcesSaveFailed"), "error");
         } finally {
             setSavingSrc(false);
         }
@@ -193,11 +222,11 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
         try {
             const res = await marketplaceApi.resetSources();
             setSrcList([res.default]);
-            addToast("Fuentes restablecidas al catálogo oficial.", "success");
+            addToast(t("plugins.marketplace.sourcesReset"), "success");
             setShowSources(false);
             await load(true);
         } catch (e: any) {
-            addToast(e?.message || "No se pudieron restablecer las fuentes.", "error");
+            addToast(e?.message || t("plugins.marketplace.sourcesResetFailed"), "error");
         } finally {
             setSavingSrc(false);
         }
@@ -228,20 +257,18 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                 const res = await marketplaceApi.update(entry.id);
                 const newPerms = res.newPermissions || [];
                 addToast(
-                    newPerms.length
-                        ? `"${entry.name}" actualizado a v${entry.version}. Declara ${newPerms.length} permiso(s) nuevo(s) — revísalos en Instalados.`
-                        : `"${entry.name}" actualizado a v${entry.version}.`,
+                    fill(t(newPerms.length ? "plugins.marketplace.updatedNewPerms" : "plugins.marketplace.updated"), { name: entry.name, version: entry.version, count: newPerms.length }),
                     "success"
                 );
                 setEntries((list) => list.map((e) => (e.id === entry.id ? { ...e, installedVersion: entry.version, updateAvailable: false, updatable: false } : e)));
             } else {
                 await marketplaceApi.install(entry.id);
-                addToast(`"${entry.name}" instalado. Actívalo y otorga sus permisos en Instalados.`, "success");
+                addToast(fill(t("plugins.marketplace.installed"), { name: entry.name }), "success");
                 setEntries((list) => list.map((e) => (e.id === entry.id ? { ...e, installed: true, installedVersion: e.version, updateAvailable: false } : e)));
             }
             onInstalled();
         } catch (e: any) {
-            addToast(e?.message || (isUpdate ? "No se pudo actualizar el plugin." : "No se pudo instalar el plugin."), "error");
+            addToast(e?.message || t(isUpdate ? "plugins.marketplace.updateFailed" : "plugins.marketplace.installFailed"), "error");
         } finally {
             setInstalling((m) => ({ ...m, [entry.id]: false }));
         }
@@ -251,7 +278,7 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
         return (
             <div className="text-center py-20">
                 <div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-                <p className="text-gray-500 text-sm">Cargando el catálogo…</p>
+                <p className="text-gray-500 text-sm">{t("plugins.marketplace.loading")}</p>
             </div>
         );
     }
@@ -262,9 +289,9 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                 <div className="w-16 h-16 shrink-0 bg-amber-50 text-amber-500 rounded-2xl flex items-center justify-center text-2xl mx-auto mb-4">
                     <FaStore />
                 </div>
-                <h3 className="font-bold text-gray-900 mb-2">No se pudo cargar el marketplace</h3>
+                <h3 className="font-bold text-gray-900 mb-2">{t("plugins.marketplace.loadFailedTitle")}</h3>
                 <p className="text-sm text-gray-500 mb-6">{error}</p>
-                <Button onClick={() => load(true)}><FaSyncAlt className="mr-2" /> Reintentar</Button>
+                <Button onClick={() => load(true)}><FaSyncAlt className="mr-2" /> {t("plugins.marketplace.retry")}</Button>
             </div>
         );
     }
@@ -273,13 +300,14 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
         <div>
             {/* Toolbar */}
             <div className="flex flex-col md:flex-row md:items-center gap-4 mb-8">
-                <div className="relative flex-1 max-w-md">
+                <div className="relative flex-1 max-w-md md:min-w-[14rem]">
                     <FaSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-xs" />
                     <input
                         type="text"
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
-                        placeholder="Buscar plugins…"
+                        placeholder={t("plugins.marketplace.search")}
+                        aria-label={t("plugins.marketplace.search")}
                         className="w-full pl-10 pr-4 py-3 rounded-2xl border border-slate-200/60 bg-white/50 backdrop-blur-md focus:bg-white focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 outline-none transition-all text-xs font-semibold placeholder-slate-400 shadow-sm"
                     />
                 </div>
@@ -290,21 +318,23 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                             onClick={() => setCategory(c)}
                             className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-300 ${category === c ? "bg-white text-slate-900 shadow-sm border border-slate-100/50" : "text-slate-500 hover:text-slate-800"}`}
                         >
-                            {c === "all" ? "Todos" : c}
+                            {c === "all" ? t("plugins.marketplace.all") : categoryLabel(c, t)}
                         </button>
                     ))}
                 </div>
                 <div className="flex items-center gap-2 ml-auto">
                     <button
                         onClick={() => (showSources ? setShowSources(false) : openSources())}
-                        title="Configurar fuentes del marketplace"
+                        title={t("plugins.marketplace.configureSources")}
+                        aria-label={t("plugins.marketplace.configureSources")}
                         className={`w-10 h-10 shrink-0 flex items-center justify-center rounded-2xl border transition-all shadow-sm hover:scale-105 active:scale-95 ${showSources ? "bg-blue-50 border-blue-200 text-blue-600" : "bg-white border-slate-200/60 text-slate-500 hover:text-slate-850 hover:border-slate-300"}`}
                     >
                         <FaCog className="text-xs" />
                     </button>
                     <button
                         onClick={() => load(true)}
-                        title="Actualizar catálogo"
+                        title={t("plugins.marketplace.refresh")}
+                        aria-label={t("plugins.marketplace.refresh")}
                         className="w-10 h-10 shrink-0 flex items-center justify-center rounded-2xl bg-white border border-slate-200/60 text-slate-500 hover:text-slate-850 hover:border-slate-300 hover:scale-105 active:scale-95 transition-all shadow-sm"
                     >
                         <FaSyncAlt className="text-xs" />
@@ -317,11 +347,11 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
             {showSources && (
                 <div className="mb-8 bg-white/70 backdrop-blur-md border border-slate-200/60 rounded-[24px] p-6 shadow-sm animate-in fade-in slide-in-from-top-2 duration-200">
                     <div className="flex items-center justify-between mb-2">
-                        <h3 className="font-extrabold text-slate-900 text-sm flex items-center gap-2"><FaCog className="text-blue-500 text-xs" /> Fuentes del marketplace</h3>
-                        <button onClick={() => setShowSources(false)} className="text-slate-400 hover:text-slate-700 text-[11px] font-bold uppercase tracking-wider">Cerrar</button>
+                        <h3 className="font-extrabold text-slate-900 text-sm flex items-center gap-2"><FaCog className="text-blue-500 text-xs" /> {t("plugins.marketplace.sourcesTitle")}</h3>
+                        <button onClick={() => setShowSources(false)} className="text-slate-400 hover:text-slate-700 text-[11px] font-bold uppercase tracking-wider">{t("plugins.marketplace.close")}</button>
                     </div>
                     <p className="text-[11px] text-slate-500 mb-4 leading-relaxed">
-                        Agregá uno o varios catálogos (URLs <span className="font-mono">https</span>). WordJS los combina — los primeros tienen prioridad ante ids repetidos. Podés dejar la lista vacía para desactivar el catálogo remoto; «Restablecer al default» vuelve al catálogo oficial.
+                        {t("plugins.marketplace.sourcesHelp")}
                     </p>
                     <div className="space-y-2 mb-4">
                         {srcList.map((u, i) => {
@@ -334,11 +364,11 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                                     {st && (st.ok
                                         ? <span className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100 shrink-0">{st.count ?? 0}</span>
                                         : <span title={st.error} className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 border border-rose-100 shrink-0">error</span>)}
-                                    <button onClick={() => removeSource(u)} title="Quitar" className="text-slate-300 hover:text-rose-500 text-[11px] px-1 shrink-0"><FaTrash /></button>
+                                    <button onClick={() => removeSource(u)} title={t("plugins.marketplace.remove")} aria-label={t("plugins.marketplace.remove")} className="text-slate-300 hover:text-rose-500 text-[11px] px-1 shrink-0"><FaTrash /></button>
                                 </div>
                             );
                         })}
-                        {srcList.length === 0 && <div className="text-[11px] text-slate-400 italic px-1">Sin fuentes — el catálogo remoto queda desactivado al guardar.</div>}
+                        {srcList.length === 0 && <div className="text-[11px] text-slate-400 italic px-1">{t("plugins.marketplace.noSources")}</div>}
                     </div>
                     <div className="flex items-center gap-2 mb-4">
                         <input
@@ -348,28 +378,28 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                             placeholder="https://mi-marketplace.com/catalog"
                             className="flex-1 px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-[11px] font-mono outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all"
                         />
-                        <Button onClick={addSource} className="shrink-0"><FaPlus className="mr-1.5 text-[10px]" /> Agregar</Button>
+                        <Button onClick={addSource} className="shrink-0"><FaPlus className="mr-1.5 text-[10px]" /> {t("plugins.marketplace.add")}</Button>
                     </div>
                     <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-100">
-                        <button onClick={resetSources} disabled={savingSrc} className="text-[11px] font-bold text-slate-500 hover:text-slate-800 disabled:opacity-50">Restablecer al default</button>
-                        <Button onClick={() => saveSources()} disabled={savingSrc}>{savingSrc ? "Guardando…" : "Guardar fuentes"}</Button>
+                        <button onClick={resetSources} disabled={savingSrc} className="text-[11px] font-bold text-slate-500 hover:text-slate-800 disabled:opacity-50">{t("plugins.marketplace.resetDefault")}</button>
+                        <Button onClick={() => saveSources()} disabled={savingSrc}>{savingSrc ? t("plugins.marketplace.saving") : t("plugins.marketplace.saveSources")}</Button>
                     </div>
                 </div>
             )}
 
             <p className="text-[10px] font-semibold text-slate-450/80 mb-6 bg-slate-50 border border-slate-150/60 px-4 py-2.5 rounded-xl inline-block shadow-[inset_0_2px_4px_rgba(0,0,0,0.015)]">
                 {sourcesStatus.length > 1
-                    ? <>{sourcesStatus.length} fuentes</>
-                    : <>Fuente: <span className="font-mono text-slate-650 bg-slate-100 px-1.5 py-0.5 rounded">{isLocal ? "catálogo local" : (source || "sin fuentes")}</span></>}
-                {" · "}{entries.length} plugins
-                {sourcesStatus.some((s) => !s.ok) && <span className="text-rose-500 font-bold"> · {sourcesStatus.filter((s) => !s.ok).length} fuente(s) con error</span>}
-                {" · "}Los plugins se instalan desactivados y con permisos denegados por defecto.
+                    ? <>{fill(t("plugins.marketplace.sourcesCount"), { count: sourcesStatus.length })}</>
+                    : <>{t("plugins.marketplace.source")} <span className="font-mono text-slate-650 bg-slate-100 px-1.5 py-0.5 rounded">{isLocal ? t("plugins.marketplace.localCatalog") : (source || t("plugins.marketplace.noSourcesShort"))}</span></>}
+                {" · "}{fill(t("plugins.marketplace.pluginsCount"), { count: entries.length })}
+                {sourcesStatus.some((s) => !s.ok) && <span className="text-rose-500 font-bold"> · {fill(t("plugins.marketplace.sourcesWithErrors"), { count: sourcesStatus.filter((s) => !s.ok).length })}</span>}
+                {" · "}{t("plugins.marketplace.installNote")}
             </p>
 
             {filtered.length === 0 ? (
                 entries.length === 0 && sourcesStatus.length === 0
-                    ? <EmptyState icon="fa-store-slash" title="Marketplace sin fuentes" description="El catálogo remoto está desactivado. Agregá una fuente con el botón de configuración (⚙️)." />
-                    : <EmptyState icon="fa-puzzle-piece" title="Sin resultados" description="Ningún plugin coincide con la búsqueda." />
+                    ? <EmptyState icon="fa-store-slash" title={t("plugins.marketplace.emptySourcesTitle")} description={t("plugins.marketplace.emptySourcesDescription")} />
+                    : <EmptyState icon="fa-puzzle-piece" title={t("plugins.marketplace.noResultsTitle")} description={t("plugins.marketplace.noResultsDescription")} />
             ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
                     {filtered.map((e) => {
@@ -386,7 +416,7 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                                             <div className="text-[10px] text-slate-400 font-mono mt-0.5">v{e.version} · {fmtKB(e.size)}</div>
                                         </div>
                                     </div>
-                                    <span className="text-[8px] font-extrabold uppercase tracking-widest px-2.5 py-1 rounded-full bg-slate-50 border border-slate-200/40 text-slate-500 shrink-0 shadow-sm">{e.category}</span>
+                                    <span className="text-[8px] font-extrabold uppercase tracking-widest px-2.5 py-1 rounded-full bg-slate-50 border border-slate-200/40 text-slate-500 shrink-0 shadow-sm">{categoryLabel(e.category || "General", t)}</span>
                                 </div>
 
                                 <p className="text-slate-500 text-xs mb-4 line-clamp-3 flex-1 font-medium leading-relaxed">{e.description}</p>
@@ -397,7 +427,7 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                                     {/* new field first, pre-Verso catalogs fall back to the old one */}
                                     {(e.hasVersoBlock ?? e.hasPuckBlock) && (
                                         <span className="inline-flex items-center gap-1 text-[8px] font-extrabold uppercase tracking-widest px-2.5 py-1 rounded-full bg-indigo-50 border border-indigo-100/50 text-indigo-650 shadow-sm">
-                                            <FaThLarge className="text-[7px]" /> Bloque {e.blockName}
+                                            <FaThLarge className="text-[7px]" /> {fill(t("plugins.marketplace.block"), { name: e.blockName || "" })}
                                         </span>
                                     )}
                                     {(e.permissions || []).map((p) => {
@@ -413,15 +443,15 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
 
                                 {e.installed && !e.updateAvailable ? (
                                     <div className="flex items-center gap-2 text-emerald-600 text-xs font-black uppercase tracking-wider bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-3 justify-center w-full shadow-sm">
-                                        <FaCheck className="text-[10px]" /> Instalado {e.active ? "(activo)" : "(inactivo)"}
+                                        <FaCheck className="text-[10px]" /> {t(e.active ? "plugins.marketplace.installedActive" : "plugins.marketplace.installedInactive")}
                                     </div>
                                 ) : e.installed && e.updateAvailable && !e.updatable ? (
                                     // Update exists but can't be applied in one click: this copy was installed by
                                     // upload or from a different source, so replaying its grants/data onto catalog
                                     // code would be a takeover. The safe path is uninstall (data + tables kept) then
                                     // install from the catalog.
-                                    <div title="Se instaló por subida manual o desde otra fuente. Para actualizarlo, desinstálalo (conserva sus datos y tablas) e instálalo desde el catálogo." className="text-amber-700 text-[11px] font-semibold leading-snug bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 w-full text-center">
-                                        v{e.version} disponible · desinstala y reinstálalo desde el catálogo para actualizar
+                                    <div title={t("plugins.marketplace.reinstallToUpdateTitle")} className="text-amber-700 text-[11px] font-semibold leading-snug bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 w-full text-center">
+                                        {fill(t("plugins.marketplace.reinstallToUpdate"), { version: e.version })}
                                     </div>
                                 ) : (
                                     <Button onClick={() => setConfirmEntry(e)} disabled={busy} className="w-full justify-center shadow-lg shadow-gray-200/50">
@@ -430,7 +460,7 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                                         ) : (
                                             <>
                                                 <FaDownload className="mr-2 text-xs" />
-                                                {e.updateAvailable ? `Actualizar a v${e.version}` : "Instalar"}
+                                                {e.updateAvailable ? fill(t("plugins.marketplace.updateTo"), { version: e.version }) : t("plugins.marketplace.install")}
                                             </>
                                         )}
                                     </Button>
@@ -446,13 +476,13 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
             {confirmEntry && (
                 <DialogLayer className="bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setConfirmEntry(null)}>
                     <div className="bg-white/95 backdrop-blur-lg rounded-[32px] shadow-[0_32px_64px_-16px_rgba(0,0,0,0.12)] border border-slate-200/50 w-full max-w-md p-8 animate-in fade-in zoom-in-95 duration-200" onClick={(ev) => ev.stopPropagation()}>
-                        <h3 className="font-extrabold text-lg text-slate-900 mb-1">{confirmEntry.installed && confirmEntry.updateAvailable ? "Actualizar" : "Instalar"} {confirmEntry.name}</h3>
+                        <h3 className="font-extrabold text-lg text-slate-900 mb-1">{fill(t(confirmEntry.installed && confirmEntry.updateAvailable ? "plugins.marketplace.confirmUpdate" : "plugins.marketplace.confirmInstall"), { name: confirmEntry.name })}</h3>
                         <p className="text-xs font-medium text-slate-500 mb-5 leading-relaxed">
-                            v{confirmEntry.version} · {fmtKB(confirmEntry.size)} · el paquete se verifica con sha256 y pasa el mismo escaneo de seguridad que una subida manual.
+                            {fill(t("plugins.marketplace.confirmMeta"), { version: confirmEntry.version, size: fmtKB(confirmEntry.size) })}
                         </p>
                         {(confirmEntry.permissions || []).length > 0 && (
                             <>
-                                <div className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-3">Permisos que solicitará</div>
+                                <div className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-3">{t("plugins.marketplace.requestedPermissions")}</div>
                                 <div className="space-y-2 mb-5 max-h-48 overflow-y-auto custom-scrollbar pr-1">
                                     {confirmEntry.permissions.map((p) => {
                                         const token = permToken(p);
@@ -470,8 +500,8 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                             </>
                         )}
                         <div className="flex justify-end gap-2.5 pt-2 border-t border-slate-100">
-                            <button onClick={() => setConfirmEntry(null)} className="px-5 py-2.5 text-xs font-extrabold uppercase tracking-widest text-slate-500 hover:text-slate-950 hover:bg-slate-100/80 rounded-xl transition-all">Cancelar</button>
-                            <Button onClick={() => doInstall(confirmEntry)}><FaDownload className="mr-2 text-xs" /> Instalar</Button>
+                            <button onClick={() => setConfirmEntry(null)} className="px-5 py-2.5 text-xs font-extrabold uppercase tracking-widest text-slate-500 hover:text-slate-950 hover:bg-slate-100/80 rounded-xl transition-all">{t("plugins.marketplace.cancel")}</button>
+                            <Button onClick={() => doInstall(confirmEntry)}><FaDownload className="mr-2 text-xs" /> {confirmEntry.installed && confirmEntry.updateAvailable ? fill(t("plugins.marketplace.updateTo"), { version: confirmEntry.version }) : t("plugins.marketplace.install")}</Button>
                         </div>
                     </div>
                 </DialogLayer>
