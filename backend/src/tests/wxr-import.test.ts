@@ -495,7 +495,7 @@ describe('WXR importer (fast-xml-parser v5)', () => {
 
             assert.strictEqual(again.menus.created, 0, 'menu matched, not recreated');
             assert.strictEqual(again.menus.matched, 1);
-            assert.deepStrictEqual(again.menus.items, { created: 0, skipped: 3 });
+            assert.deepStrictEqual(again.menus.items, { created: 0, skipped: 3, relinked: 0 });
 
             const attachments = await dbAsync.all(
                 `SELECT id FROM posts WHERE post_type = 'attachment' AND post_name = 'photo'`);
