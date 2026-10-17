@@ -75,7 +75,7 @@ Roles are no longer hardcoded. They are stored in the database (table `options`)
 *   **Initialization:** Default roles are seeded during installation but can be modified via the Roles UI.
 *   **Capabilities:** Users' capabilities are resolved at runtime based on their assigned role in the `roles` manager.
 *   **Plugin-declared roles:** a plugin granted `roles:declare` registers the roles of its manifest (see
-    [plugins.md §12a](plugins.md#12a-declaring-user-roles-rolesdeclare)). They carry `source: "plugin"` and
+    [plugins.md §12a](plugins.md#12a-declaring-user-roles-rolesdeclare-)). They carry `source: "plugin"` and
     `plugin: "<id>"`, and the capabilities they confer are computed at every check: `read`,
     `access_admin_panel` and the plugin's own namespaced capabilities, the latter only while the grant stands
     and the role is not `orphaned` — never anything else (no core capability, no content type's capability,
@@ -200,11 +200,13 @@ Two rules in `backend/src/core/query-params.ts` decide what a malformed paramete
 - **Authentication**: `/auth` - Login, Register, Session management.
 - **Content**: `/posts`, `/pages` (alias for `?type=page`), `/media`, `/categories`, `/tags`, `/comments`.
 - **Users**: `/users`, `/roles` (see §6.11) - Role-Based Access Control.
-- **System**: `/settings`, `/site-address` (§6.22), `/notices`, `/plugins`, `/marketplace` (plugin **and theme** catalogs — see §6.3.1), `/themes`, `/menus` (§6.12), `/fonts` (§6.15), `/health` (§6.17), `/seo` (§6.16), `/hooks` (§6.18), `/notifications` (§6.19), `/webhooks` (outgoing HMAC-signed webhooks — see §6.10), `/system/certs`.
+- **Index**: `GET /api/v1/` — public, `{ name, description, version, routes }`, a map of the main route areas to their mounted paths (`version` is the API's, not the release's).
+- **System**: `/settings`, `/site-address` (§6.22), `/media-storage` (§6.26), `/network` (multisite, §6.25), `/notices`, `/plugins`, `/marketplace` (plugin **and theme** catalogs — see §6.3.1), `/themes`, `/menus` (§6.12), `/fonts` (§6.15), `/health` (§6.17), `/seo` (§6.16), `/hooks` (§6.18), `/notifications` (§6.19), `/webhooks` (outgoing HMAC-signed webhooks — see §6.10), `/system/certs`.
 - **Observability**: `/metrics` (Prometheus, root-path, scrape-token-gated — see §6.8), `/analytics` (see §6.4).
 - **Extensions**: `/widgets` (§6.13), `/types` (Post Types, §6.14), `/taxonomies` (registered taxonomies — `GET /taxonomies` and `GET /taxonomies/:name` are public; `POST /taxonomies` and `DELETE /taxonomies/:name` are admin-only), `/revisions`.
 - **Site & editor**: `/chrome` (site-level chrome compositions — `PUT`/`DELETE /chrome/:part` where `part` is `header`, `footer` or `announcement`, admin-only; anything else answers `400`; reads travel through the public `/settings` payload), `/forms` and `/presence` (§6.20).
 - **Collaboration & audit**: `/collab` (Verso real-time co-editing, `backend/src/routes/collab.ts` — `GET /collab/:postId/stream` is the SSE down-channel, `POST /collab/:postId/ops`, `/presence`, `/resync` and `/leave` the up-channel; every route requires `authenticate` plus the shared per-post edit gate `canEditPostRecord` (§6.2); `400 rest_invalid_param` for a malformed `postId`; covered by its own per-IP `collabLimiter` mounted in `backend/src/index.ts`. The routes are always mounted — the on/off switch is client-side: `NEXT_PUBLIC_WORDJS_COLLAB=off` for the deployment or `localStorage.wordjs_collab = "off"` for one browser), `/audit` (`GET /audit`, admin-only, paginated with `page`/`per_page` (1–200, default 50) and `X-WP-Total`/`X-WP-TotalPages` headers — a read-only view of the append-only `audit_log`; there is deliberately no write, update or delete route).
+- **AI**: `/agents` and `/mcp` (§6.23), `/ai` (§6.24), `/graphql` (read-only, see the note above).
 - **Internal**: `/api/internal/gateway-update` — gateway-to-backend only, outside the `/api/v1` prefix (§6.21).
 - **Data**: `/export`, `/export/wxr`, `/import`, `/import/wordpress` (WordPress WXR migration — see §6.9), `/backups`, `/db-migration` (engine migration).
 
@@ -363,6 +365,7 @@ Base path: `/api/v1/users` (`backend/src/routes/users.ts`). `PUT /me` is declare
 | `GET`  | `/plugins/active`           | No    | Array of active plugin slugs                        |
 | `GET`  | `/plugins/assets`           | No    | Enqueued frontend scripts/styles of active plugins that hold `assets:write`. Sent `Cache-Control: private, no-cache` — no shared cache may keep it, since it changes the moment a plugin is deactivated or loses the grant (the public layout caches it in its own tag-purged Data Cache) |
 | `GET`  | `/plugins/:slug/bundle` (+`/manifest`, `/css`) | No | Pre-compiled client bundle of a plugin (`routes/plugin-bundles.ts`, mounted under `/plugins`) — served only while the plugin is **active** and granted **`browser:script`**, otherwise 404 — the same 404 as a slug that was never installed. The slug is the folder or the admin-page slug of an **active** plugin. `/manifest` returns only `{ bundles }`, never the rest of `dist/manifest.build.json` (no version) |
+| `GET`  | `/plugins/:slug/portal`     | No    | Head details of the standalone public page `/portal/<slug>` a plugin declares in `frontend.portalPage`: `{ slug, title?, themeColor?, viewportFit? }` (`Cache-Control: no-store`). `slug` is the portal slug, not necessarily the folder. Same gate as the bundles: an **active** plugin granted **`browser:script`**, otherwise the same 404 |
 | `GET`  | `/plugins/:slug/admin-style` (+`/css`) | Signed in (any role) | Styling of a plugin's admin page for the generated `/admin/plugin/<slug>` page: `{ style, theme, stylesheet }` (never the manifest), and `/css` = its `client/admin/admin.css` (`Cache-Control: private, no-cache`). **Active** plugins only; anonymous → 401 for every slug, inactive or unknown → the same 404 |
 | `POST` | `/plugins/upload`           | Admin | Install a plugin from ZIP (AST-scanned at install); an installed one answers `409 plugin_exists` with both versions |
 | `POST` | `/plugins/:slug/update`     | Admin | Update an installed plugin in place from a ZIP (field `plugin`): staged and validated first, then swapped; keeps `data/`, tables, grants; reports `newPermissions` / `ungrantedPermissions` |
@@ -497,7 +500,7 @@ A Prometheus scrape endpoint is served at the **root path** `GET /metrics` (`bac
 *   **Routing:** exposed publicly through the gateway (in the backend's advertised route list) and in monolith mode (`BACKEND_PREFIXES`). Never reachable without the token regardless of mode.
 
 ### 6.9 WordPress Import (WXR) 📥
-Base path: `/api/v1` (the routes below sit under `/import`). Migrates an existing WordPress site from its **WXR** export (the `Tools → Export → All content` `.xml` file). Routes are **admin-only** (`authenticate` + `isAdmin`). The export is uploaded as a **`multipart/form-data`** request with the file in the **`file`** field (`.xml` / `.wxr`, max 100MB). Implemented by `backend/src/core/wxr-import.ts` (`analyzeWxr`/`importWxr`) and `backend/src/routes/import.ts`. The admin UI lives at `/admin/import` (sidebar "Import").
+Base path: `/api/v1` (the routes below sit under `/import`). Migrates an existing WordPress site from its **WXR** export (the `Tools → Export → All content` `.xml` file). Routes are **admin-only** (`authenticate` + `isAdmin`); the run route is also `accountAuthorityOnly`, because it creates an account for every author it cannot match. The export is uploaded as a **`multipart/form-data`** request with the file in the **`file`** field (an XML MIME type or a `.xml` / `.wxr` name, max 100MB). Implemented by `backend/src/core/wxr-import.ts` (`analyzeWxr`/`importWxr`), `backend/src/core/wxr-media.ts` (attachment downloads), `backend/src/core/wxr-menus.ts` (navigation menus) and `backend/src/routes/import.ts`. The full guide is [wordpress-import.md](wordpress-import.md). The admin UI lives at `/admin/import` (sidebar "Import").
 
 | Method | Endpoint                | Auth  | Description                                              |
 | :----- | :---------------------- | :---- | :------------------------------------------------------ |
@@ -510,9 +513,11 @@ Base path: `/api/v1` (the routes below sit under `/import`). Migrates an existin
 | :------------------ | :------------------------------- | :-------------------------------------------------------------------------- |
 | `defaultAuthorId`   | the importing admin's user id    | Fallback author for items whose WP author can't be imported (positive integer; otherwise falls back to the caller) |
 | `importComments`    | enabled (`"0"` to disable)       | Import post comments (threaded; spam/pingbacks skipped)                     |
-| `importAttachments` | disabled (`"1"` to enable)       | Create attachment **post records only** — WXR ships URLs, not media binaries, so files are never downloaded |
+| `media`             | `download`                       | What to do with attachment items: `download` fetches each file the export names and stores it in the media library (https only, 50 MB per file, 1 GB per run, SSRF-guarded) and rewrites in-content `/wp-content/uploads/` URLs; `link` creates the records and keeps the remote URLs, downloading nothing; `skip` ignores attachments. Any other value counts as absent |
+| `allowHttp`         | disabled (`"1"` to enable)       | Accept `http://` attachment sources. Does not relax the private/loopback/metadata address checks |
+| `importAttachments` | —                                | **Legacy**, read only when `media` is absent: exactly `"0"` means `media=skip`; any other value, or the field omitted, means `media=download` |
 
-**What it maps:** `wp:author` → users (created with a random password — imported users must reset to log in — or matched by login/email), categories → `category` terms (with parent hierarchy), tags → `post_tag` terms, and items → posts/pages with post meta, term relationships, and comments. The import is **idempotent**: existing users/terms/posts are matched and reused rather than duplicated, and original publish dates are preserved. **Skipped entirely:** attachments (unless `importAttachments=1`, and even then only the records) and `nav_menu_item` entries.
+**What it maps:** `wp:author` → users (created with a random password — imported users must reset to log in — or matched by login/email), categories → `category` terms (with parent hierarchy), tags → `post_tag` terms, and items → posts/pages with post meta, term relationships, and comments. Attachments go to the media library (per the `media` mode), and `nav_menu` terms plus their `nav_menu_item` entries become menus and menu items (imported unassigned to theme locations unless the export carries a JSON `nav_menu_locations` option). The import is **idempotent**: existing users/terms/posts/attachments/menus are matched and reused rather than duplicated (a re-run does not re-download files it already has), and original publish dates are preserved.
 
 **`analyze` response** — counts only, nothing is written:
 ```json
@@ -547,15 +552,26 @@ Base path: `/api/v1` (the routes below sit under `/import`). Migrates an existin
     "terms":   { "categories": 8, "tags": 42, "custom": 0 },
     "posts":   { "created": 118, "skipped": 2 },
     "pages":   { "created": 5, "skipped": 0 },
-    "attachments": { "created": 0, "skipped": 60 },
+    "attachments": { "created": 59, "skipped": 1 },
     "comments":    { "created": 305, "skipped": 5 },
-    "navItems":    { "skipped": 4 },
+    "navItems":    { "skipped": 0 },
+    "media": {
+      "mode": "download",
+      "downloaded": 59, "linked": 0, "skipped": 0, "failed": 1,
+      "bytes": 41234567, "fetchedBytes": 41240000,
+      "failures": [{ "url": "https://old.example.com/wp-content/uploads/2019/07/gone.png", "reason": "HTTP 404" }]
+    },
+    "menus": {
+      "created": 2, "matched": 0,
+      "items": { "created": 4, "skipped": 0 },
+      "locations": { "assigned": 0, "unassigned": 2, "reason": "the WXR carried no readable nav_menu_locations option" }
+    },
     "errors": []
   }
 }
 ```
 
-**Errors:** a missing upload returns `400 no_file`; an unreadable upload `400 read_failed`; a file that doesn't parse as a valid WXR returns `400 invalid_wxr`. Non-fatal per-item problems during a run are collected (capped at 100) in the summary's `errors[]` array rather than aborting the import.
+**Errors:** a missing upload returns `400 no_file`; an unreadable upload `400 read_failed`; a file that doesn't parse as a valid WXR returns `400 invalid_wxr`; an upload that is neither an XML MIME type nor named `.xml` / `.wxr` returns `415 rest_upload_invalid_type`. `POST /import/wordpress` (not `analyze`) refuses an API token with `403 rest_token_management_forbidden` and a session started at an address other than the main one with `403 rest_account_bound_session`, before the upload is read. Per-file media failures are listed (capped at 100) in `summary.media.failures`. Non-fatal per-item problems during a run are collected (capped at 100) in the summary's `errors[]` array rather than aborting the import.
 
 ### 6.10 Outgoing Webhooks 🪝
 Base path: `/api/v1/webhooks` (`backend/src/routes/webhooks.ts`; core `backend/src/core/webhooks.ts`, models `Webhook.ts`/`WebhookDelivery.ts`). WordJS fans **site events** — posts/pages, comments, users, media, terms, menus, plugins, themes and settings (e.g. `post.published`, `comment.approved`, `media.uploaded`; the full catalogue and every payload are in **[webhooks.md](webhooks.md)**) — out to admin-registered HTTP endpoints. A subscription takes exact names, family wildcards (`post.*`) or `*`; `user.login` is **opt-in** (only an exact subscription receives it). Every delivery is **HMAC-signed** with the webhook's per-endpoint secret and **SSRF-safe** — the destination host is IP-validated **at delivery time**, so loopback / link-local (incl. the cloud-metadata address) / RFC1918 targets are rejected. The whole resource is **admin-only** (`authenticate` + `isAdmin`); all **mutations** are additionally **session-only** (an `Authorization: Bearer wjt_…` API token is rejected, so a leaked token can't plant an exfiltration endpoint or rotate a secret). Delivery is subscribed to content hooks and polled by `initWebhooks()` at boot.
@@ -682,7 +698,7 @@ Base path: `/api/v1/notifications` (`backend/src/routes/notifications.ts`). All 
 | Method   | Endpoint        | Auth                     | Description                                                        |
 | :------- | :-------------- | :----------------------- | :----------------------------------------------------------------- |
 | `GET`    | `/stream`       | `authenticateAllowQuery` | SSE push stream — accepts the cookie/Bearer **or** a `?token=` query param, because `EventSource` cannot set headers |
-| `GET`    | `/`             | Yes                      | Bounded list: unread first, plus the 5 most recent read            |
+| `GET`    | `/`             | Yes                      | Bounded list of the caller's own notifications: unread first, plus the 5 most recent read. Broadcasts (`user_id = 0`) reach live SSE clients only and are not listed |
 | `POST`   | `/:uuid/read`   | Yes                      | Mark one read; `404` if it isn't the caller's                      |
 | `POST`   | `/read-all`     | Yes                      | Mark every one of the caller's notifications read                  |
 | `DELETE` | `/:uuid`        | Yes                      | Delete one; `404` if it isn't the caller's                         |
@@ -758,7 +774,33 @@ Base path `/api/v1/ai` (`backend/src/routes/ai.ts`, `core/ai-provider.ts`). Oper
 | `GET`  | `/settings` | Session + administrator | `{ provider, model, baseUrl, hasKey, keyHint, providers, anthropicModels }` |
 | `PUT`  | `/settings` | Session + administrator | `{ provider: '' \| 'anthropic' \| 'openai-compatible', model?, baseUrl?, apiKey?, clearKey? }`; an empty `apiKey` keeps the stored key. `400 rest_invalid_param` for an unknown provider/model, credentials in the URL, or plain http to a non-loopback host. Audited as `ai.settings.update` (never the key) |
 | `POST` | `/test` | Session + administrator | One tiny round trip: `{ ok, provider, model, ms }`, or the provider error |
-| `POST` | `/suggest` | `edit_posts`/`edit_pages` (text tasks); `upload_files` + edit rights on the image (`alt_text`) | `{ task: 'excerpt' \| 'seo_description' \| 'alt_text', title?, content?, mediaId?, language? }` → `{ suggestion, model }`. Saves nothing. `409 ai_not_configured`, `422 ai_refused`, `429 ai_rate_limited` (20/min per user), `502 ai_provider_*` |
+| `POST` | `/suggest` | `edit_posts`/`edit_pages` (text tasks); `upload_files` + edit rights on the image (`alt_text`) | `{ task: 'excerpt' \| 'seo_description' \| 'alt_text', title?, content?, mediaId?, language? }` → `{ suggestion, model }`. Saves nothing. `409 ai_not_configured`, `422 ai_refused`, `429 ai_rate_limited` (20/min per user), `429 ai_provider_rate_limited`, `502 ai_provider_*` (the codes are listed in [ai-provider.md](ai-provider.md#errors)) |
+
+### 6.25 Multisite network 🏘️
+Base path `/api/v1/network` (`backend/src/routes/network.ts`). Operator guide: [multisite.md](multisite.md). `GET /status` answers any signed-in user; every other route is `authenticate` → `sessionOnly` (an API token gets `403 rest_token_management_forbidden`) → `requireNetworkAdmin`: `404 rest_no_route` with multisite off or off the main site, `403 rest_forbidden_network` for anyone but a network administrator. Every write re-authenticates with `currentPassword` in the body (`403 rest_bad_current_password`). Site-level refusals elsewhere in the API: a suspended site answers `503 rest_site_suspended` to every request, and on a site other than the main one the network-wide routes answer `404 rest_no_route` or, for a write to plugin code, theme files or the installer, `403 rest_network_only`.
+
+| Method | Endpoint | Body | Description |
+| :----- | :------- | :--- | :---------- |
+| `GET`    | `/status` | — | `{ enabled, networkAdmin }` |
+| `GET`    | `/sites` | — | `{ sites: [{ id, slug, url, host, status, main, createdAt, updatedAt }] }`, the main site first; never a file path |
+| `POST`   | `/sites` | `{ slug, url, title, adminUsername, adminEmail, adminPassword, currentPassword }` | Provision a site end to end, or nothing: `201 { site }`. `400 network_invalid_url` / `network_invalid_slug` / `network_invalid_title` / `network_invalid_admin` / `network_weak_password`; `409 network_host_taken` / `network_slug_taken` |
+| `POST`   | `/sites/:id/suspend` | `{ currentPassword }` | `{ site }`; the data is kept. `400 network_primary_site` for the main site, `404 network_site_not_found` |
+| `POST`   | `/sites/:id/resume` | `{ currentPassword }` | `{ site }` |
+| `GET`    | `/audit` | — (`?limit=` 1–500, default 100) | `{ entries }`, newest first — the network's own log (sites created, suspended, resumed; network administrators) |
+| `GET`    | `/plugins` | — | `{ plugins: [{ slug, name, version, requestedPermissions, ceiling }] }`; `ceiling: null` = not offered to the sites |
+| `PUT`    | `/plugins/:slug/ceiling` | `{ tokens: string[], currentPassword }` | Offer the plugin to the sites, at most these grant tokens (`"scope:access"` or `"network"`): `{ slug, ceiling }`. Restarts its workers on the other sites. `400 network_invalid_ceiling` / `plugin_invalid_slug`, `404 plugin_not_found` |
+| `DELETE` | `/plugins/:slug/ceiling` | `{ currentPassword }` | Stop offering it: `{ slug, withdrawn, deactivatedOn }`; it is deactivated on every other site (their grants are kept) |
+
+### 6.26 Media storage 🪣
+Base path `/api/v1/media-storage` (`backend/src/routes/media-storage.ts`; core `core/media-storage.ts`, `core/media-storage-migrate.ts`). Operator guide: [media-storage.md](media-storage.md). Every route is `authenticate` + `isAdmin`. The secret access key and session token are **write-only** (answered as `…Set` flags and a last-four hint). An unsupported field value answers `400 rest_invalid_param` with `data.params`.
+
+| Method | Endpoint | Body | Description |
+| :----- | :------- | :--- | :---------- |
+| `GET`  | `/` | — | The masked `mediaStorage` block (`driver`, `bucket`, `region`, `endpoint`, `prefix`, `publicUrl`, `keepLocalCopy`, `accessKeyIdHint`, `secretAccessKeySet`, `secretAccessKeyHint`, `sessionTokenSet`, `sources`, `effective`), plus the library `state`, the `migration` progress record and `running` |
+| `PUT`  | `/` | Any of `driver` (`local` \| `s3`), `bucket`, `region`, `endpoint`, `prefix`, `publicUrl`, `accessKeyId`, `secretAccessKey`, `sessionToken`, `keepLocalCopy`, `clearCredentials` | Merge over the stored block and write `wordjs-config.json`; answers the `GET` shape. An empty secret keeps the stored one; `clearCredentials: true` removes the access key id, secret and session token. `400` for `driver: s3` with an incomplete configuration; `409 rest_media_storage_in_use` when switching to `local` while media is still in the bucket or an offload / restore run is in progress; `500 rest_config_write_failed` when the config file could not be written. Audited as `media.storage.update` (no credentials) |
+| `POST` | `/test` | The unsaved fields, merged over the stored ones | Write and read back a 1×1 PNG probe: `{ ok, steps: [{ step, ok, detail }], probe, publicUrl }`; the admin's browser then loads `publicUrl`. A second call with `{ probe }` (plus the same fields) deletes that probe and answers `{ ok, steps }`; only probe names this route writes are accepted |
+| `POST` | `/migrate` | `{ direction: "offload" \| "restore", deleteLocal?, restart? }` | Start (or resume) moving the existing library in the background: `202` with the current state at once; poll `GET /`. `400` without a complete saved S3 configuration, `409 rest_media_storage_busy` while another run is in progress. Audited as `media.storage.migrate` |
+
 ---
 
 ## 8. Cron System ⏰

@@ -259,7 +259,10 @@ void; when Redis returns, the bus reconnects and fan-out resumes without restart
   their stream. Notifications are also persisted, so a brief Redis hiccup degrades to "appears on next
   load," never lost.
 - **Rate limits** — backed by the shared Redis store, so caps are enforced globally instead of
-  per-node (N× looser).
+  per-node (N× looser). The gateway has a coarse per-IP limiter of its own on the public listener
+  (`gateway/src/rate-limit.js`); it keeps its counters in memory, per gateway worker, unless a `redis`
+  block in `gateway/gateway-config.json` points it at a shared Redis. See
+  [gateway.md](gateway.md#public-listener-rate-limit).
 - **Frontend cache purge (N frontend replicas)** — on publish the backend asks the **gateway** to
   purge, over the internal mTLS channel (`POST /purge`, `CN=backend`), and the gateway fans the
   `{ tags, paths }` out to **every** frontend it has registered. Next.js caches are per-process, so a
@@ -333,15 +336,23 @@ Health probes (added for orchestration):
 
 ### Metrics
 
-- `GET /metrics` — Prometheus scrape endpoint (default Node/process metrics plus a `wordjs_sse_clients`
-  gauge per node). It is **disabled (returns 404)** unless a scrape token is configured at
-  `config.metrics.token` (or the `METRICS_TOKEN` env), and is **never exposed without a token**. Scrape
-  with `Authorization: Bearer <token>`. The route is part of each backend's registered route group, so
-  the gateway round-robins to it like any other backend route (and it is served directly in monolith
-  mode); each node reports its own SSE client count.
+- `GET /metrics` — Prometheus scrape endpoint (`backend/src/core/metrics.ts`): `wordjs_http_requests_total`,
+  `wordjs_http_request_duration_seconds`, `wordjs_http_errors_total`, `wordjs_db_pool` (Postgres and
+  MySQL only), `wordjs_sandbox_state`, `wordjs_ready` and `wordjs_sse_clients`, plus prom-client's
+  default process metrics under the `wordjs_` prefix. It is **disabled (returns 404)** unless a scrape
+  token is configured at `config.metrics.token` (or the `METRICS_TOKEN` env), and is **never exposed
+  without a token**. Scrape with `Authorization: Bearer <token>`. The route is part of each backend's
+  registered route group, so the gateway round-robins to it like any other backend route (and it is
+  served directly in monolith mode): each scrape through the gateway samples **one** node, and every
+  series is that node's own. Once the cluster certificates exist a backend's own listener accepts only
+  the gateway's client certificate, so it cannot be scraped directly; see
+  [observability.md → Scraping](observability.md#scraping) for the options.
 
 ## Known limitations
 
+- **Multisite and multi-node do not combine yet.** A network of sites ([multisite.md](multisite.md))
+  needs the `sqlite-native` driver and one backend host (`npm run network -- enable` refuses any other
+  driver), while N backend replicas need Postgres or MySQL. Pick one of the two for a given install.
 - **Role and capability edits reach the other nodes over Redis.** The `wordjs:option-changed`
   pub/sub propagates role/capability edits live, and a same-node local-write epoch stops a stale
   background TTL refresh from clobbering a just-applied local edit. A node that misses a publish picks

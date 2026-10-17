@@ -15,7 +15,7 @@ graph TB
 
     subgraph "Gateway Layer"
         Gateway[🚀 Gateway :3000]
-        note[Features: Load Balancing & Circuit Breaking]
+        note[Features: Load Balancing, Health Checks & Edge Rate Limiting]
         Gateway -.-> note
     end
 
@@ -98,6 +98,8 @@ Scripts: `npm run dev:mono` (dev — Next dev HMR + `ts-node` backend), `npm run
 
 **Choose MONOLITH for** the simplest single-artifact deploy — one VM/container, TLS via its built-in HTTPS or a single reverse proxy in front.
 
+> **Multisite** (several sites from one install, see [multisite.md](multisite.md)) runs in every mode, but needs the `sqlite-native` database driver: `config/database.ts` refuses to open a secondary site's database on any other driver, so a network and all its site databases live on one backend host.
+
 ### SEPARATE (split across machines)
 
 SPLIT run on **different hosts** — a gateway box, a backend box, and a frontend box — joined into one cluster. The barrier is trust: the three tiers talk over **mutual TLS**, so every node needs a certificate signed by a shared cluster CA. Rather than hand-copying certs, WordJS bootstraps trust with **single-use join tokens** (like `kubeadm join` / `docker swarm join`):
@@ -125,9 +127,11 @@ Externally visible consequences:
 - **`GET /healthz`** — liveness, never touches the DB. **`GET /readyz`** — readiness; returns **503** (`setup_required` / `starting` / `not_ready`) until the instance is installed, `appReady` is set, and the DB answers.
 - **`/api/v1/plugin/*` answers `503 plugins_starting`** with `Retry-After: 5` and `Cache-Control: no-store` while the isolates are still forking — an honest "not yet" instead of a 404 that reads as "this endpoint does not exist" (and that a CDN would cache as such). The guard is scoped to `/plugin/*` only; every core route is fully functional in that window. It opens once per process: at the end of step 4, or when the install wizard finishes in a process that booted in setup mode.
 
-### Observability — `/metrics`
+### Observability — structured logs and `/metrics`
 
-The backend exposes a Prometheus endpoint at **`GET /metrics`** (`backend/src/core/metrics.ts`): the default Node/process metrics (CPU, RSS/heap, event-loop lag, GC, handles, prefixed `wordjs_`) plus app-level gauges including **`wordjs_sse_clients`** (active SSE clients on this node).
+**Logging.** Everything the backend emits is one JSON object per line on stdout through a single [pino](https://getpino.io) logger (`backend/src/core/logger.ts`). Modules log through `core/module-logger.ts` (`moduleLogger('core/cron')`), which stamps each line with the module (`mod`) and, inside a request, the `requestId`; `middleware/request-context.ts` is the first middleware on the app, mints (or validates an incoming) `X-Request-Id`, and writes the access line. Redaction, levels, the console bridge and request-id propagation are documented in **[observability.md](observability.md)**.
+
+**Metrics.** The backend exposes a Prometheus endpoint at **`GET /metrics`** (`backend/src/core/metrics.ts`): the default Node/process metrics (CPU, RSS/heap, event-loop lag, GC, handles, prefixed `wordjs_`) plus app-level gauges including **`wordjs_sse_clients`** (active SSE clients on this node).
 
 It is **disabled by default** — without a configured scrape token the route returns **404**, so metrics are never exposed publicly by accident. Enable it by setting a token at `config.metrics.token` (or the `METRICS_TOKEN` env var) and scraping with an `Authorization: Bearer <token>` header. The endpoint is reachable through the public origin in **both** run modes — routed by the gateway in SPLIT mode and included in the backend prefixes in MONOLITH mode.
 
@@ -167,7 +171,7 @@ sequenceDiagram
 
 ### Public-Site SSR Data Flow
 
-The public site is **real server-side rendering**, not the former client-only skeletons: every route under `frontend/src/app/(public)/` — home (`page.tsx`), category/post (`[slug]`, `[slug]/[postSlug]`), standalone pages (`pages/[slug]`), and `search` — is an **async React Server Component** that fetches its content on the server, so the initial HTML (and what crawlers see) already contains the real title/body.
+The public site is **real server-side rendering**, not the former client-only skeletons: every page under `frontend/src/app/(public)/` — home (`page.tsx`), category/post (`[slug]`, `[slug]/[postSlug]`), standalone pages (`pages/[slug]`), `search`, the archives (`category/`, `tag/`, `author/`, `archive/`, `taxonomy/`) and the `noindex` draft `preview/[slug]` — is an **async React Server Component** that fetches its content on the server, so the initial HTML (and what crawlers see) already contains the real title/body. Beside the pages, thin Next route handlers in the same tree publish the backend-generated feeds (`feed.xml`, `feed.atom`, `feed.json`, `comments/feed.xml`, `{category,tag,author}/[slug]/feed.xml`), the sitemap (`sitemap.xml`, `sitemap/[chunk]`) and `robots.txt` at the site's own URLs — see [frontend.md](frontend.md#public-site-rendering-ssr-).
 
 - **Server-only data layer — `frontend/src/lib/server-api.ts`.** Resolves the backend base URL the same way both run modes expect: in MONOLITH it uses the in-process backend's plain-HTTP loopback (`WORDJS_MONO_ORIGIN`, default `http://127.0.0.1:4000`); in SPLIT it reads the backend port from `wordjs-config.json` (default 4000); an `INTERNAL_API_URL` override wins when set. A release build (`npm run bundle-release`, `WORDJS_HERMETIC_BUILD=1`) overrides all of these with a base `fetch()` refuses, so nothing on the packaging machine is prerendered into the release (`frontend/hermetic-build.js`). Loaders (`getPostBySlug`, `getPosts`, `getSettings`, …) are wrapped in React `cache()` so `generateMetadata()` and the page body share **one** request-scoped backend call instead of fetching twice.
 - **`x-forwarded-host` forwarding (critical).** SSR fetches hit the loopback origin, so `serverFetch` relays the inbound `x-forwarded-host` / `x-forwarded-proto` one more hop to the backend. Without this the backend's host-based logic — the **CSRF origin check and the session-cookie rules** — would see `127.0.0.1:4000` instead of the real public host. The backend believes the relayed headers only from a trusted hop (the loopback SSR hop addressing a loopback name, the mTLS gateway, or an address-based `trustProxy` peer); an address the site does not answer gets `421 rest_host_not_allowed` (the old `409 migration_required` is gone). Canonical, OpenGraph and sitemap URLs never come from the request: they use the stored main address. The public listener (gateway in SPLIT, the `monolith.js` middleware in MONOLITH) already pins `x-forwarded-host` to the browser's `Host`, after its own edge address check.
@@ -190,9 +194,10 @@ graph LR
     subgraph "Theme Files"
         ThemeDir[📁 themes/]
         Theme1[default/]
-        Theme2[neo-digital/]
-        Theme3[soft-glass/]
-        ThemeN[...]
+        Theme2[circuito/]
+        Theme3[gaceta/]
+        Theme4[vergel/]
+        ThemeN[... marketplace installs]
     end
 
     subgraph "CSS Variables"
@@ -208,6 +213,7 @@ graph LR
     ThemeDir --> Theme1
     ThemeDir --> Theme2
     ThemeDir --> Theme3
+    ThemeDir --> Theme4
     ThemeDir --> ThemeN
     Theme1 --> CSS
     CSS --> Colors
@@ -433,6 +439,8 @@ Host-level capabilities each gate on their own grant: becoming the host mail sen
 
 #### Defense in depth
 
+- **Native kernel sandbox (default-on, fail-closed).** Below the process boundary, every production child is confined by its host's kernel mechanism, each behind a probe that runs a real confined child before the layer is trusted: **Landlock + seccomp-bpf** on Linux (`src/core/sandbox-linux.ts`), a zero-capability **AppContainer** with Job Object limits on Windows (`src/core/sandbox-windows.ts`), and **Seatbelt** (`sandbox-exec`) on macOS (`src/core/sandbox-macos.ts`). The filesystem zones all three use, together with the JavaScript I/O guard and Node's permission model, come from one declaration (`src/core/sandbox-paths.ts`). `config.sandbox.requireHardening` defaults to **true**: an isolated plugin whose native sandbox cannot be certified is **refused** rather than started without it, and the refusal reaches the administrator as a typed error (`src/core/sandbox-refusal.ts`) rather than a 500. On Linux, `src/core/host-privilege.ts` diagnoses the privilege the backend process itself holds (root, ambient capabilities) and what the sandbox does about it. See `documentation/security.md` §1.
+- **Node permission model (default-on, probe-gated).** Each child is also launched under Node's own permission model (`config.sandbox.usePermissionModel`), enforced in C++ beneath JavaScript: reads and writes are limited to the same zones, and `child_process` / `worker_threads` / native addons / WASI are never granted. `probePermissionModel()` in `src/core/plugin-isolate.ts` activates it only after a child has actually been refused a read, because the flag name moved between Node versions and a build can accept it without enforcing it; the state is reported as `sandboxPermissionState` on the admin `GET /health/details`.
 - **AST static scanner at install** (`validatePluginPermissions` in `src/core/plugins.ts`, via acorn): flags `eval`/`Function`/`exec`/`spawn`/`fork`, `require()`/`import()` of sensitive builtins (`child_process`/`worker_threads`/`vm`/…), dynamic `import()`, the `.constructor` Function build, and `process`/`global`/`require` aliasing. **Fail-closed** — an unparseable file is treated as a violation and blocked. The same pass also walks the dependency tree a plugin **ships** (`node_modules/`, previously unread), bounded so a hostile ZIP cannot turn a boot into a multi-minute AST run: at most **4,000** files, **1 MB** per file, **32** directory levels, `.js`/`.cjs`/`.mjs` only, every entry resolved through `realpath` so a symlink pointing outside the plugin directory is skipped **and counted**. Hitting any bound — or an unparseable/unreadable dependency file — is itself reported as a finding rather than passing silently, and a dependency's `require('net')`/`require('dns')` stays a *missing-permission* (fixable in `manifest.json`) rather than a hard block. Runtime containment (`secure-require`, `io-guard`, the worker's ESM hook, `blockCodeGen`) remains the control that actually **stops** a dependency; this pass buys the operator a look. Beyond this static scan there is a **default-on runtime block**: `config.sandbox.blockCodeGen` forks the child with `--disallow-code-generation-from-strings`, hard-blocking `eval`/`new Function(string)` at the V8 level. It is **ON by default** — opt **out** with `config.sandbox.blockCodeGen: false`, only for a plugin whose dependencies genuinely need runtime `Function()`/`eval` (`backend/src/config/app.ts` resolves it as `!== false`; `backend/src/core/plugin-isolate.ts` defaults the local flag to `true`) — and is never applied under ts-node (dev needs codegen to compile TS).
 - **In-child runtime guards.** `src/core/secure-require.ts` blocks `worker_threads`/`vm`/`module`/`inspector`/`repl`/`test`/`trace_events`/`cluster`/`async_hooks`/`v8`/`sqlite`/`wasi`/`diagnostics_channel`/`tty`, every `_`-prefixed internal builtin (`_http_agent`, `_http_client`, `_tls_wrap`, `_stream_wrap`, … — they expose socket/stream-wrap primitives below the `net.Socket.prototype.connect` egress chokepoint), `process.binding`/`_linkedBinding`/`getBuiltinModule`, native `.node` addons, and (by default) the network modules `net`/`tls`/`dgram`/`http`/`https`/`http2`/`dns`/`dns/promises`, which are handed out only — in their egress-guarded form — when the `network` grant is present. Every other builtin must appear on an explicit reviewed-safe allowlist; `backend/src/tests/sandbox-builtin-classification.test.ts` fails when a Node upgrade introduces a builtin that lands in no bucket. `src/core/io-guard.ts` blocks `fs` writes to plugin code and reads of `.env`/secret files **and** the live database files (any `.db`/`.sqlite`/`.sqlite3` file plus `-wal`/`-shm`/`-journal` sidecars, e.g. `data/wordjs.db`); reads are confined to the plugin's **own** directory, so a plugin cannot read a **sibling** plugin's source/data/secrets (any `package.json`/`node_modules` path stays readable so module resolution works, but never inside a sibling plugin's dir — IO-1). These run inside the child too, so the plugin's own `fs`/`child_process` are sandboxed even there.
 - **Egress confinement (network grant → public IPs only).** When an admin grants the `network` permission, the network modules are not opened raw — they are replaced with **egress-guarded** versions (`src/core/egress-guard.ts`) that confine outbound sockets to **public** destinations. It blocks loopback, link-local (incl. `169.254.169.254` cloud-metadata), RFC1918, CGNAT (`100.64/10`), IPv6 ULA/loopback, IPv4-mapped-v6, and multicast/reserved, and **fails closed** on unresolvable/garbage hosts. Validation happens **at connect time** (anti DNS-rebinding) across `net`/`tls`/`http`/`https`/`http2`/`dgram` plus global `fetch`/`WebSocket`; IPC / unix-socket / named-pipe targets (e.g. `/var/run/docker.sock`, the `path` option) are denied. The guard patches **and locks** `net.Socket.prototype.connect` inside the child (non-writable, non-configurable) as the single chokepoint a plugin cannot reassign or un-patch, with TOCTOU-hardened option snapshotting (host/hostname/path read once, validated, then frozen as own data-properties). The `dns` module itself stays available — the connect, not resolution, is the SSRF sink.
@@ -442,7 +450,8 @@ Host-level capabilities each gate on their own grant: becoming the host mail sen
 #### Memory caps (layered, per child)
 
 - **Preventive (opt-in, Linux):** a cgroup v2 `memory.max` via `systemd-run --user --scope -p MemoryMax=805306368 -p MemorySwapMax=0 -p TasksMax=512` (768 MiB; `-p CPUQuota=N%` is added to the same scope when `config.sandbox.cpuQuotaPercent` is set; no root; `--scope` runs node as a direct child inheriting the IPC fd). Enabled with `config.sandbox.useCgroupMemoryCap=true`; it is probe-gated (validates spawn + IPC + clean teardown of the exact scope on the host before activating) and logs `[Sandbox] preventive cgroup caps ACTIVE (systemd-run --user --scope <props> per isolated child).` — on probe failure it warns `[Sandbox] cgroup caps requested … but the probe failed … falling back to RLIMIT_AS + the RSS poll.` **Default OFF** — auto-detect proved unreliable (some hosts/CI have `systemd-run` but no usable `--user` bus).
-- **Reactive CPU watchdog (default ON, non-win32, non-cgroup paths):** the same host-side poll that reads the child's rss also samples its cumulative CPU time (Linux `/proc/<pid>/stat` `utime`+`stime` over the host's real `CLK_TCK`; macOS `ps -o cputime=` in the same `ps` call) and `SIGKILL`s a child holding ≥ 95% of one core for `config.sandbox.cpuBurstSeconds` (default 60, `0` disables) with no quiet tick, recording the reason in `health.lastError`. The decision is the pure `isSustainedCpuBurn(samples, thresholdRatio, windowMs)` so it is unit-tested without burning a core. Skipped on win32 (preventive Job Object CPU rate cap) and in cgroup mode (`child.pid` is `systemd-run`).
+- **Preventive (default ON, Windows):** a Job Object with a process-memory commit limit at the same **768 MB** budget (`config.sandbox.useJobObjectMemoryCap`, default `true`; opt out with `false`). It is probe-gated like the cgroup path and falls back to the RSS poll when the probe fails.
+- **Reactive CPU watchdog (default ON, every platform):** the same host-side poll that reads the child's rss also samples its cumulative CPU time (Linux `/proc/<pid>/stat` `utime`+`stime` over the host's real `CLK_TCK`; macOS `ps -o cputime=` in the same `ps` call; Windows `tasklist /V`, sampled every 30 s because that column has one-second resolution) and kills a child holding ≥ 95% of one core for `config.sandbox.cpuBurstSeconds` (default 60, `0` disables) with no quiet tick, recording the reason in `health.lastError`. The decision is the pure `isSustainedCpuBurn(samples, thresholdRatio, windowMs)` so it is unit-tested without burning a core. It is skipped only where a preventive CPU cap is really installed for that child: Linux cgroup mode with `config.sandbox.cpuQuotaPercent > 0` (`CPUQuota` in the scope), or the Windows AppContainer relay with `0 < cpuQuotaPercent < 100` (the Job Object CPU rate cap). `cpuQuotaPercent` defaults to `0`, so a stock install runs the watchdog everywhere (`backend/src/config/app.ts`).
 - **Reactive fallback:** a host-side RSS poll (Linux `/proc`, Windows `tasklist`, macOS `ps`) that `SIGKILL`s a child over the **768 MB** budget. It runs on the host loop, so a child blocking its own loop can't evade it.
 - **Loose backstop (Linux):** a kernel `RLIMIT_AS` virtual ceiling (default **16384 MB**, override via `config.sandbox.addressSpaceCapMb`) applied through an `sh -c 'ulimit -v N; exec node …'` wrapper that preserves the IPC fd, plus `--max-old-space-size=256` for the JS heap. `RLIMIT_AS` can only be loose because V8's ~4 GB pointer-compression cage counts against it. Darwin's similarly named limit is measured and rejected because current macOS does not enforce it.
 
@@ -462,27 +471,27 @@ sequenceDiagram
     participant B as Backend
     participant DB as Database
 
-    U->>F: Login Request
-    F->>G: POST /api/v1/auth/login
-    G->>B: Forward Request
+    U->>G: POST /api/v1/auth/login (from the login page)
+    G->>B: Forward (host check, routing only)
     B->>DB: Validate Credentials
     DB-->>B: User Data
-    B->>B: Generate JWT
-    B-->>G: JWT Token
-    G-->>F: Set Cookie
-    F-->>U: Redirect to Dashboard
+    B->>B: issueSessionCookie(): sign JWT, mint CSRF token
+    B-->>G: Set-Cookie wordjs_token (HttpOnly) + wjs_csrf
+    G-->>U: Response passed through unchanged
+    U->>F: Navigate to /admin
 
-    Note over U,DB: Subsequent Requests
+    Note over U,DB: Subsequent API requests
 
-    U->>F: Protected Request
-    F->>G: Request + JWT Cookie
-    G->>G: Validate JWT
-    G->>B: Forward with User Context
-    B->>B: Check Capabilities
+    U->>G: Request + wordjs_token cookie (+ X-CSRF-Token on writes)
+    G->>B: Forward unchanged
+    B->>B: authenticate: verify JWT, load user
+    B->>B: csrfProtection + capability checks
+    B->>DB: Query
     B-->>G: Response
-    G-->>F: Response
-    F-->>U: Render Page
+    G-->>U: Response
 ```
+
+The gateway never inspects or validates the session: it checks the address, applies its edge rate limit and routes. The cookie is issued by the backend (`issueSessionCookie()`, `backend/src/middleware/auth.ts`, called from `routes/auth.ts` for login, register, refresh and MFA completion) and verified on every request by the backend's `authenticate` middleware in the same file.
 
 ### Additional auth paths
 
@@ -524,17 +533,19 @@ graph LR
     end
 
     subgraph "Database Tables"
-        posts_table[(posts)]
+        posts_table[(posts + post_meta)]
+        terms_table[(terms + term_taxonomy + term_relationships)]
         options_table[(options)]
-        users_table[(users)]
-        meta_table[(meta)]
+        users_table[(users + user_meta)]
     end
 
     Posts --> posts_table
     Pages --> posts_table
     Media --> posts_table
-    Categories --> meta_table
+    Categories --> terms_table
     Settings --> options_table
+    Menus --> terms_table
+    Menus --> posts_table
     Menus --> options_table
     Widgets --> options_table
     Themes --> options_table
@@ -542,6 +553,8 @@ graph LR
     Roles --> options_table
     Capabilities --> options_table
 ```
+
+Categories and tags are `category` / `post_tag` terms (`terms` + `term_taxonomy`, linked to posts through `term_relationships`). A menu is a `nav_menu` term whose items are `nav_menu_item` posts (`backend/src/models/Menu.ts`); only the location → menu assignment is an option (`nav_menu_locations`). Widgets live in the `sidebars_widgets` option, roles and capabilities in `wordjs_user_roles`, and the active theme in `template`. The full schema is in [database.md](database.md).
 
 ### Outgoing Webhooks
 
@@ -618,6 +631,7 @@ wordjs/
 │   │   ├── 📁 app/             # App Router Pages
 │   │   │   ├── 📁 (public)/    # Public Site
 │   │   │   ├── 📁 admin/       # Admin Dashboard
+│   │   │   ├── 📁 wjs-site/[siteHost]/ # Multisite: the (public) pages rendered for another site
 │   │   │   └── 📁 api/         # API Routes
 │   │   ├── 📁 components/      # React Components
 │   │   │   ├── 📁 verso/       # Verso editor: canvas/, overlay/, dnd/, inline/, editor/, fields/,
@@ -628,7 +642,11 @@ wordjs/
 │   │   │   │                   #   ContentRenderer.tsx (server) + the client islands
 │   │   │   ├── 📁 public/      # Public site components (Header.tsx, Footer.tsx, …)
 │   │   │   └── 📁 admin/       # Admin components (Header.tsx, …)
-│   │   └── 📁 lib/             # Utilities
+│   │   ├── 📁 contexts/        # React contexts (Auth, I18n, Menu, Modal, Toast, UnsavedChanges, ThemeLayout)
+│   │   ├── 📁 generated/       # Generated visual contract (block list/types) — do not edit
+│   │   ├── 📁 lib/             # Utilities (api.ts, server-api.ts, csrf.ts, multisiteRoute.tsx, …)
+│   │   ├── instrumentation.ts  # Registers the frontend with the gateway at startup
+│   │   └── proxy.ts            # Multisite: marks another site's public requests for the wjs-site rewrite
 │   └── package.json
 │
 ├── 📁 backend/                  # Express.js Backend (TypeScript, compiled for prod)
@@ -641,7 +659,8 @@ wordjs/
 │   │   │                       #   permissions.ts (can/canAny/canAll), errorHandler.ts,
 │   │   │                       #   image-negotiation.ts, request-context.ts
 │   │   ├── 📁 models/          # Post, User, Term, Comment, Media, Menu, Email,
-│   │   │                       #   Analytics, ApiToken, Webhook, WebhookDelivery, FormSubmission
+│   │   │                       #   Analytics, ApiToken, AgentConnection, Webhook, WebhookDelivery,
+│   │   │                       #   FormSubmission
 │   │   ├── 📁 routes/          # API Routes (incl. marketplace.ts)
 │   │   ├── 📁 types/           # Ambient .d.ts
 │   │   ├── 📁 tests/           # node:test suite (npm test)
@@ -668,18 +687,27 @@ wordjs/
 │                               #   + marketplace-themes-index.json + theme-<slug>-<version>.zip
 │                               #   — published as GitHub Release assets, NOT committed
 │
-├── 📁 documentation/            # Documentation
-│   ├── api.md
-│   ├── frontend.md
-│   ├── themes.md
-│   ├── plugins.md
-│   └── architecture.md         # This file
+├── 📁 documentation/            # ~40 guides + adr/, verso/, archive/ — index: documentation/README.md
+│
+├── 📁 docs/                     # Repo media (README images), Stitch reference pages, internal working notes
+├── 📁 contracts/                # Versioned shared contracts: host-policy-vectors.v1.json,
+│                                #   visual-contract.v1.json (sources of generated code and tests)
+├── 📁 packages/
+│   └── 📁 create-wordjs/       # `npx create-wordjs` installer CLI (create, upgrade, gateway, join)
 │
 ├── 📁 gateway/                  # Cluster Gateway (reverse proxy + mTLS)
 │   ├── 📁 src/
-│   │   ├── index.js            # Gateway entry (Node cluster; mTLS /register + token /enroll servers)
+│   │   ├── index.js            # Gateway entry (Node cluster; mTLS internal API + token /enroll servers)
 │   │   ├── cluster-ca.js       # Cluster CA: issue/sign identities + join-token store
-│   │   └── proxy-config.js     # Proxy + mTLS upstream agent
+│   │   ├── proxy-config.js     # Proxy + mTLS upstream agent
+│   │   ├── routing.js          # Which registered node serves a request (prefix owner, health-aware round robin)
+│   │   ├── registration.js     # What a /register call may write into the registry
+│   │   ├── identity.js         # mTLS CN gate for every internal-listener route
+│   │   ├── host-policy.js      # Address parser/classifier (byte-identical copy of the backend's)
+│   │   ├── host-edge.js        # Edge half of the host policy (421s, POST /host-policy push)
+│   │   ├── purge.js            # Separate mode: fans a backend cache purge out to every frontend
+│   │   ├── rate-limit.js       # Public-listener rate limiter
+│   │   └── security-headers.js # Helmet/CSP options mirroring the backend's
 │   ├── gateway-config.json      # Gateway config (secret, ports, ssl, mtls)
 │   └── gateway-registry.json    # Persisted service registry + health
 │
@@ -717,7 +745,23 @@ The backend is written in **TypeScript** (`backend/src/**/*.ts`). In **productio
 - **In-tree `.js` files compiled via `allowJs`:** `src/core/db-admin/*` (the in-core DB migration/admin runner that used to be the `db-migration` plugin) and `src/core/plugin-worker.js` (the plugin isolate worker) are carried into `dist/` by `allowJs`.
 - **DB drivers:** `src/drivers/` defines a driver interface (`interface.ts`: `connect/get/all/run/exec/transaction/close`, where `transaction(fn)` runs `fn` atomically on a single connection wrapped in BEGIN/COMMIT with ROLLBACK on throw) plus implementations (`sqlite-native`, `sqlite-native-async`, `sqlite-legacy`, `postgres`, and `mysql`). The driver is selected by `config.dbDriver` (`backend/src/config/database.ts`, default `sqlite-native`); `mysql` (aliased `mariadb`) targets MySQL 8.0+/MariaDB via `mysql2` and carries a SQLite→MySQL dialect-translation layer (TEXT→LONGTEXT unless the DDL makes the column part of a key, in which case VARCHAR(255) — `drivers/mysql-text-rule.ts`; expression defaults, AUTO_INCREMENT, `INSERT OR IGNORE`/`ON CONFLICT`→`INSERT IGNORE`/`ON DUPLICATE KEY UPDATE`, `RETURNING`→`insertId`, and one shared session `sql_mode=ANSI_QUOTES,STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION` installed by **both** the main and per-plugin pools). `getDbType()` returns `{ isPostgres, isMySQL, isSQLite, driver }`. Adding a database = implement the interface + add a conformance block (`src/tests/driver-conformance.test.ts`).
 - **Plugins stay JavaScript:** code under `backend/plugins/*` remains `.js` on purpose, because the acorn AST security scanner and dynamic `require` assume `.js`. Plugins are excluded from the build.
-- **Tooling & CI:** ESLint (flat config) + Prettier, a `node:test` suite (`src/tests/*.test.ts`, including supertest API integration tests). CI (`.github/workflows/ci.yml`) runs the backend job as **dependency audit (block high/critical prod vulns, `scripts/ci-audit.mjs`) → strict typecheck → lint → build → the F0–F6 phase verifiers (`backend/scripts/verify-f*.ts`) → license gate (block AGPL/SSPL via the pinned `license-checker` devDependency) → tests (`npm test`, sharded across four parallel jobs, with `WORDJS_CI_DB=1` so the Postgres/MySQL conformance blocks hard-fail instead of skipping) → F0 content performance budgets (`npm run perf:f0`) → integration tests against the Postgres + Redis service containers (`npm run test:integration`) → marketplace catalog integrity (`build-marketplace.js` + `verify-marketplace.js --rebuild`)**, alongside jobs for the backend coverage ratchet (`Backend coverage (c8 ratchet)`: the same `npm test` instrumented in four parallel shards, merged by `npm run test:coverage:report` with the options of `test:coverage:check`, in parallel with the backend jobs), the committed-gate check (`gates-travel`), multi-node coherence (two backends on a shared Postgres + Redis, plus a container-stack parse check), gateway tests, the install channel (`packages/create-wordjs`: audit, tests with a zero-tests guard, and a `--help` boot of the CLI), frontend audit → plugin registries → token-manifest and asset-version anti-drift gates → typecheck → lint → Vitest → build → Vitest v8 coverage ratchet, a Verso Playwright E2E, a smoke-boot of the compiled bundle in every mode, a Docker image build + headless install, and performance budgets. Beyond `ci.yml`, a separate `.github/workflows/codeql.yml` runs **CodeQL SAST** (JavaScript/TypeScript) on push/PR to `main` and weekly; `.github/workflows/dependency-audit.yml` re-runs that same `scripts/ci-audit.mjs` gate **daily at 04:41 UTC** (plus on demand) across **all six** workspaces — including `/` and `/setup`, which `ci.yml` never audits — with `fail-fast: false` so every leg reports, and on failure opens or comments on a `Dependency audit failed (<date>)` issue naming the affected workspaces and linking the run; and `.github/workflows/release.yml` gates a tag on `npm run ci:all` + audits + typecheck + tests before it publishes, generates a **CycloneDX SBOM** (`wordjs-sbom.cdx.json`) as a release asset, and smoke-deploys the extracted bundle in every mode it claims to support. Third-party GitHub Actions are pinned to immutable commit SHAs for supply-chain integrity.
+- **Tooling & CI:** ESLint (flat config) + Prettier, a `node:test` suite (`src/tests/*.test.ts`, including supertest API integration tests). CI (`.github/workflows/ci.yml`) runs the backend job as **dependency audit (block high/critical prod vulns, `scripts/ci-audit.mjs`) → strict typecheck → lint → build → the F0–F6 phase verifiers (`backend/scripts/verify-f*.ts`) → license gate (block AGPL/SSPL via the pinned `license-checker` devDependency) → tests (`npm test`, sharded across four parallel jobs, with `WORDJS_CI_DB=1` so the Postgres/MySQL conformance blocks hard-fail instead of skipping) → F0 content performance budgets (`npm run perf:f0`) → integration tests against the Postgres + Redis service containers (`npm run test:integration`) → marketplace catalog integrity (`build-marketplace.js` + `verify-marketplace.js --rebuild`)**, alongside jobs for the backend coverage ratchet (`Backend coverage (c8 ratchet)`: the same `npm test` instrumented in four parallel shards, merged by `npm run test:coverage:report` with the options of `test:coverage:check`, in parallel with the backend jobs), the committed-gate check (`gates-travel`), multi-node coherence (two backends on a shared Postgres + Redis, plus a container-stack parse check), gateway tests, the install channel (`packages/create-wordjs`: audit, tests with a zero-tests guard, and a `--help` boot of the CLI), frontend audit → plugin registries → token-manifest and asset-version anti-drift gates → typecheck → lint → Vitest → build → Vitest v8 coverage ratchet, a Verso Playwright E2E, a smoke-boot of the compiled bundle in every mode, a Docker image build + headless install, and performance budgets. Beyond `ci.yml`, a separate `.github/workflows/codeql.yml` runs **CodeQL SAST** (JavaScript/TypeScript) on push/PR to `main` and weekly; `.github/workflows/dependency-audit.yml` re-runs that same `scripts/ci-audit.mjs` gate **daily at 04:41 UTC** (plus on demand) across **all six** workspaces — including `/` and `/setup`, which `ci.yml` never audits — with `fail-fast: false` so every leg reports, and on failure opens or comments on a `Dependency audit failed (<date>)` issue naming the affected workspaces and linking the run; and `.github/workflows/release.yml` gates a tag on `npm run ci:all` + audits + typecheck + tests before it publishes, generates a **CycloneDX SBOM** (`wordjs-sbom.cdx.json`) as a release asset, and smoke-deploys the extracted bundle in every mode it claims to support. Four more workflows round it out: `.github/workflows/sandbox-parity.yml` (push/PR) certifies the production plugin launch path on real Linux, Windows and macOS runners — each platform must keep its native sandbox for both network-policy shapes; `.github/workflows/f6-certification.yml` (push/PR) runs the F6 migration-certification legs the other workflows do not already cover ([ADR-0007](adr/0007-f6-migration-certification.md)); `.github/workflows/plugin-review.yml` (PRs touching `marketplace/plugins/**`, or on demand) runs the mechanical half of the marketplace plugin review; and `.github/workflows/flake-hunt.yml` (manual only) re-runs the backend suite N times per shard to reproduce intermittent runner failures. Third-party GitHub Actions are pinned to immutable commit SHAs for supply-chain integrity.
+
+---
+
+## 🧭 Subsystems
+
+Larger features have a guide of their own; this page only places them in the picture.
+
+| Subsystem | Where it lives | Guide |
+| --- | --- | --- |
+| **Multisite** — a network of sites, each with its own database, uploads, users and settings | `backend/src/core/network*.ts`, `site-context.ts`, `site-resolver.ts`, `site-keys.ts`, `multisite-guards.ts`; frontend `src/proxy.ts` + `app/wjs-site/` | [multisite.md](multisite.md), design: [multisite-design.md](multisite-design.md) |
+| **AI agents (MCP server)** — AI assistants read and draft content through granted capabilities | `backend/src/core/mcp-server.ts`, `agent-capabilities.ts`, `models/AgentConnection.ts`; `/admin/agents` | [ai-agents.md](ai-agents.md) |
+| **AI provider** — one place that holds the provider credentials; editor suggestions and `ai:use` plugins | `backend/src/core/ai-provider.ts`, `ai-suggest.ts`; `/admin/settings/ai` | [ai-provider.md](ai-provider.md) |
+| **GraphQL** — read-only endpoint where every field is a REST read | `backend/src/core/graphql/` | [graphql.md](graphql.md) |
+| **Media storage** — local disk or an S3-compatible bucket + CDN | `backend/src/core/media-storage.ts`, `media-storage-migrate.ts`; `/admin/settings/media-storage` | [media-storage.md](media-storage.md) |
+| **Outgoing webhooks** — HMAC-signed event deliveries | `backend/src/core/webhooks.ts`, `webhook-payloads.ts` | [webhooks.md](webhooks.md) |
+| **Observability** — structured logs, request ids, Prometheus metrics | `backend/src/core/logger.ts`, `module-logger.ts`, `metrics.ts`, `middleware/request-context.ts` | [observability.md](observability.md) |
 
 ---
 
@@ -765,7 +809,7 @@ graph LR
     GatewayAPI -- "Trusts cluster CA" --> Backend
 ```
 
-The **Gateway** runs a private mTLS server on the internal port (`gatewayInternalPort`, default **3100** = public port + 100). Services register and fetch info here over mutual TLS: the TLS layer (`requestCert: true` / `rejectUnauthorized: true`) requires every internal request to present a client certificate that chains to the cluster CA, and each route then enforces an allowed CN via `requireIdentity()`. `POST /register` (CN `backend`/`frontend`) updates the routing registry; `GET /info`, `POST /cert-upload`, and `POST /config-update` (CN `backend` only) return gateway/SSL/cert status and apply cert/config changes.
+The **Gateway** runs a private mTLS server on the internal port (`gatewayInternalPort`, default **3100** = public port + 100). Services register and fetch info here over mutual TLS: the TLS layer (`requestCert: true` / `rejectUnauthorized: true`) requires every internal request to present a client certificate that chains to the cluster CA, and each route then enforces an allowed CN via `requireIdentity()`. `POST /register` (CN `backend`/`frontend`) updates the routing registry; `GET /info`, `POST /cert-upload`, and `POST /config-update` (CN `backend` only) return gateway/SSL/cert status and apply cert/config changes; `POST /purge` (CN `backend`) fans a frontend cache purge out to every registered frontend (`gateway/src/purge.js`, used in separate mode); `POST /host-policy` (CN `backend`) receives the site's address policy that the public edge enforces (`gateway/src/host-edge.js`, see [site-address.md](site-address.md)); and `GET /revalidate-secret` (CN `frontend`) hands a frontend node the shared purge secret. Details: **[gateway.md](gateway.md)**.
 
 For a **single-host** deployment the cluster CA and per-service certs are generated by the **setup orchestrator** (`setup/index.js`), so sensitive keys never travel over the public port. For **SEPARATE** (multi-machine) deployments the CA is minted by `node scripts/cluster.js init` and a new node bootstraps its own mTLS identity through the gateway's **token-enrollment listener** — a **separate** HTTPS server on `gatewayEnrollPort` (default **3101**, `startEnrollServer()`) that does **not** request a client cert: it accepts `POST /enroll { role, token, advertiseHost, csr }`, validates a single-use join token, forces `CN=<role>`, and returns the signed cert + cluster CA. See **[separate-mode.md](separate-mode.md)**.
 

@@ -107,6 +107,8 @@ The honest row is the last one: WordJS is young, and every plugin and theme it s
 - SQLite · PostgreSQL · MySQL/MariaDB
 - Automatic **HTTPS** (Let's Encrypt)
 - **Docker image** + one-click compose / Helm templates
+- **Multisite**, and media offload to **S3 / a CDN**
+- **MCP server** for AI agents, read-only **GraphQL**
 - **2FA**, API tokens, webhooks, structured logs & `/metrics`
 
 </td></tr>
@@ -133,12 +135,16 @@ The honest row is the last one: WordJS is young, and every plugin and theme it s
 - **Hooks, filters & shortcodes** (WordPress-style), **dynamic roles & permissions** (database-driven), and **UI in español / english / português**.
 - **WordPress (WXR) importer** — upload a `.xml` export to bring over authors, categories/tags, posts/pages (with meta, term relationships, and threaded comments), preserving publish dates. **Attachments are downloaded** through the same SSRF guard as webhooks (50 MB per file and 1 GB per run by default, resumable, failures reported per item) and **menus come across with hierarchy**, targets and locations; content and editor-tree URLs are rewritten to the new library. Idempotent and re-runnable.
 - **Backups** — full-site export/restore with retention pruning, plus **privacy-first analytics** (no cookies, daily-rotated salted IP hashing) and a **built-in cron**.
+- **AI suggestions in the editor** — one provider layer (`backend/src/core/ai-provider.ts`) holds the site's AI credentials; the editor offers "Suggest with AI" for excerpts, meta descriptions and image alt text, always as a suggestion the user accepts, and plugins granted `ai:use` reach it through the bridge. The key is never shown to the browser, plugins or logs. See [AI provider](documentation/ai-provider.md).
+- **Multisite** — one install serves a network of sites, each with its own address, database, uploads, users, roles, settings and theme choice (`npm run network -- enable`, then **Admin → Network**; `sqlite-native` driver in this version). See [Multisite](documentation/multisite.md).
 
 **Operations**
 - **Gateway** — a clustered reverse proxy (one worker per CPU core, capped at 16 — or 4 in development — with automatic respawn of dead workers), health-check eviction, an mTLS internal control channel, and SSE-aware proxying. It also acts as the cluster CA for multi-machine deployments.
 - **Automatic TLS** — Let's Encrypt via HTTP-01 or DNS-01, manual upload, or a self-signed dev fallback; renewal works in single-process mode too.
-- **Databases** — SQLite (default), PostgreSQL, or MySQL 8+/MariaDB, all behind one interface with a migration system to move between them.
-- **Headless-friendly** — scoped API tokens (`Authorization: Bearer wjt_…`, per-resource scopes), HMAC-signed SSRF-safe webhooks, and token-gated Prometheus metrics.
+- **Databases** — SQLite (default), PostgreSQL, or MySQL 8+/MariaDB, all behind one interface with a migration system to move between them. **Strict driver mode** (`dbStrictDriver` / `WORDJS_DB_STRICT=1`) makes a site refuse to boot rather than fall back to the slower `sqlite-legacy` driver.
+- **Media offload** — public media (originals and every derivative) can live in an S3-compatible bucket (AWS S3, Cloudflare R2, MinIO, …) served from a CDN, while the database keeps relative paths; `npm run media -- offload` / `restore` moves an existing library either way. See [Media storage](documentation/media-storage.md).
+- **Headless-friendly** — scoped API tokens (`Authorization: Bearer wjt_…`, per-resource scopes), a read-only **GraphQL** endpoint (`/api/v1/graphql`, same authorization as REST, with depth/cost limits), HMAC-signed SSRF-safe **webhooks** on 31 events, and token-gated Prometheus metrics. See [GraphQL](documentation/graphql.md) and [Webhooks](documentation/webhooks.md).
+- **AI agents over MCP** — a built-in Model Context Protocol server (`POST /api/v1/mcp`) lets Claude Code, Claude Desktop or any MCP client read and draft content. Each connection has its own `wja_…` token and requests capabilities an administrator grants, which can only ever narrow what its bound user may do. See [AI agents](documentation/ai-agents.md).
 - **Observable** — structured pino logging with request correlation ids and credential scrubbing, and a `/metrics` endpoint carrying request rate, latency histogram, error rate, DB pool and sandbox state. See [Observability](documentation/observability.md).
 - **Native mail server** — an optional, fully sandboxed first-party plugin: inbound SMTP, direct-MX delivery, and DKIM signing.
 
@@ -194,8 +200,8 @@ The **same codebase** runs three ways — switch anytime, no data migration:
 
 | Mode | What it is | Best for |
 |---|---|---|
-| 🧱 **Monolith** | Everything in **one process, one port** | The simplest deploy — a small VM or container |
-| 🔀 **Split** *(default)* | Gateway + backend + frontend on one host | Scaling services independently |
+| 🧱 **Monolith** *(what `npx create-wordjs` starts)* | Everything in **one process, one port** | The simplest deploy — a small VM or container |
+| 🔀 **Split** *(the root `npm start` / `npm run dev`)* | Gateway + backend + frontend on one host | Scaling services independently |
 | 🌐 **Separate** | The three services on **different machines**, joined over mTLS | Larger, distributed setups |
 
 In a container instead: the repository ships a Dockerfile that CI **builds, boots, health-checks and installs through the setup wizard** on every run (the `docker-image` job in `.github/workflows/ci.yml`), plus ready-to-run templates under [`deploy/`](deploy/) — a single-container [`compose`](deploy/compose/) stack and a monolith [Helm chart](deploy/helm/wordjs/).
@@ -241,15 +247,18 @@ See the [Separate-mode guide](documentation/separate-mode.md) for the walkthroug
 | | | |
 |---|---|---|
 | 🏗️ [Architecture](documentation/architecture.md) | 🛠️ [Development & Build](documentation/development.md) | ⌨️ [CLI & Setup](documentation/cli.md) |
-| 🔌 [Plugin Tutorial](documentation/plugins.md) | 🧩 [Plugins Reference](documentation/plugins-reference.md) | 🧱 [Plugin Isolation](documentation/plugin-isolation-proposal.md) |
+| 🔌 [Plugin Tutorial](documentation/plugins.md) | 🧩 [Plugins Reference](documentation/plugins-reference.md) | 🧱 [Plugin Isolation](documentation/archive/plugin-isolation-proposal.md) |
 | 🎨 [Themes](documentation/themes.md) | 🖥️ [Frontend](documentation/frontend.md) | 🛰️ [Gateway](documentation/gateway.md) |
 | 🗄️ [Database](documentation/database.md) | 🗃️ [Plugin Database Access](documentation/plugin-database.md) | ✉️ [Mail Server](documentation/mail-server.md) |
 | 🚀 [Deployment](documentation/deployment.md) | 🧩 [Separate Mode](documentation/separate-mode.md) | 🌐 [Multi-Node Ops](documentation/multi-node.md) |
 | 📥 [Import from WordPress](documentation/wordpress-import.md) | 🔔 [Notifications](documentation/notifications.md) | 📡 [REST API](documentation/api.md) |
 | 🔐 [Security Policy](SECURITY.md) | 🛡️ [Security Architecture](documentation/security.md) | 🧭 [Product Positioning](POSITIONING.md) |
-| 📈 [Observability](documentation/observability.md) | 🧾 [Plugin Review Policy](marketplace/REVIEW.md) | |
+| 📈 [Observability](documentation/observability.md) | 🧾 [Plugin Review Policy](marketplace/REVIEW.md) | 🧠 [Core Modules](documentation/core-modules.md) |
+| 🔎 [GraphQL API](documentation/graphql.md) | 🪝 [Webhooks](documentation/webhooks.md) | 🖌️ [Theming & Tokens](documentation/theming.md) |
+| 🤖 [AI Agents & MCP](documentation/ai-agents.md) | ✨ [AI Provider](documentation/ai-provider.md) | ☁️ [Media Storage (S3 / CDN)](documentation/media-storage.md) |
+| 🏘️ [Multisite](documentation/multisite.md) | 🎓 [Tutorials](documentation/tutorials/README.md) | 🗂️ [All documentation](documentation/README.md) |
 
-> Live API reference (Swagger/OpenAPI) is served at `http://localhost:4000/api/v1/docs` (admin only).
+> Live API reference (Swagger/OpenAPI) is served at `<your-site>/api/v1/docs` — e.g. `http://localhost:3000/api/v1/docs` — to a signed-in administrator. Use the public origin: in monolith mode `:4000` is an internal loopback listener, and in split mode, once the cluster certificates exist, the backend's `:4000` accepts only the gateway's client certificate.
 
 ---
 
@@ -318,8 +327,8 @@ CI (`.github/workflows/ci.yml`, Node 22) runs the strict type-check, the compile
 ## 🔮 Roadmap
 
 - **🧩 Third-party marketplace** — the on-ramp is built and only the authors are missing: the review policy is public ([`marketplace/REVIEW.md`](marketplace/REVIEW.md)), decisions are recorded in a tracked ledger (`marketplace/reviews.json`), every catalog entry publishes `review.status` (`first-party` / `reviewed` / `unreviewed`), and the badge is shown for `reviewed`. The gate is real: `npm run verify:marketplace` fails if an entry claims a review with no ledger record, if a reviewed plugin's permissions have changed since the review that granted the badge, or if a first-party plugin marks *itself* reviewed. What remains is the community — all 31 catalog plugins are first-party today.
-- **☁️ Media CDN** — S3-compatible object storage.
-- **🌐 Multi-site** — manage multiple domains from one install.
+- **✅ Shipped in 2.6.0** (both were on this list): **media CDN** — S3-compatible offload served from a CDN ([Media storage](documentation/media-storage.md)) — and **multisite** — several sites, each on its own domain, from one install ([Multisite](documentation/multisite.md)).
+- **🌐 Multisite, next steps** — networks of sites shipped in 2.6.0 on the `sqlite-native` driver; Postgres/MySQL networks and a TLS certificate per site (SNI) are planned ([Multisite](documentation/multisite.md)).
 - **🛡️ More kernel hardening** — building on the default-on Landlock/AppContainer/Seatbelt layer; preventive memory caps outside systemd Linux and Windows are the open gap.
 
 ---

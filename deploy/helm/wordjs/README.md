@@ -97,8 +97,12 @@ This chart models the simplest working WordJS and nothing more.
 - **No bundled PostgreSQL or Redis.** Choose PostgreSQL or MySQL in the setup wizard if you have one, or
   point at it with `extraEnv` — but note that env-wiring the database also requires
   `WORDJS_PRESEED_CONFIG=1`, which makes the pod come up **already installed** and skips the wizard
-  entirely. No administrator is created in that case (the bootstrap deliberately seeds none), so only
-  do it for a replica joining a site that is already installed.
+  entirely. Nobody chooses the administrator in that case: on its first boot over an **empty** database
+  the backend creates a bootstrap `admin` (email `admin@example.com`) with a random password, written
+  (mode `0600`) to `backend/data/initial-admin-password` in the data volume and printed only to a
+  terminal. Read it with `kubectl -n wordjs exec deployment/wordjs -- cat
+  /app/backend/data/initial-admin-password`, sign in, change the password and delete the file.
+  Pre-seeding also requires `WORDJS_JWT_SECRET`; see [`docker/README.md`](../../../docker/README.md).
 - **No HorizontalPodAutoscaler, PodDisruptionBudget, NetworkPolicy, ServiceMonitor or ServiceAccount**
   customisation. Add them alongside the release if you need them.
 - **No backup automation.** Snapshot the `-data` PVC; the database and the `jwtSecret` must be restored
@@ -106,18 +110,55 @@ This chart models the simplest working WordJS and nothing more.
 
 ## Values
 
-See [`values.yaml`](values.yaml) — every key is commented there. The ones you will actually set:
+See [`values.yaml`](values.yaml) — every key is commented there.
 
 | Key | Default | |
 |---|---|---|
 | `image.repository` | `""` | **Required.** Rendering fails without it |
 | `image.tag` | `""` | Falls back to `.Chart.AppVersion` |
+| `image.pullPolicy` / `imagePullSecrets` | `IfNotPresent` / `[]` | |
 | `siteUrl` | `""` | The public origin. Derived from `ingress.host` when unset and `ingress.enabled=true`. Exported as `WORDJS_SITE_URL` (the wizard's suggested main address) and in `WORDJS_ALLOWED_HOSTS` (always answered) |
 | `allowedHosts` | `[]` | More addresses the site must answer (host names or URLs), exported in `WORDJS_ALLOWED_HOSTS` |
 | `trustProxy` | `""` | Exported as `WORDJS_TRUST_PROXY`: the ingress controller's address or pod network (an IP, a CIDR, `uniquelocal`, …). Needed for client-IP rate limits and for https sign-in on addresses other than the main one |
 | `ingress.extraHosts` | `[]` | More host names routed to the Service; each gets an ingress rule and is exported in `WORDJS_ALLOWED_HOSTS` |
 | `installToken.value` | `""` | Must be ≥ 16 characters; rendering fails on a shorter one, because the app would silently ignore it and mint its own. Empty means the app mints its own and writes it to `backend/data/install-token` (`0600`) in the data volume — read it with `kubectl exec`, not from the pod logs, where the banner omits it because a pod's stdout is not a TTY (set `WORDJS_PRINT_INSTALL_TOKEN=1` via `extraEnv` to print it there anyway) |
 | `installToken.existingSecret` | `""` | Use a Secret you manage; takes precedence over `value` |
+| `installToken.existingSecretKey` | `install-token` | The key inside that Secret |
+| `service.type` / `service.port` | `ClusterIP` / `80` | The Service in front of container port `3000` |
 | `ingress.enabled` | `false` | |
+| `ingress.className` | `""` | The Ingress's `ingressClassName`; empty leaves it unset (the cluster default) |
+| `ingress.host` / `ingress.path` / `ingress.pathType` | `wordjs.example.com` / `/` / `Prefix` | |
+| `ingress.annotations` | `{}` | |
+| `ingress.tls` | `[]` | `secretName` + `hosts` entries; a host covered here is exported as `https://` in `WORDJS_ALLOWED_HOSTS` |
 | `persistence.data.size` | `8Gi` | |
 | `persistence.uploads.size` | `20Gi` | |
+| `persistence.<data\|uploads>.enabled` | `true` | `false` mounts an `emptyDir` instead, lost whenever the pod is replaced |
+| `persistence.<data\|uploads>.storageClass` | `""` | Empty uses the cluster default StorageClass |
+| `persistence.<data\|uploads>.accessMode` | `ReadWriteOnce` | |
+| `persistence.<data\|uploads>.existingClaim` | `""` | Mount a PVC you created instead of letting the chart create one |
+| `resources` | requests `250m` CPU / `512Mi`, limit `2Gi` memory | The Node process plus one forked OS child per isolated plugin; below ~1Gi the first boot is an OOM risk |
+| `podSecurityContext` | `runAsNonRoot`, uid/gid `1001`, `fsGroup: 1001` | `fsGroup` is what makes a fresh, root-owned volume writable for the app |
+| `securityContext` | `allowPrivilegeEscalation: false`, drop `ALL` capabilities | |
+| `extraEnv` | `[]` | More container environment variables, rendered as given (so `valueFrom` works) — see below |
+| `podAnnotations` / `nodeSelector` / `tolerations` / `affinity` | empty | |
+
+### Useful `extraEnv` entries
+
+```yaml
+extraEnv:
+  - name: METRICS_TOKEN          # turns on GET /metrics (Authorization: Bearer <token>); it answers 404 without one
+    valueFrom:
+      secretKeyRef: { name: wordjs-metrics, key: token }
+  - name: LOG_LEVEL              # trace | debug | info | warn | error | fatal | silent (default info)
+    value: info
+```
+
+**Media offload.** With the `WORDJS_MEDIA_*` variables (`WORDJS_MEDIA_STORAGE=s3`, `WORDJS_MEDIA_S3_BUCKET`,
+`WORDJS_MEDIA_S3_REGION`, `WORDJS_MEDIA_S3_ENDPOINT`, `WORDJS_MEDIA_S3_ACCESS_KEY_ID`,
+`WORDJS_MEDIA_S3_SECRET_ACCESS_KEY`, `WORDJS_MEDIA_PUBLIC_URL`, …) public media is written to an
+S3-compatible bucket and served from its public URL or a CDN, so the `-uploads` volume is no longer where
+public media has to live: once the library is offloaded (`kubectl -n wordjs exec deployment/wordjs -- npm
+run media -- offload --delete-local`) it can be much smaller. It is not empty: fonts are still stored under
+`backend/uploads/`, so keep it persistent rather than an `emptyDir`. Private media is never offloaded and
+stays in the data volume (`backend/data/private-uploads/`). Keep the keys in a Secret (`valueFrom`). See
+[`documentation/media-storage.md`](../../../documentation/media-storage.md).

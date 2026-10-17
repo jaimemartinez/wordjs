@@ -344,4 +344,4 @@ pick one DB). The license question is resolved (MIT).
 - `backend/src/core/plugins.ts` (`validatePluginPermissions`) — AST static scanner (acorn, fail-closed)
 - `backend/src/core/io-guard.ts` — `.env` / secret-file fs backstop
 - `backend/src/routes/marketplace.ts` + `backend/scripts/build-marketplace.js` — the shipped marketplace (catalog fetch, sha256 verify, install via the standard upload pipeline)
-- `documentation/plugin-isolation-proposal.md` — the soft-vs-hard boundary analysis
+- `documentation/archive/plugin-isolation-proposal.md` — the soft-vs-hard boundary analysis

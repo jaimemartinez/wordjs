@@ -7,7 +7,7 @@ This document lists the official plugins available in the WordJS ecosystem and t
 > core only through the `wordjs` capability bridge — RPC'd to the host over IPC (v8 structured
 > clone) and permission-checked **on the host** in the plugin's context. A crash, OOM, or heap
 > escape is contained to the child; the host process (secrets, DB handle, other plugins)
-> survives and is unreachable from the child. See **[Plugin Isolation](plugin-isolation-proposal.md)**
+> survives and is unreachable from the child. See **[Plugin Isolation](archive/plugin-isolation-proposal.md)**
 > and the **[wordjs Bridge API Reference](#0-the-wordjs-bridge--api-reference-)** below.
 > **There is one plugin model and no trust tier.** Every plugin is sandboxed; capabilities are
 > **admin-granted per plugin, Android-style** (the manifest *requests*, an admin *grants* each one in
@@ -67,9 +67,9 @@ Two enforcement gates live on the host (`backend/src/core/plugin-isolate.ts`):
 | `db.get(sql, params)` | `db.get` | Same scoping as `db.all`. |
 | `db.run(sql, params)` | `db.run` | `database:write` grant. Same scoping. DDL is limited by a positive OBJECT-CLASS allowlist — a plugin may only create/alter/drop its own `TABLE`, `INDEX`, `VIEW` or `TRIGGER` (SCHEMA/DATABASE/ROLE/FUNCTION/EXTENSION/… are denied), and an `ALTER … RENAME TO` destination must itself carry the `wjp_<slug>_` prefix. |
 | `db.batch(statements)` | `db.batch` | Run up to 200 `[sql, params]` pairs in ONE host round-trip. Purely a transport optimisation: every statement is re-validated with the SAME permission check + SQL guard its single-statement counterpart would use, and DDL (`CREATE`/`ALTER`/`DROP`) is refused — use `db.run`/`db.createTable` so ownership and grants are recorded. The whole batch is validated before any of it runs, but it is **NOT** a transaction: a failure mid-batch leaves the earlier statements applied. |
-| `db.createTable(name, cols)` | `db.createTable` | `database:write` grant. Creates a `wjp_<slug>_`-prefixed table and records this plugin as its authoritative creator. |
+| `db.createTable(name, cols)` | `db.createTable` | `database:write` grant. Creates the table (`CREATE TABLE IF NOT EXISTS`) and records this plugin as its authoritative creator. It does **not** add the prefix: `name` must already start with `db.tablePrefix`, or the call throws. |
 | `db.getType()` | `db.getType` | `database:read` grant. Returns `{ isPostgres, isMySQL, isSQLite, driver }` for dialect branches (`driver` ∈ `sqlite-native`/`sqlite-legacy`/`postgres`/`mysql`/`mariadb`; `isSQLite` stays true under MySQL, so gate `PRAGMA`/`sqlite_master` on `isMySQL` — MariaDB reports `driver: 'mariadb'` but `isMySQL` is true, so branch on `isMySQL` not the raw `driver` string). |
-| `users.findByEmail / findByLogin / findById / search` | `users.*` | `users:read` grant. Returns a **safe projection** `{id, userLogin, username, userEmail, displayName, role, hasProfessionalMailbox}` — never `user_pass`. (`hasProfessionalMailbox` is the admin-owned corporate-mailbox grant, projected as a boolean; read it, never re-derive it from `userEmail`.) |
+| `users.findByEmail / findByLogin / findById / search` | `users.*` | `users:read` grant. Returns a **safe projection** `{id, userLogin, username, userEmail, displayName, role, hasProfessionalMailbox, pluginCapabilities}` — never `user_pass`. (`hasProfessionalMailbox` is the admin-owned corporate-mailbox grant, projected as a boolean; read it, never re-derive it from `userEmail`. `pluginCapabilities` is the account's capabilities in the plugin's own namespace — [plugins.md §12a](plugins.md#12a-declaring-user-roles-rolesdeclare-).) |
 | `site.url / domain / adminEmail` | `site.*` | `settings:read` grant. Read-only site identity. |
 | `media.getPrivate(id)` | `media.getPrivate` | **`media:private_read` grant** (default-deny; not implied by `admin`). Path-free description `{id, title, mimeType, filesize, filename}` of a **private** media item, or `null` for anything that is not one. The bytes are delivered with `res.sendPrivateMedia` (below), never through this call. |
 | `dns.resolveMx / resolveTxt / resolve4 / resolve6 / resolve` | `dns.*` | **`network` grant.** Host-mediated record lookups — the raw c-ares surface (`dns.resolve*`) is denied inside the isolate, so an MTA reaches MX (direct delivery) and TXT (SPF/DKIM/DMARC) through here. The host runs the query and STRIPS every A/AAAA answer pointing at a private/internal/special address, so `resolve4`/`resolve6`/`resolve` return public addresses only (a domain resolving solely to internal IPs comes back empty). Every method also checks the NAME being resolved against the plugin's egress allowlist (an empty list allows every public name; an unloaded policy refuses every name), because a lookup is itself egress; a name containing a control character is refused in every state (c-ares stops at a NUL, so the allowlist would judge a different name from the one queried). |
@@ -80,18 +80,19 @@ Two enforcement gates live on the host (`backend/src/core/plugin-isolate.ts`):
 | `mail(msg)` | `mail` | `email:admin` grant. Send through the host-wide mail sender. |
 | `notify(notification)` | `notify` | `notifications:send` grant. Dispatch a core notification. |
 | `ai.complete(request)` | `ai.complete` | `ai:use` grant. Text completion through the site's AI provider (`ai-provider.md` §4). |
-| `adminMenu.add(item)` | `adminMenu.add` | `admin_menu:register` grant (an explicit, admin-granted verb — `scope: "admin"` does not imply it). Adds a sidebar item; capped at 50 items per plugin, and `href` must be a same-origin relative admin path (single leading `/`, no scheme, no `//`) or the item is dropped with a warning. |
+| `adminMenu.add(item)` | `adminMenu.add` | `admin_menu:register` grant (an explicit, admin-granted verb — `access: "admin"` does not imply it). Adds a sidebar item; capped at 50 items per plugin, and `href` must be a same-origin relative admin path (single leading `/`, no scheme, no `//`) or the item is dropped with a warning. |
 | `cron.schedule(ts, recurring, hook, args)` | `cron.schedule` | Schedule a recurring/one-shot hook fire. |
 | `crypto.randomToken(bytes=16)` / `crypto.randomInt(min, max)` | `crypto.randomToken` / `crypto.randomInt` | CSPRNG helpers (no data access, no permission gate) — use instead of `Math.random` for tokens/access codes. **Async** in an isolated plugin (RPC to host), so `await` them. |
 | `assets.enqueueScript(spec)` / `assets.enqueueStyle(spec)` | `assets.enqueueScript` / `assets.enqueueStyle` | `assets:write` grant. Enqueue a `<script>`/`<style>` onto public pages; the host emits a **sanitized** tag. `src` must resolve **inside your plugin's `public/` directory** with a servable extension — that directory is the only part of the plugin tree published at `/plugins/<slug>/` (besides the Verso block stylesheet `dist/component.bundle.css`), it is served **only while the plugin is active**, and it is **read-only to the plugin** (`documentation/plugins.md` §11a). Any other `src` throws. |
-| `slug` | (local) | The plugin's slug string. |
+| `slug` | (local) | The plugin's slug string (its folder name). |
+| `paths.data` / `paths.logs` / `paths.tmp` | (local) | Frozen absolute paths of the plugin's private storage directories (`backend/data/plugins/<key>`, `backend/logs/plugins/<key>`, `backend/os-tmp/plugins/<key>`), created when it holds a `filesystem` grant; raw `fs` use of them still needs `filesystem:read`/`write`. |
 
 ### Registration methods (dedicated IPC kinds — NOT in the call allowlist)
 
 | `wordjs` member | IPC kind | Host-side gate (a capability here means manifest-declared AND admin-granted) |
 | --- | --- | --- |
 | `hooks.addAction(hook, cb, priority)` / `hooks.addFilter(...)` | `register` | Hook access policy (`core/hook-access.ts`): raw-HTML hooks (`wordjs_head`/`wordjs_footer`/`wp_head`/`wp_footer`/`dynamic_sidebar`), host-only hooks and unclassified core-namespace names denied to **every** plugin; data hooks need the matching grant (`comments:read`, `posts:read`, `notifications:read`, `settings:read`) and every delivery is re-checked and minimized (commenter email/IP/agent only with `comments:pii`; no post passwords, notification tokens or protected option values); capped per-plugin (`MAX_HOOKS`) and per-hook-name (`MAX_PER_HOOK`); each shim runs with a 2 s timeout. |
-| `http.route(method, routePath, opts, handler)` | `register-route` | **`express:register_route` grant** — checked first (default-deny; not implied by `admin`); without it the registration is logged and dropped (no route is mounted). Then: per-plugin route cap (`MAX_ROUTES`); HTTP verb allowlisted (`get/post/put/patch/delete/options/head/all`); `routePath` restricted to static segments, `:params` and at most two `*` wildcards (≤ 200 chars, no regex metacharacters, `::` or `..`); `opts.auth`/`opts.admin` apply the real `authenticate`/`isAdmin` middleware, and the handler's `req.user` is `{ id, role, userEmail, userLogin, hasProfessionalMailbox, pluginCapabilities }` (`pluginCapabilities`: the caller's capabilities in the plugin's own namespace — [plugins.md §12a](plugins.md#12a-declaring-user-roles-rolesdeclare)); `opts.multipart` parsed host-side by multer (single file, `fileSize` capped at `config.uploads.maxFileSize` — the site's configured `maxFileSize`, 10 MB by default; the temp file is unlinked when the response finishes). Always namespaced under `/api/v1/plugin/<slug>`, auth/session cookies stripped, Set-Cookie/CSP/HSTS/Location dropped, plugin cookies namespaced + path-confined. (No absolute-path mode.) The handler may reply with `res.sendPrivateMedia(mediaId, { filename })`: with the **`media:private_read` grant** the host streams that PRIVATE media item itself (`Content-Disposition: attachment`, nosniff, sandbox CSP, `Cache-Control: private, no-store`; plugin headers ignored; 404 for anything that is not a private attachment), without it the reply is `403`. File bytes never cross the IPC channel. A plugin route sits behind the global CSRF gate like every other API route: a cookie-authenticated `POST`/`PUT`/`PATCH`/`DELETE` must carry an `X-CSRF-Token` header equal to the caller's `wjs_csrf` cookie or it is refused with `403 rest_csrf_token`; `Bearer` callers are exempt. |
+| `http.route(method, routePath, opts, handler)` | `register-route` | **`express:register_route` grant** — checked first (default-deny; not implied by `admin`); without it the registration is logged and dropped (no route is mounted). Then: per-plugin route cap (`MAX_ROUTES`); HTTP verb allowlisted (`get/post/put/patch/delete/options/head/all`); `routePath` restricted to static segments, `:params` and at most two `*` wildcards (≤ 200 chars, no regex metacharacters, `::` or `..`); `opts.auth`/`opts.admin` apply the real `authenticate`/`isAdmin` middleware, and the handler's `req.user` is `{ id, role, userEmail, userLogin, hasProfessionalMailbox, pluginCapabilities }` (`pluginCapabilities`: the caller's capabilities in the plugin's own namespace — [plugins.md §12a](plugins.md#12a-declaring-user-roles-rolesdeclare-)); `opts.multipart` parsed host-side by multer (single file, `fileSize` capped at `config.uploads.maxFileSize` — the site's configured `maxFileSize`, 10 MB by default; the temp file is unlinked when the response finishes). Always namespaced under `/api/v1/plugin/<slug>`, auth/session cookies stripped, Set-Cookie/CSP/HSTS/Location dropped, plugin cookies namespaced + path-confined. (No absolute-path mode.) The handler may reply with `res.sendPrivateMedia(mediaId, { filename })`: with the **`media:private_read` grant** the host streams that PRIVATE media item itself (`Content-Disposition: attachment`, nosniff, sandbox CSP, `Cache-Control: private, no-store`; plugin headers ignored; 404 for anything that is not a private attachment), without it the reply is `403`. File bytes never cross the IPC channel. A plugin route sits behind the global CSRF gate like every other API route: a cookie-authenticated `POST`/`PUT`/`PATCH`/`DELETE` must carry an `X-CSRF-Token` header equal to the caller's `wjs_csrf` cookie or it is refused with `403 rest_csrf_token`; `Bearer` callers are exempt. |
 | `shortcodes.add(tag, handler)` | `register-shortcode` | Capped per-plugin; handler resolves HTML over RPC (`doShortcodeAsync`). |
 | `provideMail(handler)` | `register-mail-provider` | `email:provider` grant — becomes the host-wide mail sender (sandboxed). |
 | `notify.registerTransport(name, handler)` | `register-notify-transport` | `notifications:provider` grant — registers a core notification transport (sandboxed). |
@@ -104,7 +105,7 @@ gone **fails fast** ("… is not running") instead of waiting the timeout out. P
 global IPC message rates are token-bucket capped, with inbound/outbound payload caps.
 
 ## 1. Photo Carousel 📸
-**ID:** `photo-carousel` | **Version:** 2.0.0
+**ID:** `photo-carousel` | **Version:** 2.0.1
 
 Manages image carousels for Hero sections or content sliders.
 
@@ -116,7 +117,7 @@ Manages image carousels for Hero sections or content sliders.
 ---
 
 ## 2. Card Gallery 🃏
-**ID:** `card-gallery` | **Version:** 1.0.0
+**ID:** `card-gallery` | **Version:** 1.0.1
 
 Displays event or promo cards as a full-width stack whose content alternates left/right by index (the
 "zigzag"). There is no grid mode — the block's only fields are the gallery to show and an optional
@@ -130,7 +131,7 @@ anchor id.
 ---
 
 ## 3. Video Gallery 🎬
-**ID:** `video-gallery` | **Version:** 1.0.0
+**ID:** `video-gallery` | **Version:** 1.0.1
 
 Manages YouTube video carousels. Galleries and their videos are stored in **options**
 (`vgallery_galleries_list`, `vgallery_data_<id>`), not in a `wjp_` table.
@@ -147,16 +148,24 @@ Manages YouTube video carousels. Galleries and their videos are stored in **opti
 ---
 
 ## 4. Mail Server 📧
-**ID:** `mail-server` | **Version:** 2.2.3
+**ID:** `mail-server` | **Version:** 3.0.1
 
 A complete SMTP server and email manager. Allows sending and receiving emails directly within WordJS.
 
 *   **Features:**
-    *   Inbound SMTP server (listens on port 25 by default — operator-configurable via the `smtp_listen_port` option — automatically falling back to the unprivileged port 2525 when 25 cannot be bound) + direct-MX outbound delivery (connects to remote MTAs on port 25) — runs inside the child process
+    *   Inbound SMTP through the **host listener**: with the exclusive `smtp:inbound` grant, WordJS itself
+        listens on the port the manifest's `claimPorts: [25]` declares (`core/inbound-smtp.ts`; falling back
+        to 2525, with the reason, when 25 cannot be bound) and asks the plugin for a verdict at each SMTP
+        step. Without that grant the plugin falls back to its own `smtp-server` listener
+        (`smtp_listen_port`, default 25, then 2525) — which works only where the platform lets an isolated
+        plugin listen: on Linux the plugin sandbox's seccomp filter refuses it on every port.
+    *   Direct-MX outbound delivery (connects to remote MTAs on port 25) from the child process
     *   Attachment handling (multipart upload parsed by the host, forwarded to the isolate)
     *   DKIM signing (private key stored in the plugin's own DB/files, not a core secret option)
     *   Registers the host-wide mail sender (`provideMail`) and a notification transport
-*   **Requested capabilities:** `settings` (read/write — non-secret SMTP/display options + the safe `site` bridge), `database` (read/write — its own `wjp_mail_server_*` tables), `email` (admin + provider), `notifications` (send/provider), `filesystem` (read/write), `users` (read — resolves local recipients via the safe users projection, never password hashes), `network` (for SMTP / outbound MX), `express` (register_route), `admin_menu` (register).
+    *   Ships an admin page (`/admin/plugin/emails`) and a frontend hooks file
+        (`client/UserFormExtension.tsx`: the "Professional Mail Account" toggle on the core user form)
+*   **Requested capabilities:** `browser:script` (its admin page and hooks bundle), `settings` (read/write — non-secret SMTP/display options + the safe `site` bridge), `database` (read/write — its own `wjp_mail_server_*` tables), `email` (admin + provider), `notifications` (send/provider), `filesystem` (read/write), `users` (read — resolves local recipients via the safe users projection, never password hashes), `network` (outbound MX / relay and the DNS bridge), `smtp:inbound` (the host listener above), `express` (register_route), `admin_menu` (register).
 *   **Egress:** because it holds the `network` grant, its outbound connections are validated at connect
     time against the egress guard — direct-MX delivery is **IP-pinned** into nodemailer and only public
     IPs are reachable (loopback/RFC1918/link-local/metadata blocked). An **operator-configured
@@ -164,8 +173,8 @@ A complete SMTP server and email manager. Allows sending and receiving emails di
     defaults ON but is opt-out via the `mail_relay_require_tls` option for a TLS-less internal relay.
 *   **Sandbox:** isolated, like every plugin — no trust bypass. It runs under the same **default-deny**
     grant checks and OS-process isolation as anything uploaded: **activating** it grants exactly the
-    capabilities it declares (`network` for raw sockets, `email:provider`, `notifications:provider`,
-    `filesystem`, etc.), which the admin sees in the activation dialog and can refine or revoke in
+    capabilities it declares (`network` for outbound sockets, `smtp:inbound`, `email:provider`,
+    `notifications:provider`, `filesystem`, etc.), which the admin sees in the activation dialog and can refine or revoke in
     `/admin/plugins`. It is not privileged and can be fully de-fanged by revoking those grants.
 
 ---
@@ -270,7 +279,7 @@ Complex business logic for managing church conferences.
         accounting whose records the conference still holds (`409 conference_has_records`, with `sections`,
         otherwise); an empty conference needs `settings:manage` only.
     *   **Team WordJS role** (2.17.0): the manifest declares the role «Equipo de conferencia»
-        (`conference_manager_team`, through `roles:declare`; see [plugins.md §12a](plugins.md#12a-declaring-user-roles-rolesdeclare))
+        (`conference_manager_team`, through `roles:declare`; see [plugins.md §12a](plugins.md#12a-declaring-user-roles-rolesdeclare-))
         whose only capability is `conference_manager_access` — the capability the «Conference» menu entry
         requires. An account with that role reaches the admin shell, its own account page and this plugin's
         page, and no other admin page. What lets an account work in the panel is the CAPABILITY: the team role
@@ -338,15 +347,22 @@ file (`tests/hello-world.test.js`) that you run yourself — WordJS never execut
 ## 8. Test Schema 🧪
 **ID:** `test-schema` | **Version:** 1.0.0
 
-Reference plugin for hooks + DB access through the bridge (`wordjs.db.createTable` / `db.run`).
+A test fixture for backup integrity: on the `init` action it creates `wjp_test_schema_custom` through
+the bridge (`wordjs.db.createTable` with a name built from `wordjs.db.tablePrefix`, then `db.get` /
+`db.run`) and inserts one known row. Its manifest declares `{ "scope": "database", "access": "admin" }`
+and also carries `main` and `active`, which the runtime ignores (see
+[plugins.md §14](plugins.md)). `database:admin` is not in the manifest vocabulary, so the upload and the
+marketplace gate would reject this manifest; the plugin loads only because it ships on disk in
+`backend/plugins/`, and the grant it can receive confers no more than `database:read` + `write`, still
+confined to its own prefix. Do not copy its manifest.
 
-*   **Purpose:** Development / Education.
+*   **Purpose:** Test fixture.
 *   **Sandbox:** isolated (like every plugin).
 
 ---
 
 ## 9. YouTube Videos 🎥
-**ID:** `youtube-videos` | **Version:** 1.0.0
+**ID:** `youtube-videos` | **Version:** 1.0.3
 
 Pulls the videos of a YouTube channel (links, thumbnails, titles) and ships a carousel block
 with title filtering and a video-count limit. Works **keyless** out of the box via the channel RSS
@@ -418,7 +434,7 @@ Test Schema are bundled with core):
 | `image-lightbox` | Site-wide click-to-zoom lightbox for content images (captions, keyboard nav) | `settings` r/w, routes, admin menu, `assets:write` |
 | `invoices` | Invoices with statuses, dashboard totals, CSV export, public token URL + print view, email to client | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
 | `job-board` | Job listings with anti-spam public application form, applications inbox, filterable Verso block | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
-| `mail-server` | Full SMTP server: inbound listener + direct-MX outbound delivery, DKIM signing, host-wide mail sender + email notification transport | `settings` r/w, `database` r/w, `email:admin`+provider, `notifications`, `filesystem` r/w, `users` read, `network`, routes, admin menu |
+| `mail-server` | Full SMTP server: inbound mail through the host listener (`smtp:inbound`) + direct-MX outbound delivery, DKIM signing, host-wide mail sender + email notification transport | `settings` r/w, `database` r/w, `email:admin`+provider, `notifications`, `filesystem` r/w, `users` read, `network`, `smtp:inbound`, routes, admin menu |
 | `newsletter` | Subscriptions (double opt-in; subscribers stay pending until they confirm), subscriber CSV, HTML campaigns with unsubscribe links | `database` r/w, routes, admin menu, `email:admin` |
 | `notification-bar` | Slim site-wide announcement bar with CTA, dismissal versioning, schedule window | `settings` r/w, routes, admin menu, `assets:write` |
 | `online-store` | Product catalog (variants, galleries, categories) + cart + checkout with server-side price validation, coupons, shipping zones and taxes, orders admin with refunds and transactional emails, sales reports + CSV, optional Stripe Checkout | `database` r/w, `settings` r/w, routes, admin menu, `email:admin`, `network` |

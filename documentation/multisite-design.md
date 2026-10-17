@@ -1,17 +1,19 @@
 # Multisite: design
 
-Status: **phase 1 implemented**; phases 2 and 3 proposed. This page is the design for running several
-independent sites from one WordJS install: one network of sites, each with its own domain, content,
+Status: **phase 1 and phase 2 implemented** — phase 2's plugin and theme-code half; what of phase 2
+remains open is listed in [Phase 2 as built](#phase-2-as-built-plugins-and-theme-code-per-site). Phase 3
+proposed. This page is the design for running several independent sites from one WordJS install: one network of sites, each with its own domain, content,
 options, uploads, users and plugin data. It records how the code was wired before multisite, the tenancy
 model it picks and why, what changes, what it guarantees, and the order in which it is built.
 
 The three product decisions are settled (see [Decisions](#decisions)): users per site, plugin code
 installed by network administrators only, domains before subdirectories. How to run a network is in
-[Multisite](multisite.md); [Phase 1 as built](#phase-1-as-built) lists where the implementation narrowed
-or departed from the plan below, and why.
+[Multisite](multisite.md); [Phase 1 as built](#phase-1-as-built) and
+[Phase 2 as built](#phase-2-as-built-plugins-and-theme-code-per-site) list where the implementation
+narrowed or departed from the plan below, and why.
 
 - [Goals and non-goals](#goals-and-non-goals)
-- [How the code is wired today](#how-the-code-is-wired-today)
+- [How the code was wired before multisite](#how-the-code-was-wired-before-multisite)
 - [Tenancy model](#tenancy-model)
 - [Site registry and the network store](#site-registry-and-the-network-store)
 - [Host to site resolution](#host-to-site-resolution)
@@ -23,6 +25,7 @@ or departed from the plan below, and why.
 - [What breaks, and the risks](#what-breaks-and-the-risks)
 - [Phased plan](#phased-plan)
 - [Phase 1 as built](#phase-1-as-built)
+- [Phase 2 as built (plugins and theme code per site)](#phase-2-as-built-plugins-and-theme-code-per-site)
 - [Decisions](#decisions)
 - [Alternatives considered](#alternatives-considered)
 
@@ -48,7 +51,7 @@ or departed from the plan below, and why.
 - Tenants uploading their own plugin code (see [Decisions](#decisions)).
 - Sharing content between sites (a post on two sites). Sites are separate.
 
-## How the code is wired today
+## How the code was wired before multisite
 
 Nothing in the code knows about a "site". Every connection, table name, cache key, pub/sub channel, lock
 name, cron store, upload directory and worker exists once per process. The facts the design rests on:
@@ -306,6 +309,12 @@ helpers pin one host.
   (`/<path>` → `/_sites/<siteKey>/<path>`), the standard multi-tenant pattern for the App Router. The
   public route tree moves under `app/_sites/[site]/`. Visitors never see the segment. In single-site
   mode the rewrite always targets site 1, so URLs, pages and caching behave as today.
+  **As built:** there is no `middleware.ts` and the public tree did not move. `src/proxy.ts` (Next 16's
+  name for the middleware entry) only marks another site's public requests with the internal header
+  `x-wordjs-site-route`, a `beforeFiles` rewrite in `next.config.ts` sends them to the
+  `app/wjs-site/[siteHost]/` tree, whose pages wrap the `(public)` ones, and the main site and every
+  single-site install are never rewritten. The site comes from the edge's `x-wordjs-site-host`, not
+  from a registry snapshot fetched by the frontend. See [Phase 1 as built](#phase-1-as-built).
 - The site key comes from the host, resolved against a registry snapshot the backend exposes to the
   frontend (an internal, authenticated endpoint; cached briefly). An unknown host never reaches the
   frontend (the edge already answered 421).

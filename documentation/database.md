@@ -129,6 +129,8 @@ The backing API is mounted at `/api/v1/db-migration` (guarded by `authenticate` 
 
 Full-site backups (logical DB export + a physical DB snapshot for SQLite + the `uploads/`, `plugins/`, `themes/` content roots) are produced by `backend/src/core/backup.ts` (`createBackup()`) and stored **on-host** under `backend/backups/`. An **optional off-host S3 offload** (`backend/src/core/s3-offload.ts`) runs right after: it is config-gated on an `s3` block in `wordjs-config.json` or the `WORDJS_S3_*` / `AWS_*` env vars, and a partial config (a bucket with no keys) counts as *not configured* rather than a half-attempt. The upload is a single SigV4-signed `PUT` over Node's built-in `https` — the AWS SDK is not a dependency — so an S3-compatible endpoint such as MinIO works by setting `s3.endpoint`. A failed upload never fails the backup: the local copy is kept and the outcome is reported in the result's `s3` field.
 
+> This `s3` block offloads **backups** only. Serving the **media library** from an S3-compatible bucket or CDN is a separate feature with its own configuration (the `mediaStorage` block) — see [media-storage.md](./media-storage.md).
+
 After every backup, retention pruning runs automatically (`pruneBackups()` in `backend/src/core/backup.ts`): only the newest **N** backups are kept and older ones are deleted, so scheduled/auto backups can no longer fill the disk unbounded. **N** comes from the `backup_retention` option (**default 7**); set it to `0` (or a negative value) to keep all backups and disable pruning.
 
 ### 1.6 Configuration
@@ -183,9 +185,9 @@ The two SQLite drivers do **not** share a data file by default — each maps to 
 | `sqlite-native`   | `better-sqlite3`       | `backend/data/wordjs-native.db` |
 | `sqlite-legacy`   | `sql.js` (WASM)        | `backend/data/wordjs.db`     |
 
-PostgreSQL (via `pg`) is a **separate engine** entirely, not a file under `data/`.
+PostgreSQL (via `pg`) and MySQL / MariaDB (via `mysql2`) are **separate engines** entirely, not files under `data/`.
 
-> ⚠️ **Switching `dbDriver` points the app at a different file/engine.** Data written under one driver is **not** visible under another until it is migrated. Flipping `dbDriver` in `backend/wordjs-config.json` alone makes your existing data look **"missing"** — nothing is lost, the app is just reading a different file (or engine). The same applies when switching between SQLite and PostgreSQL.
+> ⚠️ **Switching `dbDriver` points the app at a different file/engine.** Data written under one driver is **not** visible under another until it is migrated. Flipping `dbDriver` in `backend/wordjs-config.json` alone makes your existing data look **"missing"** — nothing is lost, the app is just reading a different file (or engine). The same applies when switching between SQLite and PostgreSQL or MySQL.
 
 To actually **move your data between drivers/engines** (e.g. `sqlite-legacy` → `sqlite-native`, or SQLite → Postgres), use the admin **DB Migration** route described in [§1.4](#14-live-data-migration) — it streams the data into the target driver and, for a file-based SQLite target, moves a fully-written temporary file onto the new driver's filename (see the note in [§1.4](#14-live-data-migration)). Do **not** edit `dbDriver` by hand for this.
 
@@ -338,7 +340,7 @@ High-volume event logging table for the internal analytics engine. Its schema li
 | `metadata`   | TEXT (JSON) | Extra payload                                        |
 | `created_at` | DATETIME    | Timestamp                                            |
 
-> Other core tables created by `initializeSchema` but not detailed above include `comment_meta`, `links`, and `notifications`.
+> Other core tables created by `initializeSchema` but not detailed above include `comment_meta`, `links`, and `notifications`. Created outside it: `schema_migrations` (one row per applied migration id, `core/schema-migrations.ts`), `wordjs_locks` (the distributed-lock leases, created on first use by `core/dist-lock.ts`), the migration-created platform tables listed under §2.9 (`api_tokens`, `webhooks`, `webhook_deliveries`, `form_submissions`, `audit_log`, `collab_*`, `content_outbox`, `agent_connections`), and on SQLite the `posts_fts` full-text index (§2.10).
 
 ---
 
@@ -382,6 +384,8 @@ On boot, the schema (`backend/src/config/database.ts`) creates a set of indexes 
 > **Migrations `0006`–`0008`.** `0006_professional_mailbox_flag` converts the corporate-mailbox grant from "derived from the account's email domain" into an explicit `user_meta.professional_mailbox` flag, auto-granting it **only** to accounts that could already set it themselves (administrators and holders of `edit_users`) and recording every other on-domain account in the `professional_mailbox_migration_pending` option for the operator to re-enable by hand. Like `0001` it **never throws** (the un-granted state is the deny direction). `0007_create_form_submissions` creates `form_submissions` + `idx_form_submissions_name` for the public form block. `0008_posts_fts5` builds the SQLite full-text index — see [§2.10](#210-full-text-search).
 
 > **Migrations `0009`–`0015`.** `0009_create_audit_log` creates the append-only `audit_log` (+ `idx_audit_log_actor`) that `core/audit.recordAudit` writes and the admin `GET /audit` reads. `0010_posts_fts_pg_mysql` gives Postgres and MySQL their own inverted index — see [§2.10](#210-full-text-search). `0011_posts_multilingual` adds the two NULLABLE columns `posts.post_language` / `posts.translation_group` (+ `idx_posts_translation_group`); a monolingual site keeps NULL/NULL and is unchanged. `0012_create_collab` creates `collab_docs` + `collab_ops` for real-time editing **session** state (the canonical content stays in `_puck_data`), and `0013_collab_epoch_and_liveness` adds `collab_docs.truncated` / `base_hash` / `updated_ms`, the `collab_members` liveness table, and an epoch-bearing replacement for the dot UNIQUE index. `0014_create_content_outbox` creates the durable `content_outbox` the transactional content path writes its events into, plus `webhook_deliveries.source_event_id` and a UNIQUE index on `(webhook_id, source_event_id, event)` so a retried event is not fanned out twice. `0015_backfill_user_nicename` fills the empty `users.user_nicename` of existing accounts with a public author slug derived from the display name (the same rule as `User.create`); it never rewrites an existing value and never throws.
+
+> **Migration `0016`.** `0016_create_agent_connections` creates `agent_connections`, the store of [AI agent connections](./ai-agents.md) (`models/AgentConnection.ts`): the bound `user_id`, a `name`, the sha256 `token_hash` and a display `token_prefix` (the raw `wja_` token is never stored), the `requested_caps` / `granted_caps` comma lists, `status` (`pending` → `active` → `revoked`, which is terminal), who created and granted it, and `granted_at` / `last_used_at` / `expires_at` in epoch seconds. It adds the UNIQUE `idx_agent_connections_hash` on `token_hash` and `idx_agent_connections_user` on `user_id`. The table is on the core table lists, so a site export never dumps its hashes. It runs under the normal fail-closed policy.
 
 ### Batched Meta Loading (N+1 avoidance)
 
@@ -444,3 +448,22 @@ Dialect differences are confined to a few spots:
 *   **`RETURNING`:** auto-injected by the Postgres driver on `INSERT`; the MySQL driver reports `insertId` instead; stripped by the legacy WASM driver.
 *   **`TEXT` / defaults / upserts (MySQL):** the MySQL driver maps `TEXT`→`LONGTEXT` (→`VARCHAR(255)` only for a column the DDL makes part of a key) with parenthesised expression defaults, `INSERT OR IGNORE`/`ON CONFLICT`→`INSERT IGNORE`/`ON DUPLICATE KEY UPDATE`, and runs `sql_mode=ANSI_QUOTES,STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION` — so `"col"` is an identifier and an overlong value errors instead of truncating.
 *   **Clearing tables:** `TRUNCATE … RESTART IDENTITY CASCADE` (Postgres) vs `DELETE FROM …` plus a `sqlite_sequence` reset (SQLite), in `clearDatabase`.
+
+## 5. Multisite Storage
+
+A [multisite](./multisite.md) network keeps every site's data apart by giving each site **its own database file**, plus one small database for the network itself ([design](./multisite-design.md)).
+
+*   **Driver requirement.** Multisite needs the `sqlite-native` driver: `npm run network -- enable` refuses any other, and `openSiteDatabase()` in `config/database.ts` throws before creating a file when the server runs a different driver. Postgres and MySQL site databases are not supported yet, so a network and all its sites live on one backend host.
+*   **The network store — `<data dir>/network.db`.** A separate SQLite file next to the main database (`config.multisite.networkDbPath` overrides it), written only by `core/network.ts` and never reachable through `dbAsync`, so no site's export, backup or wipe carries it. Its tables:
+
+    | Table | Holds |
+    | :---- | :---- |
+    | `network_meta` | Key/value records about the network |
+    | `network_sites` | One row per site: `id`, unique `slug`, `main_url`, `status` (`active` by default), `db_path`, timestamps |
+    | `network_site_hosts` | Every address a site answers (`host` primary key → `site_id`, `kind`) |
+    | `network_admins` | The main-site user ids listed as network administrators |
+    | `network_plugin_ceilings` | Per plugin, the grant tokens any other site may grant it (no row = not offered) |
+    | `network_audit_log` | Network-level actions: who, what, which site, when |
+
+*   **Site 1** is the install that existed before multisite was enabled: its database stays at the configured `dbPath`, unchanged.
+*   **Every other site** owns one directory, `<data dir>/sites/<id>/`, holding its database (`wordjs-native.db`) and its public and private uploads. Each site database has the full core schema and runs the same migrations; models, migrations and plugin queries keep their literal table names and simply run against the current site's database. A site whose database is not open is an error, never a fall-through to site 1's.

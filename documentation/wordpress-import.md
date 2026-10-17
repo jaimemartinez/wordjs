@@ -81,9 +81,9 @@ Runs the idempotent import and returns a summary. Options are sent as multipart 
 | --- | --- | --- | --- |
 | `defaultAuthorId` | integer | the calling admin's id | Fallback author for items whose WordPress author couldn't be imported. |
 | `importComments` | `1` / `0` | `1` (any value other than `"0"`) | Import comments. |
-| `media` | `download` / `link` / `skip` | falls back to `importAttachments` | What to do with attachment items. See [Media](#media-attachments). |
+| `media` | `download` / `link` / `skip` | `download` (when `importAttachments` is absent too) | What to do with attachment items. A value that is not one of the three counts as absent. See [Media](#media-attachments). |
 | `allowHttp` | `1` / `0` | `0` | Allow `http://` attachment sources. Does not weaken the resolved-IP checks. |
-| `importAttachments` | `1` / `0` | `0` (only `"1"` enables it) | **Legacy**, and used only when `media` is absent: `1` means `media=download`, anything else `media=skip`. A caller that has always sent this field keeps exactly the behaviour it had. |
+| `importAttachments` | `1` / `0` | — | **Legacy**, and used only when `media` is absent: exactly `"0"` means `media=skip`; any other value, or the field omitted, means `media=download`. |
 
 ```bash
 curl -X POST https://localhost:3000/api/v1/import/wordpress \
@@ -93,7 +93,7 @@ curl -X POST https://localhost:3000/api/v1/import/wordpress \
   -F "media=download"
 ```
 
-> **Note the two different defaults, on purpose.** The admin wizard preselects **Download the files** and always sends an explicit `media`, because that is the migration most people want and the screen says in full what it will do. The raw endpoint keeps defaulting to `skip` when *neither* field is sent, so an existing script cannot start making host-side downloads because it was upgraded.
+> **One default everywhere.** With *neither* `media` nor `importAttachments` sent, the endpoint uses `download` — the same default as `importWxr()` itself and the option the admin wizard preselects. A script that must not make host-side downloads sends `media=skip` (or `media=link`), or the legacy `importAttachments=0`.
 
 The remaining media knobs (`maxFileBytes`, `maxTotalBytes`, `timeoutMs`, `rewriteUrls`) are options of `importWxr()` itself and are documented under [Media](#media-attachments); a caller that needs them calls `core/wxr-import`'s `importWxr()` directly (a CLI or a migration script).
 
@@ -134,7 +134,7 @@ Response (`summary`):
 }
 ```
 
-A malformed file (not a `<rss><channel>` WXR document) returns **HTTP 400** with `code: "invalid_wxr"`; a missing upload returns **400** with `code: "no_file"`, and an upload that cannot be read returns **400** with `code: "read_failed"`. Because the import creates user accounts, `POST /api/v1/import/wordpress` (not the analyze endpoint) refuses an API token with **403** `code: "rest_token_management_forbidden"` and a session started on a secondary site address with **403** `code: "rest_account_bound_session"` — run it from an interactive session started at the main address or on loopback. Up to the first 100 per-item problems are collected in `summary.errors` — the import continues past them rather than failing the whole run.
+A malformed file (not a `<rss><channel>` WXR document) returns **HTTP 400** with `code: "invalid_wxr"`; a missing upload returns **400** with `code: "no_file"`, and an upload that cannot be read returns **400** with `code: "read_failed"`. An upload that is neither an XML MIME type nor named `.xml` / `.wxr` is refused with **415** `code: "rest_upload_invalid_type"` (both endpoints). Because the import creates user accounts, `POST /api/v1/import/wordpress` (not the analyze endpoint) refuses an API token with **403** `code: "rest_token_management_forbidden"` and a session started on a secondary site address with **403** `code: "rest_account_bound_session"` — run it from an interactive session started at the main address or on loopback. Up to the first 100 per-item problems are collected in `summary.errors` — the import continues past them rather than failing the whole run.
 
 ## What gets mapped
 
