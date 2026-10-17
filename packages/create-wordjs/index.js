@@ -108,10 +108,11 @@ Separate mode (three machines) — run one command per machine:
   npx create-wordjs@latest join frontend --gateway 10.0.0.1 --token <t> --ca-hash <fp> --advertise 10.0.0.3
   (join needs 'openssl' on PATH. See documentation/separate-mode.md.)
 
-Upgrading preserves your database (backend/data), uploads (backend/uploads), config
-(wordjs-config.json + gateway secrets) and any user-installed plugins; it replaces the app code and
-runs the dependency install. Database schema migrations apply automatically the next time the server
-starts — then restart WordJS (e.g. 'systemctl restart wordjs', or stop it and 'npm run start:mono').
+Upgrading preserves your database (backend/data), uploads (backend/uploads), backups
+(backend/backups), config (wordjs-config.json + gateway secrets) and any user-installed plugins;
+it replaces the app code and runs the dependency install. Database schema migrations apply
+automatically the next time the server starts — then restart WordJS (e.g. 'systemctl restart
+wordjs', or stop it and 'npm run start:mono').
 `;
 
 function fail(message, hint) {
@@ -1004,6 +1005,7 @@ function confirm(question) {
 const PRESERVE_ON_UPGRADE = new Set([
     'backend/data',                 // the database (+ WAL/SHM, ssl/, imports/)
     'backend/uploads',              // user uploads / media / fonts
+    'backend/backups',              // the site's own backups: a bundle never adds to or replaces them
     'backend/wordjs-config.json',   // site config + secrets
     'backend/.env',
     '.env',
@@ -1466,6 +1468,7 @@ if (require.main === module) {
 module.exports = {
     pickBundleAsset, pickChecksumAsset, extractZip, normalizeSha256, parseChecksumFile, classifyZipSource, sha256File,
     parseArgs, buildSystemdFiles, systemdInstallSteps, writeSystemdFiles,
+    copyMerge, PRESERVE_ON_UPGRADE,
     sysctlDropIn, serviceUserProblem, systemdPreflight, createSystemdStagingDir, LOW_PORT_ADVICE, HELP, installedFileMode,
     installDirOwner, restoreInstallOwner,
 };

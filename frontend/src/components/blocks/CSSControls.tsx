@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import MSym from "../editor/MSym";
+import { useEditorTr } from "@/lib/verso/useEditorTr";
 
 // Types
 export interface CSSData {
@@ -57,6 +58,7 @@ const ControlLabelContext = React.createContext<string | undefined>(undefined);
 // These primitives are EXPORTED so every properties-panel control in the editor is built from the
 // same kit (see AppearanceField). Keep them presentational — no block-specific logic here.
 export const AccordionItem = ({ title, children, defaultOpen = false }: { title: string, children: React.ReactNode, defaultOpen?: boolean }) => {
+    const { tr } = useEditorTr();
     const [isOpen, setIsOpen] = useState(defaultOpen);
     const contentId = React.useId();
     return (
@@ -68,7 +70,7 @@ export const AccordionItem = ({ title, children, defaultOpen = false }: { title:
                 aria-controls={contentId}
                 className={`flex items-center justify-between w-full px-3 py-2 text-[10px] font-bold uppercase tracking-wider transition-colors hover:bg-[var(--ed-surface-container-low)] ${isOpen ? 'text-[var(--ed-on-surface)]' : 'text-[var(--ed-outline)] group-hover:text-[var(--ed-on-surface-variant)]'}`}
             >
-                {title}
+                {tr(title)}
                 <MSym name="expand_more" size={14} className={`transition-transform ${isOpen ? 'rotate-180' : ''}`} />
             </button>
             {isOpen && <div id={contentId} className="px-3 pb-3 space-y-3">{children}</div>}
@@ -76,12 +78,16 @@ export const AccordionItem = ({ title, children, defaultOpen = false }: { title:
     );
 };
 
-export const ControlGroup = ({ label, children }: { label: string, children: React.ReactNode }) => (
+export const ControlGroup = ({ label: source, children }: { label: string, children: React.ReactNode }) => {
+    const { tr } = useEditorTr();
+    const label = tr(source);
+    return (
     <div role="group" aria-label={label} className="space-y-1.5 group/control">
         <span className="block text-[11px] font-medium text-[var(--ed-on-surface-variant)] group-hover/control:text-[var(--ed-on-surface)] transition-colors duration-300">{label}</span>
         <ControlLabelContext.Provider value={label}>{children}</ControlLabelContext.Provider>
     </div>
-);
+    );
+};
 
 export const Input = ({ value, onChange, placeholder, type = "text", ariaLabel }: {
     value?: string;
@@ -91,12 +97,13 @@ export const Input = ({ value, onChange, placeholder, type = "text", ariaLabel }
     ariaLabel?: string;
 }) => {
     const groupLabel = React.useContext(ControlLabelContext);
+    const { tr } = useEditorTr();
     return (
         <input
             type={type}
             value={value || ""}
             onChange={(e) => onChange(e.target.value)}
-            placeholder={placeholder}
+            placeholder={placeholder && tr(placeholder)}
             aria-label={ariaLabel || groupLabel}
             className="w-full px-2.5 py-1.5 text-[13px] bg-[var(--ed-surface-container-lowest)] border border-[var(--ed-outline-variant)] rounded text-[var(--ed-on-surface)] placeholder:text-[var(--ed-outline)] hover:border-[var(--ed-outline)] focus:border-[var(--ed-primary)] focus:ring-1 focus:ring-[var(--ed-primary)] outline-none transition-colors duration-200"
         />
@@ -110,6 +117,7 @@ export const Select = ({ value, onChange, options, ariaLabel }: {
     ariaLabel?: string;
 }) => {
     const groupLabel = React.useContext(ControlLabelContext);
+    const { tr } = useEditorTr();
     return (
         <div className="relative">
             <select
@@ -118,9 +126,9 @@ export const Select = ({ value, onChange, options, ariaLabel }: {
                 aria-label={ariaLabel || groupLabel}
                 className="w-full pl-2.5 pr-7 py-1.5 text-[13px] bg-[var(--ed-surface-container-lowest)] border border-[var(--ed-outline-variant)] rounded text-[var(--ed-on-surface)] appearance-none hover:border-[var(--ed-outline)] focus:border-[var(--ed-primary)] focus:ring-1 focus:ring-[var(--ed-primary)] outline-none transition-colors duration-200 cursor-pointer"
             >
-                <option value="">Default</option>
+                <option value="">{tr("Default")}</option>
                 {options.map((opt) => (
-                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    <option key={opt.value} value={opt.value}>{tr(opt.label)}</option>
                 ))}
             </select>
             <div className="absolute inset-y-0 right-1.5 flex items-center pointer-events-none text-[var(--ed-outline)]">
@@ -132,6 +140,7 @@ export const Select = ({ value, onChange, options, ariaLabel }: {
 
 export const ColorPicker = ({ value, onChange }: { value?: string; onChange: (value: string) => void }) => {
     const groupLabel = React.useContext(ControlLabelContext);
+    const { tr } = useEditorTr();
     return <div className="flex gap-2 items-center group/picker">
         <div className="relative w-8 h-8 rounded border border-[var(--ed-outline-variant)] overflow-hidden shrink-0 transition-all ring-offset-1 group-focus-within/picker:ring-1 ring-[var(--ed-primary)]">
             <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4IiBoZWlnaHQ9IjgiPjxwYXRoIGQ9Ik0wIDBoNHY0SDB6bTQgNGg0djRINHoiIGZpbGw9IiNlN2U3ZTciLz48L3N2Zz4=')] opacity-30"></div>
@@ -140,7 +149,7 @@ export const ColorPicker = ({ value, onChange }: { value?: string; onChange: (va
                 type="color"
                 value={value || "#ffffff"}
                 onChange={(e) => onChange(e.target.value)}
-                aria-label={groupLabel ? `${groupLabel}: selector` : "Color selector"}
+                aria-label={groupLabel ? `${groupLabel}: ${tr("selector")}` : tr("Color selector")}
                 className="absolute inset-0 w-[150%] h-[150%] -top-1/4 -left-1/4 cursor-pointer opacity-0"
             />
         </div>
@@ -163,6 +172,7 @@ const shadowPresets = {
 import { apiGet } from "@/lib/api";
 
 export const CSSPropertiesControl = ({ value, onChange }: { value: CSSData, onChange: (val: CSSData) => void }) => {
+    const { tr } = useEditorTr();
     const data = value || {};
     const [fonts, setFonts] = useState<any[]>([]);
 
@@ -273,7 +283,7 @@ export const CSSPropertiesControl = ({ value, onChange }: { value: CSSData, onCh
                     <div className="p-3 bg-[var(--ed-surface-container-low)] rounded-lg border border-[var(--ed-outline-variant)] hover:bg-[var(--ed-surface-container)] transition-colors">
                         <div className="flex items-center gap-2 mb-2 text-[var(--ed-outline)]">
                             <MSym name="check_box_outline_blank" size={12} />
-                            <p className="text-[10px] font-bold uppercase tracking-wider">Spacing</p>
+                            <p className="text-[10px] font-bold uppercase tracking-wider">{tr("Spacing")}</p>
                         </div>
                         <div className="grid grid-cols-2 gap-3 mb-3">
                             <ControlGroup label="Padding">
@@ -445,7 +455,7 @@ export const CSSPropertiesControl = ({ value, onChange }: { value: CSSData, onCh
                         <div className="flex items-center justify-between mb-3">
                             <div className="flex items-center gap-2 text-[var(--ed-outline)]">
                                 <MSym name="check_box_outline_blank" size={12} />
-                                <span className="text-[10px] font-bold uppercase tracking-wider">Border</span>
+                                <span className="text-[10px] font-bold uppercase tracking-wider">{tr("Border")}</span>
                             </div>
                             {data.borderWidth && <div className="w-2 h-2 rounded-full bg-[var(--ed-primary)]"></div>}
                         </div>

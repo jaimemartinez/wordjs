@@ -101,6 +101,8 @@ import { remoteSelections } from "./collabModel";
 import EditorHotkeys from "./EditorHotkeys";
 import ShortcutsDialog from "./ShortcutsDialog";
 import SaveStateChip from "./SaveStateChip";
+import { settledPrimaryLabel } from "./saveChipModel";
+import { localizedDefaults } from "@/lib/verso/defaultContent";
 import BlockPalette from "./BlockPalette";
 import OutlineTree from "./OutlineTree";
 import PropertiesPanel from "./PropertiesPanel";
@@ -448,12 +450,7 @@ export default function VersoEditor({
             const def = registry.get(type);
             if (!def) return;
             const id = crypto.randomUUID();
-            let defaults: Record<string, unknown>;
-            try {
-                defaults = structuredClone(def.defaultProps);
-            } catch {
-                defaults = { ...def.defaultProps };
-            }
+            const defaults = localizedDefaults(def.defaultProps, language);
             const item: VersoItem = { type, props: { ...defaults, id } };
             // Materializa los slots declarados que defaultProps no trae (contenedores recién
             // insertados sin zona de drop) — mismo criterio que el Verso Lab.
@@ -470,7 +467,7 @@ export default function VersoEditor({
                 handle.select(id);
             }
         },
-        [registry, handle],
+        [registry, handle, language],
     );
 
     /* ---------------- chrome UI state + prefs persistidas ---------------- */
@@ -665,6 +662,7 @@ export default function VersoEditor({
     });
 
     const collabLive = collab.status === "live" || collab.status === "degraded";
+    const settledLabel = settledPrimaryLabel({ saving, hasChanges, inlineEditing: state.inlineEditingId !== null, status });
     const sendCollabCommand = collab.sendCommand;
     const setCollabSelection = collab.setSelection;
     const collabFlush = collab.flush;
@@ -776,12 +774,7 @@ export default function VersoEditor({
             setMediaOpen(false);
             const def = registry.get("Image");
             if (!def) return;
-            let defaults: Record<string, unknown>;
-            try {
-                defaults = structuredClone(def.defaultProps);
-            } catch {
-                defaults = { ...def.defaultProps };
-            }
+            const defaults = localizedDefaults(def.defaultProps, language);
             const id = crypto.randomUUID();
             const block: VersoItem = {
                 type: "Image",
@@ -798,7 +791,7 @@ export default function VersoEditor({
                 label: "Insertar Image",
             });
         },
-        [handle, registry],
+        [handle, registry, language],
     );
 
     // Picker inyectado de los campos `external` (VersoFieldControl): el MISMO MediaPickerModal,
@@ -1220,11 +1213,14 @@ export default function VersoEditor({
                                 className="verso-primary-button min-w-[84px] h-10 xl:h-9 px-3.5 xl:px-4 rounded-xl text-[12px] font-semibold text-white active:scale-[0.98] duration-150 transition disabled:opacity-40 disabled:shadow-none flex items-center justify-center gap-2"
                             >
                                 {saving && <MSym name="sync" size={12} className="animate-spin" />}
-                                {status === "draft"
-                                    ? trStr("Guardar", language)
-                                    : status === "future"
-                                        ? trStr("Programar", language)
-                                        : trStr("Publicar", language)}
+                                {!saving && settledLabel && <MSym name="check_circle" size={14} fill />}
+                                {settledLabel
+                                    ? trStr(settledLabel, language)
+                                    : status === "draft"
+                                        ? trStr("Guardar", language)
+                                        : status === "future"
+                                            ? trStr("Programar", language)
+                                            : trStr("Publicar", language)}
                             </button>
                         )}
 
@@ -1483,7 +1479,7 @@ export default function VersoEditor({
                                                     <button
                                                         key={p.id}
                                                         type="button"
-                                                        onClick={() => insertVersoPattern(handle, registry, p)}
+                                                        onClick={() => insertVersoPattern(handle, registry, p, language)}
                                                         className="pointer-events-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--ed-surface-container-lowest)] border border-[var(--ed-outline-variant)] hover:border-[var(--ed-primary)] text-[11px] font-semibold text-[var(--ed-on-surface-variant)] hover:text-[var(--ed-primary)] transition"
                                                     >
                                                         {trStr(p.name, language)}

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { symbolsApi, type SymbolSummary } from "@/lib/symbols";
 import VersoSymbolRender from "@/components/verso/blocks/VersoSymbolBlock";
+import { useEditorTr } from "@/lib/verso/useEditorTr";
 
 /**
  * Symbol block — a reusable, SYNCED group of blocks (Figma/Webflow "components"): pages store a
@@ -26,6 +27,7 @@ import VersoSymbolRender from "@/components/verso/blocks/VersoSymbolBlock";
 export const symbolBlockDefaults = { symbolId: 0 };
 
 function SymbolPicker({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+    const { tr } = useEditorTr();
     const [symbols, setSymbols] = useState<SymbolSummary[] | null>(null);
     const [error, setError] = useState(false);
     useEffect(() => {
@@ -37,7 +39,7 @@ function SymbolPicker({ value, onChange }: { value: number; onChange: (v: number
         return () => { dead = true; };
     }, []);
     if (error) {
-        return <p className="text-[11px] text-[var(--ed-error)]">No se pudieron cargar los símbolos.</p>;
+        return <p className="text-[11px] text-[var(--ed-error)]">{tr("No se pudieron cargar los símbolos.")}</p>;
     }
     return (
         <div className="space-y-1">
@@ -46,13 +48,13 @@ function SymbolPicker({ value, onChange }: { value: number; onChange: (v: number
                 onChange={(e) => onChange(Number(e.target.value))}
                 className="w-full px-2 py-1.5 bg-white border border-[var(--ed-outline-variant)] rounded text-[13px] text-[var(--ed-on-surface)] focus:outline-none focus:border-[var(--ed-primary)] focus:ring-1 focus:ring-[var(--ed-primary)]"
             >
-                <option value="0">{symbols ? "— Elige un símbolo —" : "Cargando…"}</option>
+                <option value="0">{tr(symbols ? "— Elige un símbolo —" : "Cargando…")}</option>
                 {(symbols || []).map((s) => (
                     <option key={s.id} value={String(s.id)}>{s.name}</option>
                 ))}
             </select>
             <p className="text-[10px] text-[var(--ed-outline)]">
-                Crea símbolos con «Guardar bloque como símbolo» (⌘K) desde cualquier bloque.
+                {tr("Crea símbolos con «Guardar bloque como símbolo» (⌘K) desde cualquier bloque.")}
             </p>
         </div>
     );

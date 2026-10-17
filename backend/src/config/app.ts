@@ -452,7 +452,10 @@ const config: AppConfig = {
         description: fileConfig.siteDescription || 'A WordPress-like CMS'
     },
 
-    // Roles placeholder (if managed via config)
+    // Always empty: wordjs-config.json has no roles key and nothing reads one. Roles live in the
+    // `wordjs_user_roles` option; core/roles merges this ({}) over its built-in defaults, so the boot's
+    // syncRoles(config.roles, …) and every "config.roles" fallback there are exactly "the defaults".
+    // Kept as a hook (a test or an embedder may set it before boot), not as an operator setting.
     roles: {},
 
     // Environment — fail safe to 'production' (the hardened default). process.env.NODE_ENV wins so

@@ -372,12 +372,19 @@ class Post {
      * Get permalink
      * Equivalent to get_permalink()
      */
+    /**
+     * The public URL, exactly as the live page declares it in rel=canonical (and as the sitemap and the
+     * feeds publish it): `/<slug>` for posts AND pages, no trailing slash. The old `/post/<slug>/` form
+     * answered 308 to `/post/<slug>` — itself a second, non-canonical address of the same post.
+     * Another content type keeps its `/<type>/<slug>` address. No slug yet (an untitled draft): the id.
+     */
     getPermalink() {
         const siteUrl = network.currentSiteUrl();
-        if (this.postType === 'page') {
-            return `${siteUrl}/${this.postName}/`;
+        const slug = this.postName || String(this.id);
+        if (this.postType === 'page' || this.postType === 'post') {
+            return `${siteUrl}/${slug}`;
         }
-        return `${siteUrl}/${this.postType}/${this.postName}/`;
+        return `${siteUrl}/${this.postType}/${slug}`;
     }
 
     /**

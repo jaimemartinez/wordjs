@@ -116,6 +116,12 @@ export interface CollabNotice {
     /** La identidad de réplica cambió (rotación de clave): hubo que re-sembrar el estado. */
     | "identity-reset";
   message: string;
+  /**
+   * Aviso con números: `message` ya va interpolado (ES); `template` es el mismo texto con
+   * marcadores {n}… y `vars` sus valores, para que la UI lo traduzca entero (trFmt).
+   */
+  template?: string;
+  vars?: Record<string, number>;
   at: number;
   /** Detalle de las ops que el servidor rechazó, para el panel de "no se pudo aplicar". */
   rejected?: { index: number; code: string }[];
