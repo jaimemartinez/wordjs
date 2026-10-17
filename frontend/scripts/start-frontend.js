@@ -48,6 +48,18 @@ try {
         const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
         if (cfg.internalApiUrl && !process.env.INTERNAL_API_URL) process.env.INTERNAL_API_URL = cfg.internalApiUrl;
     }
+    // (c) the loopback origin of a gateway on this machine, for src/lib/server-api.ts and src/lib/api.ts:
+    // once the install has issued certificates their SSR reads go to it instead of the public address.
+    // Decided here, in plain Node, because those files are bundled and api.ts also runs in the browser.
+    if (!process.env.WORDJS_LOCAL_GATEWAY_ORIGIN) {
+        const { localGatewayOrigin } = require('../local-gateway');
+        let dir = process.cwd();
+        if (!fs.existsSync(path.join(dir, 'wordjs-config.json'))) dir = path.resolve(dir, '..', 'backend');
+        let cfg = {};
+        try { cfg = JSON.parse(fs.readFileSync(path.join(dir, 'wordjs-config.json'), 'utf8')); } catch { /* none yet */ }
+        const origin = localGatewayOrigin(dir, cfg);
+        if (origin) process.env.WORDJS_LOCAL_GATEWAY_ORIGIN = origin;
+    }
 } catch (e) { /* best-effort */ }
 
 console.log(`🚀 Starting Autonomous Frontend in ${process.env.NODE_ENV} mode on port ${port}...`);
