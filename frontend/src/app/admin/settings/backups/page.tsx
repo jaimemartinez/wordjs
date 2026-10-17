@@ -30,6 +30,10 @@ export default function BackupsPage() {
 
     // removing local restoring state as useModal handles it
     const [error, setError] = useState<string | null>(null);
+    // The backup a restore just put back. The page stays on it instead of reloading: a reload threw the
+    // success toast away before anyone read it, and the admin was never told the service must restart.
+    const [restored, setRestored] = useState<string | null>(null);
+    const [restoring, setRestoring] = useState(false);
 
     const { confirm } = useModal();
     const { addToast } = useToast();
@@ -139,18 +143,16 @@ export default function BackupsPage() {
 
         if (!confirmed) return;
 
+        setRestored(null);
+        setRestoring(true);
         try {
-            setLoading(true); // Show full page loading (or overlay)
             await backupsApi.restore(filename);
             addToast(t('backups.toast.restored'), "success");
-
-            // Reload after a short delay to allow toast to be seen, or immediately
-            setTimeout(() => {
-                window.location.reload();
-            }, 1000);
+            setRestored(filename);
         } catch (err: any) {
             addToast(t('backups.toast.restoreFailed') + err.message, "error");
-            setLoading(false);
+        } finally {
+            setRestoring(false);
         }
     };
 
@@ -170,6 +172,26 @@ export default function BackupsPage() {
                 icon="fa-box-archive"
             />
 
+            {restoring && (
+                <div role="status" className="mb-6 p-4 bg-blue-50 text-blue-700 rounded-xl border border-blue-100 flex items-center gap-3">
+                    <i className="fa-solid fa-spinner fa-spin" aria-hidden="true"></i>
+                    {t('backups.restoring')}
+                </div>
+            )}
+
+            {restored && (
+                <div role="alert" data-testid="backup-restored" className="mb-6 p-5 bg-emerald-50 text-emerald-800 rounded-xl border border-emerald-200 flex flex-col sm:flex-row sm:items-start gap-4">
+                    <i className="fa-solid fa-circle-check text-xl text-emerald-500 mt-0.5" aria-hidden="true"></i>
+                    <div className="flex-1 min-w-0">
+                        <p className="font-bold">{t('backups.restored.title')}</p>
+                        <p className="text-sm mt-1 break-words">{t('backups.restored.body').replace('{filename}', restored)}</p>
+                    </div>
+                    <Button onClick={() => window.location.reload()} variant="secondary" className="shrink-0">
+                        <i className="fa-solid fa-rotate-right mr-2" aria-hidden="true"></i>{t('backups.restored.reload')}
+                    </Button>
+                </div>
+            )}
+
             {error && (
                 <div className="mb-6 p-4 bg-red-50 text-red-600 rounded-xl border border-red-100 flex items-center gap-3">
                     <i className="fa-solid fa-triangle-exclamation"></i>
@@ -180,7 +202,7 @@ export default function BackupsPage() {
             <div className="flex justify-end mb-6">
                 <Button
                     onClick={handleCreate}
-                    disabled={creating}
+                    disabled={creating || restoring}
                     className="bg-blue-600 hover:bg-blue-700 text-white"
                 >
                     {creating ? (
@@ -327,6 +349,7 @@ export default function BackupsPage() {
                                                 </button>
                                                 <button
                                                     onClick={() => handleRestore(backup.filename)}
+                                                    disabled={restoring}
                                                     className="p-2 hover:bg-orange-50 text-orange-500 rounded-lg transition-colors"
                                                     title={t('backups.action.restore')}
                                                 >

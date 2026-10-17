@@ -4,6 +4,41 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [Unreleased]
+
+### Changed
+
+- **The admin follows the site's language until you pick one.** With no choice saved in the sidebar's
+  language menu, the admin now speaks the site's own language (`<html lang>`, from the site locale) when it
+  is English, Spanish or Portuguese, instead of always starting in Spanish. An English site no longer
+  shows Spanish Backups or Marketplace screens next to English ones. A language picked in the sidebar still
+  wins, on every site.
+- **Bundled theme descriptions are translatable.** `theme.json` accepts
+  `"translations": { "<lang>": { "description": "…" } }`; the admin shows the description for its own
+  language and falls back to `description`. The four bundled themes ship English descriptions with Spanish
+  and Portuguese translations (Circuito's was Spanish only).
+
+### Fixed
+
+- **Plugins → Marketplace speaks the admin's language.** The catalog tab, its source settings and the
+  install dialog were hard-coded Spanish ("Cargando el catálogo…", "Instalar", "Bloque …", "Permisos que
+  solicitará", "Cancelar", the source line and the toasts); they are translated now, including the
+  catalog's categories and the review badges. The broken-plugin card and its cleanup messages too.
+- **The delete-plugin dialog is one sentence.** It read "…This action cannot be undone. Reading List?";
+  the plugin's name now sits inside the question.
+- **Restoring a backup says it worked and what to do next.** The page reloaded a second after the restore,
+  throwing away the only feedback; it now stays on a success notice that tells the admin to restart the
+  WordJS service, with a reload button.
+- **Webhook delivery times are local.** The delivery log showed UTC database timestamps as if they were
+  local, next to a "Last delivery" in local time.
+- **Network → Create site shows why it failed.** A failed create (a server error included) now leaves an
+  error on the form as well as a toast.
+- **Media storage explains the one-minute wait after a new public URL.** The admin's security policy picks
+  up a new media origin within about a minute, and "Test connection" failed its public check until then;
+  the screen now says so after saving, and a failed public check explains what to try.
+- **AI agents → New connection is no longer cramped.** Below 1536 px the form sits above the connection
+  list instead of in a narrow column that cut its labels at 1280 px.
+
 ## [2.6.0] - 2026-10-16
 
 ### Added

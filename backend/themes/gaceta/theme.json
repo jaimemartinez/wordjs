@@ -2,6 +2,10 @@
   "name": "Gaceta",
   "version": "1.0.5",
   "description": "An editorial broadsheet: a serious magazine front on cream paper — georgia headlines, thin double rules, deep-red accents and square corners.",
+  "translations": {
+    "es": { "description": "Un periódico editorial: la portada de una revista seria sobre papel crema — titulares en Georgia, filetes dobles finos, acentos rojo oscuro y esquinas rectas." },
+    "pt": { "description": "Um jornal editorial: a capa de uma revista séria em papel creme — manchetes em Georgia, filetes duplos finos, detalhes em vermelho escuro e cantos retos." }
+  },
   "author": "WordJS",
   "generator": "wordjs",
   "archetype": "editorial",
