@@ -94,7 +94,7 @@ configured**: the effective driver stays `local` and the screen says which field
 values on screen merged over the stored ones); then **your browser** loads the probe from the public URL
 — from the viewer's network, exactly as visitors will fetch media — and a second call asks the server to
 delete it, reporting each step. The server never fetches the operator-typed public URL itself. (A plain-`http://` CDN that is
-not saved yet is not in the admin page's CSP, so save first and test again.) `npm run media -- test`
+not saved yet is not in the admin page's CSP, so save first, then reload the page and test again. The admin page's CSP follows the saved origin through the 60 s settings cache, so the first reload can still carry the old policy.) `npm run media -- test`
 does the server half: write, read, delete.
 
 ## Moving an existing library
