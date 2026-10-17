@@ -104,8 +104,8 @@ The token is pre-filled from the link. The wizard has three steps:
 
 Click **Install WordJS**. The wizard confirms the install and warns you about one thing: WordJS
 cannot send email on its own, so **password recovery is off** until you install a mail plugin (for
-example the bundled *Mail Server*, see [Tutorial 16](16-run-your-own-mail-server.md)) and grant it the
-`email:provider` permission. Keep your admin password safe until then.
+example *Mail Server*, from **Admin → Plugins → Marketplace**; see [mail-server.md](../mail-server.md))
+and grant it the `email:provider` permission. Keep your admin password safe until then.
 
 Click **Continue to Dashboard**. You are in the admin. Open the site's address in another tab to see
 the sample home page.
