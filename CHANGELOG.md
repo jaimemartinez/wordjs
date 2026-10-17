@@ -120,6 +120,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **A page rendered while the backend was down is no longer cached.** Public pages rendered with the
+  defaults (title "WordJS", no menus) or as a 404 when the backend did not answer, and the page cache kept
+  serving that copy after the backend was back; a site created a moment earlier could answer its own
+  address with it. A render that gets no answer (a failed connection, or the gateway's 502/504) now
+  fails instead: the last good copy keeps being served, or an error that is not cached, and the next
+  request renders the page again.
+
 - **The share image of a post follows the media library to the CDN.** With the library in an
   S3-compatible bucket, the page body already loaded images from the CDN, but `og:image`,
   `twitter:image` and the JSON-LD image still named `<site>/uploads/…`, which only answers with a

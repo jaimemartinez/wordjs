@@ -1,9 +1,8 @@
-import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import PostContent from "@/components/public/PostContent";
 import JsonLd from "@/components/public/JsonLd";
 import ThemeTemplate from "@/components/content/ThemeTemplate";
-import { getPostBySlugPreview, getSettings, buildPostMetadata, buildPostJsonLd, resolveSiteBase } from "@/lib/server-api";
+import { getPostBySlugPreview, getSettings, buildPostMetadata, buildPostJsonLd, resolveSiteBase, contentNotFound } from "@/lib/server-api";
 import { withResolvedBlocks } from "@/lib/resolveDynamicBlocks";
 
 // Author/editor draft preview, split OUT of the public /[slug] route: preview needs the session
@@ -53,7 +52,7 @@ export default async function PostPreviewPage(
         getSettings(),
         resolveSiteBase(),
     ]);
-    if (!post) notFound();
+    if (!post) contentNotFound();
     const withBlocks = await withResolvedBlocks(post);
     return (
         <>

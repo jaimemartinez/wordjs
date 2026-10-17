@@ -1,8 +1,7 @@
-import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import PostContent from "@/components/public/PostContent";
 import JsonLd from "@/components/public/JsonLd";
-import { getCategoryPostBySlug, getSettings, buildPostMetadata, buildPostJsonLd, resolveSiteBase } from "@/lib/server-api";
+import { getCategoryPostBySlug, getSettings, buildPostMetadata, buildPostJsonLd, resolveSiteBase, contentNotFound } from "@/lib/server-api";
 import { withResolvedBlocks } from "@/lib/resolveDynamicBlocks";
 import ThemeTemplate from "@/components/content/ThemeTemplate";
 
@@ -33,7 +32,7 @@ export async function generateMetadata({ params }: { params: Promise<RouteParams
 export default async function CategoryPostPage({ params }: { params: Promise<RouteParams> }) {
     const { slug, postSlug } = await params;
     const [post, settings, base] = await Promise.all([getCategoryPostBySlug(postSlug), getSettings(), resolveSiteBase()]);
-    if (!post) notFound();
+    if (!post) contentNotFound();
     // Real posts for the dynamic blocks, resolved server-side (see resolveDynamicBlocks).
     const withBlocks = await withResolvedBlocks(post);
     return (

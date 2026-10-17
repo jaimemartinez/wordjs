@@ -13,6 +13,7 @@
  */
 import { normalizeMediaBase, rewriteMediaString } from './mediaDelivery';
 import { cache } from 'react';
+import { notFound } from 'next/navigation';
 import type { Metadata } from 'next';
 import type { Post } from './api';
 import { THEME_CONTRACT } from '@/generated/visual-contract.generated';
@@ -424,11 +425,54 @@ export async function serverResponse(endpoint: string, options: ServerFetchOptio
 
     try {
         const res = await fetch(url, { headers, ...cacheInit });
+        if (res.status === 502 || res.status === 504) noteBackendUnavailable(); // the gateway's "no upstream"
         return fromRequestedSite(res, requestSiteHost());
     } catch {
         // Backend unreachable during SSR — caller decides how to degrade.
+        noteBackendUnavailable();
         return null;
     }
+}
+
+/**
+ * BACKEND OUTAGES MUST NOT BE CACHED. Every read here degrades to null, so a public page rendered while
+ * the backend gave no answer (stopped, restarting, busy preparing a site it just created) came out as a
+ * 200 with the defaults — title "WordJS", no menus — or as a 404 for a post that exists, and ISR cached
+ * that page and kept serving it after the backend was back. The render now records that it got no
+ * answer (a failed connection, or the gateway's 502/504; never a status the backend chose, such as the
+ * install guard's or a suspended site's 503), and the public layout and the public pages' not-found
+ * decisions throw instead of rendering it: Next keeps serving the last good copy, or answers an error
+ * that is not cached, and the next request renders again. A build never throws: `next build`
+ * prerenders against a backend that cannot answer by design (hermetic-build.js).
+ */
+const backendOutage = cache((): { unavailable: boolean } => ({ unavailable: false }));
+
+function noteBackendUnavailable(): void {
+    try { backendOutage().unavailable = true; } catch { /* outside a render: nothing to protect */ }
+}
+
+/** Did a read of THIS render get no answer from the backend? Always false while building. */
+export function backendUnavailableInThisRender(): boolean {
+    if (isHermeticBuild() || process.env.NEXT_PHASE === 'phase-production-build') return false;
+    try { return backendOutage().unavailable; } catch { return false; }
+}
+
+export class BackendUnavailableError extends Error {
+    constructor() {
+        super('The backend did not answer while rendering this page; it is not rendered (or cached) until it does.');
+        this.name = 'BackendUnavailableError';
+    }
+}
+
+/** Throw BackendUnavailableError when this render got no answer from the backend. */
+export function assertBackendAnswered(): void {
+    if (backendUnavailableInThisRender()) throw new BackendUnavailableError();
+}
+
+/** notFound() for a public page — unless the "not found" is really "the backend did not answer". */
+export function contentNotFound(): never {
+    assertBackendAnswered();
+    notFound();
 }
 
 /**

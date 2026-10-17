@@ -1,9 +1,8 @@
-import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import PostContent from "@/components/public/PostContent";
 import JsonLd from "@/components/public/JsonLd";
 import ThemeTemplate from "@/components/content/ThemeTemplate";
-import { getPostBySlug, getPostById, getSettings, buildPostMetadata, buildPostJsonLd, resolveSiteBase } from "@/lib/server-api";
+import { getPostBySlug, getPostById, getSettings, buildPostMetadata, buildPostJsonLd, resolveSiteBase, contentNotFound } from "@/lib/server-api";
 import { withResolvedBlocks } from "@/lib/resolveDynamicBlocks";
 import type { Post } from "@/lib/api";
 
@@ -48,7 +47,7 @@ export async function generateMetadata({ params }: { params: Promise<RouteParams
 export default async function SinglePage({ params }: { params: Promise<RouteParams> }) {
     const { slug } = await params;
     const [page, settings, base] = await Promise.all([loadPage(slug), getSettings(), resolveSiteBase()]);
-    if (!page) notFound();
+    if (!page) contentNotFound();
     // Dynamic blocks (PostsGrid / CategoryPosts) are given their real posts HERE, on the server, so
     // the entries are in the SSR HTML for crawlers and no-JS visitors — not fetched, and certainly
     // not invented, in the browser.
