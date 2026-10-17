@@ -5,6 +5,7 @@ import { webhooksApi, Webhook, WebhookDelivery, WebhookEventGroup } from "@/lib/
 import { useModal } from "@/contexts/ModalContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
+import { formatServerTimestamp } from "@/lib/serverTimestamp";
 import { PageHeader, Button, Card, EmptyState, Input, StatusBadge } from "@/components/ui";
 import SecretRevealModal from "@/components/SecretRevealModal";
 
@@ -35,11 +36,8 @@ const groupEvents = (events: string[]): WebhookEventGroup[] => {
     return out;
 };
 
-const fmtDate = (v: number | null | string | undefined) => {
-    if (v == null) return "—";
-    const ms = typeof v === "number" ? v * 1000 : Date.parse(v);
-    return Number.isFinite(ms) ? new Date(ms).toLocaleString() : "—";
-};
+// Delivery rows carry SQL UTC text, the webhook's last delivery epoch seconds: both in local time.
+const fmtDate = formatServerTimestamp;
 
 const deliveryStatusType = (s: string) => (s === "success" ? "success" : s === "dead" ? "error" : s === "delivering" ? "info" : "warning");
 

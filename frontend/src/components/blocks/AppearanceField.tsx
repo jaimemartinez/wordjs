@@ -3,6 +3,7 @@
 import React from "react";
 import { AccordionItem, ControlGroup, Input, Select, ColorPicker } from "./CSSControls";
 import MSym from "../editor/MSym";
+import { useEditorTr } from "@/lib/verso/useEditorTr";
 
 /**
  * SHARED APPEARANCE SYSTEM — the "nothing is hardcoded" layer.
@@ -65,14 +66,16 @@ const Num = ({ value, onChange, min = 0, max = 100, step = 1, suffix = "px" }: a
     </div>
 );
 
-const Segmented = ({ value, onChange, options }: any) => (
+const Segmented = ({ value, onChange, options }: any) => {
+    const { tr } = useEditorTr();
+    return (
     <div className="flex gap-0.5 bg-[var(--ed-surface-container-high)] p-0.5 rounded border border-[var(--ed-outline-variant)]">
         {options.map((o: any) => (
             <button
                 key={o.value}
                 type="button"
                 onClick={() => onChange(o.value)}
-                title={o.label}
+                title={tr(o.label)}
                 className={`flex-1 py-1 rounded text-[10px] font-bold transition-all flex items-center justify-center ${
                     (value || "") === o.value
                         ? "bg-[var(--ed-primary)] text-white shadow-sm"
@@ -82,19 +85,22 @@ const Segmented = ({ value, onChange, options }: any) => (
                 {o.icon ? (
                     o.icon.startsWith("fa-") ? <i className={`fa-solid ${o.icon}`}></i> : <MSym name={o.icon} size={14} />
                 ) : (
-                    o.label
+                    tr(o.label)
                 )}
             </button>
         ))}
     </div>
-);
+    );
+};
 
 /**
  * One responsive-override row: the shared Num slider + an "heredado" indicator + a small undo
  * button that removes the override for that prop on that breakpoint. Module-level on purpose —
  * a component type recreated inside every render would remount the range input mid-drag.
  */
-const RespNum = ({ label, value, has, inherited, onChange, onClear, min = 0, max = 100, step = 1, suffix = "px" }: any) => (
+const RespNum = ({ label, value, has, inherited, onChange, onClear, min = 0, max = 100, step = 1, suffix = "px" }: any) => {
+    const { tr, trf } = useEditorTr();
+    return (
     <ControlGroup label={label}>
         <div className="flex items-center gap-1.5">
             <div className="flex-1">
@@ -104,7 +110,7 @@ const RespNum = ({ label, value, has, inherited, onChange, onClear, min = 0, max
                 type="button"
                 onClick={onClear}
                 disabled={!has}
-                title="Quitar el ajuste de este dispositivo (volver al heredado)"
+                title={tr("Quitar el ajuste de este dispositivo (volver al heredado)")}
                 className={`p-1 rounded transition-colors ${
                     has
                         ? "text-[var(--ed-primary)] hover:bg-[var(--ed-surface-container-high)]"
@@ -116,13 +122,14 @@ const RespNum = ({ label, value, has, inherited, onChange, onClear, min = 0, max
         </div>
         <p className="text-[10px] text-[var(--ed-outline)]">
             {has
-                ? "Ajuste propio de este dispositivo"
+                ? tr("Ajuste propio de este dispositivo")
                 : isSet(inherited)
-                  ? `Heredado: ${inherited}${suffix}`
-                  : "Heredado (sin valor propio)"}
+                  ? trf("Heredado: {value}", { value: `${inherited}${suffix}` })
+                  : tr("Heredado (sin valor propio)")}
         </p>
     </ControlGroup>
-);
+    );
+};
 
 export function AppearanceControl({
     value,
@@ -131,6 +138,7 @@ export function AppearanceControl({
     value: Appearance;
     onChange: (v: Appearance) => void;
 }) {
+    const { tr, trf } = useEditorTr();
     const a = value || {};
     const set = (patch: Partial<Appearance>) => onChange({ ...a, ...patch });
     const touched = Object.values(a).some((v) => isSet(v) && v !== false);
@@ -179,7 +187,7 @@ export function AppearanceControl({
                     className="w-full px-3 py-1.5 text-[10px] font-bold text-[var(--ed-outline)] hover:text-[var(--ed-error)] hover:bg-[var(--ed-error-container)] transition-colors border-b border-[var(--ed-outline-variant)] flex items-center justify-center gap-1.5"
                 >
                     <MSym name="undo" size={12} />
-                    Restablecer apariencia
+                    {tr("Restablecer apariencia")}
                 </button>
             )}
 
@@ -239,7 +247,7 @@ export function AppearanceControl({
                                 onChange={(e) => set({ gradAnimate: e.target.checked })}
                                 className="accent-[#1f108e]"
                             />
-                            Degradado en movimiento
+                            {tr("Degradado en movimiento")}
                         </label>
                     </>
                 )}
@@ -280,7 +288,7 @@ export function AppearanceControl({
                                 onChange={(e) => set({ bgFixed: e.target.checked })}
                                 className="accent-[#1f108e]"
                             />
-                            Efecto parallax al hacer scroll
+                            {tr("Efecto parallax al hacer scroll")}
                         </label>
                     </>
                 )}
@@ -470,8 +478,7 @@ export function AppearanceControl({
                     </>
                 )}
                 <p className="text-[10px] text-[var(--ed-outline)] leading-relaxed">
-                    Los efectos se desactivan solos para quien tenga activado &ldquo;reducir movimiento&rdquo; en su
-                    sistema.
+                    {tr("Los efectos se desactivan solos para quien tenga activado «reducir movimiento» en su sistema.")}
                 </p>
             </AccordionItem>
                 </>
@@ -481,9 +488,10 @@ export function AppearanceControl({
                         design — one look per block, only sizes adapt — so those sections are hidden
                         here with this short note instead of shown greyed-out. */}
                     <p className="px-3 py-2 text-[10px] text-[var(--ed-outline)] leading-relaxed border-b border-[var(--ed-outline-variant)]">
-                        Editando {bp === "tb" ? "tableta (768–1023 px)" : "móvil (menos de 768 px)"}. Solo caja y
-                        tipografía varían por dispositivo; fondo, borde, sombra y movimiento se ajustan en
-                        Escritorio. Sin ajuste propio se hereda: escritorio → tableta → móvil.
+                        {bp === "tb"
+                            ? tr("Editando tableta (768–1023 px).")
+                            : tr("Editando móvil (menos de 768 px).")}{" "}
+                        {tr("Solo caja y tipografía varían por dispositivo; fondo, borde, sombra y movimiento se ajustan en Escritorio. Sin ajuste propio se hereda: escritorio → tableta → móvil.")}
                     </p>
 
                     <AccordionItem title="Espaciado y tamaño">
@@ -516,10 +524,10 @@ export function AppearanceControl({
                             />
                             <p className="text-[10px] text-[var(--ed-outline)]">
                                 {isSet(rl.align)
-                                    ? "Ajuste propio de este dispositivo"
+                                    ? tr("Ajuste propio de este dispositivo")
                                     : isSet(inh("align"))
-                                      ? `Heredada: ${inh("align")}`
-                                      : "Heredada (sin valor propio)"}
+                                      ? trf("Heredada: {value}", { value: String(inh("align")) })
+                                      : tr("Heredada (sin valor propio)")}
                             </p>
                         </ControlGroup>
                     </AccordionItem>

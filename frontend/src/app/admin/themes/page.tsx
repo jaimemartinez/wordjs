@@ -7,7 +7,7 @@ import { useI18n } from "@/contexts/I18nContext";
 import { PageHeader, Button, EmptyState } from "@/components/ui";
 
 export default function ThemesPage() {
-    const { t } = useI18n();
+    const { t, language } = useI18n();
     const [themes, setThemes] = useState<Theme[]>([]);
     const [loading, setLoading] = useState(true);
     const [uploading, setUploading] = useState(false);
@@ -469,7 +469,7 @@ export default function ThemesPage() {
                                             </span>
                                         </div>
                                         <p className="text-gray-500 font-medium text-sm leading-relaxed line-clamp-2">
-                                            {theme.description || t('themes.defaultDescription')}
+                                            {theme.translations?.[language]?.description || theme.description || t('themes.defaultDescription')}
                                         </p>
                                     </div>
 

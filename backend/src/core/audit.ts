@@ -107,6 +107,9 @@ const AUDIT_ACTIONS = Object.freeze({
     // stale entry was dropped and (only when the directory held no manifest and no entry file) its
     // residue removed. Recorded because it both changes the active list and deletes from disk.
     PLUGIN_ORPHAN_RECLAIM: 'plugin.orphan_reclaim',
+    // An administrator approved (or withdrew) an exact private host:port a plugin may reach (a LAN SMTP
+    // relay): {destinations} - the full approved list after the write.
+    PLUGIN_PRIVATE_EGRESS: 'plugin.private_egress',
     THEME_ACTIVATE: 'theme.activate',
     // An installed theme replaced from an uploaded zip (POST /themes/:slug/update).
     THEME_UPDATE: 'theme.update',

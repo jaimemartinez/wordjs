@@ -1,15 +1,10 @@
-"use client";
 /**
- * Hydration-safe date: the server (and first client render) show the deterministic ISO slice so
- * SSR markup matches; after mount it localizes to the visitor's locale — exactly the behavior the
- * old client PostContent had, packaged as the smallest possible island.
+ * A post's date in the SITE's language (lib/public/siteDate). It used to localize after mount to the
+ * VISITOR's browser locale, so an English site showed `2/3/2024` to a Spanish reader; the formatting
+ * is deterministic now, so the server renders the final text and no client island is needed.
  */
-import { useEffect, useState } from "react";
+import { formatSiteDate } from "@/lib/public/siteDate";
 
-export default function LocalizedDate({ date }: { date?: string | null }) {
-    const [dateStr, setDateStr] = useState(() => (date ? String(date).slice(0, 10) : ""));
-    useEffect(() => {
-        if (date) setDateStr(new Date(date).toLocaleDateString());
-    }, [date]);
-    return <>{dateStr}</>;
+export default function LocalizedDate({ date, lang }: { date?: string | null; lang?: string | null }) {
+    return <>{formatSiteDate(date, lang)}</>;
 }

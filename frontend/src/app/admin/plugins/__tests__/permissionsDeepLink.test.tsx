@@ -95,7 +95,7 @@ vi.mock("@/lib/api", () => ({
 vi.mock("@/lib/plugins", () => ({ reloadActivePlugins: () => {} }));
 vi.mock("@/contexts/MenuContext", () => ({ useMenu: () => ({ refreshMenus: () => {} }) }));
 vi.mock("@/contexts/ToastContext", () => ({ useToast: () => ({ addToast: () => {} }) }));
-vi.mock("@/contexts/I18nContext", () => ({ useI18n: () => ({ t: (k: string) => k }) }));
+vi.mock("@/contexts/I18nContext", () => ({ useI18n: () => ({ t: (k: string) => k }), useOptionalI18n: () => ({ t: (k: string) => k }) }));
 vi.mock("@/contexts/ModalContext", () => ({ useModal: () => ({ confirm: async () => true, alert: async () => {} }) }));
 vi.mock("../MarketplaceTab", () => ({ default: () => null }));
 

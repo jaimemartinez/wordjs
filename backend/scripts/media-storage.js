@@ -25,6 +25,9 @@ const fs = require('fs');
 
 const BACKEND = path.resolve(__dirname, '..');
 process.chdir(BACKEND); // config / data / uploads resolve relative to backend/, like a normal boot
+// stdout is this command's output (`status` prints JSON meant for jq): the backend modules it loads
+// log to stderr instead (core/logger).
+process.env.WORDJS_LOG_TO_STDERR = '1';
 
 const USAGE = [
     'Usage: npm run media -- <command> [options]',

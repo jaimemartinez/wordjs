@@ -13,8 +13,9 @@
  *   1. WORDJS_MEDIA_CDN_ORIGIN — an operator override (a frontend replica that cannot see the backend's
  *      config file and renders nothing before its first response);
  *   2. the value the public SSR last read from the backend's settings (`media_cdn_origin`), published
- *      process-wide by src/lib/server-api.ts — the live answer, which follows an admin change within
- *      the settings cache's 60 s;
+ *      process-wide by src/lib/server-api.ts — the live answer. A media storage save purges the
+ *      `settings` tag, and /api/revalidate then re-reads it at once (refreshMediaCdnOrigin), so an
+ *      admin change reaches this header within the purge's debounce, not the settings cache's 60 s;
  *   3. the `mediaStorage` block of the nearest wordjs-config.json (driver s3 + publicUrl), so the very
  *      first response after a restart already carries it on a same-machine install.
  */

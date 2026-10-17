@@ -502,15 +502,39 @@ export const checkSetupRequired = siteCache(async (): Promise<boolean> => {
 // hottest read. Cache 60s + tag so the ~N-per-render backend calls collapse to one until it changes.
 export const getSettings = siteCache((): Promise<Record<string, string> | null> =>
     serverFetch<Record<string, string>>('/settings', { revalidate: 60, tags: ['settings'] }).then((settings) => {
-        // The media/CDN origin, published process-wide for the custom server's CSP amendment
-        // (frontend/media-csp.js): the build-time header cannot know where this site's media lives.
-        if (settings && typeof settings === 'object') {
-            const origin = (settings as Record<string, unknown>).media_cdn_origin;
-            (globalThis as Record<string, unknown>).__WORDJS_MEDIA_CDN_ORIGIN__ = typeof origin === 'string' ? origin : '';
-        }
+        publishMediaCdnOrigin(settings);
         return settings;
     })
 );
+
+/**
+ * The media/CDN origin, published process-wide for the custom server's CSP amendment
+ * (frontend/media-csp.js): the build-time header cannot know where this site's media lives.
+ */
+function publishMediaCdnOrigin(settings: unknown): void {
+    if (!settings || typeof settings !== 'object') return;
+    const origin = (settings as Record<string, unknown>).media_cdn_origin;
+    (globalThis as Record<string, unknown>).__WORDJS_MEDIA_CDN_ORIGIN__ = typeof origin === 'string' ? origin : '';
+}
+
+/**
+ * Re-read the media/CDN origin from the backend NOW. getSettings only republishes it when a public page
+ * renders, and after a purge its first answer is still the stale cached one (revalidateTag 'max' is
+ * stale-while-revalidate) — so a media storage change reached the admin's CSP up to a minute late and
+ * the screen's "Test connection" failed in the meantime. /api/revalidate calls this when the backend
+ * purges the `settings` tag. Best effort: on any failure the published value is left as it was.
+ */
+export async function refreshMediaCdnOrigin(): Promise<void> {
+    const url = backendUrl(resolveServerBase(), '/settings');
+    if (!url) return;
+    try {
+        const res = await fetch(url, { cache: 'no-store' });
+        if (!res.ok) return;
+        publishMediaCdnOrigin(await res.json().catch(() => null));
+    } catch {
+        /* keep the published value */
+    }
+}
 
 export interface PublicAssets {
     scripts: { handle: string; src: string; inFooter?: boolean; strategy?: string }[];

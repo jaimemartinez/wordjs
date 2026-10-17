@@ -16,6 +16,7 @@
  */
 import React from "react";
 import { DEVICE_LABELS, DEVICE_ORDER, DEVICE_WIDTHS, type DeviceKind } from "./viewport";
+import { useEditorTr } from "@/lib/verso/useEditorTr";
 
 const BTN_CLS =
     "rounded border px-2 py-1 text-xs disabled:opacity-40";
@@ -29,19 +30,20 @@ export interface ViewportControlsProps {
 }
 
 export default function ViewportControls({ value, onChange }: ViewportControlsProps) {
+    const { tr } = useEditorTr();
     return (
-        <div role="group" aria-label="Viewport del lienzo" className="flex items-center gap-1">
+        <div role="group" aria-label={tr("Viewport del lienzo")} className="flex items-center gap-1">
             {DEVICE_ORDER.map((device) => (
                 <button
                     key={device}
                     type="button"
                     aria-pressed={value === device}
-                    aria-label={`Viewport ${DEVICE_LABELS[device]}`}
+                    aria-label={`Viewport ${tr(DEVICE_LABELS[device])}`}
                     data-wjs-viewport={device}
                     className={value === device ? BTN_ON_CLS : BTN_OFF_CLS}
                     onClick={() => onChange(device)}
                 >
-                    {DEVICE_LABELS[device]}
+                    {tr(DEVICE_LABELS[device])}
                 </button>
             ))}
         </div>

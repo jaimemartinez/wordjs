@@ -1,8 +1,9 @@
 import Link from "next/link";
 import type { Metadata } from "next";
-import { searchPosts } from "@/lib/server-api";
+import { getSettings, searchPosts } from "@/lib/server-api";
 import ThemeTemplate from "@/components/content/ThemeTemplate";
 import { postCardExcerpt } from "@/lib/postExcerpt";
+import { formatSiteDate, siteDateLanguage } from "@/lib/public/siteDate";
 
 interface SearchParams {
     q?: string | string[];
@@ -25,6 +26,7 @@ export async function generateMetadata({ searchParams }: { searchParams: Promise
 export default async function SearchPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
     const query = readQuery((await searchParams).q);
     const results = query ? await searchPosts(query) : [];
+    const dateLang = siteDateLanguage(await getSettings());
 
     // The route hands the template its OWN results: a listing a theme places on the search template
     // must answer the search, not show the newest posts.
@@ -117,9 +119,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                                     {post.type === "page" ? "Page" : "Post"}
                                 </span>
                                 <span className="text-sm text-[var(--wjs-color-text-muted,#9ca3af)]">
-                                    {post.date
-                                        ? new Date(post.date).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })
-                                        : ""}
+                                    {formatSiteDate(post.date, dateLang)}
                                 </span>
                             </div>
 
