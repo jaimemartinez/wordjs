@@ -1,8 +1,8 @@
 {
     "id": "memberships",
     "name": "Memberships",
-    "version": "1.1.0",
-    "description": "Members-only content for WordJS: free and paid tiers, a paywall block that ends a post's free teaser, Stripe Checkout subscriptions verified by signed webhooks, tier changes and cancellation by the member, complimentary memberships granted by the admin, and newsletters that email published posts to members by tier with one-click unsubscribe. Members are the site's own user accounts.",
+    "version": "1.2.0",
+    "description": "Members-only content for WordJS: free and paid tiers, a paywall block that ends a post's free teaser, paid subscriptions through Stripe, Mercado Pago or Wompi (sandbox credentials) verified by signed webhooks, tier changes and cancellation by the member, complimentary memberships granted by the admin, and newsletters that email published posts to members by tier with one-click unsubscribe. Members are the site's own user accounts.",
     "author": "WordJS",
     "license": "MIT",
     "repository": "https://github.com/jaimemartinez/wordjs/tree/main/marketplace/plugins/memberships",
@@ -83,7 +83,7 @@
         },
         {
             "scope": "network",
-            "reason": "Create Stripe Checkout sessions and manage subscriptions (change tier, cancel, resume) against api.stripe.com when a Stripe key is configured."
+            "reason": "Call the payment provider the admin chose, only when its credentials are configured: api.stripe.com (Checkout sessions, subscription changes), api.mercadopago.com (subscriptions) or sandbox.wompi.co (transactions, Nequi payment sources and scheduled renewals)."
         }
     ]
 }

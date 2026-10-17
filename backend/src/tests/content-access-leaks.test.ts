@@ -6,7 +6,8 @@
  * system, so core asks exactly the filter the plugin registers in production. Readers:
  *   · anonymous;
  *   · a FREE member (a signed-in subscriber: free sign-up is on);
- *   · PAID members — one comped to the cheaper "Silver" tier, one to "Gold";
+ *   · PAID members — one comped to the cheaper "Silver" tier, one to "Gold", and one whose Gold
+ *     membership comes from each payment provider (Stripe, Mercado Pago, Wompi) in every state;
  * and the managers (the author, an editor) as the positive control that the body is really there.
  *
  * Each gated entry hides a unique marker after its access break. The assertions look for that marker in
@@ -119,6 +120,7 @@ before(async () => {
     await seedUser('free', 'subscriber');
     await seedUser('silver', 'subscriber');
     await seedUser('gold', 'subscriber');
+    await seedUser('payer', 'subscriber');
 
     const coreUser = async (sql: string, v: any) => {
         const row = await db.get(`SELECT id, user_login, user_email, display_name FROM users WHERE ${sql} = ?`, [v]);
@@ -297,6 +299,40 @@ describe('REST: what each reader receives', () => {
         const e = await as('editor', 'get', `/posts?search=${SECRET.paid}`);
         assert.ok(e.body.some((p: any) => p.id === P.paid), 'positive control: an editor searches bodies');
     });
+});
+
+describe('whatever provider took the money, a paid post opens only while the membership is live', () => {
+    // The provider writes the membership row (see memberships-providers.test.ts for each provider's
+    // webhooks and return legs); access is decided from that row alone, so every provider × state is
+    // checked here against the real REST surface.
+    const DAY = 86400000;
+    const STATES: Array<[string, string, number, boolean]> = [
+        ['active, in period', 'active', 20 * DAY, true],
+        ['past due (provider retrying), in period', 'past_due', 2 * DAY, true],
+        ['active but the period lapsed past the grace window', 'active', -5 * DAY, false],
+        ['incomplete (checkout not paid)', 'incomplete', 20 * DAY, false],
+        ['canceled', 'canceled', 20 * DAY, false],
+        ['expired', 'expired', -5 * DAY, false],
+    ];
+    for (const provider of ['stripe', 'mercadopago', 'wompi']) {
+        test(`${provider}: gold body only for a live gold membership; never to a lapsed, unpaid or cancelled one`, async () => {
+            const gold = plugin.sdb.prepare(`SELECT id FROM ${plugin.prefix}tiers WHERE slug = 'gold'`).get().id;
+            for (const [label, status, endOffset, opens] of STATES) {
+                plugin.sdb.prepare(`DELETE FROM ${plugin.prefix}members WHERE user_id = ?`).run(U.payer);
+                plugin.sdb.prepare(`INSERT INTO ${plugin.prefix}members (user_id, tier_id, status, source, provider_subscription_id, current_period_end) VALUES (?, ?, ?, ?, ?, ?)`)
+                    .run(U.payer, gold, status, provider, `${provider}-sub-1`, new Date(Date.now() + endOffset).toISOString());
+                for (const key of ['paid', 'gold']) {
+                    const r = await as('payer', 'get', `/posts/${P[key]}`);
+                    assert.strictEqual(r.body.access.granted, opens, `${provider} / ${label} / ${key}`);
+                    if (opens) assert.ok(r.body.content.includes(SECRET[key as keyof typeof SECRET]), `positive control ${provider} / ${label}`);
+                    else assert.deepStrictEqual(leaks(r.body), [], `${provider} / ${label}: ${key} leaks`);
+                }
+                const list = await as('payer', 'get', '/posts');
+                if (!opens) assert.deepStrictEqual(leaks(list.body, [SECRET.paid, SECRET.gold]), [], `${provider} / ${label}: list leaks`);
+            }
+            plugin.sdb.prepare(`DELETE FROM ${plugin.prefix}members WHERE user_id = ?`).run(U.payer);
+        });
+    }
 });
 
 describe('feeds and sitemaps', () => {
