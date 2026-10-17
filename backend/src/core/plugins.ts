@@ -2962,7 +2962,12 @@ async function getAllPlugins() {
 }
 
 /**
- * Create sample plugin
+ * Create the sample plugin (POST /plugins/sample) when backend/plugins/hello-world/ is missing.
+ *
+ * It used to write an in-process plugin that require()d core's hooks and filtered `the_content` — no
+ * manifest (so not a plugin the list could show), a require the sandbox refuses, and a hook core never
+ * applies. It now writes the same isolated sample the repository ships: a [hello] shortcode through the
+ * bridge, no permissions.
  */
 function createSamplePlugin() {
     const sampleDir = path.join(PLUGINS_DIR, 'hello-world');
@@ -2971,36 +2976,43 @@ function createSamplePlugin() {
 
     fs.mkdirSync(sampleDir, { recursive: true });
 
-    const sampleCode = `/**
- * Hello World Plugin for WordJS
- */
+    const manifest = {
+        name: 'Hello World',
+        version: '1.1.0',
+        description: 'A sample plugin that adds a [hello] shortcode',
+        author: 'WordJS',
+        isolated: true,
+        permissions: [],
+    };
+    const sampleCode = [
+        '/**',
+        ' * Hello World Plugin for WordJS: put [hello] or [hello name="Ada"] in a post or page.',
+        ' * Isolated: it reaches core only through the injected `wordjs` bridge. Shortcodes need no permission.',
+        ' */',
+        '',
+        'exports.metadata = {',
+        "    name: 'Hello World',",
+        "    version: '1.1.0',",
+        "    description: 'A sample plugin that adds a [hello] shortcode',",
+        "    author: 'WordJS'",
+        '};',
+        '',
+        "const escapeHtml = (s) => String(s).replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]));",
+        '',
+        'exports.renderHello = function (attrs) {',
+        "    const name = attrs && typeof attrs.name === 'string' && attrs.name.trim() ? attrs.name.trim().slice(0, 80) : 'world';",
+        "    return '<p class=\"hello-world-greeting\">Hello, ' + escapeHtml(name) + '!</p>';",
+        '};',
+        '',
+        'exports.init = function (wordjs) {',
+        "    wordjs.shortcodes.add('hello', (attrs) => exports.renderHello(attrs));",
+        '};',
+        '',
+        'exports.deactivate = function () {};',
+        '',
+    ].join('\n');
 
-// Plugin metadata
-exports.metadata = {
-  name: 'Hello World',
-  version: '1.0.0',
-  description: 'A sample plugin that adds a greeting filter',
-  author: 'WordJS'
-};
-
-// Called when plugin is activated
-exports.init = function() {
-  const { addFilter } = require('../../src/core/hooks');
-  
-  // Add a filter to post content
-  addFilter('the_content', (content) => {
-    return '<p><em>Hello from the Hello World plugin!</em></p>' + content;
-  });
-  
-  console.log('Hello World plugin initialized!');
-};
-
-// Called when plugin is deactivated
-exports.deactivate = function() {
-  console.log('Hello World plugin deactivated!');
-};
-`;
-
+    fs.writeFileSync(path.join(sampleDir, 'manifest.json'), JSON.stringify(manifest, null, 4) + '\n');
     fs.writeFileSync(path.join(sampleDir, 'index.js'), sampleCode);
 }
 

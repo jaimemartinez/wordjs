@@ -32,6 +32,16 @@ const readableOn = (colour, bg, min = 4.5) => {
     return toward === '#000000' ? '#111111' : '#ffffff';
 };
 
+// Muted text: the body text washed toward the page, but never below AA (a 38% wash gave 4.42:1 on
+// some valid palettes). Mirrors mutedOn() in backend/src/core/theme-derive.ts.
+const mutedOn = (text, bg, min = 4.5) => {
+    for (let i = 19; i >= 1; i--) {
+        const c = mix(text, bg, i * 0.02);
+        if (contrast(c, bg) >= min) return c;
+    }
+    return text;
+};
+
 function canonicalAliases(t) {
     const dark = lum(t.bgColor) < 0.35;
     const toward = dark ? '#ffffff' : '#000000';
@@ -49,7 +59,7 @@ function canonicalAliases(t) {
   --wjs-color-accent: ${t.secondaryColor};
   --wjs-color-on-accent: ${onColor(t.secondaryColor)};
   --wjs-color-text-main: ${t.textColor};
-  --wjs-color-text-muted: ${mix(t.textColor, t.bgColor, 0.38)};
+  --wjs-color-text-muted: ${mutedOn(t.textColor, t.bgColor)};
   --wjs-color-heading: ${t.textColor};
   --wjs-color-link: ${readableOn(t.primaryColor, t.bgColor)};
   --wjs-color-link-hover: ${readableOn(t.secondaryColor, t.bgColor)};

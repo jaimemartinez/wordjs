@@ -99,6 +99,8 @@ const AUDIT_ACTIONS = Object.freeze({
     // A plugin installed from an uploaded zip (the marketplace path records `marketplace.install`).
     PLUGIN_INSTALL: 'plugin.install',
     PLUGIN_UNINSTALL: 'plugin.uninstall',
+    // An installed plugin's code replaced from an uploaded zip (POST /plugins/:slug/update).
+    PLUGIN_UPDATE: 'plugin.update',
     PLUGIN_ACTIVATE: 'plugin.activate',
     PLUGIN_DEACTIVATE: 'plugin.deactivate',
     // An ORPHANED slug reclaimed: `active_plugins` named it while its files were not loadable, so the
@@ -109,6 +111,8 @@ const AUDIT_ACTIONS = Object.freeze({
     // relay): {destinations} - the full approved list after the write.
     PLUGIN_PRIVATE_EGRESS: 'plugin.private_egress',
     THEME_ACTIVATE: 'theme.activate',
+    // An installed theme replaced from an uploaded zip (POST /themes/:slug/update).
+    THEME_UPDATE: 'theme.update',
     THEME_MODS_IMPORT: 'theme.mods.import',
 
     // ── Configuration ───────────────────────────────────────────────────────────────────────────────

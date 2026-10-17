@@ -109,7 +109,21 @@ const SEED_SETS: Array<[string, Seeds]> = [
     ['secondary at the onColor limit, above (lum 0.553)', { primary: '#8d8d8d', secondary: '#8c8c8c', bg: '#000000', text: '#ffffff' }],
     ['monochrome extremes (monochrome-gallery palette)', { primary: '#ffffff', secondary: '#a1a1aa', bg: '#000000', text: '#ffffff' }],
     ['pastel organic light', { primary: '#f472b6', secondary: '#db2777', bg: '#fdf2f8', text: '#500724' }],
+    // A 38% wash of the text gave a muted ink of 4.42:1 here — under AA, in a theme the CLI generated.
+    ['warm paper (muted wash under AA at 38%)', { primary: '#b4532a', secondary: '#7a3b1e', bg: '#fbf7f2', text: '#2b211c' }],
 ];
+
+describe('deriveTokens — muted text always clears AA', () => {
+    const { contrast } = require('../core/theme-derive');
+    for (const [label, seeds] of SEED_SETS) {
+        it(`--wjs-color-text-muted ≥ 4.5:1 on the canvas: ${label}`, () => {
+            const muted = deriveTokens(seeds)['--wjs-color-text-muted'];
+            // Only when the body text itself clears AA can the muted ink be asked to.
+            if (contrast(seeds.text, seeds.bg) < 4.5) return;
+            assert.ok(contrast(muted, seeds.bg) >= 4.5, `${muted} on ${seeds.bg} is ${contrast(muted, seeds.bg).toFixed(2)}:1`);
+        });
+    }
+});
 
 describe('deriveTokens — parity with generator canonicalAliases()', () => {
     for (const [label, seeds] of SEED_SETS) {

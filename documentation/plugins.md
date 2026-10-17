@@ -375,8 +375,9 @@ This is also the way to ship a **private** plugin that never goes through the Ma
     packer on the installed plugin (`POST /api/v1/plugins/:slug/pack`) and saves the ZIP; a refusal
     shows its reason, and the full packer output goes to the browser console. Outside development the
     button is hidden and the route answers 404.
-2.  **Upload:** Go to **Plugins** -> **Add New** in the Admin panel and pick the ZIP. Deactivate or
-    uninstall an installed copy first.
+2.  **Upload:** Go to **Plugins** → **Upload Plugin** in the Admin panel and pick the ZIP. If that
+    plugin is already installed, the screen offers to **update** it instead — see
+    [Updating a plugin](#updating-a-plugin-upload-a-newer-zip) below. Nothing to deactivate or uninstall.
 3.  **Activate:** Plugin works instantly using the pre-compiled bundle.
 
 #### Dependencies in the ZIP
@@ -421,7 +422,31 @@ When you upload a plugin ZIP, WordJS validates it **before** reporting success, 
 - **Permissions** — every `{scope, access}` is checked against the known vocabulary; a typo (`databse`, `readwrite`) is rejected with the valid list.
 - **Declared roles** — a `roles` block must stay inside the plugin's namespace and request `roles:declare` (§12a); anything else is rejected with the reason.
 - **AST scan** — the same static scan that runs at activation runs here too; forbidden code (`eval`, `child_process`, dynamic `require`, …) is rejected up front, in your own source and — within the bounds in §7.2 — in any `node_modules/` you ship.
-- **Live-plugin safety** — re-uploading a slug that is currently **active** is refused (409). Deactivate it first so a botched extract can't corrupt a running plugin.
+- **No silent overwrite** — uploading a ZIP whose plugin is already installed (active or not) is refused with 409 `plugin_exists`, which carries the installed and incoming versions; the Plugins screen turns it into the **Update** prompt below. The install path never extracts over an existing plugin.
+
+### Updating a plugin (upload a newer ZIP)
+
+Upload the new ZIP from **Plugins → Upload Plugin**. When the plugin is already installed, the screen
+asks *Update the plugin?* with both versions; confirm and it is replaced in place
+(`POST /api/v1/plugins/:slug/update`, field `plugin`). The ZIP's root folder must be the plugin's slug
+(what `pack` and `pack:plugin` produce).
+
+1. **Staged first.** The new version is extracted to a private staging directory and goes through every
+   check above (bomb cap, Zip Slip, manifest, permissions, AST scan, page conflicts). A ZIP that fails is
+   refused with the reason and **nothing changes** — an active plugin keeps running the old version.
+2. **Then swapped.** The plugin is stopped if it was running, its code is moved aside, the staged code is
+   moved in, and it is started again. If the new version fails to start, the previous one is put back
+   (and restarted). An update interrupted by a crash is recovered at the next boot.
+3. **Kept:** the plugin's `data/` directory (keys, attachments — a `data/` inside the ZIP is ignored when
+   one exists), its `wjp_<slug>_*` tables, its stored grants and its egress allowlist.
+4. **New permissions are asked about, not granted.** The answer lists `newPermissions` (declared by this
+   version, not by the previous one) and `ungrantedPermissions` (declared and not granted). When there are
+   any, the Plugins screen opens the plugin's permissions dialog on them; they stay off until an
+   administrator grants them. A version that asks for nothing new keeps working exactly as granted.
+
+A plugin installed from a catalog loses its catalog binding when updated by hand (its code no longer
+comes from that catalog); install it from the Marketplace again to get one-click updates back. On a
+multisite network, updating is the main site's job, like installing.
 
 ### Runtime health & auto-restart
 
@@ -434,7 +459,7 @@ Each active plugin runs in its own OS process, and WordJS now **supervises** it:
 
 ### Uninstalling a plugin (and its data)
 
-Deleting a plugin (admin **Plugins** → delete, password-confirmed) removes its folder **and** always purges its permission grants (so a later re-upload of the same slug can't silently inherit old, possibly-revoked grants) and its crash-guard strikes.
+Deleting a plugin (admin **Plugins** → delete, password-confirmed) removes its folder **and** always purges its permission grants (so a later re-upload of the same slug can't silently inherit old, possibly-revoked grants) and its crash-guard strikes. To install a newer version, **update** instead (above): deleting is not needed and drops the grants.
 
 By default your plugin's **data tables are kept** (WordPress parity). Tick **"Also delete this plugin's data / tables"** in the delete dialog to additionally `DROP` the plugin's own `wjp_<slug>_*` tables. Only those prefixed tables are dropped — core and other plugins are never touched.
 
@@ -768,6 +793,13 @@ policy (`backend/src/core/hook-access.ts`; full table in [security.md §8.1](sec
 | `notification_sent` | `notifications:read` | The notification with tokens, codes and reset/verification text redacted. |
 | `updated_option` | `settings:read` | Name and value; secret and protected option values arrive as `'[redacted]'`. |
 | `wordjs_head`, `wordjs_footer`, `wp_head`, `wp_footer`, `dynamic_sidebar`, `admin_menu_items`, core cron hooks | denied to every plugin | — |
+
+**Filters that fail closed.** For most filters, a callback of yours that throws or does not answer within
+2 s is skipped: the value goes on unchanged, so a broken plugin cannot break the page. `comments:pre_insert`
+is the exception, because it is a verdict: a callback that throws (or times out) **refuses the comment**.
+Throw an error with a 4xx `status` and a `rest_*` `code` to refuse with your own answer (e.g.
+`422 rest_captcha_required`); any other failure is answered as `503 rest_plugin_check_failed`, without
+your error text. Return `false` to discard the comment silently as spam.
 
 Your **own** hook names need no permission. Names in a core namespace that core does not define
 (`wp_*`, `wordjs_*`, `core:*`, `comments:*`, `posts:*`, `users:*`, …) are reserved and refused. A refused

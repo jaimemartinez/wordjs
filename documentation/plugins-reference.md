@@ -324,10 +324,11 @@ runs as core, never in the plugin sandbox.) See **[Database](database.md)**.
 ---
 
 ## 7. Hello World 👋
-**ID:** `hello-world` | **Version:** 1.0.0
+**ID:** `hello-world` | **Version:** 1.1.0
 
-A reference implementation for developers. Hooks-only (registers an `the_content` filter via the
-bridge) and demonstrates the plugin test framework.
+A reference implementation for developers. Registers a `[hello]` shortcode through the bridge (`[hello]`
+or `[hello name="Ada"]` in a post renders a greeting; no permissions), and ships its own `node:test`
+file (`tests/hello-world.test.js`) that you run yourself — WordJS never executes a plugin's tests.
 
 *   **Purpose:** Development / Education.
 *   **Sandbox:** isolated (like every plugin).
