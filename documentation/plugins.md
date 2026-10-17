@@ -945,6 +945,12 @@ is egress too), and under a list a host is only matched when it is a plain ASCII
 digits, `-`, `_`, dots) or an IP literal: pass the punycode form of an internationalised name (`fetch` and
 `URL` already do). If the host cannot load the egress policy, a `network` plugin reaches no public host
 and resolves no name until it reloads.
+The one exception to public-only is an **approved private destination**: an administrator may approve
+exactly one host on exactly one port for a plugin (`GET`/`POST /api/v1/plugins/:slug/private-egress`, body
+`{ destinations: ["192.168.1.20:587"] }`, at most 4) — for example a LAN SMTP relay. It is matched on the
+host and the port together (a hostname entry also covers the addresses the guard itself resolved for that
+name, so approving a name trusts its DNS), it never opens a range or another port, link-local (`169.254.169.254`), unspecified and multicast
+addresses cannot be approved, and an API token may withdraw an approval but never make one.
 
 > `scope: "admin"` on a capability implies only its ordinary `read`+`write` verbs — it never subsumes the
 > high-power verbs (`provider`, `register`, `register_route`), which must be granted explicitly.
