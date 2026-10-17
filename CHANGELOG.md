@@ -8,6 +8,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **A freshly installed site runs cron and outgoing webhooks without a restart.** The process that
+  finished the install wizard (or `POST /api/v1/setup/install`) had booted in setup mode, and the boot
+  starts cron, the coherence and cluster buses, the webhook dispatcher and the content outbox only on an
+  installed site. Until the first restart, webhooks delivered only the manual test ping (no post,
+  comment, term or settings event was ever queued) and scheduled posts were not published. The install
+  now starts these services in the running process, as the boot does (`core/runtime-services`).
+
 - **Release bundles no longer include a stray test backup in `backend/backups/`.** The 2.6.0 bundle
   carried a backup left over from a local test run (a throwaway test database, no site data), and
   `npx create-wordjs upgrade` copied it into the upgraded site, where it listed under Admin → Settings →
