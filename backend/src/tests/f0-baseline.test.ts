@@ -123,18 +123,19 @@ describe('F0 live REST characterization', () => {
     it('keeps the API index response shape and version stable', async () => {
         const response = await request(app).get('/api/v1');
         assert.strictEqual(response.status, 200);
-        assert.deepStrictEqual(
-            { name: response.body.name, version: response.body.version, routeKeys: Object.keys(response.body.routes || {}).sort() },
-            {
-                name: 'WordJS REST API',
-                version: '1.0.0',
-                routeKeys: [
-                    'authentication', 'categories', 'chrome', 'comments', 'export', 'forms', 'graphql', 'hooks', 'import', 'media',
-                    'menus', 'notices', 'notifications', 'plugins', 'posts', 'revisions', 'roles', 'settings',
-                    'tags', 'taxonomies', 'themes', 'types', 'users', 'widgets',
-                ].sort(),
-            },
-        );
+        assert.strictEqual(response.body.name, 'WordJS REST API');
+        // The product version (it was a fixed '1.0.0' until the index read the release manifest).
+        assert.strictEqual(response.body.version, require(path.resolve(__dirname, '..', '..', '..', 'package.json')).version);
+        const routeKeys = Object.keys(response.body.routes || {});
+        // Backward compatible: every key the index has always published is still there, with its path.
+        for (const key of [
+            'authentication', 'categories', 'chrome', 'comments', 'export', 'forms', 'graphql', 'hooks', 'import', 'media',
+            'menus', 'notices', 'notifications', 'plugins', 'posts', 'revisions', 'roles', 'settings',
+            'tags', 'taxonomies', 'themes', 'types', 'users', 'widgets',
+        ]) assert.ok(routeKeys.includes(key), `the API index still lists '${key}'`);
+        assert.strictEqual(response.body.routes.authentication, '/api/v1/auth');
+        // ...and it is exactly the route-group map (tests/route-modules-mounted.test.ts keeps that complete).
+        assert.deepStrictEqual(routeKeys.sort(), Object.keys(require('../routes/index').API_ROUTE_GROUPS).sort());
     });
 
     it('keeps the unauthenticated content-write error contract stable', async () => {
