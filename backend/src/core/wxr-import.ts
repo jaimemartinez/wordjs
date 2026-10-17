@@ -69,6 +69,9 @@ const { isCanonicalPostTypeName, canonicalImportedPostStatus } = require('./post
  */
 const ALWAYS_INTERNAL_POST_TYPES: Set<string> = new Set(['nav_menu_item', 'revision']);
 
+/** The featured-image reference: a post's meta naming an ATTACHMENT id (remapped on import). */
+const THUMBNAIL_META_KEY = '_thumbnail_id';
+
 function isInternalPostType(type: unknown): boolean {
     const name = String(type || 'post');
     // Fail closed on the core internals whatever the registry says: initPostTypes() registers those two
@@ -226,6 +229,17 @@ function metaValueOf(item: any, key: string): string {
 }
 
 const isPlaceholderDate = (d: string) => !d || d.startsWith('0000-00-00');
+
+/**
+ * A WXR timestamp (`YYYY-MM-DD HH:MM:SS`, the MySQL DATETIME shape WordPress exports), or '' for a
+ * placeholder or anything else. Used where the value is written into a date column of a row we did
+ * not just create through a model that validates it (comments), so only the exact shape crosses.
+ */
+function wxrDateTime(raw: string): string {
+    const d = (raw || '').trim();
+    if (isPlaceholderDate(d)) return '';
+    return /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(d) ? d : '';
+}
 
 /**
  * Light wpautop: WordPress classic-editor content is stored as plain text with blank-line paragraph
@@ -407,7 +421,7 @@ interface ImportSummary {
     menus: {
         created: number;
         matched: number;
-        items: { created: number; skipped: number };
+        items: { created: number; skipped: number; relinked: number };
         locations: { assigned: number; unassigned: number; reason: string | null };
     };
     errors: string[];
@@ -482,7 +496,7 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
         media: media.stats,
         menus: {
             created: 0, matched: 0,
-            items: { created: 0, skipped: 0 },
+            items: { created: 0, skipped: 0, relinked: 0 },
             locations: { assigned: 0, unassigned: 0, reason: null },
         },
         errors: [],
@@ -616,6 +630,16 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
     const deferredCommentParent = new Map<number, string>(); // new comment id -> wp parent comment id
     /** `nav_menu_item` items, collected here and written by the menu pass (never by this loop). */
     const menuItems: any[] = [];
+    /**
+     * new post id -> the WXR's `_thumbnail_id` (a SOURCE attachment id), resolved in pass D2.
+     *
+     * `_thumbnail_id` is a reference, not a value: copied verbatim it names the attachment's id on the
+     * OLD site, which on this install is some unrelated row or nothing at all, so the featured image was
+     * silently lost. It cannot be resolved inline either — a WXR may list the post before its image.
+     */
+    const deferredThumbnail = new Map<number, string>();
+    /** matched (pre-existing) post id -> the WXR's `_thumbnail_id`, for the re-run repair in pass D2. */
+    const staleThumbnail = new Map<number, string>();
 
     /** Backfill the original publish/modified dates (Post.create and Media.create both stamp "now"). */
     const restoreDates = async (item: any, newId: number) => {
@@ -678,6 +702,11 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
             }
 
             if (isProtectedPostMeta(key)) continue;
+            if (key === THUMBNAIL_META_KEY && type !== 'attachment') {
+                const sourceId = text(pm['wp:meta_value']).trim();
+                if (sourceId) deferredThumbnail.set(newId, sourceId);
+                continue;
+            }
             await Post.updateMeta(newId, key, sanitizeImportedMeta(key, text(pm['wp:meta_value']), rewrite));
         }
     };
@@ -774,6 +803,11 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
             const existing = await Post.findBySlug(slug, type);
             if (existing) {
                 if (oldId) oldToNewPost.set(oldId, existing.id);
+                // A post an EARLIER run created may still carry the raw source id (imports before the
+                // remap existed copied it verbatim). Pass D2 repairs it — only while it still holds
+                // exactly that raw value, so a featured image chosen since then is never touched.
+                const sourceThumb = metaValue(item, THUMBNAIL_META_KEY).trim();
+                if (sourceThumb) staleThumbnail.set(existing.id, sourceThumb);
                 bumpSkip(summary, type);
                 continue;
             }
@@ -855,6 +889,16 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
                             parent: 0, // resolved in pass E
                         });
                         const newCommentId = created.commentId ?? created.id; // Comment model exposes commentId
+                        // Comment.create stamps "now", like Post.create — restore when it was actually
+                        // written. A missing GMT twin falls back to the local time, as restoreDates does.
+                        const cDate = wxrDateTime(text(cm['wp:comment_date']));
+                        if (cDate) {
+                            const cDateGmt = wxrDateTime(text(cm['wp:comment_date_gmt'])) || cDate;
+                            await dbAsync.run(
+                                `UPDATE comments SET comment_date = ?, comment_date_gmt = ? WHERE comment_id = ?`,
+                                [cDate, cDateGmt, newCommentId]
+                            );
+                        }
                         const cOld = text(cm['wp:comment_id']);
                         if (cOld) oldToNewComment.set(`${oldId}:${cOld}`, newCommentId);
                         const cParent = text(cm['wp:comment_parent']);
@@ -892,6 +936,36 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
             }
             catch { /* non-fatal */ }
         }
+    }
+
+    // --- Pass D2: featured images ---------------------------------------------------------------
+    // Every attachment of the run is in oldToNewPost by now, whether it was created, matched on a
+    // re-run, or listed after the post that uses it. A source id that does not resolve to an
+    // ATTACHMENT here is dropped rather than written: kept, it would name an unrelated local row.
+    const resolveThumbnail = async (sourceId: string): Promise<number | null> => {
+        const mapped = oldToNewPost.get(sourceId);
+        if (mapped === undefined) return null;
+        const row = await dbAsync.get('SELECT post_type FROM posts WHERE id = ?', [mapped]);
+        return row && row.post_type === 'attachment' ? mapped : null;
+    };
+    for (const [postId, sourceId] of deferredThumbnail) {
+        try {
+            const attachmentId = await resolveThumbnail(sourceId);
+            if (attachmentId !== null) await Post.updateMeta(postId, THUMBNAIL_META_KEY, String(attachmentId));
+        } catch (e: any) { pushError(`featured image of post ${postId}: ${e.message}`); }
+    }
+    for (const [postId, sourceId] of staleThumbnail) {
+        try {
+            const stored = await dbAsync.get(
+                'SELECT meta_value FROM post_meta WHERE post_id = ? AND meta_key = ?',
+                [postId, THUMBNAIL_META_KEY]
+            );
+            if (!stored || String(stored.meta_value).trim() !== sourceId) continue;
+            const attachmentId = await resolveThumbnail(sourceId);
+            if (attachmentId !== null && String(attachmentId) !== sourceId) {
+                await Post.updateMeta(postId, THUMBNAIL_META_KEY, String(attachmentId));
+            }
+        } catch (e: any) { pushError(`featured image of post ${postId}: ${e.message}`); }
     }
 
     // --- Pass E: resolve threaded comment parents ----------------------------------------------

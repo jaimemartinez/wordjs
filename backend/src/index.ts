@@ -1854,43 +1854,10 @@ async function initializeMainSite() {
             log.warn({ err: e }, '[boot] sandbox hardening probe skipped');
         }
 
-        // Start cron system
-        const { startCron, initDefaultCronEvents, scheduleEvent, scheduleSingleEvent, unscheduleEvent, nextScheduled } = require('./core/cron');
-        await initDefaultCronEvents();
-        // (#21) Daily analytics prune. Armed here rather than inside initDefaultCronEvents so the
-        // retention policy stays in one module with its handler; the guard is the same "only if not
-        // already scheduled" shape every default event uses, so a restart never duplicates it.
-        try {
-            const { HOOK: ANALYTICS_PRUNE_HOOK } = require('./core/analytics-retention');
-            if (!(await nextScheduled(ANALYTICS_PRUNE_HOOK))) {
-                await scheduleEvent(Date.now(), 'daily', ANALYTICS_PRUNE_HOOK);
-            }
-        } catch (e: any) {
-            log.error({ err: e }, 'Failed to schedule the analytics retention prune');
-        }
-        startCron();
-
-        // Multi-node coherence: refresh in-process caches (roles) on cross-node option changes, and
-        // join the cluster notification bus so SSE pushes reach clients on any node. No-op w/o Redis.
-        require('./core/coherence').initCoherence();
-        require('./core/notifications').initClusterBus();
-        // Salas de edición colaborativa (Verso F8): el gateway hace round-robin en cada petición, así
-        // que dos editores de la misma página caen en nodos distintos por construcción. El bus reparte
-        // sus ops entre nodos; sin Redis (mononodo) es un no-op y el fan-out se queda en memoria.
-        require('./core/collab-rooms').initClusterBus();
-
-        // Outgoing webhooks: subscribe the dispatcher to content hooks and start the delivery poller.
-        require('./core/webhooks').initWebhooks();
-        // F3 content outbox: pending events from this or a crashed peer are leased and delivered only
-        // after their content transaction committed. Start it after hook consumers are registered.
-        require('./core/content-outbox').initContentOutbox();
-
-        // Expose Cron API to Plugins via global.wordjs
-        global.wordjs = global.wordjs || {};
-        global.wordjs.scheduleEvent = scheduleEvent;
-        global.wordjs.scheduleSingleEvent = scheduleSingleEvent;
-        global.wordjs.unscheduleEvent = unscheduleEvent;
-        global.wordjs.nextScheduled = nextScheduled;
+        // Cron, the coherence and cluster buses, the webhook dispatcher and the content outbox. One
+        // module (core/runtime-services) because POST /setup/install starts the same services in a
+        // process that booted in setup mode — otherwise a fresh site ran without them until a restart.
+        await require('./core/runtime-services').startRuntimeServices();
 
         // Initialize Robust Theme Engine
         log.info('🎨 Initializing Theme Engine...');
