@@ -30,13 +30,17 @@ process.env.PORT = port.toString();
 // cluster-CA-signed public origin validate — global fetch/undici would otherwise reject the chain; and
 // (b) surface internalApiUrl as INTERNAL_API_URL for any code that reads the env rather than the config.
 try {
-    // Trust the cluster CA for SSR. Fall back to backend/certs for LOCAL split, where the install writes
-    // the CA there rather than frontend/certs (mirrors server.js).
-    const localCa = path.resolve(process.cwd(), 'certs', 'cluster-ca.crt');
-    const caPath = fs.existsSync(localCa) ? localCa : path.resolve(process.cwd(), '..', 'backend', 'certs', 'cluster-ca.crt');
-    if (fs.existsSync(caPath) && !process.env.NODE_EXTRA_CA_CERTS) {
-        process.env.NODE_EXTRA_CA_CERTS = caPath;
-        console.log(`🔐 Trusting cluster CA for SSR: ${caPath}`);
+    // Trust the cluster CA for SSR (falling back to backend/certs for LOCAL split, where the install writes
+    // the CA there rather than frontend/certs, mirroring server.js) — plus, on one machine, the certificate
+    // the gateway next to us serves on its public port, which SSR goes through (scripts/ssr-trust.js).
+    if (!process.env.NODE_EXTRA_CA_CERTS) {
+        const { buildSsrTrust, writeTrustBundle } = require('./ssr-trust');
+        const files = buildSsrTrust({ cwd: process.cwd() });
+        const bundle = writeTrustBundle(files, path.resolve(process.cwd(), '.next', 'ssr-trust.pem'));
+        if (bundle) {
+            process.env.NODE_EXTRA_CA_CERTS = bundle;
+            console.log(`🔐 Trusting for SSR: ${files.join(', ')}`);
+        }
     }
     const configPath = path.resolve(process.cwd(), 'wordjs-config.json');
     if (fs.existsSync(configPath)) {

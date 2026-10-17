@@ -146,17 +146,24 @@ class WordJSSetup {
             existingGateway = await fs.readJson(gatewayConfigPath);
         }
 
-        const gatewayConfig = {
-            ...existingGateway,
+        // Only keys the backend config actually carries replace the gateway's own. The backend config has
+        // no `ssl` block in a release install: create-wordjs seeds `{ "ssl": true }` in gateway-config.json
+        // alone, and writing `ssl: undefined` over it dropped the key, so the gateway came back from its
+        // next restart serving plain HTTP on a site whose address is https://.
+        const fromBackend = {
             gatewaySecret: fullConfig.gatewaySecret,
             gatewayPort: fullConfig.gatewayPort,
             gatewayInternalPort: fullConfig.gatewayInternalPort,
             siteUrl: fullConfig.siteUrl,
             host: fullConfig.host,
-            ssl: fullConfig.ssl,
-            mtls: { ca: './certs/cluster-ca.crt', key: './certs/gateway-internal.key', cert: './certs/gateway-internal.crt' },
-            updatedAt: new Date().toISOString()
+            ssl: fullConfig.ssl
         };
+        const gatewayConfig = { ...existingGateway };
+        for (const [key, value] of Object.entries(fromBackend)) {
+            if (value !== undefined) gatewayConfig[key] = value;
+        }
+        gatewayConfig.mtls = { ca: './certs/cluster-ca.crt', key: './certs/gateway-internal.key', cert: './certs/gateway-internal.crt' };
+        gatewayConfig.updatedAt = new Date().toISOString();
         await fs.writeJson(gatewayConfigPath, gatewayConfig, { spaces: 2 });
 
         // 3. SELECTIVE CERT DISTRIBUTION

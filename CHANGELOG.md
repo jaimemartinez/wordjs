@@ -4,6 +4,23 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [Unreleased]
+
+### Fixed
+
+- **A split install keeps serving HTTPS after its first restart, and its content pages render.** Two
+  problems hit a split-mode site installed from the release bundle with the default self-signed HTTPS
+  (no `WORDJS_HTTP=1`). First, the installer rewrote `gateway/gateway-config.json` with `ssl` taken
+  from the backend's config, which has none, so the key was dropped and the gateway came back from its
+  next restart serving plain HTTP on a site whose address is `https://`. The installer now only replaces
+  gateway keys the backend config actually sets. Second, once the cluster certificates exist the
+  frontend's server-side reads go through the gateway's public origin, but the frontend trusted only the
+  cluster CA, not the gateway's own self-signed certificate, so every read failed and pages such as
+  `/about` or a post answered 404 while the home page fell back to defaults. The frontend now also
+  trusts the certificate the gateway on the same machine serves (`gateway/ssl-auto.crt`, or the one set
+  in `gateway-config.json`), and nothing wider. Sites behind a TLS-terminating proxy with
+  `WORDJS_HTTP=1`, monolith installs and separate mode were not affected.
+
 ## [2.6.0] - 2026-10-16
 
 ### Added
