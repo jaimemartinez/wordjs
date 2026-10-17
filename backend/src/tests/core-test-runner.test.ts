@@ -45,6 +45,12 @@ test('a TypeScript suite is found and run; passes and failures are counted', asy
     assert.ok(!r.skipped);
 });
 
+test('a test file that cannot even load is a failure, never a pass of 0 tests', async () => {
+    const r = await runCoreTests(suite({ 'broken.test.ts': `throw new Error('does not load');\n` }));
+    assert.strictEqual(r.success, false, JSON.stringify(r));
+    assert.ok(r.failed >= 1, JSON.stringify(r));
+});
+
 test('no suite at all is reported as skipped, never as a pass of 0 tests', async () => {
     const r = await runCoreTests(suite({ 'readme.md': 'nothing here' }));
     assert.strictEqual(r.skipped, true);

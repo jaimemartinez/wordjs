@@ -71,7 +71,9 @@ async function runCoreTests(testsDir: string = path.resolve('./src/tests')) {
 
     for (const testFile of testFiles) {
         const result = await new Promise<any>((resolve) => {
-            const args = ['--test', '--test-force-exit'];
+            // The TAP reporter, explicitly: node's default depends on whether stdout is a TTY (spec's
+            // `ℹ tests N` on one machine, TAP's `# tests N` on another), and the counts are parsed below.
+            const args = ['--test', '--test-force-exit', '--test-reporter=tap'];
             if (testFile.endsWith('.ts') && tsNodeRegister) args.push('-r', tsNodeRegister);
             args.push(testFile);
             const child = spawn(process.execPath, args, {
@@ -85,14 +87,17 @@ async function runCoreTests(testsDir: string = path.resolve('./src/tests')) {
             child.stderr.on('data', (data: Buffer) => { output += data.toString(); });
 
             child.on('close', (code: number | null) => {
-                const testsMatch = output.match(/ℹ tests (\d+)/);
-                const passMatch = output.match(/ℹ pass (\d+)/);
-                const failMatch = output.match(/ℹ fail (\d+)/);
-
+                const count = (name: string) => {
+                    const m = output.match(new RegExp(`^# ${name} (\\d+)$`, 'm'));
+                    return m ? parseInt(m[1], 10) : 0;
+                };
+                const failed = count('fail');
                 resolve({
-                    tests: testsMatch ? parseInt(testsMatch[1], 10) : 0,
-                    passed: passMatch ? parseInt(passMatch[1], 10) : 0,
-                    failed: failMatch ? parseInt(failMatch[1], 10) : 0,
+                    tests: count('tests'),
+                    passed: count('pass'),
+                    // A file that exits non-zero without a failing test (it did not load, it crashed)
+                    // counts as one failure, so it can never add up to a pass.
+                    failed: code !== 0 && failed === 0 ? 1 : failed,
                     success: code === 0
                 });
             });
