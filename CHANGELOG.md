@@ -130,6 +130,7 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   restart. A single-host split now purges the frontend installed next to the backend on `127.0.0.1`
   at its own port, and for that loopback target the purge follows the listener the frontend really
   opened.
+
 - **A split install keeps serving HTTPS after its first restart, and its content pages render.** Two
   problems hit a split-mode site installed from the release bundle with the default self-signed HTTPS
   (no `WORDJS_HTTP=1`). First, the installer rewrote `gateway/gateway-config.json` with `ssl` taken
