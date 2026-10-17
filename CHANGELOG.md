@@ -15,6 +15,16 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   comment, term or settings event was ever queued) and scheduled posts were not published. The install
   now starts these services in the running process, as the boot does (`core/runtime-services`).
 
+- **Release bundles no longer include a stray test backup in `backend/backups/`.** The 2.6.0 bundle
+  carried a backup left over from a local test run (a throwaway test database, no site data), and
+  `npx create-wordjs upgrade` copied it into the upgraded site, where it listed under Admin → Settings →
+  Backups. If a site upgraded to 2.6.0 shows a backup dated 2026-10-15 that it did not create, delete it
+  from that page; do not restore it. The packager now excludes `backend/backups/` by name,
+  `.gitignore` covers it, and CI fails if the repository tracks a backup or a database file outside test
+  fixtures or if a built bundle contains one. `create-wordjs upgrade` also treats `backend/backups/`
+  as site state, like `backend/data/` and `backend/uploads/`: it never adds to or replaces the site's
+  own backups.
+
 ## [2.6.0] - 2026-10-16
 
 ### Added
