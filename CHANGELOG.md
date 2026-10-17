@@ -8,6 +8,24 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Fixed
 
+- **WordPress import keeps featured images.** `_thumbnail_id` names the attachment's id on the old site;
+  it is now remapped to the imported attachment, also when the attachment is listed after the post or was
+  matched on a re-run, and a re-run repairs posts an earlier import left pointing at the source id. A
+  reference that resolves to no imported attachment is dropped instead of naming an unrelated row.
+
+- **Imported comments keep their dates.** `wp:comment_date` / `wp:comment_date_gmt` are restored instead of
+  the import time.
+
+- **Re-importing content re-links menus.** When a menu is matched on a re-run, an item whose page, post or
+  term no longer exists (deleted and imported again under a new id) is re-pointed at the re-imported copy;
+  items whose target still exists, including ones edited by hand, are left alone. The summary reports them
+  as `menus.items.relinked`.
+
+- **Public dates follow the site language.** Post dates on single posts, the home page and search results,
+  and comment dates, are formatted in the site's language (`WPLANG`, the same value as `<html lang>`)
+  instead of the visitor's browser or the server's locale, so an English site no longer shows `2/3/2024`
+  for 2 March to a Spanish reader.
+
 - **A freshly installed site runs cron and outgoing webhooks without a restart.** The process that
   finished the install wizard (or `POST /api/v1/setup/install`) had booted in setup mode, and the boot
   starts cron, the coherence and cluster buses, the webhook dispatcher and the content outbox only on an
