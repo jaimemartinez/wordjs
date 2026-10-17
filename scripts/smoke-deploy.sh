@@ -312,10 +312,11 @@ case "$install_out" in
 esac
 echo "   ✓ installed through the HTTPS gateway"
 grep -q '"ssl"' "$APP/gateway/gateway-config.json"     || fail "the install rewrote gateway-config.json WITHOUT its ssl setting — the gateway will serve plain HTTP after a restart: $(cat "$APP/gateway/gateway-config.json")" "$LOGS/split-https.log"
-# 80 s, not 24: before the restart the frontend still listens on the plain-HTTP socket it opened before the
-# install, and the backend's purge to the https:// frontendUrl cannot reach it, so the home page changes on
-# its 60 s ISR window. What this proves is that SSR reaches the HTTPS gateway before any restart.
-assert_serving "https, fresh install" "$LOGS/split-https.log" 40
+# The default 24 s, i.e. the install's purge must land: before the restart the frontend still listens on
+# the plain-HTTP socket it opened before the install, and the purge (to the co-located frontend on
+# loopback, backend/src/core/frontend-purge.ts) has to follow that listener rather than wait out the home
+# page's 60 s ISR window.
+assert_serving "https, fresh install" "$LOGS/split-https.log"
 
 echo "   restarting: the gateway must keep its HTTPS and SSR must trust it"
 stop_all
