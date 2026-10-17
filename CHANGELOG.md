@@ -4,6 +4,17 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [Unreleased]
+
+### Fixed
+
+- **A freshly installed site runs cron and outgoing webhooks without a restart.** The process that
+  finished the install wizard (or `POST /api/v1/setup/install`) had booted in setup mode, and the boot
+  starts cron, the coherence and cluster buses, the webhook dispatcher and the content outbox only on an
+  installed site. Until the first restart, webhooks delivered only the manual test ping (no post,
+  comment, term or settings event was ever queued) and scheduled posts were not published. The install
+  now starts these services in the running process, as the boot does (`core/runtime-services`).
+
 ## [2.6.0] - 2026-10-16
 
 ### Added

@@ -993,6 +993,17 @@ router.post('/install', async (req: Request, res: Response) => {
             // wizard answers 503 until a restart.
             require('../core/plugins-ready').markPluginsReady();
 
+            // And for the runtime services the boot starts only on an installed site: cron (scheduled
+            // publishing), the coherence and cluster buses, the webhook dispatcher and the content outbox.
+            // Without them a fresh site enqueued no webhook for any post, comment or settings change and
+            // never published a scheduled post until its first restart. Never fatal — the install already
+            // succeeded; a restart starts them through the boot.
+            try {
+                await require('../core/runtime-services').startRuntimeServices();
+            } catch (e: any) {
+                log.warn({ err: e }, '⚠️ Setup: could not start the runtime services (cron, webhooks); they start at the next restart');
+            }
+
             res.json({
                 success: true,
                 autoLoggedIn,
