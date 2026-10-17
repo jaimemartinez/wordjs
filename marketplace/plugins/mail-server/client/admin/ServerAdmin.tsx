@@ -897,7 +897,7 @@ function TestDelivery({ t }: any) {
             {res && (
                 <div className={cx('mt-5 rounded-xl border p-4 text-sm', res.localOnly ? 'border-amber-200 bg-amber-50' : res.success ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50')}>
                     <div className={cx('flex items-center gap-2 font-semibold', res.localOnly ? 'text-amber-800' : res.success ? 'text-emerald-800' : 'text-red-800')}>
-                        <i className={cx('fa-solid', res.localOnly ? 'fa-triangle-exclamation' : res.success ? 'fa-circle-check' : 'fa-circle-exclamation')}></i>{res.localOnly ? t('srv.testx.localOnly', { to: res.to }) : res.success ? t('srv.testx.ok') : res.message && !res.failed?.length && !res.delivered?.length ? res.message : t('srv.testx.fail')}
+                        <i className={cx('fa-solid', res.localOnly ? 'fa-triangle-exclamation' : res.success ? 'fa-circle-check' : 'fa-circle-exclamation')}></i>{res.localOnly ? t('srv.testx.localOnly', { to: res.to }) : res.success ? t('srv.testx.ok') : res.message && ((!res.failed?.length && !res.delivered?.length) || (res.relay?.configured && !res.relay.ok)) ? res.message : t('srv.testx.fail')}
                     </div>
                     {(res.delivered || []).map((d: any, i: number) => <div key={'d' + i} className="mt-2 break-all rounded-lg bg-white/70 px-3 py-2 font-mono text-xs text-emerald-900"><b>{d.recipient}</b> {t('srv.testx.via')} <b>{d.via}</b> — {d.response}</div>)}
                     {(res.failed || []).map((f: any, i: number) => <div key={'f' + i} className="mt-2 break-all rounded-lg bg-white/70 px-3 py-2 font-mono text-xs text-red-900"><b>{f.recipient}</b> — {f.error}{f.permanent ? ` (${t('srv.testx.permanent')})` : ''}</div>)}

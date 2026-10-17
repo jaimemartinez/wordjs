@@ -40,8 +40,8 @@ class FakeSMTPServer {
 }
 
 interface Boot {
-    options?: Record<string, string>;
-    verify?: () => Promise<any>;
+    options?: Record<string, any>;
+    verify?: (transportOptions: any) => Promise<any>;
     siteDomain?: string;
     smtpListen?: (handlers: any, opts: any) => Promise<any>;
 }
@@ -54,7 +54,7 @@ async function boot(cfg: Boot) {
         createTransport(opts: any) {
             transports.push(opts);
             return {
-                verify: cfg.verify || (async () => true),
+                verify: cfg.verify ? () => cfg.verify!(opts) : (async () => true),
                 async sendMail(m: any) { relaySends.push(m); return { response: '250 2.0.0 Ok: queued' }; },
             };
         },
@@ -72,7 +72,7 @@ async function boot(cfg: Boot) {
         moduleObj.exports, requireShim, moduleObj, PLUGIN_SRC, PLUGIN_DIR);
     const plugin = moduleObj.exports;
 
-    const options: Record<string, string> = { smtp_listen_port: '25', mail_undo_send_seconds: '0', ...(cfg.options || {}) };
+    const options: Record<string, any> = { smtp_listen_port: '25', mail_undo_send_seconds: '0', ...(cfg.options || {}) };
     const routes = new Map<string, (req: any, res: any) => any>();
     const domain = cfg.siteDomain || 'acme.example';
     const dnsBridge = (label: string) => async (name: string) => { mxLookups.push(`${label} ${name}`); throw new Error(`query ${label} ENOTFOUND`); };
@@ -111,7 +111,7 @@ async function boot(cfg: Boot) {
         await handler!({ query: {}, params: {}, body, cookies: {}, user: ADMIN, headers: {} }, res);
         return out;
     };
-    return { plugin, call, transports, relaySends, mxLookups };
+    return { plugin, call, transports, relaySends, mxLookups, options };
 }
 
 test('a relay the sandbox refuses is reported as unavailable, and mail is queued — never sent direct-to-MX', async () => {
@@ -125,6 +125,7 @@ test('a relay the sandbox refuses is reported as unavailable, and mail is queued
         assert.strictEqual(settings.relay_status.ok, false);
         assert.strictEqual(settings.relay_status.sandboxBlocked, true);
         assert.match(settings.relay_status.error, /sandbox blocks private addresses .* approve 192\.168\.182\.56:1025/);
+        assert.strictEqual(b.options.mail_delivery_ready, '0', 'password recovery stays off while the relay cannot deliver');
 
         const lookupsBefore = b.mxLookups.length;
         const r = await b.call('post', '/test', { to: 'someone@example.org' });
@@ -153,6 +154,14 @@ test('a relay given by name is resolved by the plugin; nodemailer gets the addre
         assert.strictEqual(t.requireTLS, true, 'STARTTLS stays required by default');
         const settings = (await b.call('get', '/settings')).body;
         assert.strictEqual(settings.relay_status.ok, true);
+        // A relay that answers makes mail deliverable — the flag password recovery is gated on — without
+        // the MX/SPF/DKIM/DMARC check, which a relay-only site never passes.
+        assert.strictEqual(b.options.mail_delivery_ready, '1');
+        await b.call('get', '/security/dns-check');
+        assert.strictEqual(b.options.mail_delivery_ready, '1', 'the DNS check does not override a working relay');
+        await b.call('post', '/settings', { mail_server: '' });
+        assert.strictEqual(b.options.mail_delivery_ready, '0', 'removing the relay hands readiness back to the DNS check');
+        await b.call('post', '/settings', { mail_server: 'relay.lan' });
         const r = await b.call('post', '/test', { to: 'someone@example.org' });
         assert.strictEqual(r.body.success, true, JSON.stringify(r.body));
         assert.strictEqual(r.body.delivered[0].via, 'relay');
@@ -193,4 +202,33 @@ test('a localhost site gives a non-public mail domain, and GET /settings says so
         assert.strictEqual(s.mail_domain, 'acme.org');
         assert.strictEqual(s.mail_domain_public, true);
     } finally { real.plugin.deactivate(); }
+});
+
+test('a setting saved as 0 is read as off: Require STARTTLS = No is honoured even when the host returns the number 0', async () => {
+    const b = await boot({ options: { mail_server: '192.168.182.56', mail_port: 1025, mail_relay_require_tls: 0 } });
+    try {
+        const t = b.transports[b.transports.length - 1];
+        assert.strictEqual(t.requireTLS, false);
+        assert.strictEqual(t.port, 1025);
+        const settings = (await b.call('get', '/settings')).body;
+        assert.strictEqual(settings.mail_relay_require_tls, '0', 'the console shows No, not the default Yes');
+    } finally { b.plugin.deactivate(); }
+});
+
+test('with Require STARTTLS off, a relay that refuses STARTTLS with an SMTP reply is used without TLS; with it on, it is reported', async () => {
+    const REFUSED = 'Error upgrading connection with STARTTLS: 502 5.5.1 Command not implemented';
+    const verify = async (opts: any) => { if (!opts.ignoreTLS) throw new Error(REFUSED); return true; };
+    const off = await boot({ options: { mail_server: '192.168.182.56', mail_port: '1025', mail_relay_require_tls: '0' }, verify });
+    try {
+        const last = off.transports[off.transports.length - 1];
+        assert.strictEqual(last.ignoreTLS, true);
+        assert.strictEqual((await off.call('get', '/settings')).body.relay_status.ok, true);
+    } finally { off.plugin.deactivate(); }
+    const on = await boot({ options: { mail_server: '192.168.182.56', mail_port: '587' }, verify });
+    try {
+        assert.ok(on.transports.every((t: any) => !t.ignoreTLS), 'never downgraded while STARTTLS is required');
+        const st = (await on.call('get', '/settings')).body.relay_status;
+        assert.strictEqual(st.ok, false);
+        assert.match(st.error, /502 5\.5\.1/);
+    } finally { on.plugin.deactivate(); }
 });

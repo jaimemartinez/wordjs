@@ -21,18 +21,27 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 - **Mail Server 3.0.2: a relay that does not answer is reported, not bypassed.** When the configured
   relay failed its check, outgoing mail silently went direct-to-MX instead. Now it waits in the retry
-  queue and the console says **Relay unavailable: <reason>** (server health, the Config tab and the Test
-  tab; `relay_status` in `GET /settings`); a failed relay is re-checked at most once a minute. The Config
-  tab has a **Sandbox access** section to approve a private relay's exact address. A relay given by name
-  now works inside the sandbox (the plugin resolves it and keeps the name for TLS), and relay credentials
-  are optional, for a smarthost that relays for its network by address.
+  queue and the console says **Relay unavailable: <reason>** (server health, the Configuration tab and
+  the Test tab; `relay_status` in `GET /settings`); a failed relay is re-checked at most once a minute.
+  The Configuration tab has a **Sandbox access** section to approve a private relay's exact address. A
+  relay given by name now works inside the sandbox (the plugin resolves it and keeps the name for TLS),
+  and relay credentials are optional, for a smarthost that relays for its network by address. With
+  **Require STARTTLS** off, a relay that advertises STARTTLS and then refuses it with an SMTP reply gets
+  the mail without TLS, as direct-to-MX delivery already does.
+- **Mail Server: password recovery works with a relay.** Recovery (and e-mail verification) waited for
+  the DNS check to find MX, A, SPF, DKIM and DMARC on the site's own domain, which a site that sends
+  through a relay never passes. Now a relay that answers its check is what makes mail ready, and one
+  that does not turns recovery off again.
+- **Mail Server: switched-off settings stay off.** A setting saved as `0` came back from the host as a
+  number and was read as on, so **Require STARTTLS: No** (and other switches turned off in the console)
+  had no effect and showed as **Yes** again after saving.
 - **Mail Server: a non-standard `smtp_listen_port` works with "Receive internet email".** WordJS now
   opens any unprivileged port (1024 and up) for the plugin, besides the ones its manifest declares. A port
   it refuses no longer leaves the server without a listener: the plugin listens on 25 and the console
   says which port was refused and why.
 - **Mail Server: the console warns when the mail domain is not a public domain.** On a site reached by
   IP, `localhost` or a LAN name, mailboxes become `@localhost` (or similar) and no other server can
-  deliver to them. Server health, the Config tab and the startup log now say so and how to fix it
+  deliver to them. Server health, the Configuration tab and the startup log now say so and how to fix it
   (`mail_domain` / `mail_domain_public` in `GET /settings`).
 
 ## [2.6.0] - 2026-10-16
