@@ -23,18 +23,18 @@
 	<wp:term><wp:term_id>4</wp:term_id><wp:term_taxonomy><![CDATA[nav_menu]]></wp:term_taxonomy><wp:term_slug><![CDATA[header]]></wp:term_slug><wp:term_name><![CDATA[Header]]></wp:term_name></wp:term>
 
 	<item>
-		<title><![CDATA[logo]]></title>
-		<link>https://old.example.com/logo/</link>
+		<title><![CDATA[beans]]></title>
+		<link>https://old.example.com/beans/</link>
 		<dc:creator><![CDATA[maria]]></dc:creator>
 		<content:encoded><![CDATA[]]></content:encoded>
 		<wp:post_id>10</wp:post_id>
 		<wp:post_date><![CDATA[2024-03-01 09:00:00]]></wp:post_date>
 		<wp:post_date_gmt><![CDATA[2024-03-01 09:00:00]]></wp:post_date_gmt>
-		<wp:post_name><![CDATA[logo]]></wp:post_name>
+		<wp:post_name><![CDATA[beans]]></wp:post_name>
 		<wp:status><![CDATA[inherit]]></wp:status>
 		<wp:post_parent>0</wp:post_parent>
 		<wp:post_type><![CDATA[attachment]]></wp:post_type>
-		<wp:attachment_url><![CDATA[https://www.google.com/images/branding/googlelogo/2x/googlelogo_color_92x30dp.png]]></wp:attachment_url>
+		<wp:attachment_url><![CDATA[https://raw.githubusercontent.com/jaimemartinez/wordjs/refs/heads/main/documentation/tutorials/files/wp-content/uploads/2024/03/beans.png]]></wp:attachment_url>
 	</item>
 
 	<item>
@@ -43,7 +43,7 @@
 		<dc:creator><![CDATA[maria]]></dc:creator>
 		<description></description>
 		<content:encoded><![CDATA[<p>Rinse the filter, use 15 g of coffee for 250 g of water, and pour in three slow stages.</p>
-<p><img src="https://www.google.com/images/branding/googlelogo/2x/googlelogo_color_92x30dp.png" alt="Our logo" /></p>]]></content:encoded>
+<p><img src="https://raw.githubusercontent.com/jaimemartinez/wordjs/refs/heads/main/documentation/tutorials/files/wp-content/uploads/2024/03/beans.png" alt="Freshly roasted beans" /></p>]]></content:encoded>
 		<excerpt:encoded><![CDATA[Our three-stage pour-over recipe.]]></excerpt:encoded>
 		<wp:post_id>11</wp:post_id>
 		<wp:post_date><![CDATA[2024-03-02 10:00:00]]></wp:post_date>
