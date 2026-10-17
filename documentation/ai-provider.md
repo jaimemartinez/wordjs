@@ -24,8 +24,9 @@ Nobody else ever sees the key: not the browser, not plugins, not the logs.
 **Timeout.** One provider request may take 60 s for a remote provider and **300 s for a loopback one** —
 a model on the same machine (Ollama, LM Studio on a CPU) can need minutes on its first load, behind a
 queue, or for an image. `WORDJS_AI_TIMEOUT_MS` on the backend overrides both (clamped to 1 s – 30 min).
-In split and separate mode the gateway sits between the browser and the backend; a request longer than
-its proxy timeout is cut there, so keep the two in step.
+In split and separate mode the gateway sits between the browser and the backend and gives `/api/v1/ai/`
+requests `WORDJS_AI_TIMEOUT_MS` + 30 s, read from **its own** environment (see gateway.md, "Upstream
+timeout"): when you raise the value, set it for the gateway as well as the backend.
 
 **Errors.** A provider failure answers a distinct code with a message that says what to do; the editor
 shows its own wording for each (anything else falls back to "the AI provider did not answer correctly"):
