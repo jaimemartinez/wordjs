@@ -1909,6 +1909,152 @@ router.post('/:slug/egress-hosts', authenticate, isAdmin, asyncHandler(async (re
 
 /**
  * @swagger
+ * /plugins/{slug}/private-egress:
+ *   parameters:
+ *     - in: path
+ *       name: slug
+ *       required: true
+ *       schema:
+ *         type: string
+ *   get:
+ *     summary: List the private destinations (exact host:port) an administrator approved for a plugin.
+ *     description: >-
+ *       Plugins may reach public addresses only. An approved destination is the one exception: exactly that
+ *       host on exactly that port (for example a LAN SMTP relay), and only while the plugin holds the
+ *       network grant. Link-local (cloud metadata), unspecified and multicast addresses cannot be approved.
+ *     tags: [Plugins]
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: The approved destinations and whether the plugin holds the network grant.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               required: [slug, destinations, network]
+ *               properties:
+ *                 slug:
+ *                   type: string
+ *                 destinations:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                     example: 192.168.1.20:587
+ *                 network:
+ *                   type: boolean
+ *       400:
+ *         description: The slug is not a well-formed plugin slug.
+ *       401:
+ *         description: Not authenticated.
+ *       403:
+ *         description: Authenticated but not an administrator (rest_forbidden), or an API token whose scope does not reach this resource.
+ *       429:
+ *         description: Global per-IP API rate limit exceeded.
+ *   post:
+ *     summary: Replace the private destinations approved for a plugin (admin). The egress allowlist is not changed.
+ *     tags: [Plugins]
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               destinations:
+ *                 type: array
+ *                 description: >-
+ *                   `host:port` or `[ipv6]:port` entries (at most 4). Invalid entries are dropped. An empty array
+ *                   withdraws every approval.
+ *                 items:
+ *                   type: string
+ *     responses:
+ *       200:
+ *         description: Saved (destinations echoes what survived validation); the running plugin is restarted so it applies.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               required: [success, slug, destinations, reloaded]
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 slug:
+ *                   type: string
+ *                 destinations:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                 reloaded:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *       400:
+ *         description: The slug is not a well-formed plugin slug.
+ *       401:
+ *         description: Not authenticated.
+ *       403:
+ *         description: >-
+ *           Not an administrator (rest_forbidden); a failed CSRF check (rest_csrf_invalid, rest_csrf_token); or an
+ *           API token whose list would approve a destination not approved now (rest_token_management_forbidden —
+ *           a token may withdraw an approval, never make one; nothing is written).
+ *       409:
+ *         description: >-
+ *           `sandbox_unavailable` — the list WAS saved (`saved: true`), but the plugin sandbox refused to restart
+ *           the plugin, which is now stopped (`stopped: true`).
+ *       429:
+ *         description: Global per-IP API rate limit exceeded.
+ */
+router.get('/:slug/private-egress', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    const slug = safeSlugParam(req.params.slug);
+    if (!slug) return res.status(400).json({ error: 'Invalid plugin slug' });
+    const { getPrivateDestinations, getGrants } = require('../core/plugin-permissions');
+    res.json({ slug, destinations: getPrivateDestinations(slug), network: getGrants(slug).includes('network') });
+}));
+
+router.post('/:slug/private-egress', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    const slug = safeSlugParam(req.params.slug);
+    if (!slug) return res.status(400).json({ error: 'Invalid plugin slug' });
+    const { applyPrivateDestinations, getPrivateDestinations } = require('../core/plugin-permissions');
+    const body = req.body || {};
+    const entries: string[] = Array.isArray(body.destinations) ? body.destinations.slice(0, 32).map((h: any) => String(h)) : [];
+    // Same rule as the egress allowlist: an API token may narrow, never widen (judged on the stored list).
+    const { announced, refused } = await applyPrivateDestinations(slug, entries, { narrowOnly: isHeadless(req) });
+    if (refused.length && refusePluginGrantByToken(req, res, refused)) return;
+
+    // The running child enforces the list it was spawned with: respawn it, then propagate to other nodes.
+    let reloaded = false;
+    let reloadRefusal: any = null;
+    try {
+        const { reloadIsolatedPlugin, isIsolated } = require('../core/plugin-isolate');
+        if (isIsolated(slug)) { await reloadIsolatedPlugin(slug); reloaded = true; }
+    } catch (e: any) {
+        log.warn({ slug: logSafe(slug), err: e }, `[PrivateEgress] reload of '${logSafe(slug)}' after the change failed`);
+        reloadRefusal = findSandboxUnavailable(e);
+    }
+    try { require('../core/plugins').publishPluginChange(slug, 'reload'); } catch { /* best-effort */ }
+    await awaitPolicyAnnounced(announced, 'PrivateEgress', slug);
+
+    const saved = getPrivateDestinations(slug);
+    await recordAudit(req.user && req.user.id, 'plugin.private_egress', 'plugin', slug, { destinations: saved });
+    if (reloadRefusal) {
+        return res.status(409).json(sandboxRefusalBody(reloadRefusal, {
+            message: `The private destinations for '${slug}' were saved, but the plugin is now STOPPED: the plugin sandbox refused to restart it. ${reloadRefusal.message}`,
+            slug, destinations: saved, saved: true, reloaded: false, stopped: true,
+        }));
+    }
+    res.json({
+        success: true,
+        slug,
+        destinations: saved,
+        reloaded,
+        message: saved.length
+            ? `'${slug}' may now reach ${saved.join(', ')} (and no other private address).${reloaded ? ' Plugin reloaded — in effect.' : ' Reactivate the plugin to apply.'}`
+            : `'${slug}' may no longer reach any private address.${reloaded ? ' Plugin reloaded — in effect.' : ''}`,
+    });
+}));
+
+/**
+ * @swagger
  * /plugins/{slug}/reload:
  *   post:
  *     summary: Hot-reload an isolated plugin's child process (e.g. after editing its files)

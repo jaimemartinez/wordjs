@@ -1721,6 +1721,11 @@ function fsGrantsFor(slug: string): { read: boolean; write: boolean } {
 function getEgressAllowlistFor(slug: string): string[] {
     try { const l = require('./plugin-permissions').getEgressAllowlist(slug); return Array.isArray(l) ? l : []; } catch { return []; }
 }
+// The admin-approved private destinations (exact host:port) for a plugin, pushed into the child's cfg
+// (→ egress-guard.setPrivateDestinations). Fail-CLOSED: none on any error.
+function getPrivateDestinationsFor(slug: string): string[] {
+    try { const l = require('./plugin-permissions').getPrivateDestinations(slug); return Array.isArray(l) ? l : []; } catch { return []; }
+}
 // Whether the per-plugin egress policy loaded cleanly at boot. When FALSE (DB/options load failed, or the
 // permissions module can't be required at all), the spawn path below fails egress CLOSED for a
 // network-granted plugin instead of the historic allow-all-public (audit F-06).
@@ -2015,7 +2020,7 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
     // worker scrubs the secret out of process.argv before plugin code runs, so a forged frame written
     // straight to fd 3 by plugin code can never carry it. Closes the frame-forge class regardless of vector.
     const frameNonce = require('crypto').randomBytes(24).toString('base64url');
-    const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, network: netGranted, allowedHosts: (netGranted && !egressDenyAll) ? getEgressAllowlistFor(slug) : [], egressDenyAll, fsRead: fsGrant.read, fsWrite: fsGrant.write, storage, site: siteId, envAllow: SAFE_ENV_KEYS, frameNonce });
+    const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, network: netGranted, allowedHosts: (netGranted && !egressDenyAll) ? getEgressAllowlistFor(slug) : [], egressDenyAll, privateDestinations: (netGranted && !egressDenyAll) ? getPrivateDestinationsFor(slug) : [], fsRead: fsGrant.read, fsWrite: fsGrant.write, storage, site: siteId, envAllow: SAFE_ENV_KEYS, frameNonce });
     const HEAP_FLAG = '--max-old-space-size=256'; // caps the JS HEAP; cgroup/rlimit/poll cap TOTAL memory
     // RSS_BUDGET_BYTES (resident budget — cgroup memory.max AND the /proc poll AND the Job-Object cap) is
     // module-scoped now, shared with cgroupResourceProps() so the probe and this launch never disagree.
