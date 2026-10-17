@@ -81,7 +81,7 @@ describe('plugin in-place update', () => {
     // This slug's update scratch dirs: the stash (named at random, its slug in a marker file, or the legacy
     // `plugin-update-<slug>-<hex>` form) and any staging dir left behind.
     function ownScratch(): string[] {
-        let names: string[] = [];
+        let names: string[];
         try { names = fs.readdirSync(OS_TMP_DIR); } catch { return []; }
         return names.filter((n: string) => {
             if (n.startsWith(`plugin-update-${SLUG}-`)) return true;
