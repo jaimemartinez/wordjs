@@ -7,11 +7,12 @@
  *   2. THE DELIVERY REWRITE (lib/mediaDelivery). Content keeps relative /uploads paths; only the SSR
  *      copy of a page points at the CDN, and only real /uploads URLs (not fonts, not absolute URLs).
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import nextConfig from '../../../next.config';
 import { normalizeMediaBase, rewriteMediaString, rewriteMediaUrls, mediaBaseFromSettings } from '../mediaDelivery';
+import { refreshMediaCdnOrigin } from '../server-api';
 import mediaCsp from '../../../media-csp.js';
 
 const { withMediaOrigin, installMediaCsp, currentMediaOrigin, GLOBAL_KEY } = mediaCsp as {
@@ -124,5 +125,33 @@ describe('mediaDelivery: SSR rewrite of /uploads to the CDN base', () => {
         expect(mediaBaseFromSettings({ media_public_base: 'javascript:alert(1)' })).toBe('');
         expect(mediaBaseFromSettings(null)).toBe('');
         expect(normalizeMediaBase('https://cdn.example.com/x?y=1')).toBe('');
+    });
+});
+
+describe('media-csp: a settings purge refreshes the published origin at once', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        delete (globalThis as Record<string, unknown>)[GLOBAL_KEY];
+    });
+
+    it('re-reads media_cdn_origin from the backend with no cache, and keeps the old value on failure', async () => {
+        (globalThis as Record<string, unknown>)[GLOBAL_KEY] = 'https://old-cdn.example.com';
+        const calls: Array<{ url: string; init: any }> = [];
+        vi.stubGlobal('fetch', async (url: string, init: any) => {
+            calls.push({ url: String(url), init });
+            return new Response(JSON.stringify({ media_cdn_origin: 'http://media.lan:3900' }), { status: 200, headers: { 'content-type': 'application/json' } });
+        });
+        await refreshMediaCdnOrigin();
+        expect(calls).toHaveLength(1);
+        expect(calls[0].url).toMatch(/\/settings$/);
+        expect(calls[0].init.cache).toBe('no-store');
+        expect(currentMediaOrigin({})).toBe('http://media.lan:3900');
+
+        vi.stubGlobal('fetch', async () => new Response('down', { status: 502 }));
+        await refreshMediaCdnOrigin();
+        expect(currentMediaOrigin({})).toBe('http://media.lan:3900');
+        vi.stubGlobal('fetch', async () => { throw new Error('ECONNREFUSED'); });
+        await refreshMediaCdnOrigin();
+        expect(currentMediaOrigin({})).toBe('http://media.lan:3900');
     });
 });

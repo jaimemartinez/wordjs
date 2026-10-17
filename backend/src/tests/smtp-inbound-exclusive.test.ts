@@ -155,14 +155,21 @@ test('a plugin that throws gets the sender a TEMPORARY 451, never a silent accep
     await inbound.stop(A);
 });
 
-test('one owner at a time, the port must be declared, and a busy port falls back with the reason', async () => {
+test('one owner at a time, a privileged port must be declared, and a busy port falls back with the reason', async () => {
     const port = await freePort();
     const fallback = await freePort();
     const nothing = async () => null;
 
-    const undeclared = await inbound.start(A, { port }, [25], nothing);
+    // A privileged port the manifest does not declare is refused (587 here: never bound, the check runs first).
+    const undeclared = await inbound.start(A, { port: 587 }, [25], nothing);
     assert.equal(undeclared.ok, false);
     assert.match(undeclared.error, /claimPorts/);
+
+    // An undeclared UNPRIVILEGED port (an operator's smtp_listen_port behind a port map) is opened.
+    const high = await inbound.start(A, { port }, [25], nothing);
+    assert.equal(high.ok, true, high.error);
+    assert.equal(high.boundPort, port);
+    await inbound.stop(A);
 
     const st = await inbound.start(A, { port }, [port], nothing);
     assert.equal(st.ok, true);

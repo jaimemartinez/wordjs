@@ -31,6 +31,8 @@ export interface MediaStorageProgress {
 }
 
 export interface MediaStorageView {
+    /** Non-blocking advice about the saved values (e.g. a public URL that repeats the key prefix). */
+    warnings?: Array<{ field: string; code: string; message: string }>;
     driver: MediaStorageDriver;
     bucket: string;
     region: string;

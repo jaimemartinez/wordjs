@@ -24,6 +24,8 @@ import {
 import { ROOT_ID, ROOT_SLOT, type VersoItem } from "@/lib/verso/types";
 import type { EditorHandle } from "@/lib/verso/store";
 import type { BlockRegistry, VersoField } from "@/lib/verso/registry";
+import type { Language } from "@/lib/i18n";
+import { localizedDefaults } from "@/lib/verso/defaultContent";
 
 export { PATTERNS, loadUserPatterns, deleteUserPattern };
 export type { Pattern, UserPattern };
@@ -57,17 +59,12 @@ function freshId(type: string): string {
  * (mismo criterio que la inserción normal del VersoEditor: un contenedor recién insertado
  * siempre tiene zona de drop). Tipos no registrados se saltan (paridad con buildPatternBlocks).
  */
-export function buildVersoPatternItems(pattern: Pattern, registry: BlockRegistry): VersoItem[] {
+export function buildVersoPatternItems(pattern: Pattern, registry: BlockRegistry, lang: Language = "es"): VersoItem[] {
     const build = (b: PatternBlockShape): VersoItem | null => {
         const def = registry.get(b.type);
         if (!def) return null;
-        let defaults: Record<string, unknown>;
-        try {
-            defaults = structuredClone(def.defaultProps);
-        } catch {
-            defaults = { ...def.defaultProps };
-        }
-        const props: VersoItem["props"] = { ...defaults, ...(b.props ?? {}), id: freshId(b.type) };
+        const defaults = localizedDefaults(def.defaultProps, lang);
+        const props: VersoItem["props"] = { ...defaults, ...localizedDefaults(b.props, lang), id: freshId(b.type) };
         for (const [slot, children] of Object.entries(b.slots ?? {})) {
             props[slot] = (children ?? []).map(build).filter((c): c is VersoItem => c !== null);
         }
@@ -95,8 +92,8 @@ export function insertItemsAtEnd(handle: EditorHandle, items: VersoItem[], label
 }
 
 /** Inserta un patrón built-in al final de la página (ids frescos, un solo undo). */
-export function insertVersoPattern(handle: EditorHandle, registry: BlockRegistry, pattern: Pattern): boolean {
-    return insertItemsAtEnd(handle, buildVersoPatternItems(pattern, registry), `Insertar patrón ${pattern.id}`);
+export function insertVersoPattern(handle: EditorHandle, registry: BlockRegistry, pattern: Pattern, lang: Language = "es"): boolean {
+    return insertItemsAtEnd(handle, buildVersoPatternItems(pattern, registry, lang), `Insertar patrón ${pattern.id}`);
 }
 
 /**

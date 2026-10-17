@@ -21,6 +21,31 @@ Nobody else ever sees the key: not the browser, not plugins, not the logs.
 
 **Test connection** sends one tiny request. Choosing **Off** disables every AI feature.
 
+**Timeout.** One provider request may take 60 s for a remote provider and **300 s for a loopback one** —
+a model on the same machine (Ollama, LM Studio on a CPU) can need minutes on its first load, behind a
+queue, or for an image. `WORDJS_AI_TIMEOUT_MS` on the backend overrides both (clamped to 1 s – 30 min).
+In split and separate mode the gateway sits between the browser and the backend and gives `/api/v1/ai/`
+requests `WORDJS_AI_TIMEOUT_MS` + 30 s, read from **its own** environment (see gateway.md, "Upstream
+timeout"): when you raise the value, set it for the gateway as well as the backend.
+
+**Errors.** A provider failure answers a distinct code with a message that says what to do; the editor
+shows its own wording for each (anything else falls back to "the AI provider did not answer correctly"):
+
+| Code | HTTP | When |
+|---|---|---|
+| `ai_provider_timeout` | 504 | no answer within the timeout (or the server answered 408/504) |
+| `ai_provider_no_vision` | 422 | alt text was asked of a model that does not accept images (the OpenAI-compatible server refused the image) |
+| `ai_provider_model` | 502 | the server does not know the configured model (404, or "model not found") |
+| `ai_provider_auth` | 502 | the key was refused (401/403) |
+| `ai_provider_rate_limited` | 429 | the provider is rate limiting the site |
+| `ai_provider_unreachable` | 502 | the server could not be reached at all |
+| `ai_provider_unavailable` | 502 | the server answered 502/503 |
+| `ai_provider_bad_request` | 502 | any other refusal of the request (400/413/422) |
+| `ai_provider_bad_response` | 502 | the answer was not JSON |
+| `ai_provider_error` | 502 | any other error status |
+
+The provider's own error body is only inspected to classify the failure; it is never echoed back.
+
 ## 2. The key
 
 - Stored as the option `ai_provider_api_key`. It is **write-only**: `GET /api/v1/ai/settings` answers
@@ -87,12 +112,15 @@ const { text, model } = await wordjs.ai.complete({
 | `GET` | `/ai/settings` | administrator, session | settings without the key (`hasKey`, `keyHint`) |
 | `PUT` | `/ai/settings` | administrator, session | `{ provider, model?, baseUrl?, apiKey?, clearKey? }`; `400 rest_invalid_param` on an unknown provider/model or a bad base URL or key |
 | `POST` | `/ai/test` | administrator, session | `{ ok, provider, model, ms }` or the provider error |
-| `POST` | `/ai/suggest` | edit rights (see §3) | `{ task, title?, content?, mediaId?, language? }` → `{ suggestion, model }`; `409 ai_not_configured`, `422 ai_refused`, `429 ai_rate_limited`, or a provider error (below) |
+| `POST` | `/ai/suggest` | edit rights (see §3) | `{ task, title?, content?, mediaId?, language? }` → `{ suggestion, model }`; `409 ai_not_configured`, `422 ai_refused`, `429 ai_rate_limited`, and the provider codes of §1 |
 
 ### Errors
 
 Every error has the usual `{ code, message, data: { status } }` shape; the message never carries the key
 or the request.
+
+The provider's own failures (`ai_provider_*`, timeouts, a model that does not accept images) are listed in
+[§1](#1-configure). The site's own errors:
 
 | Status | Code | When |
 |---|---|---|
@@ -100,10 +128,3 @@ or the request.
 | `409` | `ai_not_configured` | No provider, no stored key (Anthropic), or no base URL or model (OpenAI-compatible) |
 | `422` | `ai_refused` | The model declined to answer (`stop_reason: "refusal"`) |
 | `429` | `ai_rate_limited` | This site's own limit: 20 suggestions per minute per user, 30 calls per minute per plugin |
-| `429` | `ai_provider_rate_limited` | The provider is rate limiting the site's account |
-| `502` | `ai_provider_auth` | The provider rejected the key, or the key may not use this model |
-| `502` | `ai_provider_model` | The configured model was not found (Anthropic) |
-| `502` | `ai_provider_bad_request` | The provider refused the request as invalid (Anthropic) |
-| `502` | `ai_provider_unreachable` | The provider could not be reached (network error or timeout) |
-| `502` | `ai_empty` | The model returned no text |
-| `502` | `ai_provider_error` | Any other provider error, or a response that is not JSON |

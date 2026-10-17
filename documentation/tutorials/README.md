@@ -35,6 +35,7 @@ any order once you have a site; links point back to earlier ones where they buil
 | 10 | [AI suggestions with a model on your own server](10-ai-suggestions-with-a-local-model.md) | Excerpt and meta-description suggestions from a local Ollama model |
 | 13 | [React to site changes with webhooks](13-webhooks.md) | A receiver that verifies signed deliveries |
 | 14 | [Read your content with GraphQL](14-read-your-content-with-graphql.md) | Queries from the command line and a script that builds a static page |
+| 16 | [Send email from your site](16-send-email-from-your-site.md) | The Mail Server plugin sending through an SMTP relay, password recovery working |
 
 Files used by the tutorials are in [`files/`](files/).
 

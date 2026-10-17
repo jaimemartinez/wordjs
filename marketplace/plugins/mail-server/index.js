@@ -61,7 +61,7 @@ function stripHtml(s) {
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '3.0.1',
+    version: '3.0.2',
     description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
 };
@@ -470,45 +470,128 @@ function parseSearchQuery(raw) {
 }
 
 /**
- * Initialize the fallback transporter (optional)
+ * The relay/smarthost, when one is configured. A configured relay is the ONLY outbound path: when it is
+ * unreachable, external mail waits in the retry queue and the console says why ("Relay unavailable:
+ * <reason>") — it never falls back to direct-to-MX delivery behind the operator's back. (A host that
+ * blocks outbound port 25 is the usual reason a relay is configured at all, so a silent fallback would
+ * only trade a clear error for a queue of mail that cannot leave.)
+ *
+ * The relay host is resolved HERE (dns.lookup, the one resolver the sandbox leaves plugins) and nodemailer
+ * is handed the address, with the configured name kept for TLS SNI and certificate checks: nodemailer's own
+ * resolver (dns.Resolver) is denied inside the sandbox, so handing it a NAME could never connect.
+ *
+ * A relay on a PRIVATE address (a LAN smarthost) is reachable only once an administrator approves that
+ * exact host:port for this plugin (the Configuration tab → Sandbox access → "Allow <host>:<port>", which calls
+ * the host's POST /plugins/mail-server/private-egress). Without that, the sandbox refuses the connection
+ * and relayStatus says so.
  */
+let relayStatus = { configured: false, ok: false, host: '', port: null, error: null, sandboxBlocked: false, checkedAt: null };
+let relayRetryAt = 0;
+const RELAY_RECHECK_MS = 60 * 1000;
+
+function relayErrorText(e, host, port) {
+    const msg = String((e && e.message) || e || 'unknown error');
+    if (/network egress to .* is blocked/i.test(msg)) {
+        return `the WordJS plugin sandbox blocks private addresses for plugins — approve ${host}:${port} under "Sandbox access" in the Configuration tab`;
+    }
+    if (/network' is blocked|grant Network access|\[sandbox\] .*(net|tls).*blocked/i.test(msg)) {
+        return 'this plugin does not hold the Network permission (Plugins → Mail Server → Permissions)';
+    }
+    return msg;
+}
+
 async function initTransporter() {
-    const host = await getOption('mail_server', '');
-    const port = parseInt(await getOption('mail_port', '587'), 10);
+    const host = String(await getOption('mail_server', '') || '').trim();
+    const port = parseInt(await getOption('mail_port', '587'), 10) || 587;
     const user = await getOption('mail_user', '');
     const pass = await getOption('mail_pass', '');
     const secureRaw = await getOption('mail_secure', '0');
     const secure = secureRaw === '1';
 
-    if (!host || !user || !pass) {
-        transporter = null;
+    transporter = null;
+    const wasRelayed = relayStatus.configured;
+    if (!host) {
+        relayStatus = { configured: false, ok: false, host: '', port: null, error: null, sandboxBlocked: false, checkedAt: null };
+        // The relay was what made mail deliverable; without it, readiness is the DNS check's to establish.
+        if (wasRelayed) await setDeliveryReady(false);
         return;
     }
+    relayStatus = { configured: true, ok: false, host, port, error: null, sandboxBlocked: false, checkedAt: new Date().toISOString() };
+    relayRetryAt = Date.now() + RELAY_RECHECK_MS;
 
     // The relay/smarthost is OPERATOR-configured (admin-only setting) and may LEGITIMATELY be an INTERNAL
     // host (a LAN smarthost / corporate MTA). Unlike the attacker-controlled direct-MX recipient domain,
-    // it is therefore NOT subject to the public-only SSRF pin — that wrongly refused internal smarthosts
-    // (MAIL-RELAY-SSRF). Pass the configured hostname straight to nodemailer (which resolves + uses it for
-    // SNI/cert match).
-    const requireRelayTls = (await getOption('mail_relay_require_tls', '1')) !== '0';
-    transporter = nodemailer.createTransport({
-        host,
+    // it is therefore NOT subject to this plugin's public-only SSRF pin (MAIL-RELAY-SSRF); the sandbox
+    // still applies its own rule (see the comment above).
+    let address = host;
+    if (!net.isIP(host)) {
+        try {
+            address = (await require('dns').promises.lookup(host)).address;
+        } catch (e) {
+            relayStatus.error = `cannot resolve ${host}: ${relayErrorText(e, host, port)}`;
+            console.error(`   ✗ Relay unavailable: ${relayStatus.error}`);
+            return;
+        }
+    }
+    const requireRelayTls = String(await getOption('mail_relay_require_tls', '1')) !== '0';
+    const candidateOptions = {
+        host: address,
         port,
         secure,
+        // The configured NAME, for SNI and the certificate check (we connect to its resolved address).
+        ...(address !== host ? { servername: host, tls: { servername: host } } : {}),
         // STARTTLS downgrade protection: force STARTTLS on the non-implicit-TLS path so an on-path attacker
         // can't strip it and capture the relay creds. An operator with a TLS-less INTERNAL smarthost can
         // opt out via the mail_relay_require_tls='0' setting (REG-2). secure:true (465) is implicit TLS.
         requireTLS: requireRelayTls && !secure,
-        auth: { user, pass }
-    });
+        // Credentials are optional: an internal smarthost often relays for its LAN by address.
+        ...(user && pass ? { auth: { user, pass } } : {}),
+        connectionTimeout: 15000,
+        greetingTimeout: 15000,
+    };
+    let candidate = nodemailer.createTransport(candidateOptions);
 
     try {
-        await transporter.verify();
-        console.log('   ✓ Fallback SMTP Transporter ready');
+        try {
+            await candidate.verify();
+        } catch (e) {
+            // With "Require STARTTLS" off (an internal relay without TLS), a relay that ADVERTISES STARTTLS
+            // and then refuses it with an SMTP reply (Mailpit: "502 5.5.1 Command not implemented") gets
+            // the mail in plaintext — the rule the direct-to-MX path already applies to such servers. A
+            // handshake that starts and then fails is not downgraded, and with STARTTLS required nothing is.
+            if (requireRelayTls || secure || !/upgrading connection with STARTTLS: [45]\d\d/i.test(String(e && e.message))) throw e;
+            console.warn(`   [MailServer][TLS] relay ${host}:${port} refused STARTTLS (${e.message}) — Require STARTTLS is off, so connecting without TLS`);
+            candidate = nodemailer.createTransport({ ...candidateOptions, ignoreTLS: true, requireTLS: false });
+            await candidate.verify();
+        }
+        transporter = candidate;
+        relayStatus.ok = true;
+        console.log(`   ✓ Relay ${host}:${port} ready`);
     } catch (error) {
-        console.error('   ✗ Fallback SMTP Connection failed:', error.message);
-        transporter = null;
+        relayStatus.error = relayErrorText(error, host, port);
+        relayStatus.sandboxBlocked = /plugin sandbox blocks private/.test(relayStatus.error);
+        console.error(`   ✗ Relay unavailable: ${relayStatus.error}`);
     }
+    await setDeliveryReady(relayStatus.ok);
+}
+
+/**
+ * The host's `mail_delivery_ready` flag gates password recovery and e-mail verification. With a relay,
+ * the relay answering IS the readiness: the smarthost owns MX/SPF/DKIM for its senders, so the DNS check
+ * (which requires all five records on OUR domain) can never pass on a relay-only site and recovery stayed
+ * off for good. Without a relay the DNS check sets it (see /security/dns-check).
+ */
+async function setDeliveryReady(ready) {
+    try { await updateOption('mail_delivery_ready', ready ? '1' : '0'); } catch (e) { /* best-effort */ }
+}
+
+/** The ready relay, re-checking a configured-but-failed one at most once a minute. null = none ready. */
+async function readyRelay() {
+    if (transporter) return transporter;
+    if (relayStatus.configured && Date.now() >= relayRetryAt) {
+        try { await initTransporter(); } catch (e) { /* relayStatus already describes it */ }
+    }
+    return transporter;
 }
 
 /**
@@ -1273,6 +1356,9 @@ async function isLikelySpam(c, text) {
 async function initSMTPServer() {
     // The domain we ACCEPT mail for — the same one we sign/send as and publish MX on (see getMailDomain).
     const mailDomain = await getMailDomain();
+    if (!isPublicSendingDomain(mailDomain)) {
+        console.warn(`   ⚠️  Mail domain is '${mailDomain}', which is not a public domain: mailboxes are addressed @${mailDomain} and no other server can deliver to them. Give the site its real domain (Settings → Site address) or set the domain in the DKIM card of the Configuration tab.`);
+    }
     // Default to 25 — the ONLY port the world delivers mail to (the MX record implies :25). This makes
     // inbound work with zero config wherever the process may bind it. Where it CAN'T bind 25 we fall back
     // to 2525 below and report WHY, naming the real cause (inboundPortReason) — never a silent no-inbound.
@@ -1641,14 +1727,29 @@ async function initSMTPServer() {
                 resolve({ code: 451, message: 'Temporary local problem, try again later' });
             }
         });
-        const res = await wordjs.smtp.listen({
+        const handlers = {
             connect: (session) => viaCallback(serverOptions.onConnect, session),
             mailFrom: (address, session) => viaCallback(serverOptions.onMailFrom, address, session),
             rcptTo: (address, session) => viaCallback(serverOptions.onRcptTo, address, session),
             // mailparser takes the raw message Buffer directly.
             data: (raw, session) => viaCallback(serverOptions.onData, raw, session),
             close: () => { },
-        }, { port, fallbackPort: 2525, maxSize: serverOptions.size, maxClients: serverOptions.maxClients, proxyIps: trustedProxyIps }).catch((e) => ({ ok: false, granted: false, error: e && e.message }));
+        };
+        const listenOn = (p) => wordjs.smtp.listen(handlers, { port: p, fallbackPort: 2525, maxSize: serverOptions.size, maxClients: serverOptions.maxClients, proxyIps: trustedProxyIps }).catch((e) => ({ ok: false, granted: false, error: e && e.message }));
+        let res = await listenOn(port);
+        // The host opens only the ports this plugin declares (claimPorts: 25) and unprivileged ones (1024+).
+        // An smtp_listen_port it refuses must not leave the server with NO listener: fall back to the
+        // standard port and say which port was refused and why.
+        if (res && res.granted && !res.ok && !res.boundPort && port !== 25) {
+            const refusal = res.error || res.reason || 'refused by the host';
+            res = await listenOn(25);
+            if (res && res.granted) {
+                const note = `smtp_listen_port ${port} could not be used (${refusal}); listening on ${res.boundPort || 25} instead.`;
+                res.reason = res.reason ? `${note} ${res.reason}` : note;
+                res.degraded = true;
+                console.warn(`   ⚠️  Inbound SMTP: ${note}`);
+            }
+        }
         if (res && res.granted) {
             inboundStatus = {
                 requestedPort: res.requestedPort || port, boundPort: res.boundPort || null, degraded: !!res.degraded,
@@ -2317,7 +2418,10 @@ async function sendMail(data) {
     if (externalRecipients.length > 0) {
         // Snapshot the relay ONCE: the same decision must drive both the From-rewrite below and the
         // delivery branch further down (a re-read could disagree if initTransporter() runs in between).
-        const relay = transporter;
+        // `relayConfigured` with no ready relay means the relay is DOWN: the mail waits, it never goes
+        // direct-to-MX instead (see initTransporter).
+        const relay = await readyRelay();
+        const relayConfigured = !!relay || relayStatus.configured;
 
         // DMARC/SPF ALIGNMENT (DIRECT-TO-MX ONLY): when WE are the MTA, we may only send as a domain we
         // can actually AUTHENTICATE for (the one our DKIM key signs and our SPF/PTR cover). A user whose
@@ -2361,7 +2465,7 @@ async function sendMail(data) {
         const fromDomain = String(fromEmail.split('@')[1] || '').toLowerCase();
         let wireFrom = fromEmail;
         let wireReplyTo = data.replyTo || undefined;
-        const mayRewriteFrom = !relay && isPublicSendingDomain(sendingDomain);
+        const mayRewriteFrom = !relayConfigured && isPublicSendingDomain(sendingDomain);
         if (mayRewriteFrom && fromDomain && fromDomain !== sendingDomain) {
             const configured = String(optFromEmail || '');
             wireFrom = (configured && String(configured.split('@')[1] || '').toLowerCase() === sendingDomain)
@@ -2369,7 +2473,7 @@ async function sendMail(data) {
                 : `postmaster@${sendingDomain}`;
             if (!wireReplyTo) wireReplyTo = fromEmail;
             console.warn(`[MailServer] From '${fromEmail}' is not on the sending domain '${sendingDomain}' — sending as '${wireFrom}' with Reply-To '${wireReplyTo}' so DMARC/SPF align (remote servers reject unauthenticated cross-domain From).`);
-        } else if (!relay && fromDomain && sendingDomain && fromDomain !== sendingDomain && !isPublicSendingDomain(sendingDomain)) {
+        } else if (!relayConfigured && fromDomain && sendingDomain && fromDomain !== sendingDomain && !isPublicSendingDomain(sendingDomain)) {
             console.warn(`[MailServer] From '${fromEmail}' is off our sending domain, but '${sendingDomain}' is not a public mail domain (LAN host/IP/localhost) — keeping the original From. Set a DKIM domain or a real site URL for DMARC alignment.`);
         }
 
@@ -2411,6 +2515,12 @@ async function sendMail(data) {
                     failed.push({ recipient: extR, error: e.message, permanent: code >= 500 && code < 600 });
                 }
             }
+        } else if (relayConfigured) {
+            // The configured relay is unavailable. Say so and keep the mail for the retry schedule; never
+            // reroute it direct-to-MX.
+            const reason = `Relay unavailable: ${relayStatus.error || 'not reachable'}`;
+            console.error(`[MailServer] ❌ ${reason} — ${externalRecipients.length} recipient(s) left in the retry queue.`);
+            for (const extR of externalRecipients) failed.push({ recipient: extR, error: reason, permanent: false });
         } else {
             // Direct-to-MX delivery (real MTA).
             const heloName = await getHeloName();
@@ -2952,7 +3062,11 @@ exports.init = async function (bridge) {
             try { return (await wordjs.site.adminEmail()) || def; } catch (e) { return def; }
         }
         if (isSecretOption(key)) return await Email.getSecret(key, def === undefined ? '' : def);
-        return await wordjs.options.get(key, def);
+        const v = await wordjs.options.get(key, def);
+        // Every setting of this plugin is a string ('0'/'1', '587', …), but the host hands back what it
+        // parsed: a stored '0' arrives as the NUMBER 0, and `0 !== '0'` read every switched-off toggle
+        // (Require STARTTLS, SPF, forwarding, …) as on. Normalize scalars to the string this file compares.
+        return (typeof v === 'number' || typeof v === 'boolean') ? String(v) : v;
     };
     updateOption = async (key, value) => {
         if (isSecretOption(key)) return await Email.setSecret(key, value);
@@ -3812,6 +3926,12 @@ exports.init = async function (bridge) {
             mail_user: o.mail_user,
             mail_pass_set: o.mail_pass ? true : false,
             mail_relay_require_tls: o.mail_relay_require_tls,
+            // Whether the configured relay answered its last check, and why not (see initTransporter).
+            relay_status: relayStatus,
+            // The domain mailboxes live on, and whether the internet can deliver to it at all (a site
+            // reached by IP, 'localhost' or a LAN name gives mailboxes like admin@localhost).
+            mail_domain: await getMailDomain().catch(() => ''),
+            mail_domain_public: isPublicSendingDomain(await getMailDomain().catch(() => '')),
             mail_security_dkim_domain: o.mail_security_dkim_domain,
             mail_security_dkim_selector: o.mail_security_dkim_selector,
             mail_security_dkim_enabled: o.mail_security_dkim_private_key ? '1' : '0',
@@ -3901,11 +4021,13 @@ exports.init = async function (bridge) {
                 message = `Delivered to the LOCAL mailbox of ${to} only — external MX / DKIM / port 25 were NOT exercised. Enter an OFF-domain address (e.g. a Gmail account) to test real internet deliverability.`;
             } else if (result.success) {
                 message = 'Test message accepted by the recipient mail server (external delivery succeeded).';
+            } else if (relayStatus.configured && !relayStatus.ok) {
+                message = `Relay unavailable: ${relayStatus.error || 'not reachable'}. The message is queued and will be retried; it is not sent direct-to-MX while a relay is configured.`;
             } else {
                 message = 'Delivery failed — check rDNS/SPF/DKIM/DMARC and that outbound port 25 (or a configured relay) is reachable.';
             }
             res.status(result.success ? 200 : 207).json({
-                success: result.success, to, localOnly,
+                success: result.success, to, localOnly, relay: relayStatus,
                 delivered: result.delivered, failed: result.failed, message
             });
         } catch (error) {
@@ -4003,7 +4125,8 @@ exports.init = async function (bridge) {
         // re-checking after fixing a record clears/sets it accordingly.
         try {
             const allOk = ['mx', 'a', 'spf', 'dmarc', 'dkim'].every(k => results[k] && results[k].status === 'ok');
-            await updateOption('mail_delivery_ready', allOk ? '1' : '0');
+            // A configured relay decides readiness by answering (initTransporter), not by our DNS.
+            if (!relayStatus.configured) await updateOption('mail_delivery_ready', allOk ? '1' : '0');
         } catch (e) { /* best-effort — never fail the check because the flag couldn't be saved */ }
 
         res.json({ domain, checkedAt: new Date().toISOString(), results });
@@ -4404,9 +4527,11 @@ exports.init = async function (bridge) {
                     degraded: inboundStatus.degraded,
                     reason: inboundStatus.reason
                 },
-                relay: !!transporter,
+                relay: relayStatus.configured,
+                relayStatus,
                 defaultQuotaMb: policy.defaultQuotaMb,
-                mailDomain: await getMailDomain()
+                mailDomain: await getMailDomain(),
+                mailDomainPublic: isPublicSendingDomain(await getMailDomain())
             });
         } catch (e) {
             console.error('[MailServer] overview failed:', e);

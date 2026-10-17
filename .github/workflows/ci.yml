@@ -1111,6 +1111,11 @@ jobs:
           [ -n "$pkg" ] || { echo "::error::no package.json with a start:mono script found in the bundle"; exit 1; }
           app="$(dirname "$pkg")"
           echo "app root: $app"
+          # A bundle never carries a site backup or a database file. Every site `create-wordjs upgrade`
+          # touches would receive it, and a backup in backend/backups/ lists in Admin → Settings → Backups
+          # where restoring it overwrites the site. make-release.js excludes both; this checks the output.
+          stray="$(cd "$app" && find . -name node_modules -prune -o \( -path ./backend/backups -o -path './backend/backups/*' -o -iname '*.db' -o -iname '*.sqlite' -o -iname '*.sqlite3' \) -print)"
+          [ -z "$stray" ] || { echo "::error::the bundle carries site backups or database files:"; echo "$stray"; exit 1; }
           ( cd "$app" && npm run release:install ) || { echo "::error::release:install failed in the extracted bundle"; exit 1; }
           bash "$GITHUB_WORKSPACE/scripts/smoke-deploy.sh" "$app"
 

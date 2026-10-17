@@ -15,6 +15,25 @@ const log = require('./module-logger').moduleLogger('core/themes');
 const THEMES_DIR = path.resolve('./themes');
 
 /**
+ * Optional per-language metadata from theme.json: `"translations": { "es": { "description": "…" } }`.
+ * The top-level `description` stays the default (English); the admin shows the entry for its own
+ * language when there is one. Only short string descriptions under a plain language code survive — the
+ * value is theme-supplied text and goes nowhere but a text node.
+ */
+function themeTranslations(raw: unknown): Record<string, { description?: string }> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out: Record<string, { description?: string }> = {};
+  for (const [lang, entry] of Object.entries(raw as Record<string, unknown>)) {
+    if (!/^[a-z]{2,3}(-[A-Za-z]{2,4})?$/.test(lang) || !entry || typeof entry !== 'object') continue;
+    const description = (entry as Record<string, unknown>).description;
+    if (typeof description === 'string' && description.trim() && description.length <= 1000) {
+      out[lang] = { description };
+    }
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/**
  * Theme metadata structure
  */
 class Theme {
@@ -28,6 +47,7 @@ class Theme {
   path: any;
   templatePath: any;
   layout: any;
+  translations: Record<string, { description?: string }> | null;
 
   constructor(data: any) {
     this.name = data.name;
@@ -42,6 +62,7 @@ class Theme {
     // Optional structure config from theme.json (e.g. { containerWidth, sidebar, headerStyle }).
     // The Next.js public layout honors it via the active_theme_layout option (see switchTheme).
     this.layout = (data.layout && typeof data.layout === 'object') ? data.layout : null;
+    this.translations = themeTranslations(data.translations);
   }
 
   /**
@@ -415,6 +436,7 @@ async function getAllThemes() {
     slug: theme.slug,
     version: theme.version,
     description: theme.description,
+    translations: theme.translations,
     author: theme.author,
     screenshot: theme.screenshot,
     layout: theme.layout,
@@ -469,6 +491,11 @@ function createDefaultTheme(force = false) {
     name: 'WordJS',
     version: '2.1.0',
     description: 'The default WordJS theme — modern, JavaScript-native, developer-first. Signature indigo→violet gradient, Space Grotesk display type, and a deep-indigo footer.',
+    // Same as the committed themes/default/theme.json, so a restore does not lose the translations.
+    translations: {
+      es: { description: 'El tema predeterminado de WordJS — moderno, nativo de JavaScript y pensado para desarrolladores. Degradado índigo→violeta característico, tipografía Space Grotesk y un pie de página índigo oscuro.' },
+      pt: { description: 'O tema padrão do WordJS — moderno, nativo de JavaScript e pensado para desenvolvedores. Gradiente índigo→violeta característico, tipografia Space Grotesk e um rodapé índigo escuro.' },
+    },
     author: 'WordJS'
   };
   // A restore rewrites style.css, and the stylesheet URL is keyed by this version — leaving it alone

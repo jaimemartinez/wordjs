@@ -84,6 +84,8 @@ describe('backups carry private media and restore it into the private root', () 
         const zipPath = path.join(BACKUPS_DIR, result.filename);
         archives.push(zipPath);
         try {
+            // The archive is the whole site: owner-only, whatever the process umask (POSIX).
+            if (process.platform !== 'win32') assert.strictEqual(fs.statSync(zipPath).mode & 0o777, 0o600);
             const zip = new AdmZip(zipPath);
             const names = zip.getEntries().map((e: any) => e.entryName);
             assert.ok(names.includes('private-uploads/2026/10/ebook.pdf'), `nested private file missing from the backup: ${names.filter((n: string) => /private|ebook/.test(n)).join(', ') || '(none)'}`);
@@ -93,6 +95,28 @@ describe('backups carry private media and restore it into the private root', () 
                 'a private file was archived under uploads/ — a restore would publish it');
         } finally {
             try { deleteBackup(result.filename); } catch { /* */ }
+        }
+    });
+
+    test('archives with a wider mode are tightened to owner-only', { skip: process.platform === 'win32' && 'no POSIX mode bits on Windows' }, () => {
+        const { hardenBackupPermissions } = require('../core/backup');
+        const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'wjs-backup-perms-'));
+        try {
+            fs.chmodSync(dir, 0o777);
+            const old = path.join(dir, 'backup-old.zip');
+            fs.writeFileSync(old, 'zip');
+            fs.chmodSync(old, 0o666);
+            const other = path.join(dir, 'notes.txt');
+            fs.writeFileSync(other, 'x');
+            fs.chmodSync(other, 0o644);
+            fs.symlinkSync(other, path.join(dir, 'link.zip'));
+            assert.strictEqual(hardenBackupPermissions(dir), 2);
+            assert.strictEqual(fs.statSync(dir).mode & 0o777, 0o700);
+            assert.strictEqual(fs.statSync(old).mode & 0o777, 0o600);
+            assert.strictEqual(fs.statSync(other).mode & 0o777, 0o644, 'non-archives and symlink targets are left alone');
+            assert.strictEqual(hardenBackupPermissions(dir), 0, 'idempotent');
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
         }
     });
 

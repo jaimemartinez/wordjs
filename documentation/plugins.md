@@ -994,6 +994,12 @@ is egress too), and under a list a host is only matched when it is a plain ASCII
 digits, `-`, `_`, dots) or an IP literal: pass the punycode form of an internationalised name (`fetch` and
 `URL` already do). If the host cannot load the egress policy, a `network` plugin reaches no public host
 and resolves no name until it reloads.
+The one exception to public-only is an **approved private destination**: an administrator may approve
+exactly one host on exactly one port for a plugin (`GET`/`POST /api/v1/plugins/:slug/private-egress`, body
+`{ destinations: ["192.168.1.20:587"] }`, at most 4) — for example a LAN SMTP relay. It is matched on the
+host and the port together (a hostname entry also covers the addresses the guard itself resolved for that
+name, so approving a name trusts its DNS), it never opens a range or another port, link-local (`169.254.169.254`), unspecified and multicast
+addresses cannot be approved, and an API token may withdraw an approval but never make one.
 
 > **`access: "admin"`** on a scope (a grant token such as `database:admin`) implies only that scope's
 > ordinary `read`+`write` verbs — it never subsumes the special verbs (`provider`, `register`,
@@ -1188,13 +1194,14 @@ If you omit it, a convention fallback is tried: `client/verso/<Pascal>Verso.tsx`
 
 `frontend/scripts/generate-verso-plugin-registry.js` reads your entry file and supports exactly two shapes:
 
-**One block** — `export const versoComponentDef` (category/fields/defaultProps) **plus** a default-exported render component. The block is registered under the PascalCase of your manifest `id` (`card-gallery` → `CardGallery`):
+**One block** — `export const versoComponentDef` (label/category/fields/defaultProps) **plus** a default-exported render component. The block is registered under the PascalCase of your manifest `id` (`card-gallery` → `CardGallery`):
 
 ```tsx
 // @ts-nocheck
 "use client";
 
 export const versoComponentDef = {
+    label: "Card gallery",
     category: "My Plugin",
     fields: {
         title: { type: "text" as const, label: "Title" }
@@ -1211,10 +1218,12 @@ export default function MyPluginVerso({ title = "" }) {
 
 ```tsx
 export const versoComponents = {
-    PriceTable: { ...priceTableDef, render: PriceTable },
-    FaqList:    { ...faqListDef,   render: FaqList },
+    PriceTable: { ...priceTableDef, label: "Price table", render: PriceTable },
+    FaqList:    { ...faqListDef,   label: "FAQ list",    render: FaqList },
 };
 ```
+
+**Block name (`label`, optional)** — the name the editor shows in the block palette, the outline and the properties panel. Without it, the editor splits the block id into words (`ReadingList` → "Reading List", `FAQSection` → "FAQ Section"); set `label` when that is not the name you want users to see. It is shown as written — the editor does not translate plugin labels.
 
 > Export **only** the shape you use. The generated registry does `import * as X` and statically references either `X.versoComponents` **or** `X.versoComponentDef` + `X.default` — referencing a member that isn't a real export is a hard build error under Turbopack. The generator reads which name your file actually declares, so a bundle exporting the deprecated names is referenced by *those* names.
 

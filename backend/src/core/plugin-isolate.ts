@@ -1718,8 +1718,15 @@ function fsGrantsFor(slug: string): { read: boolean; write: boolean } {
 // The admin-set per-plugin egress allowlist (bare hosts / IP literals), resolved host-side at spawn and
 // pushed into the child's cfg (→ egress-guard.setAllowedHosts). Empty ⇒ allow-all-public (unchanged
 // behavior). Only meaningful for a network-granted plugin; fail-OPEN (no allowlist) on any error.
+// The admin-approved private destinations (exact `host:port`, plugin-permissions getPrivateDestinations) ride
+// in the same list: egress-guard.setAllowedHosts splits them out, so they never narrow the allowlist. They are
+// fail-CLOSED on their own (none on any error), whatever happens to the allowlist half.
 function getEgressAllowlistFor(slug: string): string[] {
-    try { const l = require('./plugin-permissions').getEgressAllowlist(slug); return Array.isArray(l) ? l : []; } catch { return []; }
+    let hosts: string[];
+    try { const l = require('./plugin-permissions').getEgressAllowlist(slug); hosts = Array.isArray(l) ? l : []; } catch { hosts = []; }
+    let priv: string[];
+    try { const l = require('./plugin-permissions').getPrivateDestinations(slug); priv = Array.isArray(l) ? l : []; } catch { priv = []; }
+    return [...hosts, ...priv];
 }
 // Whether the per-plugin egress policy loaded cleanly at boot. When FALSE (DB/options load failed, or the
 // permissions module can't be required at all), the spawn path below fails egress CLOSED for a
