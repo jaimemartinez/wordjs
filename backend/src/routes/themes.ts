@@ -346,8 +346,12 @@ router.post('/upload', authenticate, isAdmin, upload.single('theme'), asyncHandl
  */
 router.post('/:slug/update', authenticate, isAdmin, upload.single('theme'), asyncHandler(async (req: Request, res: Response) => {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-    // updateThemeFromZip proves the temp file sits in os-tmp and deletes it on every path.
-    const result = await updateThemeFromZip(req.file.path, String(req.params.slug));
+    // Update only an INSTALLED theme, by the directory's own name (read off the disk, not the request's
+    // copy). updateThemeFromZip proves the temp file sits in os-tmp and deletes it on every path, this
+    // refusal included.
+    let installed: string | undefined;
+    try { installed = fs.readdirSync(THEMES_DIR).find((d: string) => d === req.params.slug); } catch { /* no themes dir */ }
+    const result = await updateThemeFromZip(req.file.path, installed || '');
     if (result.ok) {
         await recordAudit(req.user && req.user.id, 'theme.update', 'theme', result.body.slug, {
             via: 'upload', fromVersion: result.body.fromVersion, toVersion: result.body.toVersion,

@@ -355,7 +355,15 @@ router.post('/:slug/update', authenticate, isAdmin, upload.single('plugin'), asy
         try { fs.unlinkSync(path.resolve(OS_TMP_DIR, path.basename(req.file.path))); } catch { /* */ }
         return res.status(400).json({ error: 'Invalid plugin slug' });
     }
-    const result = await runPluginUpdate(slug, req.file.path, null, { via: 'upload' });
+    // Update only what is INSTALLED, and carry the directory's own name from here on — the value read
+    // off the disk, not the request's copy of it — into the stash, the swap and the reactivation.
+    let installed: string | undefined;
+    try { installed = fs.readdirSync(PLUGINS_DIR).find((d: string) => d === slug); } catch { /* no plugins dir */ }
+    if (!installed) {
+        try { fs.unlinkSync(path.resolve(OS_TMP_DIR, path.basename(req.file.path))); } catch { /* */ }
+        return res.status(404).json({ error: `Plugin '${slug}' is not installed.` });
+    }
+    const result = await runPluginUpdate(installed, req.file.path, null, { via: 'upload' });
     if (result.ok) {
         await recordAudit(req.user && req.user.id, 'plugin.update', 'plugin', slug, {
             via: 'upload', fromVersion: result.body.fromVersion, toVersion: result.body.toVersion,

@@ -192,6 +192,12 @@ describe('in-place update from an uploaded zip', () => {
         assert.strictEqual(res.status, 404, JSON.stringify(res.body));
     });
 
+    it('updating a theme that is not installed is a 404', async () => {
+        const res = await asAdmin(request(app).post('/api/v1/themes/not-here/update')).attach('theme', themeZip('1.0.0', 'x', { root: 'not-here' }));
+        assert.strictEqual(res.status, 404, JSON.stringify(res.body));
+        assert.strictEqual(fs.existsSync(path.join(THEMES_DIR, 'not-here')), false);
+    });
+
     it('re-uploading an installed theme answers 409 theme_exists', async () => {
         const res = await asAdmin(request(app).post('/api/v1/themes/upload')).attach('theme', themeZip('2.0.0', 'new'));
         assert.strictEqual(res.status, 409, JSON.stringify(res.body));

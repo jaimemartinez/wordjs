@@ -1467,6 +1467,7 @@ async function updateThemeFromZip(zipPath: string, slug: string): Promise<{ ok: 
   const refuse = (status: number, error: string, extra: any = {}) => { cleanup(); return { ok: false, status, body: { error, unchanged: true, ...extra } }; };
 
   if (!zipAbs.startsWith(osTmp + path.sep)) return refuse(400, 'Update package is not inside the theme scratch directory');
+  if (!slug) return refuse(404, 'That theme is not installed.');
   const targetDir = resolveThemeDir(THEMES_DIR, slug);
   if (targetDir === null) return refuse(400, 'Invalid theme slug');
   if (!fs.existsSync(path.join(targetDir, 'style.css')) && !fs.existsSync(path.join(targetDir, 'theme.json'))) {
