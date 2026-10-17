@@ -46,8 +46,15 @@ export async function POST(req: NextRequest) {
     const paths = cleanList(body?.paths, (s) => s.startsWith("/"));
 
     // Next 16 signature: the 'max' profile = classic revalidateTag semantics (mark stale now,
-    // serve stale-while-revalidate on the next hit).
-    for (const tag of tags) revalidateTag(tag, "max");
+    // serve stale-while-revalidate on the next hit). A tag sent as `now:<tag>` (backend
+    // core/frontend-purge, e.g. a theme switch) is EXPIRED instead: the next hit renders fresh
+    // rather than getting the previous theme once more.
+    // (The backend also sends the plain tag, for frontends that predate the prefix; it is skipped here.)
+    const expireNow = new Set(tags.filter((t) => t.startsWith("now:") && t.length > 4).map((t) => t.slice(4)));
+    for (const tag of expireNow) revalidateTag(tag, { expire: 0 });
+    for (const tag of tags) {
+        if (!tag.startsWith("now:") && !expireNow.has(tag)) revalidateTag(tag, "max");
+    }
     for (const p of paths) revalidatePath(p);
     // The page CSP's media origin follows the site settings (a media storage change purges `settings`):
     // refresh it at once instead of waiting for the next public render and the stale-while-revalidate

@@ -191,8 +191,8 @@ too. Tokens are the normal way to build a theme, and everything past them is sti
   bundled themes use both: each declares `styles.variations` (circuito 4, gaceta 2, vergel 2),
   `styles.chromeHeader` and `animations` (4, 1 and 2 respectively). `styles.chromeFooter` is declared
   by circuito and gaceta but not by vergel. A distinctive chrome is built from those entries now,
-  instead of hand-written CSS below the generated block. In practice their `style.css` files run 96–183 lines with 49–109
-  `--wjs-*` declarations; the hand-authored bundled **default** declares 75 tokens in a 397-line
+  instead of hand-written CSS below the generated block. In practice their `style.css` files run 95–182 lines with 49–109
+  `--wjs-*` declarations; the hand-authored bundled **default** declares 76 tokens in a 562-line
   stylesheet.
 
 The complete machine-readable contract is `backend/public/theme-tokens.json` (next section).

@@ -48,6 +48,33 @@ function isValidEgressHost(h: string): boolean {
     return VALID_EGRESS_HOST.test(h);
 }
 
+// A PRIVATE DESTINATION entry, stored in the same `plugin_egress_hosts` list: one exact `host:port`
+// (`[v6]:port` for IPv6) an administrator approved even though it is not public — an SMTP smarthost on
+// the LAN is the case it exists for (POST /plugins/:slug/private-egress). It never narrows or widens the
+// allowlist: getEgressAllowlist() leaves these out, getPrivateDestinations() returns only these. The two
+// spellings cannot be confused: a bare host or IP literal never carries a port, and an IPv6 literal with a
+// port is bracketed. Parsed by egress-guard's parsePrivateDestination — the same function the child
+// enforces with — so what is stored is exactly what is enforced. Link-local (cloud metadata),
+// unspecified and multicast addresses are refused there.
+const MAX_PRIVATE_DESTINATIONS = 4;
+function privateDestinationOf(h: string): string | null {
+    if (isValidEgressHost(h)) return null;
+    let d: any;
+    try { d = require('./egress-guard').parsePrivateDestination(h); } catch { return null; }
+    if (!d) return null;
+    return (d.host.includes(':') ? `[${d.host}]` : d.host) + ':' + d.port;
+}
+/** Normalize an approved-destination list: canonical `host:port`, valid entries only, de-duplicated, capped. */
+function normalizePrivateDestinations(entries: string[]): string[] {
+    const out: string[] = [];
+    for (const raw of entries || []) {
+        const d = privateDestinationOf(String(raw).toLowerCase().trim());
+        if (d && !out.includes(d)) out.push(d);
+    }
+    return out.slice(0, MAX_PRIVATE_DESTINATIONS);
+}
+const isPrivateDestinationEntry = (h: string): boolean => privateDestinationOf(h) !== null;
+
 /** The literal token used for the network grant (no access level). */
 const NETWORK_TOKEN = 'network';
 
@@ -292,7 +319,9 @@ function egressRecordOf(slug: string, list: unknown): string[] | null {
     const clean: string[] = [];
     for (const raw of list) {
         const h = String(raw).toLowerCase().trim();
+        const d = isValidEgressHost(h) ? null : privateDestinationOf(h);
         if (isValidEgressHost(h)) clean.push(h);
+        else if (d) clean.push(d);
         else warnMalformedOnce(`egress\u0000${slug}\u0000${String(raw)}`, { egressHost: JSON.stringify(String(raw)), slug: logSafeKey(slug) }, `[PluginPermissions] Dropping malformed egress host ${logSafeKey(JSON.stringify(String(raw)))} for plugin '${logSafeKey(slug)}' from plugin_egress_hosts.`);
     }
     return clean;
@@ -1050,7 +1079,40 @@ function isEgressPolicyLoaded(): boolean { return policyState.get().egressPolicy
 
 /** The egress allowlist for a plugin (for the admin API and the spawn-time childCfg). Empty = allow-all. */
 function getEgressAllowlist(slug: string): string[] {
-    return Array.from(policyState.get().egressHosts.get(slug) || []);
+    return Array.from<string>(policyState.get().egressHosts.get(slug) || []).filter((h) => !isPrivateDestinationEntry(h));
+}
+
+/** The private destinations (exact `host:port`) an administrator approved for a plugin. Empty = none. */
+function getPrivateDestinations(slug: string): string[] {
+    return Array.from<string>(policyState.get().egressHosts.get(slug) || []).filter(isPrivateDestinationEntry);
+}
+
+/**
+ * Replace a plugin's approved private destinations (admin action), leaving its egress allowlist as it is.
+ * Same storage, lease and fan-out as applyEgressAllowlist. `narrowOnly` (an API token's write): a list that
+ * would add a destination not approved now is not written, and `refused` names it — a token may withdraw
+ * an approval, never make one. Invalid entries are dropped (normalizePrivateDestinations).
+ */
+async function applyPrivateDestinations(slug: string, entries: string[], opts: { narrowOnly?: boolean } = {}): Promise<PolicyWriteResult> {
+    assertHostContext('applyPrivateDestinations');
+    const clean = normalizePrivateDestinations(entries);
+    if (!isSafeSlugKey(slug)) writeSlugKey({}, slug, clean); // key gate first: no silent __proto__ no-op
+    if (opts.narrowOnly && !policyState.get().egressPolicyLoaded) {
+        return { announced: Promise.resolve(), refused: clean };
+    }
+    let refused: string[] = [];
+    let next: string[] = [];
+    const { announced } = await serializePolicy(() => writePolicyBlob('plugin_egress_hosts',
+        (stored) => {
+            const current = egressRecordIn(stored, slug) || [];
+            const approved = current.filter(isPrivateDestinationEntry);
+            refused = opts.narrowOnly ? clean.filter((d) => !approved.includes(d)) : [];
+            if (refused.length) return { changed: false };
+            next = [...current.filter((h) => !isPrivateDestinationEntry(h)), ...clean];
+            return { changed: true, next: writeSlugKey(stored, slug, next) };
+        },
+        () => { if (!refused.length) policyState.get().egressHosts.set(slug, next); }));
+    return { announced, refused };
 }
 
 /**
@@ -1082,13 +1144,17 @@ async function applyEgressAllowlist(slug: string, hosts: string[], opts: { narro
         return { announced: Promise.resolve(), refused: clean.length ? clean : [EGRESS_EVERY_PUBLIC_HOST] };
     }
     let refused: string[] = [];
+    let next: string[] = clean;
     const { announced } = await serializePolicy(() => writePolicyBlob('plugin_egress_hosts',
         (stored) => {
-            refused = opts.narrowOnly ? egressHostsAddedTo(egressRecordIn(stored, slug) || [], clean) : [];
+            const current = egressRecordIn(stored, slug) || [];
+            refused = opts.narrowOnly ? egressHostsAddedTo(current.filter((h) => !isPrivateDestinationEntry(h)), clean) : [];
             if (refused.length) return { changed: false };
-            return { changed: true, next: writeSlugKey(stored, slug, clean) };
+            // The approved private destinations are not part of the allowlist and survive its replacement.
+            next = [...clean, ...current.filter(isPrivateDestinationEntry)];
+            return { changed: true, next: writeSlugKey(stored, slug, next) };
         },
-        () => { if (!refused.length) policyState.get().egressHosts.set(slug, clean); }));
+        () => { if (!refused.length) policyState.get().egressHosts.set(slug, next); }));
     return { announced, refused };
 }
 
@@ -1117,7 +1183,7 @@ async function adoptStoredPolicy(slug: string): Promise<{ grants: string[]; egre
         }
         return {
             grants: record ? Array.from(new Set(record)) : [],
-            egress: egress || [],
+            egress: (egress || []).filter((h) => !isPrivateDestinationEntry(h)),
             seedsDeclaredGrants: shouldSeedDeclaredGrants(slug, record, hasAdminDecisionIn(g.stored, slug)),
         };
     });
@@ -1136,7 +1202,8 @@ function policyFingerprint(slug: string): string {
     const net = isNetworkGranted(slug);
     const denyAll = net && !policyState.get().egressPolicyLoaded;
     const hosts = (net && !denyAll) ? getEgressAllowlist(slug).sort() : [];
-    return JSON.stringify([g, hosts, denyAll]);
+    const priv = (net && !denyAll) ? getPrivateDestinations(slug).sort() : [];
+    return JSON.stringify(priv.length ? [g, hosts, denyAll, priv] : [g, hosts, denyAll]);
 }
 
 // Test-only: set a plugin's grants in memory WITHOUT persisting, so unit tests can grant the
@@ -1163,6 +1230,7 @@ module.exports = {
     isGrantsLoaded, addUpgradeGrant,
     adoptStoredPolicy, policyFingerprint, NETWORK_TOKEN, _setGrantsInMemory, _setEgressAllowlistInMemory,
     loadEgressHosts, isEgressPolicyLoaded, getEgressAllowlist, setEgressAllowlist, applyEgressAllowlist,
+    getPrivateDestinations, applyPrivateDestinations, normalizePrivateDestinations,
     PLUGIN_SLUG, FORBIDDEN_KEYS, isSafeSlugKey, writeSlugKey,
     getHostMarker, setHostMarker, HOST_RECORD_KEY, hasAdminGrantDecision, activationSeedsDeclaredGrants, ADMIN_DECISIONS_MARKER,
     grantsAddedTo, egressHostsAddedTo, EGRESS_EVERY_PUBLIC_HOST,

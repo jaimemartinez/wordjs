@@ -75,7 +75,9 @@ mirroring the `/uploads` denylist.
 `backend/wordjs-config.json` through the same atomic writer as every other credential the backend holds
 (the backup offload's `s3` block, the database password). The secret access key and session token are
 **write-only**: the API answers only whether they are set and their last four characters (the access key
-id likewise as a hint); leaving the field empty keeps the stored value. Every save and every migration is
+id likewise as a hint); leaving the field empty keeps the stored value, and a `PUT` with
+`clearCredentials: true` (API only; the screen has no button for it) removes the stored access key id,
+secret and session token. Every save and every migration is
 recorded in the audit log (`media.storage.update`, `media.storage.migrate`) without credentials.
 
 | Field | Env override | Notes |
@@ -90,7 +92,10 @@ recorded in the audit log (`media.storage.update`, `media.storage.migrate`) with
 | `publicUrl` | `WORDJS_MEDIA_PUBLIC_URL` | the URL that maps to the **bucket root** (a CDN domain). Empty = the bucket's own URL (`https://<bucket>.s3.<region>.amazonaws.com` or `<endpoint>/<bucket>`) |
 | `keepLocalCopy` | `WORDJS_MEDIA_KEEP_LOCAL_COPY` | also keep each new upload on local disk |
 
-The public URL of an object is `<publicUrl>/<prefix>/<rel>`. Objects must be **publicly readable** there
+The public URL of an object is `<publicUrl>/<prefix>/<rel>`: `publicUrl` is the base of the **bucket root**,
+and the object keys already start with the prefix (`uploads/` by default), so do not add `/uploads` to
+`publicUrl` yourself. With the defaults, `/uploads/2026/10/a.jpg` is served from
+`<publicUrl>/uploads/2026/10/a.jpg`. Objects must be **publicly readable** there
 (a public bucket or a CDN with read access to it); the bucket itself needs no public write. A partial
 configuration (a bucket without keys, an unusable public URL, a prefix with `..`) counts as **not
 configured**: the effective driver stays `local` and the screen says which fields are missing.
@@ -146,6 +151,20 @@ run with no failures — this is what turns on the SSR rewrite) → `restoring` 
 state back FIRST, so no page is rendered against a bucket being drained. Switching the driver back to
 `local` is refused (409 `rest_media_storage_in_use`) while any attachment still has its files in the
 bucket.
+
+## REST API
+
+The screen is backed by `/api/v1/media-storage` (`backend/src/routes/media-storage.ts`). Every route is
+administrator-only (`authenticate` + `isAdmin`). Bodies are JSON; an unsupported field value answers
+`400 rest_invalid_param` with `data.params` naming the fields.
+
+| Method | Endpoint | Body | Answer |
+|---|---|---|---|
+| `GET` | `/` | — | The masked configuration (`driver`, `bucket`, `region`, `endpoint`, `prefix`, `publicUrl`, `keepLocalCopy`, `accessKeyIdHint`, `secretAccessKeySet`, `secretAccessKeyHint`, `sessionTokenSet`, `sources`, `effective: { driver, incomplete, publicBase, publicOrigin }`), plus `state`, `migration` (the progress record) and `running` |
+| `PUT` | `/` | Any of `driver` (`local` \| `s3`), `bucket`, `region`, `endpoint`, `prefix`, `publicUrl`, `accessKeyId`, `secretAccessKey`, `sessionToken`, `keepLocalCopy`, `clearCredentials` | Merges the fields over the stored block and saves it; answers the same shape as `GET`. An empty text field clears it; an empty secret keeps the stored one. `400` when `driver: s3` is asked for with an incomplete configuration (`data.params` lists what is missing). `409 rest_media_storage_in_use` when switching to `local` while items are still in the bucket, the library is not `local` or an offload / restore run is in progress. `500 rest_config_write_failed` when `wordjs-config.json` could not be written (nothing changed) |
+| `POST` | `/test` | The same fields (unsaved), merged over the stored ones | Writes a probe object and reads it back: `{ ok, steps: [{ step, ok, detail }], probe, publicUrl }`. The browser then loads `publicUrl` |
+| `POST` | `/test` | `{ probe }` (the name the first call answered), plus the same fields | Deletes that probe: `{ ok, steps }`. Only names of the shape the first call writes are accepted (`400` otherwise) |
+| `POST` | `/migrate` | `{ direction: "offload" \| "restore", deleteLocal?, restart? }` | Starts the run in the background and answers `202` with the current state at once; poll `GET /` for progress. `400` without a complete, saved S3 configuration. `409 rest_media_storage_busy` while another run is in progress |
 
 ## Multi-node and the three deploy modes
 

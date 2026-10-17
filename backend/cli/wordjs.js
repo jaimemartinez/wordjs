@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * WordJS CLI — plugin/theme scaffolder + plugin packer.
+ * WordJS CLI — plugin/theme scaffolder + plugin/theme packer.
  *
  * Plain Node (no ts-node, no core imports). Run from the repo root (or backend/):
  *
@@ -10,6 +10,7 @@
  *       [--archetype <name>] [--name/--author/--description <text>]
  *   node backend/cli/wordjs.js build theme <slug>       # recompile theme.json → style.css block
  *   node backend/cli/wordjs.js pack <slug> [--build] [--out <dir>]   # zip a plugin for distribution
+ *   node backend/cli/wordjs.js pack theme <slug> [--out <dir>]       # zip a theme for distribution
  *   node backend/cli/wordjs.js doctor theme <slug>      # lint a theme against the token contract
  *   node backend/cli/wordjs.js import stitch <slug>     # map a Stitch design system into theme.json
  *       [--from <stitch.json>] [--name/--author/--description <text>]
@@ -493,6 +494,18 @@ function pack(slug, args) {
     // Optionally pre-compile the frontend bundles (reuses backend/scripts/build-plugin.js).
     if (args.includes('--build')) {
         const builder = path.join(BACKEND_DIR, 'scripts', 'build-plugin.js');
+        // The builder needs esbuild and tailwindcss, which are DEV dependencies of the backend — a
+        // production install (npm ci --omit=dev, the release bundle) does not have them, and the build
+        // used to die with a raw "Cannot find module 'esbuild'" stack. Say what is missing and what to do.
+        const missing = ['esbuild', 'tailwindcss'].filter((m) => {
+            try { require.resolve(m, { paths: [BACKEND_DIR] }); return false; } catch { return true; }
+        });
+        if (fs.existsSync(builder) && missing.length) {
+            die(`pack --build needs the backend's development dependencies (missing: ${missing.join(', ')}),\n` +
+                '   which a production install leaves out. Build in a repository checkout instead (clone the\n' +
+                '   repo, run `npm install` inside backend/, pack there and upload the zip), or install them\n' +
+                '   here with `npm install --include=dev` inside backend/. To zip the plugin as it is, drop --build.');
+        }
         if (fs.existsSync(builder)) {
             const { spawnSync } = require('child_process');
             const r = spawnSync(process.execPath, [builder, slug], { stdio: 'inherit', cwd: BACKEND_DIR });
@@ -534,8 +547,43 @@ function pack(slug, args) {
 
     const sizeKB = (fs.statSync(outFile).size / 1024).toFixed(1);
     console.log(`\n📦 Packed '${slug}' → ${outFile} (${sizeKB} KB)`);
-    console.log('   Install it on any WordJS site: /admin/plugins → Add New → upload the zip.');
+    console.log('   Install it on any WordJS site: /admin/plugins → Upload Plugin → choose the zip.');
+    console.log('   Already installed there? Upload it the same way and choose Update: its data, tables and');
+    console.log('   granted permissions are kept; you are asked only about permissions the new version adds.');
     console.log('   (node_modules/, data/, .git/ excluded — dependencies reinstall on activation.)');
+}
+
+function packTheme(slug, args) {
+    if (!isValidSlug(slug)) die(`Invalid theme slug '${slug}'.`);
+    const themeDir = path.join(THEMES_DIR, slug);
+    if (!fs.existsSync(path.join(themeDir, 'theme.json')) && !fs.existsSync(path.join(themeDir, 'style.css'))) {
+        die(`No theme at backend/themes/${slug} (neither theme.json nor style.css found).`);
+    }
+
+    let AdmZip;
+    try {
+        AdmZip = require('adm-zip');
+    } catch {
+        die("adm-zip not found — run `npm install` inside backend/ first.");
+    }
+
+    const outIdx = args.indexOf('--out');
+    const outDir = outIdx !== -1 && args[outIdx + 1] ? path.resolve(args[outIdx + 1]) : process.cwd();
+    fs.mkdirSync(outDir, { recursive: true });
+    const outFile = path.join(outDir, `${slug}.zip`);
+
+    // A single <slug>/ root folder — what POST /api/v1/themes/upload and /themes/<slug>/update expect.
+    // .design/ (a Stitch export kept next to the theme) and editor/OS junk are not part of the theme.
+    const EXCLUDE = /(^|[\\/])(node_modules|\.git|\.design|os-tmp|\.DS_Store|Thumbs\.db)([\\/]|$)/;
+    const zip = new AdmZip();
+    zip.addLocalFolder(themeDir, slug, (p) => !EXCLUDE.test(p));
+    zip.writeZip(outFile);
+
+    const sizeKB = (fs.statSync(outFile).size / 1024).toFixed(1);
+    console.log(`\n📦 Packed theme '${slug}' → ${outFile} (${sizeKB} KB)`);
+    console.log('   Install it on any WordJS site: /admin/themes → Install Theme → choose the zip.');
+    console.log('   Already installed there? Upload it the same way and choose Update: it stays active and');
+    console.log('   keeps its customizer settings.');
 }
 
 function printHelp() {
@@ -556,6 +604,8 @@ Usage (from the repo root):
                                                                block in style.css (manual CSS outside the
                                                                markers is preserved; errors → no write)
   node backend/cli/wordjs.js pack <slug> [--build] [--out <dir>]  Zip a plugin for distribution
+                                                  (--build needs the backend's dev dependencies)
+  node backend/cli/wordjs.js pack theme <slug> [--out <dir>]   Zip a theme for distribution
   node backend/cli/wordjs.js doctor theme <slug>               Lint a theme against the --wjs-* token contract
   node backend/cli/wordjs.js verify theme <slug>               Compare the theme's compiled tokens with the
     --against <stitch.json>                       Stitch design system it was built from (default:
@@ -568,6 +618,7 @@ Examples:
   node backend/cli/wordjs.js create theme  neon-shop --primary "#7c3aed" --secondary "#0ea5e9" --bg "#0b1020" --text "#e5e7eb" --archetype cyber --name "Neon Shop"
   node backend/cli/wordjs.js build theme  neon-shop
   node backend/cli/wordjs.js pack my-plugin --build
+  node backend/cli/wordjs.js pack theme neon-shop
   node backend/cli/wordjs.js doctor theme default
   node backend/cli/wordjs.js verify theme herbario
 
@@ -587,6 +638,8 @@ if (cmd === 'create' && argv[1] === 'plugin' && argv[2]) {
     createTheme(argv[2], argv.slice(3));
 } else if (cmd === 'build' && argv[1] === 'theme' && argv[2]) {
     buildTheme(argv[2]);
+} else if (cmd === 'pack' && argv[1] === 'theme' && argv[2]) {
+    packTheme(argv[2], argv.slice(3));
 } else if (cmd === 'pack' && argv[1]) {
     pack(argv[1], argv.slice(2));
 } else if (cmd === 'doctor' && argv[1] === 'theme' && argv[2]) {

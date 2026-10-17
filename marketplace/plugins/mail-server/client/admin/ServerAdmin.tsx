@@ -97,7 +97,10 @@ function Overview({ t, locale, data, settings, go, reload }: any) {
             : data.inbound?.boundPort
                 ? { ok: false, icon: 'fa-solid fa-inbox', text: t('srv.inboundDegraded', { port: data.inbound.boundPort }), detail: data.inbound.reason, action: () => go('config') }
                 : { ok: false, icon: 'fa-solid fa-inbox', text: t('srv.inboundUnknown'), action: () => go('config') },
-        { ok: true, neutral: true, icon: 'fa-solid fa-tower-broadcast', text: data.relay ? t('srv.relayOn') : t('srv.relayOff'), action: () => go('config') },
+        ...(data.mailDomain && data.mailDomainPublic === false ? [{ ok: false, icon: 'fa-solid fa-at', text: t('srv.domainLocal', { domain: data.mailDomain }), detail: t('srv.domainLocalHint', { domain: data.mailDomain }), action: () => go('config') }] : []),
+        data.relay && data.relayStatus && !data.relayStatus.ok
+            ? { ok: false, icon: 'fa-solid fa-tower-broadcast', text: t('srv.relayDown'), detail: data.relayStatus.error, action: () => go('config') }
+            : { ok: true, neutral: true, icon: 'fa-solid fa-tower-broadcast', text: data.relay ? t('srv.relayOn') : t('srv.relayOff'), action: () => go('config') },
         { ok: dkim, icon: 'fa-solid fa-key', text: dkim ? 'DKIM ✓' : 'DKIM —', action: () => go('dns') },
         { ok: true, neutral: true, icon: 'fa-solid fa-at', text: t('srv.aliasesCount', { n: data.aliases }), action: () => go('aliases') },
         { ok: true, neutral: true, icon: 'fa-solid fa-hard-drive', text: t('srv.defaultQuota', { q: data.defaultQuotaMb > 0 ? formatBytes(data.defaultQuotaMb * 1048576) : t('common.unlimited') }), action: () => go('policies') },
@@ -615,11 +618,90 @@ function InboundStatus({ settings, setSettings, t, confirm }: any) {
     );
 }
 
-function Config({ t, settings, set, setSettings, dnsInfo, onGenerateDkim, generatingDkim, confirm }: any) {
+// The relay's last check (initTransporter on the server): ready, or unavailable and why. A configured relay
+// that is down keeps mail in the queue — it is never bypassed — so this is the first thing to look at.
+const relayDest = (host: string, port: any) => `${String(host).includes(':') ? `[${host}]` : host}:${port}`;
+
+function RelayStatus({ t, settings }: any) {
+    const st = settings.relay_status;
+    const host = String(settings.mail_server || '').trim();
+    if (!host) return null;
+    if (!st?.configured || st.host !== host || String(st.port) !== String(settings.mail_port || '587')) {
+        return <p className="mt-4 text-xs text-slate-500"><i className="fa-solid fa-circle-info mr-1 text-slate-400"></i>{t('srv.cfg.relayUnsaved')}</p>;
+    }
+    if (st.ok) {
+        return (
+            <div className="mt-4 flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+                <i className="fa-solid fa-circle-check mt-0.5 text-emerald-500"></i>
+                <span>{t('srv.cfg.relayReady', { dest: relayDest(st.host, st.port) })}</span>
+            </div>
+        );
+    }
+    return (
+        <div className="mt-4 grid gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+            <span className="flex items-start gap-3 font-semibold"><i className="fa-solid fa-circle-exclamation mt-0.5 text-red-500"></i>{t('srv.cfg.relayUnavailable', { reason: st.error || '—' })}</span>
+            <span className="text-xs text-red-700">{t('srv.cfg.relayQueued')}</span>
+        </div>
+    );
+}
+
+// Sandbox access for a PRIVATE relay. WordJS lets plugins reach public addresses only; an administrator can
+// approve exactly one host:port for this plugin (the host's POST /plugins/mail-server/private-egress, which
+// restarts the plugin so it applies). Shown for any saved relay: only the operator knows whether it is on
+// their LAN, and the relay status above says so when the sandbox refused it.
+function SandboxAccess({ t, settings, onChanged }: any) {
+    const st = settings.relay_status;
+    const [state, setState] = useState<any>(null);
+    const [busy, setBusy] = useState(false);
+    const [msg, setMsg] = useState('');
+    const load = async () => { try { setState(await api('/plugins/mail-server/private-egress')); } catch { setState(null); } };
+    useEffect(() => { load(); }, []);
+    if (!st?.configured || !state) return null;
+    const dest = relayDest(st.host, st.port);
+    const approved: string[] = state.destinations || [];
+    const allowed = approved.includes(dest.toLowerCase());
+    const others = approved.filter((d) => d !== dest.toLowerCase());
+    const change = async (destinations: string[]) => {
+        setBusy(true); setMsg('');
+        try {
+            await api('/plugins/mail-server/private-egress', { method: 'POST', body: { destinations } });
+            await load();
+            // The host restarted the plugin; give it a moment to re-check the relay, then refresh.
+            setTimeout(onChanged, 1500);
+        } catch (e: any) { setMsg(e?.message || t('srv.cfg.sandboxFailed')); }
+        finally { setBusy(false); }
+    };
+    return (
+        <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+            <div className="mb-1 flex items-center gap-2 font-semibold"><i className="fa-solid fa-shield-halved text-slate-400"></i>{t('srv.cfg.sandbox')}</div>
+            {!state.network ? <p className="text-xs text-amber-700">{t('srv.cfg.sandboxNoNetwork')}</p> : allowed ? (
+                <div className="flex flex-wrap items-center gap-3">
+                    <span className="flex-1 text-xs text-emerald-700"><i className="fa-solid fa-circle-check mr-1"></i>{t('srv.cfg.sandboxAllowed', { dest })}</span>
+                    <Button size="sm" variant="secondary" loading={busy} onClick={() => change(others)}>{t('srv.cfg.sandboxWithdraw')}</Button>
+                </div>
+            ) : (
+                <div className="grid gap-3">
+                    <p className="text-xs leading-relaxed text-slate-500">{t('srv.cfg.sandboxHint', { dest })}</p>
+                    <div><Button size="sm" variant="dark" icon="fa-solid fa-unlock" loading={busy} onClick={() => change([dest])}>{t('srv.cfg.sandboxAllow', { dest })}</Button></div>
+                </div>
+            )}
+            {others.length > 0 && <p className="mt-2 text-[11px] text-slate-500">{t('srv.cfg.sandboxOthers', { list: others.join(', ') })}</p>}
+            {msg && <p className="mt-2 whitespace-pre-wrap text-xs text-red-700">{msg}</p>}
+        </div>
+    );
+}
+
+function Config({ t, settings, set, setSettings, dnsInfo, onGenerateDkim, generatingDkim, confirm, reloadSettings }: any) {
     return (
         <div className="grid gap-4 sm:gap-6">
             <Card title="SMTP" icon="fa-solid fa-server">
                 <div className="grid gap-5">
+                    {settings.mail_domain && settings.mail_domain_public === false && (
+                        <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                            <i className="fa-solid fa-triangle-exclamation mt-0.5 text-amber-500"></i>
+                            <span><span className="block font-semibold">{t('srv.domainLocal', { domain: settings.mail_domain })}</span><span className="block text-xs">{t('srv.domainLocalHint', { domain: settings.mail_domain })}</span></span>
+                        </div>
+                    )}
                     <InboundStatus settings={settings} setSettings={setSettings} t={t} confirm={confirm} />
                     <div className="grid gap-4 md:grid-cols-2">
                         <Field label={t('srv.cfg.fromEmail')}><input type="email" className={inputCls} value={settings.mail_from_email || ''} onChange={(e) => set({ mail_from_email: e.target.value })} placeholder="noreply@example.com" /></Field>
@@ -660,6 +742,8 @@ function Config({ t, settings, set, setSettings, dnsInfo, onGenerateDkim, genera
                         </select>
                     </Field>
                 </div>
+                <RelayStatus t={t} settings={settings} />
+                <SandboxAccess t={t} settings={settings} onChanged={reloadSettings} />
             </Card>
             <Card title="DKIM" icon="fa-solid fa-key" action={<Pill tone={dnsInfo?.dkimConfigured ? 'green' : 'amber'}>{dnsInfo?.dkimConfigured ? '✓' : '—'}</Pill>}>
                 <div className="grid gap-4 md:grid-cols-2">
@@ -813,7 +897,7 @@ function TestDelivery({ t }: any) {
             {res && (
                 <div className={cx('mt-5 rounded-xl border p-4 text-sm', res.localOnly ? 'border-amber-200 bg-amber-50' : res.success ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50')}>
                     <div className={cx('flex items-center gap-2 font-semibold', res.localOnly ? 'text-amber-800' : res.success ? 'text-emerald-800' : 'text-red-800')}>
-                        <i className={cx('fa-solid', res.localOnly ? 'fa-triangle-exclamation' : res.success ? 'fa-circle-check' : 'fa-circle-exclamation')}></i>{res.localOnly ? t('srv.testx.localOnly', { to: res.to }) : res.success ? t('srv.testx.ok') : res.message && !res.failed?.length && !res.delivered?.length ? res.message : t('srv.testx.fail')}
+                        <i className={cx('fa-solid', res.localOnly ? 'fa-triangle-exclamation' : res.success ? 'fa-circle-check' : 'fa-circle-exclamation')}></i>{res.localOnly ? t('srv.testx.localOnly', { to: res.to }) : res.success ? t('srv.testx.ok') : res.message && ((!res.failed?.length && !res.delivered?.length) || (res.relay?.configured && !res.relay.ok)) ? res.message : t('srv.testx.fail')}
                     </div>
                     {(res.delivered || []).map((d: any, i: number) => <div key={'d' + i} className="mt-2 break-all rounded-lg bg-white/70 px-3 py-2 font-mono text-xs text-emerald-900"><b>{d.recipient}</b> {t('srv.testx.via')} <b>{d.via}</b> — {d.response}</div>)}
                     {(res.failed || []).map((f: any, i: number) => <div key={'f' + i} className="mt-2 break-all rounded-lg bg-white/70 px-3 py-2 font-mono text-xs text-red-900"><b>{f.recipient}</b> — {f.error}{f.permanent ? ` (${t('srv.testx.permanent')})` : ''}</div>)}
@@ -924,7 +1008,7 @@ export default function ServerAdmin({ t, locale, toasts, confirm, canUseMail, on
                     {tab === 'queue' && <Queue t={t} locale={locale} toast={toast} confirm={confirm} />}
                     {needsSettings && !settings && <div className="py-20 text-center"><Spinner className="text-2xl" /></div>}
                     {tab === 'policies' && settings && <Policies t={t} settings={settings} set={set} />}
-                    {tab === 'config' && settings && <Config t={t} settings={settings} set={set} setSettings={setSettings} dnsInfo={dnsInfo} onGenerateDkim={generateDkim} generatingDkim={generatingDkim} confirm={confirm} />}
+                    {tab === 'config' && settings && <Config t={t} settings={settings} set={set} setSettings={setSettings} dnsInfo={dnsInfo} onGenerateDkim={generateDkim} generatingDkim={generatingDkim} confirm={confirm} reloadSettings={() => { loadSettings(); loadOverview(); }} />}
                     {tab === 'dns' && <Dns t={t} locale={locale} dnsInfo={dnsInfo} loading={dnsLoading} reload={loadDns} />}
                     {tab === 'test' && <TestDelivery t={t} />}
                     {needsSettings && <SaveBar dirty={dirty} saving={saving} onSave={save} onReset={() => setSettings(saved)} t={t} />}

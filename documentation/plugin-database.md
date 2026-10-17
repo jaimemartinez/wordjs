@@ -91,7 +91,8 @@ A plugin **cannot** (and should not) query the core `users` table directly — `
 it. For user lookups, use the safe `wordjs.users` bridge (`findByEmail` / `findByLogin` / `findById` /
 `search`), which returns **only a projection** (`id`, `userLogin`/`username`, `userEmail`,
 `displayName`, `role`, plus the `hasProfessionalMailbox` boolean, derived from the
-`user_meta.professional_mailbox` grant and fail-closed to `false`) and **never** `user_pass`, tokens or
+`user_meta.professional_mailbox` grant and fail-closed to `false`, and `pluginCapabilities`, the
+account's capabilities in your own plugin namespace — [plugins.md §12a](./plugins.md#12a-declaring-user-roles-rolesdeclare-)) and **never** `user_pass`, tokens or
 the rest of the meta. It requires the `users:read` grant. This is the sanctioned path that replaced a
 plugin running `SELECT * FROM users` (which leaked password hashes).
 
@@ -434,7 +435,7 @@ module.exports = {
 - ✅ `mail-server` — a **fully untrusted** (sandboxed) plugin: it uses the `database:read` +
   `database:write` grants (among others its manifest requests) and keeps its relational data — DKIM
   keys and relay SMTP secrets included — in its own `wjp_mail_server_*` tables (`_received_emails` /
-  `_email_attachments` / `_secrets` / `_labels` / `_email_labels` / `_user_prefs`), precisely because `assertSqlAllowed` denies any table outside its
+  `_email_attachments` / `_secrets` / `_labels` / `_email_labels` / `_user_prefs` / `_aliases` / `_mailboxes`), precisely because `assertSqlAllowed` denies any table outside its
   prefix. Attachment **bytes** and the Bayes corpus do not go in the database: they live in the
   plugin's own directory via the `filesystem:read`/`write` grants (the `_email_attachments` table holds
   only the metadata and the `storage_path`).

@@ -110,6 +110,21 @@ const { text, model } = await wordjs.ai.complete({
 |---|---|---|---|
 | `GET` | `/ai/status` | signed in | `{ enabled, tasks }` |
 | `GET` | `/ai/settings` | administrator, session | settings without the key (`hasKey`, `keyHint`) |
-| `PUT` | `/ai/settings` | administrator, session | `{ provider, model?, baseUrl?, apiKey?, clearKey? }`; `400` on an unknown provider/model or a bad base URL |
+| `PUT` | `/ai/settings` | administrator, session | `{ provider, model?, baseUrl?, apiKey?, clearKey? }`; `400 rest_invalid_param` on an unknown provider/model or a bad base URL or key |
 | `POST` | `/ai/test` | administrator, session | `{ ok, provider, model, ms }` or the provider error |
 | `POST` | `/ai/suggest` | edit rights (see §3) | `{ task, title?, content?, mediaId?, language? }` → `{ suggestion, model }`; `409 ai_not_configured`, `422 ai_refused`, `429 ai_rate_limited`, and the provider codes of §1 |
+
+### Errors
+
+Every error has the usual `{ code, message, data: { status } }` shape; the message never carries the key
+or the request.
+
+The provider's own failures (`ai_provider_*`, timeouts, a model that does not accept images) are listed in
+[§1](#1-configure). The site's own errors:
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `rest_invalid_param` | Saving settings: an unknown provider or Claude model, an OpenAI-compatible provider without a model, a base URL that is not a valid http(s) URL, carries credentials or uses plain http to a host that is not loopback, or a key that is too long or contains whitespace. Also a bad `task`, `title`/`content` or a missing `mediaId` on `/ai/suggest`, and a plugin's malformed `wordjs.ai.complete(...)` input |
+| `409` | `ai_not_configured` | No provider, no stored key (Anthropic), or no base URL or model (OpenAI-compatible) |
+| `422` | `ai_refused` | The model declined to answer (`stop_reason: "refusal"`) |
+| `429` | `ai_rate_limited` | This site's own limit: 20 suggestions per minute per user, 30 calls per minute per plugin |

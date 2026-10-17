@@ -6,6 +6,31 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+
+- **Update a plugin or a theme by uploading a newer zip.** Uploading a zip whose plugin is already
+  installed used to fail twice — "deactivate it", then "uninstall it" — and uninstalling dropped the
+  plugin's grants. Now **Plugins → Upload Plugin** answers `409 plugin_exists` with both versions and the
+  screen offers **Update** (`POST /api/v1/plugins/:slug/update`): the new code is extracted to a staging
+  directory and validated there first (a bad zip leaves the installed plugin running, untouched), then
+  swapped in and restarted if it was active. `data/`, the plugin's tables, its grants and its egress list
+  are kept; permissions the new version adds are reported and stay off, and the permissions dialog opens
+  on them. Themes get the same: **Install Theme** with an installed theme's zip offers **Update**
+  (`POST /api/v1/themes/:slug/update`, staged and compiled first, then swapped; an active theme stays
+  active and keeps its customizer settings). See `documentation/plugins.md` and `documentation/themes.md`.
+
+- **`wordjs.js pack theme <slug>`** zips a theme with the single `<slug>/` root folder the upload and the
+  update expect. The admin's theme download now has the same layout, so it can be uploaded back.
+
+- **A plugin can reach an administrator-approved private address — one host, one port.** Plugins still
+  reach public addresses only, but an administrator can now approve an exact `host:port` for a plugin
+  (`GET`/`POST /api/v1/plugins/:slug/private-egress`, at most 4 entries). The case it exists for is an
+  SMTP smarthost on the LAN, which the Mail Server could not use at all. An approval opens that host on
+  that port and nothing else; link-local addresses (including `169.254.169.254`), unspecified and
+  multicast addresses cannot be approved; it lives beside the egress allowlist without changing it; saving
+  restarts the plugin and is recorded in the audit log (`plugin.private_egress`); and an API token may
+  withdraw an approval but never make one. See `documentation/plugins.md` and `documentation/api.md`.
+
 ### Changed
 
 - **The release smoke gate deploys split mode with the default HTTPS too**, installing, restarting and
@@ -45,6 +70,35 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   `"translations": { "<lang>": { "description": "…" } }`; the admin shows the description for its own
   language and falls back to `description`. The four bundled themes ship English descriptions with Spanish
   and Portuguese translations (Circuito's was Spanish only).
+
+- **Mail Server 3.0.2: a relay that does not answer is reported, not bypassed.** When the configured
+  relay failed its check, outgoing mail silently went direct-to-MX instead. Now it waits in the retry
+  queue and the console says **Relay unavailable: <reason>** (server health, the Configuration tab and
+  the Test tab; `relay_status` in `GET /settings`); a failed relay is re-checked at most once a minute.
+  The Configuration tab has a **Sandbox access** section to approve a private relay's exact address. A
+  relay given by name now works inside the sandbox (the plugin resolves it and keeps the name for TLS),
+  and relay credentials are optional, for a smarthost that relays for its network by address. With
+  **Require STARTTLS** off, a relay that advertises STARTTLS and then refuses it with an SMTP reply gets
+  the mail without TLS, as direct-to-MX delivery already does.
+
+- **Mail Server: password recovery works with a relay.** Recovery (and e-mail verification) waited for
+  the DNS check to find MX, A, SPF, DKIM and DMARC on the site's own domain, which a site that sends
+  through a relay never passes. Now a relay that answers its check is what makes mail ready, and one
+  that does not turns recovery off again.
+
+- **Mail Server: switched-off settings stay off.** A setting saved as `0` came back from the host as a
+  number and was read as on, so **Require STARTTLS: No** (and other switches turned off in the console)
+  had no effect and showed as **Yes** again after saving.
+
+- **Mail Server: a non-standard `smtp_listen_port` works with "Receive internet email".** WordJS now
+  opens any unprivileged port (1024 and up) for the plugin, besides the ones its manifest declares. A port
+  it refuses no longer leaves the server without a listener: the plugin listens on 25 and the console
+  says which port was refused and why.
+
+- **Mail Server: the console warns when the mail domain is not a public domain.** On a site reached by
+  IP, `localhost` or a LAN name, mailboxes become `@localhost` (or similar) and no other server can
+  deliver to them. Server health, the Configuration tab and the startup log now say so and how to fix it
+  (`mail_domain` / `mail_domain_public` in `GET /settings`).
 
 ### Fixed
 
@@ -221,6 +275,35 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   fixtures or if a built bundle contains one. `create-wordjs upgrade` also treats `backend/backups/`
   as site state, like `backend/data/` and `backend/uploads/`: it never adds to or replaces the site's
   own backups.
+
+- `wordjs.js pack <slug> --build` on a production install stopped with a raw `Cannot find module
+  'esbuild'`; it now says the backend's development dependencies are missing and how to build instead.
+  Its closing hint names the real button (**Upload Plugin**, not "Add New").
+
+- A theme generated from valid seeds could get a `--wjs-color-text-muted` under AA (4.42:1 for
+  `#2b211c` on `#fbf7f2`), which the doctor then flagged. The derivation now washes the text less when
+  needed and always reaches 4.5:1; palettes that already passed are unchanged.
+
+- A theme's `styles.hero.bg` / `--wjs-hero-bg` never showed: the framework's default hero gradient was
+  painted over it. Both ends of that default gradient now fall back to `--wjs-hero-bg`; an explicit
+  gradient or image still wins. A bundled theme that set only `--wjs-hero-bg` now shows that colour.
+
+- After activating a theme, the first visit to each cached page still got the previous theme
+  (stale-while-revalidate). Activation, and updating the active theme, now expire those pages at once.
+
+- An isolated plugin's `comments:pre_insert` filter that threw or timed out was skipped and the comment
+  accepted, against the hook's contract. That hook now fails closed: the comment is refused with the
+  plugin's own 4xx status and `rest_*` code when it gave one, `503 rest_plugin_check_failed` otherwise.
+  Other filters keep falling back to the unchanged value.
+
+- `backend/types/wordjs-bridge.d.ts` declares `WordJSRouteUser.pluginCapabilities`,
+  `res.sendPrivateMedia()` and `wordjs.media.getPrivate()`.
+
+- The `hello-world` sample filtered `the_content`, a hook core never applies, and its test claimed to
+  run before activation; it now registers a `[hello]` shortcode and says its tests are the author's to
+  run. `POST /plugins/sample` writes the same isolated sample (it wrote an in-process one without a
+  manifest). The `test-schema` fixture declares `database:write` instead of an access level the upload
+  refuses, and drops its unused `main` / `active` keys.
 
 ## [2.6.0] - 2026-10-16
 

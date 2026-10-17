@@ -12,11 +12,11 @@ WordJS is designed to be easy to deploy. It defaults to a file-based **SQLite** 
 
 </div>
 
-The **same codebase** runs as **two mutually-exclusive process models** — **Split** and **Monolith** — and you can switch between them **at any time** with **no migration**. Both share the same `backend/wordjs-config.json`, the same database, the same `uploads`/`themes`/`plugins`, the same secrets, and the same public origin (default `https://localhost:3000`). They are **mutually exclusive** because both bind the public port (default `3000`), so run one or the other. A third topology, **Separate**, is Split spread across **different machines** (joined by gateway-minted join tokens — see below).
+The **same codebase** runs as **two mutually-exclusive process models** — **Split** and **Monolith** — and you can switch between them **at any time** with **no migration**. Both share the same `backend/wordjs-config.json`, the same database, the same `uploads`/`themes`/`plugins`, the same secrets, and the same public origin (default `http://localhost:3000`, `https://` once TLS is enabled). They are **mutually exclusive** because both bind the public port (default `3000`), so run one or the other. A third topology, **Separate**, is Split spread across **different machines** (joined by gateway-minted join tokens — see below).
 
 In **both** modes, plugins marked `"isolated": true` run **in a separate OS process** (`child_process.fork`) behind the `wordjs` capability bridge — that behavior is identical. See **[Plugin Sandbox & Memory Caps](#-plugin-sandbox--memory-caps)** for the operator-facing knobs.
 
-### Split (default — 3 processes)
+### Split (3 processes — what the root `npm start` / `npm run dev` run)
 
 The gateway (`:3000`, public) + backend (`:4000`) + frontend (`:3001`). The gateway is a Node `cluster` reverse-proxy that provides clustering, health-checks, load-balancing, an mTLS internal channel, and SSE-aware proxying.
 
@@ -25,7 +25,7 @@ On one machine the frontend listens on **loopback only** (`127.0.0.1:3001`, regi
 - **Dev:** `npm run dev`
 - **Prod:** `npm start`
 
-### Monolith (1 process, 1 port `:3000`)
+### Monolith (1 process, 1 port `:3000` — what `npx create-wordjs` starts)
 
 A single artifact via the repo-root entrypoint `monolith.js`. It mounts the **backend Express app** (with its isolated plugins, each running in its own forked OS process) **and** the **Next.js request handler** **in-process** — no loopback proxy, no Node `cluster`, no gateway `/register`. The gateway's still-needed cross-cutting concerns are re-implemented as **local middleware**: `helmet`, `compression` (skipping SSE), a `405` answer for `TRACE`/`TRACK`, SEO rewrites (`/sitemap.xml` → `/api/v1/seo/sitemap.xml`, `/robots.txt` → `.../robots.txt`, `/feed` | `/feed.xml` | `/rss.xml` → `.../feed.xml`), and `X-Forwarded-Host` / `X-Forwarded-Proto` pinning for CSRF. It serves **one HTTPS port** reusing the gateway's certificate (HTTP fallback), plus a loopback-only HTTP listener for the frontend's server-side (SSR) API calls.
 
@@ -121,7 +121,7 @@ The workflow then publishes a **GitHub Release** with the versioned `wordjs-<tag
    ```
 3. Start in either mode:
    ```bash
-   npm run start:mono     # single process, one port (simplest), default https://localhost:3000
+   npm run start:mono     # single process, one port (simplest): http://localhost:3000, or https once gateway/gateway-config.json enables TLS
    # or
    npm start              # 3-service split: gateway + backend + frontend
    ```
@@ -246,7 +246,7 @@ Example `backend/wordjs-config.json`:
 
 > **Deploying a release bundle?** You can skip the build steps entirely — see **[Releases & Distribution](#-releases--distribution)**. After `npm run release:install`, run `npm run start:mono` (or `npm start`) and the PM2 patterns below apply unchanged.
 
-> **Monolith mode?** Skip the three-process layout below and run a single process: `npm run start:mono` (after `npm run build:mono`), e.g. `pm2 start npm --name wordjs -- run start:mono`. See **[Deployment Modes](#-deployment-modes-split-monolith--separate)**. The rest of this section covers the default **split** deployment.
+> **Monolith mode?** Skip the three-process layout below and run a single process: `npm run start:mono` (after `npm run build:mono`), e.g. `pm2 start npm --name wordjs -- run start:mono`. See **[Deployment Modes](#-deployment-modes-split-monolith--separate)**. The rest of this section covers the three-process **split** deployment.
 
 We recommend using **PM2** to manage the three components (Gateway, Backend, Frontend).
 
@@ -638,10 +638,42 @@ The value is floored at 6144 MB and validated by a boot probe (using the same `e
 
 ---
 
+## 🧾 Configuration reference: environment variables & config keys
+
+Almost everything lives in `backend/wordjs-config.json` (written by the install wizard and the admin screens). The backend also reads these environment variables (`backend/src/config/app.ts` unless noted). The **Precedence** column says which one wins when both are set.
+
+| Variable | Config key | Default | Precedence | What it does |
+| :--- | :--- | :--- | :--- | :--- |
+| `WORDJS_API_RATELIMIT_MAX` | — | `1000` | env only | Requests per window per client IP on `/api/v1` (the collaboration endpoints have their own budget). Accepted range 10–1,000,000; an out-of-range value falls back to the default with a warning, as for every clamped variable in this table. |
+| `WORDJS_API_RATELIMIT_WINDOW_MS` | — | `900000` (15 min) | env only | The window of that limiter, 1,000 ms – 24 h. |
+| `WORDJS_GRAPHQL_MAX_DEPTH` | — | `10` | env only | Deepest selection a GraphQL query (`/api/v1/graphql`) may nest; range 2–50. See [graphql.md](graphql.md). |
+| `WORDJS_GRAPHQL_MAX_COST` | — | `1000` | env only | Cost budget of one GraphQL query; range 50–100,000. |
+| `WORDJS_GRAPHQL_MAX_TOKENS` | — | `5000` | env only | Token count of one GraphQL document; range 100–100,000. |
+| `REDIS_ENABLED` | `redis.enabled` | `false` | file | `true` turns on the Redis cache and the cross-node bus ([multi-node.md](multi-node.md)). |
+| `REDIS_HOST` / `REDIS_PORT` | `redis.host` / `redis.port` | `127.0.0.1` / `6379` | file | Redis address. |
+| `REDIS_PASSWORD` / `REDIS_DB` | `redis.password` / `redis.db` | — / `0` | file | Redis credentials and database index. |
+| `WORDJS_MEDIA_STORAGE` | `mediaStorage.driver` | `local` | env | `s3` offloads public media to an S3-compatible bucket ([media-storage.md](media-storage.md)). |
+| `WORDJS_MEDIA_S3_BUCKET`, `_REGION`, `_ENDPOINT`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY`, `_SESSION_TOKEN`, `_PREFIX` | `mediaStorage.bucket`, `.region`, `.endpoint`, `.accessKeyId`, `.secretAccessKey`, `.sessionToken`, `.prefix` | region `us-east-1`, prefix `uploads` | env (per field) | The bucket. A partial configuration counts as not configured, and media stays local. (`core/media-storage.ts`) |
+| `WORDJS_MEDIA_PUBLIC_URL` | `mediaStorage.publicUrl` | — | env | Public base URL of the bucket or the CDN in front of it. |
+| `WORDJS_MEDIA_KEEP_LOCAL_COPY` | `mediaStorage.keepLocalCopy` | — | env | Keep new uploads on disk as well as in the bucket. |
+| — | `multisite.enabled` | `false` | — | A network of sites. Set it with `npm run network -- enable --admin <login>`, not by hand; needs the `sqlite-native` driver and a restart ([multisite.md](multisite.md)). |
+| `METRICS_TOKEN` | `metrics.token` | empty (`/metrics` answers 404) | file | Scrape token for `GET /metrics` ([observability.md](observability.md)). |
+| `LOG_LEVEL` | `logging.level` | `info` | env | `trace`, `debug`, `info`, `warn`, `error`, `fatal` or `silent`; an unknown value is skipped. |
+| `WORDJS_TRUST_PROXY` | `trustProxy` | unset (by mode) | file | Which peers are your proxies — see [site-address.md](site-address.md). |
+| `WORDJS_DB_STRICT` | `dbStrictDriver` | `false` | env | Refuse to boot instead of falling back to `sqlite-legacy` (above). |
+| `WORDJS_INSTALL_TOKEN` | — | random | env only | Your own one-time install token (≥ 16 characters). `WORDJS_PRINT_INSTALL_TOKEN=1` prints it in the banner. |
+| `WORDJS_SITE_URL` | — | — | — | Offered by the install wizard as the suggested main address; never overrides an installed one. |
+| `WORDJS_HTTP` | — | — | env only | `1` makes the monolith serve plain HTTP (behind a TLS-terminating proxy). |
+| `PORT` | `gatewayPort` | `3000` | env | The monolith's public port (`monolith.js`). |
+
+`WORDJS_ALLOWED_HOSTS`, `WORDJS_IP_HOSTS` and `WORDJS_DEV_ORIGINS` (more accepted addresses) are covered in [site-address.md](site-address.md#environment-variables-and-config-keys), and the container entrypoint's own `WORDJS_*` variables in [`docker/README.md`](../docker/README.md). The **gateway** reads its settings from `gateway/gateway-config.json` only; see [gateway.md](gateway.md#configuration).
+
+---
+
 ## 🔒 Security Checklist
 
 1.  **Firewall:** Only open port `3000` (Gateway) to the public. Ports `4000` (Backend) and `3001` (Frontend) should stay internal.
-2.  **HTTPS:** Use a service like **Cloudflare** or a simple **Nginx Reverse Proxy** on top of the Gateway to handle SSL (Certbot).
+2.  **HTTPS:** Either terminate TLS in front of WordJS (**Cloudflare**, or an **Nginx/Caddy reverse proxy** with Certbot), or use the **built-in Let's Encrypt client** (`acme-client`, in both monolith and split mode). Issue a certificate from **Admin → Security → SSL Certificate Manager** (HTTP-01, or DNS-01 with a TXT record you publish), and turn on **auto-renewal** with the `acme` block in `backend/wordjs-config.json` (also written by that screen): `enabled` (default `false`), `email`, `domains`, `staging` (default `false`), `renewBeforeDays` (default `30`), `challengeType` (`http-01`, the default, or `dns-01`) and `http01Port`. The renewal runs from the built-in cron (on one node only in a cluster) and only for HTTP-01: a DNS-01 certificate is renewed through the admin screen, because its TXT record is published by hand. HTTP-01 needs port 80 reachable — set `acme.http01Port: 80` so WordJS serves the challenge and redirects the rest to HTTPS (see [Ports below 1024](#ports-below-1024-without-a-capability) for binding it without root).
 3.  **Secrets:** Ensure your `gatewaySecret` and `jwtSecret` in `wordjs-config.json` are cryptographically secure. Both are generated for you: the `jwtSecret` by the backend's first boot (the installer keeps it), the `gatewaySecret` by the installer. A `jwtSecret` you pre-seed is kept as-is (before the install, only a short, non-string or published placeholder value is replaced), so generate it with `openssl rand -hex 64`.
 4.  **Install token:** On a fresh, not-yet-installed instance the pre-install endpoints (`POST /api/v1/setup/install`, `POST /api/v1/setup/test-db`) are gated by a **one-time install token** written to `backend/data/install-token` (`0600`) and overridable via `WORDJS_INSTALL_TOKEN` (≥ 16 chars). It is printed in the boot banner **only when stdout is a TTY** or `WORDJS_PRINT_INSTALL_TOKEN=1` — off a TTY the banner omits the `#token=` fragment and names the file, so the bootstrap secret is not shipped to your log aggregator. Read it from the terminal, or from that file, to complete the wizard; it is cleared once installed. See **[How an operator deploys a release](#how-an-operator-deploys-a-release)**.
 5.  **Metrics:** The Prometheus `/metrics` endpoint is **disabled (returns 404) by default** — it only serves once a scrape token is set via `config.metrics.token` (`wordjs-config.json`) or the `METRICS_TOKEN` env var. Once set, scrape with `Authorization: Bearer <token>` (header only — `?token=` is not accepted); a wrong token returns 401. So metrics are never exposed publicly unless you opt in.
@@ -671,11 +703,16 @@ WordJS is **MIT-licensed** consistently across every package (root, `backend`, `
 
 ## 🤖 Continuous Integration
 
-CI runs on every pull request and on pushes to `main` and `v*` tags via `.github/workflows/ci.yml`, on **Node 22**, with eleven parallel jobs (the `Docker image (build + boot + install)` job is described under [What CI checks](#what-ci-checks)):
+CI runs on every pull request and on pushes to `main` and `v*` tags via `.github/workflows/ci.yml`, on **Node 22**, with fourteen jobs — two of them four-way matrices, so a run has twenty legs (the `Docker image (build + boot + install)` job is described under [What CI checks](#what-ci-checks)):
 
 - **Gates that travel:** a checkout-only job (no npm, no database, no build) that asserts two things a checkout can answer: every file on an explicit manifest of required gate files is present **and tracked by git**, and every tracked test file is actually run by one of the suites this workflow invokes. It exists because an untracked gate is vacuously green in CI, and because `node --test 'src/tests/*.test.ts'` does not recurse into subdirectories.
-- **Backend:** **audit gate** (`npm audit --omit=dev --audit-level=high`, blocks high/critical prod vulns) → strict type check (`npx tsc --noEmit`) → **lint** (`npm run lint`; ESLint errors block the job, warnings do not) → **build** (`npm run build`, compile to `dist/`) → the **F0–F6 verifiers** (`npm run verify:f0` … `verify:f6`, one step each) → **license gate** (`license-checker --production --failOn 'AGPL;SSPL'`, blocks network-copyleft deps) → unit tests (`npm test`) → the **F0 content performance budget** (`npm run perf:f0`) → **integration tests** (`npm run test:integration`). The job brings up real **`postgres:16`**, **`redis:7`** and **`mysql:8`** service containers, and both test steps run with `WORDJS_CI_DB=1`, which turns the Postgres/MySQL driver-conformance blocks from graceful skips into hard failures — this is the only coverage of the SQLite→MySQL translation layer. The integration tests exercise the multi-node coordination paths — distributed-lock lease CAS against Postgres, Redis pub/sub cache/role coherence — plus the health and `/metrics` endpoints (`backend/src/tests-integration/`). The job ends with a **marketplace catalog integrity** step that rebuilds the catalog (`build-marketplace.js`) and then runs `verify-marketplace.js --rebuild`, which re-hashes every zip on disk against the catalog entry advertising it, checks each manifest and its compiled frontend bundles, rejects packages carrying a plugin's runtime `data/` or exceeding the installer's 10 MB cap, and requires a second build of unchanged sources to be byte-identical. The catalog itself (`marketplace/dist/`) is **not** committed — it is a build output published as GitHub Release assets by `release.yml` — so this step validates the build rather than a checked-in artifact.
-- **Backend coverage:** the same backend unit suite run instrumented in four parallel shards and merged with `c8 report` (`npm run test:coverage:report`, the options of `test:coverage:check`), in parallel with the Backend jobs, as a ratchet that fails a run whose line coverage drops below the committed floor.
+- **Backend**, as three jobs:
+  - **Backend gates** — **audit gate** (`npm audit --omit=dev --audit-level=high`, blocks high/critical prod vulns) → strict type check (`npx tsc --noEmit`) → **lint** (`npm run lint`; ESLint errors block the job, warnings do not) → **build** (`npm run build`, compile to `dist/`) → the **F0–F6 verifiers** (`npm run verify:f0` … `verify:f6`, one step each) → **license gate** (`license-checker --production --failOn 'AGPL;SSPL'`, blocks network-copyleft deps) → the **F0 content performance budget** (`npm run perf:f0`) → **integration tests** (`npm run test:integration`, against real **`postgres:16`** + **`redis:7`** service containers) → the marketplace catalog integrity step described below.
+  - **Backend unit tests**, in **four shards** (`npm test -- --test-shard=<k>/4`: node splits the sorted file list, so every test file runs in exactly one shard), each with real **`postgres:16`**, **`redis:7`** and **`mysql:8`** service containers.
+  - **Backend** — an aggregator with the required check's name, green only when the gates job and every shard are.
+
+  Both test steps run with `WORDJS_CI_DB=1`, which turns the Postgres/MySQL driver-conformance blocks from graceful skips into hard failures — this is the only coverage of the SQLite→MySQL translation layer. The integration tests exercise the multi-node coordination paths — distributed-lock lease CAS against Postgres, Redis pub/sub cache/role coherence — plus the health and `/metrics` endpoints (`backend/src/tests-integration/`). The gates job ends with a **marketplace catalog integrity** step that rebuilds the catalog (`build-marketplace.js`) and then runs `verify-marketplace.js --rebuild`, which re-hashes every zip on disk against the catalog entry advertising it, checks each manifest and its compiled frontend bundles, rejects packages carrying a plugin's runtime `data/` or exceeding the installer's 10 MB cap, and requires a second build of unchanged sources to be byte-identical. The catalog itself (`marketplace/dist/`) is **not** committed — it is a build output published as GitHub Release assets by `release.yml` — so this step validates the build rather than a checked-in artifact.
+- **Backend coverage:** the same backend unit suite run instrumented in four parallel shards (`backend-coverage-shard`, with the same service containers and `WORDJS_CI_DB=1`) and merged with `c8 report` (`npm run test:coverage:report`, the options of `test:coverage:check`) in `backend-coverage`, in parallel with the Backend jobs, as a ratchet that fails a run whose line coverage drops below the committed floor.
 - **Multi-node coherence:** boots **two** backend cores as separate OS processes against one shared `postgres:16` + `redis:7` and asserts that an option/role change written on node A is observed on node B through the Redis bus + shared Postgres — the cross-process coverage the single-process integration test cannot give. It also `docker compose config`-validates the Docker stack.
 - **Gateway:** audit gate → tests (`npm test`), including the proxy/mTLS integration test.
 - **Install channel:** the `create-wordjs` bootstrapper (`packages/create-wordjs`), the first thing a new user runs and a package published to immutable npm — audit gate (the same `scripts/ci-audit.mjs` wrapper around `npm audit --omit=dev --audit-level=high` used by the other jobs) → its unit tests (`npm test`, i.e. `node --test test/*.test.js`, with the step failing unless the runner reports a non-zero test count, because `node --test` exits 0 when its pattern matches no files) → a `node index.js --help` smoke run so a syntax error or top-level throw in the published bin can never reach npm.
@@ -692,14 +729,26 @@ Beyond `ci.yml`, a separate **`.github/workflows/codeql.yml`** runs **CodeQL SAS
 
 ## 🔄 Updates
 
-To update the CMS:
+**A release install** (`npx create-wordjs`, or an unpacked release ZIP) upgrades in place:
+
+```bash
+npx create-wordjs@latest upgrade [dir]        # dir defaults to the current directory
+```
+
+It downloads the latest release (`--version <tag>` for another one, which is also how you roll back), verifies its SHA-256, backs up the config, replaces the code while preserving the database, uploads, `wordjs-config.json` / gateway config and user-installed plugins, and runs `npm run release:install` (`--no-install` skips it). It asks before applying (`--yes` for a non-interactive run) and does nothing when the site is already on the target version (`--force` re-applies it; with `--systemd` the unit is rewritten either way). Then restart the server. Database schema migrations run automatically on the next start.
+
+**A source checkout:**
+
 ```bash
 git pull
 npm run install:all
 cd frontend && npm run build
 cd ../backend && npm run build && node scripts/build-plugin.js --all
+cd .. && npm run migrate       # optional: apply pending schema migrations now, without starting the server
 pm2 restart all
 ```
+
+`npm run migrate` (`node setup/index.js --migrate` → `backend/scripts/migrate.js`) is idempotent and refuses to run on an instance that is not installed yet; the same migrations run at boot anyway, so it is for deploy pipelines that want them applied before the new code starts.
 
 ---
 
@@ -732,7 +781,13 @@ WordJS stores media URLs as **relative paths** (e.g., `/uploads/image.jpg`) rath
   the files live in an S3-compatible bucket and pages are served CDN URLs, while the database keeps the same
   relative paths
 
-If you have legacy content with absolute URLs, you may need to run a migration script to convert them to relative paths.
+If you have legacy content with absolute URLs, convert them to relative paths with `backend/scripts/migrate-media-urls.js`. It rewrites attachment GUIDs and the image options; it imports the TypeScript database layer, so run it from `backend/` through ts-node, with `--dry-run` first to see what would change:
+
+```bash
+cd backend
+node -r ts-node/register scripts/migrate-media-urls.js --dry-run
+node -r ts-node/register scripts/migrate-media-urls.js
+```
 
 ### Migration Checklist
 

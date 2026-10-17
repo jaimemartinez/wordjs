@@ -11,7 +11,7 @@
  * the effective plugin) and constrains arguments host-side (key allowlists, table scoping, path
  * confinement) — the plugin is untrusted input.
  *
- * See documentation/plugin-isolation-proposal.md.
+ * See documentation/archive/plugin-isolation-proposal.md.
  */
 
 const path = require('path');

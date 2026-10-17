@@ -122,7 +122,9 @@ an audit row.
 - HTTP: 240 requests/minute per agent token (cluster-wide through the shared limiter store), on top of the
   global per-IP API limiter.
 - Per agent, in-process: 120 tool calls/minute and 30 writes/minute.
-- At most 25 live connections per bound user. Tool outputs clip long text fields.
+- At most 25 live connections per bound user.
+- Tool outputs clip long text fields (an entry's body, for example) at 60,000 characters, marked
+  `… [truncated N characters]`; shorter fields (titles, excerpts, comment bodies) have lower caps of their own.
 - **Last used** (`lastUsedAt`) is telemetry, written at most once a minute per connection and per backend
   process — like API tokens' — so a burst of calls within the same minute shows the time of the first.
 

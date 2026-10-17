@@ -98,9 +98,12 @@ tear the other stack down as a stale definition of the same project.
 
 - **No TLS, no reverse proxy.** Deliberate: certificate management belongs to your ingress.
 - **Single node.** No Postgres, no Redis, no second replica, so nothing here exercises cross-node
-  coherence. The compose file at the repository root does exactly that — and, because it must come up
-  pre-installed for a second replica to join, it is not a stack you can log into. The two files answer
-  different questions on purpose.
+  coherence. The compose file at the repository root does exactly that. Because it must come up
+  pre-installed for a second replica to join, it skips the wizard: its administrator is the bootstrap
+  `admin` the seeding replica creates, with a random password in that replica's data volume
+  (`docker compose exec app cat /app/backend/data/initial-admin-password`; try `app2` if that replica
+  seeded the database) — see [`docker/README.md`](../../docker/README.md). The two files answer different
+  questions on purpose: this one is the wizard-driven install.
 - **No horizontal scaling.** SQLite plus a local volume is single-writer. Scaling out means an external
   database and the shared mounts described in `documentation/multi-node.md`.
 - **Kubernetes** is next door in [`../helm/wordjs`](../helm/wordjs).
