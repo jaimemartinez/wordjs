@@ -30,6 +30,7 @@ import type { EditorHandle } from "@/lib/verso/store";
 import type { BlockRegistry } from "@/lib/verso/registry";
 import type { DndPoint, TextDir, ZoneFlow, ZoneGeom } from "@/lib/verso/dnd/types";
 import { useVersoCanvas } from "../canvas/FrameController";
+import { useEditorTr } from "@/lib/verso/useEditorTr";
 import { nodeKeyFromTarget } from "../render/nodeKey";
 import type { GeometryStore } from "../overlay/GeometryStore";
 import {
@@ -72,7 +73,13 @@ function isEditableTarget(target: EventTarget | null): boolean {
 export default function DnDDriver({ handle, registry, geometry, frameDocument }: DnDDriverProps) {
   const canvas = useVersoCanvas();
   const [announcement, setAnnouncement] = React.useState("");
-  const announce = React.useCallback((message: string) => setAnnouncement(message), []);
+  const { tr, language } = useEditorTr();
+  const announce = React.useCallback((message: string) => setAnnouncement(tr(message)), [tr]);
+  // Leído al EMPEZAR cada arrastre: el gesto no se recrea por un cambio de idioma.
+  const languageRef = React.useRef(language);
+  React.useEffect(() => {
+    languageRef.current = language;
+  }, [language]);
 
   /* ---------------- layout provider (cacheado por snapshot) ---------------- */
 
@@ -158,7 +165,7 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
     // arrastre) no lo veía ningún test.
     const gesture = createPointerGesture<DragSession>({
       createSession: (source, startPoint) =>
-        createDragSession({ handle, registry, getLayout }, source, startPoint),
+        createDragSession({ handle, registry, getLayout, language: languageRef.current }, source, startPoint),
       moveSession: (s, point, over) => {
         s.move(point, { pointerOverDrawer: over });
         // Un bloque NUEVO empieza mostrándose como su tarjeta (todavía no existe en el lienzo). En
@@ -598,8 +605,8 @@ export default function DnDDriver({ handle, registry, geometry, frameDocument }:
   /* ---------------- teclado: modo mover + live-region ---------------- */
 
   const mover = React.useMemo(
-    () => createKeyboardMover({ handle, registry, announce }),
-    [handle, registry, announce],
+    () => createKeyboardMover({ handle, registry, announce, language }),
+    [handle, registry, announce, language],
   );
 
   React.useEffect(() => {

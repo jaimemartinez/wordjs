@@ -11,7 +11,7 @@
       "paths": 212,
       "operations": 271,
       "coverage": 0.9927,
-      "semanticSha256": "356ba3e291011459841b52687a986bf99450cfa45b82349d40c426e76d740873"
+      "semanticSha256": "78c4e543e4986da86a6df9276bd665b4a229746adca59147286d85985040960a"
     },
     "typingDebt": {
       "requestAny": {
@@ -45,8 +45,8 @@
       "semanticSha256": "87f51ab4748622ae57f9f4dbd8f5457ed88c7e311cba6bfaae401e77b6b3dfb1"
     },
     "verificationSurface": {
-      "backendTestFiles": 329,
-      "frontendTestFiles": 244,
+      "backendTestFiles": 331,
+      "frontendTestFiles": 248,
       "sandboxWorkflowSemanticSha256": "6589c490e047c52e4330eed83db22c91501686ccf6f30ba7ce030938c995a913",
       "performanceBudgetsSha256": "5a608e783d98267030d14c9ce70edb7cc9f5354cbf006c31353648425d7a7556"
     }

@@ -12,7 +12,8 @@ import { reloadActivePlugins } from "@/lib/plugins";
 import { deepLinkedPlugin, withoutPermissionsDeepLink } from "@/lib/pluginPermissionsLink";
 import { useMenu } from "@/contexts/MenuContext";
 import { useToast } from "@/contexts/ToastContext";
-import { useI18n } from "@/contexts/I18nContext";
+import { useI18n, useOptionalI18n } from "@/contexts/I18nContext";
+import { t as translate } from "@/lib/i18n";
 import { FaPlug, FaTrash, FaDownload, FaPowerOff, FaCheck, FaExclamationTriangle, FaSlidersH, FaSearch, FaSyncAlt, FaInfoCircle, FaTimes, FaShieldAlt, FaBan, FaUnlock, FaStore, FaPalette, FaFileArchive } from "react-icons/fa";
 import { PageHeader, Button, EmptyState } from "@/components/ui";
 import MarketplaceTab from "./MarketplaceTab";
@@ -71,15 +72,18 @@ function fmtMB(bytes?: number | null) {
  * Exported for the unit test — the page itself is a fetch-on-mount client tree.
  */
 export const BROKEN_REASON_COPY: Record<string, string> = {
-    'missing': 'Instalación incompleta — faltan los archivos del plugin',
-    'no-manifest': 'Instalación incompleta — faltan los archivos del plugin',
-    'unreadable-manifest': 'Instalación dañada — su manifest.json no se puede leer',
+    'missing': 'plugins.broken.reason.missing',
+    'no-manifest': 'plugins.broken.reason.missing',
+    'unreadable-manifest': 'plugins.broken.reason.unreadable',
 };
 
-export function brokenReasonText(plugin: Pick<Plugin, 'brokenReason'>): string {
+/** Outside the admin's I18nProvider (unit tests) the copy falls back to the default admin language. */
+const defaultLanguage = (key: string) => translate(key);
+
+export function brokenReasonText(plugin: Pick<Plugin, 'brokenReason'>, t: (key: string) => string = defaultLanguage): string {
     // An unknown/absent reason must still read as broken, never as healthy: the fallback is the
     // generic incomplete-install copy, not an empty string.
-    return BROKEN_REASON_COPY[plugin.brokenReason || ''] || BROKEN_REASON_COPY['no-manifest'];
+    return t(BROKEN_REASON_COPY[plugin.brokenReason || ''] || BROKEN_REASON_COPY['no-manifest']);
 }
 
 /**
@@ -193,6 +197,7 @@ export function BrokenPluginCard({ plugin, onReinstall, onCleanup, busy }: {
     onCleanup: (plugin: Plugin) => void;
     busy?: boolean;
 }) {
+    const t = useOptionalI18n()?.t ?? defaultLanguage;
     return (
         <div
             data-testid="broken-plugin-card"
@@ -203,16 +208,14 @@ export function BrokenPluginCard({ plugin, onReinstall, onCleanup, busy }: {
                     <FaExclamationTriangle className="text-lg" />
                 </div>
                 <span className="text-[8px] font-extrabold uppercase tracking-widest px-2.5 py-1 rounded-full border bg-amber-50 border-amber-200/60 text-amber-700">
-                    Roto
+                    {t('plugins.broken.badge')}
                 </span>
             </div>
 
             <h3 className="font-extrabold text-slate-900 text-lg mb-1 break-words"><BreakableToken text={plugin.slug} /></h3>
-            <p className="text-xs text-amber-700 font-semibold leading-relaxed mb-2">{brokenReasonText(plugin)}</p>
+            <p className="text-xs text-amber-700 font-semibold leading-relaxed mb-2">{brokenReasonText(plugin, t)}</p>
             <p className="text-xs text-slate-500 leading-relaxed mb-5">
-                {plugin.wasActive
-                    ? 'Estaba marcado como activo, pero no hay nada que cargar. Se ha quitado de la lista de activos.'
-                    : 'Quedan restos de este plugin en el servidor, pero no hay nada que cargar.'}
+                {t(plugin.wasActive ? 'plugins.broken.wasActive' : 'plugins.broken.leftovers')}
             </p>
 
             <div className="flex flex-wrap gap-2">
@@ -220,14 +223,14 @@ export function BrokenPluginCard({ plugin, onReinstall, onCleanup, busy }: {
                     onClick={() => onReinstall(plugin)}
                     className="px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider bg-blue-600 text-white hover:bg-blue-700 active:scale-95 transition-all shadow-sm flex items-center gap-2"
                 >
-                    <FaStore className="text-[10px]" /> Reinstalar desde el Marketplace
+                    <FaStore className="text-[10px]" /> {t('plugins.broken.reinstall')}
                 </button>
                 <button
                     onClick={() => onCleanup(plugin)}
                     disabled={busy}
                     className="px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider bg-white text-rose-600 border border-rose-200 hover:bg-rose-50 active:scale-95 transition-all shadow-sm flex items-center gap-2 disabled:opacity-50"
                 >
-                    <FaTrash className="text-[10px]" /> Quitar restos
+                    <FaTrash className="text-[10px]" /> {t('plugins.broken.cleanup')}
                 </button>
             </div>
         </div>
@@ -353,14 +356,14 @@ export default function PluginsPage() {
         setCleaningUp((m) => ({ ...m, [plugin.slug]: true }));
         try {
             const res = await pluginsApi.deactivate(plugin.slug);
-            addToast(res.message || `Restos de "${plugin.slug}" eliminados.`, "success");
+            addToast(res.message || t('plugins.broken.cleaned').replace('{slug}', plugin.slug), "success");
             loadPlugins();
             refreshMenus();
             // The stored active list just changed — the runtime loader's memo would otherwise stay stale.
             reloadActivePlugins();
         } catch (error: unknown) {
-            const message = error instanceof Error ? error.message : "Error desconocido";
-            addToast("No se pudieron quitar los restos: " + message, "error", 0);
+            const message = error instanceof Error ? error.message : t('plugins.broken.unknownError');
+            addToast(t('plugins.broken.cleanupFailed').replace('{message}', message), "error", 0);
         } finally {
             setCleaningUp((m) => ({ ...m, [plugin.slug]: false }));
         }
@@ -789,7 +792,11 @@ export default function PluginsPage() {
                         </div>
 
                         <p className="mb-6 text-slate-600 text-xs font-semibold leading-relaxed">
-                            {t('plugins.delete.message')} <strong className="text-slate-900 font-extrabold">{pluginToDelete?.name}</strong>?
+                            {(() => {
+                                // The plugin's name sits inside the sentence, wherever the language puts it.
+                                const [before, after = ''] = t('plugins.delete.message').split('{name}');
+                                return <>{before}<strong className="text-slate-900 font-extrabold">{pluginToDelete?.name}</strong>{after}</>;
+                            })()}
                         </p>
 
                         <div className="mb-6 space-y-2">

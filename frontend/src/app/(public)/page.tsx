@@ -6,6 +6,7 @@ import { getSettings, getPostById, getPosts, htmlToText, buildWebSiteJsonLd, res
 import { withResolvedBlocks } from "@/lib/resolveDynamicBlocks";
 import ThemeTemplate from "@/components/content/ThemeTemplate";
 import { postCardExcerpt } from "@/lib/postExcerpt";
+import { formatSiteDate, siteDateLanguage } from "@/lib/public/siteDate";
 
 // Server-rendered AND cached: the homepage serves from the Full-Route Cache (crawlers and first
 // paint still get the real blog roll / static page), revalidating every 60s + purged on publish.
@@ -105,7 +106,7 @@ export default async function HomePage() {
                                 <div className="wjs-post-card-meta flex flex-wrap items-center gap-3 text-sm text-[var(--wjs-color-text-muted,#6b7280)] mb-4">
                                     <span className="wjs-post-card-badge bg-[var(--wjs-bg-muted,#eff6ff)] text-[var(--wjs-color-primary,#1d4ed8)] px-3 py-1 rounded-full font-medium">Article</span>
                                     <span>•</span>
-                                    <span>{post.date ? new Date(post.date).toLocaleDateString() : ''}</span>
+                                    <span>{formatSiteDate(post.date, siteDateLanguage(settings))}</span>
                                     <span>•</span>
                                     <span>{post.author?.displayName || "Admin"}</span>
                                 </div>

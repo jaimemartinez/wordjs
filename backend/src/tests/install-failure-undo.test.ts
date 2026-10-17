@@ -63,7 +63,7 @@ const fromHere = (rel: string) => require.resolve(rel);
 let admin: any = null;
 let terms: Set<string> = new Set();
 let nativeError: Error | null = null;
-let failAt: 'roles' | 'theme' | 'admin' | 'core-tests' | null = null;
+let failAt: 'roles' | 'theme' | 'admin' | 'admin-email' | null = null;
 const boom = (where: string) => { throw new Error(`stubbed failure at ${where}`); };
 
 stub(fromHere('../models/User'), {
@@ -78,7 +78,11 @@ stub(fromHere('../config/database'), {
     initializeDatabase: async () => {},
     nativeSqliteLoadError: () => nativeError,
 });
-stub(fromHere('../core/options'), { updateOption: async () => true, getOption: async () => null });
+// The first write after the administrator exists is the admin_email option: the post-admin failure point.
+stub(fromHere('../core/options'), {
+    updateOption: async (name: string) => { if (failAt === 'admin-email' && name === 'admin_email') boom('admin-email'); return true; },
+    getOption: async () => null,
+});
 stub(fromHere('../core/roles'), {
     loadRoles: async () => {},
     syncRoles: async () => { if (failAt === 'roles') boom('roles'); },
@@ -99,12 +103,6 @@ stub(fromHere('../core/themes'), { createDefaultTheme: () => { if (failAt === 't
 stub(fromHere('../core/certManager'), {
     generateClusterCA: () => ({ key: 'stub-ca-key', cert: 'stub-ca-cert' }),
     generateServiceCert: () => {},
-});
-stub(fromHere('../core/plugin-test-runner'), {
-    runCoreTests: async () => {
-        if (failAt === 'core-tests') boom('core-tests');
-        return { success: true, tests: 0, passed: 0, failed: 0 };
-    },
 });
 stub(fromHere('../core/install-token'), {
     verifyInstallToken: (t: unknown) => t === INSTALL_TOKEN,
@@ -275,7 +273,7 @@ describe('a failure before the administrator exists is undone', () => {
 
 describe('a failure after the administrator exists is not undone', () => {
     it('the site is installed and its config kept', async () => {
-        failAt = 'core-tests';
+        failAt = 'admin-email';
         const { res } = await install();
         assert.strictEqual(res.status, 500);
         assert.doesNotMatch(res.body.error, /Nothing was kept/);

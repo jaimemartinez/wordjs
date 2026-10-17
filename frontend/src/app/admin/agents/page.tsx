@@ -228,7 +228,8 @@ export default function AgentsPage() {
         <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
             <PageHeader title={t("agents.title")} subtitle={t("agents.subtitle")} icon="fa-robot" />
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            {/* One column until 2xl: beside the list, the form was ~290px wide at 1280 and cut its labels. */}
+            <div className="grid grid-cols-1 2xl:grid-cols-3 gap-8">
                 <Card variant="default" padding="lg" className="h-fit">
                     <h2 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-6 flex items-center gap-2">
                         <i className="fa-solid fa-plus-circle text-blue-500"></i>
@@ -239,14 +240,14 @@ export default function AgentsPage() {
                         <fieldset>
                             <legend className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">{t("agents.requested")}</legend>
                             <p className="text-[11px] text-gray-400 leading-relaxed mb-2">{t("agents.requestedHelp")}</p>
-                            <div className="space-y-1.5">
+                            <div className="grid gap-1.5 md:grid-cols-2 2xl:grid-cols-1">
                                 {vocabulary.map((c) => {
                                     const implied = !requested.has(c) && withImplied(requested).has(c);
                                     return (
                                         <label key={c} className={`flex items-start gap-3 rounded-xl border px-3 py-2 cursor-pointer transition-colors ${requested.has(c) || implied ? "border-blue-200 bg-blue-50/40" : "border-gray-100 hover:bg-gray-50"}`}>
                                             <input type="checkbox" className="mt-1" checked={requested.has(c) || implied} disabled={implied} onChange={() => setRequested(toggle(requested, c))} />
                                             <span>
-                                                <span className="text-xs font-bold text-gray-700 flex items-center gap-2">
+                                                <span className="text-xs font-bold text-gray-700 flex flex-wrap items-center gap-x-2 gap-y-0.5">
                                                     <i className={`fa-solid ${CAP_ICONS[c]} text-gray-300 w-4 text-center`}></i>{t(`agents.cap.${capKey(c)}`)}
                                                     <code className="text-[10px] font-mono text-gray-400">{c}</code>
                                                 </span>
@@ -284,7 +285,7 @@ export default function AgentsPage() {
                     </form>
                 </Card>
 
-                <div className="lg:col-span-2 space-y-4">
+                <div className="2xl:col-span-2 space-y-4">
                     {loading ? (
                         <Card variant="default" padding="none">
                             <div className="p-20 text-center">

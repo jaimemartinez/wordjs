@@ -1139,13 +1139,14 @@ If you omit it, a convention fallback is tried: `client/verso/<Pascal>Verso.tsx`
 
 `frontend/scripts/generate-verso-plugin-registry.js` reads your entry file and supports exactly two shapes:
 
-**One block** — `export const versoComponentDef` (category/fields/defaultProps) **plus** a default-exported render component. The block is registered under the PascalCase of your manifest `id` (`card-gallery` → `CardGallery`):
+**One block** — `export const versoComponentDef` (label/category/fields/defaultProps) **plus** a default-exported render component. The block is registered under the PascalCase of your manifest `id` (`card-gallery` → `CardGallery`):
 
 ```tsx
 // @ts-nocheck
 "use client";
 
 export const versoComponentDef = {
+    label: "Card gallery",
     category: "My Plugin",
     fields: {
         title: { type: "text" as const, label: "Title" }
@@ -1162,10 +1163,12 @@ export default function MyPluginVerso({ title = "" }) {
 
 ```tsx
 export const versoComponents = {
-    PriceTable: { ...priceTableDef, render: PriceTable },
-    FaqList:    { ...faqListDef,   render: FaqList },
+    PriceTable: { ...priceTableDef, label: "Price table", render: PriceTable },
+    FaqList:    { ...faqListDef,   label: "FAQ list",    render: FaqList },
 };
 ```
+
+**Block name (`label`, optional)** — the name the editor shows in the block palette, the outline and the properties panel. Without it, the editor splits the block id into words (`ReadingList` → "Reading List", `FAQSection` → "FAQ Section"); set `label` when that is not the name you want users to see. It is shown as written — the editor does not translate plugin labels.
 
 > Export **only** the shape you use. The generated registry does `import * as X` and statically references either `X.versoComponents` **or** `X.versoComponentDef` + `X.default` — referencing a member that isn't a real export is a hard build error under Turbopack. The generator reads which name your file actually declares, so a bundle exporting the deprecated names is referenced by *those* names.
 

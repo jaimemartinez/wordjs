@@ -206,6 +206,18 @@ export default function MediaStoragePage() {
                                     size="md"
                                 />
                             </div>
+                            {s3 && view.warnings && view.warnings.length > 0 && (
+                                // Advice from the server about the SAVED values (never blocking), e.g. a public
+                                // URL that repeats the key prefix or would be mixed content on this admin.
+                                <ul className="space-y-1 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800" role="status" data-testid="media-storage-warnings">
+                                    {view.warnings.map((w) => (
+                                        <li key={w.code}>
+                                            <i className="fa-solid fa-triangle-exclamation mr-2" aria-hidden="true"></i>
+                                            {w.field === "publicUrl" && <strong>{t("mediaStorage.field.publicUrl")}: </strong>}{w.message}
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
                             <p className="text-xs text-gray-500">{t("mediaStorage.field.help")}</p>
                             <label className="flex items-center gap-2 text-sm">
                                 <input type="checkbox" checked={form.keepLocalCopy} disabled={fromEnv("keepLocalCopy")} onChange={(e) => set("keepLocalCopy", e.target.checked)} />
@@ -230,6 +242,9 @@ export default function MediaStoragePage() {
                                 </li>
                             ))}
                             <li className={`font-bold ${test.ok ? "text-green-700" : "text-red-700"}`}>{test.ok ? t("mediaStorage.test.ok") : t("mediaStorage.test.failed")}</li>
+                            {test.steps.some((s) => s.step === "public" && !s.ok) && (
+                                <li className="text-amber-800">{t("mediaStorage.test.publicHint")}</li>
+                            )}
                         </ul>
                     )}
                 </div>

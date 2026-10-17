@@ -2,6 +2,7 @@
 
 import React from "react";
 import MSym from "../editor/MSym";
+import { useEditorTr } from "@/lib/verso/useEditorTr";
 
 /**
  * Per-block entrance animation (Webflow-style "scroll reveal"). The field stores
@@ -64,6 +65,7 @@ const SCROLL_EFFECTS: { value: NonNullable<AnimSpec["scroll"]>; label: string }[
 ];
 
 export function AnimationControl({ value, onChange }: { value: AnimSpec; onChange: (v: AnimSpec) => void }) {
+    const { tr } = useEditorTr();
     const anim = value || {};
     const active = !!anim.type;
     const scrollActive = !!anim.scroll;
@@ -77,7 +79,7 @@ export function AnimationControl({ value, onChange }: { value: AnimSpec; onChang
                 className="w-full px-2 py-1.5 bg-white border border-[var(--ed-outline-variant)] rounded text-[13px] text-[var(--ed-on-surface)] focus:outline-none focus:border-[var(--ed-primary)] focus:ring-1 focus:ring-[var(--ed-primary)]"
             >
                 {EFFECTS.map((e) => (
-                    <option key={e.value} value={e.value}>{e.label}</option>
+                    <option key={e.value} value={e.value}>{tr(e.label)}</option>
                 ))}
             </select>
             {active && (
@@ -96,13 +98,13 @@ export function AnimationControl({ value, onChange }: { value: AnimSpec; onChang
                                             : "text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)]"
                                     }`}
                                 >
-                                    {d.label}
+                                    {tr(d.label)}
                                 </button>
                             );
                         })}
                     </div>
                     <div className="flex items-center gap-2 mt-2">
-                        <label className="text-[11px] font-medium text-[var(--ed-on-surface-variant)] shrink-0">Retardo</label>
+                        <label className="text-[11px] font-medium text-[var(--ed-on-surface-variant)] shrink-0">{tr("Retardo")}</label>
                         <select
                             value={String(anim.delay || 0)}
                             onChange={(e) => onChange({ ...anim, delay: parseInt(e.target.value, 10) || 0 })}
@@ -110,14 +112,14 @@ export function AnimationControl({ value, onChange }: { value: AnimSpec; onChang
                             style={{ fontFamily: "var(--ed-font-family-monospaced)" }}
                         >
                             {DELAYS.map((d) => (
-                                <option key={d} value={d}>{d === 0 ? "Sin retardo" : `${d} ms`}</option>
+                                <option key={d} value={d}>{d === 0 ? tr("Sin retardo") : `${d} ms`}</option>
                             ))}
                         </select>
                     </div>
                     <p className="text-[10px] text-[var(--ed-outline)] mt-1.5">
-                        Se reproduce al entrar en pantalla, tanto aquí en el editor como en el sitio publicado. Usa
-                        el botón <MSym name="play_arrow" size={11} className="align-[-2px]" /> de la barra superior para volver a
-                        verlas, y el retardo para escalonar bloques contiguos.
+                        {tr("Se reproduce al entrar en pantalla, tanto aquí en el editor como en el sitio publicado. Usa el botón")}{" "}
+                        <MSym name="play_arrow" size={11} className="align-[-2px]" />{" "}
+                        {tr("de la barra superior para volver a verlas, y el retardo para escalonar bloques contiguos.")}
                     </p>
                 </>
             )}
@@ -125,7 +127,7 @@ export function AnimationControl({ value, onChange }: { value: AnimSpec; onChang
             {/* ── Al hacer scroll — scroll-driven effect, independent of the entrance ── */}
             <div className="mt-3 pt-3 border-t border-[var(--ed-outline-variant)]">
                 <label className="block text-[11px] font-medium text-[var(--ed-on-surface-variant)] mb-1.5">
-                    Al hacer scroll
+                    {tr("Al hacer scroll")}
                 </label>
                 <select
                     value={anim.scroll || ""}
@@ -133,14 +135,14 @@ export function AnimationControl({ value, onChange }: { value: AnimSpec; onChang
                     className="w-full px-2 py-1.5 bg-white border border-[var(--ed-outline-variant)] rounded text-[13px] text-[var(--ed-on-surface)] focus:outline-none focus:border-[var(--ed-primary)] focus:ring-1 focus:ring-[var(--ed-primary)]"
                 >
                     {SCROLL_EFFECTS.map((e) => (
-                        <option key={e.value} value={e.value}>{e.label}</option>
+                        <option key={e.value} value={e.value}>{tr(e.label)}</option>
                     ))}
                 </select>
                 {scrollActive && (
                     <>
                         <div className="flex items-center gap-2 mt-2">
                             <label className="text-[11px] font-medium text-[var(--ed-on-surface-variant)] shrink-0">
-                                Intensidad
+                                {tr("Intensidad")}
                             </label>
                             <input
                                 type="range"
@@ -159,9 +161,7 @@ export function AnimationControl({ value, onChange }: { value: AnimSpec; onChang
                             </span>
                         </div>
                         <p className="text-[10px] text-[var(--ed-outline)] mt-1.5">
-                            El efecto avanza y retrocede con el scroll, sin JavaScript. En navegadores sin animaciones
-                            por scroll no ocurre nada; si además hay animación de entrada, el efecto de scroll tiene
-                            prioridad y la entrada se omite.
+                            {tr("El efecto avanza y retrocede con el scroll, sin JavaScript. En navegadores sin animaciones por scroll no ocurre nada; si además hay animación de entrada, el efecto de scroll tiene prioridad y la entrada se omite.")}
                         </p>
                     </>
                 )}

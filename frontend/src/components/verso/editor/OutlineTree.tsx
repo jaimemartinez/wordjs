@@ -104,7 +104,7 @@ export default function OutlineTree({ handle, registry }: { handle: EditorHandle
                         <button
                             type="button"
                             onClick={() => handle.select(row.id)}
-                            title={row.label}
+                            title={trStr(row.label, language)}
                             data-wjs-outline-id={row.id}
                             className={`w-full min-h-10 flex items-center gap-2 px-2 py-1.5 rounded-lg text-left text-[13px] border-l-2 transition-colors ${
                                 active

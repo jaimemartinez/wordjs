@@ -25,6 +25,17 @@ export function useAiEnabled(): boolean {
     return enabled;
 }
 
+/**
+ * The i18n key for a failed suggestion's error code: the code's own key when it has a translation (a
+ * timeout, a model without vision, an unknown model…), the generic provider message for any other
+ * `ai_provider_*` code, and "" when there is no code. `has` says whether a key is translated.
+ */
+export function aiErrorKey(code: string, has: (key: string) => boolean): string {
+    const own = code ? `ai.err.${code}` : "";
+    if (own && has(own)) return own;
+    return code.startsWith("ai_provider") ? "ai.err.provider" : own;
+}
+
 /** Forget the cached answer (the AI settings screen calls it after saving). */
 export function resetAiStatusCache(): void {
     statusPromise = null;
@@ -72,7 +83,7 @@ export default function AiSuggestion({
             // Known refusals have their own wording in the admin's language; anything else keeps the
             // server's (already key-free) message.
             const code = typeof e?.code === "string" ? e.code : "";
-            const key = code.startsWith("ai_provider") ? "ai.err.provider" : code ? `ai.err.${code}` : "";
+            const key = aiErrorKey(code, (k) => t(k) !== k);
             const localized = key ? t(key) : "";
             setError(localized && localized !== key ? localized : e?.message || t("ai.suggestFailed"));
         } finally {
