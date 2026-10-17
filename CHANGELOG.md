@@ -4,6 +4,29 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [Unreleased]
+
+### Fixed
+
+- **The Verso editor speaks the admin language everywhere.** With the admin in English the editor still
+  showed Spanish in many places: the mobile header ("Editando · …"), the canvas and navigation labels,
+  the entrance-animation effects, speeds and delays, the device tabs and every section of the
+  appearance panel (background, border and shadow, spacing and size, typography, hover motion), the
+  image and link fields, the list, menu, symbol and featured-image pickers, the interactions panel and
+  its timeline, collaboration status texts and the block palette's catalogue. All of them now go through
+  the editor dictionary in English, Spanish and Portuguese; a new test parses the editor sources and
+  fails on any visible string without a translation.
+- **New blocks start with text in the admin language.** A freshly inserted Hero, Button, Text, Form,
+  pricing table and the other core blocks — and the built-in patterns — used to start with the same
+  starter text whatever the language ("Un titular que atrapa" in an English admin). The starter text
+  now follows the admin language; blocks already on a page keep their text.
+- **The main editor button shows the published state.** After publishing, with nothing pending, the
+  button reads "Published" (or "Scheduled") with a check mark instead of offering the "Publish" action
+  again.
+- **Plugin blocks have readable names.** A plugin's Verso block can declare an optional `label` in
+  `versoComponentDef` / each `versoComponents` entry; without one the editor splits the block id into
+  words ("ReadingList" → "Reading List") instead of showing the raw id. See `documentation/plugins.md`.
+
 ## [2.6.0] - 2026-10-16
 
 ### Added

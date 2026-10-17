@@ -25,6 +25,7 @@
 import React from "react";
 import { createPortal } from "react-dom";
 import type { ActiveStates } from "@/lib/verso/inline-engine";
+import { useEditorTr } from "@/lib/verso/useEditorTr";
 
 export interface BubbleSelectionState {
     /** Rect de la selección (coords de viewport del documento del iframe). */
@@ -86,6 +87,7 @@ function BubbleButton({
 const VersoBubbleMenu = React.forwardRef<VersoBubbleMenuHandle, VersoBubbleMenuProps>(
     function VersoBubbleMenu(props, ref) {
         const { frameDoc, state } = props;
+        const { tr } = useEditorTr();
         const containerRef = React.useRef<HTMLDivElement | null>(null);
         const [pos, setPos] = React.useState<{ top: number; left: number } | null>(null);
         const [linkOpen, setLinkOpen] = React.useState(false);
@@ -163,7 +165,7 @@ const VersoBubbleMenu = React.forwardRef<VersoBubbleMenuHandle, VersoBubbleMenuP
                 ref={containerRef}
                 data-wjs-inline-bubble=""
                 role="toolbar"
-                aria-label="Formato del texto"
+                aria-label={tr("Formato del texto")}
                 style={{
                     position: "fixed",
                     top: pos ? pos.top : -10000,
@@ -173,15 +175,15 @@ const VersoBubbleMenu = React.forwardRef<VersoBubbleMenuHandle, VersoBubbleMenuP
                 }}
                 className="flex items-center gap-0.5 rounded-lg bg-gray-900 p-1 shadow-xl"
             >
-                <BubbleButton label="Negrita" active={active.bold} onCmd={props.onToggleBold}>
+                <BubbleButton label={tr("Negrita")} active={active.bold} onCmd={props.onToggleBold}>
                     <strong>B</strong>
                 </BubbleButton>
-                <BubbleButton label="Cursiva" active={active.italic} onCmd={props.onToggleItalic}>
+                <BubbleButton label={tr("Cursiva")} active={active.italic} onCmd={props.onToggleItalic}>
                     <em>I</em>
                 </BubbleButton>
                 <span className="relative inline-flex">
                     <BubbleButton
-                        label="Enlace"
+                        label={tr("Enlace")}
                         active={active.link !== null || linkOpen}
                         onCmd={() => {
                             if (linkOpen) {
@@ -207,8 +209,8 @@ const VersoBubbleMenu = React.forwardRef<VersoBubbleMenuHandle, VersoBubbleMenuP
                                     type="text"
                                     value={url}
                                     spellCheck={false}
-                                    aria-label="URL del enlace"
-                                    placeholder="https://… o /pagina"
+                                    aria-label={tr("URL del enlace")}
+                                    placeholder={tr("https://… o /pagina")}
                                     onChange={(e) => setUrl(e.target.value)}
                                     onKeyDown={(e) => {
                                         if (e.key === "Enter") {
@@ -220,7 +222,7 @@ const VersoBubbleMenu = React.forwardRef<VersoBubbleMenuHandle, VersoBubbleMenuP
                                 />
                                 <button
                                     type="button"
-                                    aria-label="Aplicar enlace"
+                                    aria-label={tr("Aplicar enlace")}
                                     onMouseDown={(e) => e.preventDefault()}
                                     onClick={() => apply(url)}
                                     className={`${BTN_CLS} text-gray-200 hover:bg-white/10`}
@@ -230,7 +232,7 @@ const VersoBubbleMenu = React.forwardRef<VersoBubbleMenuHandle, VersoBubbleMenuP
                                 {active.link !== null && (
                                     <button
                                         type="button"
-                                        aria-label="Quitar enlace"
+                                        aria-label={tr("Quitar enlace")}
                                         onMouseDown={(e) => e.preventDefault()}
                                         onClick={() => {
                                             props.onUnlink();
@@ -250,26 +252,26 @@ const VersoBubbleMenu = React.forwardRef<VersoBubbleMenuHandle, VersoBubbleMenuP
                                     onChange={(e) => setNewTab(e.target.checked)}
                                     className="h-3 w-3"
                                 />
-                                Abrir en pestaña nueva
+                                {tr("Abrir en pestaña nueva")}
                             </label>
                         </span>
                     )}
                 </span>
                 <BubbleButton
-                    label="Lista"
+                    label={tr("Lista")}
                     active={active.bulletList}
                     onCmd={() => props.onToggleList(false)}
                 >
                     ••
                 </BubbleButton>
                 <BubbleButton
-                    label="Lista numerada"
+                    label={tr("Lista numerada")}
                     active={active.orderedList}
                     onCmd={() => props.onToggleList(true)}
                 >
                     1.
                 </BubbleButton>
-                <BubbleButton label="Limpiar formato" onCmd={props.onClearFormat}>
+                <BubbleButton label={tr("Limpiar formato")} onCmd={props.onClearFormat}>
                     ⌫
                 </BubbleButton>
             </div>

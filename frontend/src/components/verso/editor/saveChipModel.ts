@@ -70,3 +70,21 @@ export function saveChipModel(i: SaveChipInputs): SaveChipModel {
     }
     return { icon: null, spin: false, fill: false, text: "", minutes: null, cls: "text-[var(--ed-outline)]" };
 }
+
+/**
+ * Texto ES fuente del botón principal cuando NO hay nada que hacer: un registro publicado (o
+ * programado) sin cambios pendientes se lee como un ESTADO ("Publicado"), no como la acción
+ * "Publicar" deshabilitada — que invitaba a pulsar otra vez para "publicar" algo ya publicado.
+ * null ⇒ el botón muestra su acción (Guardar / Programar / Publicar).
+ */
+export function settledPrimaryLabel(i: {
+    saving: boolean;
+    hasChanges: boolean;
+    inlineEditing: boolean;
+    status: string;
+}): "Publicado" | "Programado" | null {
+    if (i.saving || i.hasChanges || i.inlineEditing) return null;
+    if (i.status === "publish") return "Publicado";
+    if (i.status === "future") return "Programado";
+    return null;
+}

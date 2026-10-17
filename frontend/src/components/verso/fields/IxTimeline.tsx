@@ -37,6 +37,7 @@
  * se ve todo, se puede elegir pista, y nada se arrastra ni se enfoca.
  */
 import React, { useEffect, useRef, useState } from "react";
+import { useEditorTr } from "@/lib/verso/useEditorTr";
 import {
   IX_DELAY_MAX,
   IX_DELAY_MIN,
@@ -132,6 +133,7 @@ export default function IxTimeline({
   playhead,
   skin,
 }: IxTimelineProps) {
+  const { tr, trf } = useEditorTr();
   // La piel de escenario, medida contra la referencia: cada ternaria de abajo es un valor EXACTO.
   const S = skin === "stage";
   // El raíl del carril ACTIVO (solo hay uno): la regla que traduce clientX → posición.
@@ -207,7 +209,7 @@ export default function IxTimeline({
     e.preventDefault();
     const clamped = clamp(Math.round(next), AT_MIN, AT_MAX);
     if (clamped !== at) onStepAt(track, step, clamped);
-    setAnnounce(`Paso ${step + 1} — ${clamped} %`);
+    setAnnounce(trf("Paso {n} — {pct} %", { n: step + 1, pct: clamped }));
   };
 
   /** Flechas sobre la barra de retardo: ±50 ms, acotado a 0..3000. */
@@ -222,7 +224,7 @@ export default function IxTimeline({
     e.preventDefault();
     const clamped = clamp(Math.round(next), IX_DELAY_MIN, IX_DELAY_MAX);
     if (clamped !== delay) onDelay(track, clamped);
-    setAnnounce(`Retardo de la pista ${track + 1} — ${clamped} ms`);
+    setAnnounce(trf("Retardo de la pista {n} — {ms} ms", { n: track + 1, ms: clamped }));
   };
 
   /** Flechas sobre el asa de duración: ±50 ms, acotado a los topes del modelo. */
@@ -237,16 +239,16 @@ export default function IxTimeline({
     e.preventDefault();
     const clamped = clamp(Math.round(next), IX_DUR_MIN, IX_DUR_MAX);
     if (clamped !== dur) onDur(track, clamped);
-    setAnnounce(`Duración de la pista ${track + 1} — ${clamped} ms`);
+    setAnnounce(trf("Duración de la pista {n} — {ms} ms", { n: track + 1, ms: clamped }));
   };
 
   /** El nombre accesible de un marcador — los MISMOS de la tira P5 (los tests los fijan). */
   const markerName = (t: IxTrack, i: number): string =>
     i === 0
-      ? "Inicio — 0 %"
+      ? tr("Inicio — 0 %")
       : i === t.steps.length - 1
-        ? "Final — 100 %"
-        : `Paso ${i + 1} — ${t.steps[i].at} %`;
+        ? tr("Final — 100 %")
+        : trf("Paso {n} — {pct} %", { n: i + 1, pct: t.steps[i].at });
 
   /**
    * Carril PASIVO (no activo, o todo el componente en solo lectura): el carril entero es UN botón
@@ -261,8 +263,8 @@ export default function IxTimeline({
         key={ti}
         type="button"
         aria-pressed={isActive}
-        aria-label={isActive ? `Pista ${ti + 1} (activa)` : `Pista ${ti + 1}`}
-        title={isActive ? `Pista ${ti + 1} (activa)` : `Elegir la pista ${ti + 1}`}
+        aria-label={trf(isActive ? "Pista {n} (activa)" : "Pista {n}", { n: ti + 1 })}
+        title={trf(isActive ? "Pista {n} (activa)" : "Elegir la pista {n}", { n: ti + 1 })}
         onClick={() => {
           // Elegir pista va a REEMPLAZAR este botón por el carril editable: pedir el aterrizaje
           // del foco ANTES del re-render (el efecto de arriba lo ejecuta después).
@@ -274,7 +276,7 @@ export default function IxTimeline({
         } ${RING}`}
       >
         <span aria-hidden="true" className={`${LABEL_COL} ${isActive ? "font-semibold" : "font-medium"}`}>
-          Pista {ti + 1}
+          {trf("Pista {n}", { n: ti + 1 })}
         </span>
         <span aria-hidden="true" className={`relative block flex-1 ${S ? "h-[35px]" : "h-6"}`}>
           <span
@@ -330,11 +332,11 @@ export default function IxTimeline({
           type="button"
           ref={activeLabelRef}
           aria-pressed={true}
-          title={`Pista ${ti + 1} (activa)`}
+          title={trf("Pista {n} (activa)", { n: ti + 1 })}
           onClick={() => onSelectTrack(ti)}
           className={`${LABEL_COL} rounded font-semibold ${RING}`}
         >
-          Pista {ti + 1}
+          {trf("Pista {n}", { n: ti + 1 })}
         </button>
         <div ref={railRef} className={`relative flex-1 ${S ? "h-[35px]" : "h-6"}`}>
           <div
@@ -346,8 +348,11 @@ export default function IxTimeline({
           {timed && (
             <button
               type="button"
-              aria-label={`Retardo de la pista ${ti + 1} — ${delay} ms`}
-              title={`Retardo de la pista ${ti + 1} — ${delay} ms. Arrastra, o ←/→ (±50 ms).`}
+              aria-label={trf("Retardo de la pista {n} — {ms} ms", { n: ti + 1, ms: delay })}
+              title={trf("Retardo de la pista {n} — {ms} ms. Arrastra, o ←/→ (±50 ms).", {
+                n: ti + 1,
+                ms: delay,
+              })}
               style={{
                 left: `${(delay / totalMs) * 100}%`,
                 width: `${(dur / totalMs) * 100}%`,
@@ -402,8 +407,11 @@ export default function IxTimeline({
           {timed && onDur && (
             <button
               type="button"
-              aria-label={`Duración de la pista ${ti + 1} — ${dur} ms`}
-              title={`Duración de la pista ${ti + 1} — ${dur} ms. Arrastra el borde, o ←/→ (±50 ms).`}
+              aria-label={trf("Duración de la pista {n} — {ms} ms", { n: ti + 1, ms: dur })}
+              title={trf("Duración de la pista {n} — {ms} ms. Arrastra el borde, o ←/→ (±50 ms).", {
+                n: ti + 1,
+                ms: dur,
+              })}
               style={{ left: `${((delay + dur) / totalMs) * 100}%`, touchAction: "none" }}
               className={`absolute top-1/2 w-1.5 -translate-x-full -translate-y-1/2 cursor-ew-resize rounded-r ${
                 S
@@ -447,7 +455,7 @@ export default function IxTimeline({
                   key={si}
                   type="button"
                   aria-label={name}
-                  title={`${name} — ir a su fila`}
+                  title={trf("{name} — ir a su fila", { name })}
                   style={{ left }}
                   className={`absolute top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-[2px] border ${
                     S
@@ -463,7 +471,7 @@ export default function IxTimeline({
                 key={si}
                 type="button"
                 aria-label={name}
-                title={`${name} — arrastra o ←/→; clic para ir a su fila`}
+                title={trf("{name} — arrastra o ←/→; clic para ir a su fila", { name })}
                 style={{ left, touchAction: "none" }}
                 className={`absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full border ${
                   S
@@ -522,11 +530,11 @@ export default function IxTimeline({
     <div
       id={id}
       role="group"
-      aria-label={
+      aria-label={tr(
         timed
           ? "Línea de tiempo de las pistas (ms)"
-          : "Línea de tiempo de las pistas (0–100 % del recorrido)"
-      }
+          : "Línea de tiempo de las pistas (0–100 % del recorrido)",
+      )}
       className={`w-full rounded ${dropOver ? "outline outline-2 outline-current/60" : ""}`}
       onDragOver={
         onDropPreset
