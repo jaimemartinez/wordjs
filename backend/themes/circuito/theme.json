@@ -1,7 +1,11 @@
 {
   "name": "Circuito",
   "version": "1.0.5",
-  "description": "Terminal oscuro: near-black, neón cian y violeta, monoespaciada y a sangre completa.",
+  "description": "A dark terminal look: near-black, cyan and violet neon, monospaced and full-bleed.",
+  "translations": {
+    "es": { "description": "Terminal oscuro: casi negro, neón cian y violeta, monoespaciado y a sangre completa." },
+    "pt": { "description": "Terminal escuro: quase preto, neon ciano e violeta, monoespaçado e de ponta a ponta." }
+  },
   "author": "WordJS",
   "generator": "wordjs",
   "seeds": {

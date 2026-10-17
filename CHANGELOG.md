@@ -11,46 +11,152 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 - **AI provider: a longer, configurable timeout for local models.** A loopback OpenAI-compatible
   provider (Ollama, LM Studio…) now gets 300 s per request instead of 60 s, enough for a CPU model's first
   load, a queue or an image; `WORDJS_AI_TIMEOUT_MS` overrides it for every provider.
+
 - **AI provider failures say what went wrong.** A timeout (`ai_provider_timeout`, 504), a model that does
   not accept images asked for alt text (`ai_provider_no_vision`, 422), an unknown model, an unreachable or
   unavailable server and a refused request now have their own codes and messages, and the editor shows a
   translated message for each instead of one generic "did not answer correctly".
+
 - **Post and page `link` is the canonical URL.** REST and GraphQL answer `<siteUrl>/<slug>` — what the
   page declares in `rel=canonical` and the sitemap and feeds publish — instead of `/post/<slug>/`, which
   answered with a 308 redirect. Other content types keep `/<type>/<slug>`, without the trailing slash.
+
 - **Anonymous `status=draft` (pending, private, future) lists are empty.** `GET /posts` and GraphQL
   `posts(status:)` used to answer an anonymous request for unpublished entries with the published ones;
   they now answer an empty list. `status=any` still lists the published entries.
+
 - **The installer no longer reports a fake test run.** It used to "run" the core test suite with a filter
   that matched none of its TypeScript files and report "0 tests, OK"; the install response now says
   `tests.skipped: true`. `runCoreTests()` finds `*.test.ts` files, runs them with the secret-free env, and
   reports `skipped` when there is no suite or no dev dependencies.
 
+- **The admin follows the site's language until you pick one.** With no choice saved in the sidebar's
+  language menu, the admin now speaks the site's own language (`<html lang>`, from the site locale) when it
+  is English, Spanish or Portuguese, instead of always starting in Spanish. An English site no longer
+  shows Spanish Backups or Marketplace screens next to English ones. A language picked in the sidebar still
+  wins, on every site.
+
+- **Bundled theme descriptions are translatable.** `theme.json` accepts
+  `"translations": { "<lang>": { "description": "…" } }`; the admin shows the description for its own
+  language and falls back to `description`. The four bundled themes ship English descriptions with Spanish
+  and Portuguese translations (Circuito's was Spanish only).
+
 ### Fixed
 
 - **MCP: a call to a tool the agent connection was not granted** is answered with a tool error that names
   the missing grant and is recorded as `agent.denied` in the audit trail, as documented.
+
 - **MCP `get_site_info`** answers the effective language tag and time zone (`en`/`UTC` on a site that never
   saved them) instead of empty strings.
+
 - **Media storage: the public URL is checked for the mistakes the server can see.** The settings and the
   connection test answer `warnings` for a public URL that already ends with the key prefix (media URLs
   would read `…/uploads/uploads/…`), a path-style endpoint without the bucket, and plain http on an https
   site.
+
 - **Media storage on a multisite network:** a file another site does not hold on disk is redirected to the
   bucket, like on the main site, instead of a 404.
+
 - **Media storage: "a migration is already running" is cluster-wide.** A node that is not running the
   migration itself now refuses a second start (409) and reports it as running, from a progress record the
   running node refreshes at least every 30 s.
+
 - **Media storage: a saved public URL reaches the admin page's CSP at once.** The frontend re-reads the
   media origin when the backend purges its settings cache, so **Test connection** works right after a save
   instead of failing for up to a minute.
+
 - **`npm run media -- status` prints only its JSON on stdout**; backend log lines go to stderr
   (`WORDJS_LOG_TO_STDERR=1`), so it can be piped to `jq`.
+
 - **Backup archives are now created owner-only** (0600, in a 0700 directory), and archives already on disk
   are tightened at boot.
+
 - **Docs:** `gateway.md` documents `GET /revalidate-secret`, and its endpoint test reads the routes
   mounted from `gateway/src/purge.js`; `media-storage.md` names Garage and SeaweedFS next to MinIO for a
   self-hosted bucket; `ai-agents.md` notes that **Last used** is written at most once a minute.
+
+- **Plugins → Marketplace speaks the admin's language.** The catalog tab, its source settings and the
+  install dialog were hard-coded Spanish ("Cargando el catálogo…", "Instalar", "Bloque …", "Permisos que
+  solicitará", "Cancelar", the source line and the toasts); they are translated now, including the
+  catalog's categories and the review badges. The broken-plugin card and its cleanup messages too.
+
+- **The delete-plugin dialog is one sentence.** It read "…This action cannot be undone. Reading List?";
+  the plugin's name now sits inside the question.
+
+- **Restoring a backup says it worked and what to do next.** The page reloaded a second after the restore,
+  throwing away the only feedback; it now stays on a success notice that tells the admin to restart the
+  WordJS service, with a reload button.
+
+- **Webhook delivery times are local.** The delivery log showed UTC database timestamps as if they were
+  local, next to a "Last delivery" in local time.
+
+- **Network → Create site shows why it failed.** A failed create (a server error included) now leaves an
+  error on the form as well as a toast.
+
+- **Media storage shows the server's advice about the public URL.** Non-blocking `warnings` from the media
+  storage API (a URL that repeats the key prefix, misses the bucket, or would be mixed content) are listed
+  under the fields, a failed public check in "Test connection" explains what to try, and the endpoint
+  hints name Garage and SeaweedFS next to MinIO.
+
+- **AI agents → New connection is no longer cramped.** Below 1536 px the form sits above the connection
+  list instead of in a narrow column that cut its labels at 1280 px.
+
+- **The Verso editor speaks the admin language everywhere.** With the admin in English the editor still
+  showed Spanish in many places: the mobile header ("Editando · …"), the canvas and navigation labels,
+  the entrance-animation effects, speeds and delays, the device tabs and every section of the
+  appearance panel (background, border and shadow, spacing and size, typography, hover motion), the
+  image and link fields, the list, menu, symbol and featured-image pickers, the interactions panel and
+  its timeline, collaboration status texts and the block palette's catalogue. All of them now go through
+  the editor dictionary in English, Spanish and Portuguese; a new test parses the editor sources and
+  fails on any visible string without a translation.
+
+- **New blocks start with text in the admin language.** A freshly inserted Hero, Button, Text, Form,
+  pricing table and the other core blocks — and the built-in patterns — used to start with the same
+  starter text whatever the language ("Un titular que atrapa" in an English admin). The starter text
+  now follows the admin language; blocks already on a page keep their text.
+
+- **The main editor button shows the published state.** After publishing, with nothing pending, the
+  button reads "Published" (or "Scheduled") with a check mark instead of offering the "Publish" action
+  again.
+
+- **Plugin blocks have readable names.** A plugin's Verso block can declare an optional `label` in
+  `versoComponentDef` / each `versoComponents` entry; without one the editor splits the block id into
+  words ("ReadingList" → "Reading List") instead of showing the raw id. See `documentation/plugins.md`.
+
+- **WordPress import keeps featured images.** `_thumbnail_id` names the attachment's id on the old site;
+  it is now remapped to the imported attachment, also when the attachment is listed after the post or was
+  matched on a re-run, and a re-run repairs posts an earlier import left pointing at the source id. A
+  reference that resolves to no imported attachment is dropped instead of naming an unrelated row.
+
+- **Imported comments keep their dates.** `wp:comment_date` / `wp:comment_date_gmt` are restored instead of
+  the import time.
+
+- **Re-importing content re-links menus.** When a menu is matched on a re-run, an item whose page, post or
+  term no longer exists (deleted and imported again under a new id) is re-pointed at the re-imported copy;
+  items whose target still exists, including ones edited by hand, are left alone. The summary reports them
+  as `menus.items.relinked`.
+
+- **Public dates follow the site language.** Post dates on single posts, the home page and search results,
+  and comment dates, are formatted in the site's language (`WPLANG`, the same value as `<html lang>`)
+  instead of the visitor's browser or the server's locale, so an English site no longer shows `2/3/2024`
+  for 2 March to a Spanish reader.
+
+- **A freshly installed site runs cron and outgoing webhooks without a restart.** The process that
+  finished the install wizard (or `POST /api/v1/setup/install`) had booted in setup mode, and the boot
+  starts cron, the coherence and cluster buses, the webhook dispatcher and the content outbox only on an
+  installed site. Until the first restart, webhooks delivered only the manual test ping (no post,
+  comment, term or settings event was ever queued) and scheduled posts were not published. The install
+  now starts these services in the running process, as the boot does (`core/runtime-services`).
+
+- **Release bundles no longer include a stray test backup in `backend/backups/`.** The 2.6.0 bundle
+  carried a backup left over from a local test run (a throwaway test database, no site data), and
+  `npx create-wordjs upgrade` copied it into the upgraded site, where it listed under Admin → Settings →
+  Backups. If a site upgraded to 2.6.0 shows a backup dated 2026-10-15 that it did not create, delete it
+  from that page; do not restore it. The packager now excludes `backend/backups/` by name,
+  `.gitignore` covers it, and CI fails if the repository tracks a backup or a database file outside test
+  fixtures or if a built bundle contains one. `create-wordjs upgrade` also treats `backend/backups/`
+  as site state, like `backend/data/` and `backend/uploads/`: it never adds to or replaces the site's
+  own backups.
 
 ## [2.6.0] - 2026-10-16
 

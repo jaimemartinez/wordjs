@@ -16,6 +16,8 @@
 import type { DragPreview, VersoItem } from "@/lib/verso/types";
 import type { EditorHandle } from "@/lib/verso/store";
 import type { BlockRegistry } from "@/lib/verso/registry";
+import type { Language } from "@/lib/i18n";
+import { localizedDefaults } from "@/lib/verso/defaultContent";
 import type { DndPoint, DndRect, ZoneGeom } from "@/lib/verso/dnd/types";
 import { resolveDragTarget } from "@/lib/verso/dnd/resolve";
 import {
@@ -40,6 +42,8 @@ export interface DragSessionDeps {
   now?: () => number;
   /** Ids frescos para el insertNode del drop. Default: crypto.randomUUID. */
   generateId?: () => string;
+  /** Idioma del texto inicial de un bloque nuevo (lib/verso/defaultContent). Por defecto "es". */
+  language?: Language;
 }
 
 export interface MoveOptions {
@@ -145,12 +149,7 @@ export function createDragSession(
         } else {
           const def = deps.registry.get(source.type);
           if (def) {
-            let defaults: Record<string, unknown>;
-            try {
-              defaults = structuredClone(def.defaultProps);
-            } catch {
-              defaults = { ...def.defaultProps };
-            }
+            const defaults = localizedDefaults(def.defaultProps, deps.language ?? "es");
             const id = (deps.generateId ?? defaultGenerateId)();
             const item: VersoItem = { type: source.type, props: { ...defaults, id } };
             ok = deps.handle.transact(

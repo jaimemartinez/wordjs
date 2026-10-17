@@ -943,6 +943,8 @@ export interface Theme {
     name: string;
     version: string;
     description: string;
+    /** theme.json `translations`: per-language metadata, e.g. { es: { description } }. */
+    translations?: Record<string, { description?: string }> | null;
     author: string;
     screenshot?: string;
     active: boolean;

@@ -17,8 +17,9 @@
  */
 
 import type { Language } from './i18n';
+import { VERSO_CHROME_STRINGS } from './editorI18nVerso';
 
-type Tri = { es: string; en: string; pt: string };
+export type Tri = { es: string; en: string; pt: string };
 
 // Block + category names (mirrors the editor.block.* / editor.category.* keys in i18n.ts, which the
 // config resolves once at load — listed here so localizeConfig can re-translate them reactively).
@@ -719,7 +720,7 @@ const CHROME_STRINGS: Tri[] = [
     { es: "Estado de publicación", en: "Publication status", pt: "Status de publicação" },
 ];
 
-const TRIPLES: Tri[] = [...BLOCKS_CATEGORIES, ...FIELD_STRINGS, ...CHROME_STRINGS];
+const TRIPLES: Tri[] = [...BLOCKS_CATEGORIES, ...FIELD_STRINGS, ...CHROME_STRINGS, ...VERSO_CHROME_STRINGS];
 
 let LOOKUP: Map<string, Tri> | null = null;
 function lookup(): Map<string, Tri> {
@@ -733,6 +734,15 @@ function lookup(): Map<string, Tri> {
 export function trStr(s: string, lang: Language): string {
     const hit = lookup().get(s);
     return hit ? (hit[lang] || s) : s;
+}
+
+/**
+ * trStr for a Spanish source TEMPLATE with `{name}` placeholders: the template is translated whole
+ * (the dictionary holds it with the placeholders in place) and the values are substituted after,
+ * so a number or a block name never has to be part of a dictionary key.
+ */
+export function trFmt(s: string, lang: Language, vars: Record<string, string | number>): string {
+    return trStr(s, lang).replace(/\{(\w+)\}/g, (m, k: string) => (k in vars ? String(vars[k]) : m));
 }
 
 /** Every dictionary entry containing `s` in any language (tests: coverage and conflicting duplicates). */

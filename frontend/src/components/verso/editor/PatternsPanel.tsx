@@ -110,10 +110,10 @@ export default function PatternsPanel({ handle, registry }: VersoPatternsPanelPr
     // construidos alimentan la miniatura en vivo; la inserción vuelve a construir con ids frescos.
     const builtAvailable = useMemo(
         () =>
-            PATTERNS.map((p) => ({ pattern: p, items: buildVersoPatternItems(p, registry) })).filter(
+            PATTERNS.map((p) => ({ pattern: p, items: buildVersoPatternItems(p, registry, language) })).filter(
                 (x) => x.items.length > 0,
             ),
-        [registry],
+        [registry, language],
     );
     // Miniatura de los patrones de usuario: exactamente los items que la inserción usará
     // (tipos no registrados fuera — userPatternItems, el mismo filtro).
@@ -221,8 +221,8 @@ export default function PatternsPanel({ handle, registry }: VersoPatternsPanelPr
                     key={p.id}
                     role="button"
                     tabIndex={0}
-                    onClick={() => insertVersoPattern(handle, registry, p)}
-                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); insertVersoPattern(handle, registry, p); } }}
+                    onClick={() => insertVersoPattern(handle, registry, p, language)}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); insertVersoPattern(handle, registry, p, language); } }}
                     className="w-full group rounded-lg border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-lowest)] overflow-hidden hover:border-[var(--ed-primary)] text-left cursor-pointer transition-colors"
                     title={trStr("Insertar al final de la página", language)}
                 >

@@ -20,6 +20,11 @@
  * IDEMPOTENCY. Every created item is stamped with the WXR's own `wp:post_id` under
  * `_wxr_menu_item_id`; a re-run indexes that key first and creates nothing it already has. Menus dedupe
  * on the term slug, which is what models/Menu already keys on.
+ *
+ * RE-LINKING ON A RE-RUN. A matched item is not created again, but its TARGET is re-resolved: when the
+ * post or term it points at no longer exists (the content was deleted and imported again, so it has a
+ * new id), the item is re-pointed at this run's copy. An item whose target still exists is left alone,
+ * so a link an editor changed by hand is never overwritten.
  */
 
 const Post = require('../models/Post');
@@ -110,7 +115,8 @@ interface MenuImportInput {
 
 interface MenuImportSummary {
     menus: { created: number; matched: number };
-    items: { created: number; skipped: number };
+    /** `relinked` counts matched items whose dead target was re-pointed (they are also `skipped`). */
+    items: { created: number; skipped: number; relinked: number };
     locations: { assigned: number; unassigned: number; reason: string | null };
     errors: string[];
 }
@@ -166,7 +172,7 @@ async function importMenus(input: MenuImportInput): Promise<MenuImportSummary> {
     const { items, postIdMap, termIdMap, dbAsync } = input;
     const summary: MenuImportSummary = {
         menus: { created: 0, matched: 0 },
-        items: { created: 0, skipped: 0 },
+        items: { created: 0, skipped: 0, relinked: 0 },
         locations: { assigned: 0, unassigned: 0, reason: null },
         errors: [],
     };
@@ -223,20 +229,32 @@ async function importMenus(input: MenuImportInput): Promise<MenuImportSummary> {
     for (const it of items) {
         const menuId = it.menuSlug ? menuIdBySlug.get(it.menuSlug) : undefined;
         if (menuId === undefined) { summary.items.skipped++; continue; } // no menu to attach it to
-        if (it.sourceId && existingBySourceId.has(it.sourceId)) { summary.items.skipped++; continue; }
+        const meta = it.meta || {};
+        const type = ['post_type', 'taxonomy', 'custom'].includes(meta._menu_item_type)
+            ? meta._menu_item_type
+            : 'custom';
+        const object = String(meta._menu_item_object || '').slice(0, 64);
+        const rawObjectId = String(meta._menu_item_object_id || '').trim();
+        const mappedId: number | null = type === 'post_type'
+            ? (postIdMap.get(rawObjectId) ?? null)
+            : type === 'taxonomy'
+                ? (termIdMap.get(rawObjectId) ?? null)
+                : null;
+
+        if (it.sourceId && existingBySourceId.has(it.sourceId)) {
+            summary.items.skipped++;
+            const existingId = existingBySourceId.get(it.sourceId) as number;
+            try {
+                if (await relinkIfDead(existingId, type, object, mappedId, String(meta._menu_item_url || ''), dbAsync)) {
+                    summary.items.relinked++;
+                }
+            } catch (e: any) {
+                pushError(`menu item "${it.title || it.sourceId}": ${e.message}`);
+            }
+            continue;
+        }
 
         try {
-            const meta = it.meta || {};
-            const type = ['post_type', 'taxonomy', 'custom'].includes(meta._menu_item_type)
-                ? meta._menu_item_type
-                : 'custom';
-            const object = String(meta._menu_item_object || '').slice(0, 64);
-            const rawObjectId = String(meta._menu_item_object_id || '').trim();
-            const mappedId = type === 'post_type'
-                ? (postIdMap.get(rawObjectId) ?? null)
-                : type === 'taxonomy'
-                    ? (termIdMap.get(rawObjectId) ?? null)
-                    : null;
 
             const url = await resolveItemUrl(type, object, mappedId, String(meta._menu_item_url || ''), dbAsync);
             // WordPress leaves an item's <title> empty when it should display the linked object's own
@@ -314,6 +332,40 @@ async function importMenus(input: MenuImportInput): Promise<MenuImportSummary> {
     }
 
     return summary;
+}
+
+/** Whether the post or term a menu item points at still exists on this install. */
+async function targetExists(type: string, id: number, dbAsync: any): Promise<boolean> {
+    if (!id) return false;
+    if (type === 'post_type') return !!(await dbAsync.get('SELECT id FROM posts WHERE id = ?', [id]));
+    if (type === 'taxonomy') return !!(await dbAsync.get('SELECT term_id FROM terms WHERE term_id = ?', [id]));
+    return true;
+}
+
+/**
+ * Re-point a menu item a previous run created, when — and only when — its target is gone and this
+ * run resolved the same WXR reference to a live object. Returns whether it changed anything.
+ */
+async function relinkIfDead(
+    itemId: number,
+    type: string,
+    object: string,
+    mappedId: number | null,
+    rawUrl: string,
+    dbAsync: any,
+): Promise<boolean> {
+    if (mappedId === null || (type !== 'post_type' && type !== 'taxonomy')) return false;
+    const stored = await dbAsync.get(
+        'SELECT meta_value FROM post_meta WHERE post_id = ? AND meta_key = ?',
+        [itemId, '_menu_item_object_id']
+    );
+    const storedId = parseInt(String(stored?.meta_value ?? ''), 10) || 0;
+    if (storedId === mappedId) return false;
+    if (await targetExists(type, storedId, dbAsync)) return false;
+    const url = await resolveItemUrl(type, object, mappedId, rawUrl, dbAsync);
+    await MenuItem.update(itemId, { url });
+    await Post.updateMeta(itemId, '_menu_item_object_id', String(mappedId));
+    return true;
 }
 
 /** The title of the object a menu item points at, for an item whose own `<title>` is empty. */

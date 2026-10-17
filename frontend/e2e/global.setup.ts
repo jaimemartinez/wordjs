@@ -80,4 +80,16 @@ setup("instalar si hace falta, login admin por API y guardar storageState", asyn
     fs.mkdirSync(path.dirname(ADMIN_STORAGE_STATE), { recursive: true });
     await ctx.storageState({ path: ADMIN_STORAGE_STATE });
     await ctx.dispose();
+    // IDIOMA DEL PANEL: los specs buscan los textos en español ("Guardar", "Escritorio"…). Sin una
+    // elección guardada el panel sigue el idioma del sitio (<html lang>, en_US en esta instalación), así
+    // que la elección se fija aquí, en el localStorage del storageState compartido.
+    const state = JSON.parse(fs.readFileSync(ADMIN_STORAGE_STATE, "utf8")) as {
+        cookies: unknown[];
+        origins?: { origin: string; localStorage: { name: string; value: string }[] }[];
+    };
+    const origin = new URL(E2E_BASE_URL).origin;
+    const others = (state.origins ?? []).filter((o) => o.origin !== origin);
+    const mine = (state.origins ?? []).find((o) => o.origin === origin)?.localStorage ?? [];
+    state.origins = [...others, { origin, localStorage: [...mine.filter((e) => e.name !== "wordjs-lang"), { name: "wordjs-lang", value: "es" }] }];
+    fs.writeFileSync(ADMIN_STORAGE_STATE, JSON.stringify(state, null, 2));
 });

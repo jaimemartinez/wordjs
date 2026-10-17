@@ -18,6 +18,13 @@
  */
 
 import { toNormalized } from "../normalize";
+
+type CountedText = { message: string; template: string; vars: Record<string, number> };
+
+/** Texto de aviso con números: interpolado en `message` y traducible entero vía `template`/`vars`. */
+function countedText(template: string, vars: Record<string, number>): CountedText {
+  return { message: template.replace(/\{(\w+)\}/g, (m, k: string) => (k in vars ? String(vars[k]) : m)), template, vars };
+}
 import type { SlotResolver, VersoData, VersoDoc, VersoHistoryCommand } from "../types";
 import {
   commandToOps,
@@ -274,7 +281,7 @@ export class VersoCollabSession {
       this.outboxGen++;
       this.emitNotice({
         code: "store-failed",
-        message: `La sesión colaborativa se cerró con ${pendientes} cambio(s) sin enviar. Están en tu documento: guarda para conservarlos.`,
+        ...countedText("La sesión colaborativa se cerró con {n} cambio(s) sin enviar. Están en tu documento: guarda para conservarlos.", { n: pendientes }),
         at: this.time(),
       });
     }
@@ -382,9 +389,9 @@ export class VersoCollabSession {
         this.outboxGen++;
         this.emitNotice({
           code: identityChanged ? "identity-reset" : "epoch-reset",
-          message: pendientes
-            ? `La sesión se reinició y ${pendientes} cambio(s) tuyo(s) no llegaron a enviarse. Revisa el documento antes de seguir.`
-            : "La sesión colaborativa se reinició con el contenido guardado.",
+          ...(pendientes
+            ? countedText("La sesión se reinició y {n} cambio(s) tuyo(s) no llegaron a enviarse. Revisa el documento antes de seguir.", { n: pendientes })
+            : { message: "La sesión colaborativa se reinició con el contenido guardado." }),
           at: this.time(),
         });
       }
@@ -700,7 +707,7 @@ export class VersoCollabSession {
           // documento más tarde es indistinguible de una pérdida de datos.
           this.emitNotice({
             code: "rejected-ops",
-            message: `El servidor rechazó ${rejected.length} cambio(s) por no superar la validación.`,
+            ...countedText("El servidor rechazó {n} cambio(s) por no superar la validación.", { n: rejected.length }),
             at: this.time(),
             rejected,
           });
@@ -723,7 +730,7 @@ export class VersoCollabSession {
         if (typeof body?.accepted !== "number") {
           this.reintenta("El servidor contestó 200 sin decir de cuántos cambios se hizo cargo; se reintentan.");
         } else if (accounted < batch.length) {
-          this.reintenta(`El servidor no confirmó ${batch.length - accounted} cambio(s); se reintentan.`);
+          this.reintenta(countedText("El servidor no confirmó {n} cambio(s); se reintentan.", { n: batch.length - accounted }));
         } else {
           this.confirmaLote(batch.length, rejected.length, gen);
           this.flushRetries = 0;                       // el servidor SÍ se hizo cargo
@@ -801,14 +808,14 @@ export class VersoCollabSession {
       this.setStatus("degraded");
       this.emitNotice({
         code: "epoch-reset",
-        message: `La sesión se reinició; ${pendientes} cambio(s) no se pudieron enviar. Guarda y recarga para reconciliar.`,
+        ...countedText("La sesión se reinició; {n} cambio(s) no se pudieron enviar. Guarda y recarga para reconciliar.", { n: pendientes }),
         at: this.time(),
       });
       void this.resync();
       return;
     }
     this.reintenta(
-      `Se perdió la sesión colaborativa; ${this.outbox.length} cambio(s) siguen pendientes y se reenviarán al reconectar.`,
+      countedText("Se perdió la sesión colaborativa; {n} cambio(s) siguen pendientes y se reenviarán al reconectar.", { n: this.outbox.length }),
     );
   }
 
@@ -847,7 +854,7 @@ export class VersoCollabSession {
    * construcción, y reintentarlo a 1 Hz para siempre agota el limitador global de la IP y no arregla
    * nada. Al agotarse se deja de posear y se dice que hay que guardar a mano.
    */
-  private reintenta(message: string | null): void {
+  private reintenta(message: string | CountedText | null): void {
     // Mismo freno, otra causa. La espera sale de la ventana que publicó el servidor igual que la del
     // 429: es SU ritmo declarado, y no hay ninguna razón para inventar aquí un segundo número.
     this.gate.frenaPorFallo();
@@ -857,12 +864,12 @@ export class VersoCollabSession {
       this.setStatus("degraded");
       this.emitNotice({
         code: "store-failed",
-        message: `El servidor lleva ${this.flushRetries} intentos sin aceptar ${this.outbox.length} cambio(s). Se deja de reintentar: guarda la página para conservarlos.`,
+        ...countedText("El servidor lleva {tries} intentos sin aceptar {n} cambio(s). Se deja de reintentar: guarda la página para conservarlos.", { tries: this.flushRetries, n: this.outbox.length }),
         at: this.time(),
       });
       return;
     }
-    if (message) this.emitNotice({ code: "store-failed", message, at: this.time() });
+    if (message) this.emitNotice({ code: "store-failed", ...(typeof message === "string" ? { message } : message), at: this.time() });
   }
 
   /**
