@@ -124,7 +124,7 @@ router.get('/', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandle
  *               name: { type: string }
  *               requested:
  *                 type: array
- *                 items: { type: string, enum: [content:read, content:draft, content:publish, media:upload, taxonomy:write, comments:moderate, settings:read] }
+ *                 items: { type: string, enum: [content:read, content:draft, content:publish, content:others, media:upload, taxonomy:write, comments:moderate, settings:read] }
  *               userId: { type: integer }
  *               expiresInDays: { type: integer }
  *     responses:

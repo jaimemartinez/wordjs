@@ -752,7 +752,7 @@ Write responses are `{ rev, warnings, unchanged? }` (a no-op answers `200 { unch
 
 
 ### 6.23 AI agents & MCP 🤖
-Operator guide and the full model: [ai-agents.md](ai-agents.md). An **agent connection** is a `Bearer wja_…` token bound to one user; it **requests** capabilities (`content:read`, `content:draft`, `content:publish`, `media:upload`, `taxonomy:write`, `comments:moderate`, `settings:read`), an administrator **grants** a subset, and every call runs as the bound user with capabilities **narrowed** to the grant (`backend/src/core/agent-capabilities.ts`) — never wider than the user. Audited as `agent.create` / `.grant` / `.revoke` / `.write` / `.denied`.
+Operator guide and the full model: [ai-agents.md](ai-agents.md). An **agent connection** is a `Bearer wja_…` token bound to one user; it **requests** capabilities (`content:read`, `content:draft`, `content:publish`, `content:others`, `media:upload`, `taxonomy:write`, `comments:moderate`, `settings:read`), an administrator **grants** a subset, and every call runs as the bound user with capabilities **narrowed** to the grant (`backend/src/core/agent-capabilities.ts`) — never wider than the user. Audited as `agent.create` / `.grant` / `.revoke` / `.write` / `.denied`.
 
 | Method | Endpoint | Auth | Description |
 | :----- | :------- | :--- | :---------- |

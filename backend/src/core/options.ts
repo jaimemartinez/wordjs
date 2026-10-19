@@ -230,8 +230,10 @@ async function afterOptionWrite(name: string, value: any): Promise<() => Promise
     await cache.del(`option:${name}`);
     cache.publish('wordjs:option-changed', name);
 
-    // Update Dynamic Cache State
-    if (name === 'redis_cache_enabled') {
+    // Update Dynamic Cache State. The switch is one process-wide flag shared by every site (multisite):
+    // only the main site's row drives it — the same row boot (initCacheSetting) and the other nodes
+    // (core/coherence) read. Another site's row, however it got written, changes nothing here.
+    if (name === 'redis_cache_enabled' && !require('./multisite-guards').onSecondarySite()) {
         cache.setEnabled(value);
     }
 

@@ -4,14 +4,14 @@
     "restSource": {
       "routeFiles": 45,
       "endpointDeclarations": 275,
-      "mountDeclarations": 109,
-      "semanticSha256": "de1d4150395cd08dad00d7338ebf745f7b077477a659ce7585fd376a2153c38d"
+      "mountDeclarations": 110,
+      "semanticSha256": "5027ae5c3feb697203a4cea7198755c396ff3c71ed43832c744ce55e2e7837e1"
     },
     "openapi": {
       "paths": 214,
       "operations": 273,
       "coverage": 0.9927,
-      "semanticSha256": "7c613bbb9ce847817e6f8c0704de6f90e9688c2529ad2699ce4e756d5061abf8"
+      "semanticSha256": "608719f934f958b4b9c3337268700e320ecaec3a2913c79af19a99e39fe7a988"
     },
     "typingDebt": {
       "requestAny": {
