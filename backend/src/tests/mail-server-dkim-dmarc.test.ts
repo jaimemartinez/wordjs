@@ -173,9 +173,13 @@ test('DMARC: an aligned DKIM signature passes; a valid signature of ANOTHER doma
 });
 
 test('DMARC: relaxed vs strict alignment, SPF alignment, quarantine, pct and the subdomain policy', async () => {
-    const sub = await rsaSigned(MSG, 'mail.sender.example');
-    assert.equal((await dmarcOf(sub)).dmarc.result, 'pass', 'relaxed: a subdomain signature aligns');
-    assert.equal((await dmarcOf(sub, { '_dmarc.sender.example': 'v=DMARC1; p=reject; adkim=s' })).dmarc.result, 'fail', 'strict: it does not');
+    // Relaxed alignment needs a suffix the Public Suffix List knows (.com); under the reserved
+    // .example TLD only an exact match aligns.
+    const comDns = { 's1._domainkey.mail.example.com': `v=DKIM1; k=rsa; p=${RSA_PUB}`, '_dmarc.example.com': 'v=DMARC1; p=reject' };
+    const sub = await rsaSigned({ ...MSG, from: 'Ann <ann@example.com>' }, 'mail.example.com');
+    assert.equal((await dmarcOf(sub, comDns)).dmarc.result, 'pass', 'relaxed: a subdomain signature aligns');
+    assert.equal((await dmarcOf(sub, { ...comDns, '_dmarc.example.com': 'v=DMARC1; p=reject; adkim=s' })).dmarc.result, 'fail', 'strict: it does not');
+    assert.equal((await dmarcOf(await rsaSigned(MSG, 'mail.sender.example'))).dmarc.result, 'fail', 'unknown suffix: no relaxed match');
 
     const unsigned = await composed(MSG);
     assert.equal((await dmarcOf(unsigned, {}, { spfResult: 'pass', envelopeFrom: 'bounce@sender.example' })).dmarc.result, 'pass', 'aligned SPF');

@@ -158,10 +158,15 @@ async function verifyOne(sigHeader, msg, resolveTxt, now) {
 
     // Body hash.
     let body = canonBody(msg.body, bc);
+    let partial = false;
     if (tags.l !== undefined) {
         if (!/^\d+$/.test(tags.l)) return fail('permerror', 'malformed l=');
         const l = Number(tags.l);
-        if (l > Buffer.byteLength(body, 'latin1')) return fail('fail', 'l= exceeds the body');
+        const size = Buffer.byteLength(body, 'latin1');
+        if (l > size) return fail('fail', 'l= exceeds the body');
+        // RFC 6376 §8.2: whatever follows the signed length can be anything. Such a signature still
+        // verifies, but it is a "pass with unsigned content": it authenticates nobody (see fullPass).
+        partial = l < size;
         body = Buffer.from(body, 'latin1').subarray(0, l).toString('latin1');
     }
     const bh = crypto.createHash('sha256').update(Buffer.from(body, 'latin1')).digest('base64');
@@ -201,8 +206,14 @@ async function verifyOne(sigHeader, msg, resolveTxt, now) {
             ? crypto.verify(null, crypto.createHash('sha256').update(input).digest(), pub.key, sig)
             : crypto.verify('sha256', input, pub.key, sig);
     } catch (e) { ok = false; }
-    return ok ? Object.assign(out, { result: 'pass', reason: '' }) : fail('fail', 'signature did not verify');
+    if (!ok) return fail('fail', 'signature did not verify');
+    return Object.assign(out, partial
+        ? { result: 'pass', partial: true, reason: 'unsigned-content-after-l=' }
+        : { result: 'pass', reason: '' });
 }
+
+/** A DKIM result that authenticates its d= domain: a pass that covers the whole body. */
+const fullPass = (s) => !!s && s.result === 'pass' && !s.partial;
 
 /** Verify every DKIM-Signature on the message (up to MAX_SIGNATURES). [] = unsigned. */
 async function verifyDkim(raw, { resolveTxt, now = Date.now() } = {}) {
@@ -218,33 +229,58 @@ async function verifyDkim(raw, { resolveTxt, now = Date.now() } = {}) {
 
 // --- DMARC -----------------------------------------------------------------------------------------
 
-// Organizational domain (RFC 7489 §3.2) without shipping the whole Public Suffix List: the registrable
-// domain is the last two labels, or three under the common two-label public suffixes below. A wrong
-// guess can only make RELAXED alignment stricter or looser by one label for an unlisted suffix; strict
-// alignment and the record lookup at the From domain itself are unaffected.
-const TWO_LABEL_SUFFIXES = new Set([
-    'co.uk', 'org.uk', 'me.uk', 'ltd.uk', 'plc.uk', 'net.uk', 'ac.uk', 'gov.uk', 'sch.uk', 'nhs.uk',
-    'com.au', 'net.au', 'org.au', 'edu.au', 'gov.au', 'id.au', 'co.nz', 'org.nz', 'net.nz', 'govt.nz', 'ac.nz',
-    'co.jp', 'ne.jp', 'or.jp', 'ac.jp', 'go.jp', 'co.kr', 'or.kr', 'ne.kr', 'com.cn', 'net.cn', 'org.cn', 'gov.cn',
-    'com.br', 'net.br', 'org.br', 'gov.br', 'com.mx', 'org.mx', 'gob.mx', 'com.ar', 'gob.ar', 'com.co', 'gov.co',
-    'com.es', 'org.es', 'gob.es', 'nom.es', 'edu.es', 'com.pt', 'co.in', 'net.in', 'org.in', 'gov.in', 'co.za',
-    'org.za', 'gov.za', 'com.tr', 'gov.tr', 'com.sg', 'gov.sg', 'com.hk', 'gov.hk', 'com.tw', 'gov.tw',
-    'co.il', 'org.il', 'com.pl', 'com.ru', 'com.ua', 'co.id', 'or.id', 'com.my', 'com.ph', 'com.vn', 'com.pe',
-    'com.ve', 'com.uy', 'com.ec', 'com.gt', 'com.do', 'com.pa', 'com.bo', 'com.py', 'com.sv', 'com.ni', 'com.hn',
-    'co.cr', 'co.ve', 'com.cu', 'com.eg', 'com.sa', 'com.pk', 'com.ng', 'co.ke', 'co.th', 'in.th',
-]);
+// Organizational domain (RFC 7489 §3.2) from the Public Suffix List, vendored as data in
+// lib/public-suffix-list.js (regenerate it with backend/scripts/update-public-suffix-list.js): the
+// registrable domain is the public suffix plus one label. A domain whose suffix the list does not know
+// (only the implicit "*" rule matches) is marked `known: false`, and relaxed alignment then requires an
+// exact match — guessing where an unknown suffix ends would align unrelated registrants under it.
+const PSL = (() => {
+    const rules = new Set(), exceptions = new Set(), wildcards = new Set();
+    for (const r of require('./public-suffix-list').rules.split('\n')) {
+        if (!r) continue;
+        if (r[0] === '!') exceptions.add(r.slice(1));
+        else if (r.startsWith('*.')) wildcards.add(r.slice(2));
+        else rules.add(r);
+    }
+    return { rules, exceptions, wildcards };
+})();
 
-function organizationalDomain(domain) {
+/** { suffix, org, known } for a domain, by the PSL algorithm (https://publicsuffix.org/list/). */
+function publicSuffixOf(domain) {
     const labels = String(domain || '').toLowerCase().replace(/\.$/, '').split('.').filter(Boolean);
-    if (labels.length <= 2) return labels.join('.');
-    const last2 = labels.slice(-2).join('.');
-    return TWO_LABEL_SUFFIXES.has(last2) ? labels.slice(-3).join('.') : last2;
+    if (labels.length === 0) return { suffix: '', org: '', known: false };
+    let suffixLen = 0;
+    // An exception rule wins over every other match; the suffix is then the rule minus its first label.
+    for (let i = 0; i < labels.length && !suffixLen; i++) {
+        if (PSL.exceptions.has(labels.slice(i).join('.'))) suffixLen = labels.length - i - 1;
+    }
+    // Otherwise the longest matching rule, a wildcard "*.parent" matching any one label under parent.
+    for (let i = 0; i < labels.length && !suffixLen; i++) {
+        if (PSL.rules.has(labels.slice(i).join('.'))
+            || (i + 1 < labels.length && PSL.wildcards.has(labels.slice(i + 1).join('.')))) suffixLen = labels.length - i;
+    }
+    const known = suffixLen > 0;
+    if (!known) suffixLen = 1; // the implicit "*" rule
+    return {
+        suffix: labels.slice(-suffixLen).join('.'),
+        org: labels.length > suffixLen ? labels.slice(-(suffixLen + 1)).join('.') : '',
+        known,
+    };
+}
+
+/** The organizational domain ('' when the domain is itself a public suffix). */
+function organizationalDomain(domain) {
+    return publicSuffixOf(domain).org;
 }
 
 const aligned = (a, b, mode) => {
-    const x = String(a || '').toLowerCase(), y = String(b || '').toLowerCase();
+    const x = String(a || '').toLowerCase().replace(/\.$/, ''), y = String(b || '').toLowerCase().replace(/\.$/, '');
     if (!x || !y) return false;
-    return mode === 's' ? x === y : organizationalDomain(x) === organizationalDomain(y);
+    if (x === y) return true;
+    if (mode === 's') return false;
+    // Relaxed: the same organizational domain, and only when the list KNOWS both suffixes.
+    const px = publicSuffixOf(x), py = publicSuffixOf(y);
+    return px.known && py.known && !!px.org && px.org === py.org;
 };
 
 function parseDmarc(txt) {
@@ -281,18 +317,47 @@ const domainOf = (addr) => {
     return at > 0 ? s.slice(at + 1).replace(/>$/, '') : '';
 };
 
-/**
- * DMARC for one message. `fromDomains` is every domain in the header From (RFC 7489 §6.6.1: a From
- * with several domains cannot be evaluated). Returns { result: pass|fail|none|temperror|permerror,
- * domain, policy, disposition: none|quarantine|reject, reason }.
- */
-async function evaluateDmarc({ fromDomains, spfResult, envelopeFrom, dkim, resolveTxt, random = Math.random }) {
-    const domains = [...new Set((fromDomains || []).map(d => String(d || '').toLowerCase()).filter(Boolean))];
-    const out = { result: 'none', domain: domains[0] || '', policy: '', disposition: 'none', reason: '' };
-    if (domains.length === 0) return Object.assign(out, { result: 'permerror', reason: 'no From domain' });
-    if (domains.length > 1) return Object.assign(out, { result: 'permerror', reason: 'From names several domains' });
-    const fromDomain = domains[0];
+const MAX_FROM_DOMAINS = 10;
+const DISPOSITION_RANK = { none: 0, quarantine: 1, reject: 2 };
 
+/**
+ * DMARC for one message. `fromDomains` is every domain in the header From. Returns
+ * { result: pass|fail|none|temperror|permerror, domain, policy, disposition: none|quarantine|reject,
+ *   reason, fromDomains? }.
+ *
+ * A From naming several domains (RFC 7489 §6.6.1) is evaluated against EACH of them and gets the
+ * strictest outcome: any domain that fails decides the disposition (the strictest one wins), and a
+ * message that fails none still never passes — no single domain speaks for the whole From, so the
+ * result is permerror (accepted, but never shown as a verified sender). `fromFields` > 1 means the
+ * message carried several From header FIELDS, which RFC 5322 forbids outright: refused.
+ */
+async function evaluateDmarc({ fromDomains, spfResult, envelopeFrom, dkim, resolveTxt, random = Math.random, fromFields = 1 }) {
+    const domains = [...new Set((fromDomains || []).map(d => String(d || '').toLowerCase().replace(/\.$/, '')).filter(Boolean))];
+    const base = { result: 'none', domain: domains[0] || '', policy: '', disposition: 'none', reason: '' };
+    if (fromFields > 1) return Object.assign(base, { result: 'permerror', disposition: 'reject', reason: 'several From header fields' });
+    if (domains.length === 0) return Object.assign(base, { result: 'permerror', reason: 'no From domain' });
+    if (domains.length === 1) return evaluateDomain(domains[0], { spfResult, envelopeFrom, dkim, resolveTxt, random });
+    if (domains.length > MAX_FROM_DOMAINS) {
+        return Object.assign(base, { result: 'permerror', disposition: 'reject', reason: 'From names too many domains', fromDomains: domains.slice(0, MAX_FROM_DOMAINS) });
+    }
+    const each = [];
+    for (const d of domains) each.push(await evaluateDomain(d, { spfResult, envelopeFrom, dkim, resolveTxt, random }));
+    const failing = each.filter(r => r.result === 'fail')
+        .sort((a, b) => DISPOSITION_RANK[b.disposition] - DISPOSITION_RANK[a.disposition]
+            || DISPOSITION_RANK[b.policy || 'none'] - DISPOSITION_RANK[a.policy || 'none']);
+    if (failing.length) {
+        return Object.assign({}, failing[0], { reason: `From names several domains; ${failing[0].domain}: ${failing[0].reason}`, fromDomains: domains });
+    }
+    const temp = each.find(r => r.result === 'temperror');
+    return Object.assign(base, {
+        result: temp ? 'temperror' : 'permerror',
+        reason: temp ? `From names several domains; ${temp.domain}: ${temp.reason}` : 'From names several domains',
+        fromDomains: domains,
+    });
+}
+
+async function evaluateDomain(fromDomain, { spfResult, envelopeFrom, dkim, resolveTxt, random }) {
+    const out = { result: 'none', domain: fromDomain, policy: '', disposition: 'none', reason: '' };
     const found = await findDmarcRecord(resolveTxt, fromDomain);
     if (found.error) return Object.assign(out, { result: 'temperror', reason: 'record lookup failed' });
     if (!found.record) return out;
@@ -302,7 +367,7 @@ async function evaluateDmarc({ fromDomains, spfResult, envelopeFrom, dkim, resol
 
     const envDomain = domainOf(envelopeFrom);
     const spfAligned = spfResult === 'pass' && aligned(envDomain, fromDomain, rec.aspf);
-    const dkimAligned = (dkim || []).some(s => s.result === 'pass' && aligned(s.domain, fromDomain, rec.adkim));
+    const dkimAligned = (dkim || []).some(s => fullPass(s) && aligned(s.domain, fromDomain, rec.adkim));
     if (spfAligned || dkimAligned) {
         out.result = 'pass';
         out.reason = dkimAligned ? 'aligned DKIM' : 'aligned SPF';
@@ -333,7 +398,9 @@ function buildAuthResults(receiver, { dkim, dmarc, spfResult, envelopeFrom }) {
     if (spfResult) parts.push(`spf=${clean(spfResult, 12)} smtp.mailfrom=${clean(envelopeFrom, 320) || '<>'}`);
     if (dmarc) {
         const extra = dmarc.policy ? ` (p=${dmarc.policy} dis=${dmarc.disposition})` : '';
-        parts.push(`dmarc=${dmarc.result}${extra} header.from=${clean(dmarc.domain)}`);
+        // Every From domain when there were several, so a reader can tell the shown sender is one of them.
+        const several = (dmarc.fromDomains || []).length > 1 ? ` (from=${dmarc.fromDomains.map(d => clean(d)).join(',')})` : '';
+        parts.push(`dmarc=${dmarc.result}${extra}${several} header.from=${clean(dmarc.domain)}`);
     }
     return parts.join('; ').slice(0, 1000);
 }
@@ -341,18 +408,17 @@ function buildAuthResults(receiver, { dkim, dmarc, spfResult, envelopeFrom }) {
 async function authenticateMessage(raw, { resolveTxt, spfResult = '', envelopeFrom = '', fromAddresses = null, receiver = '', now, random } = {}) {
     const msg = splitMessage(raw);
     const dkim = await verifyDkim(msg, { resolveTxt, now: now || Date.now() });
-    let fromDomains = fromAddresses ? fromAddresses.map(domainOf) : null;
-    if (!fromDomains) {
-        const fromHeaders = msg.headers.filter(h => h.lname === 'from');
-        fromDomains = fromHeaders.length === 1
-            ? (fromHeaders[0].raw.slice(5).match(/[^\s<>,;:"@]+@[^\s<>,;:"]+/g) || []).map(domainOf)
-            : (fromHeaders.length > 1 ? ['__several__a', '__several__b'] : []);
-    }
-    const dmarc = await evaluateDmarc({ fromDomains, spfResult, envelopeFrom, dkim, resolveTxt, random });
+    // Counted on the raw message: a parser shows ONE of several From fields, and which one it picks is
+    // not necessarily the one a DKIM signature (bottom-up) or another reader picks.
+    const fromHeaders = msg.headers.filter(h => h.lname === 'from');
+    const fromDomains = fromAddresses
+        ? fromAddresses.map(domainOf)
+        : fromHeaders.flatMap(h => (h.raw.slice(h.raw.indexOf(':') + 1).match(/[^\s<>,;:"@]+@[^\s<>,;:"]+/g) || []).map(domainOf));
+    const dmarc = await evaluateDmarc({ fromDomains, spfResult, envelopeFrom, dkim, resolveTxt, random, fromFields: fromHeaders.length });
     return { dkim, dmarc, header: buildAuthResults(receiver, { dkim, dmarc, spfResult, envelopeFrom }) };
 }
 
 module.exports = {
-    authenticateMessage, verifyDkim, evaluateDmarc, organizationalDomain, splitMessage,
-    canonHeader, canonBody, buildAuthResults, aligned,
+    authenticateMessage, verifyDkim, evaluateDmarc, organizationalDomain, publicSuffixOf, splitMessage,
+    canonHeader, canonBody, buildAuthResults, aligned, fullPass,
 };
