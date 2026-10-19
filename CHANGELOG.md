@@ -17,11 +17,20 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   - Inbound mail is delivered to the SMTP envelope recipients the server accepted, not to the addresses
     in the `To:`/`Cc:` headers, which are display only. Cc, Bcc and mailing-list copies addressed to a
     mailbox only in the envelope are now stored.
+  - Inbound mail is checked with **DKIM and DMARC**. DKIM signatures are verified (rsa-sha256 and
+    ed25519-sha256, simple and relaxed canonicalization; rsa-sha1 and RSA keys under 1024 bits are not
+    accepted), and the sender domain's DMARC policy is applied using the SPF result and the DKIM `d=`
+    domain, with relaxed or strict alignment, `sp=` for subdomains and `pct=`. A message that fails
+    DMARC under `p=reject` is refused with `550 5.7.1`; under `p=quarantine` it is filed in Spam and not
+    forwarded. A DNS failure never rejects. The verdict is stored with the message as an
+    `Authentication-Results` line, and the reading pane shows **Verified sender**, **Signed by
+    <domain>**, **DKIM fail**, **DMARC fail** or **Quarantined (DMARC)**. **Server → Policies → Verify
+    DKIM and apply DMARC on inbound mail** (`mail_security_dmarc_enabled`, on by default) turns it off.
   - Mail arriving from outside that claims to be from the server's own mail domain (header `From` or
-    envelope sender) is refused with `550 5.7.1` unless SPF authenticated that domain for the
-    transaction. Devices on the LAN that send as the domain should relay through the site or be covered
-    by its SPF record. The reading pane shows **Unverified sender** when the From domain differs from
-    the domain SPF checked, even on an SPF pass.
+    envelope sender) is refused with `550 5.7.1` unless SPF or a valid DKIM signature of that domain
+    authenticated it. Devices on the LAN that send as the domain should relay through the site, sign
+    with its DKIM key or be covered by its SPF record. The reading pane shows **Unverified sender** when
+    the From domain differs from the domain SPF checked and DMARC did not pass.
   - A reply joins a conversation only when the message it answers belongs to the replying mailbox, in
     the composer and when threading inbound replies by `In-Reply-To`/`References`.
   - The webmail's link and image filter keeps only `http`, `https`, `mailto`, `cid` and inline images,

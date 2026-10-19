@@ -87,7 +87,7 @@
         },
         {
             "scope": "network",
-            "reason": "Resolve MX records (DNS) and deliver mail directly to remote MTAs / a configured relay (NET/TLS)."
+            "reason": "Resolve MX records and the TXT records that authenticate inbound mail (SPF, DKIM keys, DMARC policies) over the host DNS bridge, and deliver mail directly to remote MTAs / a configured relay (NET/TLS)."
         },
         {
             "scope": "smtp",

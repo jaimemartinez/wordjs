@@ -50,6 +50,19 @@ const senderMismatch = (header?: string, from?: string) => {
     return { from: fromDomain, envelope: envelope || '—' };
 };
 
+// The DKIM / DMARC verdict the server recorded (RFC 8601 Authentication-Results, auth_results).
+// Returns null when the message was not evaluated (outbound, internal, or the check turned off).
+const authVerdict = (header?: string) => {
+    const h = String(header || '');
+    if (!h) return null;
+    const dkim = [...h.matchAll(/dkim=([a-z]+)(?: \([^)]*\))? header\.d=([^\s;]*)/g)].map(m => ({ result: m[1], domain: m[2] }));
+    const d = /dmarc=([a-z]+)(?: \(p=([a-z]+) dis=([a-z]+)\))? header\.from=([^\s;]*)/.exec(h);
+    const dmarc = d ? { result: d[1], policy: d[2] || '', disposition: d[3] || 'none', domain: d[4] } : null;
+    const dkimPass = dkim.find(s => s.result === 'pass');
+    const dkimBad = !dkimPass && dkim.find(s => s.result === 'fail' || s.result === 'permerror' || s.result === 'policy');
+    return { dkimPass, dkimBad, dmarc };
+};
+
 export default function Webmail({ access, user, t, locale, toasts, confirm, isAdmin, onOpenServer }: any) {
     const me = String(access?.address || user?.userEmail || '').toLowerCase();
     const rootRef = useRef<HTMLDivElement>(null);
@@ -859,9 +872,14 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
         const latest = msgs[msgs.length - 1];
         const sender = !latest.is_sent ? addrOf(latest.from_address) : '';
         const spf = SPF_TONE[spfVerdict(email.received_spf)] ? spfVerdict(email.received_spf) : '';
-        const unaligned = senderMismatch(email.received_spf, email.from_address);
-        const inTrash = folder === 'trash' || email.is_trash;
-        const inSpam = folder === 'spam' || email.is_spam;
+        const auth = authVerdict(email.auth_results);
+        const dmarcPass = auth?.dmarc?.result === 'pass';
+        const dmarcFail = auth?.dmarc?.result === 'fail';
+        // An aligned DKIM signature (DMARC pass) authenticates the From domain, so no mismatch to flag.
+        const unaligned = dmarcPass ? null : senderMismatch(email.received_spf, email.from_address);
+        const authPills = !!(auth && (dmarcPass || dmarcFail || auth.dkimPass || auth.dkimBad));
+        const inTrash = folder === 'trash' || !!email.is_trash;
+        const inSpam = folder === 'spam' || !!email.is_spam;
 
         return (
             <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-white">
@@ -913,11 +931,15 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
                                 <i className={cx(email.is_starred ? 'fa-solid fa-star text-amber-400' : 'fa-regular fa-star text-slate-400', 'text-lg')}></i>
                             </button>
                         </div>
-                        {((email.labels || []).length > 0 || inSpam || spf || unaligned) && (
+                        {((email.labels || []).length > 0 || inSpam || spf || unaligned || authPills) && (
                             <div className="-mt-2 mb-4 flex flex-wrap items-center gap-1.5">
                                 {inSpam && <Pill tone="orange"><i className="fa-solid fa-triangle-exclamation"></i>{t('badge.spam')}</Pill>}
                                 {spf && <Pill tone={SPF_TONE[spf]} title={`${t('spf.' + spf + 'Hint')}\n\n${email.received_spf}`}><i className="fa-solid fa-shield-halved"></i>{t('spf.' + spf)}</Pill>}
                                 {unaligned && <Pill tone="orange" title={`${t('spf.unalignedHint', unaligned)}\n\n${email.received_spf}`}><i className="fa-solid fa-user-shield"></i>{t('spf.unaligned')}</Pill>}
+                                {dmarcPass && <Pill tone="green" title={`${t('auth.dmarcPassHint', { domain: auth.dmarc.domain })}\n\n${email.auth_results}`}><i className="fa-solid fa-circle-check"></i>{t('auth.dmarcPass')}</Pill>}
+                                {dmarcFail && <Pill tone="red" title={`${t(auth.dmarc.disposition === 'quarantine' ? 'auth.dmarcQuarantineHint' : 'auth.dmarcFailHint', { domain: auth.dmarc.domain, policy: auth.dmarc.policy || 'none' })}\n\n${email.auth_results}`}><i className="fa-solid fa-circle-xmark"></i>{t(auth.dmarc.disposition === 'quarantine' ? 'auth.dmarcQuarantine' : 'auth.dmarcFail')}</Pill>}
+                                {!dmarcPass && auth?.dkimPass && <Pill tone="green" title={`${t('auth.dkimPassHint', { domain: auth.dkimPass.domain })}\n\n${email.auth_results}`}><i className="fa-solid fa-signature"></i>{t('auth.dkimPass', { domain: auth.dkimPass.domain })}</Pill>}
+                                {auth?.dkimBad && <Pill tone="red" title={`${t(auth.dkimBad.result === 'fail' ? 'auth.dkimFailHint' : 'auth.dkimErrorHint', { domain: auth.dkimBad.domain })}\n\n${email.auth_results}`}><i className="fa-solid fa-signature"></i>{t('auth.dkimFail')}</Pill>}
                                 {(email.labels || []).map((l: any) => (
                                     <span key={l.id} className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium" style={{ background: `${l.color}1a`, color: l.color }}>
                                         {l.name}

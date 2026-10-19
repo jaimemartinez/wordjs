@@ -43,6 +43,8 @@ const createEmailStore = require('./lib/email-store');
 // kept out of email-store.js, which stays the ownership boundary of user mail.
 const createAdminStore = require('./lib/mail-admin-store');
 const MailRules = require('./lib/mail-rules');
+// Inbound DKIM signature verification and DMARC evaluation (node:crypto + the host DNS bridge).
+const MailAuth = require('./lib/mail-auth');
 
 // Attachment storage lives in the plugin's OWN dir (untrusted plugins can't write shared uploads).
 // The single source of truth is Email.UPLOAD_DIR (set in email-store); mirror it here for path joins.
@@ -394,7 +396,7 @@ function vacationSenderVerified(spfHeader, envelopeFrom, headerFrom) {
  * administrator. Returns null to accept, or the address the refusal names. The header From and the
  * envelope MAIL FROM are both checked, because either one is what a reader or a reply would trust.
  */
-function localDomainImpersonation(mailDomain, spfHeader, envelopeFrom, headerFroms) {
+function localDomainImpersonation(mailDomain, spfHeader, envelopeFrom, headerFroms, dkimPassDomains = []) {
     const dom = String(mailDomain || '').toLowerCase();
     if (!dom) return null;
     const domainOf = (a) => {
@@ -405,10 +407,48 @@ function localDomainImpersonation(mailDomain, spfHeader, envelopeFrom, headerFro
     const isLocal = (a) => { const d = domainOf(a); return !!d && (d === dom || d.endsWith('.' + dom)); };
     const claims = [envelopeFrom, ...(headerFroms || [])].filter(isLocal);
     if (claims.length === 0) return null;
+    // A valid DKIM signature of the claimed domain (d= the domain or a parent of it) authenticates it too.
+    const signedFor = (a) => {
+        const d = domainOf(a);
+        return (dkimPassDomains || []).some(s => { const x = String(s || '').toLowerCase(); return !!x && (d === x || d.endsWith('.' + x)); });
+    };
     for (const from of claims) {
-        if (!vacationSenderVerified(spfHeader, envelopeFrom, from)) return String(from).toLowerCase();
+        if (!vacationSenderVerified(spfHeader, envelopeFrom, from) && !signedFor(from)) return String(from).toLowerCase();
     }
     return null;
+}
+
+/** The whole message as a Buffer: the host hands one over, the plugin's own listener a stream. */
+function readRawMessage(input) {
+    if (Buffer.isBuffer(input)) return Promise.resolve(input);
+    if (typeof input === 'string') return Promise.resolve(Buffer.from(input, 'utf8'));
+    return new Promise((resolve, reject) => {
+        const chunks = [];
+        input.on('data', (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
+        input.on('end', () => resolve(Buffer.concat(chunks)));
+        input.on('error', reject);
+    });
+}
+
+/**
+ * DKIM + DMARC for one inbound transaction. SPF was already evaluated at MAIL FROM; its verdict is
+ * read back from the Received-SPF header onMailFrom recorded. Never throws: an evaluation problem
+ * yields no verdict (the message is then treated exactly as before this check existed).
+ */
+async function authenticateInbound(raw, session, headerFroms, receiver) {
+    try {
+        const m = String((session && session.spfHeader) || '').match(/^Received-SPF: ([a-z]+) /);
+        return await MailAuth.authenticateMessage(raw, {
+            resolveTxt: (name) => dns.resolveTxt(name),
+            spfResult: m ? m[1] : '',
+            envelopeFrom: (session && session.envelope && session.envelope.mailFrom && session.envelope.mailFrom.address) || '',
+            fromAddresses: headerFroms,
+            receiver,
+        });
+    } catch (e) {
+        console.warn(`[Security][DKIM] evaluation error: ${e && e.message}`);
+        return null;
+    }
 }
 
 async function maybeVacationAutoReply(user, senderEmail, origSubject) {
@@ -1536,22 +1576,42 @@ async function initSMTPServer() {
         },
 
         onData(stream, session, callback) {
-            simpleParser(stream, async (err, parsed) => {
+            // The raw bytes are kept: DKIM signs them exactly, and the parsed message cannot give them back.
+            readRawMessage(stream).then(raw => simpleParser(raw, async (err, parsed) => {
                 if (err) return callback(err);
 
                 try {
+                    // 2a. DKIM + DMARC (lib/mail-auth.js) for mail from outside. Our own relay path
+                    //     (loopback / authenticated) is never gated; the operator can turn it off.
+                    const external = !isTrustedSmtpSession(session);
+                    const headerFroms = (parsed.from?.value || []).map(v => v && v.address).filter(Boolean);
+                    let auth = null;
+                    if (external && (await getOption('mail_security_dmarc_enabled', '1')) !== '0') {
+                        auth = await authenticateInbound(raw, session, headerFroms, mailDomain);
+                    }
+
                     // 2b. From alignment — a message from OUTSIDE may not speak for a local mailbox
-                    //     unless SPF authenticated our own domain for it (see localDomainImpersonation).
-                    //     Our own relay path (loopback / authenticated) is never gated.
-                    if (!isTrustedSmtpSession(session)) {
-                        const headerFroms = (parsed.from?.value || []).map(v => v && v.address).filter(Boolean);
+                    //     unless SPF or a DKIM signature of that domain authenticated it (see
+                    //     localDomainImpersonation).
+                    if (external) {
+                        const dkimDomains = auth ? auth.dkim.filter(d => d.result === 'pass').map(d => d.domain) : [];
                         const forged = localDomainImpersonation(mailDomain, session?.spfHeader,
-                            session?.envelope?.mailFrom?.address, headerFroms);
+                            session?.envelope?.mailFrom?.address, headerFroms, dkimDomains);
                         if (forged) {
                             console.warn(`[Security] Rejecting external message claiming to be from ${forged} (not authenticated for ${mailDomain})`);
                             return callback(smtpError(550, `5.7.1 Sender address ${forged} is not authorized from this host`));
                         }
                     }
+
+                    // 2c. The From domain's DMARC policy: p=reject refuses the message, p=quarantine
+                    //     files it in Spam (whatever the mailbox's own rules say).
+                    const dmarc = auth && auth.dmarc;
+                    if (dmarc && dmarc.disposition === 'reject') {
+                        console.warn(`[Security][DMARC] Rejecting a message from ${dmarc.domain}: ${dmarc.reason}`);
+                        return callback(smtpError(550, `5.7.1 Message rejected by the DMARC policy of ${dmarc.domain}`));
+                    }
+                    const quarantined = !!(dmarc && dmarc.disposition === 'quarantine');
+                    if (quarantined) console.warn(`[Security][DMARC] Quarantining a message from ${dmarc.domain}: ${dmarc.reason}`);
 
                     // 3. Bayesian Analysis
                     const text = (parsed.subject || '') + ' ' + (parsed.text || '');
@@ -1637,11 +1697,14 @@ async function initSMTPServer() {
                         // ACCEPTED-but-not-clean verdict (permerror, or fail/softfail on a
                         // tag-only site) visible instead of silently discarded.
                         receivedSpf: session?.spfHeader || '',
+                        // RFC 8601 Authentication-Results for DKIM / DMARC ('' when not evaluated).
+                        authResults: auth ? auth.header : '',
+                        quarantined,
                         threadId: 0, // per mailbox — see threadFor
                         attachments: parsed.attachments,
                         // Spam goes to the SPAM FOLDER (reviewable, auto-purged after 30 days by
                         // the queue sweep) — not silently into Trash with a mangled subject.
-                        isSpam: isSpam ? 1 : 0
+                        isSpam: (isSpam || quarantined) ? 1 : 0
                     };
 
                     // Deliver one copy into a REAL mailbox (filed by the site lists + the owner's rules).
@@ -1727,7 +1790,7 @@ async function initSMTPServer() {
 
                     // Forwards run after the transaction is accepted and never fail it. Spam is not
                     // forwarded (it would spend OUR reputation on someone else's junk).
-                    if (pendingForwards.length > 0 && !isSpam && !autoGenerated) {
+                    if (pendingForwards.length > 0 && !isSpam && !quarantined && !autoGenerated) {
                         (async () => {
                             let staged = null;
                             for (const f of pendingForwards) {
@@ -1756,7 +1819,7 @@ async function initSMTPServer() {
                     console.error('Failed to store incoming email:', error);
                     callback(error);
                 }
-            });
+            })).catch(callback);
         }
     };
 
@@ -2075,7 +2138,8 @@ async function deliverLocalCopy(user, createData) {
         isStarred: filing.isStarred,
         isArchived: filing.isArchived || (forwardsAway ? 1 : 0),
         isTrash: filing.isTrash,
-        isSpam: filing.isSpam,
+        // A DMARC quarantine verdict files the copy in Spam whatever the owner's rules say.
+        isSpam: (filing.isSpam || createData.quarantined) ? 1 : 0,
     });
     // A rule may only apply the owner's OWN labels — re-checked here so a stale label id in the prefs
     // (deleted, or never theirs) is simply skipped.
@@ -2099,8 +2163,8 @@ async function deliverLocalCopy(user, createData) {
         hit.bytes += added;
     }
     // Quiet filing (read, archived, trashed or spam) gets no "new mail" notification.
-    const quiet = !!(filing.isSpam || filing.isTrash || filing.isRead || filing.isArchived || forwardsAway);
-    const forwardTo = (fwd.enabled && policy.forwardingAllowed && !filing.isSpam && !filing.isTrash) ? fwd.address : '';
+    const quiet = !!(filing.isSpam || createData.quarantined || filing.isTrash || filing.isRead || filing.isArchived || forwardsAway);
+    const forwardTo = (fwd.enabled && policy.forwardingAllowed && !filing.isSpam && !createData.quarantined && !filing.isTrash) ? fwd.address : '';
     return { ok: true, row, filing, quiet, prefs, forwardTo };
 }
 
@@ -3999,6 +4063,7 @@ exports.init = async function (bridge) {
             mail_security_dkim_private_key: '',
             // Defaults reflect the SAFE posture (H12): DNSBL + SPF default ON, SPF reject default ON.
             mail_security_dnsbl_enabled: '1', mail_security_spf_enabled: '1', mail_security_spf_reject: '1',
+            mail_security_dmarc_enabled: '1',
             mail_undo_send_seconds: '10',
             mail_blocked_senders: '', mail_allowed_senders: '', mail_quota_default_mb: '0', mail_forwarding_allowed: '1'
         });
@@ -4041,6 +4106,7 @@ exports.init = async function (bridge) {
             mail_security_dnsbl_enabled: o.mail_security_dnsbl_enabled,
             mail_security_spf_enabled: o.mail_security_spf_enabled,
             mail_security_spf_reject: o.mail_security_spf_reject,
+            mail_security_dmarc_enabled: o.mail_security_dmarc_enabled,
             // Undo-send window in seconds (0 disables and restores synchronous delivery).
             mail_undo_send_seconds: o.mail_undo_send_seconds,
             // Site-wide policy: sender block/allow lists (one address or @domain per line), the default
@@ -4074,6 +4140,7 @@ exports.init = async function (bridge) {
             'mail_server', 'mail_port', 'mail_secure', 'mail_user', 'mail_pass', 'mail_relay_require_tls',
             'mail_security_dkim_domain', 'mail_security_dkim_selector',
             'mail_security_dnsbl_enabled', 'mail_security_spf_enabled', 'mail_security_spf_reject',
+            'mail_security_dmarc_enabled',
             'mail_undo_send_seconds',
             'mail_blocked_senders', 'mail_allowed_senders', 'mail_quota_default_mb', 'mail_forwarding_allowed'
         ];

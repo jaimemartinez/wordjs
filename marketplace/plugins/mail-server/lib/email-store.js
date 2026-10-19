@@ -457,6 +457,9 @@ module.exports = function createEmailStore(db, hooks = {}) {
                 // column the SPF verdict had nowhere to live: onMailFrom computed it and threw it away,
                 // so accepting a 'permerror' left no trace anywhere that it had been unevaluable.
                 'received_spf TEXT',
+                // RFC 8601 Authentication-Results (DKIM / DMARC) for the inbound transaction ('' when
+                // not evaluated: outbound and local copies, our own relay path, or the check turned off).
+                'auth_results TEXT',
                 // 1 = an automatic response (vacation reply). The retry queue reads it so a queued
                 // auto-reply keeps its null return path (RFC 3834 §3.3) on every later attempt.
                 'is_auto_reply INT DEFAULT 0',
@@ -523,6 +526,8 @@ module.exports = function createEmailStore(db, hooks = {}) {
             // rejects an ALTER that widens a row past its limit with many TEXT columns, and this one is
             // a single bounded header line (same reasoning as the online-store v1→v2 ADD COLUMN).
             await this._ensureColumn(T_EMAILS, 'received_spf', 'VARCHAR(1024)');
+            // v3.0.3: DKIM / DMARC verdict, one bounded header line like received_spf.
+            await this._ensureColumn(T_EMAILS, 'auth_results', 'VARCHAR(1024)');
             // Auto-reply marker for the retry queue (see the column definition above).
             await this._ensureColumn(T_EMAILS, 'is_auto_reply', 'INT DEFAULT 0');
 
@@ -907,7 +912,7 @@ module.exports = function createEmailStore(db, hooks = {}) {
         async create(data) {
             const {
                 messageId, fromAddress, fromName, toAddress, ccAddress = '', bccAddress = '', subject, bodyText, bodyHtml, rawContent,
-                receivedSpf = '',
+                receivedSpf = '', authResults = '',
                 isSent = 0, isDraft = 0, isArchived = 0, isStarred = 0, isTrash = 0, isSpam = 0, isRead = 0,
                 parentId = 0, threadId = 0, scheduledAt = null, isAutoReply = 0
             } = data;
@@ -926,14 +931,14 @@ module.exports = function createEmailStore(db, hooks = {}) {
             const result = await db.run(`
                 INSERT INTO ${T_EMAILS} (
                     message_id, from_address, from_name, to_address, cc_address, bcc_address, subject, body_text, body_html, raw_content,
-                    received_spf,
+                    received_spf, auth_results,
                     is_sent, is_draft, is_archived, is_starred, is_trash, is_spam, is_read, user_id, parent_id, thread_id, scheduled_at,
                     is_auto_reply
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `, [
                 str(messageId), str(fromAddress), str(fromName), str(toAddress), str(ccAddress), str(bccAddress), str(subject), str(bodyText), str(bodyHtml), str(rawContent),
-                str(receivedSpf).slice(0, 1024),
+                str(receivedSpf).slice(0, 1024), str(authResults).slice(0, 1024),
                 isSent, isDraft, isArchived, isStarred, isTrash, isSpam ? 1 : 0, isRead ? 1 : 0, ownerId, parentId, threadId, scheduledAt,
                 isAutoReply ? 1 : 0
             ]);
