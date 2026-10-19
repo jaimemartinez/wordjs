@@ -962,6 +962,8 @@ export interface Theme {
     translations?: Record<string, { description?: string }> | null;
     author: string;
     screenshot?: string;
+    /** How many permissions the theme's functions.js declares (theme.json `permissions`). */
+    declaredPermissions?: number;
     active: boolean;
 }
 
@@ -1007,9 +1009,42 @@ function uploadThemeZip<T>(url: string, file: File, onProgress?: (percent: numbe
     });
 }
 
+/** One permission a theme's functions.js declares (theme.json `permissions`), as GET /themes/:slug/permissions reports it. */
+export interface ThemePermissionRow {
+    token: string;
+    scope: string;
+    access: string | null;
+    reason: string;
+    /** Can an administrator grant it here (declared validly, and a theme may hold it on this site)? */
+    grantable: boolean;
+    granted: boolean;
+    problem?: 'not_available_to_themes' | 'not_available_on_this_site' | string;
+}
+
+/** What the theme Permissions dialog needs: what the theme declares, what is granted, what its code is doing. */
+export interface ThemePermissions {
+    slug: string;
+    hasLogic: boolean;
+    declared: ThemePermissionRow[];
+    granted: string[];
+    /** An administrator has decided this theme's grants on this site (possibly "nothing"). */
+    decided: boolean;
+    logic: { state: 'none' | 'running' | 'blocked' | 'error'; reason: string } | null;
+}
+
 export const themesApi = {
     list: () => apiGet<Theme[]>("/themes"),
-    activate: (slug: string) => apiPost(`/themes/${slug}/activate`, {}),
+    /**
+     * Switch the active theme. `grant` is what the administrator left on in the activation dialog: the
+     * theme's functions.js gets exactly those of its declared permissions. Omitted, no grant changes —
+     * nothing is ever granted implicitly.
+     */
+    activate: (slug: string, grant?: string[]) =>
+        apiPost<{ success?: boolean; permissions?: ThemePermissions }>(`/themes/${encodeURIComponent(slug)}/activate`, grant ? { grant } : {}),
+    /** The permissions a theme declares and which of them are granted on this site. */
+    permissions: (slug: string) => apiGet<ThemePermissions>(`/themes/${encodeURIComponent(slug)}/permissions`),
+    /** Replace what an administrator grants the theme's functions.js (an active theme's code restarts with it). */
+    setPermissions: (slug: string, granted: string[]) => apiPut<ThemePermissions>(`/themes/${encodeURIComponent(slug)}/permissions`, { granted }),
     /**
      * Rewrite all eight files of `themes/default` (theme.json, functions.js, style.css, the two
      * partials and the three templates) from the literals embedded in backend/src/core/themes.ts,

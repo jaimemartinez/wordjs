@@ -35,10 +35,11 @@ const { getOption, updateOption } = require('../core/options');
 const { validateThemeMods, parseStoredMods } = require('../core/theme-mods');
 const { compileTheme, writeCompiled } = require('../core/theme-compile');
 const { analyzeTheme } = require('../core/theme-doctor');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, isHeadless, refusePluginGrantByToken } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler, offStack, UploadRejectedError } = require('../middleware/errorHandler');
 const { recordAudit } = require('../core/audit');
+const log = require('../core/module-logger').moduleLogger('routes/themes');
 // Theme files are network-wide (multisite): every handler that writes them is the main site's. The
 // mount-level guard in routes/index.ts already allows only what another site may do; this keeps each
 // writer refusing on its own as well (a no-op on a single site and on the main site).
@@ -612,14 +613,40 @@ router.put('/:slug', authenticate, isAdmin, networkThemeFiles, asyncHandler(asyn
  *         required: true
  *         schema:
  *           type: string
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               grant:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: The permissions the theme declares that the administrator grants on activation ("scope:access"). Omitted, the theme's grants stay as they are; nothing is granted implicitly.
  *     responses:
  *       200:
- *         description: Theme activated
+ *         description: Theme activated (with the theme's permissions afterwards)
+ *       400:
+ *         description: A permission in `grant` is not declared by the theme or not available to themes
+ *       403:
+ *         description: An API token tried to grant a permission
  */
 router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     // SECURITY: Validate slug
-    if (!validateSlug(req.params.slug)) {
+    const themeDir = resolveThemeDirOr400(req.params.slug);
+    if (!themeDir) {
         return res.status(400).json({ error: 'Invalid theme slug' });
+    }
+    // THE ACTIVATION DIALOG'S GRANTS. A theme's functions.js holds what an administrator granted it, and
+    // nothing because it is declared: the dialog sends the permissions the administrator left on as
+    // `grant`, and they are stored BEFORE the switch, so the theme's code starts with them. A request
+    // without `grant` (an API call, the CLI) changes no grant at all.
+    if (req.body && req.body.grant !== undefined) {
+        if (!fs.existsSync(themeDir)) return res.status(404).json({ error: `Theme ${req.params.slug} not found` });
+        const stop = await storeThemeGrants(req, res, String(req.params.slug), themeDir, req.body.grant);
+        if (stop) return;
     }
     // CONCURRENCY: this handler is deliberately thin, and the serialization lives in core, not here — a
     // double-click (or two admins) must not overlap two theme switches, and neither must the OTHER callers
@@ -629,7 +656,160 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
     const result = await switchTheme(req.params.slug);
     // AUDIT: an admin activated a theme. Slug only — no secret material.
     await recordAudit(req.user && req.user.id, 'theme.activate', 'theme', req.params.slug, {});
-    res.json(result);
+    res.json({ ...result, permissions: themePermissionsView(String(req.params.slug), themeDir) });
+}));
+
+// ── A theme's permissions: declared by the theme, granted by an administrator ─────────────────────────
+//
+// The plugin model (core/plugin-permissions '@themes', core/theme-declaration): theme.json DECLARES what
+// its functions.js needs, an administrator GRANTS each permission here or in the activation dialog, and
+// the host gates check both. GET is the dialog's data; PUT replaces the grants.
+
+/** One declared permission as the dialog shows it. */
+type ThemePermissionRow = { token: string; scope: string; access: string | null; reason: string; grantable: boolean; granted: boolean; problem?: string };
+
+/** What the Permissions dialog needs to know about a theme, on the current site. */
+function themePermissionsView(slug: string, themeDir: string) {
+    const { themeDeclaredPermissions, declarationToken } = require('../core/theme-declaration');
+    const { validateManifestPermissions } = require('../core/plugins');
+    const perms = require('../core/plugin-permissions');
+    const declared: any[] = themeDeclaredPermissions(themeDir) || [];
+    const grantable = new Set<string>(perms.themeGrantableTokens());
+    const granted = perms.getThemeGrants(slug);
+    const seen = new Set<string>();
+    const rows: ThemePermissionRow[] = [];
+    for (const p of declared) {
+        const token = declarationToken(p) || String(p.scope);
+        if (seen.has(token)) continue;
+        seen.add(token);
+        const invalid = validateManifestPermissions([p])[0];
+        const ok = !invalid && grantable.has(token);
+        rows.push({
+            token,
+            scope: String(p.scope),
+            access: typeof p.access === 'string' ? p.access : null,
+            reason: typeof p.reason === 'string' ? p.reason.slice(0, 500) : '',
+            grantable: ok,
+            granted: ok && granted.includes(token),
+            ...(ok ? {} : { problem: invalid || (perms.THEME_GRANTABLE.has(token) ? 'not_available_on_this_site' : 'not_available_to_themes') }),
+        });
+    }
+    const themeEngine = require('../core/theme-engine');
+    const logic = themeEngine.logicStatus;
+    return {
+        slug,
+        hasLogic: fs.existsSync(path.join(themeDir, 'functions.js')),
+        declared: rows,
+        granted,
+        // Has an administrator decided this theme's grants on this site (a record exists, possibly empty)?
+        // The activation dialog then starts from that decision instead of from the declaration.
+        decided: perms.hasGrantRecord(`theme:${slug}`),
+        logic: logic && logic.slug === slug ? { state: logic.state, reason: logic.reason } : null,
+    };
+}
+
+/**
+ * Store the administrator's grants for a theme (activation dialog or Permissions dialog). Answers the
+ * request itself and returns true when it refused: 400 for a permission that cannot be granted, 403 for an
+ * API token that would ADD one (a token may only narrow, as for a plugin — middleware/auth.ts).
+ */
+async function storeThemeGrants(req: Request, res: Response, slug: string, themeDir: string, list: unknown): Promise<boolean> {
+    if (!Array.isArray(list) || list.some((t) => typeof t !== 'string')) {
+        res.status(400).json({ error: '`grant` must be an array of "scope:access" strings.' });
+        return true;
+    }
+    const { themeDeclaredPermissions, declarationToken } = require('../core/theme-declaration');
+    const declared = ((themeDeclaredPermissions(themeDir) || []) as any[]).map(declarationToken).filter(Boolean) as string[];
+    const perms = require('../core/plugin-permissions');
+    let applied: any;
+    try {
+        applied = await perms.applyThemeGrants(slug, list as string[], declared, { narrowOnly: isHeadless(req) });
+    } catch (e: any) {
+        if (e && e.code === 'theme_grant_not_grantable') {
+            res.status(400).json({ code: e.code, error: e.message, refused: e.refused || [] });
+            return true;
+        }
+        throw e;
+    }
+    if (applied.refused.length && refusePluginGrantByToken(req, res, applied.refused)) return true;
+    await recordAudit(req.user && req.user.id, 'theme.permissions', 'theme', slug, { granted: perms.getThemeGrants(slug) });
+    // The grants are in force on this node already. The write's `updated_option` fan-out (every other node
+    // reloads its grants and respawns its own theme child, core/coherence) runs on; it is not waited for.
+    applied.announced.catch(() => { /* a failed subscriber is the subscriber's to report */ });
+    return false;
+}
+
+/**
+ * @swagger
+ * /themes/{slug}/permissions:
+ *   get:
+ *     summary: The permissions a theme's functions.js declares, and which of them are granted on this site
+ *     tags: [Themes]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Declared permissions with their grant state, and what became of the theme's code
+ *       404:
+ *         description: Theme not found
+ *   put:
+ *     summary: Replace what an administrator grants a theme's functions.js
+ *     tags: [Themes]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [granted]
+ *             properties:
+ *               granted:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *     responses:
+ *       200:
+ *         description: Grants stored; an active theme's code was restarted with them
+ *       400:
+ *         description: A permission that the theme does not declare or that themes cannot hold
+ *       403:
+ *         description: An API token tried to add a permission
+ */
+router.get('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    const themeDir = resolveThemeDirOr400(req.params.slug);
+    if (!themeDir) return res.status(400).json({ error: 'Invalid theme slug' });
+    if (!fs.existsSync(themeDir)) return res.status(404).json({ error: `Theme ${req.params.slug} not found` });
+    res.json(themePermissionsView(String(req.params.slug), themeDir));
+}));
+
+router.put('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    const themeDir = resolveThemeDirOr400(req.params.slug);
+    if (!themeDir) return res.status(400).json({ error: 'Invalid theme slug' });
+    if (!fs.existsSync(themeDir)) return res.status(404).json({ error: `Theme ${req.params.slug} not found` });
+    const stop = await storeThemeGrants(req, res, String(req.params.slug), themeDir, req.body && req.body.granted);
+    if (stop) return;
+    // The ACTIVE theme's code runs now with what it was spawned with (its filesystem grant rides in the
+    // child's config) and passed the grant-mode scan against the old grants: load it again, so a revoke
+    // takes effect at once and code that needs a capability just switched off is blocked.
+    const active = await getActiveTheme().catch(() => null);
+    if (active && active.slug === req.params.slug) {
+        await require('../core/theme-engine').init();
+    }
+    res.json(themePermissionsView(String(req.params.slug), themeDir));
 }));
 
 /**
@@ -685,6 +865,9 @@ router.delete('/:slug', authenticate, isAdmin, networkThemeFiles, asyncHandler(a
         return res.status(400).json({ error: 'Invalid theme slug' });
     }
     const result = await deleteTheme(req.params.slug);
+    // A theme uploaded later under this name is other code: it starts with nothing granted.
+    try { await require('../core/plugin-permissions').removeThemeGrants(req.params.slug); }
+    catch (e: any) { log.warn({ err: e, slug: req.params.slug }, '[Themes] could not drop the grants of a deleted theme'); }
     res.json(result);
 }));
 

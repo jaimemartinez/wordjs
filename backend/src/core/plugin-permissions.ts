@@ -354,6 +354,93 @@ function hostRecordOf(stored: any): Record<string, any> {
     return rec && typeof rec === 'object' && !Array.isArray(rec) ? rec : {};
 }
 
+// ── THEMES: '@themes' — WHAT AN ADMINISTRATOR GRANTED EACH THEME'S functions.js ────────────────────
+//
+// A theme's functions.js runs in an isolated child as the principal `theme:<slug>` (core/theme-engine).
+// Its permissions follow the plugin model: the theme DECLARES them (theme.json `permissions`, read by
+// core/theme-declaration), an administrator GRANTS them (the activation dialog and the Permissions dialog
+// in Appearance → Themes, routes/themes.ts), and every host gate checks declared AND granted. Nothing is
+// granted implicitly — not on activation without the dialog's explicit list, not because it is declared.
+//
+// The grants live in THIS blob, under the reserved key '@themes' (theme slug → tokens), so they share
+// everything the plugin grants rely on: the cross-node lease and guarded write, the `updated_option`
+// broadcast and the periodic re-sync (core/coherence), and the respawn of a running child whose policy
+// changed (policyFingerprint covers `theme:<slug>` like any isolate). In memory they sit in the same map
+// under `theme:<slug>`, which a plugin slug can never be (PLUGIN_SLUG has no ':'), so isGranted('theme:x', …)
+// — what plugin-context, io-guard, hook-access and the isolate's spawn config already ask — answers for
+// themes with no second interpreter. '@themes' is not a plugin slug either: loadGrants() reads it here,
+// and writeSlugKey/deleteSlugKey carry it over untouched.
+//
+// WHAT A THEME MAY BE GRANTED. The plugin vocabulary, minus what is keyed to a plugin INSTALL and would
+// collide or make no sense for a theme: its own tables and routes (database:*, express:register_route,
+// media:private_read — `theme:x` maps to the same wjp_theme_x_ prefix and /api/v1/plugin/theme-x path as a
+// plugin named theme-x), browser bundles (browser:script, assets:write, admin_menu:register), plugin roles
+// (roles:declare), host transports (email:provider, notifications:provider, smtp:inbound) and outbound
+// network (it needs the per-plugin egress allowlist). A declaration of one of those is reported as not
+// available to themes and can never be stored or answered as granted (THE CEILING, below).
+const THEMES_RECORD_KEY = '@themes';
+const THEME_PRINCIPAL_PREFIX = 'theme:';
+/** A theme slug as a record key: one segment, starts alnum, ≤64 (a theme directory name). */
+const THEME_SLUG_KEY = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+const THEME_GRANTABLE: ReadonlySet<string> = new Set([
+    'settings:read', 'settings:write',
+    'users:read',
+    'posts:read',
+    'comments:read', 'comments:pii',
+    'email:admin',
+    'notifications:send', 'notifications:read',
+    'ai:use',
+    'filesystem:read', 'filesystem:write',
+]);
+// Multisite: theme files are network-wide, users are network-wide. On a site other than the main one a site
+// administrator may grant only what stays inside their site — never the user directory or the filesystem.
+const THEME_GRANTABLE_ON_SECONDARY_SITES: ReadonlySet<string> = new Set([
+    'settings:read', 'settings:write',
+    'posts:read',
+    'comments:read', 'comments:pii',
+    'email:admin',
+    'notifications:send', 'notifications:read',
+    'ai:use',
+]);
+
+/** Is `slug` a theme's principal (`theme:<slug>`) rather than a plugin's? */
+function isThemePrincipal(slug: unknown): boolean {
+    return typeof slug === 'string' && slug.startsWith(THEME_PRINCIPAL_PREFIX);
+}
+
+/** Is `themeSlug` usable as a key of the '@themes' record? */
+function isSafeThemeKey(themeSlug: unknown): boolean {
+    return typeof themeSlug === 'string' && THEME_SLUG_KEY.test(themeSlug) && !FORBIDDEN_KEYS.has(themeSlug);
+}
+
+/** What the current site may grant a theme: every theme-grantable token on the main/single site, less elsewhere. */
+function themeCeiling(): Set<string> {
+    const secondary = siteContext.multisiteEnabled() && siteContext.currentSiteId() !== siteContext.PRIMARY_SITE_ID;
+    return new Set(secondary ? THEME_GRANTABLE_ON_SECONDARY_SITES : THEME_GRANTABLE);
+}
+
+/** The stored '@themes' record's valid entries: theme slug → normalized, grantable tokens. */
+function themeRecordsIn(stored: any): Array<[string, string[]]> {
+    const rec = stored && typeof stored === 'object' && Object.hasOwn(stored, THEMES_RECORD_KEY) ? stored[THEMES_RECORD_KEY] : null;
+    if (!rec || typeof rec !== 'object' || Array.isArray(rec)) return [];
+    const out: Array<[string, string[]]> = [];
+    for (const k of Object.keys(rec)) {
+        if (!Object.hasOwn(rec, k) || !isSafeThemeKey(k) || !Array.isArray(rec[k])) continue;
+        out.push([k, normalizeGrantTokens(rec[k]).filter((t) => THEME_GRANTABLE.has(t))]);
+    }
+    return out;
+}
+
+/** `stored` with `themeSlug`'s grants set to `tokens` (an empty list is kept: the administrator's "nothing"). */
+function themeGrantStoreWith(stored: any, themeSlug: string, tokens: string[]): Record<string, any> {
+    const next = copyStore(stored);
+    const rec: Record<string, string[]> = Object.create(null);
+    for (const [k, v] of themeRecordsIn(stored)) if (k !== themeSlug) rec[k] = v;
+    rec[themeSlug] = tokens;
+    next[THEMES_RECORD_KEY] = rec;
+    return next;
+}
+
 /** A prototype-free copy of the stored host record, to modify and write back. */
 function hostRecordCopy(stored: any): Record<string, any> {
     const rec: Record<string, any> = Object.create(null);
@@ -565,6 +652,10 @@ async function loadGrantsUnlocked(): Promise<void> {
         policyState.get().grants.clear();
         for (const [slug, list] of Object.entries(stored)) {
             if (slug === HOST_RECORD_KEY) continue; // the host's bookkeeping, not a plugin's grants
+            if (slug === THEMES_RECORD_KEY) {
+                for (const [theme, tokens] of themeRecordsIn(stored)) policyState.get().grants.set(THEME_PRINCIPAL_PREFIX + theme, new Set(tokens));
+                continue;
+            }
             // The KEY is validated too, not just the values: a blob written before this guard (or by
             // any path other than setGrants) must not be able to install a grant record under a magic
             // name. Unsafe key ⇒ the plugin simply has no grants — default-deny, fail closed.
@@ -597,6 +688,8 @@ async function loadGrantsUnlocked(): Promise<void> {
 
 /** The ceiling that bounds the current site's grants for `slug`, or null when none applies (main site / single site). */
 function ceilingFor(slug: string): Set<string> | null {
+    // A theme is bounded by what a theme may hold at all, on every install (see THEMES above).
+    if (isThemePrincipal(slug)) return themeCeiling();
     if (!siteContext.multisiteEnabled()) return null;
     if (siteContext.currentSiteId() === siteContext.PRIMARY_SITE_ID) return null;
     let tokens: string[] | null;
@@ -681,6 +774,81 @@ function getEffectiveGrants(slug: string): string[] {
  */
 function hasGrantRecord(slug: string): boolean {
     return policyState.get().grants.has(slug);
+}
+
+/** The permissions a theme may be granted on the current site (see THEMES above). */
+function themeGrantableTokens(): string[] {
+    return Array.from(themeCeiling()).sort();
+}
+
+/**
+ * Store what an administrator granted a theme's functions.js: exactly `tokens` ∩ what the theme
+ * `declared` ∩ what a theme may hold on this site. Anything else in `tokens` is refused as a whole (an
+ * error with code `theme_grant_not_grantable` and `refused`), never silently dropped: the dialog showed
+ * the administrator a choice, and a grant they made must not quietly not happen.
+ *
+ * `narrowOnly` (an API token's write): a set that would ADD a token the theme does not hold in the
+ * DATABASE now is not written; `refused` names the additions (same rule as applyGrants).
+ *
+ * Persisted first, memory second, under the policy lease (writePolicyBlob); the running theme child is
+ * the caller's to respawn (routes/themes.ts), and every other node respawns its own through the
+ * `plugin_grants` broadcast (core/coherence).
+ */
+async function applyThemeGrants(themeSlug: string, tokens: string[], declared: string[], opts: { narrowOnly?: boolean } = {}): Promise<PolicyWriteResult> {
+    assertHostContext('applyThemeGrants');
+    if (!isSafeThemeKey(themeSlug)) throw new Error(`Refusing to store theme grants under an unsafe key: ${JSON.stringify(themeSlug)}`);
+    const wanted = normalizeGrantTokens(tokens);
+    const declaredSet = new Set(normalizeGrantTokens(declared));
+    const ceiling = themeCeiling();
+    const notGrantable = wanted.filter((t) => !declaredSet.has(t) || !ceiling.has(t));
+    if (notGrantable.length) {
+        const e = new Error(`These permissions cannot be granted to the theme '${logSafeKey(themeSlug)}': ${notGrantable.join(', ')} (not declared by the theme, or not available to themes here).`) as Error & { code: string; status: number; refused: string[] };
+        e.code = 'theme_grant_not_grantable';
+        e.status = 400;
+        e.refused = notGrantable;
+        throw e;
+    }
+    const clean = Array.from(new Set(wanted)).sort();
+    const principal = THEME_PRINCIPAL_PREFIX + themeSlug;
+    let refused: string[] = [];
+    const { announced } = await serializePolicy(() => writePolicyBlob('plugin_grants', (stored) => {
+        const current = themeRecordsIn(stored).find(([k]) => k === themeSlug);
+        if (opts.narrowOnly) {
+            refused = grantsAddedTo(current ? current[1] : [], clean);
+            if (refused.length) return { changed: false };
+        } else {
+            refused = [];
+        }
+        const same = !!current && current[1].length === clean.length && current[1].every((t) => clean.includes(t));
+        return same ? { changed: false } : { changed: true, next: themeGrantStoreWith(stored, themeSlug, clean) };
+    }, () => {
+        if (!refused.length) policyState.get().grants.set(principal, new Set(clean));
+    }));
+    return { announced, refused };
+}
+
+/**
+ * Drop a theme's grant record (the theme was deleted): a theme uploaded later under the same name is
+ * another theme's code and starts with nothing granted, as a reinstalled plugin does.
+ */
+async function removeThemeGrants(themeSlug: string): Promise<void> {
+    assertHostContext('removeThemeGrants');
+    if (!isSafeThemeKey(themeSlug)) return;
+    const principal = THEME_PRINCIPAL_PREFIX + themeSlug;
+    await writePolicy(() => writePolicyBlob('plugin_grants', (stored) => {
+        const records = themeRecordsIn(stored);
+        if (!records.some(([k]) => k === themeSlug)) return { changed: false };
+        const next = copyStore(stored);
+        const rec: Record<string, string[]> = Object.create(null);
+        for (const [k, v] of records) if (k !== themeSlug) rec[k] = v;
+        next[THEMES_RECORD_KEY] = rec;
+        return { changed: true, next };
+    }, () => { policyState.get().grants.delete(principal); }));
+}
+
+/** The theme's stored grants: what an administrator granted its functions.js (the raw record). */
+function getThemeGrants(themeSlug: string): string[] {
+    return getGrants(THEME_PRINCIPAL_PREFIX + themeSlug).sort();
 }
 
 // ── WIDENING vs NARROWING — what a write would ADD ───────────────────────────────────────────────────
@@ -1235,4 +1403,5 @@ module.exports = {
     getHostMarker, setHostMarker, HOST_RECORD_KEY, hasAdminGrantDecision, activationSeedsDeclaredGrants, ADMIN_DECISIONS_MARKER,
     grantsAddedTo, egressHostsAddedTo, EGRESS_EVERY_PUBLIC_HOST,
     EXCLUSIVE_GRANTS, getExclusiveHolder,
+    THEMES_RECORD_KEY, THEME_GRANTABLE, isThemePrincipal, applyThemeGrants, removeThemeGrants, getThemeGrants, themeGrantableTokens,
 };
