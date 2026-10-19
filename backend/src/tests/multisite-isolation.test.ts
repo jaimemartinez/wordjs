@@ -353,8 +353,11 @@ describe('what stays the main site\'s', () => {
         assert.strictEqual((await bearer('get', `${API}/db-migration/status`, TWO, tokens.two)).status, 404);
         assert.strictEqual((await bearer('post', `${API}/db-migration/migrate`, TWO, tokens.two).send({})).status, 404);
         assert.strictEqual((await bearer('post', `${API}/db-migration/cleanup`, TWO, tokens.two).send({})).status, 404);
-        // The main site's administrator still reaches it.
-        const status = await bearer('get', `${API}/db-migration/status`, 'main.example.com', tokens.main);
+        // On the main site it is the network administrators' (an administrator of the main site who is
+        // not one is refused), and they still reach it.
+        const plainAdmin = await bearer('get', `${API}/db-migration/status`, 'main.example.com', tokens.main);
+        assert.strictEqual(plainAdmin.status, 403, JSON.stringify(plainAdmin.body));
+        const status = await bearer('get', `${API}/db-migration/status`, 'main.example.com', tokens.net);
         assert.strictEqual(status.status, 200, JSON.stringify(status.body));
     });
 

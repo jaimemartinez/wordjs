@@ -259,6 +259,12 @@ async function importSite(data: any, options: Record<string, any> = {}) {
     validateImportData(data);
 
     const {
+        // (userId) => true for an existing account this import may not rewrite (a network administrator
+        // imported by someone who is not one — core/network-auth protectsNetworkAdmin).
+        protectedUser = null,
+        // Option names (canonical) this import may not write (the network-wide settings, for someone
+        // who may not change them — core/network-auth networkSettingsReadOnly).
+        skipSettings = null,
         updateExisting = false,
         importUsers = false
     } = options;
@@ -293,7 +299,7 @@ async function importSite(data: any, options: Record<string, any> = {}) {
                     existing = await User.findByEmail(user.email);
                 }
 
-                if (existing && !updateExisting) {
+                if (existing && (!updateExisting || (typeof protectedUser === 'function' && protectedUser(existing.id)))) {
                     idMap.users[user.id] = existing.id;
                     results.users.skipped++;
                 } else if (existing && updateExisting) {
@@ -595,7 +601,7 @@ async function importSite(data: any, options: Record<string, any> = {}) {
         const { isProtectedOption } = require('./plugin-api');
         for (const [key, value] of Object.entries(data.settings)) {
             if (value === null || value === undefined) continue;
-            if (isProtectedOption(key)) {
+            if (isProtectedOption(key) || (skipSettings && skipSettings.has(require('./option-names').canonicalOptionName(key)))) {
                 results.settings.skipped.push(key);
                 continue;
             }

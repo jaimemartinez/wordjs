@@ -1,7 +1,7 @@
 {
     "id": "auctions",
     "name": "Auctions",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "description": "Auction listings with starting price, minimum increment and end time; public bidding with validation, anti-snipe extension, live polling updates and winner reporting. WordPress parity: YITH Auctions / Ultimate Auction.",
     "author": "WordJS",
     "isolated": true,
@@ -48,6 +48,11 @@
             "scope": "admin_menu",
             "access": "register",
             "reason": "Add the 'Subastas' entry to the admin sidebar."
+        },
+        {
+            "scope": "users",
+            "access": "read",
+            "reason": "Let a signed-in bidder bid as the address of their own account (the host shares a signed-in caller's email with the plugin only with this permission). Without it a signed-in bidder types an address and confirms it with a mailed code."
         },
         {
             "scope": "email",

@@ -23,7 +23,7 @@
 
 exports.metadata = {
     name: 'Marketplace',
-    version: '1.0.2',
+    version: '1.0.3',
     description: 'Multi-vendor directory: vendor applications, code-protected vendor portal, product listings and buyer inquiries (lead generation).',
     author: 'WordJS',
 };
@@ -292,19 +292,25 @@ exports.init = async function (wordjs) {
         return !(Number.isFinite(elapsed) && elapsed >= 3000);
     };
 
-    // ---- portal-login throttle (1.0.2) -----------------------------------------------------------
+    // ---- portal-login throttle (1.0.3) -----------------------------------------------------------
     // Only WRONG codes are counted, against three fixed-window budgets:
-    //   - per client + vendor (req.clientKey = the host's HMAC of the caller's address): another
-    //     client's mistakes never lock this one out, and a right code clears only the caller's own count;
-    //   - per vendor, all clients together: bounds guessing spread over many addresses;
-    //   - site-wide: bounds guessing spread over many vendors as well.
-    // Each attempt is charged synchronously BEFORE the code check is awaited (so a parallel burst cannot
-    // outrun the budgets) and refunded when the code is right. Signed-in vendors never meet this: the
-    // portal session is an opaque server-side id (below), not something that carries the code.
-    // Single child process → in-memory maps are the whole picture; every map is bounded.
+    //   - per client + vendor (req.clientKey = the host's HMAC of the caller's address): the ONLY
+    //     budget that refuses. Another client's mistakes never lock this one out, and a right code
+    //     clears only the caller's own count. It is charged synchronously BEFORE the code check is
+    //     awaited (so a parallel burst cannot outrun it) and refunded when the code is right;
+    //   - per vendor, all clients together, and site-wide: bound guessing spread over many addresses
+    //     and many vendors by slowing every attempt down once spent (escalating delay), never by
+    //     refusing — a right code is never turned away for other callers' wrong ones. Only wrong codes
+    //     for a vendor that exists are charged to them.
+    // Signed-in vendors never meet this: the portal session is an opaque server-side id (below), not
+    // something that carries the code. Single child process → in-memory maps are the whole picture;
+    // every map is bounded.
     const LOGIN_LIMITS = {
         perClient: 6, clientWindowMs: 10 * 60 * 1000,
         perVendor: 20, perSite: 100, sharedWindowMs: 60 * 60 * 1000,
+        // Past a shared budget every attempt waits before its code is checked: delayBaseMs, doubling
+        // every delayDoubleEvery further wrong codes, up to delayMaxMs.
+        delayBaseMs: 250, delayDoubleEvery: 10, delayMaxMs: 8000,
     };
     const LOGIN_MAP_CAP = 5000;
     const loginBuckets = { client: new Map(), vendor: new Map(), site: new Map() };
@@ -320,24 +326,47 @@ exports.init = async function (wordjs) {
         }
         return b;
     };
-    /** Charge one attempt for `vendorId`: null when a budget is spent, else `{ succeeded() }`. */
+    /** A bucket's live count, without creating one (an unknown id never becomes a map key). */
+    const loginCount = (map, key, windowMs, now) => {
+        const b = map.get(key);
+        return b && now - b.first < windowMs ? b.count : 0;
+    };
+    /**
+     * Charge one attempt for `vendorId` to the caller's own budget: null when it is spent (the only
+     * refusal), else { delayMs, failed(), succeeded() }. `delayMs` is how long the attempt waits before
+     * its code is checked, from the shared budgets; failed() charges them (call it only for a wrong
+     * code on a vendor that exists); succeeded() refunds the caller's own attempt.
+     */
     const beginLoginAttempt = (req, vendorId) => {
         const now = Date.now(), L = LOGIN_LIMITS;
         const clientKey = `${String((req && req.clientKey) || 'anon').slice(0, 64)}|${vendorId}`;
-        const charged = [
-            [loginBucket(loginBuckets.client, clientKey, L.clientWindowMs, now), L.perClient],
-            [loginBucket(loginBuckets.vendor, String(vendorId), L.sharedWindowMs, now), L.perVendor],
-            [loginBucket(loginBuckets.site, '*', L.sharedWindowMs, now), L.perSite],
-        ];
-        if (charged.some(([b, max]) => b.count >= max)) return null;
-        for (const [b] of charged) b.count++;
+        const own = loginBucket(loginBuckets.client, clientKey, L.clientWindowMs, now);
+        if (own.count >= L.perClient) return null;
+        own.count++;
+        const excess = Math.max(
+            loginCount(loginBuckets.vendor, String(vendorId), L.sharedWindowMs, now) - L.perVendor,
+            loginCount(loginBuckets.site, '*', L.sharedWindowMs, now) - L.perSite
+        );
+        const delayMs = excess < 0 ? 0
+            : Math.min(L.delayMaxMs, L.delayBaseMs * 2 ** Math.floor(excess / L.delayDoubleEvery));
+        let settled = false;
         return {
+            delayMs,
+            failed() {
+                if (settled) return;
+                settled = true;
+                const at = Date.now();
+                loginBucket(loginBuckets.vendor, String(vendorId), L.sharedWindowMs, at).count++;
+                loginBucket(loginBuckets.site, '*', L.sharedWindowMs, at).count++;
+            },
             succeeded() {
-                for (const [b] of charged) b.count = Math.max(0, b.count - 1);
+                if (settled) return;
+                settled = true;
                 loginBuckets.client.delete(clientKey); // the caller's own record only
             },
         };
     };
+    const loginPause = (ms) => (ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : null);
 
     // ---- portal sessions (1.0.2) -------------------------------------------------------------------
     // A login mints an opaque random id (host CSPRNG, 256 bits) stored server-side with the vendor and
@@ -528,8 +557,8 @@ exports.init = async function (wordjs) {
 
     // ================================ VENDOR PORTAL ===============================================
 
-    // Login with vendor + 6-digit code. The attempt is charged to the throttle BEFORE touching the DB
-    // and refunded only when the code is right (beginLoginAttempt).
+    // Login with vendor + 6-digit code. The attempt is charged to the caller's budget BEFORE touching the
+    // DB and refunded only when the code is right (beginLoginAttempt).
     http.route('post', '/portal/login', async (req, res) => {
         const body = req.body || {};
         // Validate the id BEFORE it can become a throttle-map key (bounds attacker-chosen keys).
@@ -541,10 +570,12 @@ exports.init = async function (wordjs) {
             if (!attempt) {
                 return res.status(429).json({ error: 'Demasiados intentos. Espera unos minutos e inténtalo de nuevo.' });
             }
+            await loginPause(attempt.delayMs);
             // Status before code would tell a stranger which stores are pending/suspended without the
             // code; the code is checked first (a wrong one stays charged).
             const vendor = await db.get(`SELECT * FROM ${T.vendors} WHERE id = ?`, [vendorId]);
             if (!vendor || !vendor.access_code || String(vendor.access_code) !== code) {
+                if (vendor) attempt.failed();
                 return res.status(401).json({ error: 'Código incorrecto.' });
             }
             attempt.succeeded();

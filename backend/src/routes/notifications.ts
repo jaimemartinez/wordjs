@@ -67,7 +67,7 @@ const { publicErrorText } = require('../middleware/errorHandler');
  *       - in: query
  *         name: token
  *         required: false
- *         description: Session token, for EventSource clients that cannot send an Authorization header.
+ *         description: A query ticket for this path (POST /auth/query-ticket), for EventSource clients that send neither the session cookie nor an Authorization header. A session token is not accepted here.
  *         schema:
  *           type: string
  *     responses:

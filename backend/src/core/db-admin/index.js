@@ -42,6 +42,8 @@ function register(app) {
     // whole network's, like backups — so on any other site the subtree does not exist (404), exactly as
     // /backups answers there. A no-op on a single site and on the main site.
     app.use('/api/v1/db-migration', require('../multisite-guards').mainSiteOnly);
+    // On the main site of a network: its network administrators only.
+    app.use('/api/v1/db-migration', require('../multisite-guards').networkAdminOnMainSite);
     app.use('/api/v1/db-migration', router);
 
     log.info('✅ DB Admin (core) loaded.');
