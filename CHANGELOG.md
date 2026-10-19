@@ -20,22 +20,12 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Security
 
-- **List page sizes have a floor.** `per_page` (and `limit`/`offset` on revisions) is clamped to at least
-  1 on every list route through one shared helper, and the models clamp their own `LIMIT`/`OFFSET` too.
-- **The gateway access log no longer records secrets in URLs.** Query values are logged as `[redacted]`
-  (parameter names are kept) and the Referer is no longer logged.
-- **Config and key files are owner-only.** New `wordjs-config.json` files are created `0600` and a rewrite
-  clears the bits for other users; the setup orchestrator writes private keys and configs `0600` and
-  re-applies it after copying keys; every write of `gateway-config.json` is `0600`, as are the config the
-  Docker entrypoint generates and the config backup the database migration writes. A config file that
-  cannot be parsed is no longer overwritten at boot.
-- **Less detail in public error bodies.** Gateway `502` responses no longer include the upstream address
-  or the raw error text, and `/readyz` no longer returns an exception message; both are logged instead.
-- **The gateway validates the settings it persists.** `/config-update` stores only a canonical http(s)
-  origin for `siteUrl` and a port in 1-65535; anything else gets a `400`.
-- **`/readyz` and WebSocket upgrades are bounded.** The readiness verdict is cached for about a second and
-  shared by concurrent callers, and the gateway caps WebSocket upgrades per client
-  (`rateLimit.upgradeMax`, default 120 per `rateLimit.upgradeWindowMs`, default 60 s).
+- **A plugin's JavaScript under `public/` now needs `browser:script`, like its `dist/` bundles.** The static
+  `/plugins/<slug>/public/*.js|.mjs|.cjs` files are served only while the plugin is active and granted
+  `browser:script`; styles, images and fonts keep the active-only rule. Every marketplace plugin that
+  enqueues a public script already declares it.
+- **A plugin route's `req.user` carries the caller's email and login only with `users:read`.** Without the
+  grant a route still receives `id`, `role`, `hasProfessionalMailbox` and `pluginCapabilities`.
 
 ## [2.7.0] - 2026-10-17
 

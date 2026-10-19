@@ -590,11 +590,25 @@ function listIsolateKeys(): string[] {
  */
 function projectRouteUser(user: any, slug: string): any {
     if (!user) return null;
-    return {
-        id: user.id, role: user.role, userEmail: user.userEmail, userLogin: user.userLogin,
+    const projected: any = {
+        id: user.id, role: user.role,
         hasProfessionalMailbox: hasProfessionalMailbox(user),
         pluginCapabilities: pluginCapabilitiesOf(user, slug),
     };
+    // The account's IDENTIFYING fields (email, login) are personal data: the same grant that lets a
+    // plugin look accounts up through the users bridge (users:read) is required to see them here. Without
+    // it a route still gets everything a gate needs (id, role, the mailbox fact, its own capabilities).
+    if (routeUserPiiGranted(slug)) {
+        projected.userEmail = user.userEmail;
+        projected.userLogin = user.userLogin;
+    }
+    return projected;
+}
+
+/** Whether plugin `slug` holds users:read on the current site (fails closed). */
+function routeUserPiiGranted(slug: string): boolean {
+    try { return require('./plugin-permissions').isGranted(slug, 'users', 'read') === true; }
+    catch { return false; }
 }
 
 /**

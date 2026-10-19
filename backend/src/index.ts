@@ -811,11 +811,10 @@ app.use('/plugins', (req: Request, res: Response, next: NextFunction) => {
     const abs = resolveWithin(PLUGINS_ROOT, ...segs);
     if (!abs) return res.status(404).end();
 
-    // dist/ is build output of the plugin's browser bundle: the bundle's gate. public/**: active only.
+    // dist/ and any public/ JavaScript run in a browser: the bundle's gate (browser:script). The rest
+    // of public/**: active only. One rule, stated in core/plugin-serving pluginPathServable.
     const isBundleOutput = segs[1] === PLUGIN_BUNDLE_DIR;
-    const servable: Promise<boolean> = isBundleOutput
-        ? pluginServing.browserCodeServable(folder)
-        : pluginServing.pluginFilesServable(folder);
+    const servable: Promise<boolean> = pluginServing.pluginPathServable(folder, rel, PLUGIN_BUNDLE_DIR);
     servable.then((ok: boolean) => {
         if (!ok) return res.status(404).end();
 
