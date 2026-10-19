@@ -1203,7 +1203,7 @@ if (cluster.isPrimary) {
 
             // Query values are redacted exactly as in the access log: reset, verification and invitation links
             // carry their one-time token there, and debug logs are retained and shared like any other.
-            logger.debug(`[Gateway] Proxying ${logSafe(req.method)} ${logSafe(redactUrl(req.url))} to ${target}`);
+            logger.debug(`[Gateway] Proxying ${logSafe(req.method)} ${logSafe(redactUrl(req.url))} to ${logSafe(target)}`);
             proxy.web(req, res, {
                 ...(trustsProxy ? { xfwd: false } : {}),
                 target,
