@@ -54,4 +54,23 @@ function publicDisplayName(id: any, displayName: any, login: any): string {
     return name;
 }
 
-module.exports = { isLoginDerivedName, isLoginDerivedSlug, placeholderDisplayName, publicDisplayName };
+/**
+ * The display name an account is CREATED with: the given one, or '' (the caller then writes the
+ * placeholder) when it is missing or is the login. A value, not a verdict — the writer stores what this
+ * returns and never branches on the raw input itself.
+ */
+function ownDisplayName(displayName: any, login: any): string {
+    const name = displayName == null ? '' : String(displayName);
+    return isLoginDerivedName(name, login) ? '' : name;
+}
+
+/**
+ * The explicit slug an account is CREATED with: the given one, or '' when it is missing or slugifies
+ * to the login.
+ */
+function ownNicename(nicename: any, login: any): string {
+    const slug = nicename == null ? '' : String(nicename);
+    return isLoginDerivedSlug(sanitizeTitle(slug), login) ? '' : slug;
+}
+
+module.exports = { isLoginDerivedName, isLoginDerivedSlug, placeholderDisplayName, publicDisplayName, ownDisplayName, ownNicename };

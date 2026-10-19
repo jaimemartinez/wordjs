@@ -327,14 +327,12 @@ class User {
         // a placeholder derived from its id, written right after the insert below. The display name
         // and the slug are printed on every byline, feed and archive; the login is what the sign-in
         // form takes, and must not be readable off a public page.
-        const chosenDisplay = displayName && !publicIdentity.isLoginDerivedName(displayName, username)
-            ? String(displayName) : '';
+        const chosenDisplay = publicIdentity.ownDisplayName(displayName, username);
         // THE PUBLIC AUTHOR SLUG — see generateUniqueNicename. An explicit `nicename` wins (the WXR
         // importer has one in hand, and an admin form could offer it); otherwise it is derived. Either
         // way a slug that IS the login (or what the login slugifies to) is discarded, and the account
         // gets the placeholder's slug instead.
-        const explicitNicename = data.nicename && !publicIdentity.isLoginDerivedSlug(sanitizeTitle(String(data.nicename)), username)
-            ? data.nicename : '';
+        const explicitNicename = publicIdentity.ownNicename(data.nicename, username);
         let nicename = chosenDisplay || explicitNicename ? await generateUniqueNicename(explicitNicename || chosenDisplay) : '';
         if (publicIdentity.isLoginDerivedSlug(nicename, username)) nicename = '';
         const display = chosenDisplay;
