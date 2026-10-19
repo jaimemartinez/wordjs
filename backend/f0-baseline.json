@@ -4,8 +4,8 @@
     "restSource": {
       "routeFiles": 45,
       "endpointDeclarations": 275,
-      "mountDeclarations": 108,
-      "semanticSha256": "a7c44b9cacade73f0c339cd60a06ba78ffb0b47f38022bb51514e637c9b84986"
+      "mountDeclarations": 109,
+      "semanticSha256": "54f84bb1757ec80ef8f6fc1d87a1e49ec938a2f69ade22b2bb18d6edaa9ccdea"
     },
     "openapi": {
       "paths": 214,
