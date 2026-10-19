@@ -98,7 +98,7 @@ const metaOf = (userId: number, key: string) => dbAsync.get(
 /** Every persona that a per-door test needs its OWN copy of, so one door's failures never fund another's. */
 const DOOR_PERSONAS = ['doorMe', 'doorTwin', 'doorMfa', 'doorMfaEnable', 'doorSessions', 'doorPassword'];
 /** …and the doors that need a privileged caller to be reachable at all (DELETE /plugins/:slug is isAdmin). */
-const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy'];
+const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy', 'doorAccountMailSmtp', 'doorAccountMailProvider'];
 /** …and the network doors (routes/network.ts), whose caller must also be a NETWORK administrator. */
 const NETWORK_DOOR_PERSONAS = ['doorNetworkCreate', 'doorNetworkSuspend', 'doorNetworkResume', 'doorNetworkOffer', 'doorNetworkWithdraw'];
 /** …and the code-checking doors that ask for the password only past the account's failure ceiling. */
@@ -812,6 +812,21 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
             send: (p, pw) => request(app).delete(`${B}/plugins/zz-door-probe`).set('Authorization', asUser(p))
                 .send({ password: pw }),
             alsoExpect: (r) => r.status === 404,   // past the credential, refused on the merits
+        },
+        // The account-email writes (routes/account-mail.ts): the password is checked BEFORE the value, so
+        // an empty transport is refused on the merits (400, the host is missing) and an invalid plugin
+        // name likewise — nothing is written either way.
+        {
+            site: 'account-mail.ts PUT /smtp', name: 'PUT /account-mail/smtp', persona: 'doorAccountMailSmtp',
+            send: (p: string, pw: string) => request(app).put(`${B}/account-mail/smtp`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw }),
+            alsoExpect: (r: any) => r.status === 400 && r.body.code === 'rest_invalid_param',
+        },
+        {
+            site: 'account-mail.ts PUT /provider', name: 'PUT /account-mail/provider', persona: 'doorAccountMailProvider',
+            send: (p: string, pw: string) => request(app).put(`${B}/account-mail/provider`).set('Authorization', asUser(p))
+                .send({ slug: '!!', allowed: true, currentPassword: pw }),
+            alsoExpect: (r: any) => r.status === 400 && r.body.code === 'rest_invalid_param',
         },
         // The site-address writes (routes/site-address.ts): the password is checked BEFORE the body, so a
         // body without `rev` exercises the door and is then refused on the merits — 400 naming `rev` —

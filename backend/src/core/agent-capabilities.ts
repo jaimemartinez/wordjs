@@ -19,6 +19,8 @@
  * (`isAdmin` and friends), so even an administrator's agent is refused there.
  */
 
+const { isReservedCoreCapability } = require('./reserved-capabilities');
+
 /** The grant vocabulary. Order is the display order in the admin UI. */
 const AGENT_CAPABILITIES = Object.freeze([
     'content:read',
@@ -112,6 +114,8 @@ function contentCapabilityKinds(): Map<string, ContentKind> {
     const kinds = new Map<string, ContentKind>();
     const put = (cap: unknown, kind: ContentKind) => {
         if (typeof cap !== 'string' || !cap) return;
+        // A core non-content capability is never classified as content, whatever a type names.
+        if (isReservedCoreCapability(cap)) return;
         const prev = kinds.get(cap);
         if (!prev || KIND_RANK[kind] > KIND_RANK[prev]) kinds.set(cap, kind);
     };
@@ -147,6 +151,11 @@ function agentPermitsCapability(grants: Iterable<string>, cap: string, kinds?: M
     if (cap === 'upload_files') return g.has('media:upload');
     if (cap === 'manage_categories') return g.has('taxonomy:write');
     if (cap === 'moderate_comments') return g.has('comments:moderate');
+    // HARD DENY, independent of the type registry: content-type validation refuses a type that names a
+    // core non-content capability (core/reserved-capabilities), and this is the second
+    // fence — a registry that somehow carried `edit_users` as a type's edit capability still could not
+    // turn `content:draft` into it.
+    if (isReservedCoreCapability(cap)) return false;
     const kind = (kinds || contentCapabilityKinds()).get(cap);
     if (kind === 'read') return g.has('content:read');
     if (kind === 'readOthers') return g.has('content:read') && g.has('content:others');

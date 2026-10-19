@@ -869,10 +869,11 @@ const MIGRATIONS: Migration[] = [
         //   - a nicename that is the login, or what the login slugifies to, is re-derived from the
         //     (now public) display name — the placeholder's `user-<id>` when that would be the login
         //     again — with 0015's all-digit guard and -2/-3 de-duplication.
-        // AN AUTHOR'S OLD ARCHIVE URL KEEPS WORKING: for an account that has published, the slug it is
+        // AN AUTHOR'S OLD ARCHIVE URL CAN KEEP WORKING: for an account that has published, the slug it is
         // moved off is kept as `previous_nicename` user meta (a protected key), which the author lookups
-        // (Post._authorCondition, the author feed) still resolve — to the same posts, under the new
-        // canonical slug. An account that never published has no public URL to keep, so none is kept.
+        // (Post._authorCondition, the author feed) resolve — to the same posts, under the new canonical
+        // slug — ONLY when an administrator opts in (core/author-aliases): that slug was derived from the
+        // login. An account that never published has no public URL to keep, so none is kept.
         //
         // RE-RUNNABLE and NEVER FATAL, like 0015: a repaired row no longer matches, and the read-side
         // guard in Post.getAuthorsForIds already keeps a login-equal display name off the byline if this
@@ -947,6 +948,37 @@ const MIGRATIONS: Migration[] = [
                 }
             } catch (e: any) {
                 log.warn({ err: e }, '⚠️  [migration 0017] public-identity repair skipped (non-fatal — bylines still never print a login-equal display name)');
+            }
+        }
+    },
+    {
+        // ACCOUNT MAIL NO LONGER GOES TO A MAIL PROVIDER PLUGIN BY DEFAULT (core/account-mail): password-
+        // reset and verification links use the built-in SMTP transport, or a provider plugin an
+        // administrator allowed BY NAME. A site that is upgraded was sending those links through whichever
+        // plugin holds `email:provider`; switching that off silently would stop password recovery on the
+        // next boot. So the plugins that hold the grant when this runs are recorded as allowed — an
+        // explicit, visible entry Settings → Account email shows (with the warning) and the administrator can
+        // withdraw. A new site has no grants here, so it gets the default: the built-in transport only.
+        // Never fatal; re-runnable (it only ever adds the holders it finds, and only when nothing is set).
+        id: '0018_account_mail_provider_allowance',
+        up: async (ctx: MigrationCtx) => {
+            try {
+                const existing = await ctx.get('SELECT option_value FROM options WHERE option_name = ?', ['account_mail_provider_allowed']);
+                if (existing) return;
+                const row = await ctx.get('SELECT option_value FROM options WHERE option_name = ?', ['plugin_grants']);
+                let grants: any = null;
+                try { grants = row && row.option_value ? JSON.parse(row.option_value) : null; } catch { grants = null; }
+                if (!grants || typeof grants !== 'object' || Array.isArray(grants)) return;
+                const holders = Object.keys(grants)
+                    .filter((slug) => /^[a-zA-Z0-9_-]{1,100}$/.test(slug) && Object.prototype.hasOwnProperty.call(grants, slug))
+                    .filter((slug) => Array.isArray(grants[slug]) && grants[slug].some((t: unknown) => String(t).toLowerCase().trim() === 'email:provider'))
+                    .sort();
+                if (!holders.length) return;
+                await ctx.run("INSERT INTO options (option_name, option_value, autoload) VALUES (?, ?, 'yes')",
+                    ['account_mail_provider_allowed', JSON.stringify(holders)]);
+                log.warn({ holders }, `⚠️  [migration 0018] password-reset and verification email keeps going through ${holders.join(', ')} (it held email:provider before this upgrade). Review it in Settings → Account email: the built-in SMTP transport keeps those links away from plugins.`);
+            } catch (e: any) {
+                log.warn({ err: e }, '⚠️  [migration 0018] could not record the current mail provider for account email (non-fatal — account email then needs the built-in transport or an explicit allowance)');
             }
         }
     }

@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { revisionsApi, Revision, User, usersApi } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
-import { trStr } from "@/lib/editorI18n";
+import { trStr, trFmt } from "@/lib/editorI18n";
 import MSym from "@/components/editor/MSym";
 import { buildRevisionRestoreMessage } from "@/lib/revisionRestoreDescription";
 
@@ -341,6 +341,15 @@ export default function RevisionsSidebar({ postId, isOpen, onClose, onRestore }:
                                             </span>
                                             <span className="text-sm font-semibold text-[var(--ed-on-surface)] truncate">{users[rev.authorId]?.displayName || `${tr("Autor")} #${rev.authorId}`}</span>
                                         </div>
+                                        {rev.source?.kind === "agent" && (
+                                            // A revision is a snapshot of what a write REPLACED, so this is the version from
+                                            // before the agent's change: restoring it undoes that change.
+                                            <p data-testid="revision-agent-source" title={trFmt("Restaura esta versión para deshacer lo que cambió el agente {name}.", language, { name: rev.source.agentName || `#${rev.source.agentId}` })}
+                                                className="mb-1.5 inline-flex max-w-full items-center gap-1.5 rounded-xl border border-[var(--ed-primary-container)] bg-[var(--ed-primary-fixed)] px-2 py-1 text-[11px] font-semibold leading-snug text-[var(--ed-on-surface)]">
+                                                <i className="fa-solid fa-robot text-[11px]" aria-hidden="true"></i>
+                                                <span>{tr("Antes del cambio de un agente de IA")}{rev.source.agentName ? ` · ${rev.source.agentName}` : ""}</span>
+                                            </p>
+                                        )}
                                         <p className="text-xs text-[var(--ed-on-surface-variant)]">{formatRelativeDate(rev.modified, language)}</p>
                                         <p className="text-[11px] text-[var(--ed-outline)] mt-1 tabular-nums" style={{ fontFamily: "var(--ed-font-family-monospaced)" }}>{new Date(rev.modified).toLocaleString()}</p>
                                     </div>

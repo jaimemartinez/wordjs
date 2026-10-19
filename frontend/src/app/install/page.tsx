@@ -224,12 +224,12 @@ export default function InstallPage() {
                             <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-4">
                                 <FaExclamationTriangle className="text-amber-500 mt-0.5 shrink-0" aria-hidden="true" />
                                 <div>
-                                    <h2 className="text-sm font-bold text-amber-900">No email provider — password recovery is off</h2>
+                                    <h2 className="text-sm font-bold text-amber-900">No account email yet — password recovery is off</h2>
                                     <p className="text-sm text-amber-800/90 mt-1 leading-relaxed">
-                                        WordJS core cannot send email on its own, and no mail plugin is active. Until you
-                                        install one (e.g. mail-server) and grant it the <code className="font-mono text-xs">email:provider</code>{" "}
-                                        permission, the &ldquo;Forgot password?&rdquo; flow will not work — a locked-out user must be
-                                        reset by an administrator. Keep your admin password somewhere safe.
+                                        WordJS sends password-reset and verification links through an SMTP mail server you
+                                        configure in <strong>Settings → Account email</strong>. Until you do, the &ldquo;Forgot
+                                        password?&rdquo; flow will not work — a locked-out user must be reset by an administrator.
+                                        Keep your admin password somewhere safe.
                                     </p>
                                 </div>
                             </div>

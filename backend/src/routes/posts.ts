@@ -45,6 +45,7 @@ const { asyncHandler } = require('../middleware/errorHandler');
 const { scalarQueryParam, requireRouteId, isRouteId } = require('../core/query-params');
 const { perPageParam, pageOffset } = require('../core/pagination');
 const { saveRevision, isRevisionableMeta } = require('../core/revisions');
+const { revisionSourceFor } = require('../core/agent-publishing');
 const sanitizeHtml = require('sanitize-html');
 
 // The Puck/meta sanitizer (sanitize, sanitizePuckTree, sanitizeMetaValue, PUCK_*_FIELDS) lives in a
@@ -1341,7 +1342,7 @@ router.post('/', authenticate, asyncHandler(async (req: AuthenticatedRequest<Rec
 
         // Initial history is required state, not fire-and-forget. A failure rolls back the post,
         // terms, metadata and its not-yet-visible outbox event together.
-        await saveRevision(created.id);
+        await saveRevision(created.id, [], revisionSourceFor(req));
         return created;
     });
 
@@ -1533,7 +1534,7 @@ router.put('/:id', authenticate, asyncHandler(async (req: AuthenticatedRequest<I
     try {
         await runContentMutation(async () => {
             if (autosave !== true) {
-                try { await saveRevision(postId); }
+                try { await saveRevision(postId, [], revisionSourceFor(req)); }
                 catch (error: any) {
                     error.contentRevisionFailure = true;
                     throw error;
@@ -1857,7 +1858,7 @@ router.post('/:id/meta', authenticate, asyncHandler(async (req: AuthenticatedReq
     try {
         await runContentMutation(async () => {
             if (isRevisionableMeta(storageKey, post.postType)) {
-                try { await saveRevision(postId); }
+                try { await saveRevision(postId, [], revisionSourceFor(req)); }
                 catch (error: any) {
                     error.contentRevisionFailure = true;
                     throw error;

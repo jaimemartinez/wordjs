@@ -65,6 +65,8 @@ export default function ConfirmationModal({
     return (
         <DialogLayer
             layer="dialogOver"
+            // Host UI: a plugin admin stylesheet is scoped to stop short of it (backend core/plugin-admin-css).
+            data-wjs-host-ui=""
             className="flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
             onClick={onClose}
         >

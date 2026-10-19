@@ -126,6 +126,26 @@ tool exists for users, roles, settings writes, plugins, themes, tokens or deleti
 worst do what its grant allows — as a draft unless `content:publish` was granted — and every write leaves
 an audit row.
 
+The combination to be careful with is **`content:others` + `content:publish`**: the agent reads drafts and
+private entries other people wrote and can put content live, so text hidden in what it reads can steer it
+into publishing something nobody asked for. The Agents screen warns wherever that combination is requested
+or granted. Two controls make it safe to use:
+
+- **A person confirms what agents publish** (Agents screen, site-wide, off by default;
+  `PUT /api/v1/agents/settings { publishConfirmation }`, administrators only, audited as `agent.settings`).
+  While it is on, every agent call runs with `content:publish` withheld from its narrowed user: the REST
+  publish gate files an agent's `publish_content` as **pending** (the tool answers `awaitingConfirmation`),
+  and agents cannot edit content that is already published. Each request is listed under *Waiting for your
+  confirmation* (`GET /api/v1/agents/publish-queue`); a person publishes it — or returns it to draft — with
+  their own session through the ordinary `PUT /posts/{id}`, then it leaves the queue
+  (`DELETE /api/v1/agents/publish-queue/{postId}`). The stored grant is unchanged, so turning the setting
+  off restores direct publishing.
+- **Agent writes are labelled in the revision history.** Every revision is a snapshot of what a write
+  replaced, so the revision an agent's write leaves is the version from *before* that agent touched the
+  entry. It carries the agent's id and name (`source: { kind: "agent", agentId, agentName }` on
+  `GET /revisions`), the revisions panel shows it as *Before an AI agent's change*, and restoring it undoes
+  the change. The label is a protected meta key: no client can forge or remove it.
+
 ## 7. Limits
 
 - HTTP: 240 requests/minute per agent token (cluster-wide through the shared limiter store), on top of the

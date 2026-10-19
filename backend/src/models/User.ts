@@ -154,7 +154,8 @@ const NUMERIC_NICENAME_PREFIX = 'user-';
 /**
  * The public slug an author had before migration 0017 moved them off a login-derived one. Kept ONLY for
  * accounts that had published (theirs are the only archive URLs that exist in the wild), and read by the
- * author lookups so those URLs keep resolving to the same archive under its new canonical address.
+ * author lookups — only while an administrator has opted in (core/author-aliases), because the old slug
+ * was derived from the login — so those URLs resolve to the same archive under its new canonical address.
  */
 const PREVIOUS_NICENAME_META = 'previous_nicename';
 

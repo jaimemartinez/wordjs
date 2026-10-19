@@ -154,6 +154,16 @@ const AUDIT_ACTIONS = Object.freeze({
     AGENT_WRITE: 'agent.write',
     // A tool call refused because the connection lacks the grant (or is still pending): {tool, needs}.
     AGENT_DENIED: 'agent.denied',
+    // The site-wide "a person confirms what agents publish" switch changed: {publishConfirmation, previous}.
+    AGENT_SETTINGS: 'agent.settings',
+    // A person removed an agent's publish request from the queue (after publishing or returning it).
+    AGENT_PUBLISH_REQUEST_DISMISS: 'agent.publish_request.dismiss',
+
+    // ── Account email (routes/account-mail, core/account-mail) ─────────────────────────────────────
+    // The built-in SMTP transport was configured or removed: {configured, host, passwordChanged} — never
+    // the password. And a provider plugin was allowed / disallowed to carry reset links: {plugin, allowed}.
+    ACCOUNT_MAIL_SMTP: 'account_mail.smtp',
+    ACCOUNT_MAIL_PROVIDER: 'account_mail.provider',
 
     // ── The log about the log ───────────────────────────────────────────────────────────────────────
     AUDIT_PRUNE: 'audit.prune'

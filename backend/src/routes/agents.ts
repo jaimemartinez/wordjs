@@ -26,6 +26,8 @@ const {
     AGENT_CAPABILITIES, invalidAgentCapabilities, normalizeAgentCapabilities, grantWithinRequest, effectiveAgentCapabilities,
 } = require('../core/agent-capabilities');
 const AgentConnection = require('../models/AgentConnection');
+const agentPublishing = require('../core/agent-publishing');
+const { updateOption } = require('../core/options');
 const User = require('../models/User');
 const config = require('../config/app');
 
@@ -100,7 +102,104 @@ router.get('/', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandle
         capabilities: AGENT_CAPABILITIES,
         canGrant: isAdministrator(req),
         mcpUrl: mcpEndpoint(),
+        // Whether a person must confirm what agents publish on this site (core/agent-publishing).
+        publishConfirmation: await agentPublishing.publishConfirmationRequired(),
     });
+}));
+
+/**
+ * @swagger
+ * /agents/settings:
+ *   put:
+ *     summary: Require a person to confirm what AI agents publish
+ *     description: >-
+ *       Site-wide. While publishConfirmation is true, every agent's publish is filed as pending for a person
+ *       to confirm, and agents cannot edit content that is already published. Administrators only,
+ *       session-only. Audited.
+ *     tags: [Agents]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [publishConfirmation]
+ *             properties:
+ *               publishConfirmation: { type: boolean }
+ *     responses:
+ *       200:
+ *         description: The stored setting.
+ *       400:
+ *         description: publishConfirmation is not a boolean.
+ *       403:
+ *         description: Not an administrator.
+ */
+router.put('/settings', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandler(async (req: Request, res: Response) => {
+    if (!isAdministrator(req)) return forbidden(res, 'Only an administrator can change how agents publish.');
+    const value = (req.body || {}).publishConfirmation;
+    if (typeof value !== 'boolean') {
+        return res.status(400).json({ code: 'rest_invalid_param', message: 'publishConfirmation must be true or false.', data: { status: 400 } });
+    }
+    const previous = await agentPublishing.publishConfirmationRequired();
+    await updateOption(agentPublishing.AGENT_PUBLISH_CONFIRMATION_OPTION, value ? '1' : '0');
+    if (previous !== value) await recordAudit(req.user.id, 'agent.settings', 'agent', 0, { publishConfirmation: value, previous });
+    res.json({ publishConfirmation: value });
+}));
+
+/**
+ * @swagger
+ * /agents/publish-queue:
+ *   get:
+ *     summary: What AI agents asked to publish, waiting for a person
+ *     description: >-
+ *       Entries still pending that an agent asked to publish while confirmation was required. A person
+ *       publishes one with the ordinary PUT /posts/{id} (their own session and capabilities) and then
+ *       dismisses it here. Administrators only, session-only.
+ *     tags: [Agents]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: The waiting entries.
+ *       403:
+ *         description: Not an administrator.
+ */
+router.get('/publish-queue', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandler(async (req: Request, res: Response) => {
+    if (!isAdministrator(req)) return forbidden(res, 'Only an administrator can review what agents asked to publish.');
+    res.json({ entries: await agentPublishing.listPublishRequests() });
+}));
+
+/**
+ * @swagger
+ * /agents/publish-queue/{postId}:
+ *   delete:
+ *     summary: Dismiss an AI agent's publish request
+ *     description: Removes the entry from the queue (after a person published it or returned it to draft). The entry itself is not changed. Administrators only, session-only. Audited.
+ *     tags: [Agents]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: postId
+ *         required: true
+ *         schema: { type: integer }
+ *     responses:
+ *       200:
+ *         description: Dismissed (or there was nothing to dismiss).
+ *       400:
+ *         description: Invalid id.
+ *       403:
+ *         description: Not an administrator.
+ */
+router.delete('/publish-queue/:postId', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandler(async (req: Request, res: Response) => {
+    if (!isAdministrator(req)) return forbidden(res, 'Only an administrator can review what agents asked to publish.');
+    const postId = routeIdOrNull(req.params.postId);
+    if (postId === null) return res.status(400).json({ code: 'rest_invalid_param', message: 'Invalid post id.', data: { status: 400 } });
+    const dismissed = await agentPublishing.dismissPublishRequest(postId);
+    if (dismissed) await recordAudit(req.user.id, 'agent.publish_request.dismiss', 'post', postId, {});
+    res.json({ dismissed, id: postId });
 }));
 
 /**

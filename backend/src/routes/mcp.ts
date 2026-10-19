@@ -95,7 +95,17 @@ router.post('/', agentAuth, asyncHandler(async (req: Request, res: Response) => 
     const rec = res.locals.agentConnection;
     const user = res.locals.agentUser;
     const grants = rec.status === 'active' ? rec.granted : [];
-    const server = buildMcpServer({ connection: rec, user, narrowed: narrowUser(user, grants), origin: req });
+    // While the site requires a person to confirm what agents publish (core/agent-publishing), the user
+    // the calls run as does not hold `content:publish`: REST then files an agent's publish as pending.
+    const { publishConfirmationRequired, grantsForNarrowing } = require('../core/agent-publishing');
+    const confirmationRequired = await publishConfirmationRequired();
+    const server = buildMcpServer({
+        connection: rec,
+        user,
+        narrowed: narrowUser(user, grantsForNarrowing(grants, confirmationRequired)),
+        origin: req,
+        publishConfirmationRequired: confirmationRequired,
+    });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on('close', () => {
         transport.close().catch(() => { /* already closed */ });

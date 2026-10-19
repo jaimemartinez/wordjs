@@ -1070,7 +1070,7 @@ export default function PluginsPage() {
                                                         <div className="flex items-center gap-2 flex-wrap">
                                                             <i className={`fas ${meta.icon || 'fa-key'} text-xs opacity-75`} />
                                                             <span className="text-xs font-extrabold text-slate-800">{meta.label}</span>
-                                                            <RiskBadge risk={meta.risk} />
+                                                            <RiskBadge risk={meta.risk} adminEquivalent={meta.adminEquivalent} />
                                                         </div>
                                                         <span className={`text-[9px] font-mono text-slate-600 font-bold mt-0.5 ${TOKEN_WRAP_CLASS}`}><BreakableToken text={token} /></span>
                                                     </div>
@@ -1210,7 +1210,7 @@ export default function PluginsPage() {
                                                 <span className="flex items-center gap-2 flex-wrap min-w-0">
                                                     <i className={`fas ${meta.icon || 'fa-key'} text-xs opacity-75`} />
                                                     <span className="font-extrabold text-sm text-slate-800">{meta.label}</span>
-                                                    <RiskBadge risk={meta.risk} />
+                                                    <RiskBadge risk={meta.risk} adminEquivalent={meta.adminEquivalent} />
                                                     <span className={TOKEN_CLASS}><BreakableToken text={token} /></span>
                                                 </span>
                                                 <span className={`relative inline-flex h-6 w-11 items-center rounded-full transition-all duration-300 shrink-0 mt-0.5 col-start-2 row-start-1 ${on ? knobOn.split(' ')[0] : 'bg-slate-300'}`}>

@@ -743,6 +743,9 @@ function initFrontendPurge() {
         // from the importer, plugins) so the option can never change silently under a cached nav.
         if (String(name) === 'nav_menu_locations') purgeFrontend(['menus']);
         if (PLUGIN_ASSET_OPTIONS.has(String(name))) purgeFrontend(['plugin-assets']);
+        // Whether retired author slugs resolve (core/author-aliases) changes what the cached author
+        // archives answer — both ways: switching it OFF must drop pages already rendered under an old slug.
+        if (String(name) === 'author_legacy_slugs') purgeFrontend(['posts'], ['/']);
     });
 }
 

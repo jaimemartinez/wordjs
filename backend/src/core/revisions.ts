@@ -15,6 +15,7 @@ const { runContentMutation, recordContentEvent, isContentMutationActive } = requ
 const {
   LEGACY_REVISIONABLE_META_KEYS,
   REVISION_SNAPSHOT_META_KEY,
+  REVISION_SOURCE_META_KEY,
 } = require('./revision-constants');
 const {
   buildRevisionSnapshot,
@@ -73,15 +74,28 @@ function nextRevisionName(postId: number) {
   return `${postId}-revision-v${Date.now()}-${revisionNameSeq}-${crypto.randomBytes(4).toString('hex')}`;
 }
 
+/** Who made the write a revision was taken before, when it was not a person (core/agent-publishing). */
+type RevisionSource = { kind: 'agent'; agentId: number; agentName: string };
+
+function parseRevisionSource(raw: unknown): RevisionSource | null {
+  try {
+    const v = typeof raw === 'string' ? JSON.parse(raw) : null;
+    if (!v || v.kind !== 'agent') return null;
+    return { kind: 'agent', agentId: Number(v.agentId) || 0, agentName: String(v.agentName || '').slice(0, 200) };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Save a revision of a post
  * Equivalent to wp_save_post_revision()
  */
-async function saveRevision(postId: number, preserveFields: any[] = []) {
+async function saveRevision(postId: number, preserveFields: any[] = [], source: RevisionSource | null = null) {
   // A revision is a post row plus zero-or-more meta rows and pruning. Standalone callers get one
   // pinned transaction; F3 content mutations already own it and transparently join here.
   if (!database.hasActiveTransaction()) {
-    return await dbAsync.transaction(() => saveRevision(postId, preserveFields));
+    return await dbAsync.transaction(() => saveRevision(postId, preserveFields, source));
   }
   // Get current post data
   const post = await dbAsync.get('SELECT * FROM posts WHERE id = ?', [postId]);
@@ -137,6 +151,15 @@ async function saveRevision(postId: number, preserveFields: any[] = []) {
     'INSERT INTO post_meta (post_id, meta_key, meta_value) VALUES (?, ?, ?)',
     [revisionId, REVISION_SNAPSHOT_META_KEY, serializeRevisionEnvelope(snapshot.envelope)]
   );
+  // WHO MADE THE WRITE this revision was taken before, when it was an AI agent: this row is then the
+  // version from before the agent's change, and the revisions panel labels it so it can be restored in
+  // one step. Outside the envelope on purpose — a restore never copies it onto the entry.
+  if (source && source.kind === 'agent') {
+    await dbAsync.run(
+      'INSERT INTO post_meta (post_id, meta_key, meta_value) VALUES (?, ?, ?)',
+      [revisionId, REVISION_SOURCE_META_KEY, JSON.stringify({ kind: 'agent', agentId: source.agentId, agentName: source.agentName })]
+    );
+  }
 
   // Cleanup old revisions (keep last 10)
   await limitRevisions(postId, 10);
@@ -159,19 +182,24 @@ async function getRevisions(postId: number, options: { limit?: number; offset?: 
   const rows = await dbAsync.all(`
     SELECT * FROM posts
     WHERE post_parent = ? AND post_type = 'revision' AND post_status = 'inherit'
-    ORDER BY post_modified DESC
+    ORDER BY post_modified DESC, id DESC
     LIMIT ? OFFSET ?
   `, [postId, limit, offset]);
 
   const ids = rows.map((row: any) => row.id);
   const manifestByRevision: Record<number, any[]> = {};
+  const sourceByRevision: Record<number, RevisionSource | null> = {};
   if (ids.length > 0) {
     const placeholders = ids.map(() => '?').join(',');
     const manifests = await dbAsync.all(
-      `SELECT post_id, meta_key, meta_value FROM post_meta WHERE post_id IN (${placeholders}) AND meta_key = ?`,
-      [...ids, REVISION_SNAPSHOT_META_KEY]
+      `SELECT post_id, meta_key, meta_value FROM post_meta WHERE post_id IN (${placeholders}) AND meta_key IN (?, ?)`,
+      [...ids, REVISION_SNAPSHOT_META_KEY, REVISION_SOURCE_META_KEY]
     );
     for (const manifest of manifests) {
+      if (manifest.meta_key === REVISION_SOURCE_META_KEY) {
+        sourceByRevision[manifest.post_id] = parseRevisionSource(manifest.meta_value);
+        continue;
+      }
       (manifestByRevision[manifest.post_id] ||= []).push(manifest);
     }
   }
@@ -184,6 +212,8 @@ async function getRevisions(postId: number, options: { limit?: number; offset?: 
     excerpt: row.post_excerpt,
     modified: row.post_modified,
     restore: describeRevisionSnapshot(manifestByRevision[row.id] || []),
+    // null for a person's write; { kind: 'agent', agentId, agentName } for an AI agent's (see saveRevision).
+    source: sourceByRevision[row.id] || null,
   }));
 }
 
@@ -209,6 +239,7 @@ async function getRevision(revisionId: number) {
     modified: row.post_modified,
     meta: await getAllMeta(revisionId, rawMeta),
     restore: describeRevisionSnapshot(rawMeta),
+    source: parseRevisionSource((rawMeta.find((m: any) => canonicalMetaKey(m.meta_key) === canonicalMetaKey(REVISION_SOURCE_META_KEY)) || {}).meta_value),
   };
 }
 
@@ -226,6 +257,8 @@ async function getAllMeta(postId: number, existingRows?: any[]) {
     // The manifest is an internal restore instruction, never author metadata and never part of the
     // historical public response shape.
     if (canonicalMetaKey(row.meta_key) === canonicalMetaKey(REVISION_SNAPSHOT_META_KEY)) return;
+    // The source label is reported as `source`, not as historical author metadata.
+    if (canonicalMetaKey(row.meta_key) === canonicalMetaKey(REVISION_SOURCE_META_KEY)) return;
     try {
       meta[row.meta_key] = JSON.parse(row.meta_value);
     } catch {

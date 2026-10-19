@@ -1010,8 +1010,10 @@ router.post('/install', async (req: Request, res: Response) => {
             // self-service password recovery. Report it so the wizard's final screen can warn the admin
             // instead of leaving them to discover a dead "Forgot password?" flow later. Same derived
             // signal as the admin `email_provider_available` settings flag and the boot-time warning.
+            // Password recovery depends on ACCOUNT mail (core/account-mail: the built-in transport, or a
+            // provider plugin allowed by name), so that is what the wizard reports.
             let emailProviderAvailable = false;
-            try { emailProviderAvailable = require('../core/mail-provider').isEmailProviderAvailable() === true; } catch { /* default false */ }
+            try { emailProviderAvailable = (await require('../core/account-mail').accountMailReady()) === true; } catch { /* default false */ }
 
             // The site exists now. A backend that booted uninstalled never ran the boot reconcile (it is
             // gated on isInstalled()), so run it in THIS process: it releases the gateway sync waiting on

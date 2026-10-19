@@ -493,6 +493,8 @@ export interface Revision {
     modified: string;
     meta?: Record<string, any>;
     restore?: RevisionRestoreDescriptor;
+    /** Set when the write this revision was taken before was made by an AI agent (backend core/agent-publishing). */
+    source?: { kind: "agent"; agentId: number; agentName: string } | null;
 }
 
 export interface RevisionRestoreField {
@@ -1444,8 +1446,21 @@ export interface AgentConnection {
     createdAt: string | null;
     user: { id: number; login: string; displayName: string; role: string } | null;
 }
+/** An entry an AI agent asked to publish while the site requires a person to confirm (routes/agents.ts). */
+export interface AgentPublishRequest {
+    id: number;
+    title: string;
+    type: string;
+    modified: string | null;
+    agentId: number | null;
+    agentName: string;
+    requestedAt: string | null;
+}
 export const agentsApi = {
-    list: () => apiGet<{ connections: AgentConnection[]; capabilities: AgentCapability[]; canGrant: boolean; mcpUrl: string }>("/agents"),
+    list: () => apiGet<{ connections: AgentConnection[]; capabilities: AgentCapability[]; canGrant: boolean; mcpUrl: string; publishConfirmation?: boolean }>("/agents"),
+    setPublishConfirmation: (publishConfirmation: boolean) => apiPut<{ publishConfirmation: boolean }>("/agents/settings", { publishConfirmation }),
+    publishQueue: () => apiGet<{ entries: AgentPublishRequest[] }>("/agents/publish-queue"),
+    dismissPublishRequest: (postId: number) => apiDelete<{ dismissed: boolean; id: number }>(`/agents/publish-queue/${postId}`),
     // Creating and granting follow the API-token MFA rule: `mfaCode` / `currentPassword` exactly as tokensApi.create.
     create: (data: { name: string; requested: AgentCapability[]; userId?: number; expiresInDays?: number | null; mfaCode?: string; currentPassword?: string }) =>
         apiPost<{ token: string; connection: AgentConnection; mcpUrl: string }>("/agents", data),
@@ -1454,6 +1469,27 @@ export const agentsApi = {
     revoke: (id: number) => apiDelete<{ revoked: boolean; id: number }>(`/agents/${id}`),
     audit: (id: number, page = 1) =>
         apiGet<{ entries: AuditEntry[]; total: number; page: number; perPage: number }>(`/agents/${id}/audit?page=${page}&per_page=50`),
+};
+
+// ── Account email ──────────────────────────────────────────────────────────────────────────────────
+// Backend routes/account-mail.ts: how password-reset and verification email is delivered. The relay
+// password is write-only (`hasPassword`); every write needs the administrator's current password.
+export interface AccountMailStatus {
+    route: "core" | "provider" | "none";
+    smtp: { host: string; port: number; security: "tls" | "starttls" | "none"; username: string; fromAddress: string; fromName: string } | null;
+    hasPassword: boolean;
+    provider: string | null;
+    providerAllowed: boolean;
+    allowedProviders: string[];
+    ready: boolean;
+}
+export const accountMailApi = {
+    status: () => apiGet<AccountMailStatus>("/account-mail"),
+    saveSmtp: (data: { host?: string; port?: number; security?: string; username?: string; password?: string; fromAddress?: string; fromName?: string; clear?: boolean; currentPassword: string }) =>
+        apiPut<AccountMailStatus>("/account-mail/smtp", data),
+    test: (to: string) => apiPost<{ sent: boolean }>("/account-mail/test", { to }),
+    setProvider: (slug: string, allowed: boolean, currentPassword: string) =>
+        apiPut<AccountMailStatus>("/account-mail/provider", { slug, allowed, currentPassword }),
 };
 
 // ── AI provider layer ──────────────────────────────────────────────────────────────────────────────

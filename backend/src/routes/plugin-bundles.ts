@@ -571,11 +571,14 @@ router.get('/:slug/admin-style', authenticate, asyncHandler(async (req: Request,
     const folder = await resolvePluginDir(slug);
     if (!folder) return res.status(404).json(ADMIN_STYLE_NOT_FOUND);
     const manifest = readManifest(folder) || {};
+    // The stylesheet is offered under the SAME rule that serves it (browserCodeServable, below), so the
+    // page never links a URL that answers 404.
+    const stylesheet = adminStylesheetOf(folder) !== null && await pluginServing.browserCodeServable(folder);
     res.setHeader('Cache-Control', 'private, no-store');
     res.json({
         style: typeof manifest.style === 'string' && manifest.style ? manifest.style : null,
         theme: themeVarsOf(manifest.theme),
-        stylesheet: adminStylesheetOf(folder) !== null,
+        stylesheet,
     });
 }));
 
@@ -584,7 +587,7 @@ router.get('/:slug/admin-style', authenticate, asyncHandler(async (req: Request,
  * /plugins/{slug}/admin-style/css:
  *   get:
  *     summary: Download the stylesheet of a plugin admin page
- *     description: Serves plugins/<folder>/client/admin/admin.css to a signed-in user, for an ACTIVE plugin only - the stylesheet the generated admin page links. It is not served from the static /plugins mount. Cache-Control private, no-cache with an ETag, so a deactivation is seen at the next load and no shared cache keeps a copy.
+ *     description: Serves plugins/<folder>/client/admin/admin.css to a signed-in user - the stylesheet the generated admin page links - only for an ACTIVE plugin that is granted browser:script, the same rule as its dist/ bundles. The file is confined before it is served - rules that would load another resource (@import, url() other than data:, image-set() and the like) are removed, and every style rule is scoped so it does not reach the admin's own interface. It is not served from the static /plugins mount. Cache-Control private, no-cache with an ETag, so a deactivation or a revoke is seen at the next load and no shared cache keeps a copy.
  *     tags: [Plugins]
  *     security:
  *       - bearerAuth: []
@@ -614,30 +617,61 @@ router.get('/:slug/admin-style', authenticate, asyncHandler(async (req: Request,
  *       401:
  *         description: Not signed in (answered before the slug is looked at, the same for every slug)
  *       404:
- *         description: No ACTIVE plugin answers to that slug, or it ships no admin stylesheet
+ *         description: No ACTIVE plugin granted browser:script answers to that slug, or it ships no admin stylesheet
  */
 router.get('/:slug/admin-style/css', authenticate, asyncHandler(async (req: Request, res: Response) => {
     const { slug } = req.params as { slug: string };
     if (!SLUG_RE.test(slug)) return res.status(400).json({ error: 'Invalid plugin slug' });
     const folder = await resolvePluginDir(slug);
-    const cssPath = folder ? adminStylesheetOf(folder) : null;
+    // A STYLESHEET IN THE ADMIN IS BROWSER CODE. It is linked as a full-page sheet on the plugin's admin
+    // page, so it is served under the same rule as the plugin's dist/ build output: active AND granted
+    // browser:script (core/plugin-serving browserCodeServable). The refusal is the same 404 as "no such
+    // plugin". BOTH facts are evaluated before answering, like servableBundleFolder does.
+    const servable = folder ? await pluginServing.browserCodeServable(folder) : false;
+    const cssPath = folder && servable ? adminStylesheetOf(folder) : null;
     if (!cssPath) return res.status(404).json(ADMIN_STYLE_NOT_FOUND);
-    // RELATIVE to the root, as the static mounts in index.ts do: with no root, `send` judges dotfiles
-    // against the whole absolute path and a dot-directory in the install path would 404 the file.
+    let confined: { css: string; etag: string } | null;
+    try {
+        confined = confinedAdminStylesheet(cssPath);
+    } catch {
+        return res.status(500).json({ error: 'Failed to read stylesheet' });
+    }
+    if (!confined) return res.status(404).json(ADMIN_STYLE_NOT_FOUND);
     // private + no-cache: an admin asset never belongs in a shared cache, and revalidating (a cheap 304
-    // on the ETag `send` computes) is what makes a deactivation take effect at the next page load.
-    res.sendFile(path.relative(PLUGINS_DIR, cssPath), {
-        root: PLUGINS_DIR,
-        dotfiles: 'deny',
-        cacheControl: false,
-        headers: { 'Cache-Control': 'private, no-cache', 'X-Content-Type-Options': 'nosniff' },
-    }, (err: any) => {
-        if (!err) return;
-        if (res.headersSent) { try { res.end(); } catch { /* client gone */ } return; }
-        const missing = err.status === 403 || err.status === 404
-            || err.code === 'ENOENT' || err.code === 'ENOTDIR' || err.code === 'EISDIR';
-        res.status(missing ? 404 : 500).json(missing ? ADMIN_STYLE_NOT_FOUND : { error: 'Failed to read stylesheet' });
-    });
+    // on the ETag of the CONFINED output) is what makes a deactivation or a revoke take effect at the next
+    // page load.
+    res.setHeader('Cache-Control', 'private, no-cache');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('ETag', confined.etag);
+    const inm = req.headers['if-none-match'];
+    if (typeof inm === 'string' && inm.split(',').map((t) => t.trim()).includes(confined.etag)) {
+        return res.status(304).end();
+    }
+    res.type('text/css; charset=utf-8').send(confined.css);
 }));
+
+/**
+ * The confined form of a plugin's admin.css (core/plugin-admin-css: nothing that fetches, every rule
+ * scoped away from the host's own UI), cached per file version — path, size and mtime — so a rebuilt or
+ * updated plugin is re-confined at the next request and an unchanged one is not re-parsed. null when the
+ * file is gone.
+ */
+const confinedCache = new Map<string, { version: string; css: string; etag: string }>();
+const CONFINED_CACHE_MAX = 64;
+function confinedAdminStylesheet(cssPath: string): { css: string; etag: string } | null {
+    let stat: any;
+    try { stat = fs.statSync(cssPath); } catch { return null; }
+    if (!stat.isFile()) return null;
+    const version = `${stat.size}:${stat.mtimeMs}`;
+    const hit = confinedCache.get(cssPath);
+    if (hit && hit.version === version) return hit;
+    const { confinePluginAdminCss } = require('../core/plugin-admin-css');
+    const css = confinePluginAdminCss(fs.readFileSync(cssPath, 'utf8'));
+    const etag = `"${require('crypto').createHash('sha256').update(css).digest('hex').slice(0, 32)}"`;
+    if (confinedCache.size >= CONFINED_CACHE_MAX) confinedCache.delete(confinedCache.keys().next().value as string);
+    const entry = { version, css, etag };
+    confinedCache.set(cssPath, entry);
+    return entry;
+}
 
 module.exports = router;

@@ -166,6 +166,7 @@ describe('F0 live REST characterization', () => {
             hooks: '/api/v1/hooks',
             webhooks: '/api/v1/webhooks',
             audit: '/api/v1/audit',
+            accountMail: '/api/v1/account-mail',
             agents: '/api/v1/agents',
             mcp: '/api/v1/mcp',
             ai: '/api/v1/ai',

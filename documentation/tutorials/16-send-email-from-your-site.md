@@ -75,8 +75,10 @@ Go back to the **Installed** tab. Mail Server is there, inactive. Click **Activa
 dialog lists each permission with its risk. The ones this tutorial needs are:
 
 - **Outbound network** — to connect to the relay;
-- **Send email as provider** — to become the site's mail sender, so that password resets and other
-  plugins' mail go through it.
+- **Send email as provider** — to become the site's mail sender, so that other plugins' mail (contact
+  forms, notifications, newsletters) goes through it. The dialog marks it **Administrator-level**: the
+  provider can read what it sends. Password-reset and verification links are *not* handed to it unless
+  you allow it (step 8).
 
 Click **Confirm and Activate**. The card now says **Running**, and **Email Center** appears in the
 admin menu. You can review or narrow the grants later with **Permissions** on the plugin's card.
@@ -162,8 +164,20 @@ Configuration tab, and the message waits in the queue.
 
 ## 8. Check password recovery
 
-Password recovery is offered only when the site can actually send mail. Once the relay answers, it
-turns on by itself.
+Password-reset and verification links are **account email**: whoever reads one can take over the
+account, so WordJS sends them itself and never hands them to a plugin unless you say so. Open
+**Settings → Account email** and choose one of the two:
+
+- **Built-in transport (recommended).** Enter the same relay as in step 5 — host, port, STARTTLS,
+  username and password, and a from address — type your own password to confirm, click **Save**, then
+  **Send test**. With Mailpit, use `127.0.0.1`, port `1025` and security **None** (allowed only for a
+  server on the same machine).
+- **Let Mail Server carry them.** Under **Mail provider plugin**, click **Allow for account email** and
+  confirm the warning. Mail Server then receives the reset links, so only do this if you trust it as
+  much as an administrator.
+
+The banner at the top of that screen says which way a reset link goes now. Password recovery is
+offered only when that way can actually deliver.
 
 1. Sign out, or open the login page in a private window. Below **Login** there is now a **Forgot your
    password?** link.
@@ -187,7 +201,8 @@ link in WordJS mail is built from it.
 - **Relay unavailable** with an authentication error from the relay: re-enter the username and
   password. The password field stays empty after saving; leaving it empty keeps the stored password.
 - **The test works but no "Forgot your password?" link appears.** Reload the login page. The link
-  appears only while the relay answers; check the Configuration tab.
+  appears only while account email can be delivered: check the banner in **Settings → Account email**
+  (step 8) — with Mail Server allowed there, also that the relay answers in the Configuration tab.
 - **Mail waits in the Queue tab.** It is retried automatically with growing delays. Once the relay
   answers again, the next retry delivers it, or click **Retry now** in the Queue tab.
 

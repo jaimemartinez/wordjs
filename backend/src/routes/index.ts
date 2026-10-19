@@ -48,6 +48,7 @@ const API_ROUTE_GROUPS: Readonly<Record<string, string>> = Object.freeze({
     mediaStorage: '/media-storage',
     settings: '/settings',
     siteAddress: '/site-address',
+    accountMail: '/account-mail',
     network: '/network',
     plugins: '/plugins',
     pluginRoutes: '/plugin/{slug}',
@@ -187,6 +188,9 @@ router.use('/agents', require('./agents'));
 router.use('/mcp', require('./mcp'));
 // The AI provider layer: admin-held provider settings and the editor's suggestions (core/ai-provider).
 router.use('/ai', require('./ai'));
+// How password-reset and verification email is delivered (core/account-mail): admin-only, every write
+// re-authenticated and audited.
+router.use('/account-mail', require('./account-mail'));
 router.use('/forms', require('./forms'));
 router.use('/presence', require('./presence'));
 // Colaboración en tiempo real de Verso (SSE de bajada + POST de subida). Distinta de `/presence`,
