@@ -377,7 +377,7 @@ The database file depends on the active driver (selected by `dbDriver` in `wordj
 | :------------------- | :---------------------------------- | :----------------------------------------------- |
 | `sqlite-native` (default) | `backend/data/wordjs-native.db` | `better-sqlite3`. The DB-manager default.        |
 | `sqlite-legacy`      | `backend/data/wordjs.db`            | pure-JS WASM `sql.js`; same SQLite file format. Used as the automatic fallback when a SQLite driver fails to load (e.g. the native binary is missing); also selectable explicitly — in the install wizard as "SQLite (legacy / WASM)" and as a DB-Admin migration target — or by setting `dbDriver: "sqlite-legacy"` in `wordjs-config.json`. |
-| `postgres`           | external PostgreSQL server (via the `pg` client) | Set `db: { host, port, user, password, name, ssl }` in `wordjs-config.json`. |
+| `postgres`           | external PostgreSQL server (via the `pg` client) | Set `db: { host, port, user, password, name, ssl, sslCa, sslRejectUnauthorized }` in `wordjs-config.json`. With `ssl` the server certificate is verified; see [database.md](database.md) for `sslCa` and the opt-out. |
 | `mysql` (or `mariadb`) | external MySQL 8.0+ / MariaDB server (via the `mysql2` client) | Same `db` connection object (set `dbPort: 3306`); the driver translates SQLite-dialect SQL to MySQL at the boundary. |
 
 You can open any SQLite file with a SQLite CLI or GUI (like *DB Browser for SQLite*) directly while the server is stopped.

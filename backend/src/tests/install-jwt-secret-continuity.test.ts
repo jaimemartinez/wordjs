@@ -53,10 +53,12 @@ const ANCHORED_CONFIG = path.resolve(__dirname, '..', '..', 'wordjs-config.json'
 const norm = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p);
 const redirect = (p: any) =>
     (typeof p === 'string' && norm(path.resolve(p)) === norm(ANCHORED_CONFIG) ? SANDBOX_CONFIG : p);
-const realFs = { existsSync: fs.existsSync, readFileSync: fs.readFileSync, writeFileSync: fs.writeFileSync };
+// openSync too: config/app.ts rewrites generated secrets through one descriptor ('r+').
+const realFs = { existsSync: fs.existsSync, readFileSync: fs.readFileSync, writeFileSync: fs.writeFileSync, openSync: fs.openSync };
 fs.existsSync = (p: any, ...rest: any[]) => realFs.existsSync(redirect(p), ...rest);
 fs.readFileSync = (p: any, ...rest: any[]) => realFs.readFileSync(redirect(p), ...rest);
 fs.writeFileSync = (p: any, ...rest: any[]) => realFs.writeFileSync(redirect(p), ...rest);
+fs.openSync = (p: any, ...rest: any[]) => realFs.openSync(redirect(p), ...rest);
 
 const request = require('supertest');
 const jwt = require('jsonwebtoken');

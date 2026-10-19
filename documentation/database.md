@@ -135,7 +135,7 @@ After every backup, retention pruning runs automatically (`pruneBackups()` in `b
 
 ### 1.6 Configuration
 
-To change the driver, edit `backend/wordjs-config.json`. The flat `db*` keys (`dbDriver`, `dbHost`, `dbUser`, `dbPassword`, `dbName`, `dbPort`, `dbSsl`, `dbPath`) and a nested `db: { … }` object are both accepted; the config layer normalizes them into a single `db` connection object (`backend/src/config/app.ts`).
+To change the driver, edit `backend/wordjs-config.json`. The flat `db*` keys (`dbDriver`, `dbHost`, `dbUser`, `dbPassword`, `dbName`, `dbPort`, `dbSsl`, `dbSslCa`, `dbSslRejectUnauthorized`, `dbPath`) and a nested `db: { … }` object are both accepted; the config layer normalizes them into a single `db` connection object (`backend/src/config/app.ts`).
 
 **Example — external Postgres:**
 ```json
@@ -161,6 +161,42 @@ To change the driver, edit `backend/wordjs-config.json`. The flat `db*` keys (`d
 > **fails gracefully** — plugin SQL is still confined to the plugin's `wjp_<slug>_` tables by the
 > text-guard (`assertSqlAllowed`), it just loses the second, database-enforced layer. Grant `CREATEROLE`
 > to the WordJS role if you want that layer; do **not** reach for the superuser to get it.
+
+**TLS to the database (`dbSsl`).** With `"dbSsl": true` the Postgres and MySQL connections use TLS and
+**verify the server certificate** (chain and host name) — the same as any HTTPS client. A server whose
+certificate is signed by a public CA needs nothing else. For a private CA, a managed database's own CA
+or a self-signed server, point `dbSslCa` at the CA certificate:
+
+```json
+{
+  "dbSsl": true,
+  "dbSslCa": "./certs/db-ca.pem"
+}
+```
+
+`dbSslCa` is a path to a PEM file (relative paths resolve against `backend/`) or the PEM text itself.
+If verification fails, the backend logs `The database server's TLS certificate could not be verified`
+at boot with these instructions and does not start. Only when you knowingly accept an encrypted but
+**unauthenticated** connection, set `"dbSslRejectUnauthorized": false`; every connect then logs a
+warning. Both keys also exist nested (`db.sslCa`, `db.sslRejectUnauthorized`).
+
+The same two settings are offered everywhere a server database is configured:
+
+- **Install wizard** — tick *Use SSL* under PostgreSQL/MySQL: paste the CA certificate (PEM) or tick
+  *Skip certificate verification* (shown with a warning). *Test connection* uses them, and the install
+  saves them as `db.sslCa` / `db.sslRejectUnauthorized`.
+- **Admin → Database migration** — the same fields in the target-connection dialog; the migration
+  connects with them and saves them with the new connection.
+- **Docker / Helm** (`WORDJS_PRESEED_CONFIG=1`) — `WORDJS_DB_SSL`, `WORDJS_DB_SSL_CA` (a path inside the
+  container, e.g. a mounted secret) and `WORDJS_DB_SSL_REJECT_UNAUTHORIZED` (see
+  [docker/README.md](../docker/README.md)).
+
+The wizard and the migration screen take the CA as **PEM text** only; a file path is set in
+`wordjs-config.json` (or via `WORDJS_DB_SSL_CA`) on the server itself.
+
+> **Upgrading:** releases before this change did not verify the database certificate at all. A site with
+> `dbSsl: true` whose server presents a certificate Node cannot verify will stop at boot after the
+> upgrade with the message above — add `dbSslCa` (preferred) or the explicit opt-out.
 
 **Example — SQLite (default):**
 ```json

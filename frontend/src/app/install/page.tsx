@@ -68,6 +68,10 @@ export default function InstallPage() {
     const [dbUser, setDbUser] = useState("");
     const [dbPassword, setDbPassword] = useState("");
     const [dbSsl, setDbSsl] = useState(false);
+    // TLS to the database verifies the server certificate. A private CA goes in dbSslCa (PEM); skipping
+    // verification is an explicit, warned opt-out (the backend logs it at every connect).
+    const [dbSslCa, setDbSslCa] = useState("");
+    const [dbSslSkipVerify, setDbSslSkipVerify] = useState(false);
     const [dbTest, setDbTest] = useState<TestState>({ status: 'idle', message: '' });
 
     // Step 3: Admin
@@ -116,7 +120,12 @@ export default function InstallPage() {
         else router.push(to.href);
     };
 
-    const pgConn = () => ({ host: dbHost, port: dbPort, user: dbUser, password: dbPassword, database: dbName, ssl: dbSsl });
+    const pgConn = () => ({
+        host: dbHost, port: dbPort, user: dbUser, password: dbPassword, database: dbName, ssl: dbSsl,
+        ...(dbSsl && dbSslCa.trim() ? { sslCa: dbSslCa.trim() } : {}),
+        ...(dbSsl ? { sslRejectUnauthorized: !dbSslSkipVerify } : {}),
+    });
+    const resetDbTest = () => setDbTest({ status: 'idle', message: '' });
     const needsConn = dbDriver === 'postgres' || dbDriver === 'mysql';
     const pgFilled = !needsConn || (dbHost && dbName && dbUser);
     const emailValid = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(adminEmail);
@@ -372,7 +381,29 @@ export default function InstallPage() {
                                                 <div className="group col-span-2 sm:col-span-1"><label className={labelCls}>User</label><input className={inputCls} value={dbUser} onChange={e => { setDbUser(e.target.value); setDbTest({ status: 'idle', message: '' }); }} placeholder={dbDriver === 'mysql' ? 'root' : 'postgres'} /></div>
                                                 <div className="group col-span-2 sm:col-span-1"><label className={labelCls}>Password</label><input type="password" className={inputCls} value={dbPassword} onChange={e => setDbPassword(e.target.value)} /></div>
                                             </div>
-                                            <label className="flex items-center gap-2 text-sm text-gray-700"><input type="checkbox" checked={dbSsl} onChange={e => setDbSsl(e.target.checked)} /> Use SSL</label>
+                                            <label className="flex items-center gap-2 text-sm text-gray-700"><input type="checkbox" checked={dbSsl} onChange={e => { setDbSsl(e.target.checked); resetDbTest(); }} /> Use SSL</label>
+                                            {dbSsl && (
+                                                <div className="space-y-3 rounded-lg border border-gray-200 bg-white/60 p-3">
+                                                    <p className="text-xs text-gray-500">The server&apos;s certificate is verified. A certificate from a public authority needs nothing more.</p>
+                                                    <div className="group">
+                                                        <label htmlFor="db-ssl-ca" className={labelCls}>CA certificate (PEM, optional)</label>
+                                                        <textarea id="db-ssl-ca" rows={4} spellCheck={false} disabled={dbSslSkipVerify}
+                                                            className={`${inputCls} font-mono text-xs`} value={dbSslCa}
+                                                            onChange={e => { setDbSslCa(e.target.value); resetDbTest(); }}
+                                                            placeholder={'-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----'} />
+                                                        <p className="mt-1 text-xs text-gray-500">For a private CA, a managed database&apos;s own CA or a self-signed server. Paste the certificate that signed the database server&apos;s certificate.</p>
+                                                    </div>
+                                                    <label className="flex items-start gap-2 text-sm text-gray-700">
+                                                        <input type="checkbox" className="mt-0.5" checked={dbSslSkipVerify} onChange={e => { setDbSslSkipVerify(e.target.checked); resetDbTest(); }} />
+                                                        <span>Skip certificate verification (not recommended)</span>
+                                                    </label>
+                                                    {dbSslSkipVerify && (
+                                                        <p role="alert" className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                                                            The connection is encrypted but the server is not authenticated: anyone on the network path could impersonate the database. Use this only on a network you trust, and prefer pasting the CA certificate above.
+                                                        </p>
+                                                    )}
+                                                </div>
+                                            )}
                                             <div className="flex items-center gap-3">
                                                 <button type="button" onClick={testConnection} disabled={!pgFilled || dbTest.status === 'testing'}
                                                     className="px-4 py-2 rounded-lg bg-white border border-gray-300 text-gray-700 font-semibold hover:bg-gray-50 disabled:opacity-50 text-sm">

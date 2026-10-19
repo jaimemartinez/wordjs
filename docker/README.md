@@ -81,6 +81,9 @@ container (`docker compose exec wordjs npm run site -- list`). A **regular** fil
 | `WORDJS_DB_HOST` / `WORDJS_DB_PORT` | `localhost` / `5432` | shared Postgres address |
 | `WORDJS_DB_USER` / `WORDJS_DB_NAME` | `postgres` / `wordjs` | Postgres role + database |
 | `WORDJS_DB_PASSWORD` | `wordjs` | **must not be `password`** (see gotcha) |
+| `WORDJS_DB_SSL` | `false` | `true` connects to the database over TLS and **verifies its certificate** (chain and host name) |
+| `WORDJS_DB_SSL_CA` | *(unset)* | path inside the container to the CA certificate (PEM) that signed the database server's certificate — mount it as a secret. Needed for a private CA, a managed database's own CA or a self-signed server |
+| `WORDJS_DB_SSL_REJECT_UNAUTHORIZED` | `true` | `false` skips certificate verification: encrypted but **unauthenticated**. The entrypoint and the backend both log a warning. Prefer `WORDJS_DB_SSL_CA` |
 | `WORDJS_JWT_SECRET` | *(none — required)* | session signing key, ≥ 64 characters (`openssl rand -hex 64`); **share across replicas** |
 | `WORDJS_REDIS_ENABLED` | `false` | `true` turns on cross-node coherence |
 | `WORDJS_REDIS_HOST` / `WORDJS_REDIS_PORT` | `127.0.0.1` / `6379` | shared Redis |

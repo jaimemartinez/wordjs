@@ -43,6 +43,7 @@ const { asyncHandler } = require('../middleware/errorHandler');
 // or the request is a 400. Same rule firstNonStringField()/invalidParamType() below apply to this
 // file's list and body fields — this is that rule for a single value, reusable by the other routers.
 const { scalarQueryParam, requireRouteId, isRouteId } = require('../core/query-params');
+const { perPageParam, pageOffset } = require('../core/pagination');
 const { saveRevision, isRevisionableMeta } = require('../core/revisions');
 const sanitizeHtml = require('sanitize-html');
 
@@ -828,8 +829,8 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
         });
     }
 
-    const limit = Math.min(parseInt(String(per_page), 10) || 10, 100);
-    const offset = (Math.max(parseInt(String(page), 10) || 1, 1) - 1) * limit;
+    const limit = perPageParam(per_page, 10);
+    const offset = pageOffset(page, limit);
 
     // Map orderby to database column.
     //

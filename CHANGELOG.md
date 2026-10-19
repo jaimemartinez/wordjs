@@ -6,38 +6,36 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
-### Fixed
+### Changed
 
-- **Marketplace payment and public-form plugins: charge amounts, return pages, seat holds, bidding
-  and visitor mail.** Regression tests boot each real plugin (`backend/src/tests/payment-plugins-hardening.test.ts`).
-  - **donations 1.0.2, restaurant-menu 2.0.2** — a zero-decimal currency (JPY, KRW, CLP…) was sent to
-    Stripe in cents, so the charge was 100 times the price. Both now convert the amount the way
-    online-store already did; a donation in such a currency records the whole amount it charges.
-  - **online-store 2.0.2, donations 1.0.2, restaurant-menu 2.0.2** — the Stripe Checkout `success_url`
-    and `cancel_url` follow the visitor's page only when it is on this site (same origin, under the site
-    path); any other `page_url` returns to the site URL, as bookings already did.
-  - **event-tickets 1.1.0** — a paid order now holds its seats only after the buyer types the 8-digit code
-    mailed to the address (`POST /public/order/verify`); an unconfirmed order holds nothing and expires
-    after 15 minutes. Confirmed unpaid orders may hold at most `pendingHoldPercent` of a ticket type
-    (default 50 %) and expire after `pendingTtlMinutes` (default 20, was a fixed 30) — both in
-    **Entradas → Configuración**. Unpaid orders no longer count in the site-wide order window. On a site
-    with no mail transport at all, a paid order holds its seats right away, as before.
-  - **auctions 1.1.0** — a bid may raise the price by at most `max_bid_jump_percent` of the current
-    price (default 100 %, `0` = no cap), and always by at least ten increments. Who may bid is a setting
-    (`bid_verification`): `email` (default) — the bidder confirms the address once per browser with a
-    code mailed to it (`POST /public/verify-bidder`); `login` — signed-in accounts only, bidding as their
-    account address (`POST /bid-user`); `none` — anyone, the previous behaviour. A site with no mail
-    transport keeps open bidding. A client's first bid on an auction in its window is no longer held to
-    the shared per-auction and site-wide windows.
-  - **online-store, donations, event-tickets, bookings 1.0.2, newsletter 1.0.2, auctions** — the mails the
-    public forms send to an address nobody has verified yet carry only the site's own text, never the
-    name (or message) the visitor typed, and each is bounded per recipient address (5 an hour; the
-    newsletter opt-in 3 an hour and 6 a day; auction outbid notices 10 an hour).
-  - **The public blocks of these seven plugins send the CSRF token with their form posts.** A visitor
-    who was also signed in to the site carries the session cookie, and the host refuses a cookie-carrying
-    POST without the double-submit token — so ordering tickets, donating, booking, subscribing or ordering
-    food answered 403 for signed-in visitors, and online-store's account checkout silently fell back to
-    the anonymous route (the order was not linked to the account).
+- **Database TLS verifies the server certificate.** With `dbSsl: true`, Postgres and MySQL connections
+  (including the per-plugin MySQL pools and the installer's connection test) now check the server
+  certificate chain and host name instead of accepting any certificate. New settings: `dbSslCa` (the CA
+  that signed the server certificate, as a PEM file path or PEM text) and `dbSslRejectUnauthorized: false`
+  as an explicit, logged opt-out. A site whose database presents a certificate Node cannot verify stops at
+  boot with a message explaining both options — see [database.md](documentation/database.md). The install
+  wizard and **Admin → Database migration** offer both settings when *Use SSL* is ticked (the opt-out with
+  a warning), and the Docker/Helm entrypoint reads `WORDJS_DB_SSL`, `WORDJS_DB_SSL_CA` and
+  `WORDJS_DB_SSL_REJECT_UNAUTHORIZED`.
+
+### Security
+
+- **List page sizes have a floor.** `per_page` (and `limit`/`offset` on revisions) is clamped to at least
+  1 on every list route through one shared helper, and the models clamp their own `LIMIT`/`OFFSET` too.
+- **The gateway access log no longer records secrets in URLs.** Query values are logged as `[redacted]`
+  (parameter names are kept) and the Referer is no longer logged.
+- **Config and key files are owner-only.** New `wordjs-config.json` files are created `0600` and a rewrite
+  clears the bits for other users; the setup orchestrator writes private keys and configs `0600` and
+  re-applies it after copying keys; every write of `gateway-config.json` is `0600`, as are the config the
+  Docker entrypoint generates and the config backup the database migration writes. A config file that
+  cannot be parsed is no longer overwritten at boot.
+- **Less detail in public error bodies.** Gateway `502` responses no longer include the upstream address
+  or the raw error text, and `/readyz` no longer returns an exception message; both are logged instead.
+- **The gateway validates the settings it persists.** `/config-update` stores only a canonical http(s)
+  origin for `siteUrl` and a port in 1-65535; anything else gets a `400`.
+- **`/readyz` and WebSocket upgrades are bounded.** The readiness verdict is cached for about a second and
+  shared by concurrent callers, and the gateway caps WebSocket upgrades per client
+  (`rateLimit.upgradeMax`, default 120 per `rateLimit.upgradeWindowMs`, default 60 s).
 
 ## [2.7.0] - 2026-10-17
 

@@ -29,6 +29,7 @@ const mysql = require('mysql2/promise');
 // SQL-injection barriers, used for the dynamic identifiers (user, table) in the role-isolation DDL below.
 const mysqlSync = require('mysql2');
 const config = require('../config/app');
+const { dbTlsOptions, isCertificateError, DB_TLS_VERIFY_HINT, DB_TLS_UNVERIFIED_WARNING } = require('./db-tls');
 // THE rule for TEXT → LONGTEXT / VARCHAR(255). Lives in its own dependency-free module so this driver
 // and core/db-admin/migration.js consume ONE implementation and cannot drift apart again.
 const {
@@ -614,6 +615,8 @@ class MysqlDriver extends DatabaseDriverInterface {
         const dbConfig = this.config || config.db;
         log.info(`🔌 MySQL: Connecting to ${dbConfig.host}:${dbConfig.port || 3306}/${dbConfig.name}...`);
         try {
+            const ssl = dbTlsOptions(dbConfig);
+            if (ssl && !ssl.rejectUnauthorized) log.warn(DB_TLS_UNVERIFIED_WARNING);
             this.pool = mysql.createPool({
                 host: dbConfig.host,
                 port: dbConfig.port || 3306,
@@ -625,7 +628,7 @@ class MysqlDriver extends DatabaseDriverInterface {
                 multipleStatements: true, // migrations/exec may ship several statements at once
                 charset: 'utf8mb4_unicode_ci',
                 dateStrings: true,        // WordJS stores/reads timestamps as TEXT, not JS Date
-                ssl: dbConfig.ssl ? { rejectUnauthorized: false } : undefined
+                ssl
             });
 
             // Every physical connection speaks the same dialect as SQLite/Postgres. The mode itself is
@@ -653,6 +656,7 @@ class MysqlDriver extends DatabaseDriverInterface {
             catch (e: any) { log.warn({ err: e }, '⚠️  MySQL: legacy TEXT widening pass failed'); }
         } catch (err: any) {
             log.error({ err }, '❌ MySQL: Connection failed');
+            if (isCertificateError(err)) log.error(DB_TLS_VERIFY_HINT);
             throw err;
         }
     }
@@ -1130,7 +1134,7 @@ class MysqlDriver extends DatabaseDriverInterface {
             multipleStatements: false, // a sandboxed plugin never runs stacked statements
             charset: 'utf8mb4_unicode_ci',
             dateStrings: true,
-            ssl: dbConfig.ssl ? { rejectUnauthorized: false } : undefined
+            ssl: dbTlsOptions(dbConfig)
         });
         // SAME session mode as the main pool — one constant, so the two can never drift again. This
         // pool used to re-enable NO_BACKSLASH_ESCAPES that the main pool had deliberately removed,

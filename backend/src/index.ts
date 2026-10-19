@@ -1065,22 +1065,18 @@ app.get('/metrics', async (req: Request, res: Response) => {
  *                 error:
  *                   type: string
  */
+// The verdict is cached ~1 s and shared by concurrent callers (core/readiness.ts): this route is
+// unauthenticated and rate-limit exempt, so its cost must not scale with the request rate. A failure's
+// detail is logged, never sent.
+const readiness = require('./core/readiness').createReadinessProbe({
+    isInstalled: () => require('./core/configManager').isInstalled(),
+    isBooted: () => appReady,
+    checkDatabase: () => require('./core/system-health').checkDatabase(),
+    onError: (err: unknown) => log.warn({ err }, '/readyz: readiness check failed'),
+});
 app.get('/readyz', async (req: Request, res: Response) => {
-    const checks: any = { installed: false, booted: appReady, db: 'unknown' };
-    try {
-        const { isInstalled } = require('./core/configManager');
-        checks.installed = isInstalled();
-        if (!checks.installed) return res.status(503).json({ status: 'setup_required', checks });
-        if (!appReady) return res.status(503).json({ status: 'starting', checks });
-        const SystemHealth = require('./core/system-health');
-        const db = await SystemHealth.checkDatabase();
-        checks.db = db.status === 'OK' ? 'ok' : 'error';
-        if (checks.db !== 'ok') return res.status(503).json({ status: 'not_ready', checks });
-        return res.json({ status: 'ready', checks });
-    } catch (e: any) {
-        checks.db = 'error';
-        return res.status(503).json({ status: 'not_ready', checks, error: e && e.message });
-    }
+    const { statusCode, body } = await readiness();
+    res.status(statusCode).json(body);
 });
 
 // THE INSTALL FUNNEL — before installation, every request outside the static trees, /health and the

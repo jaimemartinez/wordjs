@@ -45,6 +45,10 @@ export interface AppConfig {
         password: string;
         name: string;
         ssl: boolean;
+        // TLS verification (drivers/db-tls.ts): the server certificate is verified unless
+        // sslRejectUnauthorized is explicitly false; sslCa is a PEM string or a path to a PEM file.
+        sslCa?: string;
+        sslRejectUnauthorized: boolean;
         // Optional Postgres pool tuning (safe defaults applied in drivers/postgres.ts)
         poolMax?: number;
         poolIdleMs?: number;
@@ -254,10 +258,14 @@ function assertInstalledJwtSecretIsNotPublished(cfg: FileConfig, file: string = 
 const bootNote = /^(1|true|yes)$/i.test(String(process.env.WORDJS_LOG_TO_STDERR || '')) ? console.error : console.log;
 
 if (!(globalThis as any).__WORDJS_ISOLATED__) {
+    // Whether the file was actually READ (and parsed). The secret auto-generation below rewrites only
+    // the file it loaded: it never creates one, and never overwrites a file it could not parse.
+    let configLoaded = false;
     try {
         if (fs.existsSync(configPath)) {
             const rawData = fs.readFileSync(configPath, 'utf8');
             fileConfig = JSON.parse(rawData);
+            configLoaded = true;
             bootNote('📄 Config loaded from wordjs-config.json');
         } else {
             console.warn('⚠️  wordjs-config.json not found, using defaults.');
@@ -268,7 +276,7 @@ if (!(globalThis as any).__WORDJS_ISOLATED__) {
 
     // 1.5 Secure Auto-Generation — generate secure keys ONLY if config exists but is insecure.
     let configChanged = false;
-    if (fs.existsSync(configPath)) {
+    if (configLoaded) {
         // Outside the load's try/catch on purpose: this must stop the process, not be logged and ignored.
         assertInstalledJwtSecretIsNotPublished(fileConfig);
         if (jwtSecretNeedsReplacing(fileConfig)) {
@@ -285,7 +293,19 @@ if (!(globalThis as any).__WORDJS_ISOLATED__) {
 
         if (configChanged) {
             try {
-                fs.writeFileSync(configPath, JSON.stringify(fileConfig, null, 2));
+                // The file now holds fresh secrets: never readable by OTHER users (owner/group bits kept).
+                // One descriptor for the whole rewrite: 'r+' opens the file that was just read (it never
+                // creates one), and the mode is read and narrowed on that same descriptor, so nothing is
+                // checked by path and then acted on by path.
+                const fd = fs.openSync(configPath, 'r+');
+                try {
+                    const text = JSON.stringify(fileConfig, null, 2);
+                    fs.ftruncateSync(fd, 0);
+                    fs.writeSync(fd, text, 0, 'utf8');
+                    try { fs.fchmodSync(fd, fs.fstatSync(fd).mode & 0o770); } catch { /* Windows: no POSIX bits */ }
+                } finally {
+                    fs.closeSync(fd);
+                }
                 bootNote('💾 wordjs-config.json updated with secure credentials.');
             } catch (err) {
                 console.error('❌ Failed to persist secure credentials:', err.message);
@@ -408,6 +428,9 @@ const config: AppConfig = {
         password: fileConfig.dbPassword || (fileConfig.db && fileConfig.db.password) || 'password',
         name: fileConfig.dbName || (fileConfig.db && fileConfig.db.name) || 'wordjs',
         ssl: fileConfig.dbSsl === true || (fileConfig.db && fileConfig.db.ssl === true) || false,
+        sslCa: fileConfig.dbSslCa || fileConfig.db?.sslCa || undefined,
+        // Verified unless an operator opts out EXPLICITLY with `false` (flat or nested).
+        sslRejectUnauthorized: !(fileConfig.dbSslRejectUnauthorized === false || fileConfig.db?.sslRejectUnauthorized === false),
         // Postgres connection-pool tuning (safe defaults live in drivers/postgres.ts; override per-field via
         // a "db" block in wordjs-config.json). statementTimeoutMs stays OFF unless set — a blanket cap would
         // kill legit long migrations/imports/backups.

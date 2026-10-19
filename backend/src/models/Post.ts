@@ -4,6 +4,7 @@
  */
 
 const database = require('../config/database');
+const { clampLimit, clampOffset } = require('../core/pagination');
 const { db, dbAsync, getDbType } = database;
 const { doShortcode, doShortcodeAsync, stripShortcodes } = require('../core/shortcodes');
 const { sanitizeTitle, sanitizeContent, generateExcerpt, currentTimeGMT, currentTime, formatDate, boundSlug } = require('../core/formatting');
@@ -1450,7 +1451,7 @@ class Post {
         // Pagination
         // Use params for limit/offset
         sql += ' LIMIT ? OFFSET ?';
-        params.push(limit, offset);
+        params.push(clampLimit(limit, 10), clampOffset(offset));
 
         const rows = await dbAsync.all(sql, params);
 
