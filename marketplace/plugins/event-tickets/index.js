@@ -512,7 +512,12 @@ exports.init = async function (wordjs) {
         if (!flip || flip.changes !== 1) return { status: 409, error: 'Este pedido ya no está pendiente de confirmación.' };
         const claim = await claimSeats(parseItems(order.items), true, cfg.pendingHoldPercent);
         if (!claim.ok) {
-            await db.run(`UPDATE ${T.orders} SET payment_status = 'expired' WHERE id = ? AND payment_status = 'verifying'`, [order.id]);
+            // Nothing was held: the order goes back to waiting for its code, so the buyer can try the
+            // same code again once seats free up (within the code's TTL and its tries).
+            await db.run(
+                `UPDATE ${T.orders} SET payment_status = 'unverified', verify_code = ? WHERE id = ? AND payment_status = 'verifying'`,
+                [code, order.id]
+            );
             return { status: 409, error: claim.error };
         }
         const done = await db.run(

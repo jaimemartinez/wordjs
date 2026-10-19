@@ -67,6 +67,24 @@ const fmtMoney = (cents, symbol) =>
 // Module-level subcomponents ONLY (a component defined inside a component remounts on every render
 // and steals input focus).
 
+/**
+ * `{ "X-CSRF-Token": <wjs_csrf cookie> }`, or `{}` with no cookie. A visitor who is signed in to the
+ * site sends the session cookie with every request, and the host refuses a cookie-carrying POST that
+ * does not echo this token (double-submit CSRF) — even on a public route. Read fresh per call (the
+ * cookie rotates with the session); a plugin bundle cannot import the frontend's own reader.
+ */
+function csrfHeaders() {
+    if (typeof document === "undefined") return {};
+    for (const part of document.cookie.split(";")) {
+        const raw = part.trim();
+        if (!raw.startsWith("wjs_csrf=")) continue;
+        const value = raw.slice("wjs_csrf=".length);
+        if (!value) return {};
+        try { return { "X-CSRF-Token": decodeURIComponent(value) }; } catch { return { "X-CSRF-Token": value }; }
+    }
+    return {};
+}
+
 function Thermometer({ campaign, symbol }) {
     const goal = campaign.goal_cents || 0;
     const raised = campaign.raised_cents || 0;
@@ -264,7 +282,7 @@ export default function DonationsVerso({ campaignSlug, showGoal, showRecent, acc
             } catch { pageUrl = window.location.href; }
             const res = await fetch("/api/v1/plugin/donations/public/donate", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...csrfHeaders() },
                 body: JSON.stringify({
                     campaign_id: campaign.id,
                     amount_cents: amountCents,

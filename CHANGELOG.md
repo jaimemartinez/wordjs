@@ -33,6 +33,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     public forms send to an address nobody has verified yet carry only the site's own text, never the
     name (or message) the visitor typed, and each is bounded per recipient address (5 an hour; the
     newsletter opt-in 3 an hour and 6 a day; auction outbid notices 10 an hour).
+  - **The public blocks of these seven plugins send the CSRF token with their form posts.** A visitor
+    who was also signed in to the site carries the session cookie, and the host refuses a cookie-carrying
+    POST without the double-submit token — so ordering tickets, donating, booking, subscribing or ordering
+    food answered 403 for signed-in visitors, and online-store's account checkout silently fell back to
+    the anonymous route (the order was not linked to the account).
 
 ## [2.7.0] - 2026-10-17
 

@@ -69,6 +69,24 @@ const STYLES = `
 
 // ---- module-level helpers (never define components inside components) ------------------------------
 
+/**
+ * `{ "X-CSRF-Token": <wjs_csrf cookie> }`, or `{}` with no cookie. A visitor who is signed in to the
+ * site sends the session cookie with every request, and the host refuses a cookie-carrying POST that
+ * does not echo this token (double-submit CSRF) — even on a public route. Read fresh per call (the
+ * cookie rotates with the session); a plugin bundle cannot import the frontend's own reader.
+ */
+function csrfHeaders() {
+    if (typeof document === "undefined") return {};
+    for (const part of document.cookie.split(";")) {
+        const raw = part.trim();
+        if (!raw.startsWith("wjs_csrf=")) continue;
+        const value = raw.slice("wjs_csrf=".length);
+        if (!value) return {};
+        try { return { "X-CSRF-Token": decodeURIComponent(value) }; } catch { return { "X-CSRF-Token": value }; }
+    }
+    return {};
+}
+
 function readLs() {
     if (typeof window === "undefined") return {};
     try { return JSON.parse(window.localStorage.getItem(LS_KEY) || "{}") || {}; } catch { return {}; }
@@ -198,7 +216,7 @@ function AuctionDetail({ slug, onBack }) {
         // A signed-in bidder bids through the account route (the address is the account's own).
         const res = await fetch(loginMode ? `${API}/bid-user` : `${API}/public/bid`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", ...csrfHeaders() },
             body: JSON.stringify({
                 auction_id: data.auction.id,
                 bidder_name: name,
@@ -242,7 +260,7 @@ function AuctionDetail({ slug, onBack }) {
         try {
             const res = await fetch(`${API}/public/verify-bidder`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...csrfHeaders() },
                 body: JSON.stringify({ bidder_email: email, code: String(code).trim() }),
             });
             const body = await res.json().catch(() => null);

@@ -278,14 +278,18 @@ test('event-tickets: confirmed unpaid orders hold at most the configured share o
         };
         assert.strictEqual((await place('a', 6)).status, 200);
         assert.strictEqual((await place('b', 4)).status, 200, '10 of 20 seats held: exactly the default 50 %');
-        const over = await place('c', 1);
+        const cOrder = await placeTickets(p, 'c', 1);
+        const cCode = codeMailedTo(p, 'c@x.io')!;
+        const over = await verifyTickets(p, 'c', cOrder.body.token, cCode);
         assert.strictEqual(over.status, 409, `unpaid orders held more than half the type: ${JSON.stringify(over.body)}`);
         assert.match(over.body.error, /sin pagar/);
         assert.deepStrictEqual(typeRow(p), { sold: 10, held: 10 });
-        // A confirmed payment frees its share of the hold for the next buyer.
+        assert.strictEqual(ticketOrder(p, cOrder.body.token).payment_status, 'unverified', 'a refused hold leaves the order waiting for its code');
+        // A confirmed payment frees its share of the hold; the buyer who was refused retries the same code.
         const a = p.sdb.prepare(`SELECT id FROM ${p.prefix}orders WHERE buyer_email = 'a@x.io'`).get().id;
         assert.strictEqual((await p.call('post', '/orders/:id/paid', { params: { id: a }, user: ET_ADMIN })).status, 200);
-        assert.strictEqual((await place('d', 1)).status, 200);
+        const retried = await verifyTickets(p, 'c', cOrder.body.token, cCode);
+        assert.strictEqual(retried.status, 200, JSON.stringify(retried.body));
         assert.deepStrictEqual(typeRow(p), { sold: 11, held: 5 });
         // Cancelling a pending order releases its hold too.
         const b = p.sdb.prepare(`SELECT id FROM ${p.prefix}orders WHERE buyer_email = 'b@x.io'`).get().id;

@@ -56,6 +56,24 @@ const STYLES = `
 const CART_KEY = "wjet_cart_v1";
 
 // Module-level cart helpers (localStorage can throw in sandboxed iframes — always guarded).
+/**
+ * `{ "X-CSRF-Token": <wjs_csrf cookie> }`, or `{}` with no cookie. A visitor who is signed in to the
+ * site sends the session cookie with every request, and the host refuses a cookie-carrying POST that
+ * does not echo this token (double-submit CSRF) — even on a public route. Read fresh per call (the
+ * cookie rotates with the session); a plugin bundle cannot import the frontend's own reader.
+ */
+function csrfHeaders() {
+    if (typeof document === "undefined") return {};
+    for (const part of document.cookie.split(";")) {
+        const raw = part.trim();
+        if (!raw.startsWith("wjs_csrf=")) continue;
+        const value = raw.slice("wjs_csrf=".length);
+        if (!value) return {};
+        try { return { "X-CSRF-Token": decodeURIComponent(value) }; } catch { return { "X-CSRF-Token": value }; }
+    }
+    return {};
+}
+
 function readCart() {
     try {
         if (typeof window === "undefined") return null;
@@ -202,7 +220,7 @@ export default function EventTicketsVerso({ eventId, accentColor, elementId }) {
         try {
             const res = await fetch("/api/v1/plugin/event-tickets/public/order", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...csrfHeaders() },
                 body: JSON.stringify({
                     event_id: event.id,
                     items,
@@ -235,7 +253,7 @@ export default function EventTicketsVerso({ eventId, accentColor, elementId }) {
         try {
             const res = await fetch("/api/v1/plugin/event-tickets/public/order/verify", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...csrfHeaders() },
                 body: JSON.stringify({ token: result.token, code: code.trim() }),
             });
             const body = await res.json().catch(() => ({}));
@@ -292,8 +310,8 @@ export default function EventTicketsVerso({ eventId, accentColor, elementId }) {
                 <div className="wjet-body">
                     {result.status === "unverified" ? (
                         <form className="wjet-pend wjet-form" onSubmit={confirmCode}>
-                            <strong>Confirma tu correo</strong> — total {fmtMoney(result.total_cents, symbol)}.
-                            <p style={{ margin: ".5rem 0" }}>{result.message || "Te enviamos un código a tu correo."}</p>
+                            <p style={{ margin: 0 }}><strong>Confirma tu correo</strong> — total {fmtMoney(result.total_cents, symbol)}.</p>
+                            <p style={{ margin: 0 }}>{result.message || "Te enviamos un código a tu correo."}</p>
                             <input
                                 type="text"
                                 inputMode="numeric"
