@@ -7,6 +7,8 @@
  *  - Stripe amounts (online-store, donations, restaurant-menu): a zero-decimal currency (JPY, KRW,
  *    CLP…) takes the amount in whole units; donations and restaurant-menu sent the stored cents as is,
  *    so a ¥1,500 charge became ¥150,000. MUTATION PROOF: send `amountCents` / `totalCents` raw again.
+ *    online-store already converted, so its case passes on the code before this fix too: it guards
+ *    that conversion — send `total` raw in its checkout and the case fails ("charged 150000").
  *  - Stripe return URLs (same three): success_url / cancel_url follow the visitor's page only when it
  *    is on this site; any other http(s) page_url turned the checkout into a redirect off-site.
  *    MUTATION PROOF: accept any /^https?:/ page_url again.
