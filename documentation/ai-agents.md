@@ -31,9 +31,10 @@ A pending connection can connect, but is offered only the `whoami` tool until so
 
 | Grant | What it allows | Product capabilities it can unlock (only if the user holds them) |
 |---|---|---|
-| `content:read` | list, search and read entries, terms and media | `read_private_*` of every content type |
-| `content:draft` | create drafts, edit drafts, submit for review (implies `content:read`) | `edit_*`, `edit_others_*` (create/edit) of every content type |
+| `content:read` | list, search and read entries, terms and media | `read` (published content, and the bound user's own entries) |
+| `content:draft` | create drafts, edit drafts, submit for review (implies `content:read`) | `edit_*` (create/edit the bound user's own entries) of every content type |
 | `content:publish` | publish, edit live content (implies `content:draft`) | `publish_*`, `edit_published_*` |
+| `content:others` | reach content **other people** wrote: their private entries and drafts, and — together with `content:draft` — editing them (implies `content:read`; never implied by another word, off by default) | `read_private_*`, and with `content:draft` `edit_others_*`, of every content type |
 | `media:upload` | upload files (same checks as a browser upload) | `upload_files` |
 | `taxonomy:write` | create categories and tags | `manage_categories` |
 | `comments:moderate` | read the moderation queue, approve, mark as spam | `moderate_comments` |
@@ -49,6 +50,12 @@ Every tool call runs **as the bound user** with `req.user` replaced by a narrowe
 (`backend/src/core/agent-capabilities.ts`, `narrowUser`) whose `can(cap)` is
 `user.can(cap) && agentPermitsCapability(grant, cap)`. Consequences:
 
+- Without `content:others` an agent works on the bound user's own entries and on published content only:
+  an editor's agent granted `content:draft` cannot list, read or rewrite another author's draft, so the
+  text other people wrote does not reach the model through the write tools. Grant it only to an agent
+  meant to work on the whole site's content. Connections created before this word existed keep their
+  grant as stored, which no longer includes other people's content; re-grant with `content:others` where
+  that is wanted.
 - A contributor's agent granted `content:publish` still cannot publish — the contributor cannot. The admin
   screen shows such a grant struck through as **inert**.
 - An administrator's agent reports the synthetic role `agent` to role-based gates (`isAdmin`, the SVG
@@ -103,10 +110,12 @@ id>` so **Admin → AI agents → Audit trail** is one query:
 
 - `agent.create`, `agent.grant` (`previous` and new grant), `agent.revoke`;
 - `agent.write` — one row per write tool call, success or refusal: `{tool, objectType, objectId,
-  httpStatus, ok, status}`. The REST handler the call ran through records its own row as well
+  httpStatus, ok, status, onBehalfOf, createdBy, grantedBy}` — the user the call ran as, the account
+  that created the connection and the one that granted it (an administrator can bind a connection to
+  another user, so the row names both). The REST handler the call ran through records its own row as well
   (`post.create`, `post.update`, …) under the bound user;
-- `agent.denied` — a call to a tool the connection was not granted, listed or not: `{tool, needs}`
-  (the missing grant words).
+- `agent.denied` — a call to a tool the connection was not granted, listed or not: `{tool, needs,
+  onBehalfOf, createdBy, grantedBy}` (the missing grant words, and the same provenance).
 
 ## 6. Prompt injection
 
@@ -121,7 +130,8 @@ an audit row.
 
 - HTTP: 240 requests/minute per agent token (cluster-wide through the shared limiter store), on top of the
   global per-IP API limiter.
-- Per agent, in-process: 120 tool calls/minute and 30 writes/minute.
+- Per agent, in-process: 120 tool calls/minute (`whoami` and resource reads included) and 30
+  writes/minute, keyed by site and connection id.
 - At most 25 live connections per bound user.
 - Tool outputs clip long text fields (an entry's body, for example) at 60,000 characters, marked
   `… [truncated N characters]`; shorter fields (titles, excerpts, comment bodies) have lower caps of their own.

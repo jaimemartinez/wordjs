@@ -73,17 +73,36 @@ function fieldsOf(type: GraphQLNamedType | null | undefined): Record<string, Gra
     return null;
 }
 
+type Measure = { depth: number; cost: number };
+
+/** Per-operation walk state: fragment cycle guard and the memo of already-measured fragments. */
+interface WalkState {
+    visiting: Set<string>;
+    memo: Map<string, Measure>;
+}
+
+/** A partial result already over a limit: the caller needs no exact figure to refuse the operation. */
+function overLimit(m: Measure, opts: LimitOptions): boolean {
+    return m.cost > opts.maxCost || m.depth > opts.maxDepth;
+}
+
 /**
  * Walk a selection set, expanding fragments, and report (depth, cost). `visiting` guards fragment
  * cycles (NoFragmentCyclesRule reports them; this walker must simply not recurse forever on one).
+ *
+ * A fragment's (depth, cost) depends only on its own selections and the type it is measured against,
+ * so it is measured ONCE per (fragment, type) and reused for every later spread: without the memo a
+ * chain of fragments that each spread the next one twice costs 2^n walks to measure. The walk also
+ * stops as soon as a running figure passes a limit — the operation is refused either way, and the
+ * reported figure is then a lower bound ("at least").
  */
 function measure(
     context: ValidationContext,
     selectionSet: SelectionSetNode,
     parentType: GraphQLNamedType | null,
     opts: LimitOptions,
-    visiting: Set<string>,
-): { depth: number; cost: number } {
+    state: WalkState,
+): Measure {
     let depth = 0;
     let cost = 0;
     for (const sel of selectionSet.selections) {
@@ -97,7 +116,7 @@ function measure(
             if (!def && name === '__type') childType = context.getSchema().getType('__Type') || null;
             const spec = fieldCostOf(def);
             let child = { depth: 0, cost: 0 };
-            if (sel.selectionSet) child = measure(context, sel.selectionSet, childType, opts, visiting);
+            if (sel.selectionSet) child = measure(context, sel.selectionSet, childType, opts, state);
             let multiplier = 1;
             if (spec.list) {
                 const first = intArg(sel, 'first');
@@ -109,28 +128,34 @@ function measure(
             depth = Math.max(depth, 1 + child.depth);
         } else if (sel.kind === Kind.INLINE_FRAGMENT) {
             const cond = sel.typeCondition ? context.getSchema().getType(sel.typeCondition.name.value) : parentType;
-            const r = measure(context, sel.selectionSet, cond || parentType, opts, visiting);
+            const r = measure(context, sel.selectionSet, cond || parentType, opts, state);
             depth = Math.max(depth, r.depth);
             cost += r.cost;
         } else if (sel.kind === Kind.FRAGMENT_SPREAD) {
             const name = sel.name.value;
-            if (visiting.has(name)) continue;
+            if (state.visiting.has(name)) continue;
             const frag: FragmentDefinitionNode | null | undefined = context.getFragment(name);
             if (!frag) continue;
-            visiting.add(name);
-            const cond = context.getSchema().getType(frag.typeCondition.name.value);
-            const r = measure(context, frag.selectionSet, cond || parentType, opts, visiting);
-            visiting.delete(name);
+            const cond = context.getSchema().getType(frag.typeCondition.name.value) || parentType;
+            const key = `${name}|${cond ? cond.name : ''}`;
+            let r = state.memo.get(key);
+            if (!r) {
+                state.visiting.add(name);
+                r = measure(context, frag.selectionSet, cond, opts, state);
+                state.visiting.delete(name);
+                state.memo.set(key, r);
+            }
             depth = Math.max(depth, r.depth);
             cost += r.cost;
         }
+        if (overLimit({ depth, cost }, opts)) break;
     }
     return { depth, cost };
 }
 
 /** Measure one operation; exported for tests and for the X-GraphQL-Cost diagnostics. */
 export function measureOperation(context: ValidationContext, selectionSet: SelectionSetNode, rootType: GraphQLNamedType | null, opts: LimitOptions) {
-    return measure(context, selectionSet, rootType, opts, new Set());
+    return measure(context, selectionSet, rootType, opts, { visiting: new Set(), memo: new Map() });
 }
 
 /** One rule for both limits, so each operation is walked once. */
