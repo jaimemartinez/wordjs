@@ -25,6 +25,7 @@ const {
 // not read the entry it hangs off, and restored or purged only by who may edit that entry.
 const { attachmentReadable, attachmentWriteRefusal } = require('../core/attachment-visibility');
 const { requireRouteId, routeIdOrNull } = require('../core/query-params');
+const { perPageParam, offsetParam } = require('../core/pagination');
 
 // THE ROUTE-ID CONTRACT — see core/query-params.
 //
@@ -168,8 +169,8 @@ router.get('/post/:postId', authenticate, asyncHandler(async (req: Request, res:
     // in-range integer by the time this line runs; the parse can no longer produce NaN or a value the
     // `posts.id` column cannot hold.
     const postId = routeIdOrNull(req.params.postId);
-    const limit = parseInt(String(req.query.limit), 10) || 10;
-    const offset = parseInt(String(req.query.offset), 10) || 0;
+    const limit = perPageParam(req.query.limit, 10, 1000);
+    const offset = offsetParam(req.query.offset);
 
     const auth = await authorizeForPost(req, postId);
     if (auth.error) {

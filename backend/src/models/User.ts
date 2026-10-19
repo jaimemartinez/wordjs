@@ -4,6 +4,7 @@
  */
 
 const { db, dbAsync } = require('../config/database');
+const { clampLimit, clampOffset } = require('../core/pagination');
 const bcrypt = require('bcryptjs');
 const config = require('../config/app');
 const { sanitizeTitle } = require('../core/formatting');
@@ -635,7 +636,7 @@ class User {
         // import can leave two meta_key='role' rows) can't appear twice via the role JOIN — keeping this
         // in lockstep with count()'s COUNT(DISTINCT u.id). The ORDER BY columns are all within u.* so
         // DISTINCT is valid on Postgres too.
-        const sql = `SELECT DISTINCT u.* FROM users u${join}${whereSql}${orderSql} LIMIT ${parseInt(limit, 10)} OFFSET ${parseInt(offset, 10)}`;
+        const sql = `SELECT DISTINCT u.* FROM users u${join}${whereSql}${orderSql} LIMIT ${clampLimit(limit, 10)} OFFSET ${clampOffset(offset)}`;
 
         const rows = await dbAsync.all(sql, params);
 

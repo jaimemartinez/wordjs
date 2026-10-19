@@ -22,6 +22,7 @@ const { refuseSelfServiceEmailChange, isValidAddress, mailboxFlagValue, hasProfe
 const { recordAudit } = require('../core/audit');
 // THE SCALAR QUERY RULE — see core/query-params.
 const { requireScalarQuery, requireRouteId, routeIdOrNull } = require('../core/query-params');
+const { perPageParam, pageOffset } = require('../core/pagination');
 
 // THE ROUTE-ID CONTRACT — see core/query-params. `:id` is a user id: `/users/abc` reached
 // User.findById as NaN and was bound into `WHERE id = ?` — a 500 on Postgres/MySQL on read, edit and
@@ -273,8 +274,8 @@ router.get('/', can('list_users'), asyncHandler(async (req: Request, res: Respon
     // `parseInt` stringifies its argument before parsing, so `String(...)` here is the coercion the
     // untyped call already performed implicitly — a repeated `?per_page=5&per_page=7` still parses
     // "5,7" to 5, and a bracketed one still parses "[object Object]" to NaN and takes the default.
-    const limit = Math.min(parseInt(String(per_page), 10) || 10, 100);
-    const offset = (Math.max(parseInt(String(page), 10) || 1, 1) - 1) * limit;
+    const limit = perPageParam(per_page, 10);
+    const offset = pageOffset(page, limit);
 
     // SECURITY: Whitelist allowed orderBy columns to prevent SQL injection
     const allowedOrderBy = ['id', 'user_login', 'display_name', 'user_email', 'user_registered'];

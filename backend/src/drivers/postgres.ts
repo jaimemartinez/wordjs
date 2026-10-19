@@ -6,6 +6,7 @@
 const DatabaseDriverInterface = require('./interface');
 const { Pool, escapeIdentifier, escapeLiteral } = require('pg');
 const config = require('../config/app');
+const { dbTlsOptions, isCertificateError, DB_TLS_VERIFY_HINT, DB_TLS_UNVERIFIED_WARNING } = require('./db-tls');
 const log = require('../core/module-logger').moduleLogger('drivers/postgres');
 
 /**
@@ -161,13 +162,15 @@ class PostgresDriver extends DatabaseDriverInterface {
 
         try {
             const num = (v: any, d: number) => (Number.isFinite(Number(v)) ? Number(v) : d);
+            const ssl = dbTlsOptions(dbConfig);
+            if (ssl && !ssl.rejectUnauthorized) log.warn(DB_TLS_UNVERIFIED_WARNING);
             this.pool = new Pool({
                 host: dbConfig.host,
                 port: dbConfig.port || 5432,
                 user: dbConfig.user,
                 password: dbConfig.password,
                 database: dbConfig.name,
-                ssl: dbConfig.ssl ? { rejectUnauthorized: false } : false,
+                ssl: ssl || false,
                 // Force UTF-8 encoding to prevent errors on Windows servers with WIN1252 defaults
                 connectionString: undefined, // ensure pool uses individual params
                 client_encoding: 'UTF8',
@@ -192,6 +195,7 @@ class PostgresDriver extends DatabaseDriverInterface {
 
         } catch (err) {
             log.error({ err }, '❌ Postgres: Connection failed');
+            if (isCertificateError(err)) log.error(DB_TLS_VERIFY_HINT);
             throw err;
         }
     }

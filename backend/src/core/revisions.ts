@@ -5,6 +5,7 @@
 
 const crypto = require('crypto');
 const database = require('../config/database');
+const { clampLimit, clampOffset } = require('./pagination');
 const log = require('./module-logger').moduleLogger('core/revisions');
 const { dbAsync } = database;
 const { diffText, diffStats } = require('./text-diff');
@@ -148,7 +149,8 @@ async function saveRevision(postId: number, preserveFields: any[] = []) {
  * Equivalent to wp_get_post_revisions()
  */
 async function getRevisions(postId: number, options: { limit?: number; offset?: number } = {}) {
-  const { limit = 10, offset = 0 } = options;
+  const limit = clampLimit(options.limit ?? 10, 10);
+  const offset = clampOffset(options.offset ?? 0);
 
   // post_status = 'inherit' is the ONLY status saveRevision() emits, so it is the only thing a genuine
   // revision can carry. Requiring it here (and in countRevisions/limitRevisions/getRevision) means a

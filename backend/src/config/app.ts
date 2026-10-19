@@ -45,6 +45,10 @@ export interface AppConfig {
         password: string;
         name: string;
         ssl: boolean;
+        // TLS verification (drivers/db-tls.ts): the server certificate is verified unless
+        // sslRejectUnauthorized is explicitly false; sslCa is a PEM string or a path to a PEM file.
+        sslCa?: string;
+        sslRejectUnauthorized: boolean;
         // Optional Postgres pool tuning (safe defaults applied in drivers/postgres.ts)
         poolMax?: number;
         poolIdleMs?: number;
@@ -285,7 +289,9 @@ if (!(globalThis as any).__WORDJS_ISOLATED__) {
 
         if (configChanged) {
             try {
-                fs.writeFileSync(configPath, JSON.stringify(fileConfig, null, 2));
+                // The file now holds fresh secrets: never readable by OTHER users (owner/group bits kept).
+                fs.writeFileSync(configPath, JSON.stringify(fileConfig, null, 2), { mode: 0o600 });
+                try { fs.chmodSync(configPath, fs.statSync(configPath).mode & 0o770); } catch { /* Windows: no POSIX bits */ }
                 bootNote('💾 wordjs-config.json updated with secure credentials.');
             } catch (err) {
                 console.error('❌ Failed to persist secure credentials:', err.message);
@@ -408,6 +414,9 @@ const config: AppConfig = {
         password: fileConfig.dbPassword || (fileConfig.db && fileConfig.db.password) || 'password',
         name: fileConfig.dbName || (fileConfig.db && fileConfig.db.name) || 'wordjs',
         ssl: fileConfig.dbSsl === true || (fileConfig.db && fileConfig.db.ssl === true) || false,
+        sslCa: fileConfig.dbSslCa || fileConfig.db?.sslCa || undefined,
+        // Verified unless an operator opts out EXPLICITLY with `false` (flat or nested).
+        sslRejectUnauthorized: !(fileConfig.dbSslRejectUnauthorized === false || fileConfig.db?.sslRejectUnauthorized === false),
         // Postgres connection-pool tuning (safe defaults live in drivers/postgres.ts; override per-field via
         // a "db" block in wordjs-config.json). statementTimeoutMs stays OFF unless set — a blanket cap would
         // kill legit long migrations/imports/backups.

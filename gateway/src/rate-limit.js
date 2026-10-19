@@ -82,4 +82,33 @@ function createPublicLimiter(config, logger) {
     });
 }
 
-module.exports = { createPublicLimiter, limiterStore };
+/**
+ * Per-client cap for WebSocket upgrades. `server.on('upgrade')` never runs the Express chain, so the
+ * public limiter above does not see an upgrade at all, and each accepted upgrade holds an upstream
+ * socket open. This is a fixed-window counter per client address, kept in process memory (an upgrade
+ * is a long-lived connection to THIS process, so a per-process budget is the meaningful one).
+ *
+ * Config (optional): config.rateLimit.upgradeWindowMs (default 60000), config.rateLimit.upgradeMax
+ * (default 120 per window — far above what a page's live-reload, collaboration and presence sockets
+ * reconnect at, while bounding a flood).
+ */
+function createUpgradeLimiter(config) {
+    const rl = (config && config.rateLimit) || {};
+    const windowMs = Number(rl.upgradeWindowMs) > 0 ? Number(rl.upgradeWindowMs) : 60 * 1000;
+    const max = Number(rl.upgradeMax) > 0 ? Number(rl.upgradeMax) : 120;
+    let windowStart = Date.now();
+    let counts = new Map();
+    return {
+        /** True when this client may open another upgrade in the current window. */
+        allow(client) {
+            const now = Date.now();
+            if (now - windowStart >= windowMs) { windowStart = now; counts = new Map(); }
+            const key = String(client || 'unknown');
+            const n = (counts.get(key) || 0) + 1;
+            counts.set(key, n);
+            return n <= max;
+        },
+    };
+}
+
+module.exports = { createPublicLimiter, createUpgradeLimiter, limiterStore };

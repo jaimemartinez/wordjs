@@ -14,6 +14,7 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const proxyAddr = require('proxy-addr');
 const morgan = require('morgan');
+const { accessLogFormat } = require('./access-log');
 const compression = require('compression');
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
@@ -98,6 +99,16 @@ const REGISTRY_TEMP = path.resolve(__dirname, '../gateway-registry.json.tmp');
 // The host policy the backend last pushed (POST /host-policy). Written by the primary, read by every
 // worker by modification time. Absent = never pushed = the edge enforces nothing.
 const HOST_POLICY_FILE = path.resolve(__dirname, '../gateway-host-policy.json');
+
+/**
+ * Write gateway-config.json owner-only. It holds gatewaySecret and revalidateSecret. writeFileSync's
+ * `mode` applies only when the file is created, so an existing file is chmod'ed as well (a no-op on
+ * Windows, where POSIX modes do not apply).
+ */
+function writeGatewayConfig(configPath, data) {
+    fs.writeFileSync(configPath, JSON.stringify(data, null, 2), { mode: 0o600 });
+    try { fs.chmodSync(configPath, 0o600); } catch { /* best effort */ }
+}
 
 let configSecret = null;
 let configPort = 3000;
@@ -445,7 +456,7 @@ if (cluster.isPrimary) {
         const secret = require('crypto').randomBytes(32).toString('hex');
         config.revalidateSecret = secret;
         try {
-            fs.writeFileSync(path.resolve(__dirname, '../gateway-config.json'), JSON.stringify(config, null, 2));
+            writeGatewayConfig(path.resolve(__dirname, '../gateway-config.json'), config);
         } catch (e) {
             // Not fatal, but a secret we cannot persist would differ on the next boot and every purge
             // would 403 — say so loudly rather than failing mysteriously later.
@@ -725,7 +736,7 @@ if (cluster.isPrimary) {
 
                         // Save Config
                         const configPath = path.resolve(__dirname, '../gateway-config.json');
-                        fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+                        writeGatewayConfig(configPath, config);
 
                         // Restart Workers directly (we are in Primary process)
                         restartGateway();
@@ -777,7 +788,7 @@ if (cluster.isPrimary) {
 
                         // Save Config
                         const configPath = path.resolve(__dirname, '../gateway-config.json');
-                        fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+                        writeGatewayConfig(configPath, config);
 
                         // Restart Workers directly (we are in Primary process)
                         restartGateway();
@@ -1031,8 +1042,9 @@ if (cluster.isPrimary) {
     app.use(helmet(helmetOptions));
     // The gateway secret is no longer accepted in the query string (header-only now), so there is no
     // credential to redact and we log every request — the old skip let an attacker suppress logging
-    // for any request just by appending ?secret=.
-    app.use(morgan('combined', {
+    // for any request just by appending ?secret=. The line format (src/access-log.js) is `combined` with
+    // query VALUES redacted and the Referer dropped: reset/verification links carry their token there.
+    app.use(morgan(accessLogFormat, {
         stream: { write: (msg) => logger.info(msg.trim()) }
     }));
     const shouldCompress = (req, res) => {
@@ -1178,10 +1190,12 @@ if (cluster.isPrimary) {
                     if (code === 'ECONNRESET' || code === 'EPROTO' || /wrong version number/i.test(err.message || '')) {
                         flipScheme(target);
                     }
+                    // The upstream address and the error text stay in the log above; the client only learns
+                    // that the upstream could not answer.
                     if (code === 'ECONNREFUSED') {
-                        res.status(502).json({ error: 'Service Unavailable', message: 'The upstream service is starting or down.', target });
+                        res.status(502).json({ error: 'Service Unavailable', message: 'The upstream service is starting or down.' });
                     } else {
-                        res.status(502).json({ error: 'Upstream Error', message: err.message, target });
+                        res.status(502).json({ error: 'Upstream Error', message: 'The upstream service could not complete the request.' });
                     }
                 }
             });
@@ -1193,10 +1207,11 @@ if (cluster.isPrimary) {
         // global handler is a safety net. The second arg may be an HTTP response (web) or a
         // raw socket (ws). Only writeHead(502) on a real response; destroy a socket.
         if (res && typeof res.writeHead === 'function') {
+            logger.error(`[Gateway] Proxy Error: ${err && err.message}`);
             if (!res.headersSent) {
                 try {
                     res.writeHead(502, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'Proxy Error', message: err.message }));
+                    res.end(JSON.stringify({ error: 'Proxy Error', message: 'The upstream service could not complete the request.' }));
                 } catch (e) {
                     logger.error(`[Gateway] Could not send proxy error response: ${e.message}`);
                 }
@@ -1262,6 +1277,7 @@ if (cluster.isPrimary) {
     server.keepAliveTimeout = 65000;
     server.headersTimeout = 66000;
 
+    const upgradeLimiter = require('./rate-limit').createUpgradeLimiter(config);
     server.on('upgrade', (req, socket, head) => {
         // Upgrades never pass through the Express chain above, so the edge check and the forwarded-header
         // pins are applied here too: a WebSocket to an address the site does not answer is refused, and
@@ -1270,7 +1286,14 @@ if (cluster.isPrimary) {
         if (edge.handleUpgrade(req, socket)) return;
         hostEdge.pinUpgradeHeaders(req);
         // Upgrades skip Express, so req.ip is computed here with the same trust function.
-        if (trustsProxy) runtimeSettings.stateForwardedHeaders(req, proxyAddr(req, app.get('trust proxy fn')), { upgrade: true });
+        const upgradeClient = trustsProxy ? proxyAddr(req, app.get('trust proxy fn')) : (req.socket && req.socket.remoteAddress);
+        if (trustsProxy) runtimeSettings.stateForwardedHeaders(req, upgradeClient, { upgrade: true });
+        // Upgrades also skip the public limiter mounted on the Express chain, so they get their own
+        // per-client cap (src/rate-limit.js createUpgradeLimiter).
+        if (!upgradeLimiter.allow(upgradeClient)) {
+            try { socket.end('HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'); } catch (e) { /* socket already gone */ }
+            return;
+        }
         // The same pre-install bootstrap as the HTTP path. Without it, a fresh split install in dev had its
         // Next.js HMR socket (/_next/hmr) destroyed until the frontend registered — which it cannot do
         // before the wizard has issued the cluster identity — so the wizard page never became interactive.

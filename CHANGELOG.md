@@ -6,6 +6,30 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Changed
+
+- **Database TLS verifies the server certificate.** With `dbSsl: true`, Postgres and MySQL connections
+  (including the per-plugin MySQL pools and the installer's connection test) now check the server
+  certificate chain and host name instead of accepting any certificate. New settings: `dbSslCa` (the CA
+  that signed the server certificate, as a PEM file path or PEM text) and `dbSslRejectUnauthorized: false`
+  as an explicit, logged opt-out. A site whose database presents a certificate Node cannot verify stops at
+  boot with a message explaining both options — see [database.md](documentation/database.md).
+
+### Security
+
+- **List page sizes have a floor.** `per_page` (and `limit`/`offset` on revisions) is clamped to at least
+  1 on every list route through one shared helper, and the models clamp their own `LIMIT`/`OFFSET` too.
+- **The gateway access log no longer records secrets in URLs.** Query values are logged as `[redacted]`
+  (parameter names are kept) and the Referer is no longer logged.
+- **Config and key files are owner-only.** New `wordjs-config.json` files are created `0600` and a rewrite
+  clears the bits for other users; the setup orchestrator writes private keys and configs `0600` and
+  re-applies it after copying keys; every write of `gateway-config.json` is `0600`.
+- **Less detail in public error bodies.** Gateway `502` responses no longer include the upstream address
+  or the raw error text, and `/readyz` no longer returns an exception message; both are logged instead.
+- **`/readyz` and WebSocket upgrades are bounded.** The readiness verdict is cached for about a second and
+  shared by concurrent callers, and the gateway caps WebSocket upgrades per client
+  (`rateLimit.upgradeMax`, default 120 per `rateLimit.upgradeWindowMs`, default 60 s).
+
 ## [2.7.0] - 2026-10-17
 
 ### Added

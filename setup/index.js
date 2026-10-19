@@ -4,6 +4,22 @@ const path = require('path');
 const crypto = require('crypto');
 const { pki, md } = forge;
 
+// Private keys and config files (which hold jwtSecret, dbPassword, gatewaySecret…) are written
+// owner-only. A `mode` passed to a write applies only when the file is CREATED, and fs.copy keeps the
+// source's mode, so every write/copy is followed by an explicit chmod. chmod is a no-op on Windows.
+const SECRET_FILE_MODE = 0o600;
+async function restrictMode(file) {
+    try { await fs.chmod(file, SECRET_FILE_MODE); } catch { /* best effort (e.g. Windows) */ }
+}
+async function writeSecretFile(file, data) {
+    await fs.writeFile(file, data, { mode: SECRET_FILE_MODE });
+    await restrictMode(file);
+}
+async function writeSecretJson(file, obj) {
+    await fs.writeJson(file, obj, { spaces: 2, mode: SECRET_FILE_MODE });
+    await restrictMode(file);
+}
+
 /**
  * WordJS Autonomous Setup & Migration Orchestrator
  */
@@ -56,7 +72,7 @@ class WordJSSetup {
         const caKeyPem = pki.privateKeyToPem(caKeys.privateKey);
         const caCertPem = pki.certificateToPem(caCert);
 
-        await fs.writeFile(path.join(this.genCertsDir, 'cluster-ca.key'), caKeyPem);
+        await writeSecretFile(path.join(this.genCertsDir, 'cluster-ca.key'), caKeyPem);
         await fs.writeFile(path.join(this.genCertsDir, 'cluster-ca.crt'), caCertPem);
 
         // 2. Generate Service Identities
@@ -113,7 +129,7 @@ class WordJSSetup {
         const keyPem = pki.privateKeyToPem(keys.privateKey);
         const certPem = pki.certificateToPem(cert);
 
-        await fs.writeFile(path.join(this.genCertsDir, `${name}.key`), keyPem);
+        await writeSecretFile(path.join(this.genCertsDir, `${name}.key`), keyPem);
         await fs.writeFile(path.join(this.genCertsDir, `${name}.crt`), certPem);
     }
 
@@ -138,7 +154,7 @@ class WordJSSetup {
             mtls: { ca: './certs/cluster-ca.crt', key: './certs/backend.key', cert: './certs/backend.crt' },
             updatedAt: new Date().toISOString()
         };
-        await fs.writeJson(backendConfigPath, fullConfig, { spaces: 2 });
+        await writeSecretJson(backendConfigPath, fullConfig);
 
         // 2. MERGE GATEWAY CONFIG (Decoupled)
         let existingGateway = {};
@@ -164,7 +180,7 @@ class WordJSSetup {
         }
         gatewayConfig.mtls = { ca: './certs/cluster-ca.crt', key: './certs/gateway-internal.key', cert: './certs/gateway-internal.crt' };
         gatewayConfig.updatedAt = new Date().toISOString();
-        await fs.writeJson(gatewayConfigPath, gatewayConfig, { spaces: 2 });
+        await writeSecretJson(gatewayConfigPath, gatewayConfig);
 
         // 3. SELECTIVE CERT DISTRIBUTION
         // Ensure destination directories exist
@@ -201,6 +217,7 @@ class WordJSSetup {
                 const dest = path.join(targetDir, file);
                 if (path.resolve(src) === path.resolve(dest)) continue; // already in place
                 await fs.copy(src, dest);
+                if (file.endsWith('.key')) await restrictMode(dest);
             }
         };
 

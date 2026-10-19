@@ -12,6 +12,17 @@ const { siteHostPolicy, signInRefusal, signInRetiring, sessionCookieOptions } = 
 // The installer runs before any account exists, so its 500s are the most exposed in the product:
 // whatever broke (a filesystem path, a database DSN, a TLS library) is logged, never answered.
 const { publicErrorText } = require('../middleware/errorHandler');
+const { dbTlsOptions, isCertificateError, DB_TLS_VERIFY_HINT } = require('../drivers/db-tls');
+
+/**
+ * The TLS settings an installer request may carry for a server database. `sslCa` is accepted INLINE
+ * (PEM text) only: a path would make this unauthenticated-until-installed probe read a file of the
+ * caller's choosing. A path can still be set in wordjs-config.json after install.
+ */
+function installerDbTls(dbConn: any): { ssl: boolean; sslCa?: string; sslRejectUnauthorized: boolean } {
+    const ca = typeof dbConn?.sslCa === 'string' && dbConn.sslCa.includes('-----BEGIN') ? dbConn.sslCa : undefined;
+    return { ssl: !!dbConn?.ssl, ...(ca ? { sslCa: ca } : {}), sslRejectUnauthorized: dbConn?.sslRejectUnauthorized !== false };
+}
 
 // Gate for the PRE-INSTALL endpoints (/install, /test-db). These run before the instance is
 // configured, so they are unauthenticated and exempt from CSRF — require the one-time install token
@@ -308,6 +319,12 @@ router.get('/status', (_req: Request, res: Response) => {
  *                     type: string
  *                   ssl:
  *                     type: boolean
+ *                   sslCa:
+ *                     type: string
+ *                     description: PEM of the CA that signed the server certificate (verification is on by default).
+ *                   sslRejectUnauthorized:
+ *                     type: boolean
+ *                     description: Set to false to skip certificate verification (explicit opt-out).
  *     responses:
  *       200:
  *         description: The probe ran — read `ok` for the verdict
@@ -360,7 +377,7 @@ router.post('/test-db', async (req: Request, res: Response) => {
                 user: dbConn.user,
                 password: dbConn.password || '',
                 database: dbConn.database,
-                ssl: dbConn.ssl ? { rejectUnauthorized: false } : undefined,
+                ssl: dbTlsOptions(installerDbTls(dbConn)),
                 connectionTimeoutMillis: 4000
             });
             await client.connect();
@@ -379,7 +396,7 @@ router.post('/test-db', async (req: Request, res: Response) => {
                 user: dbConn.user,
                 password: dbConn.password || '',
                 database: dbConn.database,
-                ssl: dbConn.ssl ? { rejectUnauthorized: false } : undefined,
+                ssl: dbTlsOptions(installerDbTls(dbConn)),
                 connectTimeout: 4000
             });
             await conn.query('SELECT 1');
@@ -398,7 +415,8 @@ router.post('/test-db', async (req: Request, res: Response) => {
         }
         return res.json({ ok: false, error: 'Invalid database driver.' });
     } catch (e: any) {
-        return res.json({ ok: false, error: e && e.message ? e.message : 'Connection failed.' });
+        const message = e && e.message ? e.message : 'Connection failed.';
+        return res.json({ ok: false, error: isCertificateError(e) ? `${message}. ${DB_TLS_VERIFY_HINT}` : message });
     }
 });
 
@@ -470,6 +488,10 @@ router.post('/test-db', async (req: Request, res: Response) => {
  *                   database:
  *                     type: string
  *                   ssl:
+ *                     type: boolean
+ *                   sslCa:
+ *                     type: string
+ *                   sslRejectUnauthorized:
  *                     type: boolean
  *               siteUrl:
  *                 type: string
@@ -725,7 +747,7 @@ router.post('/install', async (req: Request, res: Response) => {
                     user: dbConn.user,
                     password: dbConn.password || '',
                     database: dbConn.database,
-                    ssl: !!dbConn.ssl
+                    ...installerDbTls(dbConn)
                 }
             }
             : { dbPath: dbDriver === 'sqlite-native' ? './data/wordjs-native.db' : './data/wordjs.db' })
