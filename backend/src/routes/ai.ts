@@ -15,7 +15,6 @@ import type { Request, Response } from 'express';
 
 const express = require('express');
 const router = express.Router();
-const path = require('path');
 const { authenticate, sessionOnly } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
@@ -142,7 +141,6 @@ router.post('/test', authenticate, sessionOnly, isAdmin, asyncHandler(async (_re
 async function imageForAltText(req: Request, res: Response, mediaId: number): Promise<{ image: any; title: string } | null> {
     const Post = require('../models/Post');
     const Media = require('../models/Media');
-    const config = require('../config/app');
     const { resolveWithin } = require('../core/safe-path');
     const { attachmentWriteRefusal } = require('../core/attachment-visibility');
     const privateMedia = require('../core/private-media');
@@ -163,7 +161,8 @@ async function imageForAltText(req: Request, res: Response, mediaId: number): Pr
     }
     const media = await Media.formatAttachment(row);
     const rel = String(media.relativePath || '').replace(/^\/uploads\//, '');
-    const file = rel ? resolveWithin(path.resolve(config.uploads.dir), ...rel.split('/')) : null;
+    // The CURRENT site's public uploads (a secondary site keeps its own tree, not site 1's).
+    const file = rel ? resolveWithin(privateMedia.publicUploadsRoot(), ...rel.split('/')) : null;
     if (!file) {
         res.status(404).json({ code: 'rest_post_invalid_id', message: 'The image file is not available.', data: { status: 404 } });
         return null;

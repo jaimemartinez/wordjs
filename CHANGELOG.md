@@ -6,6 +6,19 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Changed
+
+- **AI agents: other people's content needs its own grant.** The new grant word `content:others`
+  (off by default, never implied by another word) is what lets an agent read other authors' private
+  entries and drafts and, together with `content:draft`, edit them. Without it an agent works on its
+  bound user's own entries and on published content. Stored grants are kept as they are; grant
+  `content:others` to a connection that should work on the whole site's content.
+- **AI provider base URL goes through the egress guard.** It may carry no query string or fragment, it
+  is checked at save time and before every request, and the request connects to the checked address.
+  Local and private-network servers stay available on single-site installs and on a network's primary
+  site; other sites of a network need `WORDJS_AI_ALLOW_PRIVATE_PROVIDER=1`. Link-local and metadata
+  addresses are never accepted (`ai_provider_address_blocked`).
+
 ### Security
 
 - **Mail Server 3.0.3: delivery hardening.**
