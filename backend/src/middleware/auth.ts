@@ -756,10 +756,20 @@ function sanitizeCookies(req: Request, _res: Response, next: NextFunction): void
     next();
 }
 
-/** The session cookie as a STRING, or null. The only place this file reads `req.cookies`. */
+/**
+ * The session cookie as a STRING, or null. The only place this file reads `req.cookies`.
+ *
+ * A machine credential (`wjt_` API token, `wja_` agent connection) is NEVER a session cookie: those are
+ * Bearer-only. Accepting one here made it ambient — the browser re-attaches it on every request — while
+ * every control built for machine credentials keys on the Bearer header (the opt-in MFA gate for API
+ * tokens, the CSRF token gate's Bearer exemption). Treating it as "no cookie" means every reader in this
+ * file and in routes/auth.ts sees an anonymous request, by construction.
+ */
 function sessionCookie(req: Request): string | null {
     const v = req && req.cookies ? req.cookies[SESSION_COOKIE] : undefined;
-    return typeof v === 'string' && v ? v : null;
+    if (typeof v !== 'string' || !v) return null;
+    if (v.startsWith(ApiToken.PREFIX) || v.startsWith(AgentConnection.PREFIX)) return null;
+    return v;
 }
 
 /**
@@ -1429,9 +1439,31 @@ function originAuthority(origin: string): string | undefined {
     }
 }
 
-/** Does this Origin name exactly the host the request was sent to? Fails closed on an absent host. */
-function originMatchesHost(origin: string, host: string | undefined): boolean {
-    return host !== undefined && originAuthority(origin) === host;
+/** The scheme the request was sent over: TLS on the socket, or X-Forwarded-Proto from a trusted hop only. */
+function trustedScheme(req: Request): 'http' | 'https' {
+    return hostPolicy.trustedScheme(req, siteHostPolicy.get());
+}
+
+/**
+ * Does this Origin name the origin the request was sent to — host:port, and a scheme that may vouch for
+ * it? Fails closed on an absent host. Same derivation (core/host-policy trustedScheme) as the CORS gate in
+ * index.ts.
+ *
+ * The scheme is part of the origin, and the direction that matters is DOWNGRADE: a plain-http page —
+ * which anyone on the network path can inject into — must never count as the own page of a request that
+ * arrived over https. The other direction is accepted: an https page on this very host:port while the
+ * request looks like plain http is the site's own page behind a TLS-terminating hop whose
+ * X-Forwarded-Proto is not trusted (index.ts warns about such a proxy at boot). Refusing it would cut off
+ * every write on such an install and protect nothing — that page is not one a network attacker controls.
+ */
+function originMatchesHost(origin: string, host: string | undefined, scheme: 'http' | 'https'): boolean {
+    if (host === undefined || originAuthority(origin) !== host) return false;
+    try { return originSchemeVouches(new URL(origin).protocol, scheme); } catch { return false; }
+}
+
+/** May a page served over `protocol` ('http:' / 'https:') vouch for a request whose trusted scheme is `scheme`? */
+function originSchemeVouches(protocol: string, scheme: 'http' | 'https'): boolean {
+    return protocol === 'https:' || (protocol === 'http:' && scheme === 'http');
 }
 
 /**
@@ -1453,14 +1485,16 @@ function originMatchesHost(origin: string, host: string | undefined): boolean {
  * by the raw-socket tests in tests/absent-host-origin-allowlist.test.ts. No Host means no derivable
  * same-origin, so it must contribute NO entry at all.
  */
-function sameOriginAllowList(host: string | undefined): string[] {
+function sameOriginAllowList(host: string | undefined, scheme: 'http' | 'https'): string[] {
     // Multisite: the configured public origins are the MAIN site's. On another site of the network they
     // vouch for nothing — a page on the main site's address is a different site's page there.
     const onSecondarySite = siteContext.multisiteEnabled() && siteContext.currentSiteId() !== siteContext.PRIMARY_SITE_ID;
     const configured = onSecondarySite ? [] : [config.site?.url, config.site?.frontendUrl];
     return [
         ...configured,
-        ...(host ? [`http://${host}`, `https://${host}`] : [])
+        // The request's own origin under a scheme that may vouch for it (see originMatchesHost): over https,
+        // never the plain-http spelling. The configured public origins above carry their own scheme.
+        ...(host ? [`http://${host}`, `https://${host}`] : []).filter((o: string) => originSchemeVouches(o.startsWith('https://') ? 'https:' : 'http:', scheme))
     ].filter(Boolean);
 }
 
@@ -1558,7 +1592,8 @@ function csrfProtection(req: Request, res: Response, next: NextFunction) {
     }
 
     // Allow requests from same host (host:port, both sides normalised by the one parser).
-    if (requestOrigin && originMatchesHost(requestOrigin, host)) {
+    const scheme = trustedScheme(req);
+    if (requestOrigin && originMatchesHost(requestOrigin, host, scheme)) {
         return csrfTokenGate(req, res, next);
     }
 
@@ -1586,7 +1621,7 @@ function csrfProtection(req: Request, res: Response, next: NextFunction) {
 
     // The configured public origins plus this request's own — see sameOriginAllowList() above for why an
     // absent Host contributes NOTHING here rather than the word "undefined".
-    const allowedOrigins = sameOriginAllowList(host);
+    const allowedOrigins = sameOriginAllowList(host, scheme);
 
     // EXACT origin match — never startsWith (a prefix match lets `https://victim.com.evil.com`
     // satisfy an allowed `https://victim.com`). Compare normalized origins via URL parsing.
@@ -1616,6 +1651,7 @@ module.exports = {
     // asks the question (csrfProtection here, sameOrigin() in routes/collab.ts). Exported so there is
     // nothing left to copy.
     trustedHost,
+    trustedScheme,
     originMatchesHost,
     sameOriginAllowList,
     hostlessAmbientRequest,

@@ -44,7 +44,7 @@ router.use((req: Request, res: Response, next: NextFunction) => {
     return res.status(404).json({ code: 'rest_no_route', message: 'Real-time collaboration is not available on this site.', data: { status: 404 } });
 });
 
-const { authenticate, trustedHost, originMatchesHost, sameOriginAllowList, hostlessAmbientRequest, sessionAddressStillAccepted } = require('../middleware/auth');
+const { authenticate, trustedHost, trustedScheme, originMatchesHost, sameOriginAllowList, hostlessAmbientRequest, sessionAddressStillAccepted } = require('../middleware/auth');
 const { asyncHandler, offStack } = require('../middleware/errorHandler');
 const { canEditPostRecord, isRestExposedPostType } = require('../core/post-capabilities');
 // An attachment's entry decides too (core/attachment-visibility) — the same gate every attachment write takes.
@@ -119,9 +119,10 @@ function sameOrigin(req: Request): boolean {
     // No host of its own: the configured origins below do not stand in for one (lab finding N2) — the
     // same predicate csrfProtection applies.
     if (hostlessAmbientRequest(req, host)) return false;
-    if (originMatchesHost(requestOrigin, host)) return true;
+    const scheme = trustedScheme(req);
+    if (originMatchesHost(requestOrigin, host, scheme)) return true;
 
-    const allowed: string[] = sameOriginAllowList(host);
+    const allowed: string[] = sameOriginAllowList(host, scheme);
     return allowed.some((a: string) => { try { return new URL(a).origin === requestOrigin; } catch { return false; } });
 }
 

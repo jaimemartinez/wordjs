@@ -42,6 +42,7 @@ import {
     collapsedAt,
     emptyPara,
     isCollapsed,
+    isSafeLinkHref,
     normalizeDoc,
     paraIndexOf,
     paraToAtoms,
@@ -281,6 +282,8 @@ export function applyLink(
 ): OpResult {
     const href = attrs.href.trim();
     if (!href) return removeLink(doc0, sel); // href vacío ⇒ unlink (§2.2)
+    // Esquema no permitido (javascript:, data:, …) ⇒ no-op: el documento no cambia.
+    if (!isSafeLinkHref(href)) return { doc: normalizeDoc(cloneDoc(doc0)), selection: sel };
     const doc = cloneDoc(doc0);
     const flat = flattenDoc(doc);
     const { start, end } = orderedFlatRange(doc, flat, sel);
