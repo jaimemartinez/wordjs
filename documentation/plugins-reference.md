@@ -454,8 +454,8 @@ Complex business logic for managing church conferences.
         actual state. Confirmations and toasts name the arrangements a change affects. The coordinator's
         portal shows «Ajustado por la administración el …», and its submit confirmation says the
         administration may adjust the arrangement.
-    *   **Registration codes**: every attendee gets a unique random 10-character `reg_code` (the Code 128
-        barcode payload), visible in the admin panel with `inscriptions:view`. It is never in a portal LIST; a
+    *   **Registration codes**: every attendee gets a unique random 10-character `reg_code` (a QR Code since
+        2.22.0, the Code 128 barcode before; the scanners read both), visible in the admin panel with `inscriptions:view`. It is never in a portal LIST; a
         person's badge (below) carries it, through the badge endpoints only.
     *   **Badges** («Escarapelas», 2.19.0): one design per conference (`conferences.badge_config`: orientation,
         title, colours, legibility panel, the fields and their labels; policy: on / off, coordinators may share, an
@@ -463,14 +463,39 @@ Complex business logic for managing church conferences.
         browser into two JPEG «plates» (`badge_assets`); the server computes each person's badge once as a display
         list (`server/badge-layout.js`: text runs fitted with Helvetica metrics, Code 128 bars, all in mm on a CR80
         85.6 × 54 mm card) that the PDF (`server/badge-pdf.js`, no dependency, one per page or a Letter sheet with
-        cut guides), the admin and the core portal's credential page draw alike. Each inscription has at most one
+        cut guides), the admin and the portal draw alike. Each inscription has at most one
         link (`badge_links`, a 128-bit token in the URL fragment: `/portal/conference/badge#t=…`); the public view
         answers 404 for any wrong token (throttled per client and globally) and 410 for a cancelled inscription
         (back on reactivation), past the expiry date or with badges off. Files go through a ticket (`badge_tickets`,
-        120 s, 3 uses) that the core route `/portal/conference/badge/file` turns into bytes (PDF only). Staff need
+        120 s, 3 uses) that the core's portal file route `/portal/conference/file` turns into bytes (PDF only;
+        `frontend.portalPage.file`). Staff need
         `badges:view` AND `inscriptions:view` for links and files, `badges:manage` for the design and to regenerate
         or revoke a link; the portal reaches only its own location's people while the conference lets coordinators
         share badges (`features.badges` on /portal/login and /portal/me).
+        **The badge designer** (2.29.0): a free-form canvas (`badge_config.design`, version 2, one model shared by
+        the server and the browser — `server/badge-design.js`): six templates, texts in 13 typefaces (25 font files) shipped with
+        the plugin (SIL OFL, `fonts/`, loaded by literal `require` as base64 modules — no `filesystem` grant),
+        the person's data as tokens, images (JPEG / PNG, `badge_assets`), shapes, rotation and opacity; the PDF
+        embeds the TrueType fonts (`server/badge-pdf.js`, `badge-font.js`, `badge-png.js`). Exactly one QR
+        always. Older designs open converted (`client/lib/badgeEditor.ts` `fromLegacy`).
+    *   **«Mi inscripción»** (2.23.0): `/portal/conference/yo#c=<code>`, the registrant's own page behind their
+        badge's QR. The code alone is not enough: the person confirms the document type and number they
+        registered with (the form fields chosen in «Escarapelas › Uso», detected by label otherwise); a match opens
+        a session (a 128-bit token kept by the phone, stored hashed in `self_sessions`, 30 days or the badges'
+        expiry). It shows only the person's own badge, answers, meals delivered and to come, hotel, room and map —
+        never anyone else. Sign-in follows the portal's rule (2.30.0): only the caller's own budgets refuse; the
+        per-code and site-wide budgets only make attempts wait. A shared badge link (2.28.0) leads here instead
+        of showing the badge. Routes: `POST /public/me/start | verify | view | ticket | logout`.
+    *   **Boarding and transport packages** (2.24.0–2.27.0): hotels are found and pinned on a map (2.24.0);
+        «Verificar abordaje» (`POST /transport/check`, transport) scans a badge and says whether the person
+        travels on THIS bus (2.25.0); transport is sold as **packages** of buses with one price and their own
+        payments (`/transport/packages*`, `/transport/package-sales/:id/payments`; the per-bus sale and ticket
+        payment routes answer 410 — earlier tickets became one-bus package sales, payments included) (2.26.0);
+        and the transport team tells a bus's passengers that it is BOARDING, that it LEFT, or sends a message
+        (`POST /buses/:id/notice`), shown on their «Mi inscripción» and, where the person turned notices on, as a
+        real browser notification (Web Push, RFC 8291 encryption and RFC 8292 VAPID, no dependency —
+        `server/transport-push.js`; only the browsers' push services are contacted, and only with the
+        `network` grant) (2.27.0). A phone's subscription belongs to its «Mi inscripción» session.
     *   **Transport** (`/buses`, tickets and their own payments, sold apart from the participation fee),
         **accounting** (`/accounting`: income/expense ledger plus the validated registration and transport
         payments as read-only income) and **meals** (`/meals*`: services, a location × service plan, per-person
@@ -581,7 +606,7 @@ Complex business logic for managing church conferences.
         account in Users with the role «Equipo de conferencia», then add it to the team in «Equipo y permisos»
         and choose its team role.
     *   **Coordinator portal** (`/portal/login`, `/portal/me`, `/portal/inscriptions`, `/portal/groups`,
-        `/portal/fee-payments*`, `/portal/payments/bulk`, `/portal/lodging*`) surfaced at `/portal/conference` on the frontend. A per-location 6-digit
+        `/portal/fee-payments*`, `/portal/payments/bulk`, `/portal/lodging*`, `/portal/badges/*`) surfaced at `/portal/conference` — the plugin's own portal page (`frontend.portalPage`, `client/portal`; a page of the core before 2.30.0). A per-location 6-digit
         access code is required; there is **no anonymous public registration**. A login opens a 7-day session
         (an opaque id kept on the server) that a new code, deleting the location, unpublishing the form or a
         logout ends; wrong codes are throttled per client, per location and site-wide. Each coordinator's view is
