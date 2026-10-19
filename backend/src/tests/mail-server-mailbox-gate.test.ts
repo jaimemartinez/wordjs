@@ -524,7 +524,7 @@ test('INBOUND delivery needs the GRANT as well as the address (no self-provision
                 `Subject: ${subject}`,
                 '', 'Hello there.', ''
             ].join('\r\n');
-            b.smtp.options.onData(Readable.from([raw]), {}, (err: any) => err ? reject(err) : resolve());
+            b.smtp.options.onData(Readable.from([raw]), { envelope: { rcptTo: [{ address: to }] } }, (err: any) => err ? reject(err) : resolve());
         });
 
         await deliver(`alice@${SITE_DOMAIN}`, 'For a real mailbox');
@@ -573,7 +573,7 @@ test('a `www.` install (site host ≠ mail domain) keeps working — gate, probe
         await new Promise<void>((resolve, reject) => {
             const raw = ['From: Outside <ext@example.org>', `To: <alice@${SITE_DOMAIN}>`,
                 'Subject: Inbound on the apex', '', 'Hi.', ''].join('\r\n');
-            b.smtp.options.onData(Readable.from([raw]), {}, (err: any) => err ? reject(err) : resolve());
+            b.smtp.options.onData(Readable.from([raw]), { envelope: { rcptTo: [{ address: `alice@${SITE_DOMAIN}` }] } }, (err: any) => err ? reject(err) : resolve());
         });
         const row: any = await b.db.get(`SELECT user_id FROM ${PREFIX}received_emails WHERE subject = ?`, ['Inbound on the apex']);
         assert.ok(row, 'inbound mail for the MAIL domain must be accepted');
