@@ -380,14 +380,15 @@ router.get('/me', (req: Request, res: Response) => {
  *             schema:
  *               $ref: '#/components/schemas/RestError'
  *       403:
- *         description: "rest_forbidden (not you, and no list_users capability) or mfa_enrollment_required."
+ *         description: "mfa_enrollment_required."
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/RestError'
  *       404:
  *         description: >-
- *           rest_user_invalid_id — no such user, or the id is not a well-formed route id (the router-level
+ *           rest_user_invalid_id — no such user, a user that is not you while you lack list_users (the same
+ *           answer, so it cannot tell the two apart), or the id is not a well-formed route id (the router-level
  *           route-id contract answers 404 for a malformed id rather than letting NaN reach the database).
  *         content:
  *           application/json:
@@ -398,9 +399,11 @@ router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
     // `String(...)` is the coercion `parseInt` already applied to this argument implicitly; it is here
     // only because a route param is typed `string | string[]`, and it parses identically either way.
     const userId = parseInt(String(req.params.id), 10);
-    const user = await User.findById(userId);
 
-    if (!user) {
+    // Users can view themselves, admins can view anyone. Asked BEFORE the lookup, and answered with the
+    // SAME 404 as a missing id: a 403 for "exists, not yours" next to a 404 for "no such id" told any
+    // signed-in account which user ids exist.
+    if (req.user.id !== userId && !req.user.can('list_users')) {
         return res.status(404).json({
             code: 'rest_user_invalid_id',
             message: 'Invalid user ID.',
@@ -408,12 +411,12 @@ router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
         });
     }
 
-    // Users can view themselves, admins can view anyone
-    if (req.user.id !== userId && !req.user.can('list_users')) {
-        return res.status(403).json({
-            code: 'rest_forbidden',
-            message: 'You cannot view this user.',
-            data: { status: 403 }
+    const user = await User.findById(userId);
+    if (!user) {
+        return res.status(404).json({
+            code: 'rest_user_invalid_id',
+            message: 'Invalid user ID.',
+            data: { status: 404 }
         });
     }
 
