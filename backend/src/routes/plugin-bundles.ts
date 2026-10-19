@@ -659,14 +659,24 @@ router.get('/:slug/admin-style/css', authenticate, asyncHandler(async (req: Requ
 const confinedCache = new Map<string, { version: string; css: string; etag: string }>();
 const CONFINED_CACHE_MAX = 64;
 function confinedAdminStylesheet(cssPath: string): { css: string; etag: string } | null {
-    let stat: any;
-    try { stat = fs.statSync(cssPath); } catch { return null; }
-    if (!stat.isFile()) return null;
-    const version = `${stat.size}:${stat.mtimeMs}`;
-    const hit = confinedCache.get(cssPath);
-    if (hit && hit.version === version) return hit;
+    // ONE descriptor for the version check and the read: the file a stat describes and the file read
+    // afterwards by path could differ (a plugin update swapping it in between).
+    let fd: number;
+    try { fd = fs.openSync(cssPath, 'r'); } catch { return null; }
+    let source: string;
+    let version: string;
+    try {
+        const stat = fs.fstatSync(fd);
+        if (!stat.isFile()) return null;
+        version = `${stat.size}:${stat.mtimeMs}`;
+        const hit = confinedCache.get(cssPath);
+        if (hit && hit.version === version) return hit;
+        source = fs.readFileSync(fd, 'utf8');
+    } finally {
+        try { fs.closeSync(fd); } catch { /* already closed */ }
+    }
     const { confinePluginAdminCss } = require('../core/plugin-admin-css');
-    const css = confinePluginAdminCss(fs.readFileSync(cssPath, 'utf8'));
+    const css = confinePluginAdminCss(source);
     const etag = `"${require('crypto').createHash('sha256').update(css).digest('hex').slice(0, 32)}"`;
     if (confinedCache.size >= CONFINED_CACHE_MAX) confinedCache.delete(confinedCache.keys().next().value as string);
     const entry = { version, css, etag };
