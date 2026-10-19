@@ -63,7 +63,7 @@ function stripHtml(s) {
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '3.0.3',
+    version: '3.0.4',
     description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
 };
@@ -1584,7 +1584,11 @@ async function initSMTPServer() {
                     // 2a. DKIM + DMARC (lib/mail-auth.js) for mail from outside. Our own relay path
                     //     (loopback / authenticated) is never gated; the operator can turn it off.
                     const external = !isTrustedSmtpSession(session);
-                    const headerFroms = (parsed.from?.value || []).map(v => v && v.address).filter(Boolean);
+                    // Every address the From names, groups included ("team: a@x, b@y;" lists its
+                    // members under .group, never as an address of its own).
+                    const headerFroms = (parsed.from?.value || [])
+                        .flatMap(v => (v && Array.isArray(v.group) ? v.group : [v]))
+                        .map(v => v && v.address).filter(Boolean);
                     let auth = null;
                     if (external && (await getOption('mail_security_dmarc_enabled', '1')) !== '0') {
                         auth = await authenticateInbound(raw, session, headerFroms, mailDomain);
@@ -1594,7 +1598,8 @@ async function initSMTPServer() {
                     //     unless SPF or a DKIM signature of that domain authenticated it (see
                     //     localDomainImpersonation).
                     if (external) {
-                        const dkimDomains = auth ? auth.dkim.filter(d => d.result === 'pass').map(d => d.domain) : [];
+                        // Only a signature that covers the whole body speaks for its domain (see MailAuth.fullPass).
+                        const dkimDomains = auth ? auth.dkim.filter(MailAuth.fullPass).map(d => d.domain) : [];
                         const forged = localDomainImpersonation(mailDomain, session?.spfHeader,
                             session?.envelope?.mailFrom?.address, headerFroms, dkimDomains);
                         if (forged) {
@@ -1608,7 +1613,11 @@ async function initSMTPServer() {
                     const dmarc = auth && auth.dmarc;
                     if (dmarc && dmarc.disposition === 'reject') {
                         console.warn(`[Security][DMARC] Rejecting a message from ${dmarc.domain}: ${dmarc.reason}`);
-                        return callback(smtpError(550, `5.7.1 Message rejected by the DMARC policy of ${dmarc.domain}`));
+                        // permerror + reject is a From that cannot be evaluated at all (several From
+                        // fields, too many From domains): not any one domain's policy.
+                        return callback(smtpError(550, dmarc.result === 'permerror'
+                            ? '5.7.1 Message rejected: its From header cannot be authenticated (DMARC)'
+                            : `5.7.1 Message rejected by the DMARC policy of ${dmarc.domain}`));
                     }
                     const quarantined = !!(dmarc && dmarc.disposition === 'quarantine');
                     if (quarantined) console.warn(`[Security][DMARC] Quarantining a message from ${dmarc.domain}: ${dmarc.reason}`);
@@ -1635,10 +1644,12 @@ async function initSMTPServer() {
                         toAddresses.push({ address });
                     }
 
-                    const fromAddr = parsed.from?.value?.[0]?.address
+                    // The first From address is what the list shows; when the From names several
+                    // domains, the stored Authentication-Results lists them all and the webmail says so.
+                    const fromAddr = headerFroms[0]
                         || session?.envelope?.mailFrom?.address
                         || '';
-                    const fromName = parsed.from?.value?.[0]?.name || '';
+                    const fromName = (parsed.from?.value?.[0]?.address && parsed.from.value[0].name) || '';
 
                     // Thread an inbound reply back into its conversation (THREAD-XREF): a reply's
                     // In-Reply-To / References headers echo the Message-ID of a message we already have
@@ -1922,15 +1933,22 @@ const OUTBOUND_WINDOW_MS = 60 * 60 * 1000;
 const OUTBOUND_MAX_MESSAGES = 100;
 const OUTBOUND_MAX_RECIPIENTS = 500;
 const _outboundUsage = new Map(); // userId -> { windowStart, messages, recipients }
-function outboundRateLimitOk(userId, recipientCount) {
+// Site and provider mail (user_id 0: password resets, notifications, other plugins' transactional mail)
+// has no account to charge; its automatic retries draw on this budget of their own, sized for a busy
+// site, so they never compete with — or are starved by — anything a user sends.
+const SITE_RETRY_LIMITS = { messages: 1000, recipients: 5000 };
+const SITE_RETRY_KEY = 'retry:site';
+function outboundRateLimitOk(userId, recipientCount, limits = null) {
+    const maxMessages = (limits && limits.messages) || OUTBOUND_MAX_MESSAGES;
+    const maxRecipients = (limits && limits.recipients) || OUTBOUND_MAX_RECIPIENTS;
     const now = Date.now();
     let e = _outboundUsage.get(userId);
     if (!e || now - e.windowStart > OUTBOUND_WINDOW_MS) {
         e = { windowStart: now, messages: 0, recipients: 0 };
         _outboundUsage.set(userId, e);
     }
-    if (e.messages + 1 > OUTBOUND_MAX_MESSAGES) return false;
-    if (e.recipients + recipientCount > OUTBOUND_MAX_RECIPIENTS) return false;
+    if (e.messages + 1 > maxMessages) return false;
+    if (e.recipients + recipientCount > maxRecipients) return false;
     e.messages += 1;
     e.recipients += recipientCount;
     return true;
@@ -1961,6 +1979,32 @@ function queuedDispatchAllowed(email, recipientCount) {
     _queuedCharges.delete(id);
     if (charged !== undefined && recipientCount <= charged) return true;
     return outboundRateLimitOk(queueRateKey(email), recipientCount);
+}
+
+// The automatic retry queue re-sends ONE message up to MAX_DELIVERY_ATTEMPTS times: it is charged once
+// for that message, not on every pass. A user's message was charged when it was sent (POST /send, the
+// scheduled queue, a forward, a manual retry) — updateRetryState records that charge when the send
+// leaves the row waiting for a retry — so its retries cost nothing more. A row the queue meets without
+// a recorded charge (site/provider mail, or a row from before a restart) is charged at its first pass:
+// to its owner, or to the site's own retry budget when nobody owns it.
+const _retryCharges = new Map(); // email id -> recipients its retry cycle is already paid for
+function noteRetryCharge(emailId, recipientCount) {
+    const id = parseInt(emailId, 10) || 0;
+    if (!id) return;
+    _retryCharges.delete(id);
+    if (_retryCharges.size >= QUEUED_CHARGES_MAX) _retryCharges.delete(_retryCharges.keys().next().value);
+    _retryCharges.set(id, recipientCount);
+}
+function retryDispatchAllowed(email, recipientCount) {
+    const id = parseInt(email && email.id, 10) || 0;
+    const charged = _retryCharges.get(id);
+    if (charged !== undefined && recipientCount <= charged) return true;
+    const uid = parseInt(email && email.user_id, 10) || 0;
+    const ok = uid > 0
+        ? outboundRateLimitOk(uid, recipientCount)
+        : outboundRateLimitOk(SITE_RETRY_KEY, recipientCount, SITE_RETRY_LIMITS);
+    if (ok) noteRetryCharge(id, recipientCount);
+    return ok;
 }
 
 function isValidEmail(email) {
@@ -2748,6 +2792,12 @@ async function updateRetryState(sentRecordId, data, externalRecipients, failed) 
         // NOT-A-USER-PATH: the queue's own record, mid-delivery — see above.
         await Email.markRetry(sentRecordId, attempts, nextAttemptAt, lastError);
     } catch (e) { /* non-fatal */ }
+    // The send that just ran was this message's charge when a user made it (a first send, or a manual
+    // retry, which charges up front): its automatic retries are already paid for. Site mail
+    // (user_id 0) was never charged, so the retry queue charges the site budget once instead.
+    if ((parseInt(data.userId, 10) || 0) > 0 && (!data.isRetry || data.retryCharged)) {
+        noteRetryCharge(sentRecordId, temporary.length);
+    }
 
     // If there were also permanent failures mixed in, bounce those now (they won't be retried).
     if (permanent.length > 0) await sendBounce(data, permanent);
@@ -3114,6 +3164,7 @@ async function retryFailedDelivery(email, rateKey) {
             threadId: email.thread_id,
             userId: email.user_id || 0,
             isRetry: true,
+            retryCharged: true, // charged just above
             isAutoReply: Number(email.is_auto_reply) === 1,
             sentRecordId: email.id,
             deliveryAttempts: 0, // manual retry → fresh cycle, not stuck at max attempts
@@ -3325,7 +3376,7 @@ exports.init = async function (bridge) {
                         continue;
                     }
 
-                    if (!outboundRateLimitOk(queueRateKey(email), recipients.length)) {
+                    if (!retryDispatchAllowed(email, recipients.length)) {
                         // Over the sender's outbound limit: push the attempt back without spending one.
                         // NOT-A-USER-PATH: the retry queue — same rows Email.getPendingRetries() selected.
                         await Email.markRetry(email.id, email.delivery_attempts || 0,
