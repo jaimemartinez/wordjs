@@ -28,19 +28,19 @@ import {
     draftFromTransfer, feeBadge, feeErrorAction, followTotal, hasFeePayments, initialMethod, manualSeed, matchesBalanceFilter, mergeBalances, newClientKey, overCapInEqual, registerLoadNotice, reopenDraft,
     newDraft, orderTransfers, parseFeeView, peopleLabel, recorderLabel, rowBalanceC, sendDraft, shortName, summarize, todayLocal, viewBalanceC,
     type BalanceC, type DraftContext, type FeeBody, type FeeDraft, type FetchLike, type PortalFeeApi, type PortalFeeView, type PortalTransfer,
-} from "../feePayments";
-import { PROOF_MAX_INPUT_BYTES, PROOF_STEPS, PROOF_TARGET_CHARS, ProofError, dataUrlBytes, fitSize, prepareProof, sizeLabel, type ProofEnv } from "../proofImage";
-import FeeSummary from "../FeeSummary";
-import FeeTransfers, { transferRowLabel } from "../FeeTransfers";
-import FeeBalances, { balanceRowLabel, balanceText } from "../FeeBalances";
-import RegisterPaymentSheet, { ProofPicker, SumLine, afterText, personLine, sheetCopy } from "../RegisterPaymentSheet";
-import { Badge, captionCls, labelCls } from "../ui";
-import { scrollToListTop } from "../participants";
-import TransferSheet, { transferActions } from "../TransferSheet";
-import FeePaymentsTab, { FeeSheets, type FeeHub } from "../FeePaymentsTab";
-import type { PortalPerson } from "../participants";
+} from "../../../../../../marketplace/plugins/conference-manager/client/portal/feePayments";
+import { PROOF_MAX_INPUT_BYTES, PROOF_STEPS, PROOF_TARGET_CHARS, ProofError, dataUrlBytes, fitSize, prepareProof, sizeLabel, type ProofEnv } from "../../../../../../marketplace/plugins/conference-manager/client/portal/proofImage";
+import FeeSummary from "../../../../../../marketplace/plugins/conference-manager/client/portal/FeeSummary";
+import FeeTransfers, { transferRowLabel } from "../../../../../../marketplace/plugins/conference-manager/client/portal/FeeTransfers";
+import FeeBalances, { balanceRowLabel, balanceText } from "../../../../../../marketplace/plugins/conference-manager/client/portal/FeeBalances";
+import RegisterPaymentSheet, { ProofPicker, SumLine, afterText, personLine, sheetCopy } from "../../../../../../marketplace/plugins/conference-manager/client/portal/RegisterPaymentSheet";
+import { Badge, captionCls, labelCls } from "../../../../../../marketplace/plugins/conference-manager/client/portal/ui";
+import { scrollToListTop } from "../../../../../../marketplace/plugins/conference-manager/client/portal/participants";
+import TransferSheet, { transferActions } from "../../../../../../marketplace/plugins/conference-manager/client/portal/TransferSheet";
+import FeePaymentsTab, { FeeSheets, type FeeHub } from "../../../../../../marketplace/plugins/conference-manager/client/portal/FeePaymentsTab";
+import type { PortalPerson } from "../../../../../../marketplace/plugins/conference-manager/client/portal/participants";
 
-const PORTAL = path.resolve(__dirname, "..");
+const PORTAL = path.resolve(__dirname, "../../../../../../marketplace/plugins/conference-manager/client/portal");
 const read = (f: string) => fs.readFileSync(path.join(PORTAL, f), "utf8");
 const flat = (html: string) => html.replace(/<!-- -->/g, "");
 
@@ -747,7 +747,7 @@ describe("the sheets the page renders once", () => {
 
 // ── the page's wiring (source) ────────────────────────────────────────────────────────────────────
 describe("page.tsx: the old payment UI is gone; «Pagos de cuotas» only with the plugin's flag", () => {
-    const page = read("page.tsx");
+    const page = read("CoordinatorPortal.tsx");
     it("no StatCards above the tabs, no header «Registrar Pago (N)», no «Registrar Pago Grupal» modal or its handlers", () => {
         expect(page).not.toMatch(/import \{ StatCard \}|<StatCard/);
         expect(page).not.toMatch(/Registrar Pago Grupal|handleBulkPayment|handleFileChange|showPaymentModal|paymentForm|selectedIds/);
@@ -896,7 +896,7 @@ describe("a shared phone: nothing of the previous coordinator's session may land
         expect(tab).toMatch(/const reset = useCallback\(\(\) => \{\s*session\.reset\(\);/);
         expect(tab).toMatch(/const out = await sendDraft\(api, d, contextOf\(v, balancesOf\(v\)\)\);\s*if \(!session\.isCurrent\(e\)\) return;/);
         expect(tab).toMatch(/const r = await api\.remove\([^)]*\);\s*if \(!session\.isCurrent\(e\)\) return;/);
-        const page = read("page.tsx");
+        const page = read("CoordinatorPortal.tsx");
         expect(page).toMatch(/if \(res\.ok && data\.success\) \{\s*\/\/[^\n]*\n\s*feeHub\.reset\(\);/);
     });
 });
@@ -1035,10 +1035,11 @@ describe("a page change brings the list's top into view (as «Participantes» do
 });
 
 describe("iPhone safe areas: the conference portal is laid out under viewport-fit=cover", () => {
-    it("exports viewport-fit=cover and pads the content by the side insets", async () => {
-        const layout = await import("../layout");
-        expect(layout.viewport).toEqual({ viewportFit: "cover" });
-        const html = flat(renderToStaticMarkup(<layout.default><p>x</p></layout.default>));
+    it("declares viewport-fit=cover (the plugin's portal page) and pads the content by the side insets", async () => {
+        const manifest = JSON.parse(fs.readFileSync(path.join(PORTAL, "../../manifest.json"), "utf8"));
+        expect(manifest.frontend.portalPage.viewportFit).toBe("cover");
+        const frame = await import("../../../../../../marketplace/plugins/conference-manager/client/portal/PortalFrame");
+        const html = flat(renderToStaticMarkup(<frame.default><p>x</p></frame.default>));
         expect(html).toContain("padding-left:env(safe-area-inset-left, 0px)");
         expect(html).toContain("padding-right:env(safe-area-inset-right, 0px)");
     });

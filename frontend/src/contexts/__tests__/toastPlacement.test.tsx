@@ -36,7 +36,7 @@ describe("toast placement", () => {
         expect(toastCloseLabel()).toBe("Cerrar");
         const src = fs.readFileSync(path.resolve(__dirname, "../ToastContext.tsx"), "utf8");
         expect(src).toContain("<ToastItem key={toast.id} toast={toast} onClose={() => removeToast(toast.id)} closeLabel={closeLabel ?? toastCloseLabel()} />");
-        const portal = fs.readFileSync(path.resolve(__dirname, "../../app/portal/conference/page.tsx"), "utf8");
+        const portal = fs.readFileSync(path.resolve(__dirname, "../../../../marketplace/plugins/conference-manager/client/portal/CoordinatorPortal.tsx"), "utf8");
         expect(portal).toContain('<ToastProvider closeLabel="Cerrar">');
     });
     it("the desktop placement stays: bottom right, above every layer; the stack is a polite live region", () => {

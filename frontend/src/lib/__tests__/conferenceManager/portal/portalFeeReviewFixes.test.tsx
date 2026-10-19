@@ -21,14 +21,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
     balanceC, carriedItems, carriedNotice, checkDraft, followTotal, newDraft, parseFeeView, registerNeedsLoad, registerTargets, reopenDraft, startOver, todayLocal, viewBalanceC,
     type BalanceC, type DraftContext, type FeeDraft, type PortalFeeView,
-} from "../feePayments";
-import { familyChips, type FamilyGroup } from "../participants";
-import { pickSequence } from "../proofImage";
-import RegisterPaymentSheet, { ProofPicker } from "../RegisterPaymentSheet";
-import FeeBalances from "../FeeBalances";
-import { EmptyState, Spinner } from "../ui";
+} from "../../../../../../marketplace/plugins/conference-manager/client/portal/feePayments";
+import { familyChips, type FamilyGroup } from "../../../../../../marketplace/plugins/conference-manager/client/portal/participants";
+import { pickSequence } from "../../../../../../marketplace/plugins/conference-manager/client/portal/proofImage";
+import RegisterPaymentSheet, { ProofPicker } from "../../../../../../marketplace/plugins/conference-manager/client/portal/RegisterPaymentSheet";
+import FeeBalances from "../../../../../../marketplace/plugins/conference-manager/client/portal/FeeBalances";
+import { EmptyState, Spinner } from "../../../../../../marketplace/plugins/conference-manager/client/portal/ui";
 
-const PORTAL = path.resolve(__dirname, "..");
+const PORTAL = path.resolve(__dirname, "../../../../../../marketplace/plugins/conference-manager/client/portal");
 const read = (f: string) => fs.readFileSync(path.join(PORTAL, f), "utf8");
 const flat = (html: string) => html.replace(/<!-- -->/g, "");
 

@@ -57,8 +57,8 @@ import { SHELL_CSS, SHELL_PANEL_MIN_HEIGHT, SHELL_PANEL_MIN_WIDTH, SHELL_PANEL_S
 import { AdjustNotice, RoomLevel } from '../../../../../marketplace/plugins/conference-manager/client/admin/LodgingExplorer';
 import { conferenceApi } from '../../../../../marketplace/plugins/conference-manager/client/lib/conference';
 import { translations } from '../../../../../marketplace/plugins/conference-manager/client/lib/i18n';
-import { adminAdjustLine, submitConfirmText, unassignedHint } from '@/app/portal/conference/lodging';
-import { AdminAdjustedNotice } from '@/app/portal/conference/LodgingTab';
+import { adminAdjustLine, submitConfirmText, unassignedHint } from '../../../../../marketplace/plugins/conference-manager/client/portal/lodging';
+import { AdminAdjustedNotice } from '../../../../../marketplace/plugins/conference-manager/client/portal/LodgingTab';
 
 const CLIENT = path.resolve(__dirname, '../../../../../marketplace/plugins/conference-manager/client');
 const read = (f: string) => fs.readFileSync(path.join(CLIENT, f), 'utf8').replace(/\r\n/g, '\n');
@@ -416,7 +416,7 @@ describe('the coordinator\'s portal: «Ajustado por la administración el …»,
         const html = renderToStaticMarkup(<AdminAdjustedNotice data={{ admin_changed_at: '2026-10-08 09:30:00', admin_changes: 2 }} />);
         expect(html).toContain('data-testid="lodging-admin-adjusted"');
         expect(html).toContain('2 cambios desde tu envío');
-        const tab = fs.readFileSync(path.resolve(__dirname, '../../../app/portal/conference/LodgingTab.tsx'), 'utf8');
+        const tab = fs.readFileSync(path.resolve(__dirname, '../../../../../marketplace/plugins/conference-manager/client/portal/LodgingTab.tsx'), 'utf8');
         expect(tab).toContain('<AdminAdjustedNotice data={d} />');
     });
     it('a validated arrangement tells the coordinator the administration can place them', () => {
@@ -433,7 +433,7 @@ describe('the coordinator\'s portal: «Ajustado por la administración el …»,
         }
         expect(submitConfirmText(3)).toMatch(/^Hay 3 participantes sin habitación\. /);
         expect(submitConfirmText(0)).toMatch(/^El administrador revisará la acomodación y no podrás/);
-        const tab = fs.readFileSync(path.resolve(__dirname, '../../../app/portal/conference/LodgingTab.tsx'), 'utf8');
+        const tab = fs.readFileSync(path.resolve(__dirname, '../../../../../marketplace/plugins/conference-manager/client/portal/LodgingTab.tsx'), 'utf8');
         expect(tab).toContain('text: submitConfirmText(summary.unplaced),');
     });
 });
@@ -607,7 +607,7 @@ describe('dragging a placed attendee: the «Suelta aquí» hint appears without 
     // It used to be inserted between the search box and the «Sin asignar» list at dragstart: the list moved down
     // 51 px, the panel's scroll anchoring scrolled by as much to keep it still, the room chip being dragged slid
     // out from under the pointer and Chrome cancelled the drag (no location filter, list near the panel's top).
-    const PORTAL_EXPLORER = fs.readFileSync(path.resolve(__dirname, '../../../app/portal/conference/LodgingExplorer.tsx'), 'utf8').replace(/\r\n/g, '\n');
+    const PORTAL_EXPLORER = fs.readFileSync(path.resolve(__dirname, '../../../../../marketplace/plugins/conference-manager/client/portal/LodgingExplorer.tsx'), 'utf8').replace(/\r\n/g, '\n');
     for (const [name, src, text] of [['admin', EXPLORER, "tx('board.drop.here'"], ['portal', PORTAL_EXPLORER, 'Suelta aquí para liberar la cama']] as const) {
         it(`${name}: the hint COVERS the search box — absolutely positioned inside its wrapper — instead of taking room above the list`, () => {
             const at = src.indexOf(text);

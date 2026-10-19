@@ -1,7 +1,7 @@
 {
     "id": "conference-manager",
     "name": "Conference Manager",
-    "version": "2.29.0",
+    "version": "2.30.0",
     "description": "Manage conference inscriptions, payments, and lodging assignments.",
     "author": "WordJS",
     "isolated": true,
@@ -12,13 +12,38 @@
         "adminPage": {
             "entry": "client/admin/page.tsx",
             "slug": "conference-manager"
+        },
+        "portalPage": {
+            "entry": "client/portal/page.tsx",
+            "slug": "conference",
+            "title": "Portal de coordinadores",
+            "viewportFit": "cover",
+            "serviceWorker": "client/portal/sw.js",
+            "file": "/public/badge/file",
+            "pages": {
+                "yo": {
+                    "title": "Mi inscripción",
+                    "private": true,
+                    "app": {
+                        "name": "Mi inscripción",
+                        "shortName": "Mi inscripción",
+                        "description": "Tu escarapela, tus comidas, tu alojamiento y los avisos de tu bus.",
+                        "backgroundColor": "#f3f4f6",
+                        "themeColor": "#111827"
+                    }
+                },
+                "badge": {
+                    "title": "Escarapela",
+                    "private": true
+                }
+            }
         }
     },
     "permissions": [
         {
             "scope": "browser",
             "access": "script",
-            "reason": "Run the plugin's own compiled interface in the browser: its admin page. Without it the host does not serve these bundles and that interface does not load."
+            "reason": "Run the plugin's own compiled interface in the browser: its admin page and its public portal (/portal/conference: the coordinators' portal, «Mi inscripción» and the badge links). Without it the host does not serve these bundles and that interface does not load."
         },
         {
             "scope": "database",

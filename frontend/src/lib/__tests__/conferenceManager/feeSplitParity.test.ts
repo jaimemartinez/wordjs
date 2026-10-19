@@ -1,12 +1,11 @@
 /**
  * conference-manager 2.18.0 — ONE split rule, three copies: the plugin admin (client/lib/feeSplit.ts), the
- * server (server/fee-split.js) and the core portal (frontend/src/app/portal/conference/feeSplit.ts). Every
+ * server (server/fee-split.js) and the coordinators' portal (client/portal/feeSplit.ts). Every
  * copy runs the ONE set of shared vectors (feeSplitVectors.json, also run by the portal's
  * portalFeeSplitParity.test.ts) and must give exactly the recorded output: a split the admin's sheet shows
  * as exact is exactly what the server accepts, and «Iguales» gives the same cents everywhere.
  */
 import { describe, it, expect } from 'vitest';
-import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import * as client from '../../../../../marketplace/plugins/conference-manager/client/lib/feeSplit';
@@ -14,7 +13,7 @@ import vectors from './feeSplitVectors.json';
 
 const require = createRequire(import.meta.url);
 const server = require('../../../../../marketplace/plugins/conference-manager/server/fee-split.js');
-const PORTAL = path.resolve(__dirname, '../../../app/portal/conference/feeSplit.ts');
+const PORTAL = path.resolve(__dirname, '../../../../../marketplace/plugins/conference-manager/client/portal/feeSplit.ts');
 
 type V = {
     parseMoneyInput: { in: string | number; out: number | null }[];
@@ -62,7 +61,7 @@ describe('feeSplit parity (shared vectors)', () => {
             expect(client.parseMoneyInput(x.out)).toBe(x.in);
         }
     });
-    it.skipIf(!fs.existsSync(PORTAL))('the core portal gives every recorded output too', async () => {
+    it('the portal gives every recorded output too', async () => {
         const portal = await import(/* @vite-ignore */ PORTAL);
         expect(runVectors(portal)).toEqual(expected);
     });

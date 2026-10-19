@@ -1,3 +1,4 @@
+// @ts-nocheck — backend plugin client source; bundled by the plugin loader, not type-checked by the frontend.
 /**
  * The badge (conference-manager 2.19.0), drawn from the DISPLAY LIST the plugin computes (its
  * server/badge-layout.js, and 2.29.0's free-form server/badge-design.js: rectangles, ellipses, lines, images,

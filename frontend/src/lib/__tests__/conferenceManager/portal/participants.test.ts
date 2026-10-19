@@ -10,8 +10,8 @@ import {
     DEFAULT_PAGE_SIZE, PAGE_SIZE_KEY, PAGE_SIZES, SELECTION_MAX, clampPage, extraColumns, familyGroupsOf, filterPeople, idsKey, isCancelled,
     matchesQuery, pageAfterResize, pageCount, pageSelectionState, pageSlice, pageWindow, payFilterCounts, payStateOf, pruneSelection, rangeOf,
     readPageSize, rowHaystack, selectAllCapped, selectPage, toggleId, writePageSize, type PortalPerson,
-} from "../participants";
-import type { PortalField } from "../form";
+} from "../../../../../../marketplace/plugins/conference-manager/client/portal/participants";
+import type { PortalField } from "../../../../../../marketplace/plugins/conference-manager/client/portal/form";
 
 const fields: PortalField[] = [
     { name: "first_name", label: "Nombre", type: "text", role: "first_name" },

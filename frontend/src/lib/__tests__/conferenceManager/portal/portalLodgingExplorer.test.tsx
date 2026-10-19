@@ -11,8 +11,8 @@
 import { describe, it, expect } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import LodgingExplorer, { type LodgingExplorerProps } from "../LodgingExplorer";
-import { lodgingSummary, type LodgingAttendee, type LodgingRoom } from "../lodging";
+import LodgingExplorer, { type LodgingExplorerProps } from "../../../../../../marketplace/plugins/conference-manager/client/portal/LodgingExplorer";
+import { lodgingSummary, type LodgingAttendee, type LodgingRoom } from "../../../../../../marketplace/plugins/conference-manager/client/portal/lodging";
 
 const person = (id: number, first: string, last: string, extra: Partial<LodgingAttendee> = {}): LodgingAttendee => ({ id, first_name: first, last_name: last, gender: null, family_group: null, ...extra });
 

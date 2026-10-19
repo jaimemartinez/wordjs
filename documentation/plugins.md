@@ -884,6 +884,23 @@ coordinators, a vendor, a field team opening a QR link. Declare it in the manife
   name="theme-color">` (a hex colour) and `viewport-fit` (`auto`, `cover` or `contain`). Use `cover` only
   if your page pads itself with `env(safe-area-inset-*)`: it lets the page draw under a phone's notch.
   Portals are always `noindex`.
+- **`pages`** (optional) — the `<head>` of sub-pages, keyed by their first path segment:
+  `{ "me": { "title": "My page", "private": true, "app": { "name": "My page", "shortName"?, "description"?,
+  "backgroundColor"?, "themeColor"? } } }` (at most 20). `title` replaces the portal's; `private` marks a personal
+  page — never indexed, never stored by a cache, and no `Referer` leaves it (a link or a map tile that needs one
+  opts in itself); `app` makes the sub-page installable to a phone's home screen (what an iPhone needs before it
+  delivers Web Push): the core serves its web app manifest at `/portal/<slug>/app.webmanifest?page=me`, scoped to
+  `/portal/<slug>/me`. Hex colours only; no `<` or `>` in a text.
+- **`serviceWorker`** (optional) — a plain `.js` file under `client/` (`"client/portal/sw.js"`), served as-is
+  (never compiled) at `/portal/<slug>/sw.js`, so a page of the portal can register it with the portal or one of its
+  sub-pages as its scope — e.g. to show notifications sent by Web Push. Sending them needs the `network` grant.
+- **`file`** (optional) — one of your PUBLIC GET routes (`"/public/file"`) that turns a short-lived ticket you mint
+  (`?d=`, 16–128 letters, digits, `-` or `_`) into `{ mime, filename, b64 }`. A plugin route answers JSON; the core
+  answers the bytes at `/portal/<slug>/file?d=<ticket>` with their real type — a PDF opens in a phone's viewer —
+  for `application/pdf`, `image/png` and `image/jpeg` only, `no-store`, `nosniff`. The ticket is the only
+  credential: make it random, short-lived and few-use.
+- The core's own paths under every portal — `/portal/<slug>/file`, `/sw.js` and `/app.webmanifest` — are never
+  your sub-pages (`file` is refused as a `pages` key).
 
 **What the page gets.** The bare portal layout — no theme header or footer, no admin shell — with
 `ModalProvider`, `I18nProvider` and `ToastProvider` mounted, so `useModal()`, `useI18n()` and `useToast()`
@@ -900,7 +917,12 @@ then renders your component — compiled in when the plugin was present at build
 (`frontend/scripts/generate-portal-plugin-registry.js`), otherwise loaded at runtime from
 `GET /api/v1/plugins/<slug>/bundle?type=portal` — and links `…/bundle/css?type=portal`. All three routes
 take the **portal** slug, never the folder or the admin-page slug. A static folder under
-`frontend/src/app/portal/` is a core route of its own and wins over a plugin portal of the same name.
+`frontend/src/app/portal/` is a core route of its own and wins over a plugin portal of the same name. The menu
+editor (`/admin/menus`, «System pages») offers every portal that is served (`GET /plugins/portals`).
+
+The conference-manager plugin's portal is the complete example: `/portal/conference` (the coordinators), its
+sub-pages `yo` (private, installable, with a service worker for its bus notices) and `badge`, and its badge PDFs
+through `file` — see `marketplace/plugins/conference-manager/manifest.json` and `client/portal/page.tsx`.
 
 ---
 
@@ -1341,7 +1363,7 @@ generators and the marketplace scripts). The manifest may be at most 64 KB.
 | :-- | :-- |
 | `frontend.adminPage` | `{ "entry", "slug" }` — the admin page at `/admin/plugin/<slug>` (§2 Step 3, §10.1). |
 | `frontend.hooks` | Path (a string) of the hooks file whose `register*` exports run on admin load (§2 Step 4). |
-| `frontend.portalPage` | `{ "entry", "slug", "title"?, "themeColor"?, "viewportFit"? }` — the public page at `/portal/<slug>` (§10.6). |
+| `frontend.portalPage` | `{ "entry", "slug", "title"?, "themeColor"?, "viewportFit"?, "pages"?, "serviceWorker"?, "file"? }` — the public page at `/portal/<slug>` and its sub-pages (§10.6). |
 | `frontend.versoComponents` | `{ "entry" }` — the Verso block file (§13); the deprecated `frontend.puckComponents` is still read. `null` or absent → the `client/verso/<Pascal>Verso.tsx` convention. |
 | `frontend.components` | Legacy *location* components, `[{ "name", "entry", "locations", "props" }]`; the development registry takes the first `entry`. |
 | `style`, `theme` | Admin-page styling, returned by `GET /api/v1/plugins/<slug>/admin-style` (§11a): `style` is a string, `theme` an object whose keys become `--plugin-<key>` variables. |

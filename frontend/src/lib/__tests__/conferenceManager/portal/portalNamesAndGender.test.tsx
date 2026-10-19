@@ -11,10 +11,10 @@
 import { describe, it, expect } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import LodgingExplorer, { type LodgingExplorerProps } from "../LodgingExplorer";
-import { attendeeName, formHasGender, lodgingSummary, type LodgingAttendee, type LodgingRoom } from "../lodging";
-import { filterAttendees } from "../lodgingView";
-import { isNameFallbackField, portalPersonName } from "../form";
+import LodgingExplorer, { type LodgingExplorerProps } from "../../../../../../marketplace/plugins/conference-manager/client/portal/LodgingExplorer";
+import { attendeeName, formHasGender, lodgingSummary, type LodgingAttendee, type LodgingRoom } from "../../../../../../marketplace/plugins/conference-manager/client/portal/lodging";
+import { filterAttendees } from "../../../../../../marketplace/plugins/conference-manager/client/portal/lodgingView";
+import { isNameFallbackField, portalPersonName } from "../../../../../../marketplace/plugins/conference-manager/client/portal/form";
 
 const noName = (id: number, display: string, extra: Partial<LodgingAttendee> = {}): LodgingAttendee =>
     ({ id, first_name: null, last_name: null, display_name: display, gender: null, family_group: null, ...extra });

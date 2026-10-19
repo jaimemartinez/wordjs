@@ -17,7 +17,7 @@ import {
     PAYMENT_METHODS,
     seatsLabel,
     type PortalField,
-} from "../form";
+} from "../../../../../../marketplace/plugins/conference-manager/client/portal/form";
 
 const f = (partial: Partial<PortalField> & { name: string }): PortalField => ({ label: partial.name, type: 'text', ...partial });
 

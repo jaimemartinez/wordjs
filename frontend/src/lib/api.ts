@@ -797,6 +797,8 @@ export const revisionsApi = {
 
 export const pluginsApi = {
     list: () => apiGet<Plugin[]>("/plugins"),
+    /** The plugin portal pages served right now (/portal/<slug>), with their titles. */
+    portals: () => apiGet<{ slug: string; title?: string }[]>("/plugins/portals"),
     activate: (slug: string) => apiPost(`/plugins/${slug}/activate`, {}),
     /** Also the cleanup door for an ORPHANED slug: it always clears the stale active_plugins entry, and
      * removes the leftover directory when that directory holds no plugin code (`residueRemoved`). */

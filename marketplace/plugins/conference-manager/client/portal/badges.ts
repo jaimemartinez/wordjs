@@ -83,7 +83,7 @@ export async function openPortalBadgePdf(headers: Headers, scope: { inscription_
     const w = typeof window !== "undefined" ? window.open("", "_blank") : null;
     try {
         const r = await post<{ d: string }>(headers, "/ticket", { ...scope, sheet });
-        const url = `/portal/conference/badge/file?d=${encodeURIComponent(r.d)}`;
+        const url = `/portal/conference/file?d=${encodeURIComponent(r.d)}`;
         if (w && !w.closed) { try { w.opener = null; } catch { /* ignore */ } w.location.href = url; return; }
         const a = document.createElement("a");
         a.href = url; a.target = "_blank"; a.rel = "noopener";

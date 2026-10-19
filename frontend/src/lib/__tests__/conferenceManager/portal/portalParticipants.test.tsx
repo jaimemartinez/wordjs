@@ -17,15 +17,15 @@ import React from "react";
 import fs from "node:fs";
 import path from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
-import ParticipantList from "../ParticipantList";
-import ParticipantSheet from "../ParticipantSheet";
-import type { PortalPerson } from "../participants";
-import type { PortalField } from "../form";
+import ParticipantList from "../../../../../../marketplace/plugins/conference-manager/client/portal/ParticipantList";
+import ParticipantSheet from "../../../../../../marketplace/plugins/conference-manager/client/portal/ParticipantSheet";
+import type { PortalPerson } from "../../../../../../marketplace/plugins/conference-manager/client/portal/participants";
+import type { PortalField } from "../../../../../../marketplace/plugins/conference-manager/client/portal/form";
 import {
     Button, CheckboxLabel, IconButton, KpiTile, MODAL_PANEL_CLS, Modal, MoneyInput, MoreButton, Pager, SegmentedControl, inputBoldCls, inputCls, inputDenseCls, selectCls,
-} from "../ui";
+} from "../../../../../../marketplace/plugins/conference-manager/client/portal/ui";
 
-const PORTAL = path.resolve(__dirname, "..");
+const PORTAL = path.resolve(__dirname, "../../../../../../marketplace/plugins/conference-manager/client/portal");
 const read = (f: string) => fs.readFileSync(path.join(PORTAL, f), "utf8");
 const flat = (html: string) => html.replace(/<!-- -->/g, "");
 
@@ -241,7 +241,7 @@ describe("ui.tsx: phones first", () => {
 });
 
 describe("page.tsx wiring of «Participantes»", () => {
-    const page = read("page.tsx");
+    const page = read("CoordinatorPortal.tsx");
     it("the sheet reads the person BY ID from the live roster and opens over the list", () => {
         expect(page).toContain("const sheetPerson = sheetId != null ? byId.get(sheetId) ?? null : null;");
         expect(page).toMatch(/\{sheetPerson && \(\s*<ParticipantSheet/);

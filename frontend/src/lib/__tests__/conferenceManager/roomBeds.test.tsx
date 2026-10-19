@@ -251,9 +251,9 @@ describe('the screens show the split', () => {
     });
 
     it('the portal marks a shared room with the location\'s own beds', async () => {
-        const mod: any = await import('@/app/portal/conference/LodgingExplorer');
+        const mod: any = await import('../../../../../marketplace/plugins/conference-manager/client/portal/LodgingExplorer');
         expect(mod).toBeTruthy();
-        const src = read('../../../app/portal/conference/LodgingExplorer.tsx');
+        const src = read('../../../../../marketplace/plugins/conference-manager/client/portal/LodgingExplorer.tsx');
         expect(src).toContain('Compartida · tuyas ${beds} de ${total} camas');
         expect((src.match(/<SharedBadge room=\{room\} \/>/g) || []).length).toBe(2);
         expect(renderToStaticMarkup(React.createElement('span', null, 'ok'))).toBe('<span>ok</span>');

@@ -1,5 +1,5 @@
 /**
- * Portal-wide rules that no Tailwind utility can express reliably (plain module: the server layout imports it,
+ * Portal-wide rules that no Tailwind utility can express reliably (a plain module: PortalFrame and the tests import it,
  * so it must not be a "use client" module, whose exports would reach a server component as references).
  *
  * PORTAL_COARSE_FIELDS_CSS — 16 px fields on EVERY touch screen (`pointer: coarse`), whatever its width. The

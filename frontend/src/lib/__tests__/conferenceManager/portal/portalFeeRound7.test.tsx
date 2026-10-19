@@ -15,17 +15,17 @@ import React from "react";
 import fs from "node:fs";
 import path from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
-import { noticeTarget, parseFeeView, parseTransfer, reopenDraft, viewBalanceC, type DraftContext, type FeeDraft, type PortalFeeView } from "../feePayments";
-import { centsToInput, tidyMoneyInput } from "../feeSplit";
-import RegisterPaymentSheet from "../RegisterPaymentSheet";
-import TransferSheet from "../TransferSheet";
-import ParticipantSheet from "../ParticipantSheet";
-import FeeBalances from "../FeeBalances";
-import { Modal, SPLIT_COLUMN_REM, SheetNotice, compactMoneyTextPx } from "../ui";
-import { PORTAL_SHORT_SHEET_CSS } from "../portalCss";
-import ConferencePortalLayout from "../layout";
+import { noticeTarget, parseFeeView, parseTransfer, reopenDraft, viewBalanceC, type DraftContext, type FeeDraft, type PortalFeeView } from "../../../../../../marketplace/plugins/conference-manager/client/portal/feePayments";
+import { centsToInput, tidyMoneyInput } from "../../../../../../marketplace/plugins/conference-manager/client/portal/feeSplit";
+import RegisterPaymentSheet from "../../../../../../marketplace/plugins/conference-manager/client/portal/RegisterPaymentSheet";
+import TransferSheet from "../../../../../../marketplace/plugins/conference-manager/client/portal/TransferSheet";
+import ParticipantSheet from "../../../../../../marketplace/plugins/conference-manager/client/portal/ParticipantSheet";
+import FeeBalances from "../../../../../../marketplace/plugins/conference-manager/client/portal/FeeBalances";
+import { Modal, SPLIT_COLUMN_REM, SheetNotice, compactMoneyTextPx } from "../../../../../../marketplace/plugins/conference-manager/client/portal/ui";
+import { PORTAL_SHORT_SHEET_CSS } from "../../../../../../marketplace/plugins/conference-manager/client/portal/portalCss";
+import ConferencePortalLayout from "../../../../../../marketplace/plugins/conference-manager/client/portal/PortalFrame";
 
-const PORTAL = path.resolve(__dirname, "..");
+const PORTAL = path.resolve(__dirname, "../../../../../../marketplace/plugins/conference-manager/client/portal");
 const read = (f: string) => fs.readFileSync(path.join(PORTAL, f), "utf8");
 const flat = (html: string) => html.replace(/<!-- -->/g, "");
 const html = (node: React.ReactElement) => flat(renderToStaticMarkup(node));
@@ -94,7 +94,7 @@ describe("while a sheet is open, the payments speak in it — never a toast over
         expect(tab).toMatch(/setSheet\(null\);\s*setRegisterNotice\(null\);\s*\/\/[^\n]*\n\s*say\(out\.toast, "success"\);/);
         expect(tab).toMatch(/notice=\{hub\.notice\}/);
         expect(tab).toMatch(/notice=\{hub\.registerNotice\}/);
-        const page = read("page.tsx");
+        const page = read("CoordinatorPortal.tsx");
         expect(page).toMatch(/sheetOpen: \(\) => sheetId != null,/);
         expect(page).toMatch(/onClose=\{\(\) => \{ setSheetId\(null\); feeHub\.clearNotice\(\); \}\}\s*notice=\{feeHub\.sheet \? null : feeHub\.notice\}/);
     });
@@ -119,7 +119,7 @@ describe("«Reparto»: a part's «máximo» is read with its field; amounts grou
 // ── «Participantes» ─────────────────────────────────────────────────────────────────────────────────────
 describe("«Participantes»: counts like the hero, separators with their facts, whole names for voice control (PUX-12, 13, 14)", () => {
     it("the caption counts active people and the cancelled apart; each «·» is inside the fact it introduces", () => {
-        const page = read("page.tsx");
+        const page = read("CoordinatorPortal.tsx");
         expect(page).toMatch(/const cancelledCount = inscriptions\.filter\(\(i\) => isCancelled\(i\)\)\.length;\s*const activeCount = inscriptions\.length - cancelledCount;/);
         const caption = page.match(/data-testid="participants-caption">([\s\S]*?)<\/span>\s*\) : undefined\}/)![1];
         expect(caption).toContain("{activeCount} {activeCount === 1 ? 'participante' : 'participantes'}");
@@ -129,7 +129,7 @@ describe("«Participantes»: counts like the hero, separators with their facts, 
         expect(caption).not.toContain("inscriptions.length}");
     });
     it("the «Pagos de cuotas» badge stays on one line", () => {
-        expect(read("page.tsx")).toMatch(/<Badge tone=\{badge\.tone\} size="xs" className="whitespace-nowrap" data-testid="fees-badge">/);
+        expect(read("CoordinatorPortal.tsx")).toMatch(/<Badge tone=\{badge\.tone\} size="xs" className="whitespace-nowrap" data-testid="fees-badge">/);
     });
     it("the search fields' accessible names start with their visible words (label in name)", () => {
         const v = view();

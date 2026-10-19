@@ -8,10 +8,10 @@
 import { describe, it, expect, vi } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { balanceC, checkDraft, newDraft, type DraftContext, type BalanceC } from "../feePayments";
-import { tidyMoneyInput } from "../feeSplit";
-import RegisterPaymentSheet, { afterText } from "../RegisterPaymentSheet";
-import { MoneyInput } from "../ui";
+import { balanceC, checkDraft, newDraft, type DraftContext, type BalanceC } from "../../../../../../marketplace/plugins/conference-manager/client/portal/feePayments";
+import { tidyMoneyInput } from "../../../../../../marketplace/plugins/conference-manager/client/portal/feeSplit";
+import RegisterPaymentSheet, { afterText } from "../../../../../../marketplace/plugins/conference-manager/client/portal/RegisterPaymentSheet";
+import { MoneyInput } from "../../../../../../marketplace/plugins/conference-manager/client/portal/ui";
 
 const flat = (html: string) => html.replace(/<!-- -->/g, "");
 

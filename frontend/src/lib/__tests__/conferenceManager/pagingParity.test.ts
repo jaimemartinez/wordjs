@@ -1,13 +1,12 @@
 /**
- * conference-manager 2.18.0 — the same paging rules in the plugin admin (client/lib/paging.ts) and the core
- * portal (frontend/src/app/portal/conference/participants.ts, when it is there): one behaviour on both sides.
+ * conference-manager 2.18.0 — the same paging rules in the plugin admin (client/lib/paging.ts) and the
+ * coordinators' portal (client/portal/participants.ts): one behaviour on both sides.
  */
 import { describe, it, expect } from 'vitest';
-import fs from 'node:fs';
 import path from 'node:path';
 import * as plugin from '../../../../../marketplace/plugins/conference-manager/client/lib/paging';
 
-const PORTAL = path.resolve(__dirname, '../../../app/portal/conference/participants.ts');
+const PORTAL = path.resolve(__dirname, '../../../../../marketplace/plugins/conference-manager/client/portal/participants.ts');
 
 const run = (impl: any) => ({
     sizes: [...impl.PAGE_SIZES],
@@ -27,7 +26,7 @@ describe('paging parity', () => {
         expect(r.window[0]).toEqual([1, '…', 5, 6, 7, '…', 20]);
         expect(r.resize).toEqual([1, 5, 3]);
     });
-    it.skipIf(!fs.existsSync(PORTAL))('the core portal agrees on every vector', async () => {
+    it('the portal agrees on every vector', async () => {
         const portal = await import(/* @vite-ignore */ PORTAL);
         expect(run(portal)).toEqual(run(plugin));
     });

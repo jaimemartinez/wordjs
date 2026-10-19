@@ -44,7 +44,7 @@ import {
     type LodgingData,
     type LodgingRoom,
     type LodgingRule,
-} from "../lodging";
+} from "../../../../../../marketplace/plugins/conference-manager/client/portal/lodging";
 
 const room = (partial: Partial<LodgingRoom> & { id: number }): LodgingRoom => ({ hotel_name: 'Hotel Sol', room_number: String(partial.id), capacity: 4, occupied: 0, occupants: [], ...partial });
 

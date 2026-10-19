@@ -489,11 +489,31 @@ export function fromRequestedSite(res: Response, siteHost: string | null): Respo
 }
 
 /** What a plugin portal page (/portal/<slug>, manifest frontend.portalPage) puts in its <head>. */
+export interface PortalAppInfo {
+    name: string;
+    shortName?: string;
+    description?: string;
+    backgroundColor?: string;
+    themeColor?: string;
+}
+export interface PortalSubPageInfo {
+    title?: string;
+    /** A personal page: never indexed, never stored, no Referer leaves it. */
+    private?: boolean;
+    /** Installable to a phone's home screen: its web app manifest is /portal/<slug>/app.webmanifest?page=<page>. */
+    app?: PortalAppInfo;
+}
 export interface PortalPageInfo {
     slug: string;
     title?: string;
     themeColor?: string;
     viewportFit?: 'auto' | 'cover' | 'contain';
+    /** Head details of the sub-pages (/portal/<slug>/<page>), keyed by page. */
+    pages?: Record<string, PortalSubPageInfo>;
+    /** The portal has a service worker, served at /portal/<slug>/sw.js. */
+    serviceWorker?: boolean;
+    /** API path (under /api/v1) of the plugin route that turns a ticket into a file (/portal/<slug>/file). */
+    fileEndpoint?: string;
 }
 
 /**

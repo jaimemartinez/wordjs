@@ -23,19 +23,19 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
     correctionKey, draftBody, draftChanged, draftFromTransfer, checkDraft, feeErrorAction, FeeApiError, keepCorrection, parseFeeView, parseTransfer, recoverCorrection, viewBalanceC,
     type DraftContext, type FeeDraft, type PortalFeeView, type PortalTransfer,
-} from "../feePayments";
-import RegisterPaymentSheet, { owedLines } from "../RegisterPaymentSheet";
-import TransferSheet, { transferActions } from "../TransferSheet";
-import ParticipantList, { PL_FORM_COL_REM, participantTableCss, participantTableMinRem } from "../ParticipantList";
-import { fieldNode } from "../ParticipantSheet";
-import FeeTransfers from "../FeeTransfers";
-import { KpiTile, Modal, SECOND_ESCAPE_MS, SHEET_BODY_SCROLL_PADDING, SPLIT_COLUMN_REM, compactMoneyTextPx, fieldKeepsEscape, isFilledField, kpiValueFit, pagerSizeLabel, sectionLabelCls, thCls, thWrapCls } from "../ui";
-import { PORTAL_COARSE_FIELDS_CSS } from "../portalCss";
-import ConferencePortalLayout from "../layout";
-import type { PortalPerson } from "../participants";
-import type { PortalField } from "../form";
+} from "../../../../../../marketplace/plugins/conference-manager/client/portal/feePayments";
+import RegisterPaymentSheet, { owedLines } from "../../../../../../marketplace/plugins/conference-manager/client/portal/RegisterPaymentSheet";
+import TransferSheet, { transferActions } from "../../../../../../marketplace/plugins/conference-manager/client/portal/TransferSheet";
+import ParticipantList, { PL_FORM_COL_REM, participantTableCss, participantTableMinRem } from "../../../../../../marketplace/plugins/conference-manager/client/portal/ParticipantList";
+import { fieldNode } from "../../../../../../marketplace/plugins/conference-manager/client/portal/ParticipantSheet";
+import FeeTransfers from "../../../../../../marketplace/plugins/conference-manager/client/portal/FeeTransfers";
+import { KpiTile, Modal, SECOND_ESCAPE_MS, SHEET_BODY_SCROLL_PADDING, SPLIT_COLUMN_REM, compactMoneyTextPx, fieldKeepsEscape, isFilledField, kpiValueFit, pagerSizeLabel, sectionLabelCls, thCls, thWrapCls } from "../../../../../../marketplace/plugins/conference-manager/client/portal/ui";
+import { PORTAL_COARSE_FIELDS_CSS } from "../../../../../../marketplace/plugins/conference-manager/client/portal/portalCss";
+import ConferencePortalLayout from "../../../../../../marketplace/plugins/conference-manager/client/portal/PortalFrame";
+import type { PortalPerson } from "../../../../../../marketplace/plugins/conference-manager/client/portal/participants";
+import type { PortalField } from "../../../../../../marketplace/plugins/conference-manager/client/portal/form";
 
-const PORTAL = path.resolve(__dirname, "..");
+const PORTAL = path.resolve(__dirname, "../../../../../../marketplace/plugins/conference-manager/client/portal");
 const read = (f: string) => fs.readFileSync(path.join(PORTAL, f), "utf8");
 const flat = (html: string) => html.replace(/<!-- -->/g, "");
 const html = (node: React.ReactElement) => flat(renderToStaticMarkup(node));

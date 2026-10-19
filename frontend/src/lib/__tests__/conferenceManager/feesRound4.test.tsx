@@ -43,7 +43,7 @@ import { PersonPicker } from '../../../../../marketplace/plugins/conference-mana
 import { RegisterPaymentSheet, buildPersonOptions } from '../../../../../marketplace/plugins/conference-manager/client/admin/RegisterPaymentSheet';
 import { LEDGER_CSS } from '../../../../../marketplace/plugins/conference-manager/client/admin/AccountingPage';
 import FeePaymentsPage, { FEES_CSS, MASTER_DETAIL_MIN_PX, QUEUE_LIST_COLUMN } from '../../../../../marketplace/plugins/conference-manager/client/admin/FeePaymentsPage';
-import { afterText as portalAfterText } from '../../../app/portal/conference/RegisterPaymentSheet';
+import { afterText as portalAfterText } from '../../../../../marketplace/plugins/conference-manager/client/portal/RegisterPaymentSheet';
 
 const CM = path.resolve(__dirname, '../../../../../marketplace/plugins/conference-manager/client');
 const read = (f: string) => fs.readFileSync(path.join(CM, f), 'utf8');

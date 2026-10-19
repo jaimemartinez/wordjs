@@ -17,13 +17,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
     FeeApiError, balanceC, checkDraft, draftFromTransfer, feeErrorAction, followTotal, manualOnSwitch, manualSeed, newDraft, parseFeeView, parseTransfer, sendDraft, viewBalanceC,
     type DraftContext, type FeeDraft, type PortalFeeApi, type PortalFeeView,
-} from "../feePayments";
-import { SumLine, personLine, proofFocusTarget } from "../RegisterPaymentSheet";
-import { balanceText } from "../FeeBalances";
-import { peopleHint } from "../FeeSummary";
-import { SheetNotice, revealInSheetBody } from "../ui";
+} from "../../../../../../marketplace/plugins/conference-manager/client/portal/feePayments";
+import { SumLine, personLine, proofFocusTarget } from "../../../../../../marketplace/plugins/conference-manager/client/portal/RegisterPaymentSheet";
+import { balanceText } from "../../../../../../marketplace/plugins/conference-manager/client/portal/FeeBalances";
+import { peopleHint } from "../../../../../../marketplace/plugins/conference-manager/client/portal/FeeSummary";
+import { SheetNotice, revealInSheetBody } from "../../../../../../marketplace/plugins/conference-manager/client/portal/ui";
 
-const PORTAL = path.resolve(__dirname, "..");
+const PORTAL = path.resolve(__dirname, "../../../../../../marketplace/plugins/conference-manager/client/portal");
 const read = (f: string) => fs.readFileSync(path.join(PORTAL, f), "utf8").replace(/\r\n/g, "\n");
 const flat = (html: string) => html.replace(/<!-- -->/g, "");
 const NB = " ";

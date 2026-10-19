@@ -12,14 +12,14 @@
 import { describe, it, expect, vi } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { dayLabel, parseFeeView, parseTransfer, reopenDraft, stampDayLabel, viewBalanceC, type DraftContext, type FeeDraft, type PortalFeeView } from "../feePayments";
-import TransferSheet from "../TransferSheet";
-import ParticipantSheet from "../ParticipantSheet";
-import RegisterPaymentSheet, { ProofPicker } from "../RegisterPaymentSheet";
-import { factsLine } from "../FeeTransfers";
-import { peopleHint } from "../FeeSummary";
-import { KPI_TILE_BOX, KpiTile, SegmentedControl, segmentKeyTarget } from "../ui";
-import { PAYMENTS_UNAVAILABLE, bulkErrorText } from "../LegacyBulkPayment";
+import { dayLabel, parseFeeView, parseTransfer, reopenDraft, stampDayLabel, viewBalanceC, type DraftContext, type FeeDraft, type PortalFeeView } from "../../../../../../marketplace/plugins/conference-manager/client/portal/feePayments";
+import TransferSheet from "../../../../../../marketplace/plugins/conference-manager/client/portal/TransferSheet";
+import ParticipantSheet from "../../../../../../marketplace/plugins/conference-manager/client/portal/ParticipantSheet";
+import RegisterPaymentSheet, { ProofPicker } from "../../../../../../marketplace/plugins/conference-manager/client/portal/RegisterPaymentSheet";
+import { factsLine } from "../../../../../../marketplace/plugins/conference-manager/client/portal/FeeTransfers";
+import { peopleHint } from "../../../../../../marketplace/plugins/conference-manager/client/portal/FeeSummary";
+import { KPI_TILE_BOX, KpiTile, SegmentedControl, segmentKeyTarget } from "../../../../../../marketplace/plugins/conference-manager/client/portal/ui";
+import { PAYMENTS_UNAVAILABLE, bulkErrorText } from "../../../../../../marketplace/plugins/conference-manager/client/portal/LegacyBulkPayment";
 
 const flat = (html: string) => html.replace(/<!-- -->/g, "");
 const html = (node: React.ReactElement) => flat(renderToStaticMarkup(node));

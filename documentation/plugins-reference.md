@@ -180,7 +180,7 @@ A complete SMTP server and email manager. Allows sending and receiving emails di
 ---
 
 ## 5. Conference Manager 🎟️
-**ID:** `conference-manager` | **Version:** 2.18.0
+**ID:** `conference-manager` | **Version:** 2.30.0
 
 Complex business logic for managing church conferences.
 

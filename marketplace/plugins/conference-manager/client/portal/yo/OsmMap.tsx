@@ -1,3 +1,4 @@
+// @ts-nocheck — backend plugin client source; bundled by the plugin loader, not type-checked by the frontend.
 /**
  * A small map of one point (conference-manager 2.23.0, «Mi inscripción»): OpenStreetMap tiles drawn as plain
  * images around the point, with a pin on it — no map script, no iframe (the site's security policy allows images

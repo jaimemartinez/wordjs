@@ -8,7 +8,7 @@
  * edit gate is closed.
  */
 import { describe, it, expect } from "vitest";
-import { deadlineMessage, dragDecision, type LodgingAttendee, type LodgingData, type LodgingRoom } from "../lodging";
+import { deadlineMessage, dragDecision, type LodgingAttendee, type LodgingData, type LodgingRoom } from "../../../../../../marketplace/plugins/conference-manager/client/portal/lodging";
 import {
     assignCandidates,
     compareRoomNumbers,
@@ -51,7 +51,7 @@ import {
     sameNavOwner,
     UNNAMED_HOTEL,
     type RoomFilters,
-} from "../lodgingView";
+} from "../../../../../../marketplace/plugins/conference-manager/client/portal/lodgingView";
 
 const person = (id: number, first: string, last: string, extra: Partial<LodgingAttendee> = {}): LodgingAttendee => ({ id, first_name: first, last_name: last, gender: null, family_group: null, ...extra });
 

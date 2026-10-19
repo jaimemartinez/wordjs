@@ -1,10 +1,11 @@
+// @ts-nocheck — backend plugin client source; bundled by the plugin loader, not type-checked by the frontend.
 "use client";
 
 /**
  * «Mi transporte» on «Mi inscripción» (conference-manager 2.27.0): the person's buses with their boarding state
  * («Programado», «Embarcando ahora», «Salió») and the transport team's notices, kept fresh while the page is open
  * (it asks every 30 s while visible, and at once when a notice arrives), plus the switch for the bus notices as
- * browser notifications (Web Push): this page registers its own service worker (/portal/conference/yo-sw.js, scope
+ * browser notifications (Web Push): this page registers its own service worker (/portal/conference/sw.js, scope
  * = this page) and hands the plugin the phone's push subscription, tied to this page's session.
  *
  * iPhone / iPad: Safari only delivers web notifications to a page added to the home screen (iOS 16.4+), so there
@@ -20,7 +21,7 @@ export type Bus = {
 };
 type Post = (path: string, body: unknown) => Promise<{ status: number; body: any }>;
 
-const SW_URL = "/portal/conference/yo-sw.js";
+const SW_URL = "/portal/conference/sw.js";
 const SW_SCOPE = "/portal/conference/yo";
 const POLL_MS = 30000;
 
@@ -36,7 +37,12 @@ const keyBytes = (b64u: string) => {
 async function registration(): Promise<ServiceWorkerRegistration | null> {
     if (!pushSupported()) return null;
     const existing = await navigator.serviceWorker.getRegistration(SW_SCOPE);
-    return existing || navigator.serviceWorker.register(SW_URL, { scope: SW_SCOPE });
+    // 2.30.0: the worker moved from /portal/conference/yo-sw.js (a core file then) to the portal's own sw.js.
+    // Registering the new script for the same scope updates that registration in place — its push
+    // subscription, and so the notices this phone turned on, stay.
+    const current = existing && (existing.active || existing.waiting || existing.installing);
+    if (existing && current && new URL(current.scriptURL).pathname === SW_URL) return existing;
+    return navigator.serviceWorker.register(SW_URL, { scope: SW_SCOPE });
 }
 
 /** Leaving the page on this phone: its push subscription goes too (the plugin drops it with the session). */

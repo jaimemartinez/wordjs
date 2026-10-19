@@ -9,9 +9,9 @@ import { describe, it, expect } from "vitest";
 import { createRequire } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
-import * as portal from "../feeSplit";
+import * as portal from "../../../../../../marketplace/plugins/conference-manager/client/portal/feeSplit";
 import * as plugin from "../../../../../../marketplace/plugins/conference-manager/client/lib/feeSplit";
-import vectors from "../../../../lib/__tests__/conferenceManager/feeSplitVectors.json";
+import vectors from "../feeSplitVectors.json";
 
 const require = createRequire(import.meta.url);
 const SERVER = path.resolve(__dirname, "../../../../../../marketplace/plugins/conference-manager/server/fee-split.js");
@@ -82,7 +82,7 @@ describe("«Resumen» parity: server, admin and portal agree on the same balance
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const serverSplit = require(SERVER) as { summaryOf: (l: unknown[]) => Record<string, number> };
     it.each(PEOPLE.map((list, i) => [i, list] as const))("vector %s", async (_i, list) => {
-        const { summarize, balanceC } = await import("../feePayments");
+        const { summarize, balanceC } = await import("../../../../../../marketplace/plugins/conference-manager/client/portal/feePayments");
         const admin = await import("../../../../../../marketplace/plugins/conference-manager/client/lib/feePayments");
         const portalS = summarize(list.map(([due, validated, pending, returned, cancelled]) => balanceC({ due, validated, pending, returned, cancelled })));
         const adminB = list.map(([due, validated, pending, returned, cancelled]) => admin.personBalance({ total_due: due, amount_paid: validated, pending_amount: pending, returned_amount: returned, status: cancelled ? "cancelled" : "active" }));

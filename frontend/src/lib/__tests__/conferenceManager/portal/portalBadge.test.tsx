@@ -18,18 +18,18 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { BadgeCard, ScanQr } from "../badge/BadgeCard";
+import { BadgeCard, ScanQr } from "../../../../../../marketplace/plugins/conference-manager/client/portal/badge/BadgeCard";
 import { BadgeSvg } from "../../../../../../marketplace/plugins/conference-manager/client/admin/BadgeSvg";
 import { encodeQr, qrRows } from "../../../../../../marketplace/plugins/conference-manager/client/lib/qr";
 import jsQR from "../../../../../../marketplace/plugins/conference-manager/client/lib/vendor/jsQR";
 import * as pluginBadges from "../../../../../../marketplace/plugins/conference-manager/client/lib/badges";
 import { translations } from "../../../../../../marketplace/plugins/conference-manager/client/lib/i18n";
-import { hasBadges, waNumber, whatsappUrl } from "../badges";
+import { hasBadges, waNumber, whatsappUrl } from "../../../../../../marketplace/plugins/conference-manager/client/portal/badges";
 import fs from "node:fs";
-import ParticipantSheet from "../ParticipantSheet";
+import ParticipantSheet from "../../../../../../marketplace/plugins/conference-manager/client/portal/ParticipantSheet";
 import { parseGeo } from "../../../../../../marketplace/plugins/conference-manager/client/lib/geo";
 import { classifyRead, codeFromLink, normalizeCode } from "../../../../../../marketplace/plugins/conference-manager/client/lib/meals";
-import { OsmMap, tilesAround } from "../yo/OsmMap";
+import { OsmMap, tilesAround } from "../../../../../../marketplace/plugins/conference-manager/client/portal/yo/OsmMap";
 import * as places from "../../../../../../marketplace/plugins/conference-manager/client/lib/places";
 
 const require = createRequire(import.meta.url);
@@ -135,29 +135,15 @@ describe("the portal's helpers", () => {
     });
 });
 
-describe("the file route", () => {
-    it("answers the PDF bytes with their type, never cached or sniffed; a bad ticket or another type is a 410", async () => {
-        vi.resetModules();
-        const replies: Record<string, unknown> = {
-            ["a".repeat(32)]: { mime: "application/pdf", filename: "Escarapela María.pdf", b64: Buffer.from("%PDF-1.4 x").toString("base64") },
-            ["b".repeat(32)]: { mime: "text/html", filename: "x.html", b64: Buffer.from("<script>").toString("base64") },
-        };
-        vi.doMock("@/lib/server-api", () => ({
-            serverFetch: async (endpoint: string) => replies[new URL(`http://x${endpoint}`).searchParams.get("d") || ""] ?? null,
-        }));
-        const { GET } = await import("../badge/file/route");
-        const ok = await GET(new Request(`http://site/portal/conference/badge/file?d=${"a".repeat(32)}`));
-        expect(ok.status).toBe(200);
-        expect(ok.headers.get("content-type")).toBe("application/pdf");
-        expect(ok.headers.get("cache-control")).toBe("no-store");
-        expect(ok.headers.get("x-content-type-options")).toBe("nosniff");
-        expect(ok.headers.get("content-disposition")).toBe('inline; filename="Escarapela-Mar-a.pdf"');
-        expect(Buffer.from(await ok.arrayBuffer()).toString()).toBe("%PDF-1.4 x");
-        for (const d of ["b".repeat(32), "c".repeat(32), "../etc", ""]) {
-            const r = await GET(new Request(`http://site/portal/conference/badge/file?d=${encodeURIComponent(d)}`));
-            expect(r.status).toBe(410);
+describe("the badge PDF goes through the core's portal file route", () => {
+    it("the portal declares the plugin's ticket route, and the pages open /portal/conference/file", () => {
+        const manifest = JSON.parse(fs.readFileSync(path.resolve(__dirname, `../../../../../../marketplace/plugins/conference-manager/client/portal/../../manifest.json`), "utf8"));
+        expect(manifest.frontend.portalPage.file).toBe("/public/badge/file");
+        for (const f of ["badges.ts", "yo/MyRegistration.tsx"]) {
+            const src = fs.readFileSync(path.resolve(__dirname, `../../../../../../marketplace/plugins/conference-manager/client/portal/${f}`), "utf8");
+            expect(src, f).toContain("/portal/conference/file?d=");
+            expect(src, f).not.toContain("/badge/file");
         }
-        vi.doUnmock("@/lib/server-api");
     });
 });
 
@@ -178,7 +164,7 @@ describe("the review fixes, in the sources", () => {
     const read = (rel: string) => fs.readFileSync(path.resolve(__dirname, rel), "utf8");
     const PLUGIN = "../../../../../../marketplace/plugins/conference-manager/client";
     it("PDFs open in a new tab (the admin keeps its page and any unsaved edit), copies start inside the click", () => {
-        const page = read(`${PLUGIN}/admin/BadgesPage.tsx`), actions = read(`${PLUGIN}/admin/BadgeActions.tsx`), portal = read("../PortalBadges.tsx");
+        const page = read(`${PLUGIN}/admin/BadgesPage.tsx`), actions = read(`${PLUGIN}/admin/BadgeActions.tsx`), portal = read("../../../../../../marketplace/plugins/conference-manager/client/portal/PortalBadges.tsx");
         for (const src of [page, actions]) expect(src).not.toMatch(/openBadgeFile\(/);
         expect(page).toContain("openBadgeFileFrom(");
         expect(actions).toContain("openBadgeFileFrom(");
@@ -229,8 +215,8 @@ describe("each person's badge, in the admin and the portal", () => {
         expect((translations as any).es["badges.people.opened.one"]).toBe("Abierta 1 vez");
     });
     it("the portal says how to reach one person's badge, and re-reads its flags when the coordinator comes back", () => {
-        expect(read("../PortalBadges.tsx")).toContain("data-portal-badges-hint");
-        const page = read("../page.tsx");
+        expect(read("../../../../../../marketplace/plugins/conference-manager/client/portal/PortalBadges.tsx")).toContain("data-portal-badges-hint");
+        const page = read("../../../../../../marketplace/plugins/conference-manager/client/portal/CoordinatorPortal.tsx");
         expect(page).toMatch(/refreshMyLocation\(\);[\s\S]{0,120}addEventListener\('visibilitychange'/);
         // A portal that never leaves the screen still learns it: focus, back-forward restore, and once a minute.
         for (const ev of ["focus", "pageshow"]) expect(page).toContain(`window.addEventListener('${ev}', reread)`);
@@ -350,7 +336,7 @@ describe("«Mi inscripción»: the bus, its boarding state and the notices", () 
     });
     const post = async () => ({ status: 200, body: {} });
     it("shows each state, the team's messages, and the switch (server render: before the browser is asked)", async () => {
-        const { BusAlerts } = await import("../yo/BusAlerts");
+        const { BusAlerts } = await import("../../../../../../marketplace/plugins/conference-manager/client/portal/yo/BusAlerts");
         const scheduled = renderToStaticMarkup(<BusAlerts session={"a".repeat(32)} initial={[bus("scheduled")]} pushKey="BKEY" post={post} />);
         expect(scheduled).toContain('data-bus-status="scheduled"');
         expect(scheduled).toContain("Programado");
@@ -365,16 +351,22 @@ describe("«Mi inscripción»: the bus, its boarding state and the notices", () 
         expect(renderToStaticMarkup(<BusAlerts session={"a".repeat(32)} initial={[]} pushKey="BKEY" post={post} />)).toBe("");
     });
     it("the service worker shows the notice and opens the page; the page is installable for iPhone", () => {
-        const root = path.resolve(__dirname, "../../../../../public/portal/conference");
-        const sw = fs.readFileSync(path.join(root, "yo-sw.js"), "utf8");
+        const root = path.resolve(__dirname, "../../../../../../marketplace/plugins/conference-manager/client/portal");
+        const sw = fs.readFileSync(path.join(root, "sw.js"), "utf8");
         expect(sw).toContain("showNotification");
         expect(sw).toContain("notificationclick");
         expect(sw).toMatch(/openWindow\(PAGE\)/);
-        const manifest = JSON.parse(fs.readFileSync(path.join(root, "yo.webmanifest"), "utf8"));
-        expect(manifest.scope).toBe("/portal/conference/yo");
-        expect(manifest.display).toBe("standalone");
-        const layout = fs.readFileSync(path.resolve(__dirname, "../yo/layout.tsx"), "utf8");
-        expect(layout).toContain('manifest: "/portal/conference/yo.webmanifest"');
+        expect(sw).toContain("const PAGE = '/portal/conference/yo';");
+        // The portal page declares the worker (served at /portal/conference/sw.js) and «Mi inscripción» as an
+        // installable, private sub-page (its web app manifest: /portal/conference/app.webmanifest?page=yo).
+        const portal = JSON.parse(fs.readFileSync(path.join(root, "../../manifest.json"), "utf8")).frontend.portalPage;
+        expect(portal.slug).toBe("conference");
+        expect(portal.serviceWorker).toBe("client/portal/sw.js");
+        expect(portal.pages.yo.private).toBe(true);
+        expect(portal.pages.yo.app.name).toBe("Mi inscripción");
+        const alerts = fs.readFileSync(path.join(root, "yo/BusAlerts.tsx"), "utf8");
+        expect(alerts).toContain('const SW_URL = "/portal/conference/sw.js";');
+        expect(alerts).toContain('const SW_SCOPE = "/portal/conference/yo";');
     });
     it("every bus-notice text of the admin exists in es / en / pt", () => {
         const keys = Object.keys(translations.es).filter((k) => k.startsWith("transport.notice."));
@@ -385,7 +377,7 @@ describe("«Mi inscripción»: the bus, its boarding state and the notices", () 
 
 describe("a shared badge link (2.28.0)", () => {
     it("goes to «Mi inscripción» when the plugin says so — only to that page, never to an address it is handed", () => {
-        const src = fs.readFileSync(path.resolve(__dirname, "../badge/page.tsx"), "utf8");
+        const src = fs.readFileSync(path.resolve(__dirname, "../../../../../../marketplace/plugins/conference-manager/client/portal/badge/BadgePage.tsx"), "utf8");
         expect(src).toContain("window.location.replace(body.self)");
         expect(src).toContain("SELF.test(body.self)");
         expect(src).toContain("conference\\/yo#c=[A-Z0-9]{10}$/;");
