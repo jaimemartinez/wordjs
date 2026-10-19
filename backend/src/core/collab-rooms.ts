@@ -414,9 +414,15 @@ const SITE_ALPHABET = 'abcdefghijklmnopqrstuvwxyz234567';
  * reordena lo que se ve) y se colapsan los espacios. La identidad ESTABLE no es esto: es el `userId`,
  * que viaja al lado y que el cliente enseña junto al nombre.
  */
+function invisibleCodePoint(c: number): boolean {
+    return c <= 0x1f || (c >= 0x7f && c <= 0x9f) || c === 0x61c || (c >= 0x200b && c <= 0x200f)
+        || (c >= 0x202a && c <= 0x202e) || (c >= 0x2060 && c <= 0x2069) || c === 0xfeff;
+}
+
 function cleanDisplayName(raw: any, userId: number): string {
-    const s = String(raw ?? '')
-        .replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g, '')
+    const s = Array.from(String(raw ?? ''))
+        .filter((ch) => !invisibleCodePoint(ch.codePointAt(0) as number))
+        .join('')
         .replace(/\s+/g, ' ')
         .trim()
         .slice(0, 80);
@@ -1211,6 +1217,11 @@ function handleBusMessage(msg: string): void {
 
 /* --- Re-autorización por EVENTO ------------------------------------------------------------------ */
 
+/** Encola `fn` para después del commit de la transacción en curso; `false` si no hay transacción. */
+function deferAfterCommit(fn: () => any): boolean {
+    try { return require('../config/database').afterCommit(fn) === true; } catch { return false; }
+}
+
 type RecheckScope = { userId?: number; postId?: number; all?: boolean };
 
 /**
@@ -1251,9 +1262,7 @@ function requestRecheck(scope: RecheckScope, closePost = false): void {
             if (!ok) mlog.error({ scope }, '[collab] la re-autorización por evento NO cruzó el bus: los otros nodos la harán en su próximo ciclo');
         });
     };
-    let deferred = false;
-    try { deferred = require('../config/database').afterCommit(run); } catch { deferred = false; }
-    if (!deferred) run();
+    if (!deferAfterCommit(run)) run();
 }
 
 /** Un hecho de seguridad de la CUENTA: cierre de sesión, contraseña, rol, 2FA, baja. */
@@ -2824,9 +2833,7 @@ function contentChangedOutside(postId: number): void {
     const run = () => retireRoom(postId).then((r) => {
         if (r === 'error') mlog.error({ postId }, '[collab] el contenido cambió fuera de la sala y no se pudo reiniciar');
     });
-    let deferred = false;
-    try { deferred = require('../config/database').afterCommit(run); } catch { deferred = false; }
-    if (!deferred) void run();
+    if (!deferAfterCommit(run)) void run();
 }
 
 /**
@@ -2871,9 +2878,7 @@ function forgetPost(postId: number): void {
         requestRecheck({ postId: id }, true);
         await purgePostRows(id);
     };
-    let deferred = false;
-    try { deferred = require('../config/database').afterCommit(run); } catch { deferred = false; }
-    if (!deferred) void run();
+    if (!deferAfterCommit(run)) void run();
 }
 
 async function purgePostRows(postId: number): Promise<void> {
