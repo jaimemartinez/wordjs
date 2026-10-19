@@ -362,6 +362,113 @@ describe('what stays the main site\'s', () => {
         assert.strictEqual((await bearer('post', `${API}/themes/default`, TWO, tokens.two)).status, 403);
     });
 
+    test('theme file writers stay refused whatever the casing or trailing slash of the path', async () => {
+        // Express routes these case-insensitively to the upload / update / create / restore / edit /
+        // delete handlers; every spelling must get the network refusal, never reach a handler.
+        const writes: Array<[string, string]> = [
+            ['post', '/themes/UPLOAD'], ['post', '/themes/Upload/'], ['post', '/themes/default/UPDATE'],
+            ['post', '/themes/default/Update/'], ['post', '/themes/DEFAULT'], ['post', '/themes/Default/'],
+            ['put', '/themes/DEFAULT'], ['delete', '/themes/Default'], ['post', '/themes/'],
+            ['patch', '/themes/default'],
+        ];
+        for (const [method, p] of writes) {
+            const res = await bearer(method, `${API}${p}`, TWO, tokens.two).send({});
+            assert.strictEqual(res.status, 403, `${method.toUpperCase()} ${p}: ${res.status} ${JSON.stringify(res.body)}`);
+            assert.strictEqual(res.body.code, 'rest_network_only', `${method.toUpperCase()} ${p}`);
+        }
+        // Controls: what a site does with themes is still its own.
+        assert.strictEqual((await bearer('get', `${API}/themes`, TWO, tokens.two)).status, 200);
+        for (const p of ['/themes/default/activate', '/themes/default/ACTIVATE', '/themes/mods/import', '/themes/MODS/Import']) {
+            const res = await bearer('post', `${API}${p}`, TWO, tokens.two).send({});
+            assert.notStrictEqual(res.body && res.body.code, 'rest_network_only', `POST ${p} is the site's own: ${JSON.stringify(res.body)}`);
+        }
+        // And the main site still reaches the writers (no file → the handler's own 400, not a refusal).
+        const main = await bearer('post', `${API}/themes/UPLOAD`, 'main.example.com', tokens.net).send({});
+        assert.notStrictEqual(main.body && main.body.code, 'rest_network_only', JSON.stringify(main.body));
+    });
+
+    test('media storage is the network\'s: another site cannot read, change or test it', async () => {
+        for (const [method, p] of [['get', '/media-storage'], ['put', '/media-storage'], ['post', '/media-storage/test'], ['post', '/media-storage/migrate'], ['get', '/MEDIA-STORAGE']] as const) {
+            const res = await bearer(method, `${API}${p}`, TWO, tokens.two).send({ driver: 'local' });
+            assert.strictEqual(res.status, 404, `${method.toUpperCase()} ${p} on another site: ${res.status} ${JSON.stringify(res.body)}`);
+        }
+        // On the main site of a network it takes a network administrator, not any administrator.
+        assert.strictEqual((await bearer('get', `${API}/media-storage`, 'main.example.com', tokens.main)).status, 403);
+        const ok = await bearer('get', `${API}/media-storage`, 'main.example.com', tokens.net);
+        assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    });
+
+    test('switching media storage back to local counts the media of every site', async () => {
+        const { STORAGE_META_KEY } = require('../core/media-storage');
+        await siteContext.runWithSite(siteThree, () => database.getDbAsync().run(
+            `INSERT INTO post_meta (post_id, meta_key, meta_value) VALUES (?, ?, ?)`, [987654, STORAGE_META_KEY, 's3']));
+        try {
+            const res = await bearer('put', `${API}/media-storage`, 'main.example.com', tokens.net).send({ driver: 'local' });
+            assert.strictEqual(res.status, 409, JSON.stringify(res.body));
+            assert.strictEqual(res.body.code, 'rest_media_storage_in_use');
+            assert.deepStrictEqual(res.body.data.sites, [siteThree]);
+            assert.strictEqual(res.body.data.inBucket, 1);
+        } finally {
+            await siteContext.runWithSite(siteThree, () => database.getDbAsync().run(
+                `DELETE FROM post_meta WHERE post_id = ? AND meta_key = ?`, [987654, STORAGE_META_KEY]));
+        }
+        // Control: nothing left in the bucket anywhere → the switch is accepted.
+        const done = await bearer('put', `${API}/media-storage`, 'main.example.com', tokens.net).send({ driver: 'local' });
+        assert.strictEqual(done.status, 200, JSON.stringify(done.body));
+    });
+
+    test('the media storage connection test refuses an unsaved internal endpoint, and tests a saved one', async () => {
+        const fields = { bucket: 'net-media', region: 'us-east-1', accessKeyId: 'AKIATEST', secretAccessKey: 'test-secret' };
+        const refused = await bearer('post', `${API}/media-storage/test`, 'main.example.com', tokens.net)
+            .send({ ...fields, endpoint: 'http://127.0.0.1:6379' });
+        assert.strictEqual(refused.status, 400, JSON.stringify(refused.body));
+        assert.deepStrictEqual(refused.body.data.params, ['endpoint']);
+        // A storage server on the operator's own network, once SAVED, is tested as configured.
+        const hits: string[] = [];
+        const s3 = http.createServer((req: any, res: any) => { hits.push(req.method); req.resume(); req.on('end', () => res.end()); });
+        await new Promise<void>((resolve) => s3.listen(0, '127.0.0.1', resolve));
+        const endpoint = `http://127.0.0.1:${(s3.address() as any).port}`;
+        try {
+            const saved = await bearer('put', `${API}/media-storage`, 'main.example.com', tokens.net).send({ ...fields, driver: 's3', endpoint });
+            assert.strictEqual(saved.status, 200, JSON.stringify(saved.body));
+            const tested = await bearer('post', `${API}/media-storage/test`, 'main.example.com', tokens.net).send({});
+            assert.strictEqual(tested.status, 200, JSON.stringify(tested.body));
+            assert.ok(hits.includes('PUT'), `the saved endpoint was reached: ${hits.join(',')}`);
+        } finally {
+            await bearer('put', `${API}/media-storage`, 'main.example.com', tokens.net).send({ driver: 'local', clearCredentials: true });
+            await new Promise<void>((resolve) => s3.close(() => resolve()));
+        }
+    });
+
+    test('the Redis cache switch is the network\'s: another site cannot flip it', async () => {
+        const cache = require('../core/cache');
+        const original = cache.setEnabled;
+        const calls: any[] = [];
+        cache.setEnabled = (v: any) => { calls.push(v); };
+        try {
+            const bulk = await bearer('put', `${API}/settings`, TWO, tokens.two).send({ redis_cache_enabled: '1' });
+            assert.strictEqual(bulk.status, 403, JSON.stringify(bulk.body));
+            assert.deepStrictEqual(bulk.body.data.params, ['redis_cache_enabled']);
+            const single = await bearer('put', `${API}/settings/redis_cache_enabled`, TWO, tokens.two).send({ value: '1' });
+            assert.strictEqual(single.status, 403, JSON.stringify(single.body));
+            // The screen sends every field back: an unchanged value is not a change.
+            const screen = await bearer('put', `${API}/settings`, TWO, tokens.two).send({ redis_cache_enabled: '0', blogname: 'Site Two' });
+            assert.strictEqual(screen.status, 200, JSON.stringify(screen.body));
+            // However the row gets written on another site, the process-wide switch does not move.
+            await siteContext.runWithSite(siteTwo, () => require('../core/options').updateOption('redis_cache_enabled', '1'));
+            assert.deepStrictEqual(calls, []);
+            await siteContext.runWithSite(siteTwo, () => require('../core/options').updateOption('redis_cache_enabled', '0'));
+            // Control: the main site still drives it.
+            for (const value of ['1', '0']) {
+                const main = await bearer('put', `${API}/settings/redis_cache_enabled`, 'main.example.com', tokens.net).send({ value });
+                assert.strictEqual(main.status, 200, JSON.stringify(main.body));
+            }
+            assert.deepStrictEqual(calls, ['1', '0']);
+        } finally {
+            cache.setEnabled = original;
+        }
+    });
+
     test('the admin menu of another site lists its own entries, never the network screen', async () => {
         const res = await bearer('get', `${API}/plugins/menus`, TWO, tokens.two);
         assert.strictEqual(res.status, 200);

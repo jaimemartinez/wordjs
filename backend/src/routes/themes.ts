@@ -39,6 +39,10 @@ const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler, offStack, UploadRejectedError } = require('../middleware/errorHandler');
 const { recordAudit } = require('../core/audit');
+// Theme files are network-wide (multisite): every handler that writes them is the main site's. The
+// mount-level guard in routes/index.ts already allows only what another site may do; this keeps each
+// writer refusing on its own as well (a no-op on a single site and on the main site).
+const { mainSiteWrites: networkThemeFiles } = require('../core/multisite-guards');
 const { isThemeAssetName, resolveThemeDir, resolveWithin } = require('../core/safe-path');
 
 /**
@@ -177,7 +181,7 @@ function writeJsonAtomic(target: string, text: string): void {
  *       400:
  *         description: Invalid file or zip slip
  */
-router.post('/upload', authenticate, isAdmin, upload.single('theme'), asyncHandler(async (req: Request, res: Response) => {
+router.post('/upload', authenticate, isAdmin, networkThemeFiles, upload.single('theme'), asyncHandler(async (req: Request, res: Response) => {
     if (!req.file) {
         return res.status(400).json({ error: 'No file uploaded' });
     }
@@ -344,7 +348,7 @@ router.post('/upload', authenticate, isAdmin, upload.single('theme'), asyncHandl
  *       404:
  *         description: The theme is not installed
  */
-router.post('/:slug/update', authenticate, isAdmin, upload.single('theme'), asyncHandler(async (req: Request, res: Response) => {
+router.post('/:slug/update', authenticate, isAdmin, networkThemeFiles, upload.single('theme'), asyncHandler(async (req: Request, res: Response) => {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     // Update only an INSTALLED theme, by the directory's own name (read off the disk, not the request's
     // copy). updateThemeFromZip proves the temp file sits in os-tmp and deletes it on every path, this
@@ -410,7 +414,7 @@ router.get('/', asyncHandler(async (req: Request, res: Response) => {
  *       409:
  *         description: Theme already exists
  */
-router.post('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.post('/', authenticate, isAdmin, networkThemeFiles, asyncHandler(async (req: Request, res: Response) => {
     const body = isPlainObject(req.body) ? req.body : {};
     // SECURITY: Validate slug (same gate as the sibling routes; typeof first — the regex
     // would stringify a missing slug into the literal "undefined", which passes the charset)
@@ -518,7 +522,7 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: R
  *       409:
  *         description: Theme was not created by the WordJS writer
  */
-router.put('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.put('/:slug', authenticate, isAdmin, networkThemeFiles, asyncHandler(async (req: Request, res: Response) => {
     // SECURITY: the slug picks the directory this handler WRITES theme.json and style.css into, so it
     // uses the resolved-and-contained path the gate returns rather than re-joining the raw param.
     const themeDir = resolveThemeDirOr400(req.params.slug);
@@ -640,7 +644,7 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
  *       200:
  *         description: Default theme restored
  */
-router.post('/default', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.post('/default', authenticate, isAdmin, networkThemeFiles, asyncHandler(async (req: Request, res: Response) => {
     // Admin explicitly asked to restore the default theme → force overwrite. This is the ONLY path
     // that clobbers files inside themes/: boot no longer scaffolds anything (it verifies and warns —
     // see index.ts), and the install wizard provisions once, without force. A plain
@@ -675,7 +679,7 @@ router.post('/default', authenticate, isAdmin, asyncHandler(async (req: Request,
  *       200:
  *         description: Theme deleted
  */
-router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.delete('/:slug', authenticate, isAdmin, networkThemeFiles, asyncHandler(async (req: Request, res: Response) => {
     // SECURITY: Validate slug
     if (!validateSlug(req.params.slug)) {
         return res.status(400).json({ error: 'Invalid theme slug' });

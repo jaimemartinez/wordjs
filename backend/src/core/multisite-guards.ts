@@ -60,21 +60,26 @@ function pluginsOnSecondarySite(req: Request, res: Response, next: NextFunction)
     return refuse(res, 403, 'rest_network_only', 'Plugin code is installed and removed by the network administrator.');
 }
 
-/** Theme files are network-wide: creating, editing, uploading, restoring or deleting them is the main site's. */
-const THEME_FILE_WRITES = [
-    { method: 'POST', re: /^\/upload\/?$/ },
-    { method: 'POST', re: /^\/[^/]+\/update\/?$/ },
-    { method: 'POST', re: /^\/?$/ },
-    { method: 'POST', re: /^\/default\/?$/ },
-    { method: 'PUT', re: /^\/[^/]+\/?$/ },
-    { method: 'DELETE', re: /^\/[^/]+\/?$/ },
+/**
+ * /api/v1/themes on another site. Theme files are network-wide, so a site reads them and does only what
+ * is its own: activate one of the installed themes, and import its customizations (the theme mods, a
+ * site option). Creating, editing, uploading, updating, restoring or deleting theme files is the main
+ * site's.
+ *
+ * An ALLOWLIST, like SITE_PLUGIN_ROUTES: Express matches routes case-insensitively (and with or without
+ * a trailing slash), so a list of what is refused, tested against `req.path`, misses every spelling it
+ * did not foresee. Here an unforeseen spelling is simply not allowed. The patterns ignore case so that
+ * every spelling the router sends to an allowed handler is allowed too.
+ */
+const SITE_THEME_ROUTES = [
+    { method: 'POST', re: /^\/[^/]+\/activate\/?$/i },
+    { method: 'POST', re: /^\/mods\/import\/?$/i },
 ];
 function themeFilesOnSecondarySite(req: Request, res: Response, next: NextFunction) {
     if (!onSecondarySite()) return next();
-    if (THEME_FILE_WRITES.some((w) => w.method === req.method && w.re.test(req.path))) {
-        return refuse(res, 403, 'rest_network_only', 'Themes are installed and edited on the main site of the network.');
-    }
-    return next();
+    const method = req.method === 'HEAD' ? 'GET' : req.method;
+    if (method === 'GET' || method === 'OPTIONS' || SITE_THEME_ROUTES.some((r) => r.method === method && r.re.test(req.path))) return next();
+    return refuse(res, 403, 'rest_network_only', 'Themes are installed and edited on the main site of the network.');
 }
 
 module.exports = {
