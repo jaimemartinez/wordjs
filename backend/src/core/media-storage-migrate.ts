@@ -110,6 +110,42 @@ async function countOffloaded(): Promise<number> {
     return Number(row?.n || 0);
 }
 
+/**
+ * Is any media still served from the bucket, anywhere the storage block serves? The block is
+ * network-wide (multisite): every site's uploads follow it, while the state, the progress record and the
+ * bucket markers live in each site's own database. So the answer covers this site AND every other site
+ * of the network — suspended ones too, since their media comes back when they resume. A site whose
+ * database cannot be read counts as in use: switching storage away from media that may still be there
+ * is what this check exists to prevent.
+ */
+async function bucketUsage(): Promise<{ state: MigrationState; inBucket: number; inUse: boolean; sites: number[] }> {
+    const state = await getState();
+    let inBucket = await countOffloaded();
+    let busy = state !== 'local' || inBucket > 0 || await isRunningAnywhere();
+    const sites: number[] = [];
+    const siteContext = require('./site-context');
+    if (siteContext.multisiteEnabled()) {
+        const network = require('./network');
+        const { openSiteDatabase } = deps().database;
+        for (const site of network.listSites()) {
+            if (site.id === siteContext.PRIMARY_SITE_ID) continue;
+            try {
+                await siteContext.runWithSite(site.id, async () => {
+                    await openSiteDatabase(site.id, site.dbPath || network.siteDbPath(site.id));
+                    const n = await countOffloaded();
+                    const s = await getState();
+                    const live = isLiveRecord(await deps().options.getOptionFresh(PROGRESS_OPTION, null));
+                    if (n > 0 || s !== 'local' || live) { inBucket += n; sites.push(site.id); }
+                });
+            } catch {
+                sites.push(site.id);
+            }
+        }
+        if (sites.length) busy = true;
+    }
+    return { state, inBucket, inUse: busy, sites };
+}
+
 /** The files one attachment owns, absolute under the public root (same resolver delete/visibility use). */
 function attachmentFiles(meta: any, root: string): string[] {
     const { Media } = deps();
@@ -290,4 +326,4 @@ async function runMigration(direction: MigrationDirection, opts: {
     }
 }
 
-module.exports = { runMigration, getState, getProgress, isRunning, isRunningAnywhere, isLiveRecord, PROGRESS_STALE_MS, countOffloaded, migrateOne, STATE_OPTION, PROGRESS_OPTION };
+module.exports = { runMigration, getState, getProgress, isRunning, isRunningAnywhere, isLiveRecord, PROGRESS_STALE_MS, countOffloaded, bucketUsage, migrateOne, STATE_OPTION, PROGRESS_OPTION };
