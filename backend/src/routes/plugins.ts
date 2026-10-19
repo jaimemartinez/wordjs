@@ -3036,7 +3036,7 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request,
  *         name: token
  *         schema:
  *           type: string
- *         description: Bearer token for download authentication
+ *         description: A query ticket for this path (POST /auth/query-ticket), for a download opened without the session cookie. A session token is not accepted here.
  *     responses:
  *       200:
  *         description: Plugin ZIP file

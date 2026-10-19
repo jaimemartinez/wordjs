@@ -384,6 +384,16 @@ function withIncidents<T>(result: T, incidents: BackupIncident[]): any {
  * Restore a backup
  * WARNING: Destructive operation
  */
+/**
+ * Multisite: the restored main database may give the network administrators' ids to other accounts, or
+ * drop them. Each row follows its own account again (core/network reconcileNetworkAdmins). A failure is
+ * the operator's to see; it never undoes the restore.
+ */
+async function recheckNetworkAdminsAfterRestore(incidents: BackupIncident[]) {
+    try { await require('./network-auth').recheckNetworkAdmins(); }
+    catch (e: any) { incidents.push({ stage: 'network', message: `The network administrators could not be re-checked against the restored accounts (${e && e.message}).` }); }
+}
+
 async function restoreBackup(filename: string) {
     // Security: Prevent Directory Traversal
     if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
@@ -579,6 +589,7 @@ async function restoreBackup(filename: string) {
             updateExisting: true, // Overwrite existing content
             importUsers: true
         });
+        await recheckNetworkAdminsAfterRestore(incidents);
         // The DB just time-traveled: every cached value (L1 included) describes the PRE-restore
         // state and would be served for up to its TTL. Drop it all.
         try { await require('./cache').flush(); }
@@ -587,6 +598,7 @@ async function restoreBackup(filename: string) {
         return withIncidents(results, incidents);
     }
 
+    await recheckNetworkAdminsAfterRestore(incidents);
     try { await require('./cache').flush(); }
     catch (e: any) { incidents.push({ stage: 'cache', message: `The cache could not be flushed (${e && e.message}); pre-restore values may be served until their TTL expires.` }); }
     log.info(`✅ Restore ${incidents.length ? 'finished with warnings' : 'complete'} (physical snapshot)`);

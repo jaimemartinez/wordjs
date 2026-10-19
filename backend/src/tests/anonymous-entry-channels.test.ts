@@ -962,6 +962,8 @@ test('CHANNEL 3 — the MFA doors answer on the merits even with their own bucke
     const secret = await doors[2].prepare();
     const disableKey = auth.lockBucket(armedBy.get('routes/auth.ts POST /mfa/disable') as string, OWNER_ID);
     for (let i = 0; i < 12; i++) await auth.recordLoginFail(disableKey);
+    // The ceiling keeps its own, longer-lived count (routes/auth.ts chargeMfaCeiling): put the account past it.
+    for (let i = 0; i < auth.MFA_MANAGE_PASSWORD_AFTER; i++) await auth.chargeMfaCeiling(OWNER_ID);
     const bad = await request(app).post(`${B}/auth/mfa/disable`).set('Authorization', session).send({ code: '000000', currentPassword: PASSWORD });
     assert.strictEqual(bad.status, 400, `a wrong code must be answered on its merits, got ${bad.status}`);
     assert.strictEqual(bad.body.code, 'rest_mfa_invalid');
@@ -970,6 +972,10 @@ test('CHANNEL 3 — the MFA doors answer on the merits even with their own bucke
     assert.strictEqual(codeOnly.status, 403, `past the ceiling a code alone must not be enough, got ${codeOnly.status}`);
     assert.strictEqual(codeOnly.body.code, 'rest_mfa_password_required');
     assert.ok(await mfa.isEnabled(OWNER_ID), 'a code alone past the ceiling must not have disabled MFA');
+    // The owner, with code AND password, is answered — and that correct code ends the ceiling for the
+    // tests after this one.
+    const owner = await request(app).post(`${B}/auth/mfa/disable`).set('Authorization', session).send({ code: totp.totp(secret), currentPassword: PASSWORD });
+    assert.strictEqual(owner.status, 200, JSON.stringify(owner.body));
 
     await mfa.disable(OWNER_ID);
     await auth.clearLoginFails(disableKey);

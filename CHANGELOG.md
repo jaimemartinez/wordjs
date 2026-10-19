@@ -34,6 +34,18 @@ the boot error links there too.
   a warning), and the Docker/Helm entrypoint reads `WORDJS_DB_SSL`, `WORDJS_DB_SSL_CA` and
   `WORDJS_DB_SSL_REJECT_UNAUTHORIZED`.
 
+- **Multisite: network-wide actions on the main site take a network administrator.** Installing, updating,
+  packing, downloading or deleting plugins, writing theme files, the marketplace, backups, the database
+  migration tool, the site's addresses, certificates, the hooks registry and the Redis object-cache switch
+  now answer `403 rest_forbidden_network` (`rest_network_only` for the cache switch) to an administrator of
+  the main site who is not a network administrator. Activating plugins, granting their permissions and
+  everything else the main site owns stay with its administrators, and the admin screens hide what they
+  cannot use. A single site behaves exactly as before.
+- **Query-string credentials are short-lived tickets.** The two routes that accept `?token=` (the
+  notifications stream and the plugin package download) take only a 60-second ticket for that path, from
+  the new `POST /api/v1/auth/query-ticket`; a session token or an API token in the query string is no
+  longer accepted. The admin uses the session cookie for both and is unaffected.
+
 ### Fixed
 
 - **`/readyz` no longer hangs when the database stops answering.** The readiness check now has a deadline
@@ -50,6 +62,16 @@ the boot error links there too.
 
 ### Security
 
+- **Network administrator accounts are managed by network administrators.** With multisite on, a network
+  administrator's email, password, role, two-factor reset, AI agent connections and the account itself can
+  be changed only by a network administrator (or by its owner), and a site import leaves those accounts and
+  the network-wide settings untouched. Deleting an account removes it from the network administrators, and
+  each network-administrator entry is bound to its account's login and re-checked at boot and after a
+  backup restore.
+- **The two-factor code ceiling on the account security doors lasts a day.** Past ten wrong codes on
+  `/auth/mfa/disable`, `/auth/mfa/backup-codes` or a token step-up, the account password stays required
+  for 24 hours (or until a correct code or a password sign-in), on the Redis and in-memory stores alike,
+  and concurrent attempts are counted one by one.
 - **The gateway's debug "Proxying" line redacts query values,** like the access log, so one-time tokens
   in reset, verification and invitation links are not written to debug logs.
 - **A plugin's JavaScript under `public/` now needs `browser:script`, like its `dist/` bundles.** The static

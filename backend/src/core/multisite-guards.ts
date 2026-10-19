@@ -11,7 +11,13 @@
  * workers (core/plugins, core/plugin-isolate). Installing, updating, deleting or building plugin code
  * stays the network's.
  *
- * Every guard here is a no-op on a single site and on the main site.
+ * On the main site of a network, the same network-wide actions belong to the NETWORK administrators
+ * (core/network-auth), not to every administrator of the main site: an administrator of the main site
+ * who is not listed manages the main site's own content, users and plugin activations, and nothing that
+ * reaches every other site. `networkAdminOnMainSite` and the main-site halves of the plugin and theme
+ * guards below enforce that.
+ *
+ * Every guard here is a no-op on a single site.
  */
 import type { Request, Response, NextFunction } from 'express';
 
@@ -24,6 +30,31 @@ function onSecondarySite(): boolean {
 
 function refuse(res: Response, status: number, code: string, message: string) {
     return res.status(status).json({ code, message, data: { status } });
+}
+
+/** True while working for the main site of a network (never on a single site). */
+function onNetworkMainSite(): boolean {
+    return siteContext.multisiteEnabled() && siteContext.currentSiteId() === siteContext.PRIMARY_SITE_ID;
+}
+
+/**
+ * Authenticate the request and let it through only for a network administrator. The route behind the
+ * guard authenticates again with its own rules (its own isAdmin, sessionOnly, CSRF): this only decides
+ * WHO, never replaces what the route already demands.
+ */
+function demandNetworkAdmin(req: Request, res: Response, next: NextFunction) {
+    const { authenticate } = require('../middleware/auth');
+    return authenticate(req, res, (err?: any) => {
+        if (err) return next(err);
+        if (require('./network-auth').isNetworkAdminRequest(req)) return next();
+        return refuse(res, 403, 'rest_forbidden_network', 'Only a network administrator can do this.');
+    });
+}
+
+/** A network-wide subtree on the main site of a network: network administrators only. */
+function networkAdminOnMainSite(req: Request, res: Response, next: NextFunction) {
+    if (!onNetworkMainSite() || req.method === 'OPTIONS') return next();
+    return demandNetworkAdmin(req, res, next);
 }
 
 /** The whole subtree is the main site's: 404 elsewhere (as if it did not exist). */
@@ -53,10 +84,14 @@ const SITE_PLUGIN_ROUTES = [
     // The frontend bundles of plugins (routes/plugin-bundles): reads, answered for this site's plugins.
     { method: 'GET', re: /^\/[^/]+\/(?:bundle(?:\/manifest|\/css)?|portal|admin-style(?:\/css)?)\/?$/ },
 ];
-function pluginsOnSecondarySite(req: Request, res: Response, next: NextFunction) {
-    if (!onSecondarySite()) return next();
+function isSitePluginRoute(req: Request): boolean {
     const method = req.method === 'HEAD' ? 'GET' : req.method;
-    if (method === 'OPTIONS' || SITE_PLUGIN_ROUTES.some((r) => r.method === method && r.re.test(req.path))) return next();
+    return method === 'OPTIONS' || SITE_PLUGIN_ROUTES.some((r) => r.method === method && r.re.test(req.path));
+}
+function pluginsOnSecondarySite(req: Request, res: Response, next: NextFunction) {
+    if (isSitePluginRoute(req)) return next();
+    if (onNetworkMainSite()) return demandNetworkAdmin(req, res, next);
+    if (!onSecondarySite()) return next();
     return refuse(res, 403, 'rest_network_only', 'Plugin code is installed and removed by the network administrator.');
 }
 
@@ -76,14 +111,17 @@ const SITE_THEME_ROUTES = [
     { method: 'POST', re: /^\/mods\/import\/?$/i },
 ];
 function themeFilesOnSecondarySite(req: Request, res: Response, next: NextFunction) {
-    if (!onSecondarySite()) return next();
     const method = req.method === 'HEAD' ? 'GET' : req.method;
     if (method === 'GET' || method === 'OPTIONS' || SITE_THEME_ROUTES.some((r) => r.method === method && r.re.test(req.path))) return next();
+    if (onNetworkMainSite()) return demandNetworkAdmin(req, res, next);
+    if (!onSecondarySite()) return next();
     return refuse(res, 403, 'rest_network_only', 'Themes are installed and edited on the main site of the network.');
 }
 
 module.exports = {
     onSecondarySite,
+    onNetworkMainSite,
+    networkAdminOnMainSite,
     mainSiteOnly,
     mainSiteWrites,
     pluginsOnSecondarySite,

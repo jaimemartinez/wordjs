@@ -20,6 +20,7 @@ const { getRoles } = require('../core/roles');
 // ACTIVE CORPORATE MAILBOX: the admin-owned grant + the one self-service email-write rule.
 const { refuseSelfServiceEmailChange, isValidAddress, mailboxFlagValue, hasProfessionalMailbox } = require('../core/mailbox');
 const { recordAudit } = require('../core/audit');
+const { protectsNetworkAdmin, refuseNetworkAdminTarget } = require('../core/network-auth');
 // THE SCALAR QUERY RULE — see core/query-params.
 const { requireScalarQuery, requireRouteId, routeIdOrNull } = require('../core/query-params');
 const { perPageParam, pageOffset } = require('../core/pagination');
@@ -1265,6 +1266,9 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
         });
     }
 
+    // MULTISITE: a network administrator is changed only by a network administrator (core/network-auth).
+    if (!isOwn && protectsNetworkAdmin(req, userId)) return refuseNetworkAdminTarget(res);
+
     // SECURITY (privilege hierarchy / account takeover): editing ANOTHER user mutates their email +
     // password below. `edit_users` is a delegable capability, so without this a non-administrator could
     // reset a privileged user's password/email and seize the account. See isPrivilegedTarget. (AUTH-1)
@@ -1563,6 +1567,7 @@ router.post('/:id/mfa/reset', can('edit_users'), asyncHandler(async (req: Reques
             data: { status: 400 }
         });
     }
+    if (protectsNetworkAdmin(req, userId)) return refuseNetworkAdminTarget(res);
     if (isPrivilegedTarget(user) && req.user.getRole() !== 'administrator') {
         return res.status(403).json({
             code: 'rest_forbidden',
@@ -1660,6 +1665,7 @@ router.delete('/:id', isAdmin, asyncHandler(async (req: Request, res: Response) 
             data: { status: 400 }
         });
     }
+    if (protectsNetworkAdmin(req, userId)) return refuseNetworkAdminTarget(res);
 
     await User.delete(userId);
     // AUDIT: admin deleted a user. Record who + the deleted account's login/role (no secret material).
