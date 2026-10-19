@@ -130,6 +130,8 @@ router.get('/', (req: Request, res: Response) => {
 // guard is a no-op on a single site and on the main site.
 const multisiteGuards = require('../core/multisite-guards');
 router.use('/site-address', multisiteGuards.mainSiteOnly);
+// Where EVERY site's public media is stored and served from (one block in wordjs-config.json).
+router.use('/media-storage', multisiteGuards.mainSiteOnly);
 router.use('/plugins', multisiteGuards.pluginsOnSecondarySite);
 router.use('/marketplace', multisiteGuards.mainSiteOnly);
 router.use('/themes', multisiteGuards.themeFilesOnSecondarySite);

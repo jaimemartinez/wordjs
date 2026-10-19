@@ -17,7 +17,15 @@ Nobody else ever sees the key: not the browser, not plugins, not the logs.
 | Provider | What to enter |
 |---|---|
 | **Anthropic (Claude)** | the model — `claude-sonnet-5-5` (default, balanced), `claude-haiku-5-5` (cheapest) or `claude-opus-5-5` (most capable) — and the API key |
-| **OpenAI-compatible** | the base URL ending in `/v1` (OpenAI, an OpenAI-compatible gateway, Ollama, LM Studio, vLLM…), the model name, and the key if the server needs one. https is required unless the host is loopback (`localhost`, `127.0.0.1`, `::1`) |
+| **OpenAI-compatible** | the base URL ending in `/v1` (OpenAI, an OpenAI-compatible gateway, Ollama, LM Studio, vLLM…), the model name, and the key if the server needs one. https is required unless the host is loopback (`localhost`, `127.0.0.1`, `::1`). No query string or fragment |
+
+**Which addresses.** The base URL goes through the same egress guard as webhooks, at save time and again
+before every request, and the request connects to the address that was checked (no DNS rebinding in
+between). A server on this machine or on a private network (Ollama, LM Studio, an internal gateway) is
+accepted on a single-site install and on the primary site of a network; a secondary site of a network
+can only use a public endpoint unless the operator sets `WORDJS_AI_ALLOW_PRIVATE_PROVIDER=1` on the
+backend. Link-local and cloud-metadata addresses are never accepted. A refused address answers
+`ai_provider_address_blocked` (400).
 
 **Test connection** sends one tiny request. Choosing **Off** disables every AI feature.
 
@@ -39,6 +47,7 @@ shows its own wording for each (anything else falls back to "the AI provider did
 | `ai_provider_auth` | 502 | the key was refused (401/403) |
 | `ai_provider_rate_limited` | 429 | the provider is rate limiting the site |
 | `ai_provider_unreachable` | 502 | the server could not be reached at all |
+| `ai_provider_address_blocked` | 400 | the base URL points at an address this site may not reach (see *Which addresses*) |
 | `ai_provider_unavailable` | 502 | the server answered 502/503 |
 | `ai_provider_bad_request` | 502 | any other refusal of the request (400/413/422) |
 | `ai_provider_bad_response` | 502 | the answer was not JSON |

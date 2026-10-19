@@ -362,3 +362,79 @@ test('draft text extraction: a real parser drops script/style bodies, entities d
     assert.ok(Date.now() - started < 2000, 'pathological markup is handled in linear time');
     assert.strictEqual(cleanSuggestion('"Resumen: Un <em>gran</em> post &amp; más"', 160), 'Un gran post & más');
 });
+
+// ── Base URL egress rules ───────────────────────────────────────────────────────────────────────────
+
+test('base URL: a query string or fragment is refused (it would swallow /chat/completions)', async () => {
+    for (const u of ['https://api.example.com/v1?x=', 'https://api.example.com/v1#', 'https://api.example.com/v1?', 'http://127.0.0.1:11434/v1#frag']) {
+        assert.throws(() => ai.validateBaseUrl(u), (e: any) => e.status === 400, u);
+    }
+    const r = await request(app).put('/api/v1/ai/settings').set(as('admin')).send({ provider: 'openai-compatible', model: 'm', baseUrl: 'https://api.example.com/v1?x=' });
+    assert.strictEqual(r.status, 400);
+});
+
+test('base URL: loopback and private servers only from the primary site or with the explicit opt-in; metadata never', async () => {
+    const siteContext = require('../core/site-context');
+    const allowed = async (siteId: number, url: string) => {
+        try { await siteContext.runWithSite(siteId, () => ai.assertBaseUrlAllowed(url)); return true; } catch (e: any) {
+            assert.strictEqual(e.code, 'ai_provider_address_blocked', `${url}: ${e.message}`);
+            return false;
+        }
+    };
+    // Single-site: the local model servers the docs describe keep working.
+    assert.strictEqual(await allowed(1, 'http://127.0.0.1:11434/v1'), true);
+    assert.strictEqual(await allowed(1, 'https://10.0.0.5/v1'), true);
+    assert.strictEqual(await allowed(1, 'http://169.254.169.254/v1'), false, 'cloud metadata is never a provider');
+    await assert.rejects(ai.assertBaseUrlAllowed('https://169.254.169.254/v1'), (e: any) => /can never be used/.test(e.message),
+        'the refusal says it applies everywhere, not "use the primary site"');
+    const prev = (config as any).multisite;
+    const prevEnv = process.env.WORDJS_AI_ALLOW_PRIVATE_PROVIDER;
+    (config as any).multisite = { enabled: true };
+    delete process.env.WORDJS_AI_ALLOW_PRIVATE_PROVIDER;
+    try {
+        assert.strictEqual(await allowed(1, 'http://127.0.0.1:11434/v1'), true, 'the primary site keeps local servers');
+        for (const u of ['http://127.0.0.1:11434/v1', 'http://localhost:11434/v1', 'https://10.0.0.5/v1', 'https://192.168.1.20/v1', 'http://[::1]:1234/v1', 'https://169.254.169.254/v1']) {
+            assert.strictEqual(await allowed(2, u), false, `a secondary site must not reach ${u}`);
+        }
+        process.env.WORDJS_AI_ALLOW_PRIVATE_PROVIDER = '1';
+        assert.strictEqual(await allowed(2, 'http://127.0.0.1:11434/v1'), true, 'the operator opt-in opens private servers');
+        assert.strictEqual(await allowed(2, 'http://169.254.169.254/v1'), false, '…but never metadata');
+    } finally {
+        (config as any).multisite = prev;
+        if (prevEnv === undefined) delete process.env.WORDJS_AI_ALLOW_PRIVATE_PROVIDER; else process.env.WORDJS_AI_ALLOW_PRIVATE_PROVIDER = prevEnv;
+    }
+});
+
+test('base URL: a stored setting is re-checked before every request, and nothing is sent to a refused address', async () => {
+    const { updateOption } = require('../core/options');
+    const before = seen.openai.length;
+    await updateOption(ai.SETTINGS_OPTION, JSON.stringify({ provider: 'openai-compatible', model: 'm', baseUrl: 'https://169.254.169.254/v1' }));
+    await assert.rejects(ai.complete({ system: 's', prompt: 'p' }), (e: any) => e.code === 'ai_provider_address_blocked');
+    await updateOption(ai.SETTINGS_OPTION, JSON.stringify({ provider: 'openai-compatible', model: 'm', baseUrl: `${fakeUrl}/v1?x=` }));
+    await assert.rejects(ai.complete({ system: 's', prompt: 'p' }), (e: any) => e.status === 400);
+    assert.strictEqual(seen.openai.length, before, 'the fake provider received nothing');
+    await updateOption(ai.SETTINGS_OPTION, '');
+});
+
+test('local media storage resolves against the current site\'s uploads, never site 1\'s', async () => {
+    const siteContext = require('../core/site-context');
+    const privateMedia = require('../core/private-media');
+    const ms = require('../core/media-storage');
+    const prev = (config as any).multisite;
+    (config as any).multisite = { enabled: true };
+    try {
+        await siteContext.runWithSite(2, async () => {
+            const root = privateMedia.publicUploadsRoot();
+            assert.notStrictEqual(path.resolve(root), path.resolve(TMP_UPLOADS));
+            fs.mkdirSync(path.join(root, 'twin'), { recursive: true });
+            fs.writeFileSync(path.join(root, 'twin', 'site2.txt'), 'two');
+            fs.mkdirSync(path.join(TMP_UPLOADS, 'twin'), { recursive: true });
+            fs.writeFileSync(path.join(TMP_UPLOADS, 'twin', 'site1.txt'), 'one');
+            const adapter = ms.getMediaStorage({ driver: 'local' });
+            assert.ok(await adapter.head('twin/site2.txt'), 'the site\'s own file is found');
+            assert.strictEqual(await adapter.head('twin/site1.txt'), null, 'site 1\'s file is out of reach');
+        });
+    } finally {
+        (config as any).multisite = prev;
+    }
+});
