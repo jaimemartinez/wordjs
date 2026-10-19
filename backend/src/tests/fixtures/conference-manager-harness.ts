@@ -179,9 +179,10 @@ export async function bootPlugin(opts: { users?: HarnessUser[]; usersGrant?: boo
 
     /**
      * One request. `user` defaults to the administrator; `anonymous` sends none. `headers` are the request
-     * headers the host forwards (e.g. the coordinator portal's `x-portal-token`).
+     * headers the host forwards (e.g. the coordinator portal's `x-portal-token`); `clientKey` the host's keyed hash of
+     * the caller's address (req.clientKey), which the sign-in throttles key on.
      */
-    async function call(method: string, url: string, { body, user, anonymous, headers }: { body?: any; user?: HarnessUser & Record<string, any>; anonymous?: boolean; headers?: Record<string, string> } = {}): Promise<CallResult> {
+    async function call(method: string, url: string, { body, user, anonymous, headers, clientKey }: { body?: any; user?: HarnessUser & Record<string, any>; anonymous?: boolean; headers?: Record<string, string>; clientKey?: string } = {}): Promise<CallResult> {
         const [urlPath, qs] = url.split('?');
         const m = match(method.toLowerCase(), urlPath);
         if (!m) return { status: 404, body: { error: 'no route' }, route: null };
@@ -196,6 +197,7 @@ export async function bootPlugin(opts: { users?: HarnessUser[]; usersGrant?: boo
             params: m.params, query: Object.fromEntries(new URLSearchParams(qs || '')),
             body: body === undefined ? {} : JSON.parse(JSON.stringify(body)),
             headers: { ...(headers || {}) }, cookies: {}, user: fwdUser, method: method.toUpperCase(),
+            ...(clientKey ? { clientKey } : {}),
         };
         const res: any = {
             statusCode: 200, _body: undefined,

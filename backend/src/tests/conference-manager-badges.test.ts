@@ -408,14 +408,39 @@ test('«Mi inscripción»: meals delivered and to come, the hotel and its positi
     assert.strictEqual(qrTextOf(prev), code);
 });
 
-test('«Mi inscripción»: wrong documents lock only that code for a while; no site address = the bare code', async () => {
+/** Runs `fn` with every sign-in wait (setTimeout ≥ 250 ms) recorded and skipped. */
+async function withWaitsRecorded<R>(fn: (waits: number[]) => Promise<R>): Promise<R> {
+    const real = global.setTimeout;
+    const waits: number[] = [];
+    (global as any).setTimeout = (cb: any, ms?: number, ...a: any[]) => {
+        if (typeof ms === 'number' && ms >= 250) { waits.push(ms); return (real as any)(cb, 0, ...a); }
+        return (real as any)(cb, ms, ...a);
+    };
+    try { return await fn(waits); } finally { (global as any).setTimeout = real; }
+}
+const verifyAs = (p: Plugin, clientKey: string, body: any) => p.call('post', '/public/me/verify', { anonymous: true, clientKey, body });
+
+test('«Mi inscripción»: wrong documents refuse only the guesser; the right document is never refused; no site address = the bare code', async () => {
     const w = await selfWorld();
     const { p } = w;
     const ana = w.codeOf(w.ana), beto = w.codeOf(w.beto);
-    for (let i = 0; i < 5; i++) assert.strictEqual((await pub(p, 'post', '/public/me/verify', { code: ana, doc_type: 'Cédula', doc_number: `9${i}` })).status, 401);
-    const locked = await pub(p, 'post', '/public/me/verify', { code: ana, doc_type: 'Cédula', doc_number: '1045678901' });
-    assert.deepStrictEqual([locked.status, locked.body.code], [429, 'throttled'], 'even the right document waits once the code is locked');
-    ok(await pub(p, 'post', '/public/me/verify', { code: beto, doc_type: 'Pasaporte', doc_number: 'ab-123456' }), 'another code is not locked');
+    for (let i = 0; i < 5; i++) assert.strictEqual((await verifyAs(p, 'guesser', { code: ana, doc_type: 'Cédula', doc_number: `9${i}` })).status, 401);
+    // The guesser's own budget for that code is spent: even the right document is refused to THEM.
+    const locked = await verifyAs(p, 'guesser', { code: ana, doc_type: 'Cédula', doc_number: '1045678901' });
+    assert.deepStrictEqual([locked.status, locked.body.code], [429, 'throttled']);
+    ok(await verifyAs(p, 'guesser', { code: beto, doc_type: 'Pasaporte', doc_number: 'ab-123456' }), 'another code is not locked');
+    // The holder of the badge, from their own phone: past the code's shared budget they wait, never a refusal.
+    await withWaitsRecorded(async (waits) => {
+        const owner = await verifyAs(p, 'owner-phone', { code: ana, doc_type: 'Cédula', doc_number: '1045678901' });
+        assert.strictEqual(owner.status, 200, `the right document was refused for somebody else's guesses: ${JSON.stringify(owner.body)}`);
+        assert.deepStrictEqual(waits, [250], 'one wait once the code\'s shared budget is spent');
+    });
+    // Unknown codes are charged to the caller only: they never slow down a real code.
+    for (let i = 0; i < 25; i++) assert.strictEqual((await verifyAs(p, `enumerator-${i % 3}`, { code: `ZZZZZZZZ${String(i).padStart(2, '2').replace(/[01]/g, '2')}`, doc_number: '1' })).status, 401);
+    await withWaitsRecorded(async (waits) => {
+        ok(await verifyAs(p, 'beto-phone', { code: beto, doc_type: 'Pasaporte', doc_number: 'ab-123456' }), 'beto');
+        assert.deepStrictEqual(waits, [], 'unknown codes slowed down a real one');
+    });
 
     const bare = await selfWorld({ siteUrl: null });
     const prev = ok(await bare.p.call('post', '/badges/preview', { body: { conference_id: bare.cid, inscription_id: bare.ana } })).badge;

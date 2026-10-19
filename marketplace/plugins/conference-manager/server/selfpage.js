@@ -11,11 +11,12 @@
  * on that phone until it expires (30 days, or the badges' expiry date, whichever comes first) or the person
  * leaves. Nothing about another person is ever shown (no roommates, no other names).
  *
- * THROTTLE. Only failures count: per code (5 wrong documents in 15 minutes lock THAT code for the rest of the
- * window — the holder of the real badge is never locked out by a guesser of another code), per client key and
- * globally. An unknown code and a wrong document answer the same 401; /start names the event and its document
- * types once a code exists (what the badge in hand already says) and counts unknown codes as failures. Only after
- * the document matches does anything personal leave the server.
+ * THROTTLE (2.30.0, the portal sign-in's rule): only the caller's own budgets refuse (per client + code, per
+ * client); the shared ones (per code, site-wide) only make every attempt wait, so a right document is never
+ * turned away for somebody else's guesses (see «throttle» below). An unknown code and a wrong document answer
+ * the same 401; /start names the event and its document types once a code exists (what the badge in hand already
+ * says) and charges unknown codes to the caller. Only after the document matches does anything personal leave
+ * the server.
  *
  * WHEN. The page works while the conference's participant page is on (Escarapelas › Uso, on by default), the
  * inscription is not cancelled, and the badges' expiry date (if any) has not passed.
@@ -98,25 +99,76 @@ function createSelfPage(base) {
         return ready;
     };
 
-    // ── throttle (failures only) ──
-    const WINDOW_MS = 15 * 60 * 1000, PER_CODE = 5, PER_CLIENT = 30, GLOBAL = 500;
-    const byCode = new Map(), byClient = new Map();
-    let globalFail = { n: 0, first: 0 };
-    const over = (map, key, limit) => { const f = map.get(key); return !!(f && Date.now() - f.first < WINDOW_MS && f.n >= limit); };
-    const bump = (map, key) => {
-        const now = Date.now();
-        const f = map.get(key);
-        if (!f || now - f.first >= WINDOW_MS) map.set(key, { n: 1, first: now }); else f.n++;
-        if (map.size > 5000) map.clear();
+    // ── throttle (2.30.0: the portal sign-in's rule, conference-manager 2.17.2) ──
+    // Only the CALLER'S OWN budgets refuse: per client + code (5 wrong documents) and per client overall (30
+    // attempts, unknown codes included). They are charged synchronously BEFORE the awaited checks (a parallel
+    // burst cannot outrun them) and a right document refunds the caller's own attempt. The shared budgets — per
+    // code, all clients together, and site-wide — never refuse: past them every attempt waits (250 ms, doubling
+    // every 10 further wrong documents, up to 8 s) before the document is checked, so the holder of the real
+    // badge is never turned away for somebody else's guesses. Only a wrong document for a code that exists is
+    // charged to them; an unknown code charges only the caller's own budget.
+    const LIMITS = {
+        perClientCode: 5, perClient: 30, clientWindowMs: 15 * 60 * 1000,
+        perCode: 5, perSite: 500, sharedWindowMs: 60 * 60 * 1000,
+        delayBaseMs: 250, delayDoubleEvery: 10, delayMaxMs: 8000,
     };
-    const throttled = (code, client) => (Date.now() - globalFail.first < WINDOW_MS && globalFail.n >= GLOBAL) || over(byCode, code, PER_CODE) || over(byClient, client, PER_CLIENT);
-    const noteFailure = (code, client) => {
-        const now = Date.now();
-        if (now - globalFail.first >= WINDOW_MS) globalFail = { n: 0, first: now };
-        globalFail.n++;
-        bump(byCode, code); bump(byClient, client);
+    const MAP_CAP = 5000;
+    const buckets = { clientCode: new Map(), client: new Map(), code: new Map(), site: new Map() };
+    const bucket = (map, key, windowMs, now) => {
+        let b = map.get(key);
+        if (!b || now - b.first >= windowMs) {
+            if (!b && map.size >= MAP_CAP) {
+                for (const [k, v] of map) if (now - v.first >= windowMs) map.delete(k);
+                while (map.size >= MAP_CAP) map.delete(map.keys().next().value);
+            }
+            b = { count: 0, first: now };
+            map.set(key, b);
+        }
+        return b;
     };
-    const clientOf = (req) => String((req && (req.clientKey || req.ip)) || 'anon');
+    /** A bucket's live count, without creating one (an unknown code never becomes a map key). */
+    const countOf = (map, key, windowMs, now) => {
+        const b = map.get(key);
+        return b && now - b.first < windowMs ? b.count : 0;
+    };
+    const clientOf = (req) => String((req && (req.clientKey || req.ip)) || 'anon').slice(0, 64);
+    /**
+     * Charge one attempt for `code` to the caller's own budgets: null when one is spent (the only refusal), else
+     * { delayMs, unknown(), failed(), succeeded() }. unknown(): the code does not exist (the own charge stays);
+     * failed(): a wrong document for a real code (charges the shared budgets too); succeeded(): refunds it.
+     */
+    const beginAttempt = (req, code) => {
+        const now = Date.now(), L = LIMITS, client = clientOf(req);
+        const ownCode = bucket(buckets.clientCode, `${client}|${code}`, L.clientWindowMs, now);
+        const own = bucket(buckets.client, client, L.clientWindowMs, now);
+        if (ownCode.count >= L.perClientCode || own.count >= L.perClient) return null;
+        ownCode.count++; own.count++;
+        const excess = Math.max(
+            countOf(buckets.code, code, L.sharedWindowMs, now) - L.perCode,
+            countOf(buckets.site, '*', L.sharedWindowMs, now) - L.perSite
+        );
+        const delayMs = excess < 0 ? 0 : Math.min(L.delayMaxMs, L.delayBaseMs * 2 ** Math.floor(excess / L.delayDoubleEvery));
+        let settled = false;
+        return {
+            delayMs,
+            unknown() { settled = true; },
+            failed() {
+                if (settled) return;
+                settled = true;
+                const at = Date.now();
+                bucket(buckets.code, code, L.sharedWindowMs, at).count++;
+                bucket(buckets.site, '*', L.sharedWindowMs, at).count++;
+            },
+            succeeded() {
+                if (settled) return;
+                settled = true;
+                buckets.clientCode.delete(`${client}|${code}`);
+                const b = buckets.client.get(client);
+                if (b && b.count > 0) b.count--;
+            },
+        };
+    };
+    const pause = (ms) => (ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : null);
 
     // ── state of one inscription for this page ──
     // { code: null, ins, conf, policy, cfg } | { code: 'disabled' | 'inactive' | 'expired' }.
@@ -218,10 +270,13 @@ function createSelfPage(base) {
         http.route('post', '/public/me/start', async (req, res) => {
             if (!await gate(res)) return;
             try {
-                const code = codeOf((req.body || {}).code), client = clientOf(req);
-                if (throttled(code, client)) return refuse(res, 'throttled');
+                const code = codeOf((req.body || {}).code);
+                const attempt = beginAttempt(req, code);
+                if (!attempt) return refuse(res, 'throttled');
                 const ins = CODE_RE.test(code) ? await db.get(`SELECT * FROM ${T.inscriptions} WHERE reg_code = ?`, [code]) : null;
-                if (!ins) { noteFailure(code, client); return refuse(res, 'nomatch'); }
+                if (!ins) { attempt.unknown(); return refuse(res, 'nomatch'); }
+                // Naming the event is no guess at the document: the caller's attempt is given back.
+                attempt.succeeded();
                 const st = await stateOf(ins);
                 if (st.code) return refuse(res, st.code);
                 const doc = await docOf(ins.conference_id, st.cfg);
@@ -235,21 +290,25 @@ function createSelfPage(base) {
             if (!await gate(res)) return;
             try {
                 const body = req.body || {};
-                const code = codeOf(body.code), client = clientOf(req);
-                if (throttled(code, client)) return refuse(res, 'throttled');
+                const code = codeOf(body.code);
+                const attempt = beginAttempt(req, code);
+                if (!attempt) return refuse(res, 'throttled');
+                await pause(attempt.delayMs);
                 const ins = CODE_RE.test(code) ? await db.get(`SELECT * FROM ${T.inscriptions} WHERE reg_code = ?`, [code]) : null;
-                if (!ins) { noteFailure(code, client); return refuse(res, 'nomatch'); }
+                if (!ins) { attempt.unknown(); return refuse(res, 'nomatch'); }
                 const st = await stateOf(ins);
-                if (st.code) return refuse(res, st.code);
+                // A closed page, a cancelled inscription or no document on file is no guess: given back.
+                if (st.code) { attempt.succeeded(); return refuse(res, st.code); }
                 const doc = await docOf(ins.conference_id, st.cfg);
-                if (!doc.number) return refuse(res, 'disabled');
+                if (!doc.number) { attempt.succeeded(); return refuse(res, 'disabled'); }
                 const stored = normDoc(ins[doc.number.name]);
-                if (!stored) return refuse(res, 'nodoc');
+                if (!stored) { attempt.succeeded(); return refuse(res, 'nodoc'); }
                 const numberOk = normDoc(body.doc_number) === stored;
                 // The type only counts when the person has one recorded (an older registration may not).
                 const storedType = doc.type ? normChoice(ins[doc.type.name]) : '';
                 const typeOk = !storedType || normChoice(body.doc_type) === storedType;
-                if (!numberOk || !typeOk) { noteFailure(code, client); return refuse(res, 'nomatch'); }
+                if (!numberOk || !typeOk) { attempt.failed(); return refuse(res, 'nomatch'); }
+                attempt.succeeded();
                 const session = await openSession(st);
                 res.json({ session, view: await viewOf(st) });
             } catch (e) { send(res, e); }
