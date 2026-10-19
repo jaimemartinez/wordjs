@@ -533,6 +533,7 @@ function Policies({ t, settings, set }: any) {
                 <Toggle className="py-3.5" label={t('srv.pol.dnsbl')} checked={on('mail_security_dnsbl_enabled', '1')} onChange={(v: boolean) => set({ mail_security_dnsbl_enabled: v ? '1' : '0' })} />
                 <Toggle className="py-3.5" label={t('srv.pol.spf')} checked={on('mail_security_spf_enabled', '1')} onChange={(v: boolean) => set({ mail_security_spf_enabled: v ? '1' : '0' })} />
                 <Toggle className="py-3.5" label={t('srv.pol.spfReject')} disabled={!on('mail_security_spf_enabled', '1')} checked={on('mail_security_spf_reject', '1')} onChange={(v: boolean) => set({ mail_security_spf_reject: v ? '1' : '0' })} />
+                <Toggle className="py-3.5" label={t('srv.pol.dmarc')} hint={t('srv.pol.dmarcHint')} checked={on('mail_security_dmarc_enabled', '1')} onChange={(v: boolean) => set({ mail_security_dmarc_enabled: v ? '1' : '0' })} />
                 <Toggle className="py-3.5" label={t('srv.pol.catchAll')} checked={on('smtp_catch_all', '0')} onChange={(v: boolean) => set({ smtp_catch_all: v ? '1' : '0' })} />
                 <div className="flex flex-wrap items-center justify-between gap-3 py-3.5">
                     <span className="text-sm font-semibold text-slate-800">{t('srv.pol.undo')}</span>
@@ -915,7 +916,7 @@ const SETTINGS_KEYS_EDITABLE = [
     'mail_from_email', 'mail_from_name', 'smtp_listen_port', 'smtp_proxy_ips', 'smtp_catch_all', 'mail_helo_host',
     'mail_server', 'mail_port', 'mail_secure', 'mail_user', 'mail_pass', 'mail_relay_require_tls',
     'mail_security_dkim_domain', 'mail_security_dkim_selector', 'mail_security_dnsbl_enabled', 'mail_security_spf_enabled',
-    'mail_security_spf_reject', 'mail_undo_send_seconds', 'mail_blocked_senders', 'mail_allowed_senders',
+    'mail_security_spf_reject', 'mail_security_dmarc_enabled', 'mail_undo_send_seconds', 'mail_blocked_senders', 'mail_allowed_senders',
     'mail_quota_default_mb', 'mail_forwarding_allowed',
 ];
 

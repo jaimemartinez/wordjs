@@ -421,7 +421,7 @@ Test Schema are bundled with core):
 | Slug | What it does | Key requested capabilities |
 | --- | --- | --- |
 | `analytics-tag` | Site-wide analytics tag (GA4, Plausible or Matomo) with optional cookie-consent gating | `settings` r/w, routes, admin menu, `assets:write` |
-| `auctions` | Auction listings with bidding, anti-snipe extension, live polling, winner reporting | `database` r/w, routes, admin menu, `email:admin` |
+| `auctions` | Auction listings with bidding (address confirmed by a mailed code, or signed-in accounts only), a per-bid jump cap, anti-snipe extension, live polling, winner reporting | `database` r/w, routes, admin menu, `email:admin` |
 | `bookings` | Appointment booking: services, weekly availability, race-safe slot reservations, email confirmations, admin agenda | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
 | `breadcrumbs` | Breadcrumbs Verso block with optional BreadcrumbList JSON-LD | `browser:script` only (frontend-only) |
 | `card-gallery` | Event/promo cards as an alternating-alignment ("zigzag") stack via the `CardGalleryVerso` block | `settings` r/w, `database` write, routes, admin menu |
@@ -430,7 +430,7 @@ Test Schema are bundled with core):
 | `cookie-consent` | GDPR cookie banner, anonymous consent logging, version-based re-consent | `database` r/w, `settings` r/w, routes, admin menu, `assets:write` |
 | `digital-downloads` | Sell/give away downloadable products (each file a PRIVATE media item) with expiring, limited-use token-gated downloads streamed by the host — no file URL is ever revealed. 1.1.0 migration: products created earlier keep their public `file_url` working but are flagged in the admin until their file is re-selected as private | `database` r/w, `settings` r/w, routes, admin menu, `email:admin`, `media:private_read` |
 | `donations` | Donation campaigns with goal thermometer, manual payment + optional Stripe Checkout, CSV export | `database` r/w, `settings` r/w, routes, admin menu, `email:admin`, `network` |
-| `event-tickets` | Ticket types with quantity caps, unique ticket codes, attendee check-in | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
+| `event-tickets` | Ticket types with quantity caps, paid orders confirmed by a mailed code before they hold seats, unique ticket codes, attendee check-in | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
 | `events-calendar` | Admin-managed events shown as an upcoming list or monthly calendar Verso block | `database` r/w, routes, admin menu |
 | `faq` | Database-managed FAQ accordion with categories + Google FAQPage JSON-LD | `database` r/w, routes, admin menu |
 | `image-lightbox` | Site-wide click-to-zoom lightbox for content images (captions, keyboard nav) | `settings` r/w, routes, admin menu, `assets:write` |

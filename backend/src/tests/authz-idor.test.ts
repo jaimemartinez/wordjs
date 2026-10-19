@@ -220,7 +220,12 @@ describe('authz: anonymous → 401 on protected routes', () => {
 // ── Users: IDOR + privilege escalation ────────────────────────────────────────────────────────────
 describe('authz: users IDOR + privilege escalation', () => {
     test('subscriber cannot GET another user; CAN GET self; /users/me is not shadowed', async () => {
-        assert.strictEqual((await as('subscriber', 'get', `/users/${U.authorA}`)).status, 403);
+        // 404, not 403: "exists, not yours" must read exactly like "no such id", or the split is an
+        // existence oracle over every user id.
+        const other = await as('subscriber', 'get', `/users/${U.authorA}`);
+        const missing = await as('subscriber', 'get', '/users/987654');
+        assert.strictEqual(other.status, 404);
+        assert.deepStrictEqual(other.body, missing.body, 'another user and a missing id must be indistinguishable');
         assert.strictEqual((await as('subscriber', 'get', `/users/${U.subscriber}`)).status, 200);
         const me = await as('subscriber', 'get', '/users/me');
         assert.strictEqual(me.status, 200);

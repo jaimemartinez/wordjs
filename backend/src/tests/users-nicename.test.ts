@@ -197,16 +197,16 @@ describe('User.create writes the public author slug', () => {
             "'2024' is read as a user id, so it must not be a slug any account can be given");
     });
 
-    it('an account created with NO display name still gets a slug of its own', async () => {
-        // display_name defaults to the login (WordPress parity), so this account's slug IS the
-        // slugified login — but as a real, separate, editable column rather than an invisible
-        // fallback, which is what lets an admin change it without renaming the account.
+    it('an account created with NO display name still gets a slug of its own — never the login', async () => {
+        // display_name used to default to the login (WordPress parity), which made this account's slug
+        // the slugified login: its sign-in name, on every byline. It now gets the core/public-identity
+        // placeholder, and the slug is derived from that same value.
         const created = await User.create({
             username: 'plainuser', email: 'plain@example.com', password: PASSWORD,
         });
-        assert.strictEqual(await nicenameOf(created.id), 'plainuser');
+        assert.strictEqual(await nicenameOf(created.id), `user-${created.id}`);
         const row = await dbAsync.get('SELECT display_name FROM users WHERE id = ?', [created.id]);
-        assert.strictEqual(row.display_name, 'plainuser',
+        assert.strictEqual(row.display_name, `User ${created.id}`,
             'the slug and the display name must be derived from the same value, or the two disagree');
     });
 });

@@ -439,7 +439,7 @@ const LIST_QUERY_STRING_FIELDS: readonly string[] = Object.freeze([
  * THE IDENTITY-LIST GRAMMAR of `?categories=`, `?tags=` and `?author=`.
  *
  * One comma-separated list per parameter. An element is either a row ID (all digits) or a SLUG — a
- * term's `slug`, or an author's `user_nicename`/`user_login` — split by shape, which is the same rule
+ * term's `slug`, or an author's `user_nicename` (never the login) — split by shape, which is the same rule
  * `routes/seo.ts` applies to the `/author/<segment>/feed.xml` path segment so the two surfaces cannot
  * disagree about what `2` means.
  *
@@ -737,7 +737,7 @@ async function serializeVisibleContent(post: any, user?: ContentRouteUser) {
  *       - in: query
  *         name: author
  *         description: >-
- *           Comma-separated author IDs and/or slugs (user_nicename; a login matches only an account with no nicename) — the
+ *           Comma-separated author IDs and/or slugs (user_nicename; never a login) — the
  *           same identity the author feed resolves, so a public author archive can be listed without
  *           an authenticated users endpoint. Authorization may still narrow the result to the calling
  *           user's own posts when a non-published status is requested.

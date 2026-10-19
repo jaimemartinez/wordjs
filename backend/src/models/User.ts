@@ -8,6 +8,7 @@ const { clampLimit, clampOffset } = require('../core/pagination');
 const bcrypt = require('bcryptjs');
 const config = require('../config/app');
 const { sanitizeTitle } = require('../core/formatting');
+const publicIdentity = require('../core/public-identity');
 const { getRoles, getRoleCapabilities } = require('../core/roles');
 // One unique-violation predicate for all three drivers. This file used to carry its own, which knew
 // only SQLite and Postgres — see core/db-errors.ts for what that cost on MySQL.
@@ -114,9 +115,9 @@ function identityTaken(message: string, code: 'username_taken' | 'email_taken'):
  *
  * The source is the DISPLAY NAME, slugified by core/formatting.sanitizeTitle — the same producer
  * behind every other slug in the product (post_name, term slugs), so "what does this text slugify
- * to" has exactly one answer here. An account with no display name of its own stores the login as its
- * display name (below), so its slug is the slugified login: the same value WordPress derives, and now
- * a real, separate column an admin can change instead of an invisible fallback nobody could.
+ * to" has exactly one answer here. An account with no display name of its own is NOT given the login
+ * (WordPress does that; it publishes the sign-in name on every byline): it gets the placeholder of
+ * core/public-identity, `User <id>`, and so the slug `user-<id>`.
  *
  * Returns '' when the name slugifies to nothing (an entirely non-latin display name). Inventing a
  * slug would be worse than emitting none: Post.getAuthorsForIds then falls back to the user id, which
@@ -150,6 +151,13 @@ function identityTaken(message: string, code: 'username_taken' | 'email_taken'):
  */
 const NUMERIC_NICENAME_PREFIX = 'user-';
 
+/**
+ * The public slug an author had before migration 0017 moved them off a login-derived one. Kept ONLY for
+ * accounts that had published (theirs are the only archive URLs that exist in the wild), and read by the
+ * author lookups so those URLs keep resolving to the same archive under its new canonical address.
+ */
+const PREVIOUS_NICENAME_META = 'previous_nicename';
+
 async function generateUniqueNicename(source: any): Promise<string> {
     // sanitizeTitle already lower-cases, ASCII-folds and bounds to MAX_SLUG_LENGTH; every
     // disambiguated variant is built from that bounded base, never from the caller's raw string.
@@ -167,7 +175,11 @@ async function generateUniqueNicename(source: any): Promise<string> {
     // value. That costs two authors one shared archive URL, never a failed registration.
     while (true) {
         const existing = await dbAsync.get('SELECT id FROM users WHERE user_nicename = ?', [candidate]);
-        if (!existing) return candidate;
+        // A slug an author was moved OFF (migration 0017 keeps it so their old archive URL still resolves)
+        // is taken too: handing it to someone else would merge two people's archives at that address.
+        const retired = existing ? null : await dbAsync.get(
+            'SELECT user_id FROM user_meta WHERE meta_key = ? AND meta_value = ?', [PREVIOUS_NICENAME_META, candidate]);
+        if (!existing && !retired) return candidate;
         counter++;
         candidate = `${seed}-${counter}`;
     }
@@ -309,10 +321,23 @@ class User {
 
         // The stored display name, resolved ONCE so the public slug below is derived from the very
         // value that lands in the column rather than from a second reading of the same rule.
-        const display = displayName || username;
+        //
+        // NEVER THE LOGIN (core/public-identity). An account with no display name of its own — or one
+        // whose caller simply copied the login into it (self-registration did, and a WordPress export
+        // carries `display_name = user_login` for every account that never set one) — is shown under
+        // a placeholder derived from its id, written right after the insert below. The display name
+        // and the slug are printed on every byline, feed and archive; the login is what the sign-in
+        // form takes, and must not be readable off a public page.
+        const chosenDisplay = publicIdentity.ownDisplayName(displayName, username);
         // THE PUBLIC AUTHOR SLUG — see generateUniqueNicename. An explicit `nicename` wins (the WXR
-        // importer has one in hand, and an admin form could offer it); otherwise it is derived.
-        const nicename = await generateUniqueNicename(data.nicename || display);
+        // importer has one in hand, and an admin form could offer it); otherwise it is derived. Either
+        // way a slug that IS the login (or what the login slugifies to) is discarded, and the account
+        // gets the placeholder's slug instead.
+        const explicitNicename = publicIdentity.ownNicename(data.nicename, username);
+        let nicename = chosenDisplay || explicitNicename ? await generateUniqueNicename(explicitNicename || chosenDisplay) : '';
+        if (publicIdentity.isLoginDerivedSlug(nicename, username)) nicename = '';
+        const display = chosenDisplay;
+        const needsPlaceholderSlug = !nicename && (!chosenDisplay || !!sanitizeTitle(chosenDisplay));
 
         // Insert User. The findByLogin/findByEmail checks above leave a TOCTOU window — two concurrent
         // signups can both pass the check and reach here. The unique indexes (idx_users_login /
@@ -332,6 +357,17 @@ class User {
         }
 
         const userId = result.lastID;
+
+        // The placeholder identity needs the id, so it is written now. A display name that slugifies to
+        // nothing (an entirely non-latin name) keeps its EMPTY slug — the readers fall back to the id.
+        if (!display || needsPlaceholderSlug) {
+            const placeholder = publicIdentity.placeholderDisplayName(userId);
+            const fills: string[] = [];
+            const fillValues: any[] = [];
+            if (!display) { fills.push('display_name = ?'); fillValues.push(placeholder); }
+            if (needsPlaceholderSlug) { fills.push('user_nicename = ?'); fillValues.push(await generateUniqueNicename(placeholder)); }
+            await dbAsync.run(`UPDATE users SET ${fills.join(', ')} WHERE id = ?`, [...fillValues, userId]);
+        }
 
         // Insert Role Meta
         await dbAsync.run('INSERT INTO user_meta (user_id, meta_key, meta_value) VALUES (?, ?, ?)',
@@ -571,7 +607,9 @@ class User {
             //     hash of a token you chose is a password reset for that account.
             // No route forwards req.body.meta into update() today; that is precisely why the guard must be
             // here, before one does.
-            const PROTECTED_META = new Set(['role', 'token_valid_after', MAILBOX_META_KEY]);
+            // PREVIOUS_NICENAME_META is an author-archive ALIAS the lookups resolve: writing it would claim
+            // another author's old URL.
+            const PROTECTED_META = new Set(['role', 'token_valid_after', MAILBOX_META_KEY, PREVIOUS_NICENAME_META]);
             const PROTECTED_META_PREFIXES = ['mfa_', 'password_reset_', 'email_verification_'];
             const isProtectedMeta = (k: string) =>
                 PROTECTED_META.has(k) || PROTECTED_META_PREFIXES.some((p) => k.startsWith(p));
@@ -816,3 +854,4 @@ module.exports = User;
 module.exports.usernameError = usernameError;
 module.exports.importableUsername = importableUsername;
 module.exports.USERNAME_MAX_LENGTH = USERNAME_MAX_LENGTH;
+module.exports.PREVIOUS_NICENAME_META = PREVIOUS_NICENAME_META;

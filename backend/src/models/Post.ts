@@ -27,6 +27,7 @@ const privateMedia = require('../core/private-media');
 // lazily), so both functions are complete here — and buildWhere does not resolve the module per query.
 const { canViewAttachment, attachmentVisibilityCondition } = require('../core/attachment-visibility');
 const { canReadPostContent, isPasswordProtected } = require('../core/post-capabilities');
+const { publicDisplayName } = require('../core/public-identity');
 
 /**
  * Marks a post whose stored post_date is a leftover from a schedule that was CANCELLED — i.e. a
@@ -322,6 +323,11 @@ class Post {
      * and backfilled for existing rows (migration 0015), and where it is still empty the fallback is
      * the user ID — an identity `?author=` already resolves and `/author/<id>` is already addressed
      * by. Not selecting the column at all is what keeps a future edit from reintroducing the leak.
+     *
+     * The DISPLAY NAME gets the same treatment one level down: a stored name that IS the login (the
+     * old default, or one typed in later) is compared against `user_login` INSIDE the query and comes
+     * back NULL, so the login still never reaches this process, and the byline prints the
+     * core/public-identity placeholder instead — the rule User.create and migration 0017 write.
      */
     static async getAuthorsForIds(ids: any[]): Promise<Record<string, PostAuthorRef>> {
         const result: Record<string, PostAuthorRef> = {};
@@ -330,14 +336,17 @@ class Post {
 
         const placeholders = wanted.map(() => '?').join(',');
         const rows = await dbAsync.all(
-            `SELECT id, display_name, user_nicename FROM users WHERE id IN (${placeholders})`,
+            'SELECT id, user_nicename, CASE WHEN LOWER(TRIM(display_name)) = LOWER(TRIM(user_login)) '
+            + `THEN NULL ELSE display_name END AS display_name FROM users WHERE id IN (${placeholders})`,
             wanted
         );
         for (const row of rows) {
             const nicename = row.user_nicename == null ? '' : String(row.user_nicename).trim();
             result[row.id] = {
                 id: row.id,
-                displayName: String(row.display_name || row.id),
+                // `null` for the login (see above) — publicDisplayName turns it, and an empty name, into
+                // the placeholder; it is never handed the login to compare.
+                displayName: publicDisplayName(row.id, row.display_name, null),
                 slug: nicename || String(row.id),
             };
         }
@@ -1007,9 +1016,7 @@ class Post {
         }
         if (selector.slugs.length) {
             const ph = selector.slugs.map(() => '?').join(',');
-            // THE SLUG IS `user_nicename`. `user_login` is accepted only for an account that has no
-            // nicename — the pre-0015 rows the backfill could not name — and NEVER as an alias for
-            // one that does.
+            // THE SLUG IS `user_nicename`. `user_login` is NEVER accepted as an alias for it.
             //
             // The unconditional `OR user_login IN (…)` this replaces was a login-existence ORACLE on
             // an anonymous endpoint: `?author=<guess>` returned that account's posts on a hit and an
@@ -1019,14 +1026,21 @@ class Post {
             // leak rather than closed it. An input may accept an identifier the caller already holds
             // — it may not become a way to discover one.
             //
-            // `user_nicename <> ''` on the first branch because this schema defaults that column to
-            // the empty string: without it a slug that normalised to '' would match every account at
-            // once. The `IS NULL` on the second is defensive — the column is NOT NULL on all three
-            // drivers, and a future one that isn't must not silently turn the login back into a
-            // universal alias.
+            // `user_nicename <> ''` because this schema defaults that column to the empty string:
+            // without it a slug that normalised to '' would match every account at once.
+            //
+            // NOR FOR AN ACCOUNT WITHOUT ONE. The login-for-an-empty-nicename branch that used to follow
+            // was the same oracle, narrowed: every account migration 0015 could not name (and every
+            // account whose display name slugified to nothing) still answered `?author=<login>`. An
+            // account without a slug is addressed by its id, which is what its byline serialises.
+            //
+            // The second branch is the slug an author was moved OFF by migration 0017 (it had been
+            // derived from the login): only for accounts that had published, so the archive URLs that
+            // exist in the wild keep resolving — to the same posts, under the new canonical slug the
+            // payload carries. It is a protected meta key, so no account can write itself one.
             parts.push(`${col}author_id IN (SELECT id FROM users `
-                + `WHERE (user_nicename IN (${ph}) AND user_nicename <> '') `
-                + `OR (user_login IN (${ph}) AND (user_nicename IS NULL OR user_nicename = '')))`);
+                + `WHERE user_nicename IN (${ph}) AND user_nicename <> '' `
+                + `UNION SELECT user_id FROM user_meta WHERE meta_key = 'previous_nicename' AND meta_value IN (${ph}))`);
             params.push(...selector.slugs, ...selector.slugs);
         }
         if (parts.length === 0) return { sql: '1 = 0', params: [] };
