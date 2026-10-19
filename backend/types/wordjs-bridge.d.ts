@@ -48,8 +48,10 @@ export interface WordJSUploadedFile {
 export interface WordJSRouteUser {
     id: number | string;
     role: string;
-    userEmail: string;
-    userLogin: string;
+    /** The caller's email — present only when your plugin holds the `users:read` grant (personal data). */
+    userEmail?: string;
+    /** The caller's login — present only when your plugin holds the `users:read` grant (personal data). */
+    userLogin?: string;
     /** Same admin-owned grant as {@link WordJSSafeUser.hasProfessionalMailbox} — gate on this, don't re-derive it. */
     hasProfessionalMailbox: boolean;
     /**

@@ -6,6 +6,15 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Security
+
+- **A plugin's JavaScript under `public/` now needs `browser:script`, like its `dist/` bundles.** The static
+  `/plugins/<slug>/public/*.js|.mjs|.cjs` files are served only while the plugin is active and granted
+  `browser:script`; styles, images and fonts keep the active-only rule. Every marketplace plugin that
+  enqueues a public script already declares it.
+- **A plugin route's `req.user` carries the caller's email and login only with `users:read`.** Without the
+  grant a route still receives `id`, `role`, `hasProfessionalMailbox` and `pluginCapabilities`.
+
 ## [2.7.0] - 2026-10-17
 
 ### Added
