@@ -23,6 +23,54 @@ const PRIVATE_UPLOADS_ARCHIVE_ROOT = 'private-uploads';
 const BACKUPS_DIR = path.resolve(__dirname, '../../backups');
 
 /**
+ * MULTISITE. Each site of a network has its own backups, made and restored by its own administrators
+ * (the main site's stay with the network administrators). A backup of a site other than the main one is
+ * that site only: its database (its SQLite file, its Postgres schema, its MySQL database), its uploads
+ * and its private files — never the network's plugin and theme code, which a site's restore must not be
+ * able to replace. Its archives live with the site, in `<data dir>/sites/<id>/backups`.
+ */
+function currentSiteId(): number {
+    return require('./site-context').currentSiteId();
+}
+function onSecondarySite(): boolean {
+    return currentSiteId() !== 1;
+}
+function backupsDir(): string {
+    if (!onSecondarySite()) return BACKUPS_DIR;
+    const dir = path.join(require('./network').siteDataDir(currentSiteId()), 'backups');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: BACKUP_DIR_MODE });
+    return dir;
+}
+
+/**
+ * Where the current site's database is, for the dump tools: the main site's connection settings, or a
+ * site's own Postgres schema / MySQL database (core/site-storage). On a network over Postgres the main
+ * site's dump is limited to ITS schema: the database also holds every other site and the network store.
+ */
+async function dumpConfigForCurrentSite(driver: string): Promise<any> {
+    const storage = require('./site-storage');
+    const multisite = require('./site-context').multisiteEnabled();
+    if (!onSecondarySite()) {
+        if (multisite && driver === 'postgres') {
+            const d = require('../config/database').getDbAsync();
+            return { ...config.db, schema: typeof d.currentSchema === 'function' ? await d.currentSchema() : 'public' };
+        }
+        return config.db;
+    }
+    if (driver === 'postgres') return { ...config.db, schema: storage.sitePgSchema(currentSiteId()) };
+    return { ...config.db, name: storage.siteMysqlDatabase(currentSiteId()) };
+}
+
+/** The current site's SQLite file (the main site's config.dbPath, or a site's own database file). */
+function sqliteFileForCurrentSite(driver: string): string {
+    if (onSecondarySite()) {
+        const d = require('../config/database').getDbAsync();
+        if (d && typeof d.dbPath === 'string') return path.resolve(d.dbPath);
+    }
+    return path.resolve(config.dbPath || (driver === 'sqlite-native' ? './data/wordjs-native.db' : './data/wordjs.db'));
+}
+
+/**
  * A backup archive is the whole site (the database, password hashes, tokens, private media), so the
  * directory is owner-only (0700) and every archive is created 0600, whatever the process umask.
  * Archives written by an older version keep the mode they were created with, so the directory and
@@ -125,7 +173,8 @@ async function createBackup() {
     //    code/config that restore never extracts anyway. Use async fs (fs.promises) so the walk does
     //    not block the event loop on large media libraries.
     const backendRoot = path.resolve(__dirname, '../../');
-    const CONTENT_ROOTS = ['uploads', 'plugins', 'themes'];
+    // A site other than the main one archives its own uploads (as uploads/) and no code.
+    const CONTENT_ROOTS = onSecondarySite() ? [] : ['uploads', 'plugins', 'themes'];
     const excludes = [
         'node_modules', 'backups', 'logs', 'os-tmp', '.git', '.DS_Store', 'wordjs-content.json',
         'postgres-embed',
@@ -163,6 +212,23 @@ async function createBackup() {
             continue; // content root doesn't exist on this install — skip
         }
         await addDirectoryToZip(zip, backendRoot, root);
+    }
+    if (onSecondarySite()) {
+        const siteUploads = require('./private-media').publicUploadsRoot();
+        let present = true;
+        try { await fs.promises.access(siteUploads); } catch { present = false; }
+        if (present) {
+            const walk = async (rel: string): Promise<void> => {
+                for (const name of await fs.promises.readdir(rel ? path.join(siteUploads, rel) : siteUploads)) {
+                    if (excludes.includes(name)) continue;
+                    const childRel = rel ? path.join(rel, name) : name;
+                    const st = await fs.promises.lstat(path.join(siteUploads, childRel));
+                    if (st.isDirectory()) await walk(childRel);
+                    else if (st.isFile()) zip.addFile(`uploads/${childRel.replace(/\\/g, '/')}`, await fs.promises.readFile(path.join(siteUploads, childRel)));
+                }
+            };
+            await walk('');
+        }
     }
 
     // 4a. PRIVATE media (core/private-media.ts) lives outside uploads/ — by design nothing serves it —
@@ -205,9 +271,7 @@ async function createBackup() {
                 const dbi = typeof dbModule.getDbAsync === 'function' ? dbModule.getDbAsync() : null;
                 if (dbi && typeof dbi.exec === 'function') await dbi.exec('PRAGMA wal_checkpoint(TRUNCATE)');
             } catch { /* no WAL / legacy — fine */ }
-            const dbFile = path.resolve(
-                config.dbPath || (driver === 'sqlite-native' ? './data/wordjs-native.db' : './data/wordjs.db')
-            );
+            const dbFile = sqliteFileForCurrentSite(driver);
             if (fs.existsSync(dbFile)) {
                 zip.addLocalFile(dbFile, 'database', 'wordjs.db');
                 log.info('   ✓ Added physical database snapshot (database/wordjs.db) to backup.');
@@ -231,7 +295,7 @@ async function createBackup() {
         if (entry) {
             await withPrivateTempDir('wordjs-dbdump-', async (tmpDir) => {
                 const tmpDump = path.join(tmpDir, safeDumpFileName(entry));
-                await captureDump(driver, tmpDump, config.db);
+                await captureDump(driver, tmpDump, await dumpConfigForCurrentSite(driver));
                 zip.addLocalFile(tmpDump, 'database', entry);
                 log.info(`   ✓ Added physical database dump (database/${entry}) to backup.`);
             });
@@ -241,7 +305,7 @@ async function createBackup() {
     // 5. Save Zip
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const filename = `backup-${timestamp}.zip`;
-    const filepath = path.join(BACKUPS_DIR, filename);
+    const filepath = path.join(backupsDir(), filename);
 
     // Created owner-only and exclusively (adm-zip's writeZip would create it with the process umask).
     fs.writeFileSync(filepath, zip.toBuffer(), { mode: BACKUP_FILE_MODE, flag: 'wx' });
@@ -258,7 +322,8 @@ async function createBackup() {
     // value would be dead (eslint no-useless-assignment).
     let s3: any;
     try {
-        s3 = await offloadBackup(filepath, filename);
+        // A site's archives go under its own key space of the backup bucket.
+        s3 = await offloadBackup(filepath, onSecondarySite() ? `sites/${currentSiteId()}/${filename}` : filename);
         if (s3.offloaded) log.info(`   ☁ Offloaded backup to S3: s3://${s3.bucket}/${s3.key}`);
         else if (s3.reason === 'upload-failed') log.warn({ err: s3.error }, '   ⚠️ S3 offload failed (local copy kept)');
     } catch (e: any) {
@@ -295,7 +360,7 @@ async function pruneBackups(keep?: number) {
     const toDelete = all.slice(n);
     let pruned = 0;
     for (const b of toDelete) {
-        try { fs.unlinkSync(path.join(BACKUPS_DIR, b.filename)); pruned++; }
+        try { fs.unlinkSync(path.join(backupsDir(), b.filename)); pruned++; }
         catch (e: any) { log.warn({ err: e }, `   ⚠️ Could not prune backup ${b.filename}`); }
     }
     if (pruned) log.info({ pruned, n }, `   🧹 Pruned ${pruned} old backup(s); kept newest ${n}.`);
@@ -306,12 +371,13 @@ async function pruneBackups(keep?: number) {
  * List all backups
  */
 function listBackups() {
-    if (!fs.existsSync(BACKUPS_DIR)) return [];
+    const dir = backupsDir();
+    if (!fs.existsSync(dir)) return [];
 
-    const files = fs.readdirSync(BACKUPS_DIR)
+    const files = fs.readdirSync(dir)
         .filter((f: string) => f.endsWith('.zip'))
         .map((f: string) => {
-            const stats = fs.statSync(path.join(BACKUPS_DIR, f));
+            const stats = fs.statSync(path.join(dir, f));
             return {
                 filename: f,
                 size: stats.size,
@@ -332,7 +398,7 @@ function deleteBackup(filename: string) {
         throw new Error('Invalid filename');
     }
 
-    const filepath = path.join(BACKUPS_DIR, filename);
+    const filepath = path.join(backupsDir(), filename);
     if (fs.existsSync(filepath)) {
         fs.unlinkSync(filepath);
         return true;
@@ -349,7 +415,7 @@ function getBackupPath(filename: string) {
         throw new Error('Invalid filename');
     }
 
-    const filepath = path.join(BACKUPS_DIR, filename);
+    const filepath = path.join(backupsDir(), filename);
     if (fs.existsSync(filepath)) {
         return filepath;
     }
@@ -390,6 +456,7 @@ function withIncidents<T>(result: T, incidents: BackupIncident[]): any {
  * the operator's to see; it never undoes the restore.
  */
 async function recheckNetworkAdminsAfterRestore(incidents: BackupIncident[]) {
+    if (onSecondarySite()) return; // only the main site's accounts can be network administrators
     try { await require('./network-auth').recheckNetworkAdmins(); }
     catch (e: any) { incidents.push({ stage: 'network', message: `The network administrators could not be re-checked against the restored accounts (${e && e.message}).` }); }
 }
@@ -400,7 +467,7 @@ async function restoreBackup(filename: string) {
         throw new Error('Invalid filename');
     }
 
-    const filepath = path.join(BACKUPS_DIR, filename);
+    const filepath = path.join(backupsDir(), filename);
     if (!fs.existsSync(filepath)) {
         throw new Error('Backup file not found');
     }
@@ -460,7 +527,11 @@ async function restoreBackup(filename: string) {
     //    SKIPPED and reported, while an entry that actually points somewhere else ('..', absolute,
     //    drive-relative) still aborts the whole restore before anything is written.
     const backendRoot = path.resolve(__dirname, '../../');
-    const RESTORABLE_ROOTS = ['uploads', 'plugins', 'themes', PRIVATE_UPLOADS_ARCHIVE_ROOT];
+    // A site other than the main one restores its own uploads and private files, and never code: the
+    // plugin and theme trees are the network's.
+    const secondary = onSecondarySite();
+    const RESTORABLE_ROOTS = secondary ? ['uploads', PRIVATE_UPLOADS_ARCHIVE_ROOT] : ['uploads', 'plugins', 'themes', PRIVATE_UPLOADS_ARCHIVE_ROOT];
+    const siteUploadsRoot = secondary ? path.resolve(require('./private-media').publicUploadsRoot()) : null;
     /** A segment that names somewhere OTHER than a child of the current directory. */
     const escapesUpward = (seg: string) =>
         seg === '..' || seg.includes('\0') || path.isAbsolute(seg) || /^[A-Za-z]:/.test(seg);
@@ -480,10 +551,14 @@ async function restoreBackup(filename: string) {
         // Private media restores into the CONFIGURED private root, not next to the code.
         const isPrivateRoot = top === PRIVATE_UPLOADS_ARCHIVE_ROOT;
         const privateBase = isPrivateRoot ? require('./private-media').privateUploadsRoot() : null;
-        const contentRoot = isPrivateRoot ? privateBase : path.resolve(backendRoot, top);
+        // A site's uploads/ restores into the site's own uploads root.
+        const siteUploads = !isPrivateRoot && siteUploadsRoot !== null;
+        const contentRoot = isPrivateRoot ? privateBase : siteUploads ? siteUploadsRoot : path.resolve(backendRoot, top);
         const dest = isPrivateRoot
             ? (segments.length > 1 ? resolveWithin(privateBase, ...segments.slice(1)) : null)
-            : resolveWithin(backendRoot, ...segments);
+            : siteUploads
+                ? (segments.length > 1 ? resolveWithin(siteUploadsRoot, ...segments.slice(1)) : null)
+                : resolveWithin(backendRoot, ...segments);
         if (dest === null || !dest.startsWith(contentRoot + path.sep)) {
             // Not upward-pointing (checked above) — the name simply cannot be written here.
             skipped.push(entry.entryName);
@@ -525,7 +600,30 @@ async function restoreBackup(filename: string) {
     //     failure falls back to the logical path below, so a restore never leaves the DB half-swapped.
     const physEntry = isSqlite ? zip.getEntry('database/wordjs.db') : null;
     let physicalRestored = false;
-    if (physEntry) {
+    if (physEntry && secondary) {
+        try {
+            // Read while the site's database is still open (restoreSiteDatabase closes it first).
+            const dbFile = sqliteFileForCurrentSite(dbType.driver);
+            await restoreSiteDatabase(async () => {
+                for (const sidecar of [dbFile + '-wal', dbFile + '-shm']) {
+                    try { if (fs.existsSync(sidecar)) fs.unlinkSync(sidecar); } catch { /* best-effort */ }
+                }
+                const tmp = dbFile + '.restore-tmp';
+                fs.writeFileSync(tmp, physEntry.getData());
+                fs.renameSync(tmp, dbFile);
+            });
+            physicalRestored = true;
+            log.info('   ✓ Physical database snapshot of the site restored (all tables).');
+        } catch (e: any) {
+            log.warn({ err: e }, '   ⚠️ Physical DB restore of the site failed — falling back to logical import');
+            incidents.push({
+                stage: 'database',
+                message: `The physical database snapshot could not be restored (${e && e.message}); the logical import ran instead, which does NOT restore analytics, notifications, plugin tables or schema_migrations.`
+            });
+            await reopenCurrentSite();
+            physicalRestored = false;
+        }
+    } else if (physEntry) {
         const dbFile = path.resolve(
             config.dbPath || (dbType.driver === 'sqlite-native' ? './data/wordjs-native.db' : './data/wordjs.db')
         );
@@ -571,7 +669,17 @@ async function restoreBackup(filename: string) {
                 // mode 0600 as well as the 0700 directory: defence in depth if the platform ever
                 // hands back a temp dir with looser permissions than mkdtemp promises.
                 fs.writeFileSync(tmp, dumpEntry.getData(), { mode: 0o600 });
-                await restoreDump(dbType.driver, tmp, config.db);
+                const cfg = await dumpConfigForCurrentSite(dbType.driver);
+                if (secondary) {
+                    // A site's schema / database is replaced whole: dropped, then restored from the dump
+                    // into a fresh one, so nothing created after the backup survives it.
+                    await restoreSiteDatabase(async () => {
+                        await require('../config/database').dropSiteDatabase(currentSiteId());
+                        await restoreDump(dbType.driver, tmp, { ...cfg, fresh: true });
+                    });
+                } else {
+                    await restoreDump(dbType.driver, tmp, cfg);
+                }
                 physicalRestored = true;
                 log.info('   ✓ Physical database dump restored (all tables).');
             });
@@ -603,6 +711,29 @@ async function restoreBackup(filename: string) {
     catch (e: any) { incidents.push({ stage: 'cache', message: `The cache could not be flushed (${e && e.message}); pre-restore values may be served until their TTL expires.` }); }
     log.info(`✅ Restore ${incidents.length ? 'finished with warnings' : 'complete'} (physical snapshot)`);
     return withIncidents({ physical: true, driver: dbType.driver }, incidents);
+}
+
+/**
+ * Replace the current site's (not the main site's) database with `swap`: its workers stop and its
+ * connection closes first, and afterwards the site is prepared again from the restored database (schema
+ * migrations, roles, its plugins with fresh database principals, its theme).
+ */
+async function restoreSiteDatabase(swap: () => Promise<void>): Promise<void> {
+    const id = currentSiteId();
+    await require('./network-sites').forgetSite(id);
+    require('./plugin-db-isolation').forgetSiteProvisioning(id);
+    try {
+        await swap();
+    } finally {
+        await reopenCurrentSite();
+    }
+}
+
+async function reopenCurrentSite(): Promise<void> {
+    const id = currentSiteId();
+    if (id === 1) return;
+    try { await require('./network-sites').prepareSite(id); }
+    catch (e: any) { log.warn({ err: e }, '   ⚠️ The site could not be prepared again after the restore'); throw e; }
 }
 
 module.exports = {

@@ -1196,6 +1196,8 @@ class MysqlDriver extends DatabaseDriverInterface {
 }
 
 module.exports = new MysqlDriver();
+// The class, for config/database to open one pool per site database (multisite).
+module.exports.MysqlDriver = MysqlDriver;
 // Exported for unit tests of the dialect translation.
 module.exports.translateSql = translateSql;
 module.exports.translateCreateTable = translateCreateTable;

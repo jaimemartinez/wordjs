@@ -106,6 +106,30 @@ export default function NetworkPage() {
         }
     };
 
+    // Deleting a site: the slug is typed again in a field that opens under the site (never a one-click action).
+    const [deleting, setDeleting] = useState<{ id: number; slug: string } | null>(null);
+    const removeSite = async (site: NetworkSite) => {
+        if (!actionPassword) {
+            addToast(t("network.passwordRequired"), "error");
+            return;
+        }
+        if (!deleting || deleting.id !== site.id || deleting.slug !== site.slug) {
+            addToast(t("network.deleteConfirmMismatch"), "error");
+            return;
+        }
+        setBusyId(site.id);
+        try {
+            await networkApi.remove(site.id, deleting.slug, actionPassword);
+            addToast(t("network.deleted").replace("{host}", site.host), "success");
+            setDeleting(null);
+            await load();
+        } catch (err: any) {
+            addToast(err?.message || t("network.deleteFailed"), "error");
+        } finally {
+            setBusyId(null);
+        }
+    };
+
     const changeStatus = async (site: NetworkSite, to: "suspend" | "resume") => {
         if (!actionPassword) {
             addToast(t("network.passwordRequired"), "error");
@@ -307,11 +331,26 @@ export default function NetworkPage() {
                                     )}
                                 </div>
                                 {!site.main && (
-                                    <div className="shrink-0">
+                                    <div className="shrink-0 flex flex-col items-end gap-2">
                                         {site.status === "active" ? (
                                             <Button variant="secondary" icon="fa-pause" loading={busyId === site.id} onClick={() => changeStatus(site, "suspend")}>{t("network.suspend")}</Button>
                                         ) : (
-                                            <Button variant="secondary" icon="fa-play" loading={busyId === site.id} onClick={() => changeStatus(site, "resume")}>{t("network.resume")}</Button>
+                                            <div className="flex flex-wrap gap-2 justify-end">
+                                                <Button variant="secondary" icon="fa-play" loading={busyId === site.id} onClick={() => changeStatus(site, "resume")}>{t("network.resume")}</Button>
+                                                {deleting?.id !== site.id && (
+                                                    <Button variant="danger" icon="fa-trash" onClick={() => setDeleting({ id: site.id, slug: "" })} data-delete-site={site.id}>{t("network.delete")}</Button>
+                                                )}
+                                            </div>
+                                        )}
+                                        {site.status !== "active" && deleting?.id === site.id && (
+                                            <div className="w-full sm:w-72 rounded-xl border border-red-100 bg-red-50 p-3 text-left" data-delete-confirm={site.id}>
+                                                <p className="text-xs text-red-700 mb-2">{t("network.deleteWarning").replace("{slug}", site.slug)}</p>
+                                                <Input label={t("network.deleteConfirmLabel")} icon="fa-keyboard" value={deleting.slug} onChange={(e) => setDeleting({ id: site.id, slug: e.target.value })} autoComplete="off" />
+                                                <div className="mt-2 flex gap-2 justify-end">
+                                                    <Button variant="secondary" onClick={() => setDeleting(null)}>{t("common.cancel")}</Button>
+                                                    <Button variant="danger" icon="fa-trash" loading={busyId === site.id} disabled={deleting.slug !== site.slug} onClick={() => removeSite(site)}>{t("network.deleteConfirm")}</Button>
+                                                </div>
+                                            </div>
                                         )}
                                     </div>
                                 )}

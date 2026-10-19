@@ -316,12 +316,14 @@ const init = async (options: any = {}) => {
 };
 
 // MULTISITE: one database per site (documentation/multisite-design.md). Site 1 is the database above,
-// unchanged. Every other site has its own SQLite file, opened once by openSiteDatabase (the HTTP layer
-// and forEachSite await it before entering the site) and then returned by getDb/getDbAsync whenever the
-// current work belongs to that site. Nothing else changes: every model, migration and plugin query keeps
-// its literal table names, and simply runs against the current site's database. A site whose database
-// is not open is an error, never a fall-through to site 1's.
+// unchanged. Every other site has its own database — a SQLite file, a Postgres schema or a MySQL
+// database (core/site-storage) — opened once by openSiteDatabase (the HTTP layer and forEachSite await
+// it before entering the site) and then returned by getDb/getDbAsync whenever the current work belongs
+// to that site. Nothing else changes: every model, migration and plugin query keeps its literal table
+// names, and simply runs against the current site's database. A site whose database is not open is an
+// error, never a fall-through to site 1's.
 const siteContext = require('../core/site-context');
+const siteStorage = require('../core/site-storage');
 const siteDrivers = new Map<number, any>();
 const siteDriversOpening = new Map<number, Promise<any>>();
 
@@ -338,32 +340,105 @@ function openSiteDriver(siteId: number): any {
   return d;
 }
 
+/** The main site's driver, as the administrator of the engine (it creates and drops the namespaces). */
+function adminDriver(): any {
+  if (!driverAsync || !driverAsync.pool) throw new Error('The database is not connected.');
+  return driverAsync;
+}
+
+// Namespace names come from core/site-storage (derived from a site id, [a-z0-9_] only); quoted anyway.
+const qPg = (ident: string) => '"' + ident.replace(/"/g, '""') + '"';
+const qMy = (ident: string) => '`' + ident.replace(/`/g, '``') + '`';
+
 /**
- * Open (once) the database of site `siteId` at `dbPath`, bring its schema to the current version, and
- * keep it for the life of the process. Concurrent callers share one opening. Multisite requires the
- * native SQLite driver in this phase; any other driver is refused before a file is created.
+ * Make sure the Postgres schema / MySQL database `name` exists. Creating it needs CREATE on the
+ * database (Postgres) or the CREATE privilege (MySQL); an operator who does not grant that may create it
+ * beforehand, so a refused CREATE is accepted when the namespace is already there.
  */
-async function openSiteDatabase(siteId: number, dbPath: string): Promise<void> {
+async function ensureNamespace(engine: string, name: string): Promise<void> {
+  const admin = adminDriver();
+  if (engine === 'postgres') {
+    try { await admin.pool.query(`CREATE SCHEMA IF NOT EXISTS ${qPg(name)}`); return; } catch (e: any) {
+      const r = await admin.pool.query('SELECT 1 FROM information_schema.schemata WHERE schema_name = $1', [name]);
+      if (r.rows.length) return;
+      throw new Error(`The Postgres schema "${name}" could not be created (${e && e.message}). Grant the WordJS user CREATE on the database, or create the schema for it.`);
+    }
+  }
+  try { await admin.pool.query(`CREATE DATABASE IF NOT EXISTS ${qMy(name)} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`); return; } catch (e: any) {
+    const [rows] = await admin.pool.query('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?', [name]);
+    if (rows.length) return;
+    throw new Error(`The MySQL database ${name} could not be created (${e && e.message}). Grant the WordJS user CREATE, or create the database for it.`);
+  }
+}
+
+/**
+ * A new, connected driver over the namespace `name` of the configured server: a pool pinned to a
+ * Postgres schema, or a pool on a MySQL database. A site's pool is small (multisite.sitePoolMax,
+ * default 4): a network keeps one per open site.
+ */
+async function connectNamespaceDriver(name: string, poolMax = 4): Promise<any> {
+  const engine = siteStorage.storageEngine(driverName);
+  await ensureNamespace(engine, name);
+  const configured = Number(config.multisite && config.multisite.sitePoolMax);
+  const max = Number.isSafeInteger(configured) && configured > 0 ? configured : poolMax;
+  let d: any;
+  if (engine === 'postgres') {
+    const { PostgresDriver } = require('../drivers/postgres');
+    d = new PostgresDriver();
+    d.config = { ...config.db, schema: name, poolMax: max };
+  } else {
+    const { MysqlDriver } = require('../drivers/mysql');
+    d = new MysqlDriver();
+    d.config = { ...config.db, name, connectionLimit: max };
+  }
+  await d.connect();
+  return d;
+}
+
+/** The Postgres schema / MySQL database of site `siteId`. */
+function siteNamespace(siteId: number): string {
+  const engine = siteStorage.storageEngine(driverName);
+  if (engine === 'postgres') return siteStorage.sitePgSchema(siteId);
+  if (engine === 'mysql') return siteStorage.siteMysqlDatabase(siteId);
+  throw new Error(`No database namespace on '${driverName}'`);
+}
+
+/**
+ * Open (once) the database of site `siteId`, bring its schema to the current version, and keep it for
+ * the life of the process. `dbPath` locates a SQLite site's file; on Postgres and MySQL the site's
+ * schema / database is derived from its id (core/site-storage). Concurrent callers share one opening.
+ */
+async function openSiteDatabase(siteId: number, dbPath: string | null): Promise<void> {
   if (!siteContext.isSiteId(siteId) || siteId === siteContext.PRIMARY_SITE_ID) throw new Error(`Not a secondary site id: ${siteId}`);
   if (siteDrivers.has(siteId)) return;
   const pending = siteDriversOpening.get(siteId);
   if (pending) { await pending; return; }
   const opening = (async () => {
-    if (driverName !== 'sqlite-native' || !driverAsync) {
-      throw new Error(`Multisite needs the 'sqlite-native' database driver (this server runs '${driverName}').`);
+    const problem = siteStorage.storageProblem(driverName);
+    if (!driverAsync || problem) {
+      throw new Error(`Multisite cannot run on the '${driverName}' database driver: ${problem || 'it is not connected'}.`);
     }
-    const fs = require('fs');
-    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-    const Driver = driverAsync.constructor;
-    const d = new Driver();
-    d.dbPath = path.resolve(dbPath);
-    await d.connect();
+    let d: any;
+    if (driverName === 'sqlite-native') {
+      if (!dbPath) throw new Error(`No database file for site ${siteId}`);
+      const fs = require('fs');
+      fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+      const Driver = driverAsync.constructor;
+      d = new Driver();
+      d.dbPath = path.resolve(dbPath);
+      await d.connect();
+    } else {
+      d = await connectNamespaceDriver(siteNamespace(siteId));
+    }
     try {
       await siteContext.runWithSite(siteId, async () => {
         await initializeSchema(d, true);
         await runSchemaMigrations(d, true, driverName);
         siteDrivers.set(siteId, d);
         await require('../models/Analytics').init();
+        // Postgres/MySQL: the site's leases (its cron leader, its plugin operations) live in its own
+        // database, so every node of a multi-node network coordinates that site's work there.
+        await require('../core/dist-lock').ensureLockTable();
       });
     } catch (e) {
       siteDrivers.delete(siteId);
@@ -379,11 +454,26 @@ function isSiteDatabaseOpen(siteId: number): boolean {
   return siteId === siteContext.PRIMARY_SITE_ID || siteDrivers.has(siteId);
 }
 
-/** Close one secondary site's database (a failed provisioning). */
+/** Close one secondary site's database (a failed provisioning, a deleted site). */
 async function closeSiteDatabase(siteId: number): Promise<void> {
   const d = siteDrivers.get(siteId);
   siteDrivers.delete(siteId);
   if (d) await d.close();
+}
+
+/**
+ * Remove a deleted site's database for good: its Postgres schema (CASCADE: every table, sequence and
+ * grant in it) or its MySQL database. A SQLite site's file goes with its directory (core/network-sites).
+ * Never site 1's.
+ */
+async function dropSiteDatabase(siteId: number): Promise<void> {
+  if (!siteContext.isSiteId(siteId) || siteId === siteContext.PRIMARY_SITE_ID) throw new Error(`Not a secondary site id: ${siteId}`);
+  await closeSiteDatabase(siteId);
+  const engine = siteStorage.storageEngine(driverName);
+  if (engine === 'sqlite') return;
+  const admin = adminDriver();
+  if (engine === 'postgres') await admin.pool.query(`DROP SCHEMA IF EXISTS ${qPg(siteStorage.sitePgSchema(siteId))} CASCADE`);
+  else await admin.pool.query(`DROP DATABASE IF EXISTS ${qMy(siteStorage.siteMysqlDatabase(siteId))}`);
 }
 
 /** Close every secondary site's database (shutdown, tests). Site 1's is closeDatabase's. */
@@ -395,9 +485,26 @@ async function closeSiteDatabases(): Promise<void> {
   }
 }
 
+/**
+ * The network store's own connection on Postgres (schema wordjs_network) and MySQL (database
+ * <db.name>_network): core/network's records live on the server every node shares, beside the sites and
+ * never inside any site's database. Not used on SQLite, where network.db is a file of its own.
+ */
+async function openNetworkDatabase(): Promise<any> {
+  const engine = siteStorage.storageEngine(driverName);
+  if (engine === 'sqlite') throw new Error('On SQLite the network store is a file of its own.');
+  const name = engine === 'postgres' ? siteStorage.NETWORK_PG_SCHEMA : siteStorage.networkMysqlDatabase();
+  return connectNamespaceDriver(name, 2);
+}
+
 const getDb = () => {
   const sid = routedSiteId();
-  if (sid !== null) return new (require('../drivers/sqlite-native').NativeWrapper)(openSiteDriver(sid).db);
+  if (sid !== null) {
+    const d = openSiteDriver(sid);
+    // Postgres and MySQL have no synchronous access on any site: the main driver's stub says so.
+    if (driverName !== 'sqlite-native') return driver.get();
+    return new (require('../drivers/sqlite-native').NativeWrapper)(d.db);
+  }
   return driver.get();
 };
 
@@ -968,8 +1075,10 @@ async function createPluginTable(tableName: string, columns: string[]) {
   // the assembled statement, so nothing stacked can reach exec().
   const sql = buildCreateTable(table, mappedColumns);
 
+  // The CURRENT site's database (getDbAsync), never site 1's driver directly: on a network a plugin's
+  // table belongs in the database of the site whose worker created it.
   if (driverAsync) {
-    await driverAsync.exec(sql);
+    await getDbAsync().exec(sql);
   } else {
     const db = getDb();
     db.exec(sql);
@@ -995,7 +1104,8 @@ function getDbType() {
 }
 
 async function clearDatabase(db: any = null) {
-  const targetDb = db || driverAsync || getDb();
+  // The current site's database (a restore on a site of a network clears that site, never site 1).
+  const targetDb = db || (driverAsync ? getDbAsync() : getDb());
   log.info('🧹 DB Manager: Clearing database content...');
 
   // Tables to clear (Order matters for foreign keys if enforced, though SQLite usually permissive)
@@ -1060,6 +1170,8 @@ module.exports = {
   isSiteDatabaseOpen,
   closeSiteDatabase,
   closeSiteDatabases,
+  dropSiteDatabase,
+  openNetworkDatabase,
   createPluginTable,
   getDbType,
   // The silent-downgrade state and its publisher (see DriverDegradation above). routes/health.ts

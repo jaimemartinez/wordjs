@@ -364,7 +364,8 @@ function createAcmeHandler({ challengeBase, port, getPolicy, isInstalled }) {
                     res.writeHead(200, { 'Content-Type': 'text/plain' });
                     return res.end(fs.readFileSync(file));
                 }
-                res.writeHead(404); return res.end('Not found');
+                // Not a local file: an answer kept in the network's shared store (multisite, several
+                // nodes) is served by the backend over HTTPS — the redirect below takes the CA there.
             }
             const location = hostEdge.acmeRedirectLocation(req, { getPolicy, isInstalled, port });
             if (!location) {
@@ -425,6 +426,9 @@ async function main() {
 
     // 4) Public server: cross-cutting middleware (ported from the gateway worker) + path dispatch.
     const ssl = await resolveSSL();
+    // Multisite: each site's own certificate, selected by SNI (gateway/src/site-certs.js — the backend
+    // writes them there in embedded mode); the certificate above for every other name.
+    if (ssl) ssl.SNICallback = require('./gateway/src/site-certs.js').createSniSelector({}).SNICallback;
     const proto = ssl ? 'https' : 'http';
 
     // Raw connect-style chain — deliberately NOT an Express app. The root's Express is v5 while the

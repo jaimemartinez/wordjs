@@ -1612,6 +1612,9 @@ export const networkApi = {
     create: (data: NewNetworkSite) => apiPost<{ site: NetworkSite }>("/network/sites", data),
     suspend: (id: number, currentPassword: string) => apiPost<{ site: NetworkSite }>(`/network/sites/${id}/suspend`, { currentPassword }),
     resume: (id: number, currentPassword: string) => apiPost<{ site: NetworkSite }>(`/network/sites/${id}/resume`, { currentPassword }),
+    /** Delete a suspended site and everything it holds (confirmSlug repeats its slug). */
+    remove: (id: number, confirmSlug: string, currentPassword: string) =>
+        api<{ deleted: number }>(`/network/sites/${id}`, { method: "DELETE", body: { confirmSlug, currentPassword } }),
     quotas: () => apiGet<NetworkQuotas>("/network/quotas"),
     setDefaultQuota: (bytes: number | null, currentPassword: string) =>
         apiPut<{ defaultQuota: number | null }>("/network/quotas/default", { bytes, currentPassword }),

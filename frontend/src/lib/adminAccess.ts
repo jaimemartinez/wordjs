@@ -48,6 +48,8 @@ export interface AdminMenuItem {
     networkAdminOnly?: boolean;
     /** Network-wide tools: everyone who holds `cap` on a single site, network administrators only in a network. */
     networkWide?: boolean;
+    /** On every site, but on the MAIN site of a network for network administrators only (backups). */
+    networkAdminOnMainSite?: boolean;
 }
 
 export const ACCOUNT_PATH = "/admin/account";
@@ -94,7 +96,8 @@ export const CORE_MENU_ITEMS: AdminMenuItem[] = [
     // con capabilities, y la propia página vuelve a comprobar el rol antes de ofrecer nada.
     { href: "/admin/tools", label: "Herramientas", icon: "fa-screwdriver-wrench", cap: "manage_options" },
     { href: "/admin/import", label: "nav.import", icon: "fa-file-import", cap: "manage_options" },
-    { href: "/admin/settings/backups", label: "nav.backups", icon: "fa-box-archive", cap: "manage_options", mainSiteOnly: true, networkWide: true },
+    // Every site has its own backups; the main site's (which carry the network's code) are the network administrators'.
+    { href: "/admin/settings/backups", label: "nav.backups", icon: "fa-box-archive", cap: "manage_options", networkAdminOnMainSite: true },
     { href: "/admin/security", label: "nav.security", icon: "fa-lock", cap: "manage_options" },
     // Registro de auditoría (solo lectura). Igual que Herramientas: el backend lo gatea con isAdmin
     // (rol), y la pantalla repite esa comprobación — aquí `manage_options` solo evita enseñar la
@@ -130,6 +133,7 @@ export interface AdminRouteRule {
     mainSiteOnly?: boolean;
     networkAdminOnly?: boolean;
     networkWide?: boolean;
+    networkAdminOnMainSite?: boolean;
 }
 
 /**
@@ -142,7 +146,7 @@ export const ADMIN_ROUTE_RULES: AdminRouteRule[] = (() => {
     for (const item of CORE_MENU_ITEMS) {
         const path = item.href.split("?")[0];
         if (rules.has(path)) continue; // `/admin/users?type=subscribers` is the same route as `/admin/users`
-        rules.set(path, { path, anyOf: [item.cap || "read"], exact: path === ADMIN_ROOT, mainSiteOnly: item.mainSiteOnly, networkAdminOnly: item.networkAdminOnly, networkWide: item.networkWide });
+        rules.set(path, { path, anyOf: [item.cap || "read"], exact: path === ADMIN_ROOT, mainSiteOnly: item.mainSiteOnly, networkAdminOnly: item.networkAdminOnly, networkWide: item.networkWide, networkAdminOnMainSite: item.networkAdminOnMainSite });
     }
     const extra: AdminRouteRule[] = [
         // The editor's canvas document: an empty shell loaded in an iframe by every Verso editor (posts,
@@ -172,12 +176,13 @@ export function isWildcardUser(user: AdminAccessUser | null | undefined): boolea
  * on a single site (no `network` on the user). Checked before any capability — an administrator of
  * another site holds every capability, and still has no plugin screen there.
  */
-export function siteOffers(user: AdminAccessUser | null | undefined, entry: { mainSiteOnly?: boolean; networkAdminOnly?: boolean; networkWide?: boolean } | null | undefined): boolean {
+export function siteOffers(user: AdminAccessUser | null | undefined, entry: { mainSiteOnly?: boolean; networkAdminOnly?: boolean; networkWide?: boolean; networkAdminOnMainSite?: boolean } | null | undefined): boolean {
     const network = user && user.network;
     if (!entry) return true;
     if (entry.networkAdminOnly && !(network && network.mainSite && network.networkAdmin)) return false;
     if (!network) return true;
     if (entry.networkWide && !network.networkAdmin) return false;
+    if (entry.networkAdminOnMainSite && network.mainSite && !network.networkAdmin) return false;
     return !(entry.mainSiteOnly && !network.mainSite);
 }
 
