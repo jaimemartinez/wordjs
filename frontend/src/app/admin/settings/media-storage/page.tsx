@@ -150,6 +150,30 @@ export default function MediaStoragePage() {
                 {view.effective.incomplete && (
                     <p className="mt-2 text-sm text-amber-700" role="status">{t("mediaStorage.status.incomplete")} {view.effective.incomplete.join(", ")}</p>
                 )}
+                {view.sites && view.sites.length > 0 && (
+                    <div className="mt-4 border-t border-gray-100 pt-4" data-testid="media-storage-sites">
+                        <p className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2">{t("mediaStorage.sites.title")}</p>
+                        <ul className="space-y-1 text-sm">
+                            {view.sites.map((s) => (
+                                <li key={s.siteId} className="flex flex-wrap items-center gap-2" data-media-site={s.siteId}>
+                                    <span className="font-semibold text-gray-700 break-all">{s.host || `#${s.siteId}`}</span>
+                                    {s.state ? (
+                                        <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-700">{t(`mediaStorage.state.${s.state}`)}</span>
+                                    ) : (
+                                        <span className="text-xs text-amber-700">{t("mediaStorage.sites.unreadable")}</span>
+                                    )}
+                                    {s.inBucket !== null && (
+                                        <span className="text-xs text-gray-500">{t("mediaStorage.sites.inBucket").replace("{count}", String(s.inBucket))}</span>
+                                    )}
+                                    {s.migration?.status === "running" && (
+                                        <span className="text-xs text-blue-600">{s.migration.processed}/{s.migration.total}</span>
+                                    )}
+                                </li>
+                            ))}
+                        </ul>
+                        <p className="mt-2 text-xs text-gray-500">{t("mediaStorage.sites.hint")}</p>
+                    </div>
+                )}
             </div>
 
             <div className={`${card} mb-8`}>

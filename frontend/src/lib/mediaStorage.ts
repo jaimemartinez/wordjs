@@ -49,6 +49,8 @@ export interface MediaStorageView {
     state: MediaStorageLibraryState;
     migration: MediaStorageProgress | null;
     running: boolean;
+    /** Multisite: each site's own library state (site 1 first). A move runs for every site of the network. */
+    sites?: Array<{ siteId: number; host: string; state: MediaStorageLibraryState | null; inBucket: number | null; migration: MediaStorageProgress | null; error?: string }>;
 }
 
 export interface MediaStorageForm {

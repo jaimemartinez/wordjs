@@ -24,6 +24,7 @@ SigV4 signer shared with the backup offload in `backend/src/core/s3-offload.ts`,
 | New public uploads | `uploads/<yyyy>/<mm>/…` | the bucket, under `<prefix>/<yyyy>/<mm>/…` (prefix `uploads` by default); removed from local disk after a verified write unless `keepLocalCopy` |
 | Private media (`visibility: private`) | `data/private-uploads/` | **unchanged** — private media is never offloaded; making an offloaded item private brings its files back to the private root first and deletes its objects |
 | Fonts (`uploads/fonts/`), the AVIF/WebP negotiation cache (`uploads/.derivatives/`) | local | local |
+| Multisite: another site's public uploads | `<data dir>/sites/<id>/uploads/<yyyy>/<mm>/…` | the same bucket, in that site's own space: `<prefix>/sites/<id>/<yyyy>/<mm>/…`, served from `<publicUrl>/<prefix>/sites/<id>/…`. The main site keeps `<prefix>/<yyyy>/<mm>/…` |
 | Database | `guid = /uploads/<rel>`, `_wp_attached_file = <rel>` | **identical** — plus the marker `_wjs_media_storage = s3` |
 
 **The database never holds a bucket or CDN URL.** Media references stay relative (`/uploads/…`), the
@@ -43,7 +44,8 @@ bucket, CDN host or domain — or roll the offload back — without rewriting a 
    A file that IS on disk (local storage, `keepLocalCopy`, after a restore) is served locally as before.
    `302`, not `301`, because a restore makes the local file authoritative again. In a multisite
    network the other sites redirect the same way: each serves `/uploads` from its own directory first,
-   and a file it does not hold goes to the bucket (their uploads go there too) before it is a 404.
+   and a file it does not hold goes to ITS OWN space of the bucket (`<publicBase>/sites/<id>/<rel>`)
+   before it is a 404. Two sites can hold the same relative path; each has its own object.
 2. **SSR rewrite (once the library is fully offloaded).** When the library state is `offloaded` the
    public settings carry `media_public_base`, and the public SSR (`withResolvedBlocks`) rewrites
    `/uploads/` URLs in the page's block data and HTML body to it, so browsers fetch the CDN directly.
@@ -136,6 +138,25 @@ npm run media -- offload --delete-local   # …and delete each local copy once i
 npm run media -- restore                  # copy them back to local disk (nothing is deleted from the bucket)
 ```
 
+On a network of sites (multisite) each site has its own library, state and progress record, so a move
+runs for **every site of the network**, one after another, each as that site: the screen's buttons (and
+`POST /migrate`) walk all of them, and `GET /` adds `sites` with each one's state. The CLI works on the
+main site unless told otherwise:
+
+```bash
+npm run media -- restore --all-sites      # every site of the network
+npm run media -- offload --site 3         # one site
+npm run media -- status --all-sites       # each site's state, number of items in the bucket and progress
+```
+
+**Per-site key spaces (multisite).** Every site other than the main one stores its objects under
+`<prefix>/sites/<id>/` in the shared bucket, so two sites never write, serve or delete each other's
+objects, and the main site never offloads a path under `sites/`. Objects a site stored before this layout
+existed (under `<prefix>/<rel>`, the main site's space) are moved into its own space once, at startup and
+before any offload or restore: each copy is verified by size, and the old object is removed only when no
+other site has an offloaded item at the same path. The move is recorded per site
+(`media_storage_key_layout` = `site`) and is idempotent.
+
 Both directions are **idempotent** (an item already where it belongs is skipped; an object already in
 the bucket with the same size is not uploaded again) and **resumable** (progress — the last attachment
 finished, counters, failures — is the `media_storage_migration` option; an interrupted run continues from
@@ -160,11 +181,11 @@ administrator-only (`authenticate` + `isAdmin`). Bodies are JSON; an unsupported
 
 | Method | Endpoint | Body | Answer |
 |---|---|---|---|
-| `GET` | `/` | — | The masked configuration (`driver`, `bucket`, `region`, `endpoint`, `prefix`, `publicUrl`, `keepLocalCopy`, `accessKeyIdHint`, `secretAccessKeySet`, `secretAccessKeyHint`, `sessionTokenSet`, `sources`, `effective: { driver, incomplete, publicBase, publicOrigin }`), plus `state`, `migration` (the progress record) and `running` |
+| `GET` | `/` | — | The masked configuration (`driver`, `bucket`, `region`, `endpoint`, `prefix`, `publicUrl`, `keepLocalCopy`, `accessKeyIdHint`, `secretAccessKeySet`, `secretAccessKeyHint`, `sessionTokenSet`, `sources`, `effective: { driver, incomplete, publicBase, publicOrigin }`), plus `state`, `migration` (the progress record) and `running`. On a network also `sites: [{ siteId, host, state, inBucket, migration }]`, the main site first |
 | `PUT` | `/` | Any of `driver` (`local` \| `s3`), `bucket`, `region`, `endpoint`, `prefix`, `publicUrl`, `accessKeyId`, `secretAccessKey`, `sessionToken`, `keepLocalCopy`, `clearCredentials` | Merges the fields over the stored block and saves it; answers the same shape as `GET`. An empty text field clears it; an empty secret keeps the stored one. `400` when `driver: s3` is asked for with an incomplete configuration (`data.params` lists what is missing). `409 rest_media_storage_in_use` when switching to `local` while items are still in the bucket, the library is not `local` or an offload / restore run is in progress. `500 rest_config_write_failed` when `wordjs-config.json` could not be written (nothing changed) |
 | `POST` | `/test` | The same fields (unsaved), merged over the stored ones | Writes a probe object and reads it back: `{ ok, steps: [{ step, ok, detail }], probe, publicUrl }`. The browser then loads `publicUrl` |
 | `POST` | `/test` | `{ probe }` (the name the first call answered), plus the same fields | Deletes that probe: `{ ok, steps }`. Only names of the shape the first call writes are accepted (`400` otherwise) |
-| `POST` | `/migrate` | `{ direction: "offload" \| "restore", deleteLocal?, restart? }` | Starts the run in the background and answers `202` with the current state at once; poll `GET /` for progress. `400` without a complete, saved S3 configuration. `409 rest_media_storage_busy` while another run is in progress |
+| `POST` | `/migrate` | `{ direction: "offload" \| "restore", deleteLocal?, restart? }` | Starts the run in the background and answers `202` with the current state at once; poll `GET /` for progress. On a network the run covers every site of the network, one at a time. `400` without a complete, saved S3 configuration. `409 rest_media_storage_busy` while another run is in progress (on any site) |
 
 ## Multi-node and the three deploy modes
 

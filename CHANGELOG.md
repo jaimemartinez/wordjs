@@ -6,6 +6,16 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+
+- **Per-site media storage quotas (multisite).** **Admin → Network** shows how much media each site stores
+  and takes a quota per site and a network default (`GET /network/quotas`, `PUT /network/quotas/default`,
+  `PUT /network/sites/:id/quota`). An upload or a WXR import download over a site's quota answers
+  `413 rest_upload_quota_exceeded`. No quota is set by default, and the main site never has one — see
+  [multisite.md](documentation/multisite.md#media-storage-quotas).
+- **`npm run media` takes `--site <id>` and `--all-sites`** on a network of sites, and **Settings → Media
+  storage** lists each site's library state.
+
 ### ⚠️ Upgrade note — database TLS is now verified
 
 Sites with `dbSsl: true` on a **managed database whose CA is not in Node.js's trust store** — Amazon RDS /
@@ -33,6 +43,12 @@ the boot error links there too.
   wizard and **Admin → Database migration** offer both settings when *Use SSL* is ticked (the opt-out with
   a warning), and the Docker/Helm entrypoint reads `WORDJS_DB_SSL`, `WORDJS_DB_SSL_CA` and
   `WORDJS_DB_SSL_REJECT_UNAUTHORIZED`.
+
+### Fixed
+
+- **Uploads on a network of sites.** A file upload larger than the first network packet (most real photos)
+  could fail with "No site context" on a multisite install, because the body was read outside the
+  request's site. Every middleware that reads a request body now runs as the request's site.
 
 - **Multisite: network-wide actions on the main site take a network administrator.** Installing, updating,
   packing, downloading or deleting plugins, writing theme files, the marketplace, backups, the database
@@ -62,6 +78,20 @@ the boot error links there too.
 
 ### Security
 
+- **Each site of a network has its own space in the media bucket.** With S3 media storage, every site other
+  than the main one now stores and serves its objects under `<prefix>/sites/<id>/`, so sites no longer
+  share object keys; the main site's keys and URLs are unchanged. Objects stored before this release move
+  into their site's space once, at startup (verified by size, idempotent) — see
+  [media-storage.md](documentation/media-storage.md).
+- **Moving media to the bucket and back covers every site of a network.** `POST /media-storage/migrate`
+  (and the screen's buttons) now offloads or restores each site's library in turn, so a network can
+  switch back to local storage.
+- **Plugin activation, deactivation and reload are rate-limited** per site and account, together with the
+  routes that restart a plugin's worker (grants, egress hosts, private destinations, port):
+  `429 rest_plugin_lifecycle_rate_limited` beyond 60 in 10 minutes.
+- **Private destinations can never be approved in their IPv6 spellings either.** The metadata, link-local
+  and multicast addresses that NAT64, 6to4, ISATAP or Teredo addresses embed, and `fd00:ec2::254`, are
+  refused like their plain form.
 - **Network administrator accounts are managed by network administrators.** With multisite on, a network
   administrator's email, password, role, two-factor reset, AI agent connections and the account itself can
   be changed only by a network administrator (or by its owner), and a site import leaves those accounts and

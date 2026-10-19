@@ -75,7 +75,11 @@ function siteResolver(opts: { getPolicy: () => any }) {
         }
         if (siteId === siteContext.PRIMARY_SITE_ID) {
             stateSite(res, mainSiteHostname());
-            return siteContext.runWithSite(siteId, next);
+            return siteContext.runWithSite(siteId, () => {
+                // The body stream's events (an upload read by multer) resume as this site too.
+                siteContext.bindRequestToCurrentSite(req);
+                next();
+            });
         }
 
         const network = require('./network');
@@ -92,6 +96,7 @@ function siteResolver(opts: { getPolicy: () => any }) {
         const id = siteId;
         stateSite(res, site.mainHost);
         siteContext.runWithSite(id, () => {
+            siteContext.bindRequestToCurrentSite(req);
             require('./network-sites').prepareSite(id)
                 .then(() => next())
                 .catch((e: any) => next(e));

@@ -304,7 +304,8 @@ describe('uploads (I3)', () => {
             const missing = '/uploads/2026/10/0b6f0c1e-offloaded.png';
             const res = await direct('get', missing, TWO);
             assert.strictEqual(res.status, 302);
-            assert.strictEqual(res.headers.location, 'https://cdn.example.net/uploads/2026/10/0b6f0c1e-offloaded.png');
+            // …into ITS OWN space of the bucket (core/media-storage key spaces), never the main site's.
+            assert.strictEqual(res.headers.location, `https://cdn.example.net/uploads/sites/${siteTwo}/2026/10/0b6f0c1e-offloaded.png`);
             // A file the site holds is still served from its own directory, not redirected.
             assert.strictEqual((await direct('get', url, TWO)).status, 200);
             // Paths that are never offloaded stay a 404.

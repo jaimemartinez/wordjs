@@ -119,6 +119,11 @@ function openStore(): any {
             tokens TEXT NOT NULL DEFAULT '[]',
             updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS network_site_quotas (
+            site_id INTEGER PRIMARY KEY,
+            upload_bytes INTEGER,
+            updated_at TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS network_audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             at TEXT NOT NULL,
@@ -282,6 +287,7 @@ function deleteSiteRecord(id: number): void {
     const store = openStore();
     store.transaction(() => {
         store.prepare('DELETE FROM network_site_hosts WHERE site_id = ?').run(id);
+        store.prepare('DELETE FROM network_site_quotas WHERE site_id = ?').run(id);
         store.prepare('DELETE FROM network_sites WHERE id = ?').run(id);
     })();
     invalidate();
@@ -431,6 +437,63 @@ function clearPluginCeiling(slug: string): boolean {
     return r.changes > 0;
 }
 
+// ---- per-site upload quotas ---------------------------------------------------------------------------
+// The most bytes of media a site other than site 1 may hold (its uploads, with their derivatives),
+// set by a network administrator. A site's own value wins; without one, the network's default applies;
+// with neither (and always for site 1, and on a single site) there is no limit — what every install
+// had before quotas existed.
+
+const DEFAULT_QUOTA_KEY = 'default_site_upload_quota_bytes';
+/** The largest quota accepted: 1 PiB, far beyond any real disk, and exact as a JS number. */
+const MAX_QUOTA_BYTES = 2 ** 50;
+
+function cleanQuota(value: unknown): number | null {
+    if (value === null || value === undefined || value === '') return null;
+    const n = typeof value === 'string' && /^\d+$/.test(value.trim()) ? Number(value.trim()) : value;
+    if (typeof n !== 'number' || !Number.isSafeInteger(n) || n < 0 || n > MAX_QUOTA_BYTES) {
+        throw codedError('network_invalid_quota', 'The upload quota must be a whole number of bytes (or empty for no limit).');
+    }
+    return n;
+}
+
+/** The network's default upload quota for its sites, or null (no limit). */
+function defaultUploadQuota(): number | null {
+    const row = openStore().prepare('SELECT meta_value FROM network_meta WHERE meta_key = ?').get(DEFAULT_QUOTA_KEY);
+    if (!row || row.meta_value === '') return null;
+    try { return cleanQuota(String(row.meta_value)); } catch { return null; }
+}
+
+function setDefaultUploadQuota(value: unknown): number | null {
+    const bytes = cleanQuota(value);
+    if (bytes === null) openStore().prepare('DELETE FROM network_meta WHERE meta_key = ?').run(DEFAULT_QUOTA_KEY);
+    else openStore().prepare('INSERT INTO network_meta (meta_key, meta_value) VALUES (?, ?) ON CONFLICT(meta_key) DO UPDATE SET meta_value = excluded.meta_value').run(DEFAULT_QUOTA_KEY, String(bytes));
+    return bytes;
+}
+
+/** A site's OWN quota (null when it has none and follows the network default). */
+function siteUploadQuotaOverride(siteId: number): number | null {
+    if (!isSiteId(siteId)) return null;
+    const row = openStore().prepare('SELECT upload_bytes FROM network_site_quotas WHERE site_id = ?').get(siteId);
+    return row && row.upload_bytes !== null && row.upload_bytes !== undefined ? Number(row.upload_bytes) : null;
+}
+
+/** Set (a number of bytes) or clear (null) a site's own quota. Site 1 has none. */
+function setSiteUploadQuota(siteId: number, value: unknown): number | null {
+    if (!getSite(siteId)) throw codedError('network_site_not_found', 'No such site.');
+    if (siteId === PRIMARY_SITE_ID) throw codedError('network_primary_site', 'The main site has no upload quota.');
+    const bytes = cleanQuota(value);
+    if (bytes === null) openStore().prepare('DELETE FROM network_site_quotas WHERE site_id = ?').run(siteId);
+    else openStore().prepare('INSERT INTO network_site_quotas (site_id, upload_bytes, updated_at) VALUES (?, ?, ?) ON CONFLICT(site_id) DO UPDATE SET upload_bytes = excluded.upload_bytes, updated_at = excluded.updated_at').run(siteId, bytes, now());
+    return bytes;
+}
+
+/** The quota in effect for a site: its own, else the network default; null = no limit (site 1, always). */
+function effectiveUploadQuota(siteId: number): number | null {
+    if (!isSiteId(siteId) || siteId === PRIMARY_SITE_ID) return null;
+    const own = siteUploadQuotaOverride(siteId);
+    return own !== null ? own : defaultUploadQuota();
+}
+
 function codedError(code: string, message: string): Error & { code: string } {
     const e = new Error(message) as Error & { code: string };
     e.code = code;
@@ -466,4 +529,10 @@ module.exports = {
     listPluginCeilings,
     setPluginCeiling,
     clearPluginCeiling,
+    defaultUploadQuota,
+    setDefaultUploadQuota,
+    siteUploadQuotaOverride,
+    setSiteUploadQuota,
+    effectiveUploadQuota,
+    MAX_QUOTA_BYTES,
 };
