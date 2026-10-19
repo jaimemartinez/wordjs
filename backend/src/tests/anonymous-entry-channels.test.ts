@@ -861,6 +861,42 @@ test('CHANNEL 3 — the MFA doors answer on the merits even with their own bucke
         if (s.helper !== LOCK_ARMER || s.file !== 'routes/auth.ts' || !s.purpose) continue;
         armedBy.set(s.door, s.purpose);
     }
+    // A door may record its failure through a SHARED helper (verifyManagedMfaCode is the one the
+    // code-checking account doors use), in which case the walk attributes the call site to `fn <helper>`.
+    // Lift each such helper's purpose onto every route registration that calls it — directly or through
+    // another helper — so the door set below stays derived from the source rather than restated.
+    {
+        const sf = parse('auth.ts', fs.readFileSync(AUTH_TS, 'utf8'));
+        const fnPurpose = new Map<string, string>();
+        for (const [door, purpose] of armedBy) {
+            if (door.startsWith('routes/auth.ts fn ')) fnPurpose.set(door.slice('routes/auth.ts fn '.length), purpose);
+        }
+        const calls = (node: any): string | undefined => {
+            let found: string | undefined;
+            eachNode(node, (c: any) => {
+                if (found || !ts.isCallExpression(c)) return;
+                const name = calleeName(c.expression, sf);
+                if (name && fnPurpose.has(name)) found = fnPurpose.get(name);
+            });
+            return found;
+        };
+        for (let pass = 0; pass < 4; pass++) {
+            eachNode(sf, (n: any) => {
+                if (ts.isFunctionDeclaration(n) && n.name && !fnPurpose.has(n.name.text)) {
+                    const p = calls(n.body);
+                    if (p) fnPurpose.set(n.name.text, p);
+                }
+            });
+        }
+        eachNode(sf, (n: any) => {
+            if (!ts.isCallExpression(n) || !ts.isPropertyAccessExpression(n.expression)) return;
+            if (n.expression.expression.getText(sf) !== 'router' || n.expression.name.text !== 'post') return;
+            const route = n.arguments[0];
+            if (!route || !ts.isStringLiteral(route)) return;
+            const p = calls(n);
+            if (p) armedBy.set(`routes/auth.ts POST ${route.text}`, p);
+        });
+    }
 
     const doors: Array<{ name: string; prepare: () => Promise<any>; body: (p: any) => any }> = [
         {
@@ -876,7 +912,7 @@ test('CHANNEL 3 — the MFA doors answer on the merits even with their own bucke
                 assert.ok((await mfa.completeEnroll(OWNER_ID, totp.totp(secret))).ok, 'enrolment must succeed');
                 return secret;
             },
-            body: (secret: string) => ({ code: totp.totp(secret) }),
+            body: (secret: string) => ({ code: totp.totp(secret), currentPassword: PASSWORD }),
         },
         {
             name: '/auth/mfa/disable',
@@ -886,7 +922,7 @@ test('CHANNEL 3 — the MFA doors answer on the merits even with their own bucke
                 assert.ok((await mfa.completeEnroll(OWNER_ID, totp.totp(secret))).ok, 'enrolment must succeed');
                 return secret;
             },
-            body: (secret: string) => ({ code: totp.totp(secret) }),
+            body: (secret: string) => ({ code: totp.totp(secret), currentPassword: PASSWORD }),
         },
     ];
 
@@ -900,6 +936,10 @@ test('CHANNEL 3 — the MFA doors answer on the merits even with their own bucke
     assert.deepStrictEqual(doors.map((d) => d.name).sort(), derived,
         'the rows below and the doors that actually record an MFA failure are not the same set');
 
+    // A full bucket is past the account-wide ceiling of the code-checking doors (routes/auth.ts
+    // MFA_MANAGE_PASSWORD_AFTER), so the rows above carry the account password next to the code: the OWNER —
+    // who has both — must still be answered on the merits. That the code ALONE is then not enough is the
+    // ceiling working, and is asserted once below; what must never happen is a refusal of both.
     for (const door of doors) {
         const purpose = armedBy.get(`routes/auth.ts POST ${door.name.replace('/auth', '')}`) as string;
         assert.ok(purpose, `${door.name}: no armed purpose derived — the walk stopped seeing this door`);
@@ -922,9 +962,14 @@ test('CHANNEL 3 — the MFA doors answer on the merits even with their own bucke
     const secret = await doors[2].prepare();
     const disableKey = auth.lockBucket(armedBy.get('routes/auth.ts POST /mfa/disable') as string, OWNER_ID);
     for (let i = 0; i < 12; i++) await auth.recordLoginFail(disableKey);
-    const bad = await request(app).post(`${B}/auth/mfa/disable`).set('Authorization', session).send({ code: '000000' });
+    const bad = await request(app).post(`${B}/auth/mfa/disable`).set('Authorization', session).send({ code: '000000', currentPassword: PASSWORD });
     assert.strictEqual(bad.status, 400, `a wrong code must be answered on its merits, got ${bad.status}`);
     assert.strictEqual(bad.body.code, 'rest_mfa_invalid');
+    // …and past the ceiling a code without the password is asked for the password — never a lock.
+    const codeOnly = await request(app).post(`${B}/auth/mfa/disable`).set('Authorization', session).send({ code: totp.totp(secret) });
+    assert.strictEqual(codeOnly.status, 403, `past the ceiling a code alone must not be enough, got ${codeOnly.status}`);
+    assert.strictEqual(codeOnly.body.code, 'rest_mfa_password_required');
+    assert.ok(await mfa.isEnabled(OWNER_ID), 'a code alone past the ceiling must not have disabled MFA');
 
     await mfa.disable(OWNER_ID);
     await auth.clearLoginFails(disableKey);
@@ -959,9 +1004,16 @@ test('twelve wrong codes at /auth/mfa/disable do NOT lock the owner out of the i
     await auth.clearLoginFails(auth.lockBucket('login', OWNER));
 
     // THE ATTACK, exactly as reproduced in round 4: a hijacked session, one address, no password.
+    // Up to the account-wide ceiling each wrong code is a 400 on the merits; past it the door asks for the
+    // account password (which a hijacked session does not have) — a 403 that names the password, never a lock.
     for (let i = 0; i < 12; i++) {
         const r = await request(app).post(`${B}/auth/mfa/disable`).set('Authorization', session).send({ code: '000000' });
-        assert.strictEqual(r.status, 400, `the attacker's wrong code must be a 400 on the merits, got ${r.status}`);
+        if (i < auth.MFA_MANAGE_PASSWORD_AFTER) {
+            assert.strictEqual(r.status, 400, `the attacker's wrong code must be a 400 on the merits, got ${r.status}`);
+        } else {
+            assert.strictEqual(r.status, 403, `past the ceiling the attacker must be asked for the password, got ${r.status}`);
+            assert.strictEqual(r.body.code, 'rest_mfa_password_required');
+        }
     }
     assert.ok(await mfa.isEnabled(OWNER_ID), 'precondition: the attack must not have actually disabled MFA');
 

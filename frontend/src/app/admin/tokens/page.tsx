@@ -7,6 +7,7 @@ import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { PageHeader, Button, Card, EmptyState, Input, Select, StatusBadge } from "@/components/ui";
 import SecretRevealModal from "@/components/SecretRevealModal";
+import { useMfaStepUp, MfaStepUpFields } from "@/components/MfaStepUp";
 
 const fmtDate = (v: number | null | string | undefined) => {
     if (v == null) return "—";
@@ -44,8 +45,7 @@ export default function TokensPage() {
     const [creating, setCreating] = useState(false);
     const [revealed, setRevealed] = useState<string | null>(null);
     // Step-up: shown once the backend says this role must prove the second factor to mint a token.
-    const [needsStepUp, setNeedsStepUp] = useState(false);
-    const [mfaCode, setMfaCode] = useState("");
+    const stepUp = useMfaStepUp();
 
     const load = async () => {
         try {
@@ -85,25 +85,19 @@ export default function TokensPage() {
                 name: name.trim() || t("tokens.defaultName"),
                 scopes,
                 expiresInDays: expiry ? Number(expiry) : null,
-                ...(needsStepUp && mfaCode.trim() ? { mfaCode: mfaCode.trim() } : {}),
+                ...stepUp.payload(),
             });
             setRevealed(res.token);
-            setNeedsStepUp(false);
-            setMfaCode("");
+            stepUp.reset();
             setName("");
             setScopeMode("read");
             setResourceScopes({});
             setExpiry("");
             await load();
         } catch (e: any) {
-            if (e?.code === "rest_mfa_step_up_required") {
-                // Not a failure the user caused: ask for the code instead of showing an error.
-                setNeedsStepUp(true);
-                addToast(t("tokens.stepUpHelp"), "info");
-            } else {
-                if (e?.code === "rest_mfa_invalid") setMfaCode("");
-                addToast(e?.message || t("tokens.createFailed"), "error");
-            }
+            // Not a failure the user caused: ask for the code (or the password) instead of showing an error.
+            if (stepUp.absorb(e)) addToast(e?.code === "rest_mfa_step_up_required" ? t("tokens.stepUpHelp") : t("stepUp.passwordHelp"), "info");
+            else addToast(e?.message || t("tokens.createFailed"), "error");
         } finally {
             setCreating(false);
         }
@@ -196,24 +190,7 @@ export default function TokensPage() {
                                 ]}
                             />
                         </div>
-                        {needsStepUp && (
-                            <div className="rounded-2xl border border-amber-200 bg-amber-50/60 p-3 space-y-2">
-                                <p className="text-[11px] text-amber-800 leading-relaxed flex items-start gap-2">
-                                    <i className="fa-solid fa-shield-halved mt-0.5"></i>
-                                    <span>{t("tokens.stepUpHelp")}</span>
-                                </p>
-                                <Input
-                                    label={t("tokens.stepUpLabel")}
-                                    icon="fa-mobile-screen"
-                                    value={mfaCode}
-                                    onChange={(e) => setMfaCode(e.target.value)}
-                                    placeholder={t("tokens.stepUpPlaceholder")}
-                                    autoComplete="one-time-code"
-                                    inputMode="text"
-                                    required
-                                />
-                            </div>
-                        )}
+                        <MfaStepUpFields stepUp={stepUp} codeHelp={t("tokens.stepUpHelp")} />
                         <Button type="submit" icon="fa-plus" className="w-full" loading={creating}>
                             {t("tokens.createToken")}
                         </Button>
