@@ -145,6 +145,35 @@ test('an entry is exactly one host and one port; metadata, link-local, unspecifi
     finally { eg.setAllowedHosts(null); }
 });
 
+// The metadata endpoint and the other never-approvable addresses have IPv6 spellings a translator, relay
+// or tunnel routes to (NAT64, 6to4, ISATAP, Teredo — the same embedded-IPv4 forms isBlockedIp reads), and
+// AWS also serves instance metadata at fd00:ec2::254. None of them can be approved; the private LAN
+// addresses those forms wrap still can, exactly like their plain IPv4 spelling.
+// MUTATION PROOF: isNeverExemptIp reading only the mapped/compatible form fails the first loop.
+test('the IPv6 spellings of metadata and link-local addresses can never be approved either', () => {
+    for (const bad of [
+        '[64:ff9b::a9fe:a9fe]:80',          // NAT64 of 169.254.169.254
+        '[64:ff9b::169.254.169.254]:80',    // the same, dotted
+        '[2002:a9fe:a9fe::1]:80',           // 6to4 of 169.254.169.254
+        '[2002:0:0::1]:25',                 // 6to4 of 0.0.0.0
+        '[2002:e000:1::1]:25',              // 6to4 of 224.0.0.1 (multicast)
+        '[2001:db8::5efe:a9fe:a9fe]:80',    // ISATAP of 169.254.169.254
+        '[2001:0:a9fe:a9fe::1]:80',         // Teredo whose server is 169.254.169.254
+        '[2001:0:4136:e378:8000:63bf:5601:5601]:80', // Teredo whose client is 169.254.169.254 (XOR-obfuscated)
+        '[fd00:ec2::254]:80',               // AWS IMDS over IPv6
+        '[fd00:0ec2:0000:0000:0000:0000:0000:0254]:80',
+    ]) {
+        assert.strictEqual(eg.parsePrivateDestination(bad), null, `expected ${JSON.stringify(bad)} to be refused`);
+        assert.strictEqual(eg.isNeverExemptIp(bad.slice(1, bad.lastIndexOf(']'))), true, bad);
+    }
+    // A private LAN host stays approvable in every spelling, and a neighbouring fd00:ec2:: address is not the metadata one.
+    for (const ok of ['[64:ff9b::c0a8:114]:587', '[2002:c0a8:114::1]:587', '[fd00:ec2::253]:53', '[::ffff:192.168.1.20]:587']) {
+        assert.ok(eg.parsePrivateDestination(ok), `expected ${JSON.stringify(ok)} to be approvable`);
+    }
+    // And the plain loopback stays what it was.
+    assert.strictEqual(eg.isNeverExemptIp('::1'), false);
+});
+
 test('without an approval a network-granted plugin reaches no private address', async () => {
     const r = await respawnAndProbe();
     assert.strictEqual(r.approved, 'blocked');

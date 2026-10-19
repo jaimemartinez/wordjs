@@ -76,9 +76,15 @@ function badRequest(res: Response, message: string, params?: string[]) {
 /**
  * The public pages bake the delivery base into their HTML (core/media-storage's media_public_base), so
  * a change of where media is served from re-renders them: the settings tag and the whole public tree.
+ * On a network every site's pages do (the block is the network's), each purged as that site.
  */
 function purgeDelivery() {
-    try { require('../core/frontend-purge').purgeFrontend(['settings'], ['/']); } catch { /* best effort */ }
+    const siteContext = require('../core/site-context');
+    let ids: number[];
+    try { ids = migration.networkSiteIds(); } catch { ids = [siteContext.PRIMARY_SITE_ID]; }
+    for (const id of ids) {
+        try { siteContext.runWithSite(id, () => require('../core/frontend-purge').purgeFrontend(['settings'], ['/'])); } catch { /* best effort */ }
+    }
 }
 
 /** Likely mistakes in the public URL the server can see without fetching it (core/media-storage). */
@@ -93,7 +99,9 @@ async function statePayload() {
         warnings: warningsFor(mediaStorage.resolveMediaStorage()),
         state: await migration.getState(),
         migration: await migration.getProgress(),
-        running: await migration.isRunningAnywhere(),
+        running: await migration.isRunningOnAnySite(),
+        // Multisite: each site's own state and progress (site 1 first), since a move runs per site.
+        ...(require('../core/site-context').multisiteEnabled() ? { sites: await migration.siteStates() } : {}),
     };
 }
 
@@ -378,15 +386,24 @@ router.post('/migrate', authenticate, isAdmin, networkAdminOnly, asyncHandler(as
     if (mediaStorage.resolveMediaStorage().driver !== 's3') return badRequest(res, 'Save a complete S3 configuration first.');
     // Any node: this process's flag, or a run another node keeps refreshing (the dist lock would refuse
     // that run anyway, but only after this request had answered 202).
-    if (await migration.isRunningAnywhere()) {
+    // On a network, any site's run counts: the storage block they share is what a run moves media off.
+    if (await migration.isRunningOnAnySite()) {
         return res.status(409).json({ code: 'rest_media_storage_busy', message: 'A media storage migration is already running.', data: { status: 409 } });
     }
     await recordAudit(req.user && req.user.id, AUDIT_ACTIONS.MEDIA_STORAGE_MIGRATE, 'config', 'mediaStorage', {
         direction: body.direction, deleteLocal: body.deleteLocal === true, restart: body.restart === true,
     });
-    // Background: the request answers now; progress is the media_storage_migration option.
-    migration.runMigration(body.direction, { deleteLocal: body.deleteLocal === true, restart: body.restart === true })
-        .then(() => { purgeDelivery(); })
+    // Background: the request answers now; progress is each site's media_storage_migration option.
+    // MULTISITE: the storage block is the network's and every site's library follows it, so the move
+    // runs for EVERY site of the network, one at a time, each as that site (its database, its uploads
+    // root, its key space). A restore that only covered the main site would leave the other sites'
+    // media in the bucket, and the switch back to local disk refused for good. One site only on a
+    // single-site install.
+    migration.runNetworkMigration(body.direction, { deleteLocal: body.deleteLocal === true, restart: body.restart === true })
+        .then((results: Array<{ siteId: number; error: string | null }>) => {
+            for (const r of results) if (r.error) log.warn(`media storage migration did not run for site ${r.siteId}: ${r.error}`);
+            purgeDelivery();
+        })
         .catch((e: any) => log.warn(`media storage migration did not run: ${logSafeError(e)}`));
     res.status(202).json(await statePayload());
 }));

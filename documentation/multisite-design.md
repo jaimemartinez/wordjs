@@ -417,7 +417,8 @@ B with the same roles and users with the same ids on each.
 | I8 | A site admin cannot raise their own plugin's privileges beyond the network's decision. | Grant ceiling checked on the host. | Site admin grant beyond the ceiling → 403 (`multisite-plugins.test.ts`). |
 
 What is **not** isolated, by design: CPU, memory and I/O of the backend process are shared (a noisy
-site slows its neighbours; per-site quotas are a later phase), and the network administrator can reach
+site slows its neighbours; a per-site media storage quota exists, other per-site quotas are a later
+phase), and the network administrator can reach
 every site.
 
 ## Single-site installs: zero change

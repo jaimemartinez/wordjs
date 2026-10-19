@@ -593,6 +593,8 @@ app.post(`${config.api.prefix}/analytics/track`, analyticsLimiter);
 // F0 REST inventory. What stays here is the part this file owns for EVERY limiter — the shared Redis
 // store, without which a multi-node install enforces N× the configured cap.
 require('./routes/comments').useCommentLimiterStore(limiterStore('rl:comments:'));
+// Plugin activate/deactivate/reload (each spawns a sandboxed child): limiter built on the router, store here.
+require('./routes/plugins').usePluginLifecycleLimiterStore(limiterStore('rl:plugin-lifecycle:'));
 
 // SECURITY: CSRF Protection for all API routes
 const { csrfProtection } = require('./middleware/auth');
@@ -1610,6 +1612,15 @@ async function initializeMainSite() {
         // hot option readers then serve from memory instead of one SELECT per option per request.
         const preloaded = await require('./core/options').preloadAutoloadedOptions();
         if (preloaded) log.info(`⚡ Option cache primed: ${preloaded} autoloaded options`);
+
+        // Multisite + S3 media storage: each site other than site 1 has its own key space in the bucket
+        // (core/media-storage). Objects a site stored before that move into it, once per site, in the
+        // background (core/media-storage-migrate migrateSiteKeys; a no-op once done, or with no bucket).
+        if (siteContext.multisiteEnabled()) {
+            require('./core/media-storage-migrate').migrateSiteKeys()
+                .then((r: any) => { for (const s of r.sites) log.info(`🪣 Media storage: site ${s.siteId} keys moved (${s.copied} copied, ${s.removed} old removed, ${s.failed} failed)`); })
+                .catch((e: any) => log.warn(`Media storage: the move into per-site key spaces did not finish: ${e && e.message}`));
+        }
 
         // The site's addresses: bring wordjs-config.json (the master) and the `siteurl`/`home` mirrors
         // into agreement — the legacy upgrade, a change `npm run site` made while the server was down —
