@@ -18,6 +18,8 @@ const url = require('url');
 
 const SOURCE_URL = 'https://publicsuffix.org/list/public_suffix_list.dat';
 const OUT = path.resolve(__dirname, '../../marketplace/plugins/mail-server/lib/public-suffix-list.js');
+const SAFE_TOKEN = /^[0-9A-Za-z._:+-]{1,80}$/;
+const RULE_SHAPE = /^!?(\*|[a-z0-9-]+)(\.(\*|[a-z0-9-]+))*$/;
 
 async function readList(arg) {
     if (arg) return fs.readFileSync(arg, 'utf8');
@@ -40,6 +42,14 @@ function convert(text) {
         rules.add(prefix + labels.join('.').toLowerCase());
     }
     if (rules.size < 5000) throw new Error(`only ${rules.size} rules — refusing to write a truncated list`);
+    // Everything taken from the downloaded file ends up in generated source, so it must match a strict
+    // shape before it is written: a token for the version/commit, ASCII labels for every rule.
+    if (!SAFE_TOKEN.test(version) || (commit && !SAFE_TOKEN.test(commit))) {
+        throw new Error('unexpected VERSION/COMMIT header — refusing to write the list');
+    }
+    for (const rule of rules) {
+        if (!RULE_SHAPE.test(rule)) throw new Error(`unexpected rule shape: ${JSON.stringify(rule).slice(0, 80)}`);
+    }
     return { version, commit, rules: [...rules].sort() };
 }
 
