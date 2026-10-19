@@ -395,6 +395,29 @@ const SETTING_NORMALIZERS: Record<string, (v: any) => any> = {
 const normalizedSettingValue = (key: string, value: any): any =>
     Object.prototype.hasOwnProperty.call(SETTING_NORMALIZERS, key) ? SETTING_NORMALIZERS[key](value) : value;
 
+// Multisite: settings whose effect is NETWORK-wide, not the site's. The Redis object-cache switch is one
+// process-wide flag (core/cache) shared by every site this server answers, so it is the main site's to
+// set. On another site a CHANGE is refused before anything is written (the settings screen sends every
+// field back on save, so an unchanged value passes untouched and is not rewritten).
+const NETWORK_WIDE_SETTINGS = new Set(['redis_cache_enabled']);
+const { onSecondarySite } = require('../core/multisite-guards');
+async function changedNetworkSettings(updates: Record<string, any>): Promise<string[]> {
+    if (!onSecondarySite()) return [];
+    const changed: string[] = [];
+    for (const [key, value] of Object.entries(updates)) {
+        if (!NETWORK_WIDE_SETTINGS.has(key)) continue;
+        if (normalizedSettingValue(key, value) !== normalizedSettingValue(key, await getOption(key))) changed.push(key);
+    }
+    return changed;
+}
+function refuseNetworkSettings(res: Response, keys: string[]) {
+    return res.status(403).json({
+        code: 'rest_network_only',
+        message: 'Only the main site can change this; ask the network administrator.',
+        data: { status: 403, params: keys }
+    });
+}
+
 /**
  * @swagger
  * /settings:
@@ -566,8 +589,12 @@ router.put('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
     const writable = Object.fromEntries(Object.entries(updates).filter(([key]) => ALL_SETTINGS.includes(key) && !DEDICATED_WRITE_API.has(key)));
     const registration = await changedRegistrationSettings(writable);
     if (registration.length && refuseAccountAuthority(req, res, registration)) return;
+    const network = await changedNetworkSettings(writable);
+    if (network.length) return refuseNetworkSettings(res, network);
+    const skipUnchangedNetwork = onSecondarySite();
 
     for (const [key, value] of Object.entries(updates)) {
+        if (skipUnchangedNetwork && NETWORK_WIDE_SETTINGS.has(key)) continue;
         if (ALL_SETTINGS.includes(key) && !DEDICATED_WRITE_API.has(key)) {
             // Se escribe (y se devuelve) el valor NORMALIZADO, no el recibido: la respuesta es lo que
             // el cliente usa para repintar, y decirle otra cosa que lo almacenado es cómo un
@@ -645,8 +672,10 @@ router.put('/:key', authenticate, isAdmin, asyncHandler(async (req: Request, res
     // The same rule as the bulk save above. `key` is one of ALL_SETTINGS by now, never a prototype name.
     const registration = await changedRegistrationSettings({ [key]: value });
     if (registration.length && refuseAccountAuthority(req, res, registration)) return;
+    const network = await changedNetworkSettings({ [key]: value });
+    if (network.length) return refuseNetworkSettings(res, network);
 
-    await updateOption(key, normalizedSettingValue(key, value));
+    if (!(onSecondarySite() && NETWORK_WIDE_SETTINGS.has(key))) await updateOption(key, normalizedSettingValue(key, value));
 
     res.json({
         key,
