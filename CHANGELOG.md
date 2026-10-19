@@ -27,6 +27,25 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 - **A plugin route's `req.user` carries the caller's email and login only with `users:read`.** Without the
   grant a route still receives `id`, `role`, `hasProfessionalMailbox` and `pluginCapabilities`.
 
+### Fixed
+
+- **`auctions` 1.1.1: signed-in bidding works again.** The plugin now requests `users:read`, so a signed-in
+  bidder bids as the address of their own account (the host shares a caller's email with a plugin route only
+  under that permission). Until an administrator approves it on an updated site, a signed-in bidder types an
+  address and confirms it with a mailed code, in `login` mode too. Every bid is now held to the per-auction and
+  site-wide bid windows, a mailed verification code stays charged to the requesting client's window, and
+  verification codes are bounded per client and site-wide (200 an hour) as well as per address.
+- **`vendor-marketplace` 1.0.3 and `conference-manager` 2.17.2: a right portal code is never refused for other
+  callers' wrong ones.** The per-client budget is the only one that refuses a portal sign-in; past the
+  per-portal and site-wide budgets every attempt waits a little longer instead, and only wrong codes for a
+  store or location that exists count toward them.
+- **`event-tickets` 1.1.1: unpaid holds.** Unpaid orders of a ticket type together hold at most
+  `pendingHoldPercent` of its capacity (never less than one seat), the first order included. On a site without
+  a mail transport an order is held to the same per-address unpaid-seat window as a confirmed one, and the
+  confirmation codes the site mails are bounded site-wide (200 an hour).
+- **`digital-downloads` 1.1.1: the download and order-received mails carry only the site's own text** (no
+  longer the name typed in the order form), like the other public-form plugins' mails.
+
 ## [2.7.0] - 2026-10-17
 
 ### Added

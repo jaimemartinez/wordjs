@@ -169,6 +169,8 @@ function AuctionDetail({ slug, onBack }) {
     const [banner, setBanner] = useState(null); // { kind: 'win'|'out'|'err'|'info', text }
     const [codeStep, setCodeStep] = useState(false); // the server mailed a code to prove the address
     const [code, setCode] = useState("");
+    // The account route asked for an address: this site has not let the plugin read the account's yet.
+    const [askEmail, setAskEmail] = useState(false);
     const myBidRef = useRef(null);              // { amountCents } — my last accepted bid on this auction
 
     // Prefill from previous participation on this browser.
@@ -316,6 +318,9 @@ function AuctionDetail({ slug, onBack }) {
                     }
                 }
             } catch { /* keep current view */ }
+        } else if (res.status === 400 && body && body.needsEmail) {
+            setAskEmail(true);
+            setBanner({ kind: "info", text: "Escribe tu correo para pujar: te enviaremos un código para confirmarlo." });
         } else if (res.status === 401 && loginMode) {
             setBanner({ kind: "err", text: "Inicia sesión para pujar en esta subasta." });
         } else {
@@ -376,7 +381,7 @@ function AuctionDetail({ slug, onBack }) {
                         <form className="wjau-form" onSubmit={submit}>
                             <p className="wjau-section-t" style={{ margin: 0 }}>Haz tu puja</p>
                             <input className="wjau-input" type="text" placeholder="Tu nombre" value={name} onChange={(e) => setName(e.target.value)} required maxLength={120} />
-                            {!loginMode && (
+                            {(!loginMode || askEmail) && (
                                 <input className="wjau-input" type="email" placeholder="Tu correo electrónico" value={email} onChange={(e) => { setEmail(e.target.value); setCodeStep(false); }} required maxLength={200} />
                             )}
                             <input
@@ -392,7 +397,7 @@ function AuctionDetail({ slug, onBack }) {
                             <p className="wjau-hint">
                                 Puja mínima: {fmtMoney(a.minNextBidCents, symbol)} (precio actual + incremento de {fmtMoney(a.min_increment_cents, symbol)}).
                                 {a.maxNextBidCents ? ` Puja máxima: ${fmtMoney(a.maxNextBidCents, symbol)}.` : ""}
-                                {loginMode ? " Pujas con tu cuenta." : ""}
+                                {loginMode && !askEmail ? " Pujas con tu cuenta." : ""}
                             </p>
                             {/* Honeypot: hidden from humans; bots that fill it are rejected server-side. */}
                             <input className="wjau-hp" type="text" tabIndex={-1} autoComplete="off" value={hp} onChange={(e) => setHp(e.target.value)} aria-hidden="true" />

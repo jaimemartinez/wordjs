@@ -1382,8 +1382,24 @@ test('vendor-marketplace: public and portal errors never echo the driver\'s mess
 // store's owner locked out (signed-in sessions included), and guesses spread over many addresses and
 // stores went on. Only wrong codes count now, per client + store, per store and site-wide; a right code
 // clears only the caller's own count; and the session is an opaque server-side id that the throttle never
-// touches.
-const vendorLogin = (p: BootedPlugin, clientKey: string, code: string, vendorId = 1) =>
+// touches. Only the caller's own budget refuses: the per-store and site-wide budgets slow every attempt
+// down once spent (escalating wait) and count only wrong codes for a store that exists, so nobody can
+// lock every portal by spending them. MUTATION PROOF: make a shared budget refuse again (return null
+// when it is spent), or charge it for an id that matches no row.
+/**
+ * Run `fn` with the portal login's waits recorded instead of slept: a timer of 250 ms or more armed
+ * meanwhile fires at once and its delay is pushed to `waits`.
+ */
+async function withLoginWaitsRecorded<T>(fn: (waits: number[]) => Promise<T>): Promise<T> {
+    const real = global.setTimeout;
+    const waits: number[] = [];
+    (global as any).setTimeout = (cb: any, ms?: number, ...a: any[]) => {
+        if (typeof ms === 'number' && ms >= 250) { waits.push(ms); return (real as any)(cb, 0, ...a); }
+        return (real as any)(cb, ms, ...a);
+    };
+    try { return await fn(waits); } finally { (global as any).setTimeout = real; }
+}
+const vendorLogin =(p: BootedPlugin, clientKey: string, code: string, vendorId = 1) =>
     p.call('post', '/portal/login', { clientKey, body: { vendor_id: vendorId, code } });
 function seedVendors(p: BootedPlugin, n = 1) {
     const ins = p.sdb.prepare(`INSERT INTO ${p.prefix}vendors (name, slug, email, access_code, status) VALUES (?, ?, ?, '123456', 'approved')`);
@@ -1400,8 +1416,12 @@ test('vendor-marketplace: a stranger\'s wrong codes never lock the owner out, no
         assert.strictEqual((await vendorLogin(p, 'stranger-0', '123456')).status, 429, 'the stranger is throttled');
         assert.strictEqual((await p.call('get', '/portal/me', { headers: portal })).status, 200, 'the signed-in owner was locked out');
         assert.strictEqual((await p.call('get', '/portal/products', { headers: portal })).status, 200);
-        // The store's own budget is spent: a FRESH login waits, the session does not.
-        assert.strictEqual((await vendorLogin(p, 'owner-elsewhere', '123456')).status, 429);
+        // The store's own budget is spent: a FRESH login from another client waits, and gets in.
+        await withLoginWaitsRecorded(async (waits) => {
+            const fresh = await vendorLogin(p, 'owner-elsewhere', '123456');
+            assert.strictEqual(fresh.status, 200, `the right code was refused for other callers' mistakes: ${JSON.stringify(fresh.body)}`);
+            assert.ok(waits.length === 1 && waits[0] >= 250, `no wait past the store's budget: ${JSON.stringify(waits)}`);
+        });
     });
 });
 
@@ -1422,16 +1442,46 @@ test('vendor-marketplace: the owner\'s right code clears only their own count; e
 test('vendor-marketplace: guesses spread over many clients and many stores meet a per-store and a site-wide budget', async () => {
     await withPlugin('vendor-marketplace', async (p) => {
         seedVendors(p, 8);
-        // One store, one wrong code from each of many clients: the store's budget (20) ends it.
-        const spread: number[] = [];
-        for (let i = 0; i < 25; i++) spread.push((await vendorLogin(p, `bot-${i}`, '000000', 1)).status);
-        assert.strictEqual(countOf(spread, 401), 20, JSON.stringify(spread));
-        assert.strictEqual(countOf(spread, 429), 5);
-        // Many stores, many clients: the site-wide budget (100) ends it, whatever the store.
-        const wide: number[] = [];
-        for (let i = 0; i < 120; i++) wide.push((await vendorLogin(p, `bot2-${i}`, '000000', 2 + (i % 7))).status);
-        assert.strictEqual(countOf(wide, 401), 80, 'the site-wide budget was not shared by every store');
-        assert.strictEqual(countOf(wide, 429), 40);
+        await withLoginWaitsRecorded(async (waits) => {
+            // One store, one wrong code from each of many clients: past the store's budget (20) every
+            // attempt waits; none is refused.
+            const spread: number[] = [];
+            for (let i = 0; i < 25; i++) spread.push((await vendorLogin(p, `bot-${i}`, '000000', 1)).status);
+            assert.strictEqual(countOf(spread, 401), 25, JSON.stringify(spread));
+            assert.deepStrictEqual(waits.splice(0), [250, 250, 250, 250, 250], 'the 21st to 25th guesses wait');
+            // The owner's right code, from yet another client, waits too — and gets in.
+            assert.strictEqual((await vendorLogin(p, 'owner', '123456', 1)).status, 200);
+            assert.deepStrictEqual(waits.splice(0), [250]);
+            // Many stores, many clients: past the site-wide budget (100; 25 spent above) every store's
+            // attempts wait, longer the further past it.
+            const wide: number[] = [];
+            for (let i = 0; i < 120; i++) wide.push((await vendorLogin(p, `bot2-${i}`, '000000', 2 + (i % 7))).status);
+            assert.strictEqual(countOf(wide, 401), 120, 'a shared budget refused a guess');
+            assert.strictEqual(waits.length, 45, 'the site-wide budget was not shared by every store');
+            assert.deepStrictEqual([waits[0], waits[10], waits[20], waits[30], waits[44]], [250, 500, 1000, 2000, 4000]);
+            waits.splice(0);
+            // Every store's owner still signs in with the right code.
+            for (let v = 1; v <= 8; v++) assert.strictEqual((await vendorLogin(p, `owner-${v}`, '123456', v)).status, 200, `store ${v}`);
+            assert.ok(waits.every((w) => w >= 4000 && w <= 8000), JSON.stringify(waits));
+        });
+    });
+});
+
+test('vendor-marketplace: guesses at stores that do not exist cost the shared budgets nothing', async () => {
+    await withPlugin('vendor-marketplace', async (p) => {
+        seedVendors(p);
+        await withLoginWaitsRecorded(async (waits) => {
+            const unknown: number[] = [];
+            for (let i = 0; i < 150; i++) unknown.push((await vendorLogin(p, `ghost-${i}`, '000000', 1000 + i)).status);
+            assert.strictEqual(countOf(unknown, 401), 150, 'an unknown store answers like a wrong code');
+            // Not charged to the site-wide budget: real stores' logins never wait for them.
+            assert.strictEqual((await vendorLogin(p, 'bot', '000000', 1)).status, 401);
+            assert.strictEqual((await vendorLogin(p, 'owner', '123456', 1)).status, 200);
+            assert.deepStrictEqual(waits, [], 'unknown ids were charged to the shared budgets');
+            // The caller's own budget still counts them (six per client and id).
+            for (let i = 0; i < 6; i++) await vendorLogin(p, 'ghost', '000000', 999);
+            assert.strictEqual((await vendorLogin(p, 'ghost', '000000', 999)).status, 429);
+        });
     });
 });
 
@@ -1619,6 +1669,9 @@ test('event-tickets: visitors sharing one client key wait out a window, not the 
 // gave them back again, and the type sold more tickets than its capacity.
 async function seedPaidType(p: BootedPlugin, capacity: number) {
     await seedEvent(p);
+    // These cases are about the sweep and the admin's flips, not the unpaid-hold share: let one unpaid
+    // order hold the whole (tiny) type.
+    p.options.set('event_tickets_config', { pendingHoldPercent: 100 });
     p.sdb.prepare(`INSERT INTO ${p.prefix}ticket_types (event_id, name, price_cents, capacity, sold, sales_end, is_active) VALUES (1, 'Paid', 1000, ?, 0, '', 1)`).run(capacity);
     return 2; // the new type's id
 }
@@ -1940,14 +1993,29 @@ test('conference-manager: only wrong codes count, per client, per location and s
         assert.strictEqual((await locationLogin(p, 'guesser', '000000')).status, 401, 'the sixth guess');
         assert.strictEqual((await locationLogin(p, 'guesser', '000000')).status, 429, 'the coordinator\'s login reset the guesser\'s count');
         for (let i = 0; i < 10; i++) assert.strictEqual((await locationLogin(p, 'coordinator', '123456')).status, 200);
-        // Location 2, one wrong code from each of many clients: the location's budget (20).
-        const spread: number[] = [];
-        for (let i = 0; i < 25; i++) spread.push((await locationLogin(p, `bot-${i}`, '000000', 2)).status);
-        assert.strictEqual(countOf(spread, 401), 20, JSON.stringify(spread));
-        // Every location: the site-wide budget (100; 26 spent above).
-        const wide: number[] = [];
-        for (let i = 0; i < 90; i++) wide.push((await locationLogin(p, `bot2-${i}`, '000000', 3 + (i % 6))).status);
-        assert.strictEqual(countOf(wide, 401), 74, 'the site-wide budget was not shared by every location');
+        await withLoginWaitsRecorded(async (waits) => {
+            // Location 2, one wrong code from each of many clients: past the location's budget (20) every
+            // attempt waits; none is refused, and its coordinator's right code gets in.
+            const spread: number[] = [];
+            for (let i = 0; i < 25; i++) spread.push((await locationLogin(p, `bot-${i}`, '000000', 2)).status);
+            assert.strictEqual(countOf(spread, 401), 25, JSON.stringify(spread));
+            assert.deepStrictEqual(waits.splice(0), [250, 250, 250, 250, 250]);
+            assert.strictEqual((await locationLogin(p, 'coordinator-2', '123456', 2)).status, 200);
+            waits.splice(0);
+            // Every location: the site-wide budget (100; 31 spent above) slows every attempt, refuses none.
+            const wide: number[] = [];
+            for (let i = 0; i < 90; i++) wide.push((await locationLogin(p, `bot2-${i}`, '000000', 3 + (i % 6))).status);
+            assert.strictEqual(countOf(wide, 401), 90, 'a shared budget refused a guess');
+            assert.strictEqual(waits.length, 21, 'the site-wide budget was not shared by every location');
+            waits.splice(0);
+            for (let l = 1; l <= 8; l++) assert.strictEqual((await locationLogin(p, `coord-${l}`, '123456', l)).status, 200, `location ${l}`);
+            assert.strictEqual(waits.length, 8, 'a right code past the shared budgets waits like any attempt');
+            // A location id that matches no row is not charged to them.
+            waits.splice(0);
+            for (let i = 0; i < 50; i++) assert.strictEqual((await locationLogin(p, `ghost-${i}`, '000000', 500 + i)).status, 404);
+            assert.strictEqual((await locationLogin(p, 'coord-1', '123456', 1)).status, 200);
+            assert.deepStrictEqual(waits.slice(-1), [waits[0]], 'unknown ids made the wait grow');
+        });
         // A burst from one client on a fresh plugin: six guesses evaluated, the rest refused.
     });
     await withPlugin('conference-manager', async (p) => {
