@@ -147,6 +147,8 @@ const en = {
     'spf.permerrorHint': 'The sender published an SPF record we could not evaluate. The message was accepted, but its sender was NOT verified.',
     'spf.temperror': 'SPF unverified',
     'spf.temperrorHint': 'SPF could not be checked at delivery time (temporary DNS failure).',
+    'spf.unaligned': 'Unverified sender',
+    'spf.unalignedHint': 'The From address is on {from}, but the server that delivered this message was only checked for {envelope}. Nothing confirms it really comes from {from}.',
     // composer
     'comp.new': 'New message',
     'comp.reply': 'Reply',
@@ -634,6 +636,8 @@ const es = {
     'spf.permerrorHint': 'El remitente publicó un registro SPF que no se pudo evaluar. El mensaje se aceptó, pero el remitente NO se verificó.',
     'spf.temperror': 'SPF sin verificar',
     'spf.temperrorHint': 'No se pudo comprobar el SPF al recibirlo (fallo DNS temporal).',
+    'spf.unaligned': 'Remitente sin verificar',
+    'spf.unalignedHint': 'La dirección del remitente es de {from}, pero el servidor que entregó este mensaje solo se comprobó para {envelope}. Nada confirma que venga realmente de {from}.',
     'comp.new': 'Mensaje nuevo',
     'comp.reply': 'Responder',
     'comp.forward': 'Reenviar',

@@ -6,6 +6,27 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Security
+
+- **Mail Server 3.0.3: delivery hardening.**
+  - The retry and scheduled-send queues deliver only messages that are still waiting to go out (never a
+    draft or a message in the trash), and both now stay inside the per-user outbound limit — a message
+    over the limit is postponed, not dropped, and a send already counted when it was queued is not
+    counted twice. Changing a message's recipients or content clears its delivery state, and a draft
+    may hold no more recipients than a send allows (50).
+  - Inbound mail is delivered to the SMTP envelope recipients the server accepted, not to the addresses
+    in the `To:`/`Cc:` headers, which are display only. Cc, Bcc and mailing-list copies addressed to a
+    mailbox only in the envelope are now stored.
+  - Mail arriving from outside that claims to be from the server's own mail domain (header `From` or
+    envelope sender) is refused with `550 5.7.1` unless SPF authenticated that domain for the
+    transaction. Devices on the LAN that send as the domain should relay through the site or be covered
+    by its SPF record. The reading pane shows **Unverified sender** when the From domain differs from
+    the domain SPF checked, even on an SPF pass.
+  - A reply joins a conversation only when the message it answers belongs to the replying mailbox, in
+    the composer and when threading inbound replies by `In-Reply-To`/`References`.
+  - The webmail's link and image filter keeps only `http`, `https`, `mailto`, `cid` and inline images,
+    ignores control characters inside a URL scheme, and removes SVG animation elements.
+
 ## [2.7.0] - 2026-10-17
 
 ### Added

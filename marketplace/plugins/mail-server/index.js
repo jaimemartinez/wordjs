@@ -386,6 +386,31 @@ function vacationSenderVerified(spfHeader, envelopeFrom, headerFrom) {
     return !!envDomain && envDomain === domainOf(headerFrom);
 }
 
+/**
+ * May an EXTERNAL SMTP session deliver a message that claims to come from our own mail domain?
+ * Only when SPF authenticated the transaction for that same domain (the envelope MAIL FROM is on it,
+ * the verdict is 'pass', and the header From domain matches — vacationSenderVerified). Anything else
+ * presenting `someone@<mailDomain>` from outside is a forgery of a local mailbox: a colleague, the
+ * administrator. Returns null to accept, or the address the refusal names. The header From and the
+ * envelope MAIL FROM are both checked, because either one is what a reader or a reply would trust.
+ */
+function localDomainImpersonation(mailDomain, spfHeader, envelopeFrom, headerFroms) {
+    const dom = String(mailDomain || '').toLowerCase();
+    if (!dom) return null;
+    const domainOf = (a) => {
+        const s = String(a || '').trim().toLowerCase();
+        const at = s.lastIndexOf('@');
+        return at > 0 ? s.slice(at + 1) : '';
+    };
+    const isLocal = (a) => { const d = domainOf(a); return !!d && (d === dom || d.endsWith('.' + dom)); };
+    const claims = [envelopeFrom, ...(headerFroms || [])].filter(isLocal);
+    if (claims.length === 0) return null;
+    for (const from of claims) {
+        if (!vacationSenderVerified(spfHeader, envelopeFrom, from)) return String(from).toLowerCase();
+    }
+    return null;
+}
+
 async function maybeVacationAutoReply(user, senderEmail, origSubject) {
     try {
         if (!user || !user.id || !senderEmail) return;
@@ -1515,6 +1540,19 @@ async function initSMTPServer() {
                 if (err) return callback(err);
 
                 try {
+                    // 2b. From alignment — a message from OUTSIDE may not speak for a local mailbox
+                    //     unless SPF authenticated our own domain for it (see localDomainImpersonation).
+                    //     Our own relay path (loopback / authenticated) is never gated.
+                    if (!isTrustedSmtpSession(session)) {
+                        const headerFroms = (parsed.from?.value || []).map(v => v && v.address).filter(Boolean);
+                        const forged = localDomainImpersonation(mailDomain, session?.spfHeader,
+                            session?.envelope?.mailFrom?.address, headerFroms);
+                        if (forged) {
+                            console.warn(`[Security] Rejecting external message claiming to be from ${forged} (not authenticated for ${mailDomain})`);
+                            return callback(smtpError(550, `5.7.1 Sender address ${forged} is not authorized from this host`));
+                        }
+                    }
+
                     // 3. Bayesian Analysis
                     const text = (parsed.subject || '') + ' ' + (parsed.text || '');
                     const isSpam = await isLikelySpam(classifier, text);
@@ -1522,18 +1560,19 @@ async function initSMTPServer() {
                     if (isSpam) console.log(`[Security] Bayesian Filter marked message as SPAM`);
 
                     // 4. Processing
-                    // parsed.to/from may be missing (Bcc-only / From-less mail). Guard the deref
-                    // and fall back to the SMTP envelope so we don't silently drop the message.
-                    let toAddresses = [];
-                    const parsedTo = parsed.to?.value;
-                    if (Array.isArray(parsedTo)) toAddresses = parsedTo;
-                    else if (parsedTo) toAddresses = [parsedTo];
-
-                    if (toAddresses.length === 0) {
-                        const envelopeRcpt = session?.envelope?.rcptTo || [];
-                        toAddresses = envelopeRcpt
-                            .map(r => (r && r.address ? { address: r.address } : null))
-                            .filter(Boolean);
+                    // WHO GETS A COPY is the SMTP envelope — the RCPT TO addresses this transaction
+                    // was accepted for (onRcptTo → recipientVerdict) — never the To:/Cc: headers. The
+                    // headers are whatever the sender wrote: delivering to them handed a message to
+                    // every local mailbox or alias it NAMED (one accepted RCPT was enough), and lost
+                    // the Cc/Bcc/list copies whose recipient appears only in the envelope. Headers are
+                    // display only. One entry per address, however often the envelope repeats it.
+                    const toAddresses = [];
+                    const seenRcpt = new Set();
+                    for (const r of (session?.envelope?.rcptTo || [])) {
+                        const address = String((r && r.address) || '').trim().toLowerCase();
+                        if (!address || seenRcpt.has(address)) continue;
+                        seenRcpt.add(address);
+                        toAddresses.push({ address });
                     }
 
                     const fromAddr = parsed.from?.value?.[0]?.address
@@ -1546,25 +1585,31 @@ async function initSMTPServer() {
                     // (e.g. the Sent copy we delivered with that exact Message-ID). Resolve them and
                     // inherit that message's thread so the reply lands in the same árbol instead of
                     // starting a new one. Falls back to 0 (its own new thread) when nothing matches.
-                    let inboundThreadId = 0;
-                    try {
-                        const refIds = []
-                            .concat(parsed.inReplyTo || [])
-                            .concat(parsed.references || [])
-                            .join(' ')
-                            .split(/\s+/)
-                            .map(s => s.trim())
-                            .filter(Boolean);
-                        for (const rid of refIds) {
-                            // NOT-A-USER-PATH: inbound SMTP delivery. The id is a Message-ID from the
-                            // message's own In-Reply-To/References header, read to thread the copy we
-                            // are about to write; no request chose it and nothing is returned to anyone.
-                            const parent = await Email.findByMessageId(rid);
-                            if (parent) { inboundThreadId = parent.thread_id || parent.id; break; }
+                    // The lookup is PER RECEIVING MAILBOX: the headers are the sender's to write, so
+                    // they may only ever point into a conversation that mailbox already owns.
+                    const refIds = []
+                        .concat(parsed.inReplyTo || [])
+                        .concat(parsed.references || [])
+                        .join(' ')
+                        .split(/\s+/)
+                        .map(s => s.trim())
+                        .filter(Boolean)
+                        .slice(0, 20);
+                    const threadFor = async (mailbox) => {
+                        if (!mailbox || !mailbox.id) return 0;
+                        try {
+                            for (const rid of refIds) {
+                                // NOT-A-USER-PATH: inbound SMTP delivery. The id is a Message-ID from the
+                                // message's own In-Reply-To/References header, resolved only among the
+                                // receiving mailbox's own rows to thread the copy we are about to write.
+                                const parent = await Email.findByMessageId(rid, mailbox.id, mailbox.userEmail);
+                                if (parent) return parent.thread_id || parent.id;
+                            }
+                        } catch (e) {
+                            console.error('[MailServer] Inbound thread lookup failed:', e.message);
                         }
-                    } catch (e) {
-                        console.error('[MailServer] Inbound thread lookup failed:', e.message);
-                    }
+                        return 0;
+                    };
 
                     // A message we forwarded ourselves must never be forwarded again (loop guard).
                     const alreadyForwarded = !!(parsed.headers && parsed.headers.get && parsed.headers.get(FORWARD_HEADER.toLowerCase()));
@@ -1592,7 +1637,7 @@ async function initSMTPServer() {
                         // ACCEPTED-but-not-clean verdict (permerror, or fail/softfail on a
                         // tag-only site) visible instead of silently discarded.
                         receivedSpf: session?.spfHeader || '',
-                        threadId: inboundThreadId,
+                        threadId: 0, // per mailbox — see threadFor
                         attachments: parsed.attachments,
                         // Spam goes to the SPAM FOLDER (reviewable, auto-purged after 30 days by
                         // the queue sweep) — not silently into Trash with a mangled subject.
@@ -1603,7 +1648,7 @@ async function initSMTPServer() {
                     const deliverTo = async (mailbox, toAddress) => {
                         if (deliveredTo.has(mailbox.id)) return;
                         deliveredTo.add(mailbox.id);
-                        const res = await deliverLocalCopy(mailbox, { ...baseCopy, toAddress });
+                        const res = await deliverLocalCopy(mailbox, { ...baseCopy, toAddress, threadId: await threadFor(mailbox) });
                         if (!res.ok) { quotaRejected++; return; }
                         storedCount++;
                         if (!res.quiet) {
@@ -1826,6 +1871,33 @@ function outboundRateLimitOk(userId, recipientCount) {
     e.messages += 1;
     e.recipients += recipientCount;
     return true;
+}
+
+// The background queues (scheduled sends and automatic retries) deliver on their own clock, so the
+// limit has to hold THERE too — a row is only as rate-limited as the last check it passed. POST /send
+// already charges a message when it queues it for the undo window / a schedule; it records that charge
+// here so the dispatch does not count the same message twice. Anything the queue picks up WITHOUT a
+// matching charge (or with more recipients than were charged) is charged at dispatch.
+const _queuedCharges = new Map(); // email id -> recipients already charged by POST /send
+const QUEUED_CHARGES_MAX = 10000;
+const RATE_LIMIT_DEFER_MS = 5 * 60 * 1000;
+function noteQueuedCharge(emailId, recipientCount) {
+    const id = parseInt(emailId, 10) || 0;
+    if (!id) return;
+    _queuedCharges.delete(id);
+    if (_queuedCharges.size >= QUEUED_CHARGES_MAX) _queuedCharges.delete(_queuedCharges.keys().next().value);
+    _queuedCharges.set(id, recipientCount);
+}
+function queueRateKey(email) {
+    const uid = parseInt(email && email.user_id, 10) || 0;
+    return uid > 0 ? uid : 'queue:site';
+}
+function queuedDispatchAllowed(email, recipientCount) {
+    const id = parseInt(email && email.id, 10) || 0;
+    const charged = _queuedCharges.get(id);
+    _queuedCharges.delete(id);
+    if (charged !== undefined && recipientCount <= charged) return true;
+    return outboundRateLimitOk(queueRateKey(email), recipientCount);
 }
 
 function isValidEmail(email) {
@@ -2583,16 +2655,16 @@ async function updateRetryState(sentRecordId, data, externalRecipients, failed) 
     // mark failed and bounce to the sender.
     if (temporary.length === 0 || attempts >= MAX_DELIVERY_ATTEMPTS) {
         try {
-            // NOT-A-USER-PATH: the delivery state machine writing back the outcome for the row it is
-            // delivering. The toAddress rewrite narrows the recipient list to the failed ones, which
-            // on an un-attributed row would be a change of the ownership verdict — the store refuses
-            // that case itself (mail_shared_row_party_narrowed) and this catch keeps the queue moving.
-            await Email.markFailed(sentRecordId, attempts, lastError);
-            // Persist the failed recipients for visibility.
+            // Persist the failed recipients for visibility — BEFORE the status, because a recipient
+            // rewrite clears the delivery state (Email.update) and must not wipe the outcome.
             // NOT-A-USER-PATH: the delivery state machine's own row. This narrows the recipient list,
             // which on an un-attributed row would BE a change of the ownership verdict — the store
             // refuses that case itself (mail_shared_row_party_narrowed); the catch keeps the queue moving.
             await Email.update(sentRecordId, { toAddress: failed.map(f => f.recipient).join(', ') });
+        } catch (e) { /* non-fatal */ }
+        try {
+            // NOT-A-USER-PATH: the delivery state machine writing back the outcome for its own row.
+            await Email.markFailed(sentRecordId, attempts, lastError);
         } catch (e) { /* non-fatal */ }
         await sendBounce(data, failed);
         return;
@@ -2602,13 +2674,15 @@ async function updateRetryState(sentRecordId, data, externalRecipients, failed) 
     const backoffMinutes = Math.min(attempts * attempts, 360);
     const nextAttemptAt = new Date(Date.now() + backoffMinutes * 60 * 1000).toISOString();
     try {
-        // NOT-A-USER-PATH: as above — the queue's own record, mid-delivery. The store still refuses an
-        // address rewrite that would drop a party from an un-attributed row.
-        await Email.markRetry(sentRecordId, attempts, nextAttemptAt, lastError);
-        // Store ONLY the still-failed recipients so the next pass retries exactly those.
+        // Store ONLY the still-failed recipients so the next pass retries exactly those. This runs
+        // FIRST: the rewrite clears the delivery state, and markRetry below re-arms it.
         // NOT-A-USER-PATH: as above — the queue's own record, mid-delivery, and the store still
         // refuses an address rewrite that would drop a party from an un-attributed row.
         await Email.update(sentRecordId, { toAddress: temporary.map(f => f.recipient).join(', ') });
+    } catch (e) { /* non-fatal */ }
+    try {
+        // NOT-A-USER-PATH: the queue's own record, mid-delivery — see above.
+        await Email.markRetry(sentRecordId, attempts, nextAttemptAt, lastError);
     } catch (e) { /* non-fatal */ }
 
     // If there were also permanent failures mixed in, bounce those now (they won't be retried).
@@ -3122,6 +3196,16 @@ exports.init = async function (bridge) {
 
             for (const email of pending) {
                 try {
+                    const toList = splitAddresses(email.to_address);
+                    const ccList = splitAddresses(email.cc_address);
+                    const bccList = splitAddresses(email.bcc_address);
+                    if (!queuedDispatchAllowed(email, toList.length + ccList.length + bccList.length)) {
+                        // Over the sender's outbound limit: postpone, never drop.
+                        // NOT-A-USER-PATH: the scheduled-send queue's own row (see below).
+                        await Email.update(email.id, { scheduledAt: new Date(Date.now() + RATE_LIMIT_DEFER_MS).toISOString() });
+                        console.warn(`[MailServer] Scheduled email ${email.id} postponed: outbound rate limit reached.`);
+                        continue;
+                    }
                     // NOT-A-USER-PATH: the scheduled-send queue. `email` comes from
                     // Email.getPendingScheduled() — rows the server selected by scheduled_at — so no
                     // request supplied this id and nothing here is returned to a caller.
@@ -3135,9 +3219,9 @@ exports.init = async function (bridge) {
                     await sendMail({
                         // to/cc/bcc are stored as comma-joined lists — split them back into real
                         // recipient arrays (a joined string would read as ONE malformed address).
-                        to: splitAddresses(email.to_address),
-                        cc: splitAddresses(email.cc_address),
-                        bcc: splitAddresses(email.bcc_address),
+                        to: toList,
+                        cc: ccList,
+                        bcc: bccList,
                         subject: email.subject,
                         text: email.body_text,
                         html: email.body_html,
@@ -3174,6 +3258,15 @@ exports.init = async function (bridge) {
                         // NOT-A-USER-PATH: the retry queue, over rows Email.getPendingRetries()
                         // selected by delivery_status/next_attempt_at.
                         await Email.markFailed(email.id, email.delivery_attempts || 0, 'No recipients to retry');
+                        continue;
+                    }
+
+                    if (!outboundRateLimitOk(queueRateKey(email), recipients.length)) {
+                        // Over the sender's outbound limit: push the attempt back without spending one.
+                        // NOT-A-USER-PATH: the retry queue — same rows Email.getPendingRetries() selected.
+                        await Email.markRetry(email.id, email.delivery_attempts || 0,
+                            new Date(Date.now() + RATE_LIMIT_DEFER_MS).toISOString(),
+                            'Outbound rate limit reached; delivery postponed');
                         continue;
                     }
 
@@ -3609,6 +3702,12 @@ exports.init = async function (bridge) {
         const { id, to, cc, bcc, subject, body, isHtml = true, replyToId } = req.body;
         const attachments = await resolveComposerAttachments(req.body.attachments, req.user);
 
+        // A draft is a message waiting to be sent: it may not hold more recipients than a send allows.
+        const draftRecipients = splitAddresses(to).length + splitAddresses(cc).length + splitAddresses(bcc).length;
+        if (draftRecipients > MAX_RECIPIENTS_PER_MESSAGE) {
+            return res.status(400).json({ error: `Too many recipients (max ${MAX_RECIPIENTS_PER_MESSAGE} per message).` });
+        }
+
         try {
             const data = {
                 fromAddress: req.user.userEmail,
@@ -3628,9 +3727,11 @@ exports.init = async function (bridge) {
                 attachments: attachments || []
             };
 
+            // A reply joins the parent's conversation only when the parent is the CALLER'S OWN row
+            // (_ownsRow): an id they merely guessed, or can read as an administrator, starts a new one.
             if (replyToId) {
                 const parent = await Email.findById(replyToId);
-                if (parent) {
+                if (parent && Email._ownsRow(parent, req.user.id, req.user.userEmail)) {
                     data.parentId = parent.id;
                     data.threadId = parent.thread_id || parent.id;
                 }
@@ -3731,9 +3832,10 @@ exports.init = async function (bridge) {
         let parentId = 0;
         let threadId = 0;
 
+        // Same rule as POST /drafts: only the caller's own row lends its conversation to a reply.
         if (replyToId) {
             const parent = await Email.findById(replyToId);
-            if (parent) {
+            if (parent && Email._ownsRow(parent, req.user.id, req.user.userEmail)) {
                 parentId = parent.id;
                 threadId = parent.thread_id || parent.id;
             }
@@ -3784,6 +3886,7 @@ exports.init = async function (bridge) {
                 } else {
                     email = await Email.create(data);
                 }
+                noteQueuedCharge(email.id, recipientCount);
 
                 if (scheduledAt) {
                     return res.json({ success: true, message: 'Message scheduled', id: email.id });

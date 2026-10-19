@@ -36,6 +36,20 @@ const writeLocal = (k: string, v: any) => { try { localStorage.setItem(k, JSON.s
 
 const addrOf = (s: string) => { const m = /<([^>]+)>/.exec(s || ''); return (m ? m[1] : String(s || '')).trim().toLowerCase(); };
 
+// SPF vouches for the ENVELOPE sender's domain only. When the From the reader sees is on a different
+// domain, even an SPF pass says nothing about it — so the reading pane flags the mismatch. Returns the
+// two domains when they differ, else null (no recorded verdict = internal mail, nothing to compare).
+const domainOfAddr = (a: string) => { const s = String(a || '').trim().toLowerCase(); const i = s.lastIndexOf('@'); return i > 0 ? s.slice(i + 1) : ''; };
+const senderMismatch = (header?: string, from?: string) => {
+    const h = String(header || '').trim();
+    if (!/^Received-SPF:/i.test(h)) return null;
+    const m = /envelope-from=<([^>]*)>/i.exec(h);
+    const envelope = domainOfAddr(m ? m[1] : '');
+    const fromDomain = domainOfAddr(addrOf(from || ''));
+    if (!fromDomain || fromDomain === envelope) return null;
+    return { from: fromDomain, envelope: envelope || '—' };
+};
+
 export default function Webmail({ access, user, t, locale, toasts, confirm, isAdmin, onOpenServer }: any) {
     const me = String(access?.address || user?.userEmail || '').toLowerCase();
     const rootRef = useRef<HTMLDivElement>(null);
@@ -845,6 +859,7 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
         const latest = msgs[msgs.length - 1];
         const sender = !latest.is_sent ? addrOf(latest.from_address) : '';
         const spf = SPF_TONE[spfVerdict(email.received_spf)] ? spfVerdict(email.received_spf) : '';
+        const unaligned = senderMismatch(email.received_spf, email.from_address);
         const inTrash = folder === 'trash' || email.is_trash;
         const inSpam = folder === 'spam' || email.is_spam;
 
@@ -898,10 +913,11 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
                                 <i className={cx(email.is_starred ? 'fa-solid fa-star text-amber-400' : 'fa-regular fa-star text-slate-400', 'text-lg')}></i>
                             </button>
                         </div>
-                        {((email.labels || []).length > 0 || inSpam || spf) && (
+                        {((email.labels || []).length > 0 || inSpam || spf || unaligned) && (
                             <div className="-mt-2 mb-4 flex flex-wrap items-center gap-1.5">
                                 {inSpam && <Pill tone="orange"><i className="fa-solid fa-triangle-exclamation"></i>{t('badge.spam')}</Pill>}
                                 {spf && <Pill tone={SPF_TONE[spf]} title={`${t('spf.' + spf + 'Hint')}\n\n${email.received_spf}`}><i className="fa-solid fa-shield-halved"></i>{t('spf.' + spf)}</Pill>}
+                                {unaligned && <Pill tone="orange" title={`${t('spf.unalignedHint', unaligned)}\n\n${email.received_spf}`}><i className="fa-solid fa-user-shield"></i>{t('spf.unaligned')}</Pill>}
                                 {(email.labels || []).map((l: any) => (
                                     <span key={l.id} className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium" style={{ background: `${l.color}1a`, color: l.color }}>
                                         {l.name}

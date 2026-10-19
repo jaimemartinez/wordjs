@@ -1103,6 +1103,16 @@ module.exports = function createEmailStore(db, hooks = {}) {
                 fields.push("date_received = CURRENT_TIMESTAMP");
             }
 
+            // A row's delivery state describes the message it was computed FOR. Once the recipients or
+            // the content are rewritten it describes nothing, and leaving 'retry'/'failed' plus a due
+            // next_attempt_at in place handed the rewritten message to the background retry queue —
+            // which delivers on its own schedule, outside every per-send check. Any such rewrite
+            // clears the state; the delivery state machine (updateRetryState) writes its own outcome
+            // AFTER its recipient rewrite, so a genuine retry is re-armed, not lost.
+            if (rewritesAddresses || contentChanged) {
+                fields.push("delivery_status = NULL, next_attempt_at = NULL");
+            }
+
             // Nothing to update — avoid emitting invalid "SET  WHERE id = ?".
             if (fields.length === 0) {
                 return await this.findById(id);
@@ -1197,14 +1207,20 @@ module.exports = function createEmailStore(db, hooks = {}) {
             return rows.filter(row => this._ownsRow(row, uid, userEmail));
         },
 
-        // Look up a message by its RFC Message-ID header value. Used to thread an inbound reply back
-        // into its conversation (the reply's In-Reply-To/References echo the original's Message-ID).
-        async findByMessageId(messageId) {
+        // Look up a message by its RFC Message-ID header value, IN ONE MAILBOX. Used to thread an
+        // inbound reply back into its conversation (the reply's In-Reply-To/References echo the
+        // original's Message-ID). A Message-ID is whatever the sender wrote, and every party's copy of
+        // a message carries the same one — so the answer is only ever a row the RECEIVING mailbox owns
+        // (_ownsRow); a reply never joins somebody else's conversation. No owner, no answer.
+        async findByMessageId(messageId, userId, userEmail) {
             if (!messageId) return null;
-            return await db.get(
-                `SELECT * FROM ${T_EMAILS} WHERE message_id = ? ORDER BY id ASC LIMIT 1`,
+            const uid = parseInt(userId, 10) || 0;
+            if (uid <= 0 && !userEmail) return null;
+            const rows = await db.all(
+                `SELECT * FROM ${T_EMAILS} WHERE message_id = ? ORDER BY id ASC LIMIT 50`,
                 [String(messageId).trim()]
             );
+            return rows.find(row => this._ownsRow(row, uid, userEmail)) || null;
         },
 
         /**
@@ -2344,6 +2360,7 @@ module.exports = function createEmailStore(db, hooks = {}) {
             return await db.all(`
                 SELECT * FROM ${T_EMAILS}
                 WHERE delivery_status = 'retry'
+                AND is_draft = 0 AND is_trash = 0
                 AND next_attempt_at IS NOT NULL
                 AND next_attempt_at <= ?
             `, [new Date().toISOString()]);
