@@ -64,7 +64,14 @@ export type ResolvedMediaStorage = {
         endpoint: string | null;
         prefix: string;
     } | null;
-    /** Base URL the `/uploads` tree maps to in the bucket: `<publicUrl>/<prefix>` (no trailing slash). */
+    /**
+     * The site whose objects this store addresses (multisite: each site has its own key space, see
+     * siteKeySegment). null on a network when the work names no site: such a store addresses no object.
+     */
+    siteId: number | null;
+    /** The effective key prefix of that site: `<prefix>` for site 1, `<prefix>/sites/<id>` for the others. */
+    keyPrefix: string;
+    /** Base URL the site's `/uploads` tree maps to in the bucket: `<publicUrl>/<keyPrefix>` (no trailing slash). */
     publicBase: string | null;
     /** The scheme://host[:port] of publicBase — the ONE origin the CSP gains. */
     publicOrigin: string | null;
@@ -89,6 +96,30 @@ const ENV_BY_FIELD: Record<string, string> = Object.fromEntries(FIELDS);
 
 /** Default object-key prefix: the bucket mirrors the `/uploads` URL space. */
 const DEFAULT_PREFIX = 'uploads';
+
+/**
+ * MULTISITE KEY SPACES. Every site of a network uploads into the ONE configured bucket, and a site's
+ * relative upload paths (`2026/10/a.jpg`) are only unique within that site. So a site other than site 1
+ * stores its objects under `<prefix>/sites/<id>/<rel>` and is served from `<publicUrl>/<prefix>/sites/<id>/`;
+ * site 1 — and every single-site install — keeps `<prefix>/<rel>`, exactly the keys it always had. On a
+ * network, site 1 may not offload a relative path that starts with this segment, so its keys can never
+ * land in another site's space.
+ */
+const SITES_SEGMENT = 'sites';
+
+/** The key segment of a site's own space: '' for site 1, `sites/<id>` for the others. */
+function siteKeySegment(siteId: number): string {
+    return siteId === 1 ? '' : `${SITES_SEGMENT}/${siteId}`;
+}
+
+/** The site the current work belongs to (1 on a single site), or null on a network when it names none. */
+function currentSiteForStorage(): number | null {
+    try { return require('./site-context').currentSiteIdOrNull(); } catch { return null; }
+}
+
+function joinKey(...parts: string[]): string {
+    return parts.filter(Boolean).join('/');
+}
 
 /** The prefix: zero or more plain key segments joined by '/'. */
 const PREFIX_RE = /^(?:[A-Za-z0-9!_.*'()-]+(?:\/[A-Za-z0-9!_.*'()-]+)*)?$/;
@@ -141,7 +172,7 @@ function publicUrlWarnings(store: ResolvedMediaStorage, siteUrl?: string | null)
     const out: Array<{ field: string; code: string; message: string }> = [];
     if (store.driver !== 's3' || !store.s3 || !store.publicBase || store.sources.publicUrl === 'default') return out;
     const prefix = store.s3.prefix;
-    const base = prefix ? store.publicBase.slice(0, -(prefix.length + 1)) : store.publicBase;
+    const base = store.keyPrefix ? store.publicBase.slice(0, -(store.keyPrefix.length + 1)) : store.publicBase;
     let u: URL;
     try { u = new URL(base); } catch { return out; }
     const path = u.pathname.replace(/\/+$/, '');
@@ -192,9 +223,11 @@ function derivedBucketBase(s3: NonNullable<ResolvedMediaStorage['s3']>): string 
 
 /**
  * Resolve the effective media storage config: the file block, each field overridable from the env.
- * Pure given (env, cfg) — the admin route, the CLI and the tests all call it with what they hold.
+ * Pure given (env, cfg, siteId) — the admin route, the CLI and the tests all call it with what they
+ * hold. `siteId` defaults to the site the current work belongs to (always 1 on a single site).
  */
-function resolveMediaStorage(env: NodeJS.ProcessEnv = process.env, cfg?: any): ResolvedMediaStorage {
+function resolveMediaStorage(env: NodeJS.ProcessEnv = process.env, cfg?: any, siteId?: number | null): ResolvedMediaStorage {
+    const site = siteId === undefined ? currentSiteForStorage() : siteId;
     const block = fileBlock(cfg);
     const values: Record<string, any> = {};
     const sources: Record<string, MediaStorageSource> = {};
@@ -213,7 +246,7 @@ function resolveMediaStorage(env: NodeJS.ProcessEnv = process.env, cfg?: any): R
 
     const asked = String(values.driver || 'local').toLowerCase() === 's3' ? 's3' : 'local';
     const keepLocalCopy = truthy(values.keepLocalCopy);
-    const none: ResolvedMediaStorage = { driver: 'local', incomplete: null, s3: null, publicBase: null, publicOrigin: null, keepLocalCopy, sources };
+    const none: ResolvedMediaStorage = { driver: 'local', incomplete: null, s3: null, siteId: site, keyPrefix: '', publicBase: null, publicOrigin: null, keepLocalCopy, sources };
     if (asked !== 's3') return none;
 
     const missing = ['bucket', 'accessKeyId', 'secretAccessKey'].filter((f) => !values[f]);
@@ -239,12 +272,16 @@ function resolveMediaStorage(env: NodeJS.ProcessEnv = process.env, cfg?: any): R
     }
     if (missing.length) return { ...none, incomplete: missing };
 
-    const publicBase = s3.prefix ? `${base}/${s3.prefix}` : String(base);
+    // A network with no site named addresses no object and serves no URL (fail closed, never site 1's).
+    const keyPrefix = site === null ? s3.prefix : joinKey(s3.prefix, siteKeySegment(site));
+    const publicBase = joinKey(String(base), keyPrefix);
     return {
         driver: 's3',
         incomplete: null,
         s3,
-        publicBase,
+        siteId: site,
+        keyPrefix,
+        publicBase: site === null ? null : publicBase,
         publicOrigin: new URL(publicBase).origin,
         keepLocalCopy,
         sources,
@@ -259,17 +296,42 @@ function isOffloadablePath(rel: string): boolean {
     return segments.every((s) => /^[A-Za-z0-9!_.*'()-]+$/.test(s) && s !== '.' && s !== '..');
 }
 
-/** Object key for a relative upload path (`2026/10/a.jpg` → `uploads/2026/10/a.jpg`). Throws on a bad path. */
+/**
+ * May THIS store hold `rel`? The path rule, plus the key-space rule: on a network, site 1 never
+ * addresses a path under `sites/` (that is where the other sites' spaces live).
+ */
+function isStorablePath(store: ResolvedMediaStorage, rel: string): boolean {
+    if (!isOffloadablePath(rel) || store.siteId === null) return false;
+    if (store.siteId === 1 && rel.split('/')[0] === SITES_SEGMENT) {
+        try { return !require('./site-context').multisiteEnabled(); } catch { return false; }
+    }
+    return true;
+}
+
+/**
+ * Object key for a relative upload path, in the store's site space (`2026/10/a.jpg` →
+ * `uploads/2026/10/a.jpg` on site 1, `uploads/sites/2/2026/10/a.jpg` on site 2). Throws on a bad path.
+ */
 function objectKeyFor(store: ResolvedMediaStorage, rel: string): string {
     if (!store.s3) throw new Error('media storage: not an s3 store');
-    if (!isOffloadablePath(rel)) throw new Error(`media storage: ${JSON.stringify(String(rel)).slice(0, 80)} is not an offloadable path`);
-    return store.s3.prefix ? `${store.s3.prefix}/${rel}` : rel;
+    if (store.siteId === null) throw new Error('media storage: no site named for this object');
+    if (!isStorablePath(store, rel)) throw new Error(`media storage: ${JSON.stringify(String(rel)).slice(0, 80)} is not an offloadable path`);
+    return joinKey(store.keyPrefix, rel);
 }
 
 /** Public delivery URL of a relative upload path, or null when the store has none / the path is not offloadable. */
 function publicUrlFor(store: ResolvedMediaStorage, rel: string): string | null {
-    if (store.driver !== 's3' || !store.publicBase || !isOffloadablePath(rel)) return null;
+    if (store.driver !== 's3' || !store.publicBase || !isStorablePath(store, rel)) return null;
     return `${store.publicBase}/${rel}`;
+}
+
+/**
+ * The same store, addressing the keys a site's objects had before sites had key spaces (`<prefix>/<rel>`,
+ * site 1's layout). Only the one-time move of a site's objects into its own space reads through it.
+ */
+function legacyLayoutStore(store: ResolvedMediaStorage): ResolvedMediaStorage {
+    if (!store.s3) throw new Error('media storage: not an s3 store');
+    return { ...store, siteId: 1, keyPrefix: store.s3.prefix };
 }
 
 // ---- object content types --------------------------------------------------------------------------
@@ -536,6 +598,9 @@ module.exports = {
     isOffloadablePath,
     objectKeyFor,
     publicUrlFor,
+    isStorablePath,
+    legacyLayoutStore,
+    siteKeySegment,
     objectHeadersFor,
     getMediaStorage,
     localAdapter,
@@ -548,5 +613,6 @@ module.exports = {
     maskSecret,
     STORAGE_META_KEY,
     DEFAULT_PREFIX,
+    SITES_SEGMENT,
     ENV_BY_FIELD,
 };

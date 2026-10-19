@@ -304,7 +304,8 @@ describe('uploads (I3)', () => {
             const missing = '/uploads/2026/10/0b6f0c1e-offloaded.png';
             const res = await direct('get', missing, TWO);
             assert.strictEqual(res.status, 302);
-            assert.strictEqual(res.headers.location, 'https://cdn.example.net/uploads/2026/10/0b6f0c1e-offloaded.png');
+            // …into ITS OWN space of the bucket (core/media-storage key spaces), never the main site's.
+            assert.strictEqual(res.headers.location, `https://cdn.example.net/uploads/sites/${siteTwo}/2026/10/0b6f0c1e-offloaded.png`);
             // A file the site holds is still served from its own directory, not redirected.
             assert.strictEqual((await direct('get', url, TWO)).status, 200);
             // Paths that are never offloaded stay a 404.
@@ -352,8 +353,11 @@ describe('what stays the main site\'s', () => {
         assert.strictEqual((await bearer('get', `${API}/db-migration/status`, TWO, tokens.two)).status, 404);
         assert.strictEqual((await bearer('post', `${API}/db-migration/migrate`, TWO, tokens.two).send({})).status, 404);
         assert.strictEqual((await bearer('post', `${API}/db-migration/cleanup`, TWO, tokens.two).send({})).status, 404);
-        // The main site's administrator still reaches it.
-        const status = await bearer('get', `${API}/db-migration/status`, 'main.example.com', tokens.main);
+        // On the main site it is the network administrators' (an administrator of the main site who is
+        // not one is refused), and they still reach it.
+        const plainAdmin = await bearer('get', `${API}/db-migration/status`, 'main.example.com', tokens.main);
+        assert.strictEqual(plainAdmin.status, 403, JSON.stringify(plainAdmin.body));
+        const status = await bearer('get', `${API}/db-migration/status`, 'main.example.com', tokens.net);
         assert.strictEqual(status.status, 200, JSON.stringify(status.body));
     });
 

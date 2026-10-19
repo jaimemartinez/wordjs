@@ -102,6 +102,51 @@ function ipv6ToBytes(input: string): number[] | null {
 }
 
 /**
+ * The IPv4 address(es) an IPv6 address embeds and that a translator, relay or tunnel routes to:
+ * IPv4-mapped / IPv4-compatible, NAT64 (64:ff9b::/96), 6to4 (2002::/16), ISATAP and Teredo (client and
+ * server). Null when the address embeds none. The ONE reading of these forms, shared by isBlockedIp and
+ * isNeverExemptIp, so a form recognised by one is recognised by the other.
+ */
+function embeddedIpv4(b: number[]): string[] | null {
+    const first10Zero = b.slice(0, 10).every((x) => x === 0);
+    // ::/96 (IPv4-compatible + ::/::1) and ::ffff:0:0/96 (IPv4-mapped) — apply the IPv4 rules to the
+    // embedded address. This catches EVERY spelling of ::1 (→0.0.0.1, blocked by 0/8) and of
+    // ::ffff:169.254.169.254 (→link-local), plus :: (→0.0.0.0), regardless of textual form.
+    if (first10Zero && ((b[10] === 0xff && b[11] === 0xff) || (b[10] === 0 && b[11] === 0))) {
+        return [`${b[12]}.${b[13]}.${b[14]}.${b[15]}`];
+    }
+    // NAT64 well-known prefix 64:ff9b::/96 embeds an IPv4 address a translator routes to — on an
+    // IPv6-only cloud VPC this reaches v4 metadata/loopback (64:ff9b::a9fe:a9fe = 169.254.169.254).
+    // Block only when the embedded v4 is itself private (public NAT64 targets stay allowed).
+    if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && b[4] === 0 && b[5] === 0 && b[6] === 0 && b[7] === 0) {
+        return [`${b[12]}.${b[13]}.${b[14]}.${b[15]}`];
+    }
+    // 6to4 prefix 2002::/16 (RFC 3056) embeds the site's IPv4 in bytes 2-5 (2002:V4V4:V4V4::/48) which
+    // a 6to4 relay routes to that v4 address — so a 6to4 address wrapping an RFC1918/loopback/link-local
+    // v4 reaches the internal host the same way NAT64 does. Extract + classify the embedded v4; block only
+    // when it is itself private (public 6to4 targets stay allowed). (Finding #8, low)
+    if (b[0] === 0x20 && b[1] === 0x02) {
+        return [`${b[2]}.${b[3]}.${b[4]}.${b[5]}`];
+    }
+    // ISATAP (RFC 5214): the interface identifier 0000:5efe:V4V4 / 0200:5efe:V4V4 (bytes 8-11 =
+    // 00|02,00,5e,fe) embeds an IPv4 in the last 4 bytes, under ANY prefix (link-local OR a global one),
+    // which an ISATAP router tunnels to that v4. Same internal-reach as 6to4/NAT64; block when the
+    // embedded v4 is private. (twin of the 6to4/NAT64 branches above)
+    if ((b[8] === 0x00 || b[8] === 0x02) && b[9] === 0x00 && b[10] === 0x5e && b[11] === 0xfe) {
+        return [`${b[12]}.${b[13]}.${b[14]}.${b[15]}`];
+    }
+    // Teredo (RFC 4380) 2001:0000::/32: the client IPv4 is the last 32 bits XORed with 0xffffffff and the
+    // Teredo server IPv4 is bytes 4-7. Either can be an internal target reached through the tunnel — block
+    // when the deobfuscated client OR the server v4 is private.
+    if (b[0] === 0x20 && b[1] === 0x01 && b[2] === 0x00 && b[3] === 0x00) {
+        const client = `${b[12] ^ 0xff}.${b[13] ^ 0xff}.${b[14] ^ 0xff}.${b[15] ^ 0xff}`;
+        const server = `${b[4]}.${b[5]}.${b[6]}.${b[7]}`;
+        return [client, server];
+    }
+    return null;
+}
+
+/**
  * True if an IP (literal) must NOT be reached by plugin egress. Callers pass RESOLVED IPs (the
  * validating lookup) or IP literals from connect args. Anything that isn't a parseable public IP is
  * blocked (fail closed).
@@ -115,41 +160,8 @@ export function isBlockedIp(ip: string): boolean {
     if (fam === 6) {
         const b = ipv6ToBytes(a);
         if (!b) return true;                                       // unparseable → fail closed
-        const first10Zero = b.slice(0, 10).every((x) => x === 0);
-        // ::/96 (IPv4-compatible + ::/::1) and ::ffff:0:0/96 (IPv4-mapped) — apply the IPv4 rules to the
-        // embedded address. This catches EVERY spelling of ::1 (→0.0.0.1, blocked by 0/8) and of
-        // ::ffff:169.254.169.254 (→link-local), plus :: (→0.0.0.0), regardless of textual form.
-        if (first10Zero && ((b[10] === 0xff && b[11] === 0xff) || (b[10] === 0 && b[11] === 0))) {
-            return isBlockedV4(`${b[12]}.${b[13]}.${b[14]}.${b[15]}`);
-        }
-        // NAT64 well-known prefix 64:ff9b::/96 embeds an IPv4 address a translator routes to — on an
-        // IPv6-only cloud VPC this reaches v4 metadata/loopback (64:ff9b::a9fe:a9fe = 169.254.169.254).
-        // Block only when the embedded v4 is itself private (public NAT64 targets stay allowed).
-        if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && b[4] === 0 && b[5] === 0 && b[6] === 0 && b[7] === 0) {
-            return isBlockedV4(`${b[12]}.${b[13]}.${b[14]}.${b[15]}`);
-        }
-        // 6to4 prefix 2002::/16 (RFC 3056) embeds the site's IPv4 in bytes 2-5 (2002:V4V4:V4V4::/48) which
-        // a 6to4 relay routes to that v4 address — so a 6to4 address wrapping an RFC1918/loopback/link-local
-        // v4 reaches the internal host the same way NAT64 does. Extract + classify the embedded v4; block only
-        // when it is itself private (public 6to4 targets stay allowed). (Finding #8, low)
-        if (b[0] === 0x20 && b[1] === 0x02) {
-            return isBlockedV4(`${b[2]}.${b[3]}.${b[4]}.${b[5]}`);
-        }
-        // ISATAP (RFC 5214): the interface identifier 0000:5efe:V4V4 / 0200:5efe:V4V4 (bytes 8-11 =
-        // 00|02,00,5e,fe) embeds an IPv4 in the last 4 bytes, under ANY prefix (link-local OR a global one),
-        // which an ISATAP router tunnels to that v4. Same internal-reach as 6to4/NAT64; block when the
-        // embedded v4 is private. (twin of the 6to4/NAT64 branches above)
-        if ((b[8] === 0x00 || b[8] === 0x02) && b[9] === 0x00 && b[10] === 0x5e && b[11] === 0xfe) {
-            return isBlockedV4(`${b[12]}.${b[13]}.${b[14]}.${b[15]}`);
-        }
-        // Teredo (RFC 4380) 2001:0000::/32: the client IPv4 is the last 32 bits XORed with 0xffffffff and the
-        // Teredo server IPv4 is bytes 4-7. Either can be an internal target reached through the tunnel — block
-        // when the deobfuscated client OR the server v4 is private.
-        if (b[0] === 0x20 && b[1] === 0x01 && b[2] === 0x00 && b[3] === 0x00) {
-            const client = `${b[12] ^ 0xff}.${b[13] ^ 0xff}.${b[14] ^ 0xff}.${b[15] ^ 0xff}`;
-            const server = `${b[4]}.${b[5]}.${b[6]}.${b[7]}`;
-            return isBlockedV4(client) || isBlockedV4(server);
-        }
+        const embedded = embeddedIpv4(b);
+        if (embedded) return embedded.some((v4) => isBlockedV4(v4));
         if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return true;  // fe80::/10 link-local
         if (b[0] === 0xfe && (b[1] & 0xc0) === 0xc0) return true;  // fec0::/10 deprecated site-local (RFC 3879)
         if ((b[0] & 0xfe) === 0xfc) return true;                  // fc00::/7 unique-local (ULA)
@@ -236,10 +248,14 @@ export function isNeverExemptIp(ip: string): boolean {
     if (fam === 6) {
         const b = ipv6ToBytes(a);
         if (!b) return true;
-        if (b.slice(0, 10).every((x) => x === 0) && ((b[10] === 0xff && b[11] === 0xff) || (b[10] === 0 && b[11] === 0))) {
-            if (b[10] === 0 && b.slice(10, 15).every((x) => x === 0) && b[15] === 1) return false; // ::1 loopback
-            return v4(`${b[12]}.${b[13]}.${b[14]}.${b[15]}`);
-        }
+        if (b.slice(0, 15).every((x) => x === 0) && b[15] === 1) return false; // ::1 loopback
+        // Every IPv4 the address embeds (mapped/compatible, NAT64, 6to4, ISATAP, Teredo): a translator or
+        // relay routes to it, so a NAT64 or 6to4 spelling of 169.254.169.254 is the metadata endpoint too.
+        const embedded = embeddedIpv4(b);
+        if (embedded && embedded.some((x) => v4(x))) return true;
+        if (embedded && b.slice(0, 10).every((x) => x === 0)) return false; // plain mapped/compatible v4
+        // The AWS instance metadata service's IPv6 address (Nitro): fd00:ec2::254.
+        if (b[0] === 0xfd && b[1] === 0x00 && b[2] === 0x0e && b[3] === 0xc2 && b.slice(4, 14).every((x) => x === 0) && b[14] === 0x02 && b[15] === 0x54) return true;
         if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return true; // fe80::/10 link-local
         if (b[0] === 0xff) return true;                           // ff00::/8 multicast
         return false;

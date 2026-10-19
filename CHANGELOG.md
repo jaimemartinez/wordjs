@@ -6,6 +6,32 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+
+- **Per-site media storage quotas (multisite).** **Admin → Network** shows how much media each site stores
+  and takes a quota per site and a network default (`GET /network/quotas`, `PUT /network/quotas/default`,
+  `PUT /network/sites/:id/quota`). An upload or a WXR import download over a site's quota answers
+  `413 rest_upload_quota_exceeded`. No quota is set by default, and the main site never has one — see
+  [multisite.md](documentation/multisite.md#media-storage-quotas).
+- **`npm run media` takes `--site <id>` and `--all-sites`** on a network of sites, and **Settings → Media
+  storage** lists each site's library state.
+
+### ⚠️ Upgrade note — database TLS is now verified
+
+Sites with `dbSsl: true` on a **managed database whose CA is not in Node.js's trust store** — Amazon RDS /
+Aurora, DigitalOcean Managed Databases, Azure Database for PostgreSQL / MySQL and any private CA — stop at
+boot after this upgrade until the CA is configured. **Before upgrading**, download your provider's CA
+bundle and set it, e.g. for RDS:
+
+```json
+{ "dbSsl": true, "dbSslCa": "./certs/rds-global-bundle.pem" }
+```
+
+(`https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem`; Docker/Helm: `WORDJS_DB_SSL_CA`).
+Per-provider downloads and the last-resort opt-out are in
+[database.md — Upgrade note](documentation/database.md#upgrade-note-database-tls-is-verified-by-default);
+the boot error links there too.
+
 ### Changed
 
 - **Database TLS verifies the server certificate.** With `dbSsl: true`, Postgres and MySQL connections
@@ -18,12 +44,84 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   a warning), and the Docker/Helm entrypoint reads `WORDJS_DB_SSL`, `WORDJS_DB_SSL_CA` and
   `WORDJS_DB_SSL_REJECT_UNAUTHORIZED`.
 
+### Fixed
+
+- **Uploads on a network of sites.** A file upload larger than the first network packet (most real photos)
+  could fail with "No site context" on a multisite install, because the body was read outside the
+  request's site. Every middleware that reads a request body now runs as the request's site.
+
+- **Multisite: network-wide actions on the main site take a network administrator.** Installing, updating,
+  packing, downloading or deleting plugins, writing theme files, the marketplace, backups, the database
+  migration tool, the site's addresses, certificates, the hooks registry and the Redis object-cache switch
+  now answer `403 rest_forbidden_network` (`rest_network_only` for the cache switch) to an administrator of
+  the main site who is not a network administrator. Activating plugins, granting their permissions and
+  everything else the main site owns stay with its administrators, and the admin screens hide what they
+  cannot use. A single site behaves exactly as before.
+- **Query-string credentials are short-lived tickets.** The two routes that accept `?token=` (the
+  notifications stream and the plugin package download) take only a 60-second ticket for that path, from
+  the new `POST /api/v1/auth/query-ticket`; a session token or an API token in the query string is no
+  longer accepted. The admin uses the session cookie for both and is unaffected.
+
+### Fixed
+
+- **`/readyz` no longer hangs when the database stops answering.** The readiness check now has a deadline
+  (3 s, `WORDJS_READINESS_TIMEOUT_MS`): past it the probe answers `503 not_ready` (`db: "timeout"`)
+  instead of leaving every later probe waiting on the stuck one, and no second query is started while
+  the first is still pending. On Postgres and MySQL the check also runs with a server-side statement
+  timeout.
+- **WebSocket upgrades behind an untrusted CDN or reverse proxy.** Without `trustProxy` every visitor
+  behind such a proxy shared one upgrade budget, so collaboration, presence and HMR sockets could be
+  refused for the whole site. The gateway now gives each forwarded client behind a shared address its own
+  per-client budget and raises that address's total with the number of distinct clients behind it (up to
+  `rateLimit.upgradeSharedMultiplier`, default 20×). It also logs its trust posture at boot and warns once
+  when one address carries many forwarded clients, naming `trustProxy` / `WORDJS_TRUST_PROXY`.
+
 ### Security
 
+- **Each site of a network has its own space in the media bucket.** With S3 media storage, every site other
+  than the main one now stores and serves its objects under `<prefix>/sites/<id>/`, so sites no longer
+  share object keys; the main site's keys and URLs are unchanged. Objects stored before this release move
+  into their site's space once, at startup (verified by size, idempotent) — see
+  [media-storage.md](documentation/media-storage.md).
+- **Moving media to the bucket and back covers every site of a network.** `POST /media-storage/migrate`
+  (and the screen's buttons) now offloads or restores each site's library in turn, so a network can
+  switch back to local storage.
+- **Plugin activation, deactivation and reload are rate-limited** per site and account, together with the
+  routes that restart a plugin's worker (grants, egress hosts, private destinations, port):
+  `429 rest_plugin_lifecycle_rate_limited` beyond 60 in 10 minutes.
+- **Private destinations can never be approved in their IPv6 spellings either.** The metadata, link-local
+  and multicast addresses that NAT64, 6to4, ISATAP or Teredo addresses embed, and `fd00:ec2::254`, are
+  refused like their plain form.
+- **Network administrator accounts are managed by network administrators.** With multisite on, a network
+  administrator's email, password, role, two-factor reset, AI agent connections and the account itself can
+  be changed only by a network administrator (or by its owner), and a site import leaves those accounts and
+  the network-wide settings untouched. Deleting an account removes it from the network administrators, and
+  each network-administrator entry is bound to its account's login and re-checked at boot and after a
+  backup restore.
+- **The two-factor code ceiling on the account security doors lasts a day.** Past ten wrong codes on
+  `/auth/mfa/disable`, `/auth/mfa/backup-codes` or a token step-up, the account password stays required
+  for 24 hours (or until a correct code or a password sign-in), on the Redis and in-memory stores alike,
+  and concurrent attempts are counted one by one.
+- **The gateway's debug "Proxying" line redacts query values,** like the access log, so one-time tokens
+  in reset, verification and invitation links are not written to debug logs.
 - **A plugin's JavaScript under `public/` now needs `browser:script`, like its `dist/` bundles.** The static
   `/plugins/<slug>/public/*.js|.mjs|.cjs` files are served only while the plugin is active and granted
   `browser:script`; styles, images and fonts keep the active-only rule. Every marketplace plugin that
   enqueues a public script already declares it.
+- **mail-server 3.0.4: inbound sender authentication.** A `From` that names several domains is now
+  evaluated against the DMARC policy of each of them and gets the strictest outcome (RFC 7489 §6.6.1);
+  such mail is never shown as a verified sender, the stored verdict lists every From domain and the
+  reading pane shows **Several senders**. A message with several `From` header fields is refused.
+  Relaxed DMARC alignment now finds organizational domains with the **Public Suffix List**, vendored as
+  data in the plugin (`lib/public-suffix-list.js`, regenerated by
+  `backend/scripts/update-public-suffix-list.js`); a domain whose suffix the list does not know aligns
+  only on an exact match. A DKIM signature whose `l=` leaves part of the body unsigned is a *pass with
+  unsigned content*: it no longer counts for DMARC alignment or for the local-domain check, and the
+  webmail shows **Partly signed by …** with a notice instead of a verified badge.
+- **mail-server 3.0.4: the outbound retry queue charges a message once.** Automatic retries no longer
+  count against the sender's hourly limit again on every pass, and site/provider mail (`user_id = 0`)
+  retries on its own budget (1000 messages / 5000 recipients per hour) instead of a shared 100-message
+  bucket.
 - **A plugin route's `req.user` carries the caller's email and login only with `users:read`.** Without the
   grant a route still receives `id`, `role`, `hasProfessionalMailbox` and `pluginCapabilities`.
 - **Real-time collaboration hardening.** The `/collab` routes now require an interactive sign-in; API
@@ -40,6 +138,28 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   shared by all of the user's tabs, and a per-user share of a session's operation log. Structural edits
   are sanitized with the same key-aware rules as `PUT /posts/:id`, and presence shows each member's
   account number next to their display name.
+
+### Fixed
+
+- **`auctions` 1.1.1: signed-in bidding works again.** The plugin now requests `users:read`, so a signed-in
+  bidder bids as the address of their own account (the host shares a caller's email with a plugin route only
+  under that permission). Until an administrator approves it on an updated site, a signed-in bidder types an
+  address and confirms it with a mailed code, in `login` mode too. Every bid is now held to the per-auction and
+  site-wide bid windows, a mailed verification code stays charged to the requesting client's window, and
+  verification codes are bounded per client and site-wide (200 an hour) as well as per address.
+- **`vendor-marketplace` 1.0.3 and `conference-manager` 2.17.2: a right portal code is never refused for other
+  callers' wrong ones.** The per-client budget is the only one that refuses a portal sign-in; past the
+  per-portal and site-wide budgets every attempt waits a little longer instead, and only wrong codes for a
+  store or location that exists count toward them. The `vendor-marketplace` block now sends the CSRF header
+  with its sign-in, portal, application and inquiry requests, so a visitor who is signed in to the site can
+  use them.
+- **`event-tickets` 1.1.1: unpaid holds.** Unpaid orders of a ticket type together hold at most
+  `pendingHoldPercent` of its capacity (never less than one seat), the first order included. On a site without
+  a mail transport an order is held to the same per-address unpaid-seat window as a confirmed one, and the
+  confirmation codes the site mails are bounded site-wide (200 an hour).
+- **`digital-downloads` 1.1.1: the download and order-received mails carry only the site's own text** (no
+  longer the name typed in the order form), like the other public-form plugins' mails. Its block now sends
+  the CSRF header with the order request, so a visitor who is signed in to the site can order.
 
 ## [2.7.0] - 2026-10-17
 

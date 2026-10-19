@@ -593,6 +593,8 @@ app.post(`${config.api.prefix}/analytics/track`, analyticsLimiter);
 // F0 REST inventory. What stays here is the part this file owns for EVERY limiter — the shared Redis
 // store, without which a multi-node install enforces N× the configured cap.
 require('./routes/comments').useCommentLimiterStore(limiterStore('rl:comments:'));
+// Plugin activate/deactivate/reload (each spawns a sandboxed child): limiter built on the router, store here.
+require('./routes/plugins').usePluginLifecycleLimiterStore(limiterStore('rl:plugin-lifecycle:'));
 
 // SECURITY: CSRF Protection for all API routes
 const { csrfProtection } = require('./middleware/auth');
@@ -1067,10 +1069,14 @@ app.get('/metrics', async (req: Request, res: Response) => {
 // The verdict is cached ~1 s and shared by concurrent callers (core/readiness.ts): this route is
 // unauthenticated and rate-limit exempt, so its cost must not scale with the request rate. A failure's
 // detail is logged, never sent.
-const readiness = require('./core/readiness').createReadinessProbe({
+// The database check has a deadline (WORDJS_READINESS_TIMEOUT_MS, 3 s by default): a query that never
+// answers is reported 503 instead of leaving /readyz pending forever.
+const readinessModule = require('./core/readiness');
+const readiness = readinessModule.createReadinessProbe({
     isInstalled: () => require('./core/configManager').isInstalled(),
     isBooted: () => appReady,
-    checkDatabase: () => require('./core/system-health').checkDatabase(),
+    checkDatabase: (opts: { timeoutMs: number }) => require('./core/system-health').checkDatabase(opts),
+    timeoutMs: readinessModule.readinessTimeoutMs(process.env),
     onError: (err: unknown) => log.warn({ err }, '/readyz: readiness check failed'),
 });
 app.get('/readyz', async (req: Request, res: Response) => {
@@ -1213,6 +1219,13 @@ app.use('/api/v1/analytics', require('./routes/analytics'));
 // DB administration (schema migrations) — core infrastructure, formerly the db-migration plugin.
 // Mounted here in the host (it runs around the DB lifecycle at boot; can't be isolated in a worker).
 require('./core/db-admin').register(app);
+
+// Backups archive the main site's database and files: the main site's only (multisite), and on the main
+// site of a network its network administrators only. Mounted with the app (it used to be mounted late in
+// initialize(), so an app built without the boot had no /backups at all and its guards went untested).
+app.use(`${config.api.prefix}/backups`, multisiteGuards.mainSiteOnly);
+app.use(`${config.api.prefix}/backups`, multisiteGuards.networkAdminOnMainSite);
+app.use(`${config.api.prefix}/backups`, require('./routes/backups'));
 
 // Note: 404 and error handlers are registered in initialize() after plugins load
 
@@ -1597,6 +1610,8 @@ async function initializeMainSite() {
                 const main = network.normalizeSiteUrl(config.siteUrl);
                 if (main) network.registerPrimarySite(main.url);
                 log.info(`🌐 Multisite: ${network.listSites().length} site(s) in the network.`);
+                // Every network administrator row still names an account of the main site, and the same one.
+                await require('./core/network-auth').recheckNetworkAdmins();
             } catch (e: any) {
                 log.error(`❌ Multisite: the network store could not be opened (${e && e.message}); only the main site is answered.`);
             }
@@ -1610,6 +1625,15 @@ async function initializeMainSite() {
         // hot option readers then serve from memory instead of one SELECT per option per request.
         const preloaded = await require('./core/options').preloadAutoloadedOptions();
         if (preloaded) log.info(`⚡ Option cache primed: ${preloaded} autoloaded options`);
+
+        // Multisite + S3 media storage: each site other than site 1 has its own key space in the bucket
+        // (core/media-storage). Objects a site stored before that move into it, once per site, in the
+        // background (core/media-storage-migrate migrateSiteKeys; a no-op once done, or with no bucket).
+        if (siteContext.multisiteEnabled()) {
+            require('./core/media-storage-migrate').migrateSiteKeys()
+                .then((r: any) => { for (const s of r.sites) log.info(`🪣 Media storage: site ${s.siteId} keys moved (${s.copied} copied, ${s.removed} old removed, ${s.failed} failed)`); })
+                .catch((e: any) => log.warn(`Media storage: the move into per-site key spaces did not finish: ${e && e.message}`));
+        }
 
         // The site's addresses: bring wordjs-config.json (the master) and the `siteurl`/`home` mirrors
         // into agreement — the legacy upgrade, a change `npm run site` made while the server was down —
@@ -1660,14 +1684,6 @@ async function initializeMainSite() {
 
 
 
-        // Register routes that were not in the initial index.js routes list if needed
-        // But better to add it to src/routes/index.js if possible, OR just here dynamically.
-        // Let's add it to src/routes/index.js instead for cleanliness?
-        // Actually, looking at src/routes/index.js (I haven't seen it yet), but usually it's better.
-        // However, I can inject it here.
-        // Backups archive the main site's database and files: the main site's only (multisite).
-        app.use(`${config.api.prefix}/backups`, multisiteGuards.mainSiteOnly);
-        app.use(`${config.api.prefix}/backups`, require('./routes/backups'));
 
         const { initPostTypes, initTaxonomies } = require('./core/post-types');
         await initPostTypes();

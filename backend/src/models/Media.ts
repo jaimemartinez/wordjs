@@ -412,8 +412,10 @@ class Media {
             });
         }
 
-        // Delete the post
-        return await Post.delete(id, true);
+        // Delete the post (and let the site's storage quota see the space it frees)
+        const deleted = await Post.delete(id, true);
+        require('../core/site-upload-quota').invalidateUsage();
+        return deleted;
     }
 
     /**

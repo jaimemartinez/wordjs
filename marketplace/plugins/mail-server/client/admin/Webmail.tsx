@@ -55,12 +55,19 @@ const senderMismatch = (header?: string, from?: string) => {
 const authVerdict = (header?: string) => {
     const h = String(header || '');
     if (!h) return null;
-    const dkim = [...h.matchAll(/dkim=([a-z]+)(?: \([^)]*\))? header\.d=([^\s;]*)/g)].map(m => ({ result: m[1], domain: m[2] }));
-    const d = /dmarc=([a-z]+)(?: \(p=([a-z]+) dis=([a-z]+)\))? header\.from=([^\s;]*)/.exec(h);
-    const dmarc = d ? { result: d[1], policy: d[2] || '', disposition: d[3] || 'none', domain: d[4] } : null;
-    const dkimPass = dkim.find(s => s.result === 'pass');
-    const dkimBad = !dkimPass && dkim.find(s => s.result === 'fail' || s.result === 'permerror' || s.result === 'policy');
-    return { dkimPass, dkimBad, dmarc };
+    // A pass whose comment says unsigned content (an l= signature shorter than the body) verifies only
+    // part of the message: it is shown as such, and never as a verified sender.
+    const dkim = [...h.matchAll(/dkim=([a-z]+)(?: \(([^)]*)\))? header\.d=([^\s;]*)/g)]
+        .map(m => ({ result: m[1], domain: m[3], partial: m[1] === 'pass' && /unsigned-content/.test(m[2] || '') }));
+    const d = /dmarc=([a-z]+)(?: \(p=([a-z]+) dis=([a-z]+)\))?(?: \(from=([^)]*)\))? header\.from=([^\s;]*)/.exec(h);
+    const dmarc = d ? { result: d[1], policy: d[2] || '', disposition: d[3] || 'none', domain: d[5] } : null;
+    // Every From domain, when the From named several (the list shows only the first sender).
+    const severalFrom = d && d[4] ? d[4].split(',').filter(Boolean) : [];
+    const dkimPass = dkim.find(s => s.result === 'pass' && !s.partial);
+    const dkimPartial = dkim.find(s => s.partial);
+    const dkimBad = !dkimPass && !dkimPartial && dkim.find(s => s.result === 'fail' || s.result === 'permerror' || s.result === 'policy');
+    const verified = !!dmarc && dmarc.result === 'pass' && !dkimPartial && severalFrom.length < 2;
+    return { dkimPass, dkimPartial, dkimBad, dmarc, severalFrom, verified };
 };
 
 export default function Webmail({ access, user, t, locale, toasts, confirm, isAdmin, onOpenServer }: any) {
@@ -873,11 +880,12 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
         const sender = !latest.is_sent ? addrOf(latest.from_address) : '';
         const spf = SPF_TONE[spfVerdict(email.received_spf)] ? spfVerdict(email.received_spf) : '';
         const auth = authVerdict(email.auth_results);
-        const dmarcPass = auth?.dmarc?.result === 'pass';
+        const dmarcPass = !!auth?.verified;
         const dmarcFail = auth?.dmarc?.result === 'fail';
+        const severalFrom = auth && auth.severalFrom.length > 1 ? auth.severalFrom.join(', ') : '';
         // An aligned DKIM signature (DMARC pass) authenticates the From domain, so no mismatch to flag.
         const unaligned = dmarcPass ? null : senderMismatch(email.received_spf, email.from_address);
-        const authPills = !!(auth && (dmarcPass || dmarcFail || auth.dkimPass || auth.dkimBad));
+        const authPills = !!(auth && (dmarcPass || dmarcFail || auth.dkimPass || auth.dkimPartial || auth.dkimBad || severalFrom));
         const inTrash = folder === 'trash' || !!email.is_trash;
         const inSpam = folder === 'spam' || !!email.is_spam;
 
@@ -939,6 +947,8 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
                                 {dmarcPass && <Pill tone="green" title={`${t('auth.dmarcPassHint', { domain: auth.dmarc.domain })}\n\n${email.auth_results}`}><i className="fa-solid fa-circle-check"></i>{t('auth.dmarcPass')}</Pill>}
                                 {dmarcFail && <Pill tone="red" title={`${t(auth.dmarc.disposition === 'quarantine' ? 'auth.dmarcQuarantineHint' : 'auth.dmarcFailHint', { domain: auth.dmarc.domain, policy: auth.dmarc.policy || 'none' })}\n\n${email.auth_results}`}><i className="fa-solid fa-circle-xmark"></i>{t(auth.dmarc.disposition === 'quarantine' ? 'auth.dmarcQuarantine' : 'auth.dmarcFail')}</Pill>}
                                 {!dmarcPass && auth?.dkimPass && <Pill tone="green" title={`${t('auth.dkimPassHint', { domain: auth.dkimPass.domain })}\n\n${email.auth_results}`}><i className="fa-solid fa-signature"></i>{t('auth.dkimPass', { domain: auth.dkimPass.domain })}</Pill>}
+                                {auth?.dkimPartial && <Pill tone="orange" title={`${t('auth.dkimPartialHint', { domain: auth.dkimPartial.domain })}\n\n${email.auth_results}`}><i className="fa-solid fa-signature"></i>{t('auth.dkimPartial', { domain: auth.dkimPartial.domain })}</Pill>}
+                                {severalFrom && <Pill tone="orange" title={`${t('auth.severalFromHint', { domains: severalFrom })}\n\n${email.auth_results}`}><i className="fa-solid fa-users"></i>{t('auth.severalFrom')}</Pill>}
                                 {auth?.dkimBad && <Pill tone="red" title={`${t(auth.dkimBad.result === 'fail' ? 'auth.dkimFailHint' : 'auth.dkimErrorHint', { domain: auth.dkimBad.domain })}\n\n${email.auth_results}`}><i className="fa-solid fa-signature"></i>{t('auth.dkimFail')}</Pill>}
                                 {(email.labels || []).map((l: any) => (
                                     <span key={l.id} className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium" style={{ background: `${l.color}1a`, color: l.color }}>
@@ -946,6 +956,15 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
                                         <button type="button" aria-label={t('common.delete')} onClick={() => toggleLabelOn(email, l)} className="opacity-60 hover:opacity-100"><i className="fa-solid fa-xmark text-[10px]"></i></button>
                                     </span>
                                 ))}
+                            </div>
+                        )}
+                        {(auth?.dkimPartial || severalFrom) && (
+                            <div role="note" className="mb-4 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-900">
+                                <i className="fa-solid fa-triangle-exclamation mt-0.5 text-amber-500"></i>
+                                <div className="min-w-0 flex-1 space-y-1">
+                                    {severalFrom && <p>{t('auth.severalFromBanner', { domains: severalFrom })}</p>}
+                                    {auth?.dkimPartial && <p>{t('auth.dkimPartialBanner', { domain: auth.dkimPartial.domain })}</p>}
+                                </div>
                             </div>
                         )}
                         {sender && isBlocked(sender) && (

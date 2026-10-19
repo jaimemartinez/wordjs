@@ -1543,6 +1543,11 @@ export interface NetworkSite {
     createdAt: string;
     updatedAt: string;
 }
+/** Media storage quotas of the network (bytes; null = none / no limit). `used` is null when a site cannot be read. */
+export interface NetworkQuotas {
+    defaultQuota: number | null;
+    sites: { id: number; quota: number | null; effectiveQuota: number | null; used: number | null }[];
+}
 export interface NewNetworkSite {
     slug: string;
     url: string;
@@ -1571,6 +1576,11 @@ export const networkApi = {
     create: (data: NewNetworkSite) => apiPost<{ site: NetworkSite }>("/network/sites", data),
     suspend: (id: number, currentPassword: string) => apiPost<{ site: NetworkSite }>(`/network/sites/${id}/suspend`, { currentPassword }),
     resume: (id: number, currentPassword: string) => apiPost<{ site: NetworkSite }>(`/network/sites/${id}/resume`, { currentPassword }),
+    quotas: () => apiGet<NetworkQuotas>("/network/quotas"),
+    setDefaultQuota: (bytes: number | null, currentPassword: string) =>
+        apiPut<{ defaultQuota: number | null }>("/network/quotas/default", { bytes, currentPassword }),
+    setSiteQuota: (id: number, bytes: number | null, currentPassword: string) =>
+        apiPut<{ id: number; quota: number | null; effectiveQuota: number | null }>(`/network/sites/${id}/quota`, { bytes, currentPassword }),
 };
 
 // ── Form submissions (Webflow "Forms + submissions" parity) ────────────────────────────────────────

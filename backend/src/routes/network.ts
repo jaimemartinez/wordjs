@@ -10,6 +10,9 @@
  *   GET  /network/plugins                the installed plugins and what the network offers the sites
  *   PUT  /network/plugins/:slug/ceiling  offer a plugin to the sites, up to a grant ceiling (re-authenticates)
  *   DELETE /network/plugins/:slug/ceiling  stop offering it; it is deactivated on every other site (re-authenticates)
+ *   GET  /network/quotas                 the media storage quota of every site, and what each one uses
+ *   PUT  /network/quotas/default         the quota a site without its own follows (re-authenticates)
+ *   PUT  /network/sites/:id/quota        one site's own quota (re-authenticates)
  *
  * Everything but /status is for NETWORK administrators (core/network-auth), on the main site only, with
  * a session (never an API token): a token minted for automation must not be able to create sites.
@@ -458,6 +461,138 @@ router.delete('/plugins/:slug/ceiling', asyncHandler(async (req: Request, res: R
     const result = await require('../core/plugins').withdrawPluginFromSites(slug);
     require('../core/network').audit('plugin.withdrawn', { actor: Number(req.user.id), detail: { slug, deactivatedOn: result.deactivatedOn } });
     res.json({ slug, ...result });
+}));
+
+// ── Media storage quotas (core/network effectiveUploadQuota, core/site-upload-quota) ──────────────────
+
+/**
+ * @swagger
+ * /network/quotas:
+ *   get:
+ *     summary: The media storage quota of every site and how much each one uses
+ *     description: A quota is a number of bytes of media (uploads with their derivatives, public and private). A site's own quota wins; a site without one follows the network default; with neither there is no limit. The main site never has a quota.
+ *     tags: [Network]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: "{ defaultQuota, sites: [{ id, quota, effectiveQuota, used }] } (bytes; null = none / no limit; used null when the site's database cannot be read)"
+ *       401:
+ *         description: Not signed in (rest_not_logged_in)
+ *       403:
+ *         description: Not a network administrator
+ */
+router.get('/quotas', asyncHandler(async (req: Request, res: Response) => {
+    const network = require('../core/network');
+    const database = require('../config/database');
+    const quota = require('../core/site-upload-quota');
+    const sites = [];
+    for (const site of network.listSites()) {
+        let used: number | null;
+        try {
+            used = await siteContext.runWithSite(site.id, async () => {
+                if (site.id !== siteContext.PRIMARY_SITE_ID) await database.openSiteDatabase(site.id, site.dbPath || network.siteDbPath(site.id));
+                return quota.siteUploadUsage();
+            });
+        } catch { used = null; }
+        sites.push({
+            id: site.id,
+            quota: network.siteUploadQuotaOverride(site.id),
+            effectiveQuota: network.effectiveUploadQuota(site.id),
+            used,
+        });
+    }
+    res.set('Cache-Control', 'no-store');
+    res.json({ defaultQuota: network.defaultUploadQuota(), sites });
+}));
+
+/**
+ * @swagger
+ * /network/quotas/default:
+ *   put:
+ *     summary: Set the default media storage quota of the sites
+ *     tags: [Network]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [currentPassword]
+ *             properties:
+ *               bytes:
+ *                 type: integer
+ *                 nullable: true
+ *                 description: null or absent removes the default (no limit).
+ *               currentPassword:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: "{ defaultQuota }"
+ *       400:
+ *         description: Not a whole number of bytes (network_invalid_quota), or a wrong currentPassword
+ * /network/sites/{id}/quota:
+ *   put:
+ *     summary: Set one site's own media storage quota
+ *     tags: [Network]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [currentPassword]
+ *             properties:
+ *               bytes:
+ *                 type: integer
+ *                 nullable: true
+ *                 description: null or absent removes the site's own quota (it follows the default again).
+ *               currentPassword:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: "{ id, quota, effectiveQuota }"
+ *       400:
+ *         description: The main site (network_primary_site), not a whole number of bytes (network_invalid_quota), or a wrong currentPassword
+ *       404:
+ *         description: No such site (network_site_not_found)
+ */
+router.put('/quotas/default', asyncHandler(async (req: Request, res: Response) => {
+    const body = req.body || {};
+    if (await requireSudoPassword(req, res, body.currentPassword)) return;
+    try {
+        const network = require('../core/network');
+        const defaultQuota = network.setDefaultUploadQuota(body.bytes);
+        network.audit('quota.default', { actor: Number(req.user.id), detail: { bytes: defaultQuota } });
+        res.json({ defaultQuota });
+    } catch (e: any) {
+        return sendError(res, e);
+    }
+}));
+
+router.put('/sites/:id/quota', asyncHandler(async (req: Request, res: Response) => {
+    const id = siteIdParam(req.params.id);
+    if (id === null) return res.status(404).json({ code: 'network_site_not_found', message: 'No such site.', data: { status: 404 } });
+    const body = req.body || {};
+    if (await requireSudoPassword(req, res, body.currentPassword)) return;
+    try {
+        const network = require('../core/network');
+        const quota = network.setSiteUploadQuota(id, body.bytes);
+        network.audit('quota.site', { actor: Number(req.user.id), siteId: id, detail: { bytes: quota } });
+        res.json({ id, quota, effectiveQuota: network.effectiveUploadQuota(id) });
+    } catch (e: any) {
+        return sendError(res, e);
+    }
 }));
 
 module.exports = router;

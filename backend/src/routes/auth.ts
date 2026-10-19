@@ -18,7 +18,7 @@ const User = require('../models/User');
 // refuseRetiringSignIn likewise for an address retired a few seconds ago (503 rest_address_retiring).
 // sessionBoundToSecondaryAddress keeps an address-bound session from minting an unbound API token, and
 // unboundSessionOnly from changing which accounts need a second factor (PUT /mfa/policy).
-const { authenticate, generateToken, verifyToken, issueSessionCookie, sessionOnly, sessionCookie, sessionCookieOptions, clearSessionCookies, refuseInsecureSignIn, refuseRetiringSignIn, signInRefusal, sessionBoundToSecondaryAddress, unboundSessionOnly, sessionAddressStillAccepted, sessionMfaVerified } = require('../middleware/auth');
+const { authenticate, generateToken, verifyToken, issueSessionCookie, sessionOnly, sessionCookie, sessionCookieOptions, clearSessionCookies, refuseInsecureSignIn, refuseRetiringSignIn, signInRefusal, sessionBoundToSecondaryAddress, unboundSessionOnly, sessionAddressStillAccepted, sessionMfaVerified, isQueryTicketPath, issueQueryTicket, QUERY_TICKET_TTL_SECONDS } = require('../middleware/auth');
 const { isAdmin, can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 // THE ROUTE-ID CONTRACT — see core/query-params: one definition of "a route id" for the whole tree.
@@ -975,6 +975,8 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
     try {
         const user = await User.authenticate(username, password);
         await clearLoginFails(lockId);
+        // The owner proved the password: the account's code ceiling at the session doors starts over.
+        await clearMfaCeiling(user.id);
         // Successful password → reset the escalation ladder for this IP+account.
         await loginThrottle.succeed(throttleKey, lockId);
 
@@ -1763,6 +1765,50 @@ const MAX_ACTIVE_TOKENS_PER_USER = 100;
  */
 /**
  * @swagger
+ * /auth/query-ticket:
+ *   post:
+ *     summary: Issue a short-lived ticket for one route opened from the query string
+ *     description: >-
+ *       For a client that must open an EventSource stream or a download by plain navigation and cannot
+ *       send the session cookie or an Authorization header. The ticket goes in `?token=` of exactly the
+ *       path it names, is valid for 60 seconds, and authenticates nothing else. Only these paths take one:
+ *       `/api/v1/notifications/stream` and `/api/v1/plugins/{slug}/download`. A session JWT or an API
+ *       token in `?token=` is refused. Session-only.
+ *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [path]
+ *             properties:
+ *               path:
+ *                 type: string
+ *                 example: /api/v1/notifications/stream
+ *     responses:
+ *       200:
+ *         description: "{ ticket, path, expiresIn }"
+ *       400:
+ *         description: rest_invalid_param (no ticket is issued for that path)
+ *       401:
+ *         description: rest_not_logged_in
+ *       403:
+ *         description: An API token cannot request a ticket (rest_token_management_forbidden).
+ */
+router.post('/query-ticket', authenticate, sessionOnly, (req: Request, res: Response) => {
+    const path = (req.body || {}).path;
+    if (!isQueryTicketPath(path)) {
+        return res.status(400).json({ code: 'rest_invalid_param', message: 'No ticket can be issued for that path.', data: { status: 400, params: ['path'] } });
+    }
+    res.set('Cache-Control', 'no-store');
+    res.json({ ticket: issueQueryTicket(req, path), path, expiresIn: QUERY_TICKET_TTL_SECONDS });
+});
+
+/**
+ * @swagger
  * /auth/tokens:
  *   get:
  *     summary: List the caller's API tokens
@@ -1831,6 +1877,61 @@ router.get('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), async
 const MFA_MANAGE_PASSWORD_AFTER = 10;
 
 /**
+ * THE CEILING HAS ITS OWN, LONG-LIVED COUNTER. The 'mfa_manage' failure counter is the WAIT's: it forgets
+ * after LOGIN_LOCK_MS of quiet, so a ceiling read from it reopened every quarter of an hour (ten more
+ * guesses per idle window, around the clock). This one lasts MFA_CEILING_WINDOW_MS from the last wrong
+ * code and is cleared only by a correct code at these doors or by a password sign-in (clearMfaCeiling).
+ *
+ * It is CHARGED BEFORE the code is checked (chargeMfaCeiling returns the attempt's own number), so
+ * concurrent requests from many addresses cannot all read "9" and all get through: each attempt gets a
+ * distinct count from one atomic increment (Redis INCR, or one synchronous step in memory), and only the
+ * first MFA_MANAGE_PASSWORD_AFTER ever run without the password. Same store precedence as the rest:
+ * Redis when configured, this process's map otherwise (and on a Redis hiccup).
+ */
+const MFA_CEILING_WINDOW_MS = 24 * 60 * 60 * 1000;
+const _mfaCeilingMem = new Map<string, { count: number; lastAt: number }>();
+const _mfaCeilingRedisKey = (userId: unknown) => `wjlock:mfaceil:${lockBucket('mfa_manage', String(userId))}`;
+const _mfaCeilingMemKey = (userId: unknown) => lockBucket('mfa_manage', String(userId));
+
+function _chargeMfaCeilingMem(key: string): number {
+    const now = Date.now();
+    let e = _mfaCeilingMem.get(key);
+    if (!e || now - e.lastAt > MFA_CEILING_WINDOW_MS) e = { count: 0, lastAt: now };
+    e.count++;
+    e.lastAt = now;
+    _mfaCeilingMem.set(key, e);
+    if (_mfaCeilingMem.size > LOGIN_FAILS_SOFT_CAP) {
+        for (const [k, v] of _mfaCeilingMem) if (now - v.lastAt > MFA_CEILING_WINDOW_MS) _mfaCeilingMem.delete(k);
+    }
+    return e.count;
+}
+
+/** Count this attempt against the account's ceiling and return its number (1 = the first since the last clear). */
+async function chargeMfaCeiling(userId: unknown): Promise<number> {
+    const client = _lockStore();
+    if (client) {
+        try {
+            const key = _mfaCeilingRedisKey(userId);
+            const n = Number(await client.incr(key));
+            await client.expire(key, Math.ceil(MFA_CEILING_WINDOW_MS / 1000));
+            return n;
+        } catch {
+            // Redis hiccup → this node's own count, so it still holds a ceiling.
+        }
+    }
+    return _chargeMfaCeilingMem(_mfaCeilingMemKey(userId));
+}
+
+/** A correct code at these doors, or a password sign-in, ends the ceiling. */
+async function clearMfaCeiling(userId: unknown): Promise<void> {
+    const client = _lockStore();
+    if (client) {
+        try { await client.del(_mfaCeilingRedisKey(userId)); } catch { /* best-effort; the TTL ends it anyway */ }
+    }
+    _mfaCeilingMem.delete(_mfaCeilingMemKey(userId));
+}
+
+/**
  * Check a TOTP/backup code on one of the session-reachable account doors: the in-flight slot, the
  * account-wide password ceiling above, the bounded wait, the check, and the failure count — in that
  * order, the ONE implementation all of them share. Returns true when the code is good; otherwise it has
@@ -1847,7 +1948,7 @@ async function verifyManagedMfaCode(req: Request, res: Response, code: unknown, 
         return false;
     }
     try {
-        if ((await loginFailCount(lk)) >= MFA_MANAGE_PASSWORD_AFTER) {
+        if ((await chargeMfaCeiling(req.user.id)) > MFA_MANAGE_PASSWORD_AFTER) {
             const pw = (req.body || {}).currentPassword;
             if (typeof pw !== 'string' || !pw) {
                 res.status(403).json({
@@ -1867,6 +1968,7 @@ async function verifyManagedMfaCode(req: Request, res: Response, code: unknown, 
             return false;
         }
         await clearLoginFails(lk);
+        await clearMfaCeiling(req.user.id);
         return true;
     } finally {
         await endLoginAttempt(slot);
@@ -2941,6 +3043,10 @@ module.exports.LOCK_PURPOSES = LOCK_PURPOSES;
 // isLoginLocked readers it finds in the source, instead of restating either half.
 module.exports.LOCKING_PURPOSES = LOCKING_PURPOSES;
 module.exports.loginFailCount = loginFailCount;
+// The code ceiling's own counter (see MFA_CEILING_WINDOW_MS), so a gate can put an account past the ceiling
+// without spending real wrong codes through the bounded waits.
+module.exports.chargeMfaCeiling = chargeMfaCeiling;
+module.exports.clearMfaCeiling = clearMfaCeiling;
 // The bounded wait itself, so a credential door in another module throttles with the SAME primitive
 // instead of the check-then-refuse that makes a door a hostage. See payFailureDelay.
 module.exports.payFailureDelay = payFailureDelay;
