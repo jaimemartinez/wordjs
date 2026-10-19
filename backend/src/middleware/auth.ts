@@ -458,13 +458,10 @@ async function mfaComplianceGate(req: Request, res: Response, next: NextFunction
     // Also cover the `?token=` transport that authenticateAllowQuery honors (e.g. the plugin-bundle download),
     // so an enforced user can't slip a session JWT past the gate via the query string. A wjt_ token there is
     // exempt exactly like on the Bearer path.
+    // Only a query ticket authenticates from there now (authenticateAllowQuery); it is judged exactly like
+    // the session it was issued from.
     const qToken = token ? null : queryToken(req);
-    if (qToken) {
-        if (qToken.startsWith(ApiToken.PREFIX)) {
-            return policy.enforceForApiTokens ? enforceApiTokenMfa(qToken, req, res, next) : next();
-        }
-        token = qToken;
-    }
+    if (qToken) token = qToken;
     if (!token) return next(); // no session — nothing to enforce (the route's own auth still applies)
 
     if (isMfaEnforceExempt(req)) return next();
@@ -472,7 +469,8 @@ async function mfaComplianceGate(req: Request, res: Response, next: NextFunction
     let decoded: any;
     try { decoded = verifyForSite(token); }
     catch { return next(); } // invalid/expired — the route's authenticate will 401 it
-    if (!decoded || decoded.purpose) return next(); // challenge/special-purpose tokens are not sessions
+    // Challenge/special-purpose tokens are not sessions — except a query ticket, which acts as one.
+    if (!decoded || (decoded.purpose && !(qToken && decoded.purpose === QUERY_TICKET_PURPOSE))) return next();
     // A session minted on an address the site no longer answers is no session: the route's own
     // authenticate refuses it, and asking it to enrol in 2FA first would be the wrong answer.
     if (!sessionAddressStillAccepted(decoded)) return next();
@@ -555,14 +553,22 @@ async function enforceApiTokenMfa(raw: string, req: Request, res: Response, next
  * Authenticate request with JWT token (Strict: Headers Only)
  */
 // Helper to avoid duplication
-async function verifyAndAttachUser(token: string, req: Request, res: Response, next: NextFunction) {
+async function verifyAndAttachUser(token: string, req: Request, res: Response, next: NextFunction, ticketPath?: string) {
     try {
         const decoded = verifyForSite(token);
 
         // A session token (generateToken) carries NO `purpose`. Special-purpose tokens signed with the
         // same secret — notably the MFA `mfa_challenge` token — must NEVER authenticate a request, or the
         // second factor could be skipped by presenting the challenge token as a session credential.
-        if (decoded.purpose) {
+        // The one exception is a query ticket (issueQueryTicket), and only from the query string of the
+        // one route it was issued for (`ticketPath`, from authenticateAllowQuery); from the query string
+        // NOTHING else is accepted — a session JWT there would leak through logs, Referer and history.
+        if (ticketPath !== undefined) {
+            if (decoded.purpose !== QUERY_TICKET_PURPOSE || typeof decoded.path !== 'string'
+                || normalizedTicketPath(decoded.path) !== normalizedTicketPath(ticketPath)) {
+                return res.status(401).json({ code: 'rest_token_invalid', message: 'Invalid token.', data: { status: 401 } });
+            }
+        } else if (decoded.purpose) {
             return res.status(401).json({ code: 'rest_token_invalid', message: 'Invalid token.', data: { status: 401 } });
         }
 
@@ -1273,19 +1279,68 @@ async function authenticate(req: Request, res: Response, next: NextFunction) {
 }
 
 /**
- * Authenticate request (Loose: Headers OR Cookie OR Query Param)
- * Use ONLY for read-only endpoints that require direct browser navigation where the client cannot set
- * an Authorization header (EventSource/SSE, <a href> downloads).
+ * QUERY TICKETS — the only credential the query string carries.
  *
- * SECURITY: a JWT placed in ?token= leaks via access logs, the Referer header, and browser history.
- * Prefer the HttpOnly cookie (EventSource/navigations send it same-origin) and the Authorization
- * header; only fall back to the query token when neither is present. This route MUST stay read-only —
- * never authorize a state-changing request off a query-string token.
+ * A few GET routes are opened by direct browser navigation or EventSource, where a client that has
+ * neither the session cookie nor a way to set a header has nothing else to send. They used to accept the
+ * SESSION JWT itself in `?token=`, which leaks a long-lived credential through access logs, the Referer
+ * header and browser history. Now such a client asks for a ticket first (POST /auth/query-ticket, with its
+ * session): a JWT with purpose `query_ticket`, valid for QUERY_TICKET_TTL_SECONDS, naming the ONE path it
+ * opens. It authenticates only that path, only from the query string, and every session check still
+ * applies (the user exists, the account's sessions were not revoked after it was issued, the address
+ * binding). Every other route refuses it like any other special-purpose token.
+ */
+const QUERY_TICKET_PURPOSE = 'query_ticket';
+const QUERY_TICKET_TTL_SECONDS = 60;
+/** The paths a ticket may be issued for (under the API prefix): exactly the routes mounted with authenticateAllowQuery. */
+const QUERY_TICKET_ROUTES: readonly RegExp[] = [
+    /^\/notifications\/stream$/,
+    /^\/plugins\/[a-z0-9][a-z0-9_-]{0,63}\/download$/,
+];
+
+/** One spelling per path, as Express routes it: case-insensitive, with or without one trailing slash. */
+function normalizedTicketPath(p: string): string {
+    const s = String(p || '').toLowerCase();
+    return s.length > 1 && s.endsWith('/') ? s.slice(0, -1) : s;
+}
+
+/** May a ticket be issued for this path (pathname only, no query)? */
+function isQueryTicketPath(p: unknown): boolean {
+    if (typeof p !== 'string' || p.length > 256 || /[?#%]/.test(p)) return false;
+    const n = normalizedTicketPath(p);
+    const prefix = normalizedTicketPath(String(config.api.prefix || ''));
+    if (!prefix || !n.startsWith(prefix + '/')) return false;
+    const rest = n.slice(prefix.length);
+    return QUERY_TICKET_ROUTES.some((re) => re.test(rest));
+}
+
+/**
+ * Sign a ticket for `path` on behalf of the session on `req` (callers check isQueryTicketPath and that
+ * the request is a session, not an API token). The ticket keeps the session's address binding and its
+ * second-factor marker, so it never opens more than the session would.
+ */
+function issueQueryTicket(req: Request, path: string): string {
+    const claims: Record<string, unknown> = { userId: req.user.id, purpose: QUERY_TICKET_PURPOSE, path: normalizedTicketPath(path) };
+    const mh = SESSION_MINTED_ON.get(req);
+    if (typeof mh === 'string') claims.mh = mh;
+    if (sessionMfaVerified(req)) claims.amr = [MFA_AMR];
+    return signForSite(claims, { expiresIn: QUERY_TICKET_TTL_SECONDS });
+}
+
+/**
+ * Authenticate request (Loose: Headers OR Cookie OR a query ticket)
+ * Use ONLY for read-only endpoints that require direct browser navigation where the client cannot set
+ * an Authorization header (EventSource/SSE, <a href> downloads), and list the route in QUERY_TICKET_ROUTES.
+ *
+ * The header and the HttpOnly cookie come first, as everywhere. `?token=` is the last resort and takes
+ * ONLY a query ticket for this very path: never a session JWT, never an API token. This route MUST stay
+ * read-only — never authorize a state-changing request off the query string.
  */
 async function authenticateAllowQuery(req: Request, res: Response, next: NextFunction) {
     if (handleDispatchedAgent(req, res, next)) return;
     const authHeader = req.headers.authorization;
     let token;
+    let ticketPath: string | undefined;
 
     if (authHeader && authHeader.startsWith('Bearer ')) {
         token = authHeader.substring(7);
@@ -1293,9 +1348,8 @@ async function authenticateAllowQuery(req: Request, res: Response, next: NextFun
         token = sessionCookie(req);
         ensureCsrfCookie(req, res); // same backfill as authenticate() — see there
     } else if (queryToken(req)) {
-        // Last-resort fallback (documented leak above). Kept for legacy EventSource/download clients
-        // that can supply neither header nor cookie.
         token = queryToken(req);
+        ticketPath = `${req.baseUrl || ''}${req.path || ''}`;
     }
 
     if (!token) {
@@ -1306,6 +1360,7 @@ async function authenticateAllowQuery(req: Request, res: Response, next: NextFun
         });
     }
 
+    if (ticketPath !== undefined) return await verifyAndAttachUser(token, req, res, next, ticketPath);
     if (token.startsWith(ApiToken.PREFIX)) {
         return await verifyApiTokenAndAttachUser(token, req, res, next);
     }
@@ -1643,6 +1698,9 @@ function csrfProtection(req: Request, res: Response, next: NextFunction) {
 module.exports = {
     authenticate,
     authenticateAllowQuery,
+    isQueryTicketPath,
+    issueQueryTicket,
+    QUERY_TICKET_TTL_SECONDS,
     optionalAuth,
     generateToken,
     verifyToken,

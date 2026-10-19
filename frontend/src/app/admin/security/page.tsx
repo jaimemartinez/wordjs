@@ -6,10 +6,13 @@ import SSLCertManager from "./SSLCertManager";
 import AutoRenewalPanel from "./AutoRenewalPanel";
 import { useEffect, useState } from "react";
 import { settingsApi } from "@/lib/api";
+import { useOptionalAuth } from "@/contexts/AuthContext";
 
 export default function SecurityPage() {
     useI18n();
     const [adminEmail, setAdminEmail] = useState("");
+    const viewerNetwork = useOptionalAuth()?.user?.network;
+    const certsOffered = !viewerNetwork || (viewerNetwork.mainSite && viewerNetwork.networkAdmin);
 
     useEffect(() => {
         // Fetch admin email to pre-fill
@@ -42,6 +45,9 @@ export default function SecurityPage() {
                 </div>
 
                 <div className="space-y-8 animate-in slide-in-bottom fade-in duration-700 delay-150">
+                    {/* Multisite: certificates and the gateway are the network's — a network administrator on the
+                        main site manages them (the server refuses everyone else). A single site is unchanged. */}
+                    {certsOffered && (<>
                     {/* SSL / HTTPS Settings Section */}
                     <div className="glass-panel rounded-[40px] shadow-2xl overflow-hidden border-t-4 border-blue-500 transition-all hover:shadow-blue-900/10">
                         <div className="px-8 py-6 border-b border-gray-100/50 bg-white/40 backdrop-blur-md">
@@ -96,6 +102,8 @@ export default function SecurityPage() {
                             <GatewayConfigForm />
                         </div>
                     </div>
+
+                    </>)}
 
                     {/* Two-Factor Enforcement Policy */}
                     <div className="glass-panel rounded-[40px] shadow-2xl overflow-hidden border-t-4 border-emerald-500 transition-all hover:shadow-emerald-900/10">

@@ -802,8 +802,11 @@ export const SITE_ADDRESS_SETTINGS_PATH = "/admin/settings/site-address";
  * only (REDTEAM R8: it lists the server's own IPs, which would let anyone route around a CDN or WAF),
  * the same role check as its `isAdmin`; asking with any other role would just collect a 403.
  */
-export function canManageSiteAddress(user: { role?: unknown } | null | undefined): boolean {
-    return user?.role === "administrator";
+export function canManageSiteAddress(user: { role?: unknown; network?: { mainSite: boolean; networkAdmin: boolean } } | null | undefined): boolean {
+    if (user?.role !== "administrator") return false;
+    // Multisite: the main site's addresses are the network's — a network administrator on the main site.
+    const network = user.network;
+    return !network || (network.mainSite && network.networkAdmin);
 }
 
 /** Where the retired /migration page sends a visitor: administrators to the settings screen, others home. */

@@ -264,9 +264,14 @@ router.post('/import', authenticate, isAdmin, upload.single('file'), asyncHandle
         return res.status(400).json({ error: 'No import data provided' });
     }
 
+    // MULTISITE: an import run by someone who is not a network administrator leaves the network
+    // administrators' accounts and the network-wide settings as they are (core/network-auth).
+    const networkAuth = require('../core/network-auth');
     const options = {
         updateExisting: req.body.updateExisting === 'true' || req.body.updateExisting === true,
-        importUsers: req.body.importUsers === 'true' || req.body.importUsers === true
+        importUsers: req.body.importUsers === 'true' || req.body.importUsers === true,
+        protectedUser: (userId: number) => networkAuth.protectsNetworkAdmin(req, userId),
+        skipSettings: networkAuth.networkSettingsReadOnly(req) ? networkAuth.NETWORK_WIDE_SETTINGS : null
     };
 
     // An import creates and rewrites accounts (roles and email addresses included) when asked to, and

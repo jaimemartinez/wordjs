@@ -37,6 +37,16 @@ the main site.
 **Admin → Network**, where sites are created, suspended and resumed. A site's own administrators manage
 that site only and never learn that other sites exist.
 
+On the main site, what reaches the whole network is for network administrators only: installing,
+updating, packing, downloading or deleting plugins, writing theme files, the marketplace, backups, the
+database migration tool, the site's addresses, certificates, the hooks registry and the Redis
+object-cache switch. An administrator of the main site who is not listed still runs the main site itself
+(its content, users, plugin activations and grants, settings) and gets `403 rest_forbidden_network` for
+the rest. A network administrator's account (email, password, role, two-factor reset, AI agent
+connections, deletion) is changed only by a network administrator or by its owner. Deleting an account
+removes it from the list, and each entry is bound to the account's login: at boot and after a backup
+restore it follows that login, and is dropped when the account is gone.
+
 ## Requirements
 
 - The `sqlite-native` database driver. Postgres and MySQL networks are planned; `npm run network --

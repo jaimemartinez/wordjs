@@ -149,7 +149,7 @@ function run(argv) {
         const siteUrl = m.configManager.getConfig().siteUrl;
         if (!m.network.normalizeSiteUrl(siteUrl)) throw new Error('the main site has no valid main address (npm run site -- canonical <url>)');
         m.network.registerPrimarySite(m.network.normalizeSiteUrl(siteUrl).url);
-        for (const u of users) m.network.addNetworkAdmin(u.id);
+        for (const u of users) m.network.addNetworkAdmin(u.id, u.login);
         m.network.audit('network.enabled', { detail: { admins: users.map((u) => u.login), via: 'cli' } });
         setEnabled(m.configManager, true);
         console.log(`Multisite is on. Site 1 is ${siteUrl}; network administrators: ${users.map((u) => u.login).join(', ')}.`);
@@ -169,7 +169,7 @@ function run(argv) {
         const login = positionals[1];
         if ((action !== 'add' && action !== 'remove') || !login) throw new UsageError('admins add|remove <login>');
         const [user] = lookupMainSiteUsers(m.config, [login]);
-        if (action === 'add') m.network.addNetworkAdmin(user.id);
+        if (action === 'add') m.network.addNetworkAdmin(user.id, user.login);
         else m.network.removeNetworkAdmin(user.id);
         m.network.audit(action === 'add' ? 'network.admin.added' : 'network.admin.removed', { detail: { login: user.login, via: 'cli' } });
         console.log(`${user.login} is ${action === 'add' ? 'now' : 'no longer'} a network administrator.`);

@@ -710,11 +710,15 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
         const key = authRoutes.lockBucket('mfa_manage', U[p]);
         await authRoutes.clearLoginFails(key);
         for (let i = 0; i < authRoutes.MFA_MANAGE_PASSWORD_AFTER; i++) await authRoutes.recordLoginFail(key);
+        // The ceiling keeps its own, longer-lived count (routes/auth.ts chargeMfaCeiling).
+        await authRoutes.clearMfaCeiling(U[p]);
+        for (let i = 0; i < authRoutes.MFA_MANAGE_PASSWORD_AFTER; i++) await authRoutes.chargeMfaCeiling(U[p]);
         if (policy) await mfa.setPolicy({ requiredRoles: ['administrator'], graceDays: 30 });
     };
     const ceilingCleanup = async (p: string) => {
         await mfa.setPolicy({ requiredRoles: [], graceDays: 0 });
         await authRoutes.clearLoginFails(authRoutes.lockBucket('mfa_manage', U[p]));
+        await authRoutes.clearMfaCeiling(U[p]);
     };
     const refusedOnTheMerits = (r: any) => r.status === 400 && r.body.code === 'rest_mfa_invalid';
     let grantTarget = 0;

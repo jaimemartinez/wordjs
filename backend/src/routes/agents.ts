@@ -22,6 +22,7 @@ const { can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { routeIdOrNull } = require('../core/query-params');
 const { recordAudit, listAuditForTarget } = require('../core/audit');
+const { protectsNetworkAdmin, refuseNetworkAdminTarget } = require('../core/network-auth');
 const {
     AGENT_CAPABILITIES, invalidAgentCapabilities, normalizeAgentCapabilities, grantWithinRequest, effectiveAgentCapabilities,
 } = require('../core/agent-capabilities');
@@ -164,6 +165,9 @@ router.post('/', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandl
         // JSON gives a number, a form gives a string; routeIdOrNull's contract is the string shape.
         const target = await User.findById(routeIdOrNull(typeof userId === 'number' ? String(userId) : userId));
         if (!target) return res.status(400).json({ code: 'rest_invalid_param', message: 'That user does not exist.', data: { status: 400 } });
+        // MULTISITE: an agent acts AS its bound user, so binding one to a network administrator is
+        // theirs (or another network administrator's) to do (core/network-auth).
+        if (protectsNetworkAdmin(req, target.id)) return refuseNetworkAdminTarget(res);
         boundId = target.id;
     }
 
@@ -227,6 +231,7 @@ router.put('/:id/grant', authenticate, sessionOnly, can('manage_api_tokens'), as
     if (!isAdministrator(req)) return forbidden(res, 'Only an administrator can grant capabilities to an agent.');
     const rec = await connectionForCaller(req, res);
     if (!rec) return;
+    if (protectsNetworkAdmin(req, rec.userId)) return refuseNetworkAdminTarget(res);
     if (rec.status === 'revoked') {
         return res.status(409).json({ code: 'rest_agent_revoked', message: 'This connection was revoked; create a new one.', data: { status: 409 } });
     }
@@ -276,6 +281,7 @@ router.put('/:id/grant', authenticate, sessionOnly, can('manage_api_tokens'), as
 router.delete('/:id', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandler(async (req: Request, res: Response) => {
     const rec = await connectionForCaller(req, res);
     if (!rec) return;
+    if (protectsNetworkAdmin(req, rec.userId)) return refuseNetworkAdminTarget(res);
     const ok = await AgentConnection.revoke(rec.id);
     if (!ok) return notFound(res);
     await recordAudit(req.user.id, 'agent.revoke', 'agent', rec.id, { name: rec.name, boundUser: rec.userId });

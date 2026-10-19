@@ -128,6 +128,12 @@ function openStore(): any {
             detail TEXT NOT NULL DEFAULT ''
         );
     `);
+    // Each network administrator row names the account's login as well as its id (added after the first
+    // release of the table: older rows have none until reconcileNetworkAdmins fills it in). A database
+    // restored from a backup can give an id to a different account; the login says whose row it is.
+    if (!handle.prepare('PRAGMA table_info(network_admins)').all().some((c: any) => c.name === 'user_login')) {
+        handle.exec('ALTER TABLE network_admins ADD COLUMN user_login TEXT');
+    }
     db = handle;
     snapshot = null;
     ceilings = null;
@@ -290,22 +296,77 @@ function setSiteStatus(id: number, status: SiteStatus): SiteRecord {
     return getSite(id) as SiteRecord;
 }
 
-function isNetworkAdmin(userId: unknown): boolean {
+/**
+ * Is `userId` a network administrator? With `login` (the account's current login), a row that names a
+ * DIFFERENT login is not this account's: the id was given to someone else (a restored database).
+ */
+function isNetworkAdmin(userId: unknown, login?: unknown): boolean {
     if (!isSiteId(userId)) return false;
-    return !!openStore().prepare('SELECT 1 FROM network_admins WHERE user_id = ?').get(userId);
+    const row = openStore().prepare('SELECT user_login FROM network_admins WHERE user_id = ?').get(userId);
+    if (!row) return false;
+    if (login !== undefined && row.user_login && row.user_login !== login) return false;
+    return true;
 }
 
 function listNetworkAdmins(): number[] {
     return openStore().prepare('SELECT user_id FROM network_admins ORDER BY user_id').all().map((r: any) => Number(r.user_id));
 }
 
-function addNetworkAdmin(userId: number): void {
+function addNetworkAdmin(userId: number, login?: string | null): void {
     if (!isSiteId(userId)) throw codedError('network_invalid_user', 'Not a user id.');
-    openStore().prepare('INSERT OR IGNORE INTO network_admins (user_id, created_at) VALUES (?, ?)').run(userId, now());
+    const name = typeof login === 'string' && login ? login : null;
+    openStore().prepare(`INSERT INTO network_admins (user_id, created_at, user_login) VALUES (?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET user_login = COALESCE(excluded.user_login, network_admins.user_login)`).run(userId, now(), name);
 }
 
 function removeNetworkAdmin(userId: number): void {
     openStore().prepare('DELETE FROM network_admins WHERE user_id = ?').run(userId);
+}
+
+/**
+ * A main-site account was deleted: it is no longer a network administrator. Never creates the store
+ * (an install that never had a network has nothing to forget).
+ */
+function forgetNetworkAdmin(userId: number): void {
+    if (!isSiteId(userId)) return;
+    if (!db && !fs.existsSync(networkDbPath())) return;
+    removeNetworkAdmin(userId);
+}
+
+type AdminAccount = { id: number; login: string } | null;
+
+/**
+ * Re-check every network administrator row against the main site's accounts (at boot, and after the
+ * main database is restored from a backup). A row whose login names an account keeps following THAT
+ * account (a logical restore gives accounts new ids); a row whose account is gone, or whose id now
+ * belongs to another login, is removed; an older row with no login is bound to the account its id
+ * names today. Never creates the store.
+ */
+async function reconcileNetworkAdmins(lookup: { byId: (id: number) => Promise<AdminAccount>; byLogin: (login: string) => Promise<AdminAccount> }) {
+    const outcome = { kept: 0, rebound: 0, removed: 0 };
+    if (!db && !fs.existsSync(networkDbPath())) return outcome;
+    const rows = openStore().prepare('SELECT user_id, user_login FROM network_admins ORDER BY user_id').all();
+    for (const row of rows) {
+        const id = Number(row.user_id);
+        const login = typeof row.user_login === 'string' && row.user_login ? row.user_login : null;
+        const current = await lookup.byId(id);
+        if (login === null) {
+            if (current) { addNetworkAdmin(id, current.login); outcome.kept++; }
+            else { removeNetworkAdmin(id); outcome.removed++; }
+            continue;
+        }
+        if (current && current.login === login) { outcome.kept++; continue; }
+        const owner = await lookup.byLogin(login);
+        removeNetworkAdmin(id);
+        if (owner && isSiteId(owner.id)) {
+            addNetworkAdmin(owner.id, owner.login);
+            outcome.rebound++;
+        } else {
+            outcome.removed++;
+        }
+    }
+    if (outcome.rebound || outcome.removed) audit('network.admins.reconciled', { detail: outcome });
+    return outcome;
 }
 
 // ── Plugin grant ceilings ─────────────────────────────────────────────────────────────────────────────
@@ -396,6 +457,8 @@ module.exports = {
     listNetworkAdmins,
     addNetworkAdmin,
     removeNetworkAdmin,
+    forgetNetworkAdmin,
+    reconcileNetworkAdmins,
     audit,
     auditLog,
     invalidate,
