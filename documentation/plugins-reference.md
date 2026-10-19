@@ -299,7 +299,9 @@ Complex business logic for managing church conferences.
         and choose its team role.
     *   **Coordinator portal** (`/portal/login`, `/portal/me`, `/portal/inscriptions`, `/portal/groups`,
         `/portal/payments/bulk`, `/portal/lodging*`) surfaced at `/portal/conference` on the frontend. A per-location 6-digit
-        access code is required; there is **no anonymous public registration**. Each coordinator's view is
+        access code is required; there is **no anonymous public registration**. A login opens a 7-day session
+        (an opaque id kept on the server) that a new code, deleting the location, unpublishing the form or a
+        logout ends; wrong codes are throttled per client, per location and site-wide. Each coordinator's view is
         isolated by the location's **id** (not its name — names are unique per conference and renaming a
         location keeps its attendees), and the portal listing is a projection (no admin notes, room or status).
     *   Reports (`/reports/summary`, cents-rounded totals), CSV export of inscriptions (`/inscriptions/export`),

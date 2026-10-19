@@ -310,19 +310,36 @@ function ensureDomPurifyHooks(): void {
 }
 
 /**
+ * The fallback when the server sanitizer cannot run: ESCAPE everything, so the markup arrives as
+ * inert text. A tag-stripping regex is not a fallback — it fails open on any tag it cannot match
+ * (an unterminated `<img … onerror=…` has no `>` to end the match, so it survives verbatim). The
+ * escaped form is also what sanitize-html itself emits for text, so stripHTML stays consistent.
+ */
+function escapeHTML(s: string): string {
+    return s
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+/**
  * Sanitize HTML content to prevent XSS attacks
- * @param dirty - Raw HTML string (potentially dangerous)
+ * @param dirty - Raw HTML string (potentially dangerous). Anything that is not a string (a stored
+ *   `content` that came back as an array/object) renders as nothing instead of throwing — on the
+ *   server a throw here is a 500 for the whole page.
  * @returns Clean HTML string safe for rendering
  */
-export function sanitizeHTML(dirty: string): string {
-    if (!dirty) return '';
+export function sanitizeHTML(dirty: unknown): string {
+    if (typeof dirty !== 'string' || !dirty) return '';
     if (typeof window === 'undefined') {
         // Server-side (SSR): sanitize with sanitize-html so the initial HTML is safe BEFORE hydration.
         // Returning raw here was an XSS window (the payload ran before the client could sanitize).
         try {
             return loadSanitizeHtml()(dirty, SERVER_SANITIZE_OPTIONS);
         } catch {
-            return dirty.replace(/<[^>]*>/g, ''); // fail closed
+            return escapeHTML(dirty); // fail closed
         }
     }
     ensureDomPurifyHooks();
@@ -332,14 +349,14 @@ export function sanitizeHTML(dirty: string): string {
 /**
  * Sanitize HTML with custom options
  */
-export function sanitizeHTMLCustom(dirty: string, options: object): string {
-    if (!dirty) return '';
+export function sanitizeHTMLCustom(dirty: unknown, options: object): string {
+    if (typeof dirty !== 'string' || !dirty) return '';
     if (typeof window === 'undefined') {
         // Custom options are DOMPurify-shaped; on the server fall back to the base allowlist (still safe).
         try {
             return loadSanitizeHtml()(dirty, SERVER_SANITIZE_OPTIONS);
         } catch {
-            return dirty.replace(/<[^>]*>/g, '');
+            return escapeHTML(dirty); // fail closed
         }
     }
     ensureDomPurifyHooks();
@@ -349,15 +366,15 @@ export function sanitizeHTMLCustom(dirty: string, options: object): string {
 /**
  * Strip all HTML tags, returning only text
  */
-export function stripHTML(dirty: string): string {
-    if (!dirty) return '';
+export function stripHTML(dirty: unknown): string {
+    if (typeof dirty !== 'string' || !dirty) return '';
     if (typeof window === 'undefined') {
         // Server-side: use sanitize-html (allow nothing) rather than a regex strip, which is bypassable
-        // (e.g. `<scr<script>ipt>`). Fail closed to a regex strip only if the lib is unavailable.
+        // (e.g. `<scr<script>ipt>`). If the lib is unavailable, fail closed: escape, never strip.
         try {
             return loadSanitizeHtml()(dirty, { allowedTags: [], allowedAttributes: {} });
         } catch {
-            return dirty.replace(/<[^>]*>/g, '');
+            return escapeHTML(dirty);
         }
     }
     return DOMPurify.sanitize(dirty, { ALLOWED_TAGS: [], ALLOWED_ATTR: [] });
@@ -366,8 +383,8 @@ export function stripHTML(dirty: string): string {
 /**
  * Check if content contains potentially dangerous elements
  */
-export function hasDangerousContent(html: string): boolean {
-    if (!html) return false;
+export function hasDangerousContent(html: unknown): boolean {
+    if (typeof html !== 'string' || !html) return false;
 
     const dangerous = [
         /<script/i,

@@ -314,13 +314,27 @@ async function evaluate(user: any): Promise<{ required: boolean; enabled: boolea
  * whose role the policy requires, and how many of those belong to an owner who has NOT enrolled: with the
  * flag off, each of those is a working credential for a required role that never passes a second factor.
  * Metadata only (counts), and read-only.
+ *
+ * AI agent connections (`wja_`) count as tokens here: the compliance gate treats them exactly like a
+ * `wjt_` token (headless, exempt unless `enforceForApiTokens`), so leaving them out under-reported the
+ * very exposure this number exists to show. A live connection is one not revoked and not expired —
+ * pending ones included, since they authenticate too.
  */
 async function tokenExposure(): Promise<{ requiredRoleTokens: number; unenrolledOwnerTokens: number; unenrolledOwners: number }> {
     const policy = await getPolicy();
     const out = { requiredRoleTokens: 0, unenrolledOwnerTokens: 0, unenrolledOwners: 0 };
     if (!policy.requiredRoles.length) return out;
+    const counts = new Map<number, number>();
+    const add = (userId: number, n: number) => counts.set(userId, (counts.get(userId) || 0) + n);
     const ApiToken = require('../models/ApiToken');
-    for (const { userId, count } of await ApiToken.activeCountsByOwner()) {
+    for (const { userId, count } of await ApiToken.activeCountsByOwner()) add(userId, count);
+    const AgentConnection = require('../models/AgentConnection');
+    const nowSec = Math.floor(Date.now() / 1000);
+    for (const c of await AgentConnection.list()) {
+        if (c.status === 'revoked' || (c.expiresAt != null && c.expiresAt <= nowSec)) continue;
+        add(Number(c.userId), 1);
+    }
+    for (const [userId, count] of counts) {
         const role = (await User.getMeta(userId, 'role')) || 'subscriber';
         if (!policy.requiredRoles.includes(role)) continue;
         out.requiredRoleTokens += count;
