@@ -118,7 +118,11 @@ const ALL_SETTINGS = [
     // Whether GET/POST /api/v1/graphql answers introspection (__schema / __type). Unset means "on in
     // development, off in production" (core/graphql); '1'/'0' force it. Admin-only: the schema is not a
     // secret, but turning discovery on is a posture decision, not something a visitor needs to read.
-    'graphql_introspection'
+    'graphql_introspection',
+    // Whether the author slugs migration 0017 retired (they were derived from the login) still resolve on
+    // the public author archive and feed (core/author-aliases). Off unless an administrator turns it on:
+    // resolving one confirms that login to anyone who guesses it. Admin-only.
+    'author_legacy_slugs'
 ];
 
 // Publicly readable, but NOT writable through the generic settings writers: these have a
@@ -312,6 +316,9 @@ const SETTING_VALIDATORS: Record<string, (v: any) => string | null> = {
     graphql_introspection: (v: any) => booleanishSetting(v) === null
         ? 'graphql_introspection must be a boolean ("1" or "0").'
         : null,
+    author_legacy_slugs: (v: any) => booleanishSetting(v) === null
+        ? 'author_legacy_slugs must be a boolean ("1" or "0").'
+        : null,
     wjs_ix_presets: (v: any) => {
         if (v === '' || v === null || v === undefined) return null; // sin preajustes de sitio
         if (typeof v !== 'string') return 'wjs_ix_presets must be a JSON string.';
@@ -389,6 +396,7 @@ const SETTING_NORMALIZERS: Record<string, (v: any) => any> = {
     // algún día se escribe por un camino que no valide (apagado es el lado seguro).
     redis_cache_enabled: (v: any) => booleanishSetting(v) ?? '0',
     graphql_introspection: (v: any) => booleanishSetting(v) ?? '0',
+    author_legacy_slugs: (v: any) => booleanishSetting(v) ?? '0',
 };
 
 /** El valor EXACTO que se persiste para esta clave (idéntico al recibido si no hay normalizador). */

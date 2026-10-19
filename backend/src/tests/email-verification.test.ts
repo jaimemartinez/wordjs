@@ -86,6 +86,9 @@ describe('Email verification on registration', () => {
         const User = require('../models/User');
         sentMail = [];
         (global as any).wordjs_send_mail = (msg: any) => { sentMail.push(msg); return { queued: true }; };
+        // Account mail goes only to a provider an administrator allowed BY NAME (core/account-mail).
+        require('../core/mail-provider').setMailProvider((global as any).wordjs_send_mail, 'test-mailer');
+        await require('../core/options').updateOption('account_mail_provider_allowed', JSON.stringify(['test-mailer']));
         await updateOption('mail_delivery_ready', '1');
         await updateOption('require_email_verification', '1');
 

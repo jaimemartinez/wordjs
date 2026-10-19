@@ -622,8 +622,9 @@ router.get('/author/:slug/feed.xml', async (req: Request, res: Response) => {
         // because that is what the public author ARCHIVE is keyed by when an account has no slug. An
         // all-digits segment is therefore read as an id. The LOGIN is never accepted — not even for an
         // account without a slug: a feed that answered `/author/<login>/feed.xml` with 200 or 404 would
-        // tell anyone whether that login exists. A slug an author was moved off by migration 0017 still
-        // resolves (Post._authorCondition's same rule), so an old subscription keeps working.
+        // tell anyone whether that login exists. A slug an author was moved off by migration 0017 (it was
+        // derived from the login) resolves only when the administrator opted in (core/author-aliases —
+        // Post._authorCondition's same rule); otherwise it is answered exactly like an unknown slug.
         // Only the id and the display name are read — an author feed must not become an e-mail
         // enumeration.
         const { dbAsync } = require('../config/database');
@@ -634,8 +635,11 @@ router.get('/author/:slug/feed.xml', async (req: Request, res: Response) => {
         const digitsOnly = /^\d+$/.test(slug);
         const routeId = digitsOnly ? routeIdOrNull(slug) : null;
         if (digitsOnly && routeId === null) return feedNotFound(res);
+        const legacyAliases = routeId === null && await require('../core/author-aliases').legacyAuthorSlugsEnabled();
         const user = routeId !== null
             ? await dbAsync.get('SELECT id, user_nicename FROM users WHERE id = ? LIMIT 1', [routeId])
+            : !legacyAliases
+            ? await dbAsync.get("SELECT id, user_nicename FROM users WHERE user_nicename = ? AND user_nicename <> '' LIMIT 1", [slug])
             : await dbAsync.get(
                 "SELECT id, user_nicename FROM users WHERE user_nicename = ? AND user_nicename <> '' " +
                 "UNION SELECT u.id, u.user_nicename FROM users u JOIN user_meta m ON m.user_id = u.id " +

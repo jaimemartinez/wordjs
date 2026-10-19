@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { SITE_ADDRESS_SETTINGS_PATH } from "@/lib/siteAddress";
 import { MEDIA_STORAGE_SETTINGS_PATH } from "@/lib/mediaStorage";
-import { settingsApi, MediaItem, postsApi, Post, rolesApi, Role } from "@/lib/api";
+import { settingsApi, accountMailApi, AccountMailStatus, MediaItem, postsApi, Post, rolesApi, Role } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
 import MediaPickerModal from "@/components/MediaPickerModal";
 import ModernSelect from "@/components/ModernSelect";
@@ -76,6 +76,8 @@ export default function SettingsPage() {
         require_email_verification: "0",
         comment_registration: "0",
         redis_cache_enabled: "0",
+        // Admin-only: resolve the author slugs migration 0017 retired (they were derived from the login).
+        author_legacy_slugs: "0",
         WPLANG: "en_US",
         site_text_direction: "",
     });
@@ -86,6 +88,8 @@ export default function SettingsPage() {
     const [pages, setPages] = useState<Post[]>([]);
     // null = not yet known; false = no mail provider registered → password recovery is unavailable.
     const [emailProviderAvailable, setEmailProviderAvailable] = useState<boolean | null>(null);
+    // How a reset or verification link would be delivered right now (backend core/account-mail).
+    const [accountMail, setAccountMail] = useState<AccountMailStatus | null>(null);
 
     useEffect(() => {
         loadSettings();
@@ -104,6 +108,11 @@ export default function SettingsPage() {
             setEmailProviderAvailable(health.email_provider_available === true);
         } catch (error) {
             console.error("Failed to load settings health:", error);
+        }
+        try {
+            setAccountMail(await accountMailApi.status());
+        } catch {
+            // Not an administrator, or an older backend: the Email screen says the rest.
         }
     };
 
@@ -163,6 +172,7 @@ export default function SettingsPage() {
                 require_email_verification: boolSetting(data.require_email_verification, "0"),
                 comment_registration: boolSetting(data.comment_registration, "0"),
                 redis_cache_enabled: boolSetting(data.redis_cache_enabled, "0"),
+                author_legacy_slugs: boolSetting(data.author_legacy_slugs, "0"),
                 WPLANG: data.WPLANG || "en_US",
                 site_text_direction: data.site_text_direction || "",
             });
@@ -207,20 +217,38 @@ export default function SettingsPage() {
                     subtitle={t('settings.general')}
                 />
 
-                {emailProviderAvailable === false && (
-                    <div className="mb-8 flex items-start gap-4 rounded-3xl border-2 border-amber-100 bg-amber-50/60 px-6 py-5">
-                        <i className="fa-solid fa-triangle-exclamation text-amber-500 text-xl mt-0.5"></i>
+                {/* Account email (password reset and verification) has its own rule and its own screen:
+                    the built-in SMTP transport, or a provider plugin only when allowed by name
+                    (backend core/account-mail). The banner says which way a reset link would go now. */}
+                {accountMail && accountMail.route !== "core" && (
+                    <div data-testid="account-mail-banner" className={`mb-8 flex items-start gap-4 rounded-3xl border-2 px-6 py-5 ${accountMail.route === "provider" ? "border-rose-100 bg-rose-50/60" : "border-amber-100 bg-amber-50/60"}`}>
+                        <i className={`fa-solid fa-triangle-exclamation text-xl mt-0.5 ${accountMail.route === "provider" ? "text-rose-500" : "text-amber-500"}`}></i>
                         <div>
-                            <h3 className="text-sm font-bold text-amber-900">Password recovery is unavailable</h3>
-                            <p className="text-sm text-amber-800/90 mt-1 leading-relaxed">
-                                No email provider is registered, so WordJS cannot send email on its own. Self-service
-                                password reset (the &ldquo;Forgot password?&rdquo; flow) will not work until you install and
-                                activate a mail plugin and grant it the <code className="font-mono text-xs">email:provider</code> permission.
-                                Until then, a locked-out user must be reset by an administrator.
+                            <h3 className="text-sm font-bold text-gray-900">
+                                {accountMail.route === "provider" ? t('accountMail.bannerProviderTitle').replace('{plugin}', accountMail.provider || '') : t('accountMail.bannerNoneTitle')}
+                            </h3>
+                            <p className="text-sm text-gray-700 mt-1 leading-relaxed">
+                                {accountMail.route === "provider" ? t('accountMail.bannerProviderHelp') : t('accountMail.bannerNoneHelp')}
                             </p>
                         </div>
                     </div>
                 )}
+
+                <div className="mb-8 flex flex-col lg:flex-row lg:items-center justify-between gap-4 rounded-3xl border-2 border-gray-50 bg-white px-6 py-5 shadow-xl shadow-gray-100/50">
+                    <div className="flex min-w-0 flex-1 items-start gap-4">
+                        <i className="fa-solid fa-envelope-circle-check text-blue-500 text-xl mt-0.5" aria-hidden="true"></i>
+                        <div>
+                            <h2 className="text-sm font-bold text-gray-900">{t('accountMail.title')}</h2>
+                            <p className="text-sm text-gray-500 mt-1 leading-relaxed">{t('accountMail.cardHelp')}</p>
+                        </div>
+                    </div>
+                    <Link
+                        href="/admin/settings/email"
+                        className="inline-flex shrink-0 items-center justify-center gap-2 rounded-2xl bg-gray-900 px-5 py-3 text-sm font-bold text-white hover:bg-gray-800 whitespace-nowrap"
+                    >
+                        {t('accountMail.open')} <i className="fa-solid fa-arrow-right" aria-hidden="true"></i>
+                    </Link>
+                </div>
 
                 {/* The site address has its own screen: every change there is sudo-gated, audited and
                     notified, so it is deliberately NOT a field of this bulk form (PUT /settings refuses
@@ -546,10 +574,10 @@ export default function SettingsPage() {
                                     </button>
                                 </div>
 
-                                {settings.require_email_verification === "1" && emailProviderAvailable === false && (
+                                {settings.require_email_verification === "1" && (accountMail ? !accountMail.ready : emailProviderAvailable === false) && (
                                     <p className="pl-16 text-xs text-amber-800 leading-relaxed">
                                         <i className="fa-solid fa-triangle-exclamation mr-1.5"></i>
-                                        No hay ningún proveedor de correo activo, así que esta opción queda inactiva: el sitio no
+                                        El sitio no puede enviar correo de cuenta (Ajustes → Correo de la cuenta), así que esta opción queda inactiva: el sitio no
                                         puede enviar el enlace y las cuentas nuevas seguirán entrando sin verificar.
                                     </p>
                                 )}
@@ -607,6 +635,42 @@ export default function SettingsPage() {
                                         className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform duration-200 ease-in-out ${settings.comment_registration === "1" ? 'translate-x-6' : 'translate-x-1'}`}
                                     />
                                 </button>
+                            </div>
+
+                            {/*
+                              * Old author URLs (`author_legacy_slugs`). The slugs migration 0017 retired were
+                              * derived from each author's LOGIN, so resolving them confirms that login to
+                              * anyone who guesses it. Off by default; turning it on is an informed choice,
+                              * so the warning is always visible, not only after the switch is flipped.
+                              */}
+                            <div className="p-5 bg-rose-50/50 rounded-2xl border border-rose-100 space-y-3 group hover:bg-rose-100/50 transition-colors" data-testid="author-legacy-slugs">
+                                <div className="flex items-center justify-between gap-6">
+                                    <div className="flex gap-4 items-center">
+                                        <div className="bg-white p-3 rounded-xl shadow-sm border border-rose-200 text-rose-600">
+                                            <i className="fa-solid fa-link-slash text-xl"></i>
+                                        </div>
+                                        <div>
+                                            <h4 className="text-sm font-bold text-gray-900">{t('settings.authorLegacySlugs')}</h4>
+                                            <p className="text-xs text-gray-500 mt-0.5">{t('settings.authorLegacySlugs.help')}</p>
+                                        </div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        role="switch"
+                                        aria-checked={settings.author_legacy_slugs === "1"}
+                                        aria-label={t('settings.authorLegacySlugs')}
+                                        onClick={() => setSettings({ ...settings, author_legacy_slugs: settings.author_legacy_slugs === "1" ? "0" : "1" })}
+                                        className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-2 ${settings.author_legacy_slugs === "1" ? 'bg-rose-500' : 'bg-gray-200'}`}
+                                    >
+                                        <span
+                                            className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform duration-200 ease-in-out ${settings.author_legacy_slugs === "1" ? 'translate-x-6' : 'translate-x-1'}`}
+                                        />
+                                    </button>
+                                </div>
+                                <p className="pl-16 text-xs text-rose-800 leading-relaxed">
+                                    <i className="fa-solid fa-triangle-exclamation mr-1.5"></i>
+                                    {t('settings.authorLegacySlugs.warning')}
+                                </p>
                             </div>
                         </div>
                     </div>

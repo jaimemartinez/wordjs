@@ -102,10 +102,12 @@ The token is pre-filled from the link. The wizard has three steps:
    for larger or multi-node installs and need a running database server.
 3. **Admin** — your administrator username, email and password.
 
-Click **Install WordJS**. The wizard confirms the install and warns you about one thing: WordJS
-cannot send email on its own, so **password recovery is off** until you install a mail plugin (for
-example *Mail Server*, from **Admin → Plugins → Marketplace**; see [Tutorial 16](16-send-email-from-your-site.md))
-and grant it the `email:provider` permission. Keep your admin password safe until then.
+Click **Install WordJS**. The wizard confirms the install and warns you about one thing: **password
+recovery is off** until the site can send account email. Open **Admin → Settings → Account email** and
+enter an SMTP mail server (your provider's relay, for example `smtp.example.com`, port 587, STARTTLS),
+then send yourself a test. Password-reset and verification links are sent that way, by WordJS itself —
+never handed to a plugin unless you allow one there (see [Tutorial 16](16-send-email-from-your-site.md)).
+Keep your admin password safe until then.
 
 Click **Continue to Dashboard**. You are in the admin. Open the site's address in another tab to see
 the sample home page.

@@ -755,7 +755,9 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
                 // assertNewIdentity checks the username first, so this username is free: the only thing that
                 // collided is the address. Tell its owner, not the caller.
                 const text = `Someone tried to create a new ${siteName} account with this email address. It already has an account, so nothing was created.\n\nIf this was you, sign in instead, or use "Forgot password" if you no longer know your password. If it was not you, you can ignore this message.`;
-                require('../core/mail-provider').sendMailFn()({
+                // Account mail (core/account-mail): the built-in transport, or a provider plugin only if an
+                // administrator allowed it. Not awaited — the answer must not wait on (or time) the relay.
+                await sendAccountMailDetached({
                     to: String(email).trim().toLowerCase(),
                     subject: `Sign-up attempt on ${siteName}`,
                     text,
@@ -771,7 +773,7 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
                 // The site's link base (core/site-address) — never this request's Host: whoever calls this
                 // endpoint must not be able to choose which host receives the verification token.
                 const link = `${await linkBase()}/verify-email?token=${raw}`;
-                require('../core/mail-provider').sendMailFn()({
+                await sendAccountMailDetached({
                     to: String(email).trim().toLowerCase(),
                     subject: `Verify your email for ${siteName}`,
                     text: `Welcome to ${siteName}! Please confirm this email address to create your account (${username}).\n\nVerify your email (this link is valid for 24 hours):\n${link}\n\nIf you did not ask for this account, you can safely ignore this email: nothing is created until the link is followed.`,
@@ -1366,13 +1368,21 @@ function singleUseTokenValid(given: string, storedHash: string, expiresMs: numbe
 // unloads — so this fails closed on deactivation), and declares itself configured to deliver externally
 // by setting the shared `mail_delivery_ready` option to '1' (a self-hosted MTA sets it once its DNS
 // verifies; an external SMTP/relay would set it once its credentials validate).
+//
+// ACCOUNT MAIL (reset and verification links) has its own rule now — core/account-mail: the built-in SMTP
+// transport, or a provider plugin only when an administrator allowed that plugin by name. "Ready" is that
+// rule's answer, so recovery and verification are offered only when such a message can actually go out.
 async function mailReady(): Promise<boolean> {
     try {
-        if (!require('../core/mail-provider').isEmailProviderAvailable()) return false;
-        return String(await getOption('mail_delivery_ready', '0')) === '1';
+        return await require('../core/account-mail').accountMailReady();
     } catch {
         return false;
     }
+}
+
+/** Hand an account message to its transport (core/account-mail) without waiting for delivery. */
+async function sendAccountMailDetached(msg: { to: string; subject: string; text: string; html?: string }): Promise<void> {
+    await require('../core/account-mail').handOffAccountMail(msg);
 }
 
 // EMAIL VERIFICATION on self-registration is OPT-IN and FAIL-CLOSED. It can only be *required* when a
@@ -1512,7 +1522,10 @@ router.post('/forgot-password', asyncHandler(async (req: Request, res: Response)
     const siteName = await getOption('blogname', 'WordJS');
 
     try {
-        require('../core/mail-provider').sendMailFn()({
+        // A reset link is the account: it goes through account mail (core/account-mail), never to a plugin
+        // provider an administrator did not allow by name. Detached, so the answer's timing is the same
+        // whether or not an account matched.
+        await sendAccountMailDetached({
             to,
             subject: `Password reset for ${siteName}`,
             text: `Someone requested a password reset for your ${siteName} account (${user.userLogin}).\n\nReset your password (this link is valid for 30 minutes):\n${link}\n\nIf you did not request this, you can safely ignore this email — your password will not change.`,
@@ -1620,6 +1633,9 @@ router.post('/reset-password', asyncHandler(async (req: Request, res: Response) 
     await recordAudit(uid, 'auth.password.reset', 'user', uid, {
         username: auditText(user.userLogin), via: 'recovery_link', ip: auditText(clientIp(req), 45)
     });
+    // Every OTHER administrator hears about it in-app: a reset link reached whoever reads that mailbox (or
+    // the transport that carried it), and an unexpected reset is the moment to look. Best-effort.
+    require('../core/account-mail').notifyAdminsOfReset(user, clientIp(req)).catch(() => { /* never fails the reset */ });
 
     res.json({ ok: true, message: 'Your password has been reset. You can now log in with your new password.' });
 }));

@@ -34,6 +34,18 @@ the boot error links there too.
 
 ### Changed
 
+- **Password-reset and verification email has its own transport.** WordJS now sends these links itself
+  through an SMTP relay you configure in **Settings → Account email** (host, port, TLS mode, credentials,
+  test message). A mail provider plugin carries them only if an administrator allows that plugin by name
+  there, with the warning that it can then take over any account. **Upgrading:** a site whose provider
+  plugin held `email:provider` keeps that plugin allowed (migration `0018`), so recovery keeps working;
+  Settings shows a banner until you configure the built-in transport or confirm the plugin. A new site
+  needs the built-in transport (or an explicit allowance) before "Forgot password?" is offered.
+- **Old author URLs from before the public-identity change are opt-in.** The author slugs that used to be
+  derived from sign-in names resolve on the archive, `?author=` and the author feed only when
+  **Settings → Keep old author URLs working** is on (off by default, with a warning); otherwise they are
+  answered like any unknown slug.
+
 - **Database TLS verifies the server certificate.** With `dbSsl: true`, Postgres and MySQL connections
   (including the per-plugin MySQL pools and the installer's connection test) now check the server
   certificate chain and host name instead of accepting any certificate. New settings: `dbSslCa` (the CA
@@ -77,6 +89,19 @@ the boot error links there too.
   when one address carries many forwarded clients, naming `trustProxy` / `WORDJS_TRUST_PROXY`.
 
 ### Security
+
+- **Provider grants are labelled administrator-level.** `email:provider` and `notifications:provider` are
+  shown with an "administrator-level" badge and plain wording on every grant screen, and every other
+  administrator gets an in-app notice when a password is reset through an emailed link.
+- **A plugin's admin stylesheet needs `browser:script` and is confined.** `GET /plugins/:slug/admin-style/css`
+  is served under the same gate as `dist/`, with `@import` and any resource-loading value (other than
+  `data:` URLs) removed and every rule scoped so it cannot restyle the admin's own interface.
+- **AI agents:** the Agents screen warns about the `content:others` + `content:publish` combination, an
+  optional site-wide setting makes a person confirm everything agents publish (with a queue on the Agents
+  screen), and revisions created by an agent's write are labelled so the change can be undone in one restore.
+- **Content types cannot borrow core capability names.** A content type whose operations (or capability
+  family) name a core non-content capability such as `edit_users` or `manage_options` is refused, and the
+  agent capability mapping never grants those names.
 
 - **Each site of a network has its own space in the media bucket.** With S3 media storage, every site other
   than the main one now stores and serves its objects under `<prefix>/sites/<id>/`, so sites no longer

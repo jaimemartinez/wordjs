@@ -135,7 +135,10 @@ deactivates the plugin on every other site; their grants are kept for a later of
 on the main site removes it from the whole network.
 
 A plugin that provides email does so per site: a site sends mail only through a mail plugin active and
-granted `email:provider` **on that site**.
+granted `email:provider` **on that site**. Account email (password-reset and verification links) is per
+site too: each site's **Settings → Account email** has its own built-in transport and its own list of
+allowed provider plugins; a secondary site's relay must be a public server (a relay on this machine or a
+private network is accepted only on the main site).
 
 Each site's theme server code (`functions.js`) also runs per site, in its own worker.
 

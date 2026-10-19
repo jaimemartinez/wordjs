@@ -928,10 +928,10 @@ Every call is permission-checked on the host against your manifest.
 | `wordjs.shortcodes.add(tag, handler)` | — | Handler may be async; expanded via `doShortcodeAsync`. |
 | `wordjs.fs.read(relPath, enc)` / `write(relPath, data)` | `filesystem:read` / `write` | Confined to your **own** plugin dir only (realpath-checked) — never the shared `uploads/` dir. `manifest.json` is immutable, and so is everything under `public/` and `dist/` (§11a). |
 | `wordjs.mail(msg)` | `email:admin` | Sends via the active mail provider. (Distinct from `email:provider`, which only `wordjs.provideMail` needs.) |
-| `wordjs.provideMail(handler)` | `email:provider` | Become the host-wide mail sender (sandboxed; needs the `email:provider` grant). |
+| `wordjs.provideMail(handler)` | `email:provider` | Become the host-wide mail sender (sandboxed; needs the `email:provider` grant, shown to the administrator as **administrator-level**). Password-reset and verification email reaches your provider only if the administrator allows your plugin by name in Settings → Account email; by default the host sends it with its built-in SMTP transport. |
 | `wordjs.notify(n)` | `notifications:send` | Push an admin notification. |
 | `wordjs.ai.complete({ prompt, system?, maxTokens? })` | `ai:use` | Text completion through the site's AI provider → `{ text, model }`. The key never reaches the plugin; 30 calls/minute (`ai-provider.md` §4). |
-| `wordjs.notify.registerTransport(name, handler)` | `notifications:provider` | Register a notification transport (sandboxed; needs the `notifications:provider` grant). |
+| `wordjs.notify.registerTransport(name, handler)` | `notifications:provider` | Register a notification transport (sandboxed; needs the `notifications:provider` grant, shown as **administrator-level**: the transport receives the full content of what it delivers). |
 | `wordjs.smtp.listen(handlers, opts)` / `wordjs.smtp.status()` | `smtp:inbound` | Have the HOST listen on the SMTP port (a `claimPorts` entry, default 25; falls back to 2525 with the reason recorded) and call `handlers.connect/mailFrom/rcptTo/data/close` for each step — resolve nothing to accept or `{ code, message }` to refuse; `data` receives the raw message as a Buffer. **Exclusive:** at most one plugin may hold `smtp:inbound` (a second grant is refused with `409 plugin_grant_exclusive` naming the holder). Plugins never get a listening socket themselves on any platform. |
 | `wordjs.adminMenu.add(item)` | `admin_menu:register` | Declarative sidebar item. Gated host-side like every other bridge call: the manifest must declare `admin_menu:register` **and** the admin must grant it, or the call throws a `Security Block` (`access: "admin"` does not imply it). `item.href` must be a same-origin relative path (a single leading `/`, no scheme, no `//` — e.g. `/admin/plugin/<slug>`) or the item is dropped with a warning; capped at 50 items per plugin. |
 | `wordjs.cron.schedule(ts, recurrence, hook, args)` | — | Host fires the hook back into the child process — only **your** callbacks, never core's. `recurrence` is a registered schedule name (`'hourly'`, `'twicedaily'`, `'daily'`, `'weekly'`, `'off'`); pass `false` for a one-off event at `ts`. An unregistered name is stored with a 0 interval, so it never repeats. |
@@ -962,8 +962,15 @@ runtime. An inactive plugin's files are the same `404` as a plugin that was neve
 **Your admin page's styling** — the manifest's `style` / `theme` fields and `client/admin/admin.css` —
 still reaches your page, but not from the static mount: the host's generated admin page reads them through
 `GET /api/v1/plugins/<slug>/admin-style` and links `GET /api/v1/plugins/<slug>/admin-style/css`, which
-answer a **signed-in** user for an **active** plugin only. Nothing changes for you: keep shipping
-`client/admin/admin.css` and the manifest fields. (The manifest used to be public at
+answer a **signed-in** user for an **active** plugin only — and the stylesheet only while the plugin is
+granted `browser:script`, the same gate as your `dist/` bundles (a plugin with an admin page declares it
+anyway). The host **confines** the sheet before serving it: `@import` and any declaration that would load a
+resource (`url()` other than `data:`, `image-set()`, `image()`, `src()`) are dropped — ship images and
+fonts as `data:` URLs or reference files from your `public/` folder in markup instead — and every rule is
+wrapped in `@scope (:root) to ([data-wjs-host-ui])`, so it styles your page and anything you portal to
+`<body>`, but not the admin's own sidebar, header, confirmation dialogs or toasts. A selector that starts at
+`:root` or `html` keeps working (it is re-anchored on `:scope`, the same element). Otherwise nothing
+changes for you: keep shipping `client/admin/admin.css` and the manifest fields. (The manifest used to be public at
 `/plugins/<slug>/manifest.json` — your exact version, author and permissions, to anyone.)
 
 **And every published subtree is read-only to your plugin — `public/` and `dist/` alike.**

@@ -1850,14 +1850,14 @@ async function initializeMainSite() {
         // we say so once at boot (boot-time twin of the admin `email_provider_available` settings flag and
         // the active-theme / sandbox-hardening warnings). Guarded so it can never break boot.
         try {
-            const { isEmailProviderAvailable } = require('./core/mail-provider');
-            if (!isEmailProviderAvailable()) {
-                log.warn('⚠️  No email provider is registered — WordJS core cannot send email on its own.');
+            // Password recovery and verification use ACCOUNT mail (core/account-mail): the built-in SMTP
+            // transport, or a mail provider plugin an administrator allowed by name.
+            if (!(await require('./core/account-mail').accountMailReady())) {
+                log.warn('⚠️  Account email cannot be sent — password-reset and verification links have no transport.');
                 log.warn('   Self-service PASSWORD RECOVERY is therefore unavailable: /auth/forgot-password');
                 log.warn('   fails closed and users cannot reset their own passwords.');
-                log.warn('   Install and activate a mail plugin (e.g. mail-server) and grant it the');
-                log.warn('   email:provider permission. Visible to admins on GET /api/v1/settings/all');
-                log.warn('   (email_provider_available).');
+                log.warn('   Configure the built-in SMTP transport in Admin → Settings → Account email');
+                log.warn('   (or allow a mail provider plugin there).');
             }
         } catch (e: any) {
             log.warn({ err: e }, '[boot] email-provider check skipped');

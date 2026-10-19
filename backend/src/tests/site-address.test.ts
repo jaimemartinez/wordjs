@@ -854,11 +854,15 @@ describe('link bases', () => {
     beforeEach(async () => {
         await stage();
         mail = [];
-        (global as any).wordjs_send_mail = (m: any) => { mail.push(m); };
+        // Reset links are ACCOUNT mail (core/account-mail): only a provider allowed by name carries them.
+        require('../core/mail-provider').setMailProvider((m: any) => { mail.push(m); }, 'test-mailer');
+        await options.updateOption('account_mail_provider_allowed', JSON.stringify(['test-mailer']));
         await options.updateOption('mail_delivery_ready', '1');
     });
     afterEach(async () => {
+        require('../core/mail-provider').clearMailProvider();
         (global as any).wordjs_send_mail = realSend;
+        await options.updateOption('account_mail_provider_allowed', '[]');
         await options.updateOption('mail_delivery_ready', '0');
     });
 

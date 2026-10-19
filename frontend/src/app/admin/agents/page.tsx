@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { agentsApi, usersApi, AgentCapability, AgentConnection, AuditEntry, User } from "@/lib/api";
+import { agentsApi, usersApi, apiPut, AgentCapability, AgentConnection, AgentPublishRequest, AuditEntry, User } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
@@ -39,6 +39,26 @@ const withImplied = (set: Set<AgentCapability>) => {
     for (const c of set) for (const i of IMPLIES[c] || []) out.add(i);
     return out;
 };
+// An agent that READS other people's text and can PUBLISH can be steered by that text into putting
+// something live. The grant is still the limit, but this combination deserves a warning wherever it is
+// requested or granted.
+const steerableCombination = (set: Set<AgentCapability>) => {
+    const s = withImplied(set);
+    return s.has("content:others") && s.has("content:publish");
+};
+
+function SteerableWarning({ confirmation }: { confirmation: boolean }) {
+    const { t } = useI18n();
+    return (
+        <div role="note" data-testid="agent-steerable-warning" className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-[11px] leading-relaxed text-amber-900 flex gap-2">
+            <i className="fa-solid fa-triangle-exclamation mt-0.5 text-amber-500"></i>
+            <span>
+                <strong className="font-bold">{t("agents.steerableTitle")}</strong> {t("agents.steerableBody")}{" "}
+                {confirmation ? t("agents.steerableConfirmationOn") : t("agents.steerableConfirmationOff")}
+            </span>
+        </div>
+    );
+}
 
 const fmtDate = (v: number | string | null | undefined) => {
     if (v == null) return "—";
@@ -132,6 +152,14 @@ export default function AgentsPage() {
     const grantStepUp = useMfaStepUp();
     const [auditFor, setAuditFor] = useState<number | null>(null);
     const [audit, setAudit] = useState<AuditEntry[]>([]);
+    const [publishConfirmation, setPublishConfirmation] = useState(false);
+    const [savingConfirmation, setSavingConfirmation] = useState(false);
+    const [queue, setQueue] = useState<AgentPublishRequest[]>([]);
+    const [queueBusy, setQueueBusy] = useState<number | null>(null);
+
+    const loadQueue = async () => {
+        try { setQueue((await agentsApi.publishQueue()).entries); } catch { setQueue([]); }
+    };
 
     const load = async () => {
         try {
@@ -140,6 +168,8 @@ export default function AgentsPage() {
             setVocabulary(res.capabilities);
             setCanGrant(res.canGrant);
             setMcpUrl(res.mcpUrl);
+            setPublishConfirmation(!!res.publishConfirmation);
+            if (res.canGrant) loadQueue();
             if (res.canGrant && users.length === 0) {
                 usersApi.list().then(setUsers).catch(() => { /* binding to another user stays unavailable */ });
             }
@@ -231,6 +261,37 @@ export default function AgentsPage() {
         }
     };
 
+    const toggleConfirmation = async () => {
+        const next = !publishConfirmation;
+        setSavingConfirmation(true);
+        try {
+            const res = await agentsApi.setPublishConfirmation(next);
+            setPublishConfirmation(res.publishConfirmation);
+            addToast(t(res.publishConfirmation ? "agents.confirmationOn" : "agents.confirmationOff"), "success");
+        } catch (e: any) {
+            addToast(e?.message || t("agents.confirmationFailed"), "error");
+        } finally {
+            setSavingConfirmation(false);
+        }
+    };
+
+    // A person decides with THEIR session, through the ordinary content route (capabilities, publish
+    // gate, revisions, audit), then the request leaves the queue.
+    const decide = async (entry: AgentPublishRequest, status: "publish" | "draft") => {
+        if (status === "publish" && !(await confirm(t("agents.queuePublishConfirm").replace("{title}", entry.title || `#${entry.id}`), t("agents.queuePublish")))) return;
+        setQueueBusy(entry.id);
+        try {
+            await apiPut(`/posts/${entry.id}`, { status });
+            await agentsApi.dismissPublishRequest(entry.id);
+            addToast(t(status === "publish" ? "agents.queuePublished" : "agents.queueReturned"), "success");
+            await loadQueue();
+        } catch (e: any) {
+            addToast(e?.message || t("agents.queueFailed"), "error");
+        } finally {
+            setQueueBusy(null);
+        }
+    };
+
     const statusOf = (c: AgentConnection) => c.status === "revoked" ? "revoked" : c.expired ? "expired" : c.status;
     const badge = (c: AgentConnection) => {
         const s = statusOf(c);
@@ -273,6 +334,7 @@ export default function AgentsPage() {
                                 })}
                             </div>
                         </fieldset>
+                        {steerableCombination(requested) && <SteerableWarning confirmation={publishConfirmation} />}
                         {canGrant && users.length > 0 && (
                             <div>
                                 <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">{t("agents.boundUser")}</label>
@@ -302,6 +364,61 @@ export default function AgentsPage() {
                 </Card>
 
                 <div className="2xl:col-span-2 space-y-4">
+                    {canGrant && !loading && (
+                        <Card variant="default" padding="lg">
+                            <div className="flex items-start justify-between gap-6" data-testid="agent-publish-confirmation">
+                                <div className="flex gap-4 items-start min-w-0">
+                                    <div className="w-11 h-11 shrink-0 rounded-2xl bg-violet-50 text-violet-600 flex items-center justify-center">
+                                        <i className="fa-solid fa-user-check"></i>
+                                    </div>
+                                    <div className="min-w-0">
+                                        <h2 className="text-sm font-bold text-gray-900">{t("agents.confirmationTitle")}</h2>
+                                        <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">{t("agents.confirmationHelp")}</p>
+                                    </div>
+                                </div>
+                                <button
+                                    type="button"
+                                    role="switch"
+                                    aria-checked={publishConfirmation}
+                                    aria-label={t("agents.confirmationTitle")}
+                                    disabled={savingConfirmation}
+                                    onClick={toggleConfirmation}
+                                    className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-violet-500 focus:ring-offset-2 disabled:opacity-60 ${publishConfirmation ? "bg-violet-500" : "bg-gray-200"}`}
+                                >
+                                    <span className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform duration-200 ease-in-out ${publishConfirmation ? "translate-x-6" : "translate-x-1"}`} />
+                                </button>
+                            </div>
+                            {(publishConfirmation || queue.length > 0) && (
+                                <div className="mt-5 border-t border-gray-100 pt-4" data-testid="agent-publish-queue">
+                                    <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">
+                                        {t("agents.queueTitle")} <span className="text-gray-300">({queue.length})</span>
+                                    </h3>
+                                    {queue.length === 0 ? (
+                                        <p className="text-xs text-gray-400">{t("agents.queueEmpty")}</p>
+                                    ) : (
+                                        <ul className="space-y-2">
+                                            {queue.map((entry) => (
+                                                <li key={entry.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-gray-100 px-3 py-2">
+                                                    <div className="min-w-0">
+                                                        <a href={`/admin/posts/${entry.id}`} className="text-sm font-bold text-gray-800 hover:text-blue-600 break-words">{entry.title || `#${entry.id}`}</a>
+                                                        <div className="text-[11px] text-gray-400 mt-0.5 flex flex-wrap gap-x-3">
+                                                            <span><i className="fa-solid fa-robot mr-1"></i>{entry.agentName || "—"}</span>
+                                                            <span>{entry.type}</span>
+                                                            <span>{fmtDate(entry.requestedAt)}</span>
+                                                        </div>
+                                                    </div>
+                                                    <div className="flex gap-2">
+                                                        <Button size="sm" variant="ghost" icon="fa-rotate-left" loading={queueBusy === entry.id} onClick={() => decide(entry, "draft")}>{t("agents.queueReturn")}</Button>
+                                                        <Button size="sm" icon="fa-paper-plane" loading={queueBusy === entry.id} onClick={() => decide(entry, "publish")}>{t("agents.queuePublish")}</Button>
+                                                    </div>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    )}
+                                </div>
+                            )}
+                        </Card>
+                    )}
                     {loading ? (
                         <Card variant="default" padding="none">
                             <div className="p-20 text-center">
@@ -370,6 +487,9 @@ export default function AgentsPage() {
                                                 );
                                             })}
                                         </div>
+                                        {steerableCombination(draftGrant) && (
+                                            <div className="mt-3"><SteerableWarning confirmation={publishConfirmation} /></div>
+                                        )}
                                         <div className="mt-4">
                                             <MfaStepUpFields stepUp={grantStepUp} codeHelp={t("agents.stepUpHelp")} />
                                         </div>

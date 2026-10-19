@@ -48,6 +48,9 @@ describe('core transactional mails escape what they interpolate', () => {
         await updateOption('users_can_register', '1');
         await updateOption('blogname', `Acme ${PAYLOAD}`);
         (global as any).wordjs_send_mail = (m: any) => { sent.push(m); return { queued: true }; };
+        // Account mail goes only to a provider an administrator allowed BY NAME (core/account-mail).
+        require('../core/mail-provider').setMailProvider((global as any).wordjs_send_mail, 'test-mailer');
+        await require('../core/options').updateOption('account_mail_provider_allowed', JSON.stringify(['test-mailer']));
         await updateOption('mail_delivery_ready', '1');
 
         const express = require('express');

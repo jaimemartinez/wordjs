@@ -35,6 +35,9 @@ describe('Password recovery', () => {
 
         // Capture every outbound mail so we can read the reset link the server generated.
         (global as any).wordjs_send_mail = (msg: any) => { sentMail.push(msg); return { queued: true }; };
+        // Account mail goes only to a provider an administrator allowed BY NAME (core/account-mail).
+        require('../core/mail-provider').setMailProvider((global as any).wordjs_send_mail, 'test-mailer');
+        await require('../core/options').updateOption('account_mail_provider_allowed', JSON.stringify(['test-mailer']));
 
         const express = require('express');
         const cookieParser = require('cookie-parser');

@@ -12,7 +12,8 @@
  *      and never resolves a login;
  *   3. a byline whose stored display name IS the login prints the placeholder (the read-side guard);
  *   4. migration 0017 repairs existing rows, renames the comments they left under the login, and keeps
- *      a published author's old slug resolving (and nobody else's);
+ *      a published author's old slug (and nobody else's) — resolved ONLY when an administrator opts in,
+ *      and otherwise answered on every anonymous surface exactly like an unknown slug;
  *   5. a signed-in commenter's stored name is their public one;
  *   6. `GET /users/:id` answers "someone else's" exactly like "no such id".
  */
@@ -202,14 +203,43 @@ describe('migration 0017 repairs existing rows', () => {
         assert.strictEqual(c.comment_author, `User ${published}`);
     });
 
-    it("keeps a PUBLISHED author's old slug resolving, and nobody else's", async () => {
-        const viaOld = await Post.findAll({ author: 'oldauthor' });
-        assert.strictEqual(viaOld.length, 1, 'the old archive URL must still list the same posts');
-        const feed = await request(app).get('/api/v1/seo/author/oldauthor/feed.xml');
-        assert.strictEqual(feed.status, 200);
-        assert.ok(feed.text.includes(`/author/user-${published}`), 'the channel must name the new canonical slug');
+    it("keeps a PUBLISHED author's old slug (and nobody else's), but resolves none of it by default", async () => {
         const kept = await dbAsync.all("SELECT user_id FROM user_meta WHERE meta_key = 'previous_nicename'");
         assert.deepStrictEqual(kept.map((k: any) => k.user_id), [published]);
+
+        // The retired slug was derived from the login: answered anonymously, it confirms the login. With
+        // the opt-in OFF (the default) every anonymous surface answers it exactly like a slug nobody has.
+        assert.deepStrictEqual(await Post.findAll({ author: 'oldauthor' }), [], '?author=<retired slug> must match nothing');
+        const list = await request(app).get('/api/v1/posts').query({ author: 'oldauthor' });
+        const unknownList = await request(app).get('/api/v1/posts').query({ author: 'nobody-has-this' });
+        assert.deepStrictEqual(
+            { status: list.status, body: list.body, total: list.headers['x-wp-total'] },
+            { status: unknownList.status, body: unknownList.body, total: unknownList.headers['x-wp-total'] },
+            'GET /posts?author= must answer a retired slug exactly like an unknown one',
+        );
+        const feed = await request(app).get('/api/v1/seo/author/oldauthor/feed.xml');
+        const unknownFeed = await request(app).get('/api/v1/seo/author/nobody-has-this/feed.xml');
+        assert.strictEqual(feed.status, 404);
+        assert.deepStrictEqual({ status: feed.status, text: feed.text }, { status: unknownFeed.status, text: unknownFeed.text });
+    });
+
+    it('resolves the retired slug only once an administrator opts in', async () => {
+        const { updateOption } = require('../core/options');
+        await updateOption('author_legacy_slugs', '1');
+        try {
+            const viaOld = await Post.findAll({ author: 'oldauthor' });
+            assert.strictEqual(viaOld.length, 1, 'the old archive URL lists the same posts when opted in');
+            const feed = await request(app).get('/api/v1/seo/author/oldauthor/feed.xml');
+            assert.strictEqual(feed.status, 200);
+            assert.ok(feed.text.includes(`/author/user-${published}`), 'the channel must name the new canonical slug');
+        } finally {
+            await updateOption('author_legacy_slugs', '0');
+        }
+        assert.deepStrictEqual(await Post.findAll({ author: 'oldauthor' }), []);
+    });
+
+    it('the opt-in is an administrator setting a plugin cannot reach', () => {
+        assert.strictEqual(require('../core/plugin-api').isProtectedOption('author_legacy_slugs'), true);
     });
 
     it('keeps the retired slug from being handed to someone else, and from being self-assigned', async () => {

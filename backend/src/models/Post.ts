@@ -28,6 +28,7 @@ const privateMedia = require('../core/private-media');
 const { canViewAttachment, attachmentVisibilityCondition } = require('../core/attachment-visibility');
 const { canReadPostContent, isPasswordProtected } = require('../core/post-capabilities');
 const { publicDisplayName } = require('../core/public-identity');
+const { legacyAuthorSlugsEnabled } = require('../core/author-aliases');
 const { canonicalMetaKey } = require('../core/protected-meta');
 
 /**
@@ -1000,7 +1001,7 @@ class Post {
      * can narrow by nicename without a users endpoint to enumerate — and, as the slug branch spells
      * out, without the subquery itself becoming the enumeration.
      */
-    static _authorCondition(author: any, col: string): { sql: string; params: any[] } | null {
+    static _authorCondition(author: any, col: string, legacyAliases = false): { sql: string; params: any[] } | null {
         if (author === undefined || author === null || author === '') return null;
         if (typeof author === 'number') {
             if (!Number.isFinite(author) || author === 0) return null;
@@ -1035,14 +1036,20 @@ class Post {
             // account whose display name slugified to nothing) still answered `?author=<login>`. An
             // account without a slug is addressed by its id, which is what its byline serialises.
             //
-            // The second branch is the slug an author was moved OFF by migration 0017 (it had been
-            // derived from the login): only for accounts that had published, so the archive URLs that
-            // exist in the wild keep resolving — to the same posts, under the new canonical slug the
-            // payload carries. It is a protected meta key, so no account can write itself one.
-            parts.push(`${col}author_id IN (SELECT id FROM users `
-                + `WHERE user_nicename IN (${ph}) AND user_nicename <> '' `
-                + `UNION SELECT user_id FROM user_meta WHERE meta_key = 'previous_nicename' AND meta_value IN (${ph}))`);
-            params.push(...selector.slugs, ...selector.slugs);
+            // The slug an author was moved OFF by migration 0017 is resolved ONLY when the administrator
+            // opted in (core/author-aliases): that slug was derived from the login, so resolving it
+            // confirms the login to anyone who guesses it. Off — the default — an old slug matches
+            // nothing, exactly like a slug that never existed. It is a protected meta key, so no account
+            // can write itself one.
+            if (legacyAliases) {
+                parts.push(`${col}author_id IN (SELECT id FROM users `
+                    + `WHERE user_nicename IN (${ph}) AND user_nicename <> '' `
+                    + `UNION SELECT user_id FROM user_meta WHERE meta_key = 'previous_nicename' AND meta_value IN (${ph}))`);
+                params.push(...selector.slugs, ...selector.slugs);
+            } else {
+                parts.push(`${col}author_id IN (SELECT id FROM users WHERE user_nicename IN (${ph}) AND user_nicename <> '')`);
+                params.push(...selector.slugs);
+            }
         }
         if (parts.length === 0) return { sql: '1 = 0', params: [] };
         return { sql: parts.length === 1 ? parts[0] : `(${parts.join(' OR ')})`, params };
@@ -1132,7 +1139,7 @@ class Post {
         }
 
         // Author — a bare id (every existing caller), or the ids/slugs selector the list route parses.
-        const authorClause = Post._authorCondition(author, col);
+        const authorClause = Post._authorCondition(author, col, options._authorLegacyAliases === true);
         if (authorClause) {
             conditions.push(authorClause.sql);
             params.push(...authorClause.params);
@@ -1404,6 +1411,17 @@ class Post {
     }
 
     /**
+     * The author filter resolves migration 0017's retired slugs only on an explicit opt-in
+     * (core/author-aliases), and that is an option read — so it is resolved here, before the synchronous
+     * buildWhere, and only when the filter can name a slug at all (a numeric author never pays it).
+     */
+    static async _withAuthorAliasFlag(options: any): Promise<any> {
+        const author = options && options.author;
+        if (author === undefined || author === null || author === '' || typeof author === 'number') return options;
+        return { ...options, _authorLegacyAliases: await legacyAuthorSlugsEnabled() };
+    }
+
+    /**
      * Query posts
      * Equivalent to WP_Query
      */
@@ -1420,7 +1438,7 @@ class Post {
         // Resolve the full-text engine ONCE per search so the WHERE filter (here and in COUNT) and the
         // relevance ORDER BY below agree on the same backend. Non-search queries never pay the probe.
         const searchEngine = options.search ? await Post._resolveSearchEngine() : null;
-        const whereOptions = options.search ? { ...options, _searchEngine: searchEngine } : options;
+        const whereOptions = await Post._withAuthorAliasFlag(options.search ? { ...options, _searchEngine: searchEngine } : options);
 
         const { joins, conditions, params } = Post.buildWhere(whereOptions, 'p');
 
@@ -1495,7 +1513,7 @@ class Post {
         // Same engine resolution as findAll so the COUNT filter matches the rows filter exactly — a
         // drift here would report a total that disagrees with the page it accompanies.
         const searchEngine = options.search ? await Post._resolveSearchEngine() : null;
-        const whereOptions = options.search ? { ...options, _searchEngine: searchEngine } : options;
+        const whereOptions = await Post._withAuthorAliasFlag(options.search ? { ...options, _searchEngine: searchEngine } : options);
 
         const { conditions, params } = Post.buildWhere(whereOptions, '');
 

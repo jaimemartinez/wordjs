@@ -570,6 +570,8 @@ const CHROME_STRINGS: Tri[] = [
     { es: "Última", en: "Latest", pt: "Mais recente" },
     { es: "Autor", en: "Author", pt: "Autor" },
     { es: "Restaurar", en: "Restore", pt: "Restaurar" },
+    { es: "Antes del cambio de un agente de IA", en: "Before an AI agent's change", pt: "Antes da alteração de um agente de IA" },
+    { es: "Restaura esta versión para deshacer lo que cambió el agente {name}.", en: "Restore this version to undo what the agent {name} changed.", pt: "Restaure esta versão para desfazer o que o agente {name} alterou." },
     { es: "Cambios", en: "Changes", pt: "Alterações" },
     { es: "Restaurar reemplaza el contenido actual y conserva una revisión de su estado presente.", en: "Restoring replaces the current content and preserves a revision of its present state.", pt: "Restaurar substitui o conteúdo atual e preserva uma revisão do seu estado presente." },
     // Symbols (save-block-as-symbol action + toasts)

@@ -41,7 +41,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
             {/* Toast Container. 1rem from the edges, or the safe area: the admin viewport is
                 viewport-fit=cover, so a fixed stack at bottom-4/left-4/right-4 sat under the home indicator,
                 and in landscape under the notch / rounded corner (env() is 0 everywhere else). */}
-            <div data-wjs-toasts="" className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] left-[max(1rem,env(safe-area-inset-left))] right-[max(1rem,env(safe-area-inset-right))] sm:left-auto z-[9999] flex flex-col gap-2">
+            <div data-wjs-toasts="" data-wjs-host-ui="" className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] left-[max(1rem,env(safe-area-inset-left))] right-[max(1rem,env(safe-area-inset-right))] sm:left-auto z-[9999] flex flex-col gap-2">
                 {toasts.map((toast) => (
                     <div
                         key={toast.id}

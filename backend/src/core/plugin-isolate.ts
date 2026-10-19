@@ -3218,7 +3218,7 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                 if (isGrantedFor(slug, 'email', 'provider')) {
                     // The provider of THIS worker's site only (core/mail-provider: site 1 keeps the global).
                     mailProviderFn = (mailMsg: any) => invokeMail(mailMsg);
-                    require('./mail-provider').setMailProvider(mailProviderFn);
+                    require('./mail-provider').setMailProvider(mailProviderFn, slug);
                     providedMail = true;
                 } else {
                     log.warn({ slug: logSafe(slug) }, `[Isolate ${logSafe(slug)}] provideMail denied: the email:provider permission is not granted (grant it in /admin/plugins).`);
