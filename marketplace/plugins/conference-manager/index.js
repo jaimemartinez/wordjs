@@ -22,7 +22,7 @@
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.17.1',
+    version: '2.17.2',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -914,19 +914,24 @@ exports.init = async function (wordjs) {
         return rows.length;
     }
 
-    // In-process portal-login throttle (2.17.1; single child process → in-memory maps are the whole
+    // In-process portal-login throttle (2.17.2; single child process → in-memory maps are the whole
     // picture, and every map is bounded). Only WRONG codes are counted, against three fixed-window budgets:
-    //   - per client + location (req.clientKey = the host's HMAC of the caller's address): another
-    //     client's mistakes never lock this one out, and a right code clears only the caller's own count;
-    //   - per location, all clients together: bounds guessing spread over many addresses;
-    //   - site-wide: bounds guessing spread over many locations as well (location ids are public).
-    // Each attempt is charged synchronously BEFORE the code check is awaited (so a parallel burst cannot
-    // outrun the budgets) and refunded when the code is right. A signed-in coordinator never meets this:
-    // the portal session is an opaque server-side id (see PORTAL AUTH HELPER), not something carrying
-    // the code.
+    //   - per client + location (req.clientKey = the host's HMAC of the caller's address): the ONLY
+    //     budget that refuses. Another client's mistakes never lock this one out, and a right code
+    //     clears only the caller's own count. It is charged synchronously BEFORE the code check is
+    //     awaited (so a parallel burst cannot outrun it) and refunded when the code is right;
+    //   - per location, all clients together, and site-wide (location ids are public): bound guessing
+    //     spread over many addresses and many locations by slowing every attempt down once spent
+    //     (escalating delay), never by refusing — a right code is never turned away for other callers'
+    //     wrong ones. Only wrong codes for a location that exists are charged to them.
+    // A signed-in coordinator never meets this: the portal session is an opaque server-side id (see
+    // PORTAL AUTH HELPER), not something carrying the code.
     const LOGIN_LIMITS = {
         perClient: 6, clientWindowMs: 10 * 60 * 1000,
         perLocation: 20, perSite: 100, sharedWindowMs: 60 * 60 * 1000,
+        // Past a shared budget every attempt waits before its code is checked: delayBaseMs, doubling
+        // every delayDoubleEvery further wrong codes, up to delayMaxMs.
+        delayBaseMs: 250, delayDoubleEvery: 10, delayMaxMs: 8000,
     };
     const LOGIN_MAP_CAP = 5000;
     const loginBuckets = { client: new Map(), location: new Map(), site: new Map() };
@@ -942,24 +947,47 @@ exports.init = async function (wordjs) {
         }
         return b;
     };
-    /** Charge one attempt for `locationId`: null when a budget is spent, else `{ succeeded() }`. */
+    /** A bucket's live count, without creating one (an unknown id never becomes a map key). */
+    const loginCount = (map, key, windowMs, now) => {
+        const b = map.get(key);
+        return b && now - b.first < windowMs ? b.count : 0;
+    };
+    /**
+     * Charge one attempt for `locationId` to the caller's own budget: null when it is spent (the only
+     * refusal), else { delayMs, failed(), succeeded() }. `delayMs` is how long the attempt waits before
+     * its code is checked, from the shared budgets; failed() charges them (call it only for a wrong
+     * code on a location that exists); succeeded() refunds the caller's own attempt.
+     */
     const beginLoginAttempt = (req, locationId) => {
         const now = Date.now(), L = LOGIN_LIMITS;
         const clientKey = `${String((req && req.clientKey) || 'anon').slice(0, 64)}|${locationId}`;
-        const charged = [
-            [loginBucket(loginBuckets.client, clientKey, L.clientWindowMs, now), L.perClient],
-            [loginBucket(loginBuckets.location, String(locationId), L.sharedWindowMs, now), L.perLocation],
-            [loginBucket(loginBuckets.site, '*', L.sharedWindowMs, now), L.perSite],
-        ];
-        if (charged.some(([b, max]) => b.count >= max)) return null;
-        for (const [b] of charged) b.count++;
+        const own = loginBucket(loginBuckets.client, clientKey, L.clientWindowMs, now);
+        if (own.count >= L.perClient) return null;
+        own.count++;
+        const excess = Math.max(
+            loginCount(loginBuckets.location, String(locationId), L.sharedWindowMs, now) - L.perLocation,
+            loginCount(loginBuckets.site, '*', L.sharedWindowMs, now) - L.perSite
+        );
+        const delayMs = excess < 0 ? 0
+            : Math.min(L.delayMaxMs, L.delayBaseMs * 2 ** Math.floor(excess / L.delayDoubleEvery));
+        let settled = false;
         return {
+            delayMs,
+            failed() {
+                if (settled) return;
+                settled = true;
+                const at = Date.now();
+                loginBucket(loginBuckets.location, String(locationId), L.sharedWindowMs, at).count++;
+                loginBucket(loginBuckets.site, '*', L.sharedWindowMs, at).count++;
+            },
             succeeded() {
-                for (const [b] of charged) b.count = Math.max(0, b.count - 1);
+                if (settled) return;
+                settled = true;
                 loginBuckets.client.delete(clientKey); // the caller's own record only
             },
         };
     };
+    const loginPause = (ms) => (ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : null);
 
     // Serialize the auto-assigner: it loads occupancy into memory then writes in a loop, so two
     // concurrent runs (or a run racing a manual assign) would double-book. Chain them instead.
@@ -5190,12 +5218,13 @@ exports.init = async function (wordjs) {
             return res.status(400).json({ error: 'Localidad inválida.' });
         }
         try {
-            // Charged to the throttle before touching the DB, refunded only when the code is right (or the
-            // form is closed — that refusal is not a guess). Bounds brute force of the 6-digit code.
+            // Charged to the caller's budget before touching the DB, refunded only when the code is right
+            // (or the form is closed — that refusal is not a guess). Bounds brute force of the 6-digit code.
             const attempt = beginLoginAttempt(req, location_id);
             if (!attempt) {
                 return res.status(429).json({ error: 'Demasiados intentos. Espera unos minutos e inténtalo de nuevo.' });
             }
+            await loginPause(attempt.delayMs);
             const location = await db.get(`SELECT * FROM ${T.locations} WHERE id = ?`, [location_id]);
             if (!location) return res.status(404).json({ error: 'Location not found' });
 
@@ -5207,6 +5236,7 @@ exports.init = async function (wordjs) {
 
             // Simple code check
             if (!location.code || String(location.code) !== String(code)) {
+                attempt.failed();
                 return res.status(401).json({ error: 'Invalid code' });
             }
             attempt.succeeded();
