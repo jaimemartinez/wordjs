@@ -1340,7 +1340,8 @@ async function authenticateAllowQuery(req: Request, res: Response, next: NextFun
     if (handleDispatchedAgent(req, res, next)) return;
     const authHeader = req.headers.authorization;
     let token;
-    let ticketPath: string | undefined;
+    // Which transport carried the credential — decided by where it was found, never by its content.
+    let fromQueryString = false;
 
     if (authHeader && authHeader.startsWith('Bearer ')) {
         token = authHeader.substring(7);
@@ -1349,7 +1350,7 @@ async function authenticateAllowQuery(req: Request, res: Response, next: NextFun
         ensureCsrfCookie(req, res); // same backfill as authenticate() — see there
     } else if (queryToken(req)) {
         token = queryToken(req);
-        ticketPath = `${req.baseUrl || ''}${req.path || ''}`;
+        fromQueryString = true;
     }
 
     if (!token) {
@@ -1360,7 +1361,8 @@ async function authenticateAllowQuery(req: Request, res: Response, next: NextFun
         });
     }
 
-    if (ticketPath !== undefined) return await verifyAndAttachUser(token, req, res, next, ticketPath);
+    // From the query string only a ticket for this very path is accepted (see verifyAndAttachUser).
+    if (fromQueryString) return await verifyAndAttachUser(token, req, res, next, `${req.baseUrl || ''}${req.path || ''}`);
     if (token.startsWith(ApiToken.PREFIX)) {
         return await verifyApiTokenAndAttachUser(token, req, res, next);
     }
