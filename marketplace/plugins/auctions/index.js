@@ -28,7 +28,7 @@
 
 exports.metadata = {
     name: 'Auctions',
-    version: '1.1.0',
+    version: '1.1.1',
     description: 'Auction listings with public bidding, minimum increments, anti-snipe extension and winner reporting.',
     author: 'WordJS',
 };
@@ -69,6 +69,8 @@ exports.init = async function (wordjs) {
     const VERIFY_CODE_TTL_MS = 30 * 60 * 1000;
     const VERIFY_CODE_MAX_TRIES = 5;            // wrong codes before a new code must be requested
     const VERIFY_MAIL_PER_HOUR = 3;             // verification codes mailed to one address per hour
+    const VERIFY_MAIL_CLIENT_PER_HOUR = 10;     // verification codes one client can have mailed per hour
+    const VERIFY_MAIL_SITE_PER_HOUR = 200;      // verification codes the whole site mails per hour
     const VERIFY_CLIENT_ATTEMPTS = 20;          // code checks per client per BID_WINDOW_MS
     const OUTBID_MAIL_PER_HOUR = 10;            // outbid notices mailed to one address per hour
     // The host's own refusals when this site cannot send mail at all (same list as bookings).
@@ -381,7 +383,7 @@ exports.init = async function (wordjs) {
     // limit). key -> timestamps[] over the last hour; the map is bounded like bidHits.
     const MAIL_WINDOW_MS = 60 * 60 * 1000;
     const mailSentTo = new Map();
-    function mailBudget(key, max) {
+    function mailBudget(key, max, peek) {
         const now = Date.now();
         if (!mailSentTo.has(key) && mailSentTo.size >= 20000) {
             for (const [k, ts] of mailSentTo) if (!ts.length || now - ts[ts.length - 1] >= MAIL_WINDOW_MS) mailSentTo.delete(k);
@@ -389,6 +391,7 @@ exports.init = async function (wordjs) {
         }
         const ts = (mailSentTo.get(key) || []).filter((t) => now - t < MAIL_WINDOW_MS);
         if (ts.length >= max) { mailSentTo.set(key, ts); return false; }
+        if (peek) return true;
         ts.push(now);
         mailSentTo.set(key, ts);
         return true;
@@ -410,12 +413,18 @@ exports.init = async function (wordjs) {
     }
 
     /**
-     * Mail a fresh verification code to `email`. Returns 'sent', 'throttled' (the address had its
-     * share this hour — nothing rotated, nothing sent), 'no-transport' (this site cannot send mail
-     * at all) or 'failed'. The mail carries only the site's own text and the code.
+     * Mail a fresh verification code to `email`. Returns 'sent', 'throttled' (the address, the
+     * requesting client or the whole site had its share this hour — nothing rotated, nothing sent),
+     * 'no-transport' (this site cannot send mail at all) or 'failed'. The mail carries only the
+     * site's own text and the code. Codes go to addresses nobody has proven yet, so besides the
+     * per-address budget the whole site mails at most VERIFY_MAIL_SITE_PER_HOUR of them.
      */
-    async function sendVerifyCode(email, auctionTitle) {
-        if (!mailBudget('verify:' + email, VERIFY_MAIL_PER_HOUR)) return 'throttled';
+    async function sendVerifyCode(email, auctionTitle, clientKey) {
+        const budgets = [['verify:' + email, VERIFY_MAIL_PER_HOUR], ['verify-site', VERIFY_MAIL_SITE_PER_HOUR]];
+        if (clientKey) budgets.push(['verify-client:' + clientKey, VERIFY_MAIL_CLIENT_PER_HOUR]);
+        // Check every budget before spending any, so a refusal by one does not use up the others.
+        if (!budgets.every(([k, max]) => mailBudget(k, max, true))) return 'throttled';
+        for (const [k, max] of budgets) mailBudget(k, max);
         const code = String(await wordjs.crypto.randomInt(0, 100000000)).padStart(8, '0');
         const expires = new Date(Date.now() + VERIFY_CODE_TTL_MS).toISOString().slice(0, 19).replace('T', ' ');
         const setCode = () => db.run(
@@ -565,39 +574,45 @@ exports.init = async function (wordjs) {
 
             // --- input validation ---
             const name = String(body.bidder_name || '').trim();
-            // A signed-in bidder bids as the account's own address.
-            const email = String((account ? account.userEmail : body.bidder_email) || '').trim().toLowerCase();
+            // A signed-in bidder bids as the account's own address. The host hands a route the
+            // account's address only while this plugin holds users:read; until the administrator
+            // grants it, a signed-in bidder types an address and proves it like a guest does.
+            const accountEmail = account && typeof account.userEmail === 'string' && account.userEmail.trim()
+                ? account.userEmail : null;
+            const email = String((accountEmail || body.bidder_email) || '').trim().toLowerCase();
             const amountCents = centsOrNull(body.amount_cents, false);
             if (name.length < 2 || name.length > 120) {
                 return res.status(400).json({ error: 'Escribe tu nombre (2 a 120 caracteres).' });
             }
             if (!email || email.length > 200 || !EMAIL_RE.test(email)) {
-                return res.status(400).json({ error: 'Escribe un correo electrónico válido.' });
+                // needsEmail: a signed-in bidder whose account address this plugin cannot read yet.
+                return res.status(400).json({ error: 'Escribe un correo electrónico válido.', ...(account && !accountEmail ? { needsEmail: true } : {}) });
             }
             if (amountCents === null) {
                 return res.status(400).json({ error: 'El monto de la puja es inválido.' });
             }
             // Claim the shared windows and the per-client / per-email ones in one synchronous step
             // (no await since the top of the handler), so concurrent bids see each other's claims.
-            // A client's FIRST bid on this auction in its window is not held to the shared windows:
-            // a few clients filling them could otherwise keep every other bidder out of the auction
-            // (and win at their own price). Their own later bids still count against them.
-            const caKey = 'ca:' + auctionId + ':' + clientKey;
-            const caRec = clientKey ? bidHits.get(caKey) : null;
-            const firstInWindow = !!clientKey && (!caRec || Date.now() - caRec.first >= BID_WINDOW_MS || caRec.count === 0);
-            const windows = firstInWindow ? [] : [['all', BID_MAX_GLOBAL], ['a:' + auctionId, BID_MAX_PER_AUCTION]];
-            if (clientKey) windows.push([caKey, BID_MAX_PER_CLIENT_AUCTION]);
-            releaseHits = claimHits(windows);
-            if (!releaseHits) {
+            // Every bid is held to the shared windows; they count only bids that land, so invalid
+            // requests cannot fill them.
+            const releaseShared = claimHits([['all', BID_MAX_GLOBAL], ['a:' + auctionId, BID_MAX_PER_AUCTION]]);
+            if (!releaseShared) {
                 return res.status(429).json({ error: 'Demasiadas pujas en este momento. Espera un minuto e inténtalo de nuevo.' });
             }
+            releaseHits = releaseShared;
+            const releaseClient = clientKey
+                ? claimHits([['ca:' + auctionId + ':' + clientKey, BID_MAX_PER_CLIENT_AUCTION]])
+                : () => {};
+            if (!releaseClient) {
+                return res.status(429).json({ error: 'Demasiadas pujas en este momento. Espera un minuto e inténtalo de nuevo.' });
+            }
+            releaseHits = () => { releaseShared(); releaseClient(); };
             // Secondary cap keyed on the (validated) bidder email.
             const releaseEmail = claimHits([['e:' + email, BID_MAX_PER_EMAIL]]);
             if (!releaseEmail) {
                 return res.status(429).json({ error: 'Has pujado demasiadas veces en un minuto. Espera un momento e inténtalo de nuevo.' });
             }
-            const releaseWindows = releaseHits;
-            releaseHits = () => { releaseWindows(); releaseEmail(); };
+            releaseHits = () => { releaseShared(); releaseClient(); releaseEmail(); };
 
             // --- auction state (lazy end first so 'active' below is trustworthy) ---
             await db.run(
@@ -642,12 +657,21 @@ exports.init = async function (wordjs) {
             if (mode === 'login' && !account) {
                 return res.status(401).json({ error: 'Inicia sesión para pujar en esta subasta.', loginRequired: true });
             }
-            if (mode === 'email' && !account) {
+            // A typed address must be proven in 'email' and 'login' mode; an account's own address
+            // (accountEmail) already is.
+            if ((mode === 'email' || mode === 'login') && !accountEmail) {
                 const proven = await bidderProven(email, body.bidder_key);
                 if (!proven) {
-                    const sent = await sendVerifyCode(email, a.title);
+                    const sent = await sendVerifyCode(email, a.title, clientKey);
                     if (sent === 'failed') {
                         return res.status(503).json({ error: 'No se pudo enviar el código de verificación. Inténtalo de nuevo en unos minutos.' });
+                    }
+                    if (sent === 'sent') {
+                        // A mailed code stays charged to this client's own window (only the shared
+                        // and per-address windows are refunded), so repeating it is not free.
+                        releaseShared();
+                        releaseEmail();
+                        releaseHits = null;
                     }
                     if (sent !== 'no-transport') {
                         // Same reply whether a code went out or this address already had its share.
