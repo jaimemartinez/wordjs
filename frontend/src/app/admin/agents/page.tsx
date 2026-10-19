@@ -7,6 +7,7 @@ import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { PageHeader, Button, Card, EmptyState, Input, Select, StatusBadge } from "@/components/ui";
 import DialogLayer from "@/components/DialogLayer";
+import { useMfaStepUp, MfaStepUpFields } from "@/components/MfaStepUp";
 
 /**
  * AI agent connections — the admin side of the MCP server (backend routes/agents.ts, routes/mcp.ts).
@@ -123,6 +124,12 @@ export default function AgentsPage() {
     const [reviewing, setReviewing] = useState<number | null>(null);
     const [draftGrant, setDraftGrant] = useState<Set<AgentCapability>>(new Set());
     const [saving, setSaving] = useState(false);
+    // Creating and granting follow the API-token MFA rule (backend requireMfaForMachineCredential): a role
+    // under the 2FA policy whose session did not sign in with it is asked for a code, and an account past
+    // its invalid-code ceiling for its password too. One prompt per action, so a code typed for one is
+    // never sent with the other.
+    const createStepUp = useMfaStepUp();
+    const grantStepUp = useMfaStepUp();
     const [auditFor, setAuditFor] = useState<number | null>(null);
     const [audit, setAudit] = useState<AuditEntry[]>([]);
 
@@ -160,7 +167,9 @@ export default function AgentsPage() {
                 requested: Array.from(requested),
                 userId: boundUser ? Number(boundUser) : undefined,
                 expiresInDays: expiry ? Number(expiry) : null,
+                ...createStepUp.payload(),
             });
+            createStepUp.reset();
             setReveal({ token: res.token, url: res.mcpUrl, fresh: true });
             setName("");
             setExpiry("");
@@ -169,13 +178,15 @@ export default function AgentsPage() {
             // An administrator creating a connection reviews it straight away.
             if (canGrant) startReview(res.connection);
         } catch (e: any) {
-            addToast(e?.message || t("agents.createFailed"), "error");
+            if (createStepUp.absorb(e)) addToast(e?.code === "rest_mfa_step_up_required" ? t("agents.stepUpHelp") : t("stepUp.passwordHelp"), "info");
+            else addToast(e?.message || t("agents.createFailed"), "error");
         } finally {
             setCreating(false);
         }
     };
 
     const startReview = (c: AgentConnection) => {
+        grantStepUp.reset();
         setReviewing(c.id);
         setDraftGrant(new Set(c.granted));
     };
@@ -183,13 +194,15 @@ export default function AgentsPage() {
     const saveGrant = async (c: AgentConnection) => {
         setSaving(true);
         try {
-            await agentsApi.grant(c.id, Array.from(withImplied(draftGrant)).filter((g) => c.requested.includes(g)));
+            await agentsApi.grant(c.id, Array.from(withImplied(draftGrant)).filter((g) => c.requested.includes(g)), grantStepUp.payload());
+            grantStepUp.reset();
             addToast(t("agents.granted"), "success");
             setReviewing(null);
             await load();
             if (auditFor === c.id) await openAudit(c.id, true);
         } catch (e: any) {
-            addToast(e?.message || t("agents.grantFailed"), "error");
+            if (grantStepUp.absorb(e)) addToast(e?.code === "rest_mfa_step_up_required" ? t("agents.stepUpHelp") : t("stepUp.passwordHelp"), "info");
+            else addToast(e?.message || t("agents.grantFailed"), "error");
         } finally {
             setSaving(false);
         }
@@ -283,6 +296,7 @@ export default function AgentsPage() {
                                 ]}
                             />
                         </div>
+                        <MfaStepUpFields stepUp={createStepUp} codeHelp={t("agents.stepUpHelp")} />
                         <Button type="submit" icon="fa-plus" className="w-full" loading={creating}>{t("agents.create")}</Button>
                     </form>
                 </Card>
@@ -355,6 +369,9 @@ export default function AgentsPage() {
                                                     </label>
                                                 );
                                             })}
+                                        </div>
+                                        <div className="mt-4">
+                                            <MfaStepUpFields stepUp={grantStepUp} codeHelp={t("agents.stepUpHelp")} />
                                         </div>
                                         <div className="mt-4 flex gap-2 justify-end">
                                             <Button size="sm" variant="ghost" onClick={() => setReviewing(null)}>{t("cancel")}</Button>

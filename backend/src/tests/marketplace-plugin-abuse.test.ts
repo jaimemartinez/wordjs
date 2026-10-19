@@ -1215,10 +1215,17 @@ test('invoices: a concurrent burst of wrong tokens is held to the failure budget
 
 // ================================== vendor-marketplace ========================================
 
+/** Sign a store in through its portal (the session is an opaque server-side id): its portal headers. */
+async function vendorPortal(p: BootedPlugin, vendorId = 1, code = '123456', clientKey = 'vendor-owner') {
+    const r = await p.call('post', '/portal/login', { clientKey, body: { vendor_id: vendorId, code } });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    return { 'x-portal-token': String(r.body.token) };
+}
+
 test('vendor-marketplace: a vendor cannot republish a product the admin hid; protocol-relative URLs are refused', async () => {
     await withPlugin('vendor-marketplace', async (p) => {
         p.sdb.prepare(`INSERT INTO ${p.prefix}vendors (name, slug, email, access_code, status) VALUES ('Shop', 'shop', 'v@x.io', '123456', 'approved')`).run();
-        const portal = { 'x-portal-token': Buffer.from(`1:123456:${Date.now() + 3600e3}`).toString('base64') };
+        const portal = await vendorPortal(p);
         const created = await p.call('post', '/portal/products', { headers: portal, body: { name: 'Lamp', price_cents: 500 } });
         assert.strictEqual(created.status, 200, JSON.stringify(created.body));
         const id = created.body.id;
@@ -1346,7 +1353,7 @@ test('vendor-marketplace: re-approving a store never brings back the access code
 test('vendor-marketplace: public and portal errors never echo the driver\'s message', async () => {
     await withPlugin('vendor-marketplace', async (p) => {
         p.sdb.prepare(`INSERT INTO ${p.prefix}vendors (name, slug, email, access_code, status) VALUES ('Shop', 'shop', 'v@x.io', '123456', 'approved')`).run();
-        const portal = { 'x-portal-token': Buffer.from(`1:123456:${Date.now() + 3600e3}`).toString('base64') };
+        const portal = await vendorPortal(p);
         const quiet = (label: string, r: Reply) => {
             assert.strictEqual(r.status, 500, `${label}: ${JSON.stringify(r.body)}`);
             assert.doesNotMatch(JSON.stringify(r.body), LEAK_RE, label);
@@ -1364,6 +1371,103 @@ test('vendor-marketplace: public and portal errors never echo the driver\'s mess
         p.sdb.exec(`DROP TABLE ${p.prefix}vendors`);
         quiet('POST /portal/login', await p.call('post', '/portal/login', { body: { vendor_id: 1, code: '123456' } }));
         quiet('POST /public/apply', await applyStore(p, 'late', 'Tienda', 'late@x.io'));
+    });
+});
+
+// The portal login: a store's id is public. The throttle was one counter per store, checked before the
+// code, cleared by any right code and also charged by the session check — so a stranger could keep a
+// store's owner locked out (signed-in sessions included), and guesses spread over many addresses and
+// stores went on. Only wrong codes count now, per client + store, per store and site-wide; a right code
+// clears only the caller's own count; and the session is an opaque server-side id that the throttle never
+// touches.
+const vendorLogin = (p: BootedPlugin, clientKey: string, code: string, vendorId = 1) =>
+    p.call('post', '/portal/login', { clientKey, body: { vendor_id: vendorId, code } });
+function seedVendors(p: BootedPlugin, n = 1) {
+    const ins = p.sdb.prepare(`INSERT INTO ${p.prefix}vendors (name, slug, email, access_code, status) VALUES (?, ?, ?, '123456', 'approved')`);
+    for (let i = 1; i <= n; i++) ins.run(`Shop ${i}`, `shop-${i}`, `v${i}@x.io`);
+}
+
+test('vendor-marketplace: a stranger\'s wrong codes never lock the owner out, nor end a signed-in session', async () => {
+    await withPlugin('vendor-marketplace', async (p) => {
+        seedVendors(p);
+        const portal = await vendorPortal(p);
+        assert.match(portal['x-portal-token'], /^[0-9a-f]{64}$/, 'the session is an opaque id');
+        assert.ok(!Buffer.from(portal['x-portal-token'], 'hex').toString('latin1').includes('123456'));
+        for (let i = 0; i < 30; i++) await vendorLogin(p, `stranger-${i % 5}`, String(100000 + i));
+        assert.strictEqual((await vendorLogin(p, 'stranger-0', '123456')).status, 429, 'the stranger is throttled');
+        assert.strictEqual((await p.call('get', '/portal/me', { headers: portal })).status, 200, 'the signed-in owner was locked out');
+        assert.strictEqual((await p.call('get', '/portal/products', { headers: portal })).status, 200);
+        // The store's own budget is spent: a FRESH login waits, the session does not.
+        assert.strictEqual((await vendorLogin(p, 'owner-elsewhere', '123456')).status, 429);
+    });
+});
+
+test('vendor-marketplace: the owner\'s right code clears only their own count; each client gets its own budget', async () => {
+    await withPlugin('vendor-marketplace', async (p) => {
+        seedVendors(p);
+        for (let i = 0; i < 5; i++) assert.strictEqual((await vendorLogin(p, 'guesser', '000000')).status, 401);
+        assert.strictEqual((await vendorLogin(p, 'owner', '123456')).status, 200);
+        assert.strictEqual((await vendorLogin(p, 'guesser', '000000')).status, 401, 'the sixth guess');
+        assert.strictEqual((await vendorLogin(p, 'guesser', '000000')).status, 429, 'the owner\'s login reset the guesser\'s count');
+        // Another client is not refused for the guesser's mistakes; the owner still signs in.
+        assert.strictEqual((await vendorLogin(p, 'owner', '123456')).status, 200);
+        // A right code refunds the attempt: the owner signing in again and again is never throttled.
+        for (let i = 0; i < 10; i++) assert.strictEqual((await vendorLogin(p, 'owner', '123456')).status, 200);
+    });
+});
+
+test('vendor-marketplace: guesses spread over many clients and many stores meet a per-store and a site-wide budget', async () => {
+    await withPlugin('vendor-marketplace', async (p) => {
+        seedVendors(p, 8);
+        // One store, one wrong code from each of many clients: the store's budget (20) ends it.
+        const spread: number[] = [];
+        for (let i = 0; i < 25; i++) spread.push((await vendorLogin(p, `bot-${i}`, '000000', 1)).status);
+        assert.strictEqual(countOf(spread, 401), 20, JSON.stringify(spread));
+        assert.strictEqual(countOf(spread, 429), 5);
+        // Many stores, many clients: the site-wide budget (100) ends it, whatever the store.
+        const wide: number[] = [];
+        for (let i = 0; i < 120; i++) wide.push((await vendorLogin(p, `bot2-${i}`, '000000', 2 + (i % 7))).status);
+        assert.strictEqual(countOf(wide, 401), 80, 'the site-wide budget was not shared by every store');
+        assert.strictEqual(countOf(wide, 429), 40);
+    });
+});
+
+test('vendor-marketplace: a parallel burst of guesses cannot outrun the throttle', async () => {
+    await withPlugin('vendor-marketplace', async (p) => {
+        seedVendors(p);
+        const burst = await Promise.all(Array.from({ length: 30 }, (_, i) => vendorLogin(p, 'burst', String(200000 + i))));
+        const statuses = burst.map((r) => r.status);
+        assert.strictEqual(countOf(statuses, 401), 6, JSON.stringify(statuses));
+        assert.strictEqual(countOf(statuses, 429), 24);
+    });
+});
+
+test('vendor-marketplace: a forged or old-style token opens nothing; a new code, a suspension and a logout end the session', async () => {
+    await withPlugin('vendor-marketplace', async (p) => {
+        seedVendors(p);
+        const forged = { 'x-portal-token': Buffer.from(`1:123456:${Date.now() + 3600e3}`).toString('base64') };
+        assert.strictEqual((await p.call('get', '/portal/me', { headers: forged })).status, 401, 'a token built from the code opens the portal');
+        assert.strictEqual((await p.call('get', '/portal/me', { headers: { 'x-portal-token': 'f'.repeat(64) } })).status, 401);
+        // A new access code ends every session opened with the old one.
+        const a = await vendorPortal(p);
+        assert.strictEqual((await p.call('post', '/vendors/:id/rotate-code', { user: ADMIN, params: { id: '1' } })).status, 200);
+        assert.strictEqual((await p.call('get', '/portal/me', { headers: a })).status, 401, 'the session survived a new code');
+        const code = String(p.sdb.prepare(`SELECT access_code FROM ${p.prefix}vendors WHERE id = 1`).get().access_code);
+        // A suspension too.
+        const b = await vendorPortal(p, 1, code);
+        assert.strictEqual((await p.call('post', '/vendors/:id/suspend', { user: ADMIN, params: { id: '1' } })).status, 200);
+        assert.strictEqual((await p.call('get', '/portal/me', { headers: b })).status, 401, 'the session survived a suspension');
+        p.sdb.prepare(`UPDATE ${p.prefix}vendors SET status = 'approved' WHERE id = 1`).run();
+        // A logout ends the session server-side, not only in that browser.
+        const c = await vendorPortal(p, 1, code);
+        assert.strictEqual((await p.call('get', '/portal/me', { headers: c })).status, 200);
+        assert.strictEqual((await p.call('post', '/portal/logout', { headers: c })).status, 200);
+        assert.strictEqual((await p.call('get', '/portal/me', { headers: c })).status, 401, 'the session survived its logout');
+        // An expired session is refused.
+        const d = await vendorPortal(p, 1, code);
+        await withClockAdvanced(8 * 24 * 3600e3, async () => {
+            assert.strictEqual((await p.call('get', '/portal/me', { headers: d })).status, 401, 'a session outlived its 7 days');
+        });
     });
 });
 
@@ -1642,6 +1746,12 @@ test('event-tickets: a capacity cut lands only while it still covers the seats s
 // each other's gap left a cancelled attendee holding a bed. The bus edit checked the tickets sold
 // outside the lock its sales run under.
 const CM_ADMIN = { id: 1, role: 'administrator' };
+/** Sign a location in through its portal (the session is an opaque server-side id): its portal headers. */
+async function locationPortal(p: BootedPlugin, locationId = 1, code = '123456', clientKey = 'coordinator') {
+    const r = await p.call('post', '/portal/login', { clientKey, body: { location_id: locationId, code } });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    return { 'x-portal-token': String(r.body.token) };
+}
 function seedLodging(p: BootedPlugin) {
     p.sdb.prepare(`INSERT INTO ${p.prefix}conferences (name, slug, is_form_published) VALUES ('Conf', 'conf', 1)`).run();
     p.sdb.prepare(`INSERT INTO ${p.prefix}locations (conference_id, name, code) VALUES (1, 'North', '123456')`).run();
@@ -1684,7 +1794,8 @@ test('conference-manager: a coordinator\'s placement and an admin\'s cancellatio
     await withPlugin('conference-manager', async (p) => {
         seedLodging(p);
         p.sdb.prepare(`UPDATE ${p.prefix}rooms SET location_id = 1`).run(); // allotted to the location
-        const portal = { 'x-portal-token': Buffer.from(`1:123456:${Date.now() + 3600e3}`).toString('base64') };
+        p.sdb.prepare(`UPDATE ${p.prefix}conferences SET is_form_published = 1 WHERE id = 1`).run(); // the portal's form is open
+        const portal = await locationPortal(p);
         const place = (inscription: number) => p.call('post', '/portal/lodging/assign', { headers: portal, body: { inscription_id: inscription, room_id: 1 } });
         // The portal reads the attendee under the lock; the admin's cancellation lands before its write.
         const cancel = interleaveAfter(p, /^SELECT id, status, room_id, location_id FROM \w+inscriptions/, () => cancelInscription(p, 1));
@@ -1784,6 +1895,108 @@ for (const [label, remove, gap] of [
         });
     });
 }
+
+// The location portal: location ids are public (GET /public/locations). Same throttle and session model as
+// the vendor portal above; the session also ends when the conference's form is unpublished (the login
+// already refused an unpublished form). And a location's last seat: the count and the write ran apart.
+const locationLogin = (p: BootedPlugin, clientKey: string, code: string, locationId = 1) =>
+    p.call('post', '/portal/login', { clientKey, body: { location_id: locationId, code } });
+function seedPortalLocations(p: BootedPlugin, n = 1, capacity: number | null = null): number {
+    // Locations 1..n, in a published conference (the plugin seeds an empty, unpublished one at boot).
+    const cid = p.sdb.prepare(`INSERT INTO ${p.prefix}conferences (name, slug, is_form_published) VALUES ('Conf', 'conf', 1)`).run().lastInsertRowid;
+    const ins = p.sdb.prepare(`INSERT INTO ${p.prefix}locations (conference_id, name, code, capacity) VALUES (?, ?, '123456', ?)`);
+    for (let i = 1; i <= n; i++) ins.run(cid, `Loc ${i}`, capacity);
+    return Number(cid);
+}
+
+test('conference-manager: a stranger\'s wrong codes never lock a coordinator out, nor end a signed-in session', async () => {
+    await withPlugin('conference-manager', async (p) => {
+        seedPortalLocations(p);
+        const portal = await locationPortal(p);
+        assert.match(portal['x-portal-token'], /^[0-9a-f]{64}$/, 'the session is an opaque id');
+        for (let i = 0; i < 30; i++) await locationLogin(p, `stranger-${i % 5}`, String(100000 + i));
+        assert.strictEqual((await locationLogin(p, 'stranger-0', '123456')).status, 429, 'the stranger is throttled');
+        assert.strictEqual((await p.call('get', '/portal/me', { headers: portal })).status, 200, 'the signed-in coordinator was locked out');
+        assert.strictEqual((await p.call('get', '/portal/inscriptions', { headers: portal })).status, 200);
+    });
+});
+
+test('conference-manager: only wrong codes count, per client, per location and site-wide; a burst cannot outrun them', async () => {
+    await withPlugin('conference-manager', async (p) => {
+        seedPortalLocations(p, 8);
+        for (let i = 0; i < 5; i++) assert.strictEqual((await locationLogin(p, 'guesser', '000000')).status, 401);
+        assert.strictEqual((await locationLogin(p, 'coordinator', '123456')).status, 200);
+        assert.strictEqual((await locationLogin(p, 'guesser', '000000')).status, 401, 'the sixth guess');
+        assert.strictEqual((await locationLogin(p, 'guesser', '000000')).status, 429, 'the coordinator\'s login reset the guesser\'s count');
+        for (let i = 0; i < 10; i++) assert.strictEqual((await locationLogin(p, 'coordinator', '123456')).status, 200);
+        // Location 2, one wrong code from each of many clients: the location's budget (20).
+        const spread: number[] = [];
+        for (let i = 0; i < 25; i++) spread.push((await locationLogin(p, `bot-${i}`, '000000', 2)).status);
+        assert.strictEqual(countOf(spread, 401), 20, JSON.stringify(spread));
+        // Every location: the site-wide budget (100; 26 spent above).
+        const wide: number[] = [];
+        for (let i = 0; i < 90; i++) wide.push((await locationLogin(p, `bot2-${i}`, '000000', 3 + (i % 6))).status);
+        assert.strictEqual(countOf(wide, 401), 74, 'the site-wide budget was not shared by every location');
+        // A burst from one client on a fresh plugin: six guesses evaluated, the rest refused.
+    });
+    await withPlugin('conference-manager', async (p) => {
+        seedPortalLocations(p);
+        const burst = (await Promise.all(Array.from({ length: 30 }, (_, i) => locationLogin(p, 'burst', String(200000 + i))))).map((r) => r.status);
+        assert.strictEqual(countOf(burst, 401), 6, JSON.stringify(burst));
+        assert.strictEqual(countOf(burst, 429), 24);
+    });
+});
+
+test('conference-manager: a forged token opens nothing; a new code, unpublishing the form and a logout end the session', async () => {
+    await withPlugin('conference-manager', async (p) => {
+        const cid = seedPortalLocations(p);
+        const forged = { 'x-portal-token': Buffer.from(`1:123456:${Date.now() + 3600e3}`).toString('base64') };
+        assert.strictEqual((await p.call('get', '/portal/me', { headers: forged })).status, 401, 'a token built from the code opens the portal');
+        // Unpublishing the form ends the sessions (the login refuses an unpublished form, so must they).
+        const a = await locationPortal(p);
+        assert.strictEqual((await p.call('post', '/publish', { user: CM_ADMIN, body: { conference_id: cid, published: false } })).status, 200);
+        assert.strictEqual((await p.call('get', '/portal/me', { headers: a })).status, 401, 'the session survived unpublishing the form');
+        assert.strictEqual((await p.call('get', '/portal/inscriptions', { headers: a })).status, 401);
+        p.sdb.prepare(`UPDATE ${p.prefix}conferences SET is_form_published = 1 WHERE id = ?`).run(cid);
+        // A new access code.
+        const b = await locationPortal(p);
+        const rot = await p.call('put', '/locations/:id', { user: CM_ADMIN, params: { id: '1' }, body: { rotate_code: true } });
+        assert.strictEqual(rot.status, 200, JSON.stringify(rot.body));
+        assert.strictEqual((await p.call('get', '/portal/me', { headers: b })).status, 401, 'the session survived a new code');
+        const code = String(p.sdb.prepare(`SELECT code FROM ${p.prefix}locations WHERE id = 1`).get().code);
+        // A logout ends it server-side.
+        const c = await locationPortal(p, 1, code);
+        assert.strictEqual((await p.call('post', '/portal/logout', { headers: c })).status, 200);
+        assert.strictEqual((await p.call('get', '/portal/me', { headers: c })).status, 401, 'the session survived its logout');
+    });
+});
+
+test('conference-manager: two registrations for a location\'s last seat never both take it', async () => {
+    // The portal: two coordinators' devices register at once.
+    await withPlugin('conference-manager', async (p) => {
+        seedPortalLocations(p, 1, 1);
+        const portal = await locationPortal(p);
+        const both = await Promise.all([0, 1].map(() => p.call('post', '/portal/inscriptions', { headers: portal, body: {} })));
+        const statuses = both.map((r) => r.status).sort();
+        assert.deepStrictEqual(statuses, [200, 409], JSON.stringify(both));
+        assert.strictEqual(p.sdb.prepare(`SELECT COUNT(*) AS n FROM ${p.prefix}inscriptions WHERE location_id = 1`).get().n, 1);
+    });
+    // The admin, and an edit that moves an attendee in, racing a registration.
+    await withPlugin('conference-manager', async (p) => {
+        const cid = seedPortalLocations(p, 2, 1);
+        const both = await Promise.all([0, 1].map(() => p.call('post', '/inscriptions', { user: CM_ADMIN, body: { conference_id: cid, location_id: 1 } })));
+        assert.deepStrictEqual(both.map((r) => r.status).sort(), [200, 409], JSON.stringify(both));
+        const other = await p.call('post', '/inscriptions', { user: CM_ADMIN, body: { conference_id: cid, location_id: 2 } });
+        assert.strictEqual(other.status, 200, JSON.stringify(other.body));
+        p.sdb.prepare(`DELETE FROM ${p.prefix}inscriptions WHERE location_id = 1`).run();
+        const [moved, registered] = await Promise.all([
+            p.call('put', '/inscriptions/:id', { user: CM_ADMIN, params: { id: String(other.body.id) }, body: { location_id: 1 } }),
+            p.call('post', '/inscriptions', { user: CM_ADMIN, body: { conference_id: cid, location_id: 1 } }),
+        ]);
+        assert.deepStrictEqual([moved.status, registered.status].sort(), [200, 409], JSON.stringify([moved, registered]));
+        assert.strictEqual(p.sdb.prepare(`SELECT COUNT(*) AS n FROM ${p.prefix}inscriptions WHERE location_id = 1`).get().n, 1);
+    });
+});
 
 // ================================== youtube-videos ============================================
 // A channel page also carries the ids of OTHER channels — featured channels, shelves, subscribe
@@ -2199,7 +2412,8 @@ test('conference-manager: the location portal\'s own summary never answers with 
     await withPlugin('conference-manager', async (p) => {
         p.sdb.prepare(`INSERT INTO ${p.prefix}conferences (name, slug, is_form_published) VALUES ('C', 'c', 1)`).run();
         p.sdb.prepare(`INSERT INTO ${p.prefix}locations (conference_id, name, code) VALUES (1, 'Norte', '123456')`).run();
-        const portal = { 'x-portal-token': Buffer.from(`1:123456:${Date.now() + 3600e3}`).toString('base64') };
+        p.sdb.prepare(`UPDATE ${p.prefix}conferences SET is_form_published = 1 WHERE id = 1`).run(); // the portal's form is open
+        const portal = await locationPortal(p);
         assert.strictEqual((await callLikeHost(p, 'get', '/portal/me', { headers: portal })).status, 200);
         p.sdb.pragma('foreign_keys = OFF');
         p.sdb.exec(`DROP TABLE ${p.prefix}inscriptions`);

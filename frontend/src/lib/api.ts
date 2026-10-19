@@ -1412,7 +1412,9 @@ export const tokensApi = {
     list: () => apiGet<{ tokens: ApiToken[] }>("/auth/tokens"),
     // `mfaCode` is the step-up code: required only when the caller's role requires 2FA and the session was
     // not signed in with the second factor (the backend answers 403 `rest_mfa_step_up_required` first).
-    create: (data: { name: string; scopes: string; expiresInDays?: number | null; mfaCode?: string }) =>
+    // `currentPassword` goes with it once the account is past its invalid-code ceiling (403
+    // `rest_mfa_password_required`). components/MfaStepUp.tsx turns both answers into fields.
+    create: (data: { name: string; scopes: string; expiresInDays?: number | null; mfaCode?: string; currentPassword?: string }) =>
         apiPost<ApiTokenCreated>("/auth/tokens", data),
     revoke: (id: number) => apiDelete<{ revoked: boolean; id: number }>(`/auth/tokens/${id}`),
 };
@@ -1444,9 +1446,11 @@ export interface AgentConnection {
 }
 export const agentsApi = {
     list: () => apiGet<{ connections: AgentConnection[]; capabilities: AgentCapability[]; canGrant: boolean; mcpUrl: string }>("/agents"),
-    create: (data: { name: string; requested: AgentCapability[]; userId?: number; expiresInDays?: number | null }) =>
+    // Creating and granting follow the API-token MFA rule: `mfaCode` / `currentPassword` exactly as tokensApi.create.
+    create: (data: { name: string; requested: AgentCapability[]; userId?: number; expiresInDays?: number | null; mfaCode?: string; currentPassword?: string }) =>
         apiPost<{ token: string; connection: AgentConnection; mcpUrl: string }>("/agents", data),
-    grant: (id: number, granted: AgentCapability[]) => apiPut<{ connection: AgentConnection }>(`/agents/${id}/grant`, { granted }),
+    grant: (id: number, granted: AgentCapability[], stepUp: { mfaCode?: string; currentPassword?: string } = {}) =>
+        apiPut<{ connection: AgentConnection }>(`/agents/${id}/grant`, { granted, ...stepUp }),
     revoke: (id: number) => apiDelete<{ revoked: boolean; id: number }>(`/agents/${id}`),
     audit: (id: number, page = 1) =>
         apiGet<{ entries: AuditEntry[]; total: number; page: number; perPage: number }>(`/agents/${id}/audit?page=${page}&per_page=50`),
@@ -1718,8 +1722,11 @@ export const mfaApi = {
         apiPost<{ secret: string; otpauthUri: string }>("/auth/mfa/setup", { currentPassword: requireCurrentPassword(currentPassword) }),
     enable: async (code: string, currentPassword: string) =>
         apiPost<{ enabled: boolean; backupCodes: string[]; message: string }>("/auth/mfa/enable", { code, currentPassword: requireCurrentPassword(currentPassword) }),
-    disable: (code: string) => apiPost<{ disabled: boolean }>("/auth/mfa/disable", { code }),
-    regenerateBackupCodes: (code: string) => apiPost<{ backupCodes: string[]; message: string }>("/auth/mfa/backup-codes", { code }),
+    // `currentPassword` only once the account is past its invalid-code ceiling (403 `rest_mfa_password_required`).
+    disable: (code: string, currentPassword?: string) =>
+        apiPost<{ disabled: boolean }>("/auth/mfa/disable", { code, ...(currentPassword ? { currentPassword } : {}) }),
+    regenerateBackupCodes: (code: string, currentPassword?: string) =>
+        apiPost<{ backupCodes: string[]; message: string }>("/auth/mfa/backup-codes", { code, ...(currentPassword ? { currentPassword } : {}) }),
     // `enforceForApiTokensDefault`: true only on a freshly installed site whose policy has never required a
     // role — the screen then pre-checks the API-token switch (the admin can still uncheck it).
     getPolicy: () => apiGet<{ policy: MfaPolicy; tokenExposure?: MfaTokenExposure; enforceForApiTokensDefault?: boolean }>("/auth/mfa/policy"),

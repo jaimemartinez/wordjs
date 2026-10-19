@@ -51,6 +51,7 @@ import {
     insertParagraphBreak,
     insertText,
     isCollapsed,
+    isSafeLinkHref,
     normalizeDoc,
     normalizePara,
     parseRichHtml,
@@ -164,7 +165,7 @@ function collectInlineInto(entry: ParaEntry, node: Node, marks: Marks): void {
     let m = marks;
     if (tag === "strong" || tag === "b") m = { ...cloneMarks(m), bold: true };
     else if (tag === "em" || tag === "i") m = { ...cloneMarks(m), italic: true };
-    else if (tag === "a" && node.hasAttribute("href")) {
+    else if (tag === "a" && isSafeLinkHref(node.getAttribute("href"))) {
         m = {
             ...cloneMarks(m),
             link: {
