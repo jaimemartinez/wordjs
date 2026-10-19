@@ -24,6 +24,7 @@ const AGENT_CAPABILITIES = Object.freeze([
     'content:read',
     'content:draft',
     'content:publish',
+    'content:others',
     'media:upload',
     'taxonomy:write',
     'comments:moderate',
@@ -33,6 +34,12 @@ const AGENT_CAPABILITIES = Object.freeze([
 type AgentCapability = typeof AGENT_CAPABILITIES[number];
 
 /**
+ * `content:others` is the one word that reaches OTHER people's content: reading their private entries
+ * (`read_private_*`) and editing their entries (`edit_others_*`, together with `content:draft`). Without
+ * it an agent works on its bound user's own entries and on published content only — the text other
+ * authors and commenters wrote never reaches its context through a write tool. It is never implied by
+ * another word and never added to an existing grant: an administrator grants it on purpose.
+ *
  * A grant that only makes sense together with another one, made explicit: editing a draft implies being
  * able to read it, and publishing implies being able to prepare the draft. Applied when a set is
  * NORMALIZED (so the stored grant already carries the implication and the admin UI shows it), never
@@ -41,6 +48,7 @@ type AgentCapability = typeof AGENT_CAPABILITIES[number];
 const IMPLIES: Readonly<Record<string, readonly AgentCapability[]>> = Object.freeze({
     'content:draft': ['content:read'],
     'content:publish': ['content:draft', 'content:read'],
+    'content:others': ['content:read'],
 });
 
 /** The synthetic role a narrowed administrator reports to role-based gates (never 'administrator'). */
@@ -88,8 +96,10 @@ function grantWithinRequest(requested: unknown, granted: unknown): { ok: true; g
 
 // ─── Grant → capability ──────────────────────────────────────────────────────────────────────────────
 
-type ContentKind = 'read' | 'draft' | 'publish' | 'never';
-const KIND_RANK: Record<ContentKind, number> = { read: 0, draft: 1, publish: 2, never: 3 };
+// 'readOthers' / 'editOthers' reach content the bound user did not write; they need `content:others`
+// on top of the read / draft word. Ranked above their base kind so a name shared with one fails closed.
+type ContentKind = 'read' | 'readOthers' | 'draft' | 'editOthers' | 'publish' | 'never';
+const KIND_RANK: Record<ContentKind, number> = { read: 0, readOthers: 1, draft: 2, editOthers: 3, publish: 4, never: 5 };
 
 /**
  * Every content capability of every registered post type, classified. Built from the SAME policy the
@@ -114,10 +124,10 @@ function contentCapabilityKinds(): Map<string, ContentKind> {
         let p: any;
         try { p = capsForType(name); } catch { p = null; }
         if (!p) continue;
-        put(p.readPrivate, 'read');
+        put(p.readPrivate, 'readOthers');
         put(p.create, 'draft');
         put(p.edit, 'draft');
-        put(p.editOthers, 'draft');
+        put(p.editOthers, 'editOthers');
         put(p.publish, 'publish');
         put(p.editPublished, 'publish');
         put(p.del, 'never');
@@ -139,7 +149,9 @@ function agentPermitsCapability(grants: Iterable<string>, cap: string, kinds?: M
     if (cap === 'moderate_comments') return g.has('comments:moderate');
     const kind = (kinds || contentCapabilityKinds()).get(cap);
     if (kind === 'read') return g.has('content:read');
+    if (kind === 'readOthers') return g.has('content:read') && g.has('content:others');
     if (kind === 'draft') return g.has('content:draft');
+    if (kind === 'editOthers') return g.has('content:draft') && g.has('content:others');
     if (kind === 'publish') return g.has('content:publish');
     return false;
 }
@@ -182,6 +194,7 @@ function effectiveAgentCapabilities(user: any, grants: Iterable<string>): AgentC
             case 'content:read': return true; // published content is readable by anyone, so never inert
             case 'content:draft': return byKind('draft');
             case 'content:publish': return byKind('publish');
+            case 'content:others': return byKind('readOthers') || byKind('editOthers');
             case 'media:upload': return userCan('upload_files');
             case 'taxonomy:write': return userCan('manage_categories');
             case 'comments:moderate': return userCan('moderate_comments');

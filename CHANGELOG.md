@@ -6,6 +6,19 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Changed
+
+- **AI agents: other people's content needs its own grant.** The new grant word `content:others`
+  (off by default, never implied by another word) is what lets an agent read other authors' private
+  entries and drafts and, together with `content:draft`, edit them. Without it an agent works on its
+  bound user's own entries and on published content. Stored grants are kept as they are; grant
+  `content:others` to a connection that should work on the whole site's content.
+- **AI provider base URL goes through the egress guard.** It may carry no query string or fragment, it
+  is checked at save time and before every request, and the request connects to the checked address.
+  Local and private-network servers stay available on single-site installs and on a network's primary
+  site; other sites of a network need `WORDJS_AI_ALLOW_PRIVATE_PROVIDER=1`. Link-local and metadata
+  addresses are never accepted (`ai_provider_address_blocked`).
+
 ### Security
 
 - **conference-manager 2.17.1 and vendor-marketplace 1.0.2: portal sign-in hardening.** The location and
@@ -22,6 +35,14 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   without that permission, as the meals people search already did.
 
 ### Fixed
+
+- **GraphQL:** the query cost and depth limits measure each fragment once, so validating a document
+  stays fast whatever its fragment structure.
+- **Multisite:** alt-text suggestions and the local media-storage adapter read the current site's
+  uploads.
+- **AI agents:** `agent.write` / `agent.denied` audit rows record the user the call ran as, who created
+  the connection and who granted it; per-agent rate windows are kept per site, and `whoami` counts
+  against them.
 
 - **conference-manager 2.17.1: two registrations for a location's last seat can no longer both take it.**
   The seat count and the write that takes the seat — the admin's and the portal's registrations, and an

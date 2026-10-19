@@ -424,3 +424,82 @@ test('MCP protocol: initialize advertises tools + instructions, resources read, 
     const get = await request(app).get('/api/v1/mcp').set('Authorization', `Bearer ${token}`);
     assert.strictEqual(get.status, 405);
 });
+
+// ── Other people's content, provenance, rate windows ──────────────────────────────────────────────
+
+test('content:others is a separate word: without it, editing others\' entries and reading their private ones is denied', () => {
+    assert.deepStrictEqual(normalizeAgentCapabilities(['content:others']), ['content:read', 'content:others']);
+    assert.deepStrictEqual(normalizeAgentCapabilities(['content:publish']), ['content:read', 'content:draft', 'content:publish'],
+        'no other word implies content:others');
+    for (const t of ['post', 'page']) {
+        const pl = t === 'post' ? 'posts' : 'pages';
+        assert.strictEqual(agentPermitsCapability(['content:read', 'content:draft', 'content:publish'], `edit_others_${pl}`), false);
+        assert.strictEqual(agentPermitsCapability(['content:read', 'content:draft', 'content:publish'], `read_private_${pl}`), false);
+        assert.strictEqual(agentPermitsCapability(['content:read', 'content:others'], `read_private_${pl}`), true);
+        assert.strictEqual(agentPermitsCapability(['content:read', 'content:others'], `edit_others_${pl}`), false, 'editing also needs content:draft');
+        assert.strictEqual(agentPermitsCapability(['content:read', 'content:draft', 'content:others'], `edit_others_${pl}`), true);
+        assert.strictEqual(agentPermitsCapability(['content:read', 'content:draft'], `edit_${pl}`), true, 'own entries stay editable');
+    }
+});
+
+test('an editor\'s agent with content:draft cannot rewrite another author\'s draft until content:others is granted', async () => {
+    _resetAgentRateLimits();
+    const theirs = await request(app).post('/api/v1/posts').set(as('admin')).send({ title: 'Admin private draft', content: '<p>secret</p>', status: 'draft' });
+    assert.strictEqual(theirs.status, 201, JSON.stringify(theirs.body));
+    const { token, connection } = await createAgent('editor', ['content:draft', 'content:others']);
+    await grant(connection.id, ['content:draft']);
+    let client = await mcp(token);
+    const edit = await client.callTool({ name: 'update_draft', arguments: { id: theirs.body.id, title: 'Rewritten' } });
+    assert.ok(edit.isError, 'another author\'s draft must be out of reach');
+    const listed = parse(await client.callTool({ name: 'list_content', arguments: { status: 'draft' } }));
+    assert.ok(!(listed.data || []).some((p: any) => p.id === theirs.body.id), 'and not listed either');
+    const mine = parse(await client.callTool({ name: 'create_draft', arguments: { title: 'Editor own draft' } }));
+    const own = await client.callTool({ name: 'update_draft', arguments: { id: mine.created.id, title: 'Editor own draft v2' } });
+    assert.ok(!own.isError, 'the bound user\'s own draft stays editable');
+    await client.close();
+    assert.strictEqual((await dbAsync.get('SELECT post_title FROM posts WHERE id = ?', [theirs.body.id])).post_title, 'Admin private draft');
+
+    assert.strictEqual((await grant(connection.id, ['content:draft', 'content:others'])).status, 200);
+    client = await mcp(token);
+    const again = await client.callTool({ name: 'update_draft', arguments: { id: theirs.body.id, title: 'Rewritten' } });
+    assert.ok(!again.isError, JSON.stringify(again));
+    await client.close();
+    assert.strictEqual((await dbAsync.get('SELECT post_title FROM posts WHERE id = ?', [theirs.body.id])).post_title, 'Rewritten');
+});
+
+test('agent.write and agent.denied rows name who created the connection and whom it acts for', async () => {
+    _resetAgentRateLimits();
+    const res = await request(app).post('/api/v1/agents').set(as('admin')).send({ name: 'bound-bot', requested: ['content:draft'], userId: U.editor });
+    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+    const { token, connection } = res.body;
+    await grant(connection.id, ['content:draft']);
+    const client = await mcp(token);
+    await client.callTool({ name: 'create_draft', arguments: { title: 'Bound write' } });
+    await client.callTool({ name: 'publish_content', arguments: { id: 1 } });
+    await client.close();
+    const rows = await dbAsync.all(`SELECT action, actor_id, detail FROM audit_log WHERE action IN ('agent.write', 'agent.denied') AND target_id = ? ORDER BY id`, [String(connection.id)]);
+    assert.deepStrictEqual(rows.map((r: any) => r.action), ['agent.write', 'agent.denied']);
+    for (const r of rows) {
+        const d = JSON.parse(r.detail);
+        assert.strictEqual(Number(r.actor_id), U.editor, 'the actor is the user the call ran as');
+        assert.strictEqual(d.onBehalfOf, U.editor);
+        assert.strictEqual(d.createdBy, U.admin, 'the administrator who bound it is on the row');
+        assert.strictEqual(d.grantedBy, U.admin);
+    }
+});
+
+test('whoami counts against the per-agent call window', async () => {
+    _resetAgentRateLimits();
+    const { CALLS_PER_MINUTE } = require('../core/mcp-server');
+    const { token, connection } = await createAgent('admin', ['content:read']);
+    await grant(connection.id, ['content:read']);
+    const client = await mcp(token);
+    let refused = 0;
+    for (let i = 0; i <= CALLS_PER_MINUTE; i++) {
+        const r = await client.callTool({ name: 'whoami', arguments: {} });
+        if (r.isError) refused++;
+    }
+    await client.close();
+    _resetAgentRateLimits();
+    assert.strictEqual(refused, 1, 'the call past the window is refused');
+});

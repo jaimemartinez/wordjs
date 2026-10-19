@@ -394,8 +394,8 @@ function s3Adapter(store: ResolvedMediaStorage, deps: any = {}): MediaStorageAda
 /** The adapter for the effective config. `deps` lets tests inject a mocked s3Request. */
 function getMediaStorage(store: ResolvedMediaStorage = resolveMediaStorage(), deps: any = {}): MediaStorageAdapter {
     if (store.driver === 's3') return s3Adapter(store, deps);
-    const config = require('../config/app');
-    return localAdapter(path.resolve(config.uploads.dir));
+    // The current site's public tree: a secondary site's media never lands in site 1's uploads.
+    return localAdapter(require('./private-media').publicUploadsRoot());
 }
 
 /** The per-attachment marker: post_meta `_wjs_media_storage` = 's3' on an attachment whose files are in the bucket. */
