@@ -51,6 +51,7 @@ router.param('id', requireRouteId({ code: 'rest_comment_invalid_id', message: 'I
 // Shared, length-capped email validator (the one shape rule) — guards against ReDoS on unbounded input.
 const { isValidAddress } = require('../core/mailbox');
 const { recordAudit } = require('../core/audit');
+const { publicDisplayName } = require('../core/public-identity');
 
 /**
  * One audit row per moderation write, naming the most specific transition — `comment.approve`,
@@ -878,7 +879,9 @@ router.post('/', optionalAuth, commentLimiter, asyncHandler(async (req: Request,
     let userId = 0;
 
     if (req.user) {
-        author = req.user.displayName;
+        // The name a signed-in commenter is stored (and publicly shown) under is their PUBLIC identity,
+        // never the login — core/public-identity's rule, the same one every byline follows.
+        author = publicDisplayName(req.user.id, req.user.displayName, req.user.userLogin);
         email = req.user.userEmail;
         // SECURITY: a logged-in user's stored profile URL is also rendered as a clickable comment-author
         // link (admin moderation UI + public post page), so hold it to the SAME http(s)-only rule the

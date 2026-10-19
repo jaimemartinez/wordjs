@@ -448,17 +448,26 @@ export function useElementWidth(ref: any) {
  */
 const URL_ATTRS = new Set(['href', 'src', 'xlink:href', 'action', 'formaction', 'background', 'poster']);
 /**
- * A URL attribute is kept unless its scheme can run code or smuggle a document: javascript: and
- * vbscript: never, and data: only as an inline IMAGE source (data:image/png|gif|jpeg|webp) — a data:
- * link or frame source can carry an html document.
+ * A URL attribute is kept only when its scheme is on an ALLOWLIST: http(s), mailto and cid (an inline
+ * part of the message), or no scheme at all (a fragment or relative reference). data: is kept only as
+ * an inline IMAGE source (data:image/png|gif|jpeg|webp) — a data: link or frame source can carry an
+ * html document. A denylist of javascript:/vbscript: missed every scheme it did not name.
+ * `compactLower` has had whitespace AND control characters removed: browsers ignore those inside a
+ * scheme, so `java\u0001script:` must be judged as the javascript: it really is.
  */
-function isSafeUrl(attr: string, compactLower: string) {
-    if (/^(javascript|vbscript):/.test(compactLower)) return false;
+const SAFE_SCHEMES = new Set(['http', 'https', 'mailto', 'cid']);
+const MEDIA_ATTRS = new Set(['src', 'background', 'poster']);
+export function isSafeUrl(attr: string, compactLower: string) {
     if (compactLower.startsWith('data:')) {
-        return (attr === 'src' || attr === 'background' || attr === 'poster') && /^data:image\/(png|gif|jpe?g|webp);/.test(compactLower);
+        return MEDIA_ATTRS.has(attr) && /^data:image\/(png|gif|jpe?g|webp);/.test(compactLower);
     }
-    return true;
+    const scheme = /^([a-z][a-z0-9+.-]*):/.exec(compactLower);
+    if (!scheme) return true;
+    return SAFE_SCHEMES.has(scheme[1]);
 }
+
+/** Elements that can SET an attribute after sanitizing (SVG animation: `<set attributeName="href" to=…>`). */
+const ANIMATION_TAGS = new Set(['set', 'animate', 'animatetransform', 'animatemotion', 'discard']);
 
 export function prepareEmailHtml(html: string, showImages: boolean) {
     if (!html) return { html: '', blocked: 0 };
@@ -466,11 +475,16 @@ export function prepareEmailHtml(html: string, showImages: boolean) {
     try {
         const doc = new DOMParser().parseFromString(html, 'text/html');
         doc.querySelectorAll('script, iframe, object, embed, link, meta, base, form').forEach(el => el.remove());
+        // By local name, not a selector: SVG element names are case-sensitive (animateTransform).
+        Array.from(doc.getElementsByTagName('*')).forEach(el => {
+            if (ANIMATION_TAGS.has(String(el.localName || '').toLowerCase())) el.remove();
+        });
         let blocked = 0;
         doc.querySelectorAll('*').forEach(el => {
             for (const attr of Array.from(el.attributes)) {
                 const name = attr.name.toLowerCase();
-                const val = attr.value.replace(/\s+/g, '').toLowerCase();
+                // eslint-disable-next-line no-control-regex
+                const val = attr.value.replace(/[\u0000-\u0020\u007f-\u009f]+/g, '').toLowerCase();
                 if (name.startsWith('on')) el.removeAttribute(attr.name);
                 else if (URL_ATTRS.has(name) && !isSafeUrl(name, val)) el.removeAttribute(attr.name);
             }

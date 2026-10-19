@@ -43,6 +43,8 @@ const createEmailStore = require('./lib/email-store');
 // kept out of email-store.js, which stays the ownership boundary of user mail.
 const createAdminStore = require('./lib/mail-admin-store');
 const MailRules = require('./lib/mail-rules');
+// Inbound DKIM signature verification and DMARC evaluation (node:crypto + the host DNS bridge).
+const MailAuth = require('./lib/mail-auth');
 
 // Attachment storage lives in the plugin's OWN dir (untrusted plugins can't write shared uploads).
 // The single source of truth is Email.UPLOAD_DIR (set in email-store); mirror it here for path joins.
@@ -61,7 +63,7 @@ function stripHtml(s) {
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '3.0.2',
+    version: '3.0.3',
     description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
 };
@@ -384,6 +386,69 @@ function vacationSenderVerified(spfHeader, envelopeFrom, headerFrom) {
     };
     const envDomain = domainOf(envelopeFrom);
     return !!envDomain && envDomain === domainOf(headerFrom);
+}
+
+/**
+ * May an EXTERNAL SMTP session deliver a message that claims to come from our own mail domain?
+ * Only when SPF authenticated the transaction for that same domain (the envelope MAIL FROM is on it,
+ * the verdict is 'pass', and the header From domain matches — vacationSenderVerified). Anything else
+ * presenting `someone@<mailDomain>` from outside is a forgery of a local mailbox: a colleague, the
+ * administrator. Returns null to accept, or the address the refusal names. The header From and the
+ * envelope MAIL FROM are both checked, because either one is what a reader or a reply would trust.
+ */
+function localDomainImpersonation(mailDomain, spfHeader, envelopeFrom, headerFroms, dkimPassDomains = []) {
+    const dom = String(mailDomain || '').toLowerCase();
+    if (!dom) return null;
+    const domainOf = (a) => {
+        const s = String(a || '').trim().toLowerCase();
+        const at = s.lastIndexOf('@');
+        return at > 0 ? s.slice(at + 1) : '';
+    };
+    const isLocal = (a) => { const d = domainOf(a); return !!d && (d === dom || d.endsWith('.' + dom)); };
+    const claims = [envelopeFrom, ...(headerFroms || [])].filter(isLocal);
+    if (claims.length === 0) return null;
+    // A valid DKIM signature of the claimed domain (d= the domain or a parent of it) authenticates it too.
+    const signedFor = (a) => {
+        const d = domainOf(a);
+        return (dkimPassDomains || []).some(s => { const x = String(s || '').toLowerCase(); return !!x && (d === x || d.endsWith('.' + x)); });
+    };
+    for (const from of claims) {
+        if (!vacationSenderVerified(spfHeader, envelopeFrom, from) && !signedFor(from)) return String(from).toLowerCase();
+    }
+    return null;
+}
+
+/** The whole message as a Buffer: the host hands one over, the plugin's own listener a stream. */
+function readRawMessage(input) {
+    if (Buffer.isBuffer(input)) return Promise.resolve(input);
+    if (typeof input === 'string') return Promise.resolve(Buffer.from(input, 'utf8'));
+    return new Promise((resolve, reject) => {
+        const chunks = [];
+        input.on('data', (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
+        input.on('end', () => resolve(Buffer.concat(chunks)));
+        input.on('error', reject);
+    });
+}
+
+/**
+ * DKIM + DMARC for one inbound transaction. SPF was already evaluated at MAIL FROM; its verdict is
+ * read back from the Received-SPF header onMailFrom recorded. Never throws: an evaluation problem
+ * yields no verdict (the message is then treated exactly as before this check existed).
+ */
+async function authenticateInbound(raw, session, headerFroms, receiver) {
+    try {
+        const m = String((session && session.spfHeader) || '').match(/^Received-SPF: ([a-z]+) /);
+        return await MailAuth.authenticateMessage(raw, {
+            resolveTxt: (name) => dns.resolveTxt(name),
+            spfResult: m ? m[1] : '',
+            envelopeFrom: (session && session.envelope && session.envelope.mailFrom && session.envelope.mailFrom.address) || '',
+            fromAddresses: headerFroms,
+            receiver,
+        });
+    } catch (e) {
+        console.warn(`[Security][DKIM] evaluation error: ${e && e.message}`);
+        return null;
+    }
 }
 
 async function maybeVacationAutoReply(user, senderEmail, origSubject) {
@@ -1511,10 +1576,43 @@ async function initSMTPServer() {
         },
 
         onData(stream, session, callback) {
-            simpleParser(stream, async (err, parsed) => {
+            // The raw bytes are kept: DKIM signs them exactly, and the parsed message cannot give them back.
+            readRawMessage(stream).then(raw => simpleParser(raw, async (err, parsed) => {
                 if (err) return callback(err);
 
                 try {
+                    // 2a. DKIM + DMARC (lib/mail-auth.js) for mail from outside. Our own relay path
+                    //     (loopback / authenticated) is never gated; the operator can turn it off.
+                    const external = !isTrustedSmtpSession(session);
+                    const headerFroms = (parsed.from?.value || []).map(v => v && v.address).filter(Boolean);
+                    let auth = null;
+                    if (external && (await getOption('mail_security_dmarc_enabled', '1')) !== '0') {
+                        auth = await authenticateInbound(raw, session, headerFroms, mailDomain);
+                    }
+
+                    // 2b. From alignment — a message from OUTSIDE may not speak for a local mailbox
+                    //     unless SPF or a DKIM signature of that domain authenticated it (see
+                    //     localDomainImpersonation).
+                    if (external) {
+                        const dkimDomains = auth ? auth.dkim.filter(d => d.result === 'pass').map(d => d.domain) : [];
+                        const forged = localDomainImpersonation(mailDomain, session?.spfHeader,
+                            session?.envelope?.mailFrom?.address, headerFroms, dkimDomains);
+                        if (forged) {
+                            console.warn(`[Security] Rejecting external message claiming to be from ${forged} (not authenticated for ${mailDomain})`);
+                            return callback(smtpError(550, `5.7.1 Sender address ${forged} is not authorized from this host`));
+                        }
+                    }
+
+                    // 2c. The From domain's DMARC policy: p=reject refuses the message, p=quarantine
+                    //     files it in Spam (whatever the mailbox's own rules say).
+                    const dmarc = auth && auth.dmarc;
+                    if (dmarc && dmarc.disposition === 'reject') {
+                        console.warn(`[Security][DMARC] Rejecting a message from ${dmarc.domain}: ${dmarc.reason}`);
+                        return callback(smtpError(550, `5.7.1 Message rejected by the DMARC policy of ${dmarc.domain}`));
+                    }
+                    const quarantined = !!(dmarc && dmarc.disposition === 'quarantine');
+                    if (quarantined) console.warn(`[Security][DMARC] Quarantining a message from ${dmarc.domain}: ${dmarc.reason}`);
+
                     // 3. Bayesian Analysis
                     const text = (parsed.subject || '') + ' ' + (parsed.text || '');
                     const isSpam = await isLikelySpam(classifier, text);
@@ -1522,18 +1620,19 @@ async function initSMTPServer() {
                     if (isSpam) console.log(`[Security] Bayesian Filter marked message as SPAM`);
 
                     // 4. Processing
-                    // parsed.to/from may be missing (Bcc-only / From-less mail). Guard the deref
-                    // and fall back to the SMTP envelope so we don't silently drop the message.
-                    let toAddresses = [];
-                    const parsedTo = parsed.to?.value;
-                    if (Array.isArray(parsedTo)) toAddresses = parsedTo;
-                    else if (parsedTo) toAddresses = [parsedTo];
-
-                    if (toAddresses.length === 0) {
-                        const envelopeRcpt = session?.envelope?.rcptTo || [];
-                        toAddresses = envelopeRcpt
-                            .map(r => (r && r.address ? { address: r.address } : null))
-                            .filter(Boolean);
+                    // WHO GETS A COPY is the SMTP envelope — the RCPT TO addresses this transaction
+                    // was accepted for (onRcptTo → recipientVerdict) — never the To:/Cc: headers. The
+                    // headers are whatever the sender wrote: delivering to them handed a message to
+                    // every local mailbox or alias it NAMED (one accepted RCPT was enough), and lost
+                    // the Cc/Bcc/list copies whose recipient appears only in the envelope. Headers are
+                    // display only. One entry per address, however often the envelope repeats it.
+                    const toAddresses = [];
+                    const seenRcpt = new Set();
+                    for (const r of (session?.envelope?.rcptTo || [])) {
+                        const address = String((r && r.address) || '').trim().toLowerCase();
+                        if (!address || seenRcpt.has(address)) continue;
+                        seenRcpt.add(address);
+                        toAddresses.push({ address });
                     }
 
                     const fromAddr = parsed.from?.value?.[0]?.address
@@ -1546,25 +1645,31 @@ async function initSMTPServer() {
                     // (e.g. the Sent copy we delivered with that exact Message-ID). Resolve them and
                     // inherit that message's thread so the reply lands in the same árbol instead of
                     // starting a new one. Falls back to 0 (its own new thread) when nothing matches.
-                    let inboundThreadId = 0;
-                    try {
-                        const refIds = []
-                            .concat(parsed.inReplyTo || [])
-                            .concat(parsed.references || [])
-                            .join(' ')
-                            .split(/\s+/)
-                            .map(s => s.trim())
-                            .filter(Boolean);
-                        for (const rid of refIds) {
-                            // NOT-A-USER-PATH: inbound SMTP delivery. The id is a Message-ID from the
-                            // message's own In-Reply-To/References header, read to thread the copy we
-                            // are about to write; no request chose it and nothing is returned to anyone.
-                            const parent = await Email.findByMessageId(rid);
-                            if (parent) { inboundThreadId = parent.thread_id || parent.id; break; }
+                    // The lookup is PER RECEIVING MAILBOX: the headers are the sender's to write, so
+                    // they may only ever point into a conversation that mailbox already owns.
+                    const refIds = []
+                        .concat(parsed.inReplyTo || [])
+                        .concat(parsed.references || [])
+                        .join(' ')
+                        .split(/\s+/)
+                        .map(s => s.trim())
+                        .filter(Boolean)
+                        .slice(0, 20);
+                    const threadFor = async (mailbox) => {
+                        if (!mailbox || !mailbox.id) return 0;
+                        try {
+                            for (const rid of refIds) {
+                                // NOT-A-USER-PATH: inbound SMTP delivery. The id is a Message-ID from the
+                                // message's own In-Reply-To/References header, resolved only among the
+                                // receiving mailbox's own rows to thread the copy we are about to write.
+                                const parent = await Email.findByMessageId(rid, mailbox.id, mailbox.userEmail);
+                                if (parent) return parent.thread_id || parent.id;
+                            }
+                        } catch (e) {
+                            console.error('[MailServer] Inbound thread lookup failed:', e.message);
                         }
-                    } catch (e) {
-                        console.error('[MailServer] Inbound thread lookup failed:', e.message);
-                    }
+                        return 0;
+                    };
 
                     // A message we forwarded ourselves must never be forwarded again (loop guard).
                     const alreadyForwarded = !!(parsed.headers && parsed.headers.get && parsed.headers.get(FORWARD_HEADER.toLowerCase()));
@@ -1592,18 +1697,21 @@ async function initSMTPServer() {
                         // ACCEPTED-but-not-clean verdict (permerror, or fail/softfail on a
                         // tag-only site) visible instead of silently discarded.
                         receivedSpf: session?.spfHeader || '',
-                        threadId: inboundThreadId,
+                        // RFC 8601 Authentication-Results for DKIM / DMARC ('' when not evaluated).
+                        authResults: auth ? auth.header : '',
+                        quarantined,
+                        threadId: 0, // per mailbox — see threadFor
                         attachments: parsed.attachments,
                         // Spam goes to the SPAM FOLDER (reviewable, auto-purged after 30 days by
                         // the queue sweep) — not silently into Trash with a mangled subject.
-                        isSpam: isSpam ? 1 : 0
+                        isSpam: (isSpam || quarantined) ? 1 : 0
                     };
 
                     // Deliver one copy into a REAL mailbox (filed by the site lists + the owner's rules).
                     const deliverTo = async (mailbox, toAddress) => {
                         if (deliveredTo.has(mailbox.id)) return;
                         deliveredTo.add(mailbox.id);
-                        const res = await deliverLocalCopy(mailbox, { ...baseCopy, toAddress });
+                        const res = await deliverLocalCopy(mailbox, { ...baseCopy, toAddress, threadId: await threadFor(mailbox) });
                         if (!res.ok) { quotaRejected++; return; }
                         storedCount++;
                         if (!res.quiet) {
@@ -1682,7 +1790,7 @@ async function initSMTPServer() {
 
                     // Forwards run after the transaction is accepted and never fail it. Spam is not
                     // forwarded (it would spend OUR reputation on someone else's junk).
-                    if (pendingForwards.length > 0 && !isSpam && !autoGenerated) {
+                    if (pendingForwards.length > 0 && !isSpam && !quarantined && !autoGenerated) {
                         (async () => {
                             let staged = null;
                             for (const f of pendingForwards) {
@@ -1711,7 +1819,7 @@ async function initSMTPServer() {
                     console.error('Failed to store incoming email:', error);
                     callback(error);
                 }
-            });
+            })).catch(callback);
         }
     };
 
@@ -1826,6 +1934,33 @@ function outboundRateLimitOk(userId, recipientCount) {
     e.messages += 1;
     e.recipients += recipientCount;
     return true;
+}
+
+// The background queues (scheduled sends and automatic retries) deliver on their own clock, so the
+// limit has to hold THERE too — a row is only as rate-limited as the last check it passed. POST /send
+// already charges a message when it queues it for the undo window / a schedule; it records that charge
+// here so the dispatch does not count the same message twice. Anything the queue picks up WITHOUT a
+// matching charge (or with more recipients than were charged) is charged at dispatch.
+const _queuedCharges = new Map(); // email id -> recipients already charged by POST /send
+const QUEUED_CHARGES_MAX = 10000;
+const RATE_LIMIT_DEFER_MS = 5 * 60 * 1000;
+function noteQueuedCharge(emailId, recipientCount) {
+    const id = parseInt(emailId, 10) || 0;
+    if (!id) return;
+    _queuedCharges.delete(id);
+    if (_queuedCharges.size >= QUEUED_CHARGES_MAX) _queuedCharges.delete(_queuedCharges.keys().next().value);
+    _queuedCharges.set(id, recipientCount);
+}
+function queueRateKey(email) {
+    const uid = parseInt(email && email.user_id, 10) || 0;
+    return uid > 0 ? uid : 'queue:site';
+}
+function queuedDispatchAllowed(email, recipientCount) {
+    const id = parseInt(email && email.id, 10) || 0;
+    const charged = _queuedCharges.get(id);
+    _queuedCharges.delete(id);
+    if (charged !== undefined && recipientCount <= charged) return true;
+    return outboundRateLimitOk(queueRateKey(email), recipientCount);
 }
 
 function isValidEmail(email) {
@@ -2003,7 +2138,8 @@ async function deliverLocalCopy(user, createData) {
         isStarred: filing.isStarred,
         isArchived: filing.isArchived || (forwardsAway ? 1 : 0),
         isTrash: filing.isTrash,
-        isSpam: filing.isSpam,
+        // A DMARC quarantine verdict files the copy in Spam whatever the owner's rules say.
+        isSpam: (filing.isSpam || createData.quarantined) ? 1 : 0,
     });
     // A rule may only apply the owner's OWN labels — re-checked here so a stale label id in the prefs
     // (deleted, or never theirs) is simply skipped.
@@ -2027,8 +2163,8 @@ async function deliverLocalCopy(user, createData) {
         hit.bytes += added;
     }
     // Quiet filing (read, archived, trashed or spam) gets no "new mail" notification.
-    const quiet = !!(filing.isSpam || filing.isTrash || filing.isRead || filing.isArchived || forwardsAway);
-    const forwardTo = (fwd.enabled && policy.forwardingAllowed && !filing.isSpam && !filing.isTrash) ? fwd.address : '';
+    const quiet = !!(filing.isSpam || createData.quarantined || filing.isTrash || filing.isRead || filing.isArchived || forwardsAway);
+    const forwardTo = (fwd.enabled && policy.forwardingAllowed && !filing.isSpam && !createData.quarantined && !filing.isTrash) ? fwd.address : '';
     return { ok: true, row, filing, quiet, prefs, forwardTo };
 }
 
@@ -2583,16 +2719,16 @@ async function updateRetryState(sentRecordId, data, externalRecipients, failed) 
     // mark failed and bounce to the sender.
     if (temporary.length === 0 || attempts >= MAX_DELIVERY_ATTEMPTS) {
         try {
-            // NOT-A-USER-PATH: the delivery state machine writing back the outcome for the row it is
-            // delivering. The toAddress rewrite narrows the recipient list to the failed ones, which
-            // on an un-attributed row would be a change of the ownership verdict — the store refuses
-            // that case itself (mail_shared_row_party_narrowed) and this catch keeps the queue moving.
-            await Email.markFailed(sentRecordId, attempts, lastError);
-            // Persist the failed recipients for visibility.
+            // Persist the failed recipients for visibility — BEFORE the status, because a recipient
+            // rewrite clears the delivery state (Email.update) and must not wipe the outcome.
             // NOT-A-USER-PATH: the delivery state machine's own row. This narrows the recipient list,
             // which on an un-attributed row would BE a change of the ownership verdict — the store
             // refuses that case itself (mail_shared_row_party_narrowed); the catch keeps the queue moving.
             await Email.update(sentRecordId, { toAddress: failed.map(f => f.recipient).join(', ') });
+        } catch (e) { /* non-fatal */ }
+        try {
+            // NOT-A-USER-PATH: the delivery state machine writing back the outcome for its own row.
+            await Email.markFailed(sentRecordId, attempts, lastError);
         } catch (e) { /* non-fatal */ }
         await sendBounce(data, failed);
         return;
@@ -2602,13 +2738,15 @@ async function updateRetryState(sentRecordId, data, externalRecipients, failed) 
     const backoffMinutes = Math.min(attempts * attempts, 360);
     const nextAttemptAt = new Date(Date.now() + backoffMinutes * 60 * 1000).toISOString();
     try {
-        // NOT-A-USER-PATH: as above — the queue's own record, mid-delivery. The store still refuses an
-        // address rewrite that would drop a party from an un-attributed row.
-        await Email.markRetry(sentRecordId, attempts, nextAttemptAt, lastError);
-        // Store ONLY the still-failed recipients so the next pass retries exactly those.
+        // Store ONLY the still-failed recipients so the next pass retries exactly those. This runs
+        // FIRST: the rewrite clears the delivery state, and markRetry below re-arms it.
         // NOT-A-USER-PATH: as above — the queue's own record, mid-delivery, and the store still
         // refuses an address rewrite that would drop a party from an un-attributed row.
         await Email.update(sentRecordId, { toAddress: temporary.map(f => f.recipient).join(', ') });
+    } catch (e) { /* non-fatal */ }
+    try {
+        // NOT-A-USER-PATH: the queue's own record, mid-delivery — see above.
+        await Email.markRetry(sentRecordId, attempts, nextAttemptAt, lastError);
     } catch (e) { /* non-fatal */ }
 
     // If there were also permanent failures mixed in, bounce those now (they won't be retried).
@@ -3122,6 +3260,16 @@ exports.init = async function (bridge) {
 
             for (const email of pending) {
                 try {
+                    const toList = splitAddresses(email.to_address);
+                    const ccList = splitAddresses(email.cc_address);
+                    const bccList = splitAddresses(email.bcc_address);
+                    if (!queuedDispatchAllowed(email, toList.length + ccList.length + bccList.length)) {
+                        // Over the sender's outbound limit: postpone, never drop.
+                        // NOT-A-USER-PATH: the scheduled-send queue's own row (see below).
+                        await Email.update(email.id, { scheduledAt: new Date(Date.now() + RATE_LIMIT_DEFER_MS).toISOString() });
+                        console.warn(`[MailServer] Scheduled email ${email.id} postponed: outbound rate limit reached.`);
+                        continue;
+                    }
                     // NOT-A-USER-PATH: the scheduled-send queue. `email` comes from
                     // Email.getPendingScheduled() — rows the server selected by scheduled_at — so no
                     // request supplied this id and nothing here is returned to a caller.
@@ -3135,9 +3283,9 @@ exports.init = async function (bridge) {
                     await sendMail({
                         // to/cc/bcc are stored as comma-joined lists — split them back into real
                         // recipient arrays (a joined string would read as ONE malformed address).
-                        to: splitAddresses(email.to_address),
-                        cc: splitAddresses(email.cc_address),
-                        bcc: splitAddresses(email.bcc_address),
+                        to: toList,
+                        cc: ccList,
+                        bcc: bccList,
                         subject: email.subject,
                         text: email.body_text,
                         html: email.body_html,
@@ -3174,6 +3322,15 @@ exports.init = async function (bridge) {
                         // NOT-A-USER-PATH: the retry queue, over rows Email.getPendingRetries()
                         // selected by delivery_status/next_attempt_at.
                         await Email.markFailed(email.id, email.delivery_attempts || 0, 'No recipients to retry');
+                        continue;
+                    }
+
+                    if (!outboundRateLimitOk(queueRateKey(email), recipients.length)) {
+                        // Over the sender's outbound limit: push the attempt back without spending one.
+                        // NOT-A-USER-PATH: the retry queue — same rows Email.getPendingRetries() selected.
+                        await Email.markRetry(email.id, email.delivery_attempts || 0,
+                            new Date(Date.now() + RATE_LIMIT_DEFER_MS).toISOString(),
+                            'Outbound rate limit reached; delivery postponed');
                         continue;
                     }
 
@@ -3609,6 +3766,12 @@ exports.init = async function (bridge) {
         const { id, to, cc, bcc, subject, body, isHtml = true, replyToId } = req.body;
         const attachments = await resolveComposerAttachments(req.body.attachments, req.user);
 
+        // A draft is a message waiting to be sent: it may not hold more recipients than a send allows.
+        const draftRecipients = splitAddresses(to).length + splitAddresses(cc).length + splitAddresses(bcc).length;
+        if (draftRecipients > MAX_RECIPIENTS_PER_MESSAGE) {
+            return res.status(400).json({ error: `Too many recipients (max ${MAX_RECIPIENTS_PER_MESSAGE} per message).` });
+        }
+
         try {
             const data = {
                 fromAddress: req.user.userEmail,
@@ -3628,9 +3791,11 @@ exports.init = async function (bridge) {
                 attachments: attachments || []
             };
 
+            // A reply joins the parent's conversation only when the parent is the CALLER'S OWN row
+            // (_ownsRow): an id they merely guessed, or can read as an administrator, starts a new one.
             if (replyToId) {
                 const parent = await Email.findById(replyToId);
-                if (parent) {
+                if (parent && Email._ownsRow(parent, req.user.id, req.user.userEmail)) {
                     data.parentId = parent.id;
                     data.threadId = parent.thread_id || parent.id;
                 }
@@ -3731,9 +3896,10 @@ exports.init = async function (bridge) {
         let parentId = 0;
         let threadId = 0;
 
+        // Same rule as POST /drafts: only the caller's own row lends its conversation to a reply.
         if (replyToId) {
             const parent = await Email.findById(replyToId);
-            if (parent) {
+            if (parent && Email._ownsRow(parent, req.user.id, req.user.userEmail)) {
                 parentId = parent.id;
                 threadId = parent.thread_id || parent.id;
             }
@@ -3784,6 +3950,7 @@ exports.init = async function (bridge) {
                 } else {
                     email = await Email.create(data);
                 }
+                noteQueuedCharge(email.id, recipientCount);
 
                 if (scheduledAt) {
                     return res.json({ success: true, message: 'Message scheduled', id: email.id });
@@ -3896,6 +4063,7 @@ exports.init = async function (bridge) {
             mail_security_dkim_private_key: '',
             // Defaults reflect the SAFE posture (H12): DNSBL + SPF default ON, SPF reject default ON.
             mail_security_dnsbl_enabled: '1', mail_security_spf_enabled: '1', mail_security_spf_reject: '1',
+            mail_security_dmarc_enabled: '1',
             mail_undo_send_seconds: '10',
             mail_blocked_senders: '', mail_allowed_senders: '', mail_quota_default_mb: '0', mail_forwarding_allowed: '1'
         });
@@ -3938,6 +4106,7 @@ exports.init = async function (bridge) {
             mail_security_dnsbl_enabled: o.mail_security_dnsbl_enabled,
             mail_security_spf_enabled: o.mail_security_spf_enabled,
             mail_security_spf_reject: o.mail_security_spf_reject,
+            mail_security_dmarc_enabled: o.mail_security_dmarc_enabled,
             // Undo-send window in seconds (0 disables and restores synchronous delivery).
             mail_undo_send_seconds: o.mail_undo_send_seconds,
             // Site-wide policy: sender block/allow lists (one address or @domain per line), the default
@@ -3971,6 +4140,7 @@ exports.init = async function (bridge) {
             'mail_server', 'mail_port', 'mail_secure', 'mail_user', 'mail_pass', 'mail_relay_require_tls',
             'mail_security_dkim_domain', 'mail_security_dkim_selector',
             'mail_security_dnsbl_enabled', 'mail_security_spf_enabled', 'mail_security_spf_reject',
+            'mail_security_dmarc_enabled',
             'mail_undo_send_seconds',
             'mail_blocked_senders', 'mail_allowed_senders', 'mail_quota_default_mb', 'mail_forwarding_allowed'
         ];
