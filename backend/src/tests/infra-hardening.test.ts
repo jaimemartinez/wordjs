@@ -210,3 +210,33 @@ describe('config/app.ts boot rewrite of generated secrets', () => {
         assert.ok(!/chmodSync\(configPath/.test(src));
     });
 });
+
+describe('every place that configures a server database carries the TLS settings', () => {
+    const REPO = path.join(SRC, '..', '..');
+    const repo = (rel: string) => fs.readFileSync(path.join(REPO, rel), 'utf8');
+
+    test('installer UI sends sslCa and the explicit opt-out, and warns about it', () => {
+        const src = repo('frontend/src/app/install/page.tsx');
+        assert.ok(/sslCa: dbSslCa\.trim\(\)/.test(src));
+        assert.ok(/sslRejectUnauthorized: !dbSslSkipVerify/.test(src));
+        assert.ok(/Skip certificate verification/.test(src) && /role="alert"/.test(src));
+    });
+
+    test('DB migration: UI sends the settings, the backend connects and persists with them', () => {
+        const ui = repo('frontend/src/app/admin/db-migration/page.tsx');
+        assert.ok(/dbSslRejectUnauthorized: !dbSslSkipVerify/.test(ui) && /Skip certificate verification/.test(ui));
+        const be = read('core/db-admin/migration.js');
+        assert.ok(/dbConfig: \{[^}]*\.\.\.dbTls \}/.test(be), 'the target connection uses the TLS settings');
+        assert.ok(/password: dbPassword,\s*\.\.\.dbTls/.test(be), 'the saved connection keeps them');
+        assert.ok(/req\.body\.dbSslCa\.includes\('-----BEGIN'\)/.test(be), 'a CA is accepted inline only');
+        assert.ok(/writeFileSync\(backupFile, [^\n]*mode: 0o600/.test(be), 'the config backup is owner-only');
+    });
+
+    test('docker entrypoint maps WORDJS_DB_SSL* into the config and writes it owner-only', () => {
+        const sh = repo('docker/entrypoint.sh');
+        for (const v of ['WORDJS_DB_SSL', 'WORDJS_DB_SSL_CA', 'WORDJS_DB_SSL_REJECT_UNAUTHORIZED']) assert.ok(sh.includes(`\${${v}:-`), v);
+        assert.ok(/"dbSsl": \$\{DB_SSL\}/.test(sh) && /"dbSslRejectUnauthorized": \$\{DB_SSL_REJECT\}/.test(sh));
+        assert.ok(/umask 077/.test(sh));
+        assert.ok(repo('docker/README.md').includes('WORDJS_DB_SSL_REJECT_UNAUTHORIZED'));
+    });
+});

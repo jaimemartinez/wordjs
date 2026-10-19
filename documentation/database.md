@@ -180,6 +180,20 @@ at boot with these instructions and does not start. Only when you knowingly acce
 **unauthenticated** connection, set `"dbSslRejectUnauthorized": false`; every connect then logs a
 warning. Both keys also exist nested (`db.sslCa`, `db.sslRejectUnauthorized`).
 
+The same two settings are offered everywhere a server database is configured:
+
+- **Install wizard** — tick *Use SSL* under PostgreSQL/MySQL: paste the CA certificate (PEM) or tick
+  *Skip certificate verification* (shown with a warning). *Test connection* uses them, and the install
+  saves them as `db.sslCa` / `db.sslRejectUnauthorized`.
+- **Admin → Database migration** — the same fields in the target-connection dialog; the migration
+  connects with them and saves them with the new connection.
+- **Docker / Helm** (`WORDJS_PRESEED_CONFIG=1`) — `WORDJS_DB_SSL`, `WORDJS_DB_SSL_CA` (a path inside the
+  container, e.g. a mounted secret) and `WORDJS_DB_SSL_REJECT_UNAUTHORIZED` (see
+  [docker/README.md](../docker/README.md)).
+
+The wizard and the migration screen take the CA as **PEM text** only; a file path is set in
+`wordjs-config.json` (or via `WORDJS_DB_SSL_CA`) on the server itself.
+
 > **Upgrading:** releases before this change did not verify the database certificate at all. A site with
 > `dbSsl: true` whose server presents a certificate Node cannot verify will stop at boot after the
 > upgrade with the message above — add `dbSslCa` (preferred) or the explicit opt-out.

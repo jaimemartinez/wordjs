@@ -124,6 +124,12 @@ extraEnv: []
 #   value: "1"
 # - name: WORDJS_DB_DRIVER
 #   value: postgres
+# - name: WORDJS_DB_SSL                # TLS to the database; the server certificate is verified
+#   value: "true"
+# - name: WORDJS_DB_SSL_CA             # CA (PEM) that signed the server certificate, mounted from a Secret
+#   value: /etc/wordjs/db-ca/ca.pem
+# - name: WORDJS_DB_SSL_REJECT_UNAUTHORIZED   # "false" skips verification (warned) — prefer WORDJS_DB_SSL_CA
+#   value: "true"
 
 podAnnotations: {}
 nodeSelector: {}
