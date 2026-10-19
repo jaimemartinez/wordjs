@@ -9,10 +9,11 @@
  *
  * FAIL-OPEN ON STORE LOSS is the established, deliberate choice (see the backend's passOnStoreError):
  * a limiter-store outage must never take the edge down. Unlike the backend we LOG the degradation — a
- * silent fail-open is how "the limiter quietly stopped limiting" hides. The gateway is the true edge,
- * so Express's default `trust proxy = false` already makes req.ip the socket peer: a client cannot forge
- * X-Forwarded-For to rotate past this cap (an operator who fronts the gateway with their own proxy sets
- * `trustProxy` and is responsible for that hop).
+ * silent fail-open is how "the limiter quietly stopped limiting" hides. The limiter keys on req.ip. With
+ * no `trustProxy` (gateway-config.json) / WORDJS_TRUST_PROXY, `trust proxy` stays false and req.ip is the
+ * socket peer: a client cannot forge X-Forwarded-For to rotate past this cap. An operator who fronts the
+ * gateway with their own proxy sets one of them (src/runtime-settings.js) and is responsible for that hop;
+ * without it every visitor behind that proxy shares its bucket.
  */
 
 const rateLimit = require('express-rate-limit');
@@ -81,4 +82,74 @@ function createPublicLimiter(config, logger) {
     });
 }
 
-module.exports = { createPublicLimiter, limiterStore };
+/**
+ * Per-client cap for WebSocket upgrades. `server.on('upgrade')` never runs the Express chain, so the
+ * public limiter above does not see an upgrade at all, and each accepted upgrade holds an upstream
+ * socket open. This is a fixed-window counter per client address, kept in process memory (an upgrade
+ * is a long-lived connection to THIS process, so a per-process budget is the meaningful one).
+ *
+ * The caller passes the client address the gateway believes: with a trusted proxy that is the address
+ * resolved through the trusted hops (the same one req.ip uses), so each visitor behind it has its own
+ * budget. With NO trusted proxy the address is the socket peer, and a CDN or reverse proxy in front of
+ * the gateway makes every visitor the same peer. The caller then also passes the left-most
+ * X-Forwarded-For entry (`forwarded`). It is not believed as an identity — anyone can write it — but it
+ * is used two ways that a forger cannot turn into more than a bounded allowance:
+ *   • each (peer, forwarded) pair gets the per-client cap, so one busy visitor behind a shared proxy
+ *     cannot use up everyone's budget;
+ *   • the peer's total cap grows with the number of distinct forwarded clients seen from it in the
+ *     window, up to `upgradeSharedMultiplier` × the per-client cap. A real proxy carrying many visitors
+ *     gets room for their collaboration, presence and HMR sockets instead of locking the site out; a
+ *     client forging the header gains at most that multiplier.
+ * `onShared(peer, distinct)` is called (once per peer per window) when a peer crosses
+ * `sharedThreshold` distinct forwarded clients, so the gateway can tell the operator to trust the proxy.
+ *
+ * Config (optional): config.rateLimit.upgradeWindowMs (default 60000), config.rateLimit.upgradeMax
+ * (default 120 per window — far above what a page's live-reload, collaboration and presence sockets
+ * reconnect at, while bounding a flood), config.rateLimit.upgradeSharedMultiplier (default 20).
+ */
+function createUpgradeLimiter(config, { onShared, sharedThreshold = 5 } = {}) {
+    const rl = (config && config.rateLimit) || {};
+    const windowMs = Number(rl.upgradeWindowMs) > 0 ? Number(rl.upgradeWindowMs) : 60 * 1000;
+    const max = Number(rl.upgradeMax) > 0 ? Number(rl.upgradeMax) : 120;
+    const multiplier = Number(rl.upgradeSharedMultiplier) >= 1 ? Math.floor(Number(rl.upgradeSharedMultiplier)) : 20;
+    let windowStart = Date.now();
+    let totals = new Map();   // peer -> upgrades this window
+    let pairs = new Map();    // peer + forwarded client -> upgrades this window
+    let distinct = new Map(); // peer -> Set of forwarded clients (at most `multiplier` kept)
+    let reported = new Set();
+    return {
+        /**
+         * True when this client may open another upgrade in the current window. `forwarded` is only
+         * passed when no proxy is trusted (see above); with a trusted proxy `client` is already the visitor.
+         */
+        allow(client, forwarded) {
+            const now = Date.now();
+            if (now - windowStart >= windowMs) {
+                windowStart = now;
+                totals = new Map(); pairs = new Map(); distinct = new Map(); reported = new Set();
+            }
+            const peer = String(client || 'unknown');
+            const fwd = forwarded ? String(forwarded) : '';
+            let seen = distinct.get(peer);
+            if (fwd && fwd !== peer) {
+                if (!seen) { seen = new Set(); distinct.set(peer, seen); }
+                if (seen.size < multiplier) seen.add(fwd);
+                if (seen.size >= sharedThreshold && !reported.has(peer)) {
+                    reported.add(peer);
+                    if (onShared) { try { onShared(peer, seen.size); } catch (e) { /* a log hook never blocks the cap */ } }
+                }
+            }
+            const cap = max * Math.max(1, seen ? seen.size : 1);
+            const total = (totals.get(peer) || 0) + 1;
+            if (total > cap) return false;
+            const pairKey = `${peer} ${fwd}`;
+            const n = (pairs.get(pairKey) || 0) + 1;
+            if (n > max) return false;
+            totals.set(peer, total);
+            pairs.set(pairKey, n);
+            return true;
+        },
+    };
+}
+
+module.exports = { createPublicLimiter, createUpgradeLimiter, limiterStore };

@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 const express = require('express');
+const log = require('../core/module-logger').moduleLogger('routes/analytics');
 const router = express.Router();
 const analytics = require('../models/Analytics');
 const { authenticate } = require('../middleware/auth');
@@ -78,7 +79,7 @@ router.get('/stats', authenticate, isAdmin, asyncHandler(async (req: Request, re
         const data = await analytics.getStats(period || 'weekly');
         res.json(data);
     } catch (error) {
-        console.error('Analytics Error:', error);
+        log.error({ err: error }, 'Analytics Error');
         res.status(500).json({ error: 'Failed to fetch analytics' });
     }
 }));
@@ -224,7 +225,7 @@ router.post('/track', async (req: Request, res: Response) => {
         // A storage failure is a SERVER failure and must show up as one: answering 200 here meant a
         // broken (or disk-full) analytics table looked exactly like a healthy one. The beacon on the
         // frontend already ignores the outcome, so an honest status costs nothing.
-        console.error('Tracking Error:', error);
+        log.error({ err: error }, 'Tracking Error');
         res.status(500).json({ code: 'analytics_track_failed', message: 'Failed to record event.', data: { status: 500 } });
     }
 });

@@ -43,6 +43,8 @@ gateway/ssl/
 data/
 backend/data/
 backend/uploads/
+# Site backups (Admin → Settings → Backups): per-install state, never committed or shipped.
+backend/backups/
 backend/os-tmp/
 **/tmp/
 *.db

@@ -91,6 +91,7 @@ const { dbAsync } = require('../config/database');
 const cache = require('./cache');
 const appConfig = require('../config/app');
 const { validateFrame, sanitizeVersionVector, vvCovers, LIMITS } = require('./collab-ops');
+const mlog = require('./module-logger').moduleLogger('core/collab-rooms');
 
 /** Único por proceso — etiqueta los mensajes del bus para descartar el eco propio. */
 const NODE_ID = crypto.randomBytes(8).toString('hex');
@@ -254,10 +255,39 @@ const CONFIG = {
     KEEPALIVE_MS: 15_000,
     /** Antigüedad máxima del latido de `collab_members` para contar como VIVO en el clúster. */
     MEMBER_TTL_MS: 60_000,
-    /** Cada cuántos keepalives se vuelve a autorizar la conexión (4 × 15 s = 1 min). */
-    REAUTH_EVERY_TICKS: 4,
-    /** Comprobaciones de autorización NO CONCLUYENTES seguidas antes de cerrar por precaución. */
-    MAX_AUTH_FAILURES: 3,
+    /**
+     * Cada cuántos keepalives se vuelve a autorizar la conexión (2 × 15 s = 30 s). Es el RESPALDO: los
+     * hechos que revocan (cierre de sesión, cambio de contraseña, rol, estado o autor del post) ya
+     * disparan una re-autorización inmediata en todo el clúster (ver `recheckUser`/`recheckPost`).
+     */
+    REAUTH_EVERY_TICKS: 2,
+    /**
+     * Comprobaciones NO CONCLUYENTES seguidas que se toleran — y nunca más allá de `AUTH_GRACE_MS`
+     * desde la primera. Mientras una comprobación falla se repite en CADA keepalive, no cada
+     * `REAUTH_EVERY_TICKS`: la gracia es corta y se agota pronto, así que la sesión que no se puede
+     * comprobar se cierra en segundos, no en minutos.
+     */
+    MAX_AUTH_FAILURES: 2,
+    AUTH_GRACE_MS: 20_000,
+    /** Conexiones vivas en UNA sala, contadas en todo el clúster (`collab_members`). */
+    MAX_CONNS_PER_ROOM: 50,
+    /** Conexiones de un usuario en TODO el clúster (el tope por proceso no ve a los demás nodos). */
+    MAX_CONNS_PER_USER_CLUSTER: 20,
+    /**
+     * PRESUPUESTO DE ESCRITURA EN EL LOG, POR USUARIO. El cubo de bytes es por CONEXIÓN, y un usuario
+     * abre hasta `MAX_CONNS_PER_USER`: sin un cubo que cuelgue del usuario, diez pestañas eran diez
+     * veces el ritmo declarado. La ráfaga es >= el frame máximo (sin banda muerta, ver `OPS_BURST`).
+     */
+    USER_WRITE_BYTES_PER_SEC: 96 * 1024,
+    USER_WRITE_BURST: 384 * 1024,
+    /**
+     * PARTE DEL LOG DE UN EPOCH QUE UN SOLO USUARIO PUEDE OCUPAR cuando hay más gente. Al llenarse el
+     * log la sala deja de ser reanudable para TODOS; un co-editor que ya ocupa esta fracción no puede
+     * provocarlo: sus ops se rechazan (`log-budget`) en vez de truncar la sala de los demás.
+     */
+    USER_LOG_SHARE: 0.5,
+    /** Antigüedad máxima de un mensaje del bus de salas (firma + ventana contra la reinyección). */
+    BUS_MAX_SKEW_MS: 120_000,
 };
 
 export type PresenceSel = {
@@ -326,6 +356,12 @@ type Conn = {
      */
     welcomed: boolean;
     authFailures: number;
+    /** Instante del PRIMER fallo no concluyente de la racha actual (0 = no hay racha). */
+    authFailingSince: number;
+    /** Una re-autorización en curso: los disparadores por evento no las apilan. */
+    authInFlight: boolean;
+    /** Otra re-autorización pedida mientras corría una: se repite al terminar (el hecho es posterior). */
+    authAgain: boolean;
     revalidate: Revalidate | null;
     closed: boolean;
     /** La baja ya se contabilizó. `closed` no vale: el cierre por ritmo no descuenta cupos. */
@@ -363,7 +399,35 @@ const SITE_KEY = crypto
     .update(`wordjs:collab:site:${(appConfig.jwt && appConfig.jwt.secret) || ''}`)
     .digest();
 
+// Clave del BUS de salas, derivada igual que `SITE_KEY` y con su propio dominio. Todos los nodos validan
+// los mismos JWT, así que todos la derivan igual sin coordinarse; quien solo alcanza Redis no la tiene.
+const BUS_KEY = crypto
+    .createHash('sha256')
+    .update(`wordjs:collab:bus:${(appConfig.jwt && appConfig.jwt.secret) || ''}`)
+    .digest();
+
 const SITE_ALPHABET = 'abcdefghijklmnopqrstuvwxyz234567';
+
+/**
+ * Nombre visible de un miembro. Es texto que elige el propio usuario y lo pintan las pantallas de los
+ * demás, así que se le quitan los caracteres de control y de dirección (un RLO dentro del nombre
+ * reordena lo que se ve) y se colapsan los espacios. La identidad ESTABLE no es esto: es el `userId`,
+ * que viaja al lado y que el cliente enseña junto al nombre.
+ */
+function invisibleCodePoint(c: number): boolean {
+    return c <= 0x1f || (c >= 0x7f && c <= 0x9f) || c === 0x61c || (c >= 0x200b && c <= 0x200f)
+        || (c >= 0x202a && c <= 0x202e) || (c >= 0x2060 && c <= 0x2069) || c === 0xfeff;
+}
+
+function cleanDisplayName(raw: any, userId: number): string {
+    const s = Array.from(String(raw ?? ''))
+        .filter((ch) => !invisibleCodePoint(ch.codePointAt(0) as number))
+        .join('')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 80);
+    return s || `usuario ${Number(userId) || 0}`;
+}
 
 /**
  * Identidad de réplica a partir del nonce del cliente. La forma es la misma que produce el núcleo
@@ -592,15 +656,14 @@ async function loadOps(
         try { ops.push(JSON.parse(r.payload)); } catch { unreadable++; }
     }
     if (budgetHit) {
-        console.warn(
-            `[collab] sala ${postId}: el log supera el presupuesto de ${CONFIG.MAX_LOG_LOAD_BYTES} B; ` +
+        mlog.warn(`[collab] sala ${postId}: el log supera el presupuesto de ${CONFIG.MAX_LOG_LOAD_BYTES} B; ` +
             `se sirven ${ops.length} op(s) y la sesión NO es reanudable`);
     }
 
     if (total === null) {
         // Ni siquiera se sabe cuántas había: no se puede afirmar que el log servido sea el aceptado.
         unreadable++;
-        console.warn(`[collab] sala ${postId}: no se pudo contar el log; la sesión NO es reanudable`);
+        mlog.warn({ postId }, `[collab] sala ${postId}: no se pudo contar el log; la sesión NO es reanudable`);
     } else if (!budgetHit) {
         // Solo se puede exigir que lleguen TODAS las filas cuando no se ha recortado a propósito: con
         // el presupuesto agotado, `traidas.length` es menor que `esperadas` PORQUE lo pedimos así, y
@@ -609,11 +672,11 @@ async function loadOps(
         const faltan = Math.max(0, esperadas - traidas.length);
         if (faltan > 0) {
             unreadable += faltan;
-            console.warn(`[collab] sala ${postId}: ${faltan} fila(s) del log no llegaron a leerse`);
+            mlog.warn({ postId, faltan }, `[collab] sala ${postId}: ${faltan} fila(s) del log no llegaron a leerse`);
         }
     }
 
-    if (unreadable) console.warn(`[collab] sala ${postId}: ${unreadable} fila(s) del log ilegibles o no leídas`);
+    if (unreadable) mlog.warn({ postId, unreadable }, `[collab] sala ${postId}: ${unreadable} fila(s) del log ilegibles o no leídas`);
     return { ops, bytes, unreadable, budgetHit };
 }
 
@@ -727,12 +790,12 @@ async function countOrNull(sql: string, params: any[]): Promise<number | null> {
     try {
         row = await dbAsync.get(sql, params);
     } catch (e: any) {
-        console.warn('[collab] recuento fallido:', e && e.message);
+        mlog.warn({ err: e }, '[collab] recuento fallido');
         return null;
     }
     if (!row || row.c === null || row.c === undefined) {
         // El driver no lanzó, pero tampoco contestó. Es el mismo caso, no un cero.
-        console.warn('[collab] recuento sin fila utilizable: se trata como "no se sabe", no como cero');
+        mlog.warn('[collab] recuento sin fila utilizable: se trata como "no se sabe", no como cero');
         return null;
     }
     const n = Number(row.c);
@@ -830,7 +893,7 @@ async function touchMember(conn: Conn): Promise<void> {
             await dbAsync.run('UPDATE collab_members SET seen_at = ? WHERE conn_id = ?', [Date.now(), conn.connId]);
         }
     } catch (e: any) {
-        console.warn('[collab] latido de miembro fallido:', e && e.message);
+        mlog.warn({ err: e }, '[collab] latido de miembro fallido');
     }
 }
 
@@ -838,7 +901,7 @@ async function releaseMember(connId: string): Promise<void> {
     try {
         await dbAsync.run('DELETE FROM collab_members WHERE conn_id = ?', [connId]);
     } catch (e: any) {
-        console.warn('[collab] no se pudo dar de baja al miembro:', e && e.message);
+        mlog.warn({ err: e }, '[collab] no se pudo dar de baja al miembro');
     }
 }
 
@@ -849,7 +912,7 @@ async function touchDoc(postId: number): Promise<void> {
             'UPDATE collab_docs SET updated_ms = ?, updated_at = CURRENT_TIMESTAMP WHERE post_id = ?',
             [Date.now(), postId]);
     } catch (e: any) {
-        console.warn('[collab] no se pudo sellar la sala', postId, e && e.message);
+        mlog.warn({ postId, err: e }, '[collab] no se pudo sellar la sala');
     }
 }
 
@@ -905,10 +968,16 @@ async function retireRoom(
         await announceReset(postId, expect && expect.exceptConnId);
         return 'retired';
     } catch (e: any) {
-        console.warn('[collab] no se pudo retirar la sala', postId, e && e.message);
+        mlog.warn({ postId, err: e }, '[collab] no se pudo retirar la sala');
         return 'error';
     }
 }
+
+/** Texto de los avisos que cruzan el bus: el receptor pone el suyo, no el que venga en el mensaje. */
+const WARNING_MESSAGES = {
+    room_reset: 'La sesión colaborativa se reinició con el contenido guardado. Revisa el documento antes de seguir.',
+    log_full: 'La sesión colaborativa es muy larga: guarda y recarga para poder reconectar sin perder cambios.',
+};
 
 /**
  * Avisa por el stream de que la sala se ha reiniciado.
@@ -927,15 +996,14 @@ async function announceReset(postId: number, exceptConnId?: string | null): Prom
     const exceptSite = exceptConnId ? (room && room.conns.get(exceptConnId)?.siteId) || null : null;
     const entregado = await broadcast(postId, 'warning', {
         code: 'room_reset',
-        message: 'La sesión colaborativa se reinició con el contenido guardado. Revisa el documento antes de seguir.',
+        message: WARNING_MESSAGES.room_reset,
     }, exceptSite);
     if (!entregado) {
         // El superviviente que este aviso venía a rescatar está, por definición, en OTRO nodo: si el
         // bus no lo lleva, vuelve exactamente al «live y mudo» que esto cierra. `cache.publish`
         // devuelve `false` sin lanzar, así que sin esta línea la pérdida es INVISIBLE — ni un log.
         // No se puede reintentar (el epoch ya subió), pero sí se puede dejar de ser silenciosa.
-        console.error(
-            `[collab] sala ${postId}: el aviso de reinicio NO cruzó el bus. ` +
+        mlog.error(`[collab] sala ${postId}: el aviso de reinicio NO cruzó el bus. ` +
             'Los editores de otros nodos pueden haberse quedado en «live» y mudos: revisa Redis.');
     }
     return entregado;
@@ -1012,22 +1080,206 @@ async function broadcast(postId: number, event: string, data: any, exceptSite?: 
     // Preguntando por la CONFIGURACIÓN, un bus caído entra en `publish`, que devuelve `false` y lo
     // registra: la degradación vuelve a ser visible y `announceReset` puede volver a gritar.
     if (!cache.redisConfigured()) return true;   // monolito: no hay tramo de clúster que fallar
-    return (await cache.publish(CHANNEL, { o: NODE_ID, p: postId, e: event, d: data, x: exceptSite || null })) !== false;
+    return publishBus({ p: postId, e: event, d: data, x: exceptSite || null });
+}
+
+/* --- El bus de salas: FIRMADO y con lista cerrada de eventos ---------------------------------- */
+
+/**
+ * Eventos que un nodo puede pedirle a otro. Los cuatro primeros se ENTREGAN a los streams; `recheck`
+ * es de control (re-autorizar ahora) y no llega nunca a un cliente. Cualquier otro nombre se descarta:
+ * el bus no es un canal genérico para escribir eventos arbitrarios en el stream de un editor.
+ */
+const BUS_DELIVERED = new Set(['ops', 'presence', 'members', 'warning']);
+const BUS_WARNING_CODES = new Set(['log_full', 'room_reset']);
+
+function busMac(body: string): string {
+    return crypto.createHmac('sha256', BUS_KEY).update(body, 'utf8').digest('base64url');
+}
+
+/**
+ * Publica un mensaje FIRMADO. El cuerpo viaja como cadena para que lo firmado y lo verificado sean
+ * literalmente los mismos bytes (re-serializar en el receptor podría reordenar claves).
+ */
+async function publishBus(msg: { p: number; e: string; d: any; x?: string | null }): Promise<boolean> {
+    const body = JSON.stringify({ o: NODE_ID, t: Date.now(), ...msg });
+    return (await cache.publish(CHANNEL, { b: body, m: busMac(body) })) !== false;
+}
+
+function okSiteId(v: any): v is string {
+    return typeof v === 'string' && /^s_[a-z2-7]{16}$/.test(v);
+}
+
+/** Una entrada de presencia que viene de otro nodo, reconstruida campo a campo como dato hostil. */
+function cleanBusEntry(raw: any): PresenceEntry | null {
+    if (!raw || typeof raw !== 'object' || !okSiteId(raw.siteId)) return null;
+    const userId = Number(raw.userId);
+    if (!Number.isInteger(userId) || userId <= 0) return null;
+    return {
+        siteId: raw.siteId,
+        userId,
+        name: cleanDisplayName(raw.name, userId),
+        // El color es función pura del userId: se re-deriva aquí en vez de creer el que venga.
+        color: colorForUser(userId),
+        sel: cleanSel(raw.sel),
+        at: Number.isFinite(Number(raw.at)) ? Number(raw.at) : Date.now(),
+    };
+}
+
+/**
+ * Valida y RECONSTRUYE lo que otro nodo pide entregar. Devuelve el payload que se entrega, o null para
+ * descartar. Las ops pasan por el MISMO `validateFrame` que la ruta de subida — un nodo comprometido o
+ * un tercero con acceso a Redis no puede meter en el stream de nadie algo que la ruta habría rechazado.
+ */
+function admitBusPayload(event: string, data: any): any | null {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+    switch (event) {
+        case 'ops': {
+            if (!okSiteId(data.from) || !Number.isInteger(Number(data.epoch))) return null;
+            const frame = validateFrame(data.ops, data.from);
+            // Un frame que la ruta habría recortado no se entrega a medias: el emisor legítimo ya lo
+            // recortó antes de publicarlo, así que una diferencia aquí es un mensaje que no es suyo.
+            if (!frame.ok || frame.rejected.length || frame.ops.length !== (Array.isArray(data.ops) ? data.ops.length : -1)) return null;
+            return { ops: frame.ops, from: data.from, epoch: Number(data.epoch) };
+        }
+        case 'presence': {
+            if (!Array.isArray(data.entries) || data.entries.length !== 1) return null;
+            const entry = cleanBusEntry(data.entries[0]);
+            return entry ? { entries: [entry] } : null;
+        }
+        case 'members': {
+            if (data.joined !== undefined) {
+                const joined = cleanBusEntry(data.joined);
+                return joined ? { joined } : null;
+            }
+            if (data.left !== undefined) {
+                const l = data.left;
+                const userId = Number(l && l.userId);
+                if (!l || !okSiteId(l.siteId) || !Number.isInteger(userId) || userId <= 0) return null;
+                return { left: { siteId: l.siteId, userId } };
+            }
+            return null;
+        }
+        case 'warning': {
+            if (!BUS_WARNING_CODES.has(data.code)) return null;
+            return { code: data.code, message: WARNING_MESSAGES[data.code as keyof typeof WARNING_MESSAGES] };
+        }
+    }
+    return null;
 }
 
 /** Suscribe este proceso al bus de salas. Llamar una vez al arranque. No-op sin Redis. */
 function initClusterBus(): void {
     if (busReady) return;
     busReady = true;
-    cache.subscribe(CHANNEL, (msg: string) => {
-        try {
-            const parsed = JSON.parse(msg);
-            if (!parsed || parsed.o === NODE_ID) return; // eco propio: ya entregado localmente
-            deliverLocal(Number(parsed.p), String(parsed.e), parsed.d, parsed.x || null);
-        } catch (e: any) {
-            console.warn('[collab] bus parse error:', e && e.message);
+    cache.subscribe(CHANNEL, (msg: string) => { handleBusMessage(msg); });
+}
+
+/**
+ * Un mensaje del bus. Separado de la suscripción para poder probarlo sin Redis: es la única puerta por
+ * la que entra al proceso algo que no ha pasado por una ruta autenticada.
+ */
+function handleBusMessage(msg: string): void {
+    let parsed: any;
+    try { parsed = JSON.parse(msg); } catch { mlog.warn('[collab] bus: mensaje ilegible descartado'); return; }
+    if (!parsed || typeof parsed.b !== 'string' || typeof parsed.m !== 'string') {
+        mlog.warn('[collab] bus: mensaje SIN FIRMA descartado');
+        return;
+    }
+    const expected = Buffer.from(busMac(parsed.b));
+    const given = Buffer.from(parsed.m);
+    if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) {
+        mlog.warn('[collab] bus: firma inválida, mensaje descartado');
+        return;
+    }
+    let body: any;
+    try { body = JSON.parse(parsed.b); } catch { return; }
+    if (!body || body.o === NODE_ID) return; // eco propio: ya entregado localmente
+    if (!(Math.abs(Date.now() - Number(body.t)) <= CONFIG.BUS_MAX_SKEW_MS)) return; // fuera de ventana
+    const event = String(body.e);
+
+    if (event === 'recheck') {
+        const d = body.d || {};
+        const id = Number(d.id);
+        if (d.scope === 'all') runRecheck({ all: true }, d.closePost === true);
+        else if ((d.scope === 'user' || d.scope === 'post') && Number.isInteger(id) && id > 0) {
+            runRecheck(d.scope === 'user' ? { userId: id } : { postId: id }, d.closePost === true);
         }
-    });
+        return;
+    }
+    if (!BUS_DELIVERED.has(event)) return;
+    const postId = Number(body.p);
+    if (!Number.isInteger(postId) || postId <= 0) return;
+    const data = admitBusPayload(event, body.d);
+    if (!data) { mlog.warn({ event, postId }, '[collab] bus: carga rechazada por el validador'); return; }
+    deliverLocal(postId, event, data, okSiteId(body.x) ? body.x : null);
+}
+
+/* --- Re-autorización por EVENTO ------------------------------------------------------------------ */
+
+/** Encola `fn` para después del commit de la transacción en curso; `false` si no hay transacción. */
+function deferAfterCommit(fn: () => any): boolean {
+    try { return require('../config/database').afterCommit(fn) === true; } catch { return false; }
+}
+
+type RecheckScope = { userId?: number; postId?: number; all?: boolean };
+
+/**
+ * Re-autoriza YA las conexiones locales afectadas. `closePost` cierra la sala sin preguntar (el post
+ * ya no existe): no hay nada que re-autorizar contra una fila borrada.
+ */
+function runRecheck(scope: RecheckScope, closePost = false): void {
+    for (const room of [...rooms.values()]) {
+        if (scope.postId !== undefined && room.postId !== scope.postId) continue;
+        for (const conn of [...room.conns.values()]) {
+            if (scope.userId !== undefined && conn.userId !== scope.userId) continue;
+            if (closePost) {
+                if (conn.closed) continue;
+                writeEvent(conn, 'error', { code: 'unauthorized', message: 'Este contenido ya no existe.' });
+                void leave(conn);
+                continue;
+            }
+            if (conn.revalidate) void reauthorize(conn);
+        }
+    }
+}
+
+/**
+ * Pide la re-autorización en ESTE nodo y en los demás. Se ejecuta DESPUÉS del commit de la transacción
+ * que provocó el hecho (si la hay): re-autorizar antes leería el estado viejo y dejaría pasar la sesión.
+ *
+ * En el resto de nodos el usuario cacheado ya se invalidó: `cache.del` publica su `wordjs:cache-del`
+ * ANTES que esto, por la misma conexión de Redis, y Redis entrega en orden de publicación.
+ */
+function requestRecheck(scope: RecheckScope, closePost = false): void {
+    const run = () => {
+        runRecheck(scope, closePost);
+        if (!cache.redisConfigured()) return;
+        const d = scope.all ? { scope: 'all' }
+            : scope.userId !== undefined ? { scope: 'user', id: scope.userId }
+            : { scope: 'post', id: scope.postId };
+        void publishBus({ p: 0, e: 'recheck', d: { ...d, closePost } }).then((ok) => {
+            if (!ok) mlog.error({ scope }, '[collab] la re-autorización por evento NO cruzó el bus: los otros nodos la harán en su próximo ciclo');
+        });
+    };
+    if (!deferAfterCommit(run)) run();
+}
+
+/** Un hecho de seguridad de la CUENTA: cierre de sesión, contraseña, rol, 2FA, baja. */
+function recheckUser(userId: number): void {
+    const id = Number(userId);
+    if (Number.isInteger(id) && id > 0) requestRecheck({ userId: id });
+}
+
+/** Un hecho del POST que decide quién puede editarlo: estado, autor, tipo. */
+function recheckPost(postId: number): void {
+    const id = Number(postId);
+    if (Number.isInteger(id) && id > 0) requestRecheck({ postId: id });
+}
+
+/** Un cambio de POLÍTICA (capacidades de un rol, política de 2FA): afecta a cualquiera. */
+function recheckAll(): void {
+    requestRecheck({ all: true });
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -1036,6 +1288,8 @@ function initClusterBus(): void {
 
 export type JoinRefusal =
     | 'too-many-tabs' | 'too-many-connections' | 'server-full' | 'server-error'
+    /** La sala ya tiene `MAX_CONNS_PER_ROOM` conexiones en el clúster. */
+    | 'room-full'
     /** Sin saldo de lectura: entrar vuelve a traer el log entero al heap y este usuario ya ha leído de más. */
     | 'read-budget';
 
@@ -1059,6 +1313,7 @@ const REFUSAL_RETRYABLE: Record<JoinRefusal, boolean> = {
     'too-many-tabs': true,          // otra pestaña propia: al cerrarse, hay hueco
     'too-many-connections': true,   // cupo del usuario: se libera al soltar conexiones
     'server-full': true,            // cupo del proceso: se libera solo
+    'room-full': true,              // cupo de la sala: se libera cuando alguien sale
     'server-error': true,           // fallo transitorio de BD
     'read-budget': true,            // el cubo se recarga a USER_READ_BYTES_PER_SEC: es LITERALMENTE una espera
 };
@@ -1114,13 +1369,16 @@ async function join(params: {
     let sameUserHere = 0;
     for (const c of room.conns.values()) if (c.userId === userId && c.connId !== prevConnId) sameUserHere++;
     if (sameUserHere >= CONFIG.MAX_CONNS_PER_USER_POST) return { ok: false, refusal: 'too-many-tabs' };
+    // TOPE POR SALA, primero lo que este proceso sabe con certeza; el del clúster se mira tras reclamar
+    // la fila de liveness (abajo), cuando ya hay una cuenta compartida que incluye a esta conexión.
+    if (room.conns.size - (prevConnId ? 1 : 0) >= CONFIG.MAX_CONNS_PER_ROOM) return { ok: false, refusal: 'room-full' };
 
     const now = Date.now();
     const conn: Conn = {
         connId: `c${++connSeq}_${NODE_ID}`,
         postId, userId, siteId,
         // Solo el nombre PÚBLICO. Nunca el email: la presencia la ve todo el que edita el post.
-        name: String(params.name || `usuario ${userId}`).slice(0, 80),
+        name: cleanDisplayName(params.name, userId),
         color: colorForUser(userId),
         res,
         keepalive: null,
@@ -1139,6 +1397,9 @@ async function join(params: {
         rateSeal: crypto.randomBytes(9).toString('base64url'),
         welcomed: false,
         authFailures: 0,
+        authFailingSince: 0,
+        authInFlight: false,
+        authAgain: false,
         revalidate: params.revalidate || null,
         closed: false,
         left: false,
@@ -1168,6 +1429,25 @@ async function join(params: {
         // aborta dentro de la ventana dejaría el DELETE de `leave` corriendo antes que el INSERT y
         // la fila quedaría huérfana. Entra con `seen_at = 0` (ver `claimMember`).
         await claimMember(conn);
+        // TOPES DE CLÚSTER. Los de arriba son de ESTE proceso, y el gateway reparte en round-robin: un
+        // usuario podía tener `MAX_CONNS_PER_USER` en CADA nodo, y una sala no tenía techo alguno. La
+        // cuenta compartida es `collab_members`, con esta conexión ya dentro (fila reclamada justo
+        // arriba): dos entradas simultáneas en nodos distintos se ven la una a la otra y, en el peor
+        // caso, las dos se rechazan — nunca pasan las dos de más. Si la consulta no se puede hacer se
+        // sigue (estos topes acotan abuso; la entrada no depende de ellos para ser correcta).
+        const since = Date.now() - CONFIG.MEMBER_TTL_MS;
+        const delUsuario = await countOrNull(
+            'SELECT COUNT(*) AS c FROM collab_members WHERE user_id = ? AND ABS(seen_at) > ?', [userId, since]);
+        const enLaSala = await countOrNull(
+            'SELECT COUNT(*) AS c FROM collab_members WHERE post_id = ? AND ABS(seen_at) > ?', [postId, since]);
+        const tope: JoinRefusal | null =
+            delUsuario !== null && delUsuario > CONFIG.MAX_CONNS_PER_USER_CLUSTER ? 'too-many-connections'
+            : enLaSala !== null && enLaSala > CONFIG.MAX_CONNS_PER_ROOM ? 'room-full'
+            : null;
+        if (tope) {
+            await leave(conn, { closeSocket: false });
+            return { ok: false, refusal: tope };
+        }
         // TODO lo que esta entrada materializa —el SNAPSHOT y el log— se pide y se cobra en un solo
         // sitio (`materializeRoom`). Aquí se llamaba a `ensureDoc` + `loadOps` y se cobraba solo
         // `log.bytes`: con el log vacío, entrar era gratis por muy grande que fuera el snapshot.
@@ -1198,7 +1478,7 @@ async function join(params: {
         conn.ready = true;
         await touchMember(conn);
     } catch (e: any) {
-        console.warn('[collab] join fallido:', e && e.message);
+        mlog.warn({ err: e }, '[collab] join fallido');
         // `closeSocket: false` a propósito: la respuesta la cierra la RUTA, después de escribir el
         // evento de error. Terminarla aquí dejaba a la ruta escribiendo sobre un stream ya cerrado,
         // y ese `ERR_STREAM_WRITE_AFTER_END` no lo veía ningún `catch` — salía por `nextTick` y
@@ -1244,27 +1524,47 @@ function startKeepalive(conn: Conn): void {
 
         conn.ticks++;
         void touchMember(conn);
-        if (conn.revalidate && conn.ticks % CONFIG.REAUTH_EVERY_TICKS === 0) void reauthorize(conn);
+        // Con una racha de fallos NO CONCLUYENTES abierta se vuelve a comprobar en cada tick: la gracia
+        // es corta y tiene que poder agotarse dentro de su plazo.
+        if (conn.revalidate && (conn.authFailures > 0 || conn.ticks % CONFIG.REAUTH_EVERY_TICKS === 0)) {
+            void reauthorize(conn);
+        }
     }, CONFIG.KEEPALIVE_MS);
     if (typeof conn.keepalive.unref === 'function') conn.keepalive.unref();
 }
 
 async function reauthorize(conn: Conn): Promise<void> {
-    let allowed: boolean;
+    if (conn.closed || !conn.revalidate) return;
+    // Una a la vez por conexión; si llega un hecho nuevo mientras corre, se repite al terminar — el
+    // hecho es POSTERIOR a lo que la comprobación en curso pudo leer.
+    if (conn.authInFlight) { conn.authAgain = true; return; }
+    conn.authInFlight = true;
     try {
-        allowed = await conn.revalidate!();
-    } catch (e: any) {
-        // NO CONCLUYENTE (BD caída, etc.). Cerrar por un parpadeo echaría a todo el mundo; ignorarlo
-        // para siempre sería no comprobar nada. Se tolera un rato acotado y luego se cierra.
-        conn.authFailures++;
-        if (conn.authFailures < CONFIG.MAX_AUTH_FAILURES) return;
-        console.warn('[collab] re-autorización no concluyente repetida, se cierra la sesión:', e && e.message);
-        allowed = false;
+        do {
+            conn.authAgain = false;
+            let allowed: boolean;
+            try {
+                allowed = await conn.revalidate();
+            } catch (e: any) {
+                // NO CONCLUYENTE (BD caída, etc.). Cerrar por un parpadeo echaría a todo el mundo; seguir
+                // entregando sin poder comprobar es no comprobar nada. Se tolera una racha CORTA —por
+                // número Y por tiempo— y después se FALLA CERRADO.
+                const now = Date.now();
+                if (!conn.authFailingSince) conn.authFailingSince = now;
+                conn.authFailures++;
+                if (conn.authFailures < CONFIG.MAX_AUTH_FAILURES && now - conn.authFailingSince < CONFIG.AUTH_GRACE_MS) continue;
+                mlog.warn({ err: e }, '[collab] re-autorización no concluyente repetida, se cierra la sesión');
+                allowed = false;
+            }
+            if (allowed) { conn.authFailures = 0; conn.authFailingSince = 0; continue; }
+            if (conn.closed) return;
+            writeEvent(conn, 'error', { code: 'unauthorized', message: 'Tu sesión ya no puede editar este contenido.' });
+            await leave(conn);
+            return;
+        } while (conn.authAgain && !conn.closed);
+    } finally {
+        conn.authInFlight = false;
     }
-    if (allowed) { conn.authFailures = 0; return; }
-    if (conn.closed) return;
-    writeEvent(conn, 'error', { code: 'unauthorized', message: 'Tu sesión ya no puede editar este contenido.' });
-    await leave(conn);
 }
 
 /**
@@ -1323,10 +1623,10 @@ async function displayNames(userIds: number[]): Promise<Map<number, string>> {
         for (const r of rows || []) {
             // Same precedence the route uses when it names a live connection, so a member looks the
             // same whichever node happens to describe them.
-            out.set(Number(r.id), String(r.display_name || r.user_login || ''));
+            out.set(Number(r.id), cleanDisplayName(r.display_name || r.user_login || '', Number(r.id)));
         }
     } catch (e: any) {
-        console.warn('[collab] no se pudieron leer los nombres de los miembros remotos:', e && e.message);
+        mlog.warn({ err: e }, '[collab] no se pudieron leer los nombres de los miembros remotos');
     }
     return out;
 }
@@ -1373,7 +1673,7 @@ async function clusterPresence(room: Room, postId: number, exceptSite?: string |
             [postId, NODE_ID, since],
         );
     } catch (e: any) {
-        console.warn('[collab] no se pudo leer la presencia del clúster:', e && e.message);
+        mlog.warn({ err: e }, '[collab] no se pudo leer la presencia del clúster');
         return local;
     }
     if (!Array.isArray(rows) || !rows.length) return local;
@@ -1489,7 +1789,24 @@ async function sweepIdleRooms(maxAgeMs = 60 * 60 * 1000): Promise<number> {
         try {
             await dbAsync.run('DELETE FROM collab_members WHERE ABS(seen_at) < ?', [now - CONFIG.MEMBER_TTL_MS * 4]);
         } catch (e: any) {
-            console.warn('[collab] no se pudo podar collab_members:', e && e.message);
+            mlog.warn({ err: e }, '[collab] no se pudo podar collab_members');
+        }
+
+        // Salas de posts que YA NO EXISTEN (borrados antes de que el borrado avisara aquí, o por un
+        // camino que no pasa por el modelo). Su `updated_ms` puede ser reciente y su log no lo lee
+        // nadie: el barrido por antigüedad no las alcanza nunca o tarda una hora en hacerlo.
+        try {
+            const huerfanas = await dbAsync.all(
+                'SELECT d.post_id FROM collab_docs d LEFT JOIN posts p ON p.id = d.post_id WHERE p.id IS NULL LIMIT ?',
+                [CONFIG.MAX_SWEEP_ROOMS]);
+            for (const r of Array.isArray(huerfanas) ? huerfanas : []) {
+                const postId = Number(r.post_id);
+                if (!Number.isInteger(postId) || postId <= 0) continue;
+                runRecheck({ postId }, true);
+                await purgePostRows(postId);
+            }
+        } catch (e: any) {
+            mlog.warn({ err: e }, '[collab] no se pudieron purgar las salas de posts borrados');
         }
 
         // GEMELA DEL HALLAZGO 20, en pequeño: esta consulta no llevaba NINGUNA cota y traía una fila
@@ -1523,7 +1840,7 @@ async function sweepIdleRooms(maxAgeMs = 60 * 60 * 1000): Promise<number> {
             if (rooms.has(postId)) continue;                       // viva en ESTE nodo
             const ms = Number(r.updated_ms) || 0;
             if (!ms) {
-                console.warn(`[collab] sala ${postId} sin marca de tiempo legible: no se retira`);
+                mlog.warn({ postId }, `[collab] sala ${postId} sin marca de tiempo legible: no se retira`);
                 continue;
             }
             if (ms > cutoff) continue;
@@ -1534,7 +1851,7 @@ async function sweepIdleRooms(maxAgeMs = 60 * 60 * 1000): Promise<number> {
             if (await retireRoom(postId) === 'retired') retired++;
         }
     } catch (e: any) {
-        console.warn('[collab] barrido fallido:', e && e.message);
+        mlog.warn({ err: e }, '[collab] barrido fallido');
     }
     return retired;
 }
@@ -1623,6 +1940,51 @@ function readBucket(userId: number, now: number): ReadBucket {
     }
     readBuckets.set(userId, (b = { tokens: CONFIG.USER_READ_BURST, last: now }));
     return b;
+}
+
+/* --- PRESUPUESTO DE ESCRITURA EN EL LOG, POR USUARIO (ver CONFIG.USER_WRITE_BYTES_PER_SEC) ------- */
+
+/** userId -> cubo de escritura. Cuelga del USUARIO por lo mismo que el de lectura: sobrevive a la conexión. */
+const writeBuckets = new Map<number, ReadBucket>();
+
+function refillWrite(b: ReadBucket, now: number): void {
+    const dt = Math.max(0, now - b.last) / 1000;
+    if (dt <= 0) return;
+    b.last = now;
+    b.tokens = Math.min(CONFIG.USER_WRITE_BURST, b.tokens + dt * CONFIG.USER_WRITE_BYTES_PER_SEC);
+}
+
+/**
+ * Cobra `bytes` al cubo de escritura del usuario, o dice cuánto falta esperar. Mismo tope de memoria
+ * que el de lectura: los cubos llenos no deben nada y se olvidan; si aun así no hay sitio, se olvida
+ * el que más saldo tiene.
+ */
+function takeUserWrite(userId: number, bytes: number): { ok: true } | { ok: false; retryAfterMs: number } {
+    const now = Date.now();
+    let b = writeBuckets.get(userId);
+    if (!b) {
+        if (writeBuckets.size >= CONFIG.MAX_READ_BUCKETS) {
+            for (const [id, otro] of writeBuckets) {
+                refillWrite(otro, now);
+                if (otro.tokens >= CONFIG.USER_WRITE_BURST) writeBuckets.delete(id);
+            }
+            while (writeBuckets.size >= CONFIG.MAX_READ_BUCKETS) {
+                let victima = -1;
+                let mejor = -Infinity;
+                for (const [id, otro] of writeBuckets) if (otro.tokens > mejor) { mejor = otro.tokens; victima = id; }
+                if (victima === -1) break;
+                writeBuckets.delete(victima);
+            }
+        }
+        writeBuckets.set(userId, (b = { tokens: CONFIG.USER_WRITE_BURST, last: now }));
+    }
+    refillWrite(b, now);
+    if (b.tokens < bytes) {
+        const falta = bytes - b.tokens;
+        return { ok: false, retryAfterMs: Math.max(1, Math.ceil((falta / CONFIG.USER_WRITE_BYTES_PER_SEC) * 1000)) };
+    }
+    b.tokens -= bytes;
+    return { ok: true };
 }
 
 /** ¿Le queda saldo a este usuario para hacerse servir OTRA lectura del log? */
@@ -2044,6 +2406,37 @@ function refundRate(conn: Conn, ops: number, bytes: number, presence = 0): void 
 /* Ingest de operaciones                                                                         */
 /* ------------------------------------------------------------------------------------------- */
 
+/**
+ * ¿Ocupa ya este usuario su parte del log del epoch, con alguien más en la sala? Solo se pregunta cuando
+ * un frame llenaría el log (raro), así que las dos consultas no están en el camino caliente. Si no se
+ * pueden hacer, se responde que no: el comportamiento de siempre (truncar) es correcto, solo menos justo.
+ */
+async function overLogShare(conn: Conn, epoch: number): Promise<boolean> {
+    try {
+        const own = await dbAsync.get(
+            `SELECT COUNT(*) AS c, SUM(${payloadBytesExpr()}) AS b FROM collab_ops WHERE post_id = ? AND epoch = ? AND user_id = ?`,
+            [conn.postId, epoch, conn.userId]);
+        const ownCount = Number(own && own.c) || 0;
+        const ownBytes = Number(own && own.b) || 0;
+        // Lo que YA ocupa, sin contar este frame: un primer frame grande de alguien que no ha escrito
+        // nada no es acaparar, y rechazarlo dejaría sin poder guardar una edición legítima.
+        const overShare = ownBytes >= CONFIG.MAX_LOG_BYTES_PER_EPOCH * CONFIG.USER_LOG_SHARE
+            || ownCount >= CONFIG.MAX_OPS_PER_EPOCH * CONFIG.USER_LOG_SHARE;
+        if (!overShare) return false;
+        const since = Date.now() - CONFIG.MEMBER_TTL_MS;
+        const others = await countOrNull(
+            'SELECT COUNT(*) AS c FROM collab_members WHERE post_id = ? AND user_id <> ? AND seen_at > ?',
+            [conn.postId, conn.userId, since]);
+        const otherWriters = await countOrNull(
+            'SELECT COUNT(*) AS c FROM collab_ops WHERE post_id = ? AND epoch = ? AND user_id <> ?',
+            [conn.postId, epoch, conn.userId]);
+        return (others !== null && others > 0) || (otherWriters !== null && otherWriters > 0);
+    } catch (e: any) {
+        mlog.warn({ err: e }, '[collab] no se pudo medir la parte del log de un usuario');
+        return false;
+    }
+}
+
 export type PushResult =
     | {
         ok: true;
@@ -2093,6 +2486,18 @@ async function pushOps(conn: Conn, rawOps: any, epoch: number): Promise<PushResu
     // sobre un frame que se va a rechazar.
     const byteVerdict = rateGate(conn, 0, bytes);
     if (!byteVerdict.ok) return { ok: false, ...rateFailure(byteVerdict) };
+    // EL CUBO DEL USUARIO, además del de la conexión: sin él, cada pestaña de más era otra cuota de
+    // escritura entera. Lo que la conexión ya cobró se devuelve — el rechazo es de OTRO recurso.
+    const userWrite = takeUserWrite(conn.userId, bytes);
+    if (!userWrite.ok) {
+        refundRate(conn, 0, bytes);
+        const base = rateInstruction(conn);
+        return {
+            ok: false, status: 429, code: 'collab_rate_limit',
+            message: 'Demasiadas operaciones. Reduce el ritmo.',
+            rate: { ...base, retryAfterMs: Math.max(base.retryAfterMs, userWrite.retryAfterMs) },
+        };
+    }
 
     const current = await dbAsync.get('SELECT epoch, truncated FROM collab_docs WHERE post_id = ?', [conn.postId]);
     if (!current) {
@@ -2143,6 +2548,13 @@ async function pushOps(conn: Conn, rawOps: any, epoch: number): Promise<PushResu
         const log = await logSizeCached(conn.postId, liveEpoch, Date.now());
         persisted = log.count + frame.ops.length <= CONFIG.MAX_OPS_PER_EPOCH
             && log.bytes + frameBytes <= CONFIG.MAX_LOG_BYTES_PER_EPOCH;
+        // Este frame LLENARÍA el log y la sala dejaría de ser reanudable para TODOS. Si quien lo manda
+        // ya ocupa su parte y hay más gente en la sala, se le rechazan las ops a ÉL en vez de truncar
+        // la sesión de los demás.
+        if (!persisted && await overLogShare(conn, liveEpoch)) {
+            for (let i = 0; i < frame.ops.length; i++) rejected.push({ index: frame.srcIndex[i], code: 'log-budget' });
+            return { ok: true, accepted: 0, known: 0, rejected, persisted: false, normalized: [] };
+        }
     }
     const stored: any[] = [];
     let accepted = 0;
@@ -2168,7 +2580,7 @@ async function pushOps(conn: Conn, rawOps: any, epoch: number): Promise<PushResu
                 if (!isDuplicateKeyError(e)) {
                     // Fallo operativo. Se dice, con un status que el cliente sabe reintentar: dar el
                     // lote por bueno le haría borrarlo de su outbox y la op se perdería para siempre.
-                    console.warn('[collab] no se pudo persistir una op:', e && e.message);
+                    mlog.warn({ err: e }, '[collab] no se pudo persistir una op');
                     return {
                         ok: false, status: 503, code: 'collab_store_failed',
                         message: 'No se pudo guardar la operación. Se reintentará.',
@@ -2202,7 +2614,7 @@ async function pushOps(conn: Conn, rawOps: any, epoch: number): Promise<PushResu
                 try {
                     canonica = JSON.parse(prior.payload);
                 } catch {
-                    console.warn('[collab] fila de op ilegible en el log:', conn.postId, op.id.counter);
+                    mlog.warn({ postId: conn.postId, counter: op.id.counter }, '[collab] fila de op ilegible en el log');
                     return {
                         ok: false, status: 503, code: 'collab_store_failed',
                         message: 'No se pudo confirmar la operación. Se reintentará.',
@@ -2236,12 +2648,12 @@ async function pushOps(conn: Conn, rawOps: any, epoch: number): Promise<PushResu
                 await dbAsync.run('UPDATE collab_docs SET truncated = 1, updated_ms = ? WHERE post_id = ?',
                     [Date.now(), conn.postId]);
             } catch (e: any) {
-                console.warn('[collab] no se pudo marcar la sala como truncada:', e && e.message);
+                mlog.warn({ err: e }, '[collab] no se pudo marcar la sala como truncada');
             }
         }
         await broadcast(conn.postId, 'warning', {
             code: 'log_full',
-            message: 'La sesión colaborativa es muy larga: guarda y recarga para poder reconectar sin perder cambios.',
+            message: WARNING_MESSAGES.log_full,
         });
     }
 
@@ -2380,6 +2792,107 @@ async function resync(conn: Conn, rawVv: any, clientEpoch: number): Promise<Resy
 }
 
 /* ------------------------------------------------------------------------------------------- */
+/* Escrituras del contenido que NO vienen de la sala, y posts que desaparecen                     */
+/* ------------------------------------------------------------------------------------------- */
+
+/**
+ * GUARDADOS QUE SON DE LA SALA. El editor colaborativo guarda por la ruta de siempre (`PUT /posts/:id`),
+ * y ese guardado ES el estado de la sala: no puede reiniciarla. Todo lo demás que escribe `_puck_data`
+ * —restaurar una revisión, el editor clásico, la API, una importación— sí: la sala viva tiene un `base`
+ * y un log que ya no describen el post, y el siguiente autoguardado de cualquier miembro pisaría lo
+ * escrito por fuera. La ruta marca su escritura con `runAsCollabSave` y el modelo pregunta aquí.
+ */
+const { AsyncLocalStorage } = require('async_hooks');
+
+/** La colaboración solo existe en el sitio principal (ver routes/collab.ts): en los demás no hay salas. */
+function collabSite(): boolean {
+    try { return require('./site-context').isPrimarySite(); } catch { return true; }
+}
+const collabSaveScope: { run: (store: any, fn: () => any) => any; getStore: () => any } = new AsyncLocalStorage();
+
+function runAsCollabSave<T>(postId: number, fn: () => Promise<T>): Promise<T> {
+    return collabSaveScope.run({ postId: Number(postId) }, fn);
+}
+
+/**
+ * El modelo avisa de que se ha escrito el `_puck_data` de un post. Si no es el guardado de la propia
+ * sala, la sala se RETIRA (epoch arriba, log fuera) tras el commit y sus miembros reciben `room_reset`:
+ * su cliente re-siembra desde el contenido que se acaba de guardar en vez de pisarlo.
+ */
+function noteContentWrite(postId: number): void {
+    const id = Number(postId);
+    if (!Number.isInteger(id) || id <= 0 || !collabSite()) return;
+    const scope = collabSaveScope.getStore();
+    if (scope && scope.postId === id) return;
+    contentChangedOutside(id);
+}
+
+/** Lo mismo, sin preguntar por la marca: para quien sabe que su escritura nunca es de la sala. */
+function contentChangedOutside(postId: number): void {
+    if (!collabSite()) return;
+    const run = () => retireRoom(postId).then((r) => {
+        if (r === 'error') mlog.error({ postId }, '[collab] el contenido cambió fuera de la sala y no se pudo reiniciar');
+    });
+    if (!deferAfterCommit(run)) void run();
+}
+
+/**
+ * ¿Puede este guardado reclamarse como de la sala? `epoch` es el que declara el cliente; sin él, vale
+ * ser miembro vivo de la sala (un editor abierto con una versión anterior del cliente). Un epoch que
+ * NO es el vigente es un guardado de una generación que ya no existe: la ruta responde 409.
+ */
+async function classifySave(postId: number, userId: number, epoch: number | null):
+    Promise<'collab' | 'outside' | 'stale'> {
+    if (!collabSite()) return 'outside';
+    let row: any;
+    try {
+        row = await dbAsync.get('SELECT epoch, base_doc FROM collab_docs WHERE post_id = ?', [postId]);
+    } catch (e: any) {
+        // Sin poder leer la sala no se puede reclamar el guardado para ella: cuenta como de fuera, que
+        // es el lado seguro (reiniciar la sala), y el guardado del post sigue su curso.
+        mlog.warn({ postId, err: e }, '[collab] no se pudo clasificar un guardado');
+        return 'outside';
+    }
+    const live = row && String(row.base_doc || '') !== '';
+    if (epoch !== null) {
+        if (!row || Number(row.epoch) !== Number(epoch)) return 'stale';
+        return 'collab';
+    }
+    if (!live) return 'outside';
+    const since = Date.now() - CONFIG.MEMBER_TTL_MS;
+    const mine = await countOrNull(
+        'SELECT COUNT(*) AS c FROM collab_members WHERE post_id = ? AND user_id = ? AND seen_at > ?',
+        [postId, userId, since]);
+    return mine !== null && mine > 0 ? 'collab' : 'outside';
+}
+
+/**
+ * El post se BORRÓ: su estado de sesión no describe nada y no se va a retirar nunca por sí solo (el
+ * barrido mira salas ociosas, no huérfanas). Se cierran sus streams en todo el clúster y se borran sus
+ * filas. Tras el commit, como todo lo que reacciona a una escritura.
+ */
+function forgetPost(postId: number): void {
+    const id = Number(postId);
+    if (!Number.isInteger(id) || id <= 0 || !collabSite()) return;
+    const run = async () => {
+        requestRecheck({ postId: id }, true);
+        await purgePostRows(id);
+    };
+    if (!deferAfterCommit(run)) void run();
+}
+
+async function purgePostRows(postId: number): Promise<void> {
+    try {
+        await dbAsync.run('DELETE FROM collab_ops WHERE post_id = ?', [postId]);
+        await dbAsync.run('DELETE FROM collab_members WHERE post_id = ?', [postId]);
+        await dbAsync.run('DELETE FROM collab_docs WHERE post_id = ?', [postId]);
+        forgetLogSize(postId);
+    } catch (e: any) {
+        mlog.warn({ postId, err: e }, '[collab] no se pudieron borrar las filas de un post borrado');
+    }
+}
+
+/* ------------------------------------------------------------------------------------------- */
 
 /**
  * Localiza la conexión dueña de un `siteId` EXIGIENDO que sea del usuario que pregunta.
@@ -2414,6 +2927,7 @@ function _resetForTests(): void {
     totalConns = 0;
     logSizes.clear();
     readBuckets.clear();
+    writeBuckets.clear();
     readSlots.clear();
     lastReadPrune = 0;
     sweepCursor = 0;
@@ -2423,6 +2937,11 @@ module.exports = {
     CONFIG, NODE_ID, CHANNEL,
     colorForUser, initClusterBus, replicaId,
     join, leave, pushOps, setPresence, resync, findConn, noteRateAck,
+    // Hechos de fuera de la sala que la afectan (ver cada función).
+    recheckUser, recheckPost, recheckAll, runAsCollabSave, noteContentWrite, contentChangedOutside,
+    classifySave, forgetPost, cleanDisplayName,
+    // Solo para tests: la única puerta por la que entra algo que no pasó por una ruta autenticada.
+    _handleBusMessage: handleBusMessage, _busMac: busMac,
     // `ensureDoc` YA NO SE EXPORTA. Era el sumidero del amplificador (copia `base_doc` entero al heap y
     // relee `_puck_data` para hashearlo) y estaba publicado en todo el repo, mientras la garantía «el
     // único camino es `materializeRoom`» sólo la vigilaba un test que lee UN fichero. Que nadie lo

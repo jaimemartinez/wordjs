@@ -79,13 +79,13 @@ const VALID_LEAF = makeCert({ cn: MX_HOST, san: MX_HOST, issuer: TRUSTED_CA });
 
 // --- The real plugin module, plus the seams named in the header ----------------------------------
 
-const attempts: { host: string; port: number; tls: any }[] = [];
+const attempts: { host: string; port: number; tls: any; ignoreTLS?: boolean }[] = [];
 let targetPort = 0;
 
 const nodemailerSeam = {
     ...realNodemailer,
     createTransport(opts: any) {
-        attempts.push({ host: opts.host, port: opts.port, tls: { ...opts.tls } });
+        attempts.push({ host: opts.host, port: opts.port, tls: { ...opts.tls }, ignoreTLS: opts.ignoreTLS });
         return realNodemailer.createTransport({ ...opts, port: targetPort, tls: { ...opts.tls, ca: TRUSTED_CA.pem } });
     },
 };
@@ -364,4 +364,61 @@ test('an SMTP reply quoting a verify reason is not downgraded and keeps its 5xx 
     assertNoDowngrade(run, '554 reply');
     assert.strictEqual(run.error.permanent, true, 'a 5xx reject is permanent');
     assert.strictEqual(srv.received.length, 0);
+});
+
+// --- A host that REFUSES STARTTLS with a reply --------------------------------------------------
+
+/** A raw SMTP endpoint that advertises STARTTLS, answers it with `refusal`, and accepts mail in plaintext. */
+async function refusesStarttls(refusal: string) {
+    const received: string[] = [];
+    const sockets = new Set<net.Socket>();
+    const server = net.createServer((socket) => {
+        sockets.add(socket);
+        socket.on('close', () => sockets.delete(socket));
+        socket.on('error', () => { /* client hang-up */ });
+        let inData = false;
+        let buf = '';
+        socket.write(`220 ${MX_HOST} ESMTP\r\n`);
+        socket.on('data', (chunk: Buffer) => {
+            buf += chunk.toString();
+            for (;;) {
+                if (inData) {
+                    const end = buf.indexOf('\r\n.\r\n');
+                    if (end === -1) return;
+                    received.push(buf.slice(0, end));
+                    buf = buf.slice(end + 5);
+                    inData = false;
+                    socket.write('250 2.0.0 Ok: queued in plaintext\r\n');
+                    continue;
+                }
+                const i = buf.indexOf('\r\n');
+                if (i === -1) return;
+                const line = buf.slice(0, i);
+                buf = buf.slice(i + 2);
+                if (/^EHLO/i.test(line)) socket.write(`250-${MX_HOST}\r\n250-PIPELINING\r\n250 STARTTLS\r\n`);
+                else if (/^HELO/i.test(line)) socket.write(`250 ${MX_HOST}\r\n`);
+                else if (/^STARTTLS/i.test(line)) socket.write(`${refusal}\r\n`);
+                else if (/^(MAIL|RCPT|RSET|NOOP)/i.test(line)) socket.write('250 2.0.0 Ok\r\n');
+                else if (/^DATA/i.test(line)) { socket.write('354 End data with <CR><LF>.<CR><LF>\r\n'); inData = true; }
+                else if (/^QUIT/i.test(line)) { socket.end('221 2.0.0 Bye\r\n'); return; }
+                else socket.write('502 5.5.2 Error: command not recognized\r\n');
+            }
+        });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    closers.push(() => new Promise<void>((resolve) => { for (const s of sockets) s.destroy(); server.close(() => resolve()); }));
+    return { port: (server.address() as net.AddressInfo).port, received };
+}
+
+test('a host that REFUSES STARTTLS with a reply (454) gets the message in plaintext, and the downgrade is logged', async () => {
+    const srv = await refusesStarttls('454 4.7.0 TLS not available due to local problem');
+    const run = await deliver(srv.port);
+    assert.strictEqual(run.error, null, run.error && run.error.message);
+    assert.strictEqual(run.result.ok, true);
+    assert.strictEqual(run.result.plaintext, true);
+    assert.deepStrictEqual(run.attempts.map((a) => !!a.ignoreTLS), [false, true],
+        'first the normal attempt (STARTTLS), then ONE plaintext retry to the same host');
+    assert.ok(run.warnings.some((w) => /\[MailServer\]\[TLS\].*refused STARTTLS \(454\)/.test(w)), run.warnings.join('\n'));
+    assert.strictEqual(srv.received.length, 1, 'delivered exactly once');
+    assert.match(srv.received[0], /Subject: Hello/);
 });

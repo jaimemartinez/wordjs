@@ -432,6 +432,10 @@ const wordjs = {
         mailProvider = handler;
         send({ kind: 'register-mail-provider' });
     },
+    // Text completion through the site's AI provider (host-side gate: ai:use). Text in, text out.
+    ai: {
+        complete: (req) => callHost('ai.complete', [req]),
+    },
     notify: Object.assign((n) => callHost('notify', [n]), {
         // Register a notification transport (e.g. 'email') whose handler lives in this isolate.
         registerTransport(name, handler) {
@@ -574,7 +578,11 @@ onMessage(async (msg) => {
             if (replyTooLarge(value)) { send({ kind: 'invoke-reply', id: msg.id, ok: false, error: 'reply payload too large' }); return; }
             send({ kind: 'invoke-reply', id: msg.id, ok: true, value });
         } catch (e) {
-            send({ kind: 'invoke-reply', id: msg.id, ok: false, error: String(e && e.message || e) });
+            // A callback may refuse with its own client status and `rest_*` code (a captcha plugin
+            // rejecting a comment). Only those two plain fields cross, validated again by the host.
+            const status = e && Number.isInteger(e.status) && e.status >= 400 && e.status <= 499 ? e.status : undefined;
+            const code = e && typeof e.code === 'string' && /^rest_[a-z0-9_]{1,60}$/.test(e.code) ? e.code : undefined;
+            send({ kind: 'invoke-reply', id: msg.id, ok: false, error: String(e && e.message || e), status, code });
         }
     } else if (msg.kind === 'invoke-route') {
         // Host forwarded an HTTP request for a route handler living in this isolate.

@@ -26,6 +26,7 @@
 
 const { describe, it, beforeEach, after } = require('node:test');
 const assert = require('node:assert');
+const { captureLogLines } = require('./fixtures/log-capture');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -62,7 +63,7 @@ const fromHere = (rel: string) => require.resolve(rel);
 let admin: any = null;
 let terms: Set<string> = new Set();
 let nativeError: Error | null = null;
-let failAt: 'roles' | 'theme' | 'admin' | 'core-tests' | null = null;
+let failAt: 'roles' | 'theme' | 'admin' | 'admin-email' | null = null;
 const boom = (where: string) => { throw new Error(`stubbed failure at ${where}`); };
 
 stub(fromHere('../models/User'), {
@@ -77,7 +78,11 @@ stub(fromHere('../config/database'), {
     initializeDatabase: async () => {},
     nativeSqliteLoadError: () => nativeError,
 });
-stub(fromHere('../core/options'), { updateOption: async () => true, getOption: async () => null });
+// The first write after the administrator exists is the admin_email option: the post-admin failure point.
+stub(fromHere('../core/options'), {
+    updateOption: async (name: string) => { if (failAt === 'admin-email' && name === 'admin_email') boom('admin-email'); return true; },
+    getOption: async () => null,
+});
 stub(fromHere('../core/roles'), {
     loadRoles: async () => {},
     syncRoles: async () => { if (failAt === 'roles') boom('roles'); },
@@ -98,12 +103,6 @@ stub(fromHere('../core/themes'), { createDefaultTheme: () => { if (failAt === 't
 stub(fromHere('../core/certManager'), {
     generateClusterCA: () => ({ key: 'stub-ca-key', cert: 'stub-ca-cert' }),
     generateServiceCert: () => {},
-});
-stub(fromHere('../core/plugin-test-runner'), {
-    runCoreTests: async () => {
-        if (failAt === 'core-tests') boom('core-tests');
-        return { success: true, tests: 0, passed: 0, failed: 0 };
-    },
 });
 stub(fromHere('../core/install-token'), {
     verifyInstallToken: (t: unknown) => t === INSTALL_TOKEN,
@@ -130,6 +129,8 @@ async function install(body: Record<string, unknown> = {}) {
     const saved: any = {};
     const output: string[] = [];
     for (const m of methods) { saved[m] = (console as any)[m]; (console as any)[m] = (...a: any[]) => { output.push(a.map(String).join(' ')); }; }
+    // Backend modules log through core/module-logger: read what the real logger emitted as well.
+    const logged = captureLogLines(undefined, { raw: true });
     try {
         const res = await request(app)
             .post('/setup/install')
@@ -144,8 +145,10 @@ async function install(body: Record<string, unknown> = {}) {
                 siteUrl: 'http://localhost:3000',
                 ...body,
             });
+        output.push(...logged.stop());
         return { res, output: output.join('\n') };
     } finally {
+        logged.stop();
         for (const m of methods) (console as any)[m] = saved[m];
     }
 }
@@ -270,7 +273,7 @@ describe('a failure before the administrator exists is undone', () => {
 
 describe('a failure after the administrator exists is not undone', () => {
     it('the site is installed and its config kept', async () => {
-        failAt = 'core-tests';
+        failAt = 'admin-email';
         const { res } = await install();
         assert.strictEqual(res.status, 500);
         assert.doesNotMatch(res.body.error, /Nothing was kept/);

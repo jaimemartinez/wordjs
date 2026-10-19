@@ -22,13 +22,15 @@
  * ONE LISTENER, ONE OWNER. A second plugin asking while another owns it is refused even if the grant
  * store were edited by hand, and the owner's teardown (unload, crash, revoke → reload) closes it.
  *
- * PORT. The plugin asks for a port its manifest declares in `claimPorts` (25 by default). If the host
+ * PORT. The plugin asks for a port its manifest declares in `claimPorts` (25 by default), or any unprivileged
+ * port (1024+) — an operator behind a port map may listen on 2526, say. If the host
  * cannot bind it (EACCES below ip_unprivileged_port_start without the privilege, EADDRINUSE when another
  * MTA holds it) it falls back to 2525 and reports WHY, so the admin UI shows the real state.
  */
 'use strict';
 
 const net = require('net');
+const log = require('./module-logger').moduleLogger('core/inbound-smtp');
 
 type Verdict = null | undefined | { code?: number; message?: string };
 type Invoke = (phase: string, args: any[]) => Promise<Verdict>;
@@ -105,7 +107,7 @@ async function ask(invoke: Invoke, phase: string, args: any[]): Promise<Verdict 
         });
         return await Promise.race([invoke(phase, args), deadline]);
     } catch (e: any) {
-        console.warn(`[InboundSMTP] plugin '${owner}' failed in ${phase}: ${e && e.message}`);
+        log.warn(`[InboundSMTP] plugin '${owner}' failed in ${phase}: ${e && e.message}`);
         return smtpError(451, '4.3.0 Temporary local problem, try again later');
     } finally {
         clearTimeout(timer);
@@ -156,8 +158,10 @@ async function start(slug: string, opts: ListenOptions, claimedPorts: number[], 
 
     const allowed = new Set((claimedPorts || []).filter((p) => Number.isInteger(p) && p > 0 && p < 65536));
     let port = Number(opts && opts.port) || DEFAULT_PORT;
-    if (!allowed.has(port)) {
-        return { ok: false, error: `port ${port} is not declared in the plugin's manifest claimPorts`, ...status };
+    // A declared port, or an unprivileged one (1024+, which any process may bind anyway — the same class as
+    // the 2525 fallback). A privileged port the manifest does not declare (587, 465, …) stays refused.
+    if (!allowed.has(port) && !(Number.isInteger(port) && port >= 1024 && port < 65536)) {
+        return { ok: false, error: `port ${port} is not declared in the plugin's manifest claimPorts (undeclared ports must be 1024 or higher)`, ...status };
     }
     const fallback = Number(opts && opts.fallbackPort) || DEFAULT_FALLBACK;
     const proxyIps = validIps(opts && opts.proxyIps);
@@ -206,7 +210,7 @@ async function start(slug: string, opts: ListenOptions, claimedPorts: number[], 
             if (session && session.__wjsId) invoke('close', [sessionView(session)]).catch(() => { /* best effort */ });
         },
     });
-    server.on('error', (e: any) => console.error(`[InboundSMTP] listener error: ${e && e.message}`));
+    server.on('error', (e: any) => log.error(`[InboundSMTP] listener error: ${e && e.message}`));
     owner = slug;
 
     const bound = await new Promise<boolean>((resolve) => {
@@ -222,11 +226,11 @@ async function start(slug: string, opts: ListenOptions, claimedPorts: number[], 
     });
     if (bound) {
         status.boundPort = port;
-        console.log(`[InboundSMTP] listening on port ${port} for plugin '${slug}'${status.degraded ? ` (fallback: ${status.reason})` : ''}`);
+        log.info(`[InboundSMTP] listening on port ${port} for plugin '${slug}'${status.degraded ? ` (fallback: ${status.reason})` : ''}`);
     } else {
         try { server.close(); } catch { /* not listening */ }
         server = null;
-        console.warn(`[InboundSMTP] could not listen for plugin '${slug}': ${status.reason}`);
+        log.warn(`[InboundSMTP] could not listen for plugin '${slug}': ${status.reason}`);
     }
     return { ok: bound, ...status };
 }

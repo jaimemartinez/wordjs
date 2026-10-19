@@ -12,7 +12,9 @@
 require('dotenv').config();
 const express = require('express');
 const rateLimit = require('express-rate-limit');
+const proxyAddr = require('proxy-addr');
 const morgan = require('morgan');
+const { accessLogFormat, redactUrl } = require('./access-log');
 const compression = require('compression');
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
@@ -51,9 +53,19 @@ const GW_CERTS = path.resolve(__dirname, '../certs');
 const BE_CERTS = path.resolve(__dirname, '../../backend/certs');
 const CERTS_DIR = fs.existsSync(path.join(GW_CERTS, 'gateway-internal.crt')) ? GW_CERTS : BE_CERTS;
 
+// LOG_LEVEL / logging.level and trustProxy / WORDJS_TRUST_PROXY (src/runtime-settings.js). The logger
+// exists before the config block below, so the file is read here once for these two keys.
+const runtimeSettings = require('./runtime-settings');
+const earlyConfig = (() => {
+    try { return JSON.parse(fs.readFileSync(path.resolve(__dirname, '../gateway-config.json'), 'utf8')) || {}; } catch { return {}; }
+})();
+const LOG_LEVEL = runtimeSettings.resolveLogLevel(process.env, earlyConfig);
+const TRUST_PROXY = runtimeSettings.resolveTrustProxy(process.env, earlyConfig);
+
 // --- LOGGER SETUP ---
 const logger = winston.createLogger({
-    level: 'info',
+    level: LOG_LEVEL.level,
+    silent: LOG_LEVEL.silent,
     format: winston.format.combine(
         winston.format.timestamp(),
         winston.format.json()
@@ -87,6 +99,41 @@ const REGISTRY_TEMP = path.resolve(__dirname, '../gateway-registry.json.tmp');
 // The host policy the backend last pushed (POST /host-policy). Written by the primary, read by every
 // worker by modification time. Absent = never pushed = the edge enforces nothing.
 const HOST_POLICY_FILE = path.resolve(__dirname, '../gateway-host-policy.json');
+
+/**
+ * Write gateway-config.json owner-only. It holds gatewaySecret and revalidateSecret. writeFileSync's
+ * `mode` applies only when the file is created, so an existing file is chmod'ed as well (a no-op on
+ * Windows, where POSIX modes do not apply).
+ */
+function writeGatewayConfig(configPath, data) {
+    fs.writeFileSync(configPath, JSON.stringify(data, null, 2), { mode: 0o600 });
+    try { fs.chmodSync(configPath, 0o600); } catch { /* best effort */ }
+}
+
+/**
+ * The http(s) ORIGIN `value` names (scheme, host, optional port — nothing else), or null. The site
+ * address the backend pushes over /config-update is persisted into gateway-config.json and read back
+ * at every boot, so only a well-formed origin is ever written there.
+ */
+function siteOriginOrNull(value) {
+    if (typeof value !== 'string' || value.length > 2048) return null;
+    let u;
+    try { u = new URL(value); } catch { return null; }
+    if ((u.protocol !== 'http:' && u.protocol !== 'https:') || u.username || u.password) return null;
+    if ((u.pathname && u.pathname !== '/') || u.search || u.hash) return null;
+    return u.origin;
+}
+
+/** True when `origin` is exactly what siteOriginOrNull produces for itself (a canonical origin). */
+function isValidSiteOrigin(origin) {
+    return typeof origin === 'string' && siteOriginOrNull(origin) === origin;
+}
+
+/** A TCP port 1-65535 from a request value, or null. */
+function portOrNull(value) {
+    const n = typeof value === 'number' ? value : (typeof value === 'string' && /^[0-9]{1,5}$/.test(value) ? Number(value) : NaN);
+    return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : null;
+}
 
 let configSecret = null;
 let configPort = 3000;
@@ -212,6 +259,7 @@ function maybeStartAcmeHttpListener() {
 if (cluster.isPrimary) {
     const numCPUs = os.cpus().length;
     logger.info(`[Gateway] Starting on port ${FINAL_PORT}...`);
+    logger.info(`[Gateway] ${runtimeSettings.trustProxyBootLine(TRUST_PROXY)}`);
 
     (async () => {
         await ensureSSLCerts(config);
@@ -434,7 +482,7 @@ if (cluster.isPrimary) {
         const secret = require('crypto').randomBytes(32).toString('hex');
         config.revalidateSecret = secret;
         try {
-            fs.writeFileSync(path.resolve(__dirname, '../gateway-config.json'), JSON.stringify(config, null, 2));
+            writeGatewayConfig(path.resolve(__dirname, '../gateway-config.json'), config);
         } catch (e) {
             // Not fatal, but a secret we cannot persist would differ on the next boot and every purge
             // would 403 — say so loudly rather than failing mysteriously later.
@@ -714,7 +762,7 @@ if (cluster.isPrimary) {
 
                         // Save Config
                         const configPath = path.resolve(__dirname, '../gateway-config.json');
-                        fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+                        writeGatewayConfig(configPath, config);
 
                         // Restart Workers directly (we are in Primary process)
                         restartGateway();
@@ -729,17 +777,24 @@ if (cluster.isPrimary) {
 
                 // New Config Update Endpoint
                 internalApp.post('/config-update', requireIdentity(['backend']), (req, res) => {
-                    const { port, sslEnabled, siteUrl } = req.body;
+                    const { port, sslEnabled, siteUrl } = req.body || {};
+
+                    // Everything below is persisted to gateway-config.json: refuse a malformed value here
+                    // rather than writing it and failing at the next boot.
+                    const newPort = port ? portOrNull(port) : null;
+                    if (port && newPort === null) return res.status(400).json({ error: 'port must be an integer between 1 and 65535' });
+                    const newOrigin = siteUrl ? siteOriginOrNull(siteUrl) : null;
+                    if (siteUrl && !isValidSiteOrigin(newOrigin)) return res.status(400).json({ error: 'siteUrl must be an http(s) origin' });
 
                     try {
                         // Update Config Object
-                        if (port) config.gatewayPort = parseInt(port, 10);
+                        if (newPort !== null) config.gatewayPort = newPort;
                         if (!config.ssl) config.ssl = {};
                         if (typeof sslEnabled !== 'undefined') config.ssl.enabled = !!sslEnabled;
 
                         // Update siteUrl logic (Gateway side)
-                        if (siteUrl) {
-                            config.siteUrl = siteUrl;
+                        if (newOrigin && isValidSiteOrigin(newOrigin)) {
+                            config.siteUrl = newOrigin;
                         } else if (config.siteUrl) {
                             // If backend didn't send new siteUrl, try to autocorrect protocol
                             // Use updated values
@@ -766,7 +821,7 @@ if (cluster.isPrimary) {
 
                         // Save Config
                         const configPath = path.resolve(__dirname, '../gateway-config.json');
-                        fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+                        writeGatewayConfig(configPath, config);
 
                         // Restart Workers directly (we are in Primary process)
                         restartGateway();
@@ -922,6 +977,12 @@ if (cluster.isPrimary) {
     });
 
     const app = express();
+    // Which fronting proxy the public listener believes for the client address (unset: none, the socket
+    // peer is the client). req.ip — the rate limit's key — and the X-Forwarded-For the backend reads
+    // both follow it (src/runtime-settings.js).
+    app.set('trust proxy', TRUST_PROXY);
+    const trustsProxy = runtimeSettings.trustsAnyProxy(TRUST_PROXY);
+    const warnUntrustedProxy = runtimeSettings.createUntrustedProxyWarning(TRUST_PROXY, logger);
     let workerRegistry = new Map();
 
     // THE WORKER IS THE PROCESS THAT ROUTES, so it is the process whose registry view must be DERIVED
@@ -997,7 +1058,13 @@ if (cluster.isPrimary) {
     const edgeRefused = hostEdge.createReportingRefusals({
         send: (message) => { if (typeof process.send === 'function' && process.connected) process.send(message); },
     });
-    const edge = hostEdge.createHostEdge({ getPolicy: edgePolicy.get, logger, forwardedHostIsMarker: false, refused: edgeRefused });
+    // Multisite: the registered frontend nodes are relays for the address of their server-side reads
+    // (host-edge.js relayAuthority), so another site of the network renders with its own data.
+    const relayPeers = () => hostEdge.frontendRelayPeers(workerRegistry, routing.prefixOwner, () => {
+        const pol = edgePolicy.get();
+        return pol && typeof pol.ownAddresses === 'function' ? pol.ownAddresses() : [];
+    });
+    const edge = hostEdge.createHostEdge({ getPolicy: edgePolicy.get, logger, forwardedHostIsMarker: false, refused: edgeRefused, relayPeers });
     app.use((req, res, next) => {
         if (!edge.handle(req, res)) next();
     });
@@ -1008,8 +1075,9 @@ if (cluster.isPrimary) {
     app.use(helmet(helmetOptions));
     // The gateway secret is no longer accepted in the query string (header-only now), so there is no
     // credential to redact and we log every request — the old skip let an attacker suppress logging
-    // for any request just by appending ?secret=.
-    app.use(morgan('combined', {
+    // for any request just by appending ?secret=. The line format (src/access-log.js) is `combined` with
+    // query VALUES redacted and the Referer dropped: reset/verification links carry their token there.
+    app.use(morgan(accessLogFormat, {
         stream: { write: (msg) => logger.info(msg.trim()) }
     }));
     const shouldCompress = (req, res) => {
@@ -1025,6 +1093,7 @@ if (cluster.isPrimary) {
     // rate-limit.js), and keys on the socket peer (Express default trust proxy = false) so a client
     // cannot rotate X-Forwarded-For past it. Mounted before routing so it covers proxied traffic too.
     const { createPublicLimiter } = require('./rate-limit');
+    app.use((req, res, next) => { warnUntrustedProxy(req); next(); });
     app.use(createPublicLimiter(config, logger));
 
     app.get('/gateway-status', requireAuth, (req, res) => {
@@ -1129,15 +1198,20 @@ if (cluster.isPrimary) {
         if (target) {
             const isHttps = target.startsWith('https:');
             const isSSE = (req.headers['accept'] || '').includes('text/event-stream');
+            // Behind a trusted proxy the backend is told the client Express resolved, not the proxy.
+            if (trustsProxy) runtimeSettings.stateForwardedHeaders(req, req.ip);
 
-            logger.debug(`[Gateway] Proxying ${req.method} ${req.url} to ${target}`);
+            // Query values are redacted exactly as in the access log: reset, verification and invitation links
+            // carry their one-time token there, and debug logs are retained and shared like any other.
+            logger.debug(`[Gateway] Proxying ${logSafe(req.method)} ${logSafe(redactUrl(req.url))} to ${logSafe(target)}`);
             proxy.web(req, res, {
+                ...(trustsProxy ? { xfwd: false } : {}),
                 target,
                 agent: isHttps ? proxyAgent : httpKeepAliveAgent,
                 secure: false,
-                // Increase timeout for SSE (1 hour)
-                timeout: isSSE ? 3600000 : 60000,
-                proxyTimeout: isSSE ? 3600000 : 60000
+                // Increase timeout for SSE (1 hour); the AI routes wait for the provider (runtime-settings.js)
+                timeout: isSSE ? 3600000 : runtimeSettings.proxyTimeoutFor(req.url, process.env),
+                proxyTimeout: isSSE ? 3600000 : runtimeSettings.proxyTimeoutFor(req.url, process.env)
             }, (err) => {
                 if (!res.headersSent) {
                     const code = err.code || 'UNKNOWN';
@@ -1151,10 +1225,12 @@ if (cluster.isPrimary) {
                     if (code === 'ECONNRESET' || code === 'EPROTO' || /wrong version number/i.test(err.message || '')) {
                         flipScheme(target);
                     }
+                    // The upstream address and the error text stay in the log above; the client only learns
+                    // that the upstream could not answer.
                     if (code === 'ECONNREFUSED') {
-                        res.status(502).json({ error: 'Service Unavailable', message: 'The upstream service is starting or down.', target });
+                        res.status(502).json({ error: 'Service Unavailable', message: 'The upstream service is starting or down.' });
                     } else {
-                        res.status(502).json({ error: 'Upstream Error', message: err.message, target });
+                        res.status(502).json({ error: 'Upstream Error', message: 'The upstream service could not complete the request.' });
                     }
                 }
             });
@@ -1166,10 +1242,11 @@ if (cluster.isPrimary) {
         // global handler is a safety net. The second arg may be an HTTP response (web) or a
         // raw socket (ws). Only writeHead(502) on a real response; destroy a socket.
         if (res && typeof res.writeHead === 'function') {
+            logger.error(`[Gateway] Proxy Error: ${err && err.message}`);
             if (!res.headersSent) {
                 try {
                     res.writeHead(502, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'Proxy Error', message: err.message }));
+                    res.end(JSON.stringify({ error: 'Proxy Error', message: 'The upstream service could not complete the request.' }));
                 } catch (e) {
                     logger.error(`[Gateway] Could not send proxy error response: ${e.message}`);
                 }
@@ -1235,6 +1312,12 @@ if (cluster.isPrimary) {
     server.keepAliveTimeout = 65000;
     server.headersTimeout = 66000;
 
+    // Without a trusted proxy the upgrade cap keys on the socket peer; a CDN or reverse proxy in front then
+    // makes the whole site one peer. The limiter widens that peer's budget with the number of distinct
+    // forwarded clients behind it (bounded) and the operator is told, once, to trust the proxy.
+    const upgradeLimiter = require('./rate-limit').createUpgradeLimiter(config, {
+        onShared: (peer, n) => warnUntrustedProxy.sharedAddress(peer, n),
+    });
     server.on('upgrade', (req, socket, head) => {
         // Upgrades never pass through the Express chain above, so the edge check and the forwarded-header
         // pins are applied here too: a WebSocket to an address the site does not answer is refused, and
@@ -1242,6 +1325,17 @@ if (cluster.isPrimary) {
         // never relays a forged one.
         if (edge.handleUpgrade(req, socket)) return;
         hostEdge.pinUpgradeHeaders(req);
+        // Upgrades skip Express, so req.ip is computed here with the same trust function.
+        const upgradeClient = trustsProxy ? proxyAddr(req, app.get('trust proxy fn')) : (req.socket && req.socket.remoteAddress);
+        if (trustsProxy) runtimeSettings.stateForwardedHeaders(req, upgradeClient, { upgrade: true });
+        // Upgrades also skip the public limiter mounted on the Express chain, so they get their own
+        // per-client cap (src/rate-limit.js createUpgradeLimiter).
+        if (!trustsProxy) warnUntrustedProxy(req);
+        const forwardedClient = trustsProxy ? '' : runtimeSettings.firstForwardedFor(req.headers['x-forwarded-for']);
+        if (!upgradeLimiter.allow(upgradeClient, forwardedClient)) {
+            try { socket.end('HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'); } catch (e) { /* socket already gone */ }
+            return;
+        }
         // The same pre-install bootstrap as the HTTP path. Without it, a fresh split install in dev had its
         // Next.js HMR socket (/_next/hmr) destroyed until the frontend registered — which it cannot do
         // before the wizard has issued the cluster identity — so the wizard page never became interactive.
@@ -1250,7 +1344,7 @@ if (cluster.isPrimary) {
         const target = getTarget(req.url) || bootstrapTarget(req.url);
         if (target) {
             const isHttps = target.startsWith('https:');
-            proxy.ws(req, socket, head, { target, agent: isHttps ? proxyAgent : httpKeepAliveAgent, secure: false }, (err) => {
+            proxy.ws(req, socket, head, { ...(trustsProxy ? { xfwd: false } : {}), target, agent: isHttps ? proxyAgent : httpKeepAliveAgent, secure: false }, (err) => {
                 // Skip benign client-close noise (ECONNRESET/EPIPE), like the HTTP/SSE path; guard err deref.
                 if (err && err.code !== 'ECONNRESET' && err.code !== 'EPIPE') {
                     logger.error(`[Gateway] WebSocket Error [${target}]: ${err && err.message}`);

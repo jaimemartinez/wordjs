@@ -25,6 +25,10 @@ export interface AppConfig {
     // Database (flat defaults + driver selection)
     dbDriver: string;
     dbPath: string;
+    // Strict driver mode: a SQLite driver that fails to load (or a SQLite build without FTS5) is a boot
+    // error instead of a downgrade to the pure-JS 'sqlite-legacy' driver. Off by default; see
+    // resolveDbStrictDriver below and config/database.ts.
+    dbStrictDriver: boolean;
 
     // Secrets
     jwtSecret: string;
@@ -41,6 +45,10 @@ export interface AppConfig {
         password: string;
         name: string;
         ssl: boolean;
+        // TLS verification (drivers/db-tls.ts): the server certificate is verified unless
+        // sslRejectUnauthorized is explicitly false; sslCa is a PEM string or a path to a PEM file.
+        sslCa?: string;
+        sslRejectUnauthorized: boolean;
         // Optional Postgres pool tuning (safe defaults applied in drivers/postgres.ts)
         poolMax?: number;
         poolIdleMs?: number;
@@ -68,6 +76,8 @@ export interface AppConfig {
         prefix: string;
         /** Global per-IP budget for /api/v1/*. Operator-tunable; consumed by apiLimiter in index.ts. */
         rateLimit: { max: number; windowMs: number };
+        /** Limits of the read-only GraphQL endpoint (core/graphql). Operator-tunable, clamped. */
+        graphql: { maxDepth: number; maxCost: number; maxTokens: number };
     };
 
     // Site
@@ -242,12 +252,21 @@ function assertInstalledJwtSecretIsNotPublished(cfg: FileConfig, file: string = 
 // isolated plugin worker (global.__WORDJS_ISOLATED__) — that file is outside the worker's sandbox
 // and the worker never needs these host secrets (it reaches config via the bridge). This avoids
 // the noisy (but already-harmless) EACCES blocks config/app would otherwise trigger at worker boot.
+// These boot notes are not log records, but a CLI command (`npm run media -- status`, …) prints its own
+// result on stdout, and they would end up mixed into it: with WORDJS_LOG_TO_STDERR=1 (core/logger), send
+// them to stderr like every other log line.
+const bootNote = /^(1|true|yes)$/i.test(String(process.env.WORDJS_LOG_TO_STDERR || '')) ? console.error : console.log;
+
 if (!(globalThis as any).__WORDJS_ISOLATED__) {
+    // Whether the file was actually READ (and parsed). The secret auto-generation below rewrites only
+    // the file it loaded: it never creates one, and never overwrites a file it could not parse.
+    let configLoaded = false;
     try {
         if (fs.existsSync(configPath)) {
             const rawData = fs.readFileSync(configPath, 'utf8');
             fileConfig = JSON.parse(rawData);
-            console.log('📄 Config loaded from wordjs-config.json');
+            configLoaded = true;
+            bootNote('📄 Config loaded from wordjs-config.json');
         } else {
             console.warn('⚠️  wordjs-config.json not found, using defaults.');
         }
@@ -257,25 +276,37 @@ if (!(globalThis as any).__WORDJS_ISOLATED__) {
 
     // 1.5 Secure Auto-Generation — generate secure keys ONLY if config exists but is insecure.
     let configChanged = false;
-    if (fs.existsSync(configPath)) {
+    if (configLoaded) {
         // Outside the load's try/catch on purpose: this must stop the process, not be logged and ignored.
         assertInstalledJwtSecretIsNotPublished(fileConfig);
         if (jwtSecretNeedsReplacing(fileConfig)) {
             fileConfig.jwtSecret = crypto.randomBytes(64).toString('hex');
             configChanged = true;
-            console.log('🔐 Generated secure JWT secret for existing config.');
+            bootNote('🔐 Generated secure JWT secret for existing config.');
         }
 
         if (!fileConfig.dbPassword || fileConfig.dbPassword === 'password') {
             fileConfig.dbPassword = crypto.randomBytes(16).toString('hex');
             configChanged = true;
-            console.log('🔐 Generated secure Database password for existing config.');
+            bootNote('🔐 Generated secure Database password for existing config.');
         }
 
         if (configChanged) {
             try {
-                fs.writeFileSync(configPath, JSON.stringify(fileConfig, null, 2));
-                console.log('💾 wordjs-config.json updated with secure credentials.');
+                // The file now holds fresh secrets: never readable by OTHER users (owner/group bits kept).
+                // One descriptor for the whole rewrite: 'r+' opens the file that was just read (it never
+                // creates one), and the mode is read and narrowed on that same descriptor, so nothing is
+                // checked by path and then acted on by path.
+                const fd = fs.openSync(configPath, 'r+');
+                try {
+                    const text = JSON.stringify(fileConfig, null, 2);
+                    fs.ftruncateSync(fd, 0);
+                    fs.writeSync(fd, text, 0, 'utf8');
+                    try { fs.fchmodSync(fd, fs.fstatSync(fd).mode & 0o770); } catch { /* Windows: no POSIX bits */ }
+                } finally {
+                    fs.closeSync(fd);
+                }
+                bootNote('💾 wordjs-config.json updated with secure credentials.');
             } catch (err) {
                 console.error('❌ Failed to persist secure credentials:', err.message);
             }
@@ -302,6 +333,26 @@ function envInt(name: string, fallback: number, min: number, max: number): numbe
     return value;
 }
 
+/**
+ * Whether the database manager may downgrade to 'sqlite-legacy' (false, the default) or must refuse to
+ * boot instead (true).
+ *
+ * WORDJS_DB_STRICT wins over "dbStrictDriver" in wordjs-config.json, the way NODE_ENV wins over the
+ * file's nodeEnv: a container image can turn strictness on (or off for one emergency boot) without
+ * editing a config file that lives on a volume. An unrecognised value is a mistake, so it is reported
+ * and ignored rather than guessed at.
+ */
+function resolveDbStrictDriver(fileValue: unknown): boolean {
+    const raw = process.env.WORDJS_DB_STRICT;
+    if (raw !== undefined && raw.trim() !== '') {
+        const v = raw.trim().toLowerCase();
+        if (['1', 'true', 'yes', 'on'].includes(v)) return true;
+        if (['0', 'false', 'no', 'off'].includes(v)) return false;
+        console.warn(`⚠️  WORDJS_DB_STRICT="${raw}" is not one of 1/0/true/false/yes/no/on/off — ignoring it.`);
+    }
+    return fileValue === true;
+}
+
 // SECURITY: ephemeral fallback secret for when none is configured (see jwt.secret below). It is also
 // the value POST /setup/install persists — the installer adopts the secret this process already signs
 // with instead of minting another — so it carries the 64 bytes the installer used to generate, as does
@@ -311,9 +362,29 @@ if (!fileConfig.jwtSecret) {
     console.warn('⚠️  No JWT secret configured — using an ephemeral random secret (tokens reset on restart). Completing setup persists it.');
 }
 
+/**
+ * The backend's own listen port: PORT from the environment, then `port` in wordjs-config.json, then 4000.
+ * PORT used to be ignored outright, so `PORT=4100 npm run dev` still listened on 4000. NOT in the
+ * monolith (WORDJS_EMBEDDED=1): there PORT is the PUBLIC port monolith.js listens on, and config.port
+ * is only the loopback SSR listener it derives from the file. An unusable value falls through.
+ */
+function resolveBackendPort(fromFile: unknown): number {
+    const valid = (v: unknown): number | null => {
+        const n = Number(String(v ?? '').trim());
+        return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : null;
+    };
+    if (process.env.WORDJS_EMBEDDED !== '1') {
+        const fromEnv = valid(process.env.PORT);
+        if (fromEnv) return fromEnv;
+    }
+    return valid(fromFile) || defaultConfig.port;
+}
+
 const config: AppConfig = {
     ...defaultConfig,
     ...fileConfig,
+
+    port: resolveBackendPort(fileConfig.port),
 
     // Database file path. The native (better-sqlite3) and legacy (sql.js) drivers deliberately use
     // DIFFERENT default filenames so switching drivers never silently clobbers the other's data
@@ -326,6 +397,8 @@ const config: AppConfig = {
         ((fileConfig.dbDriver || defaultConfig.dbDriver) === 'sqlite-legacy'
             ? './data/wordjs.db'
             : './data/wordjs-native.db'),
+
+    dbStrictDriver: resolveDbStrictDriver(fileConfig.dbStrictDriver),
 
     // Routable address the gateway uses to reach this backend node (multi-node). Single-host default.
     advertiseHost: fileConfig.advertiseHost || '127.0.0.1',
@@ -355,6 +428,9 @@ const config: AppConfig = {
         password: fileConfig.dbPassword || (fileConfig.db && fileConfig.db.password) || 'password',
         name: fileConfig.dbName || (fileConfig.db && fileConfig.db.name) || 'wordjs',
         ssl: fileConfig.dbSsl === true || (fileConfig.db && fileConfig.db.ssl === true) || false,
+        sslCa: fileConfig.dbSslCa || fileConfig.db?.sslCa || undefined,
+        // Verified unless an operator opts out EXPLICITLY with `false` (flat or nested).
+        sslRejectUnauthorized: !(fileConfig.dbSslRejectUnauthorized === false || fileConfig.db?.sslRejectUnauthorized === false),
         // Postgres connection-pool tuning (safe defaults live in drivers/postgres.ts; override per-field via
         // a "db" block in wordjs-config.json). statementTimeoutMs stays OFF unless set — a blanket cap would
         // kill legit long migrations/imports/backups.
@@ -388,6 +464,13 @@ const config: AppConfig = {
             max: envInt('WORDJS_API_RATELIMIT_MAX', 1000, 10, 1_000_000),
             windowMs: envInt('WORDJS_API_RATELIMIT_WINDOW_MS', 15 * 60 * 1000, 1000, 24 * 60 * 60 * 1000),
         },
+        // GraphQL (POST/GET /api/v1/graphql). Checked before any resolver runs; see core/graphql/limits.
+        // Clamped like the limiter above, so a typo cannot switch a limit off.
+        graphql: {
+            maxDepth: envInt('WORDJS_GRAPHQL_MAX_DEPTH', 10, 2, 50),
+            maxCost: envInt('WORDJS_GRAPHQL_MAX_COST', 1000, 50, 100_000),
+            maxTokens: envInt('WORDJS_GRAPHQL_MAX_TOKENS', 5000, 100, 100_000),
+        },
     },
 
     // Site Configuration structure expected by core/options.js
@@ -397,7 +480,10 @@ const config: AppConfig = {
         description: fileConfig.siteDescription || 'A WordPress-like CMS'
     },
 
-    // Roles placeholder (if managed via config)
+    // Always empty: wordjs-config.json has no roles key and nothing reads one. Roles live in the
+    // `wordjs_user_roles` option; core/roles merges this ({}) over its built-in defaults, so the boot's
+    // syncRoles(config.roles, …) and every "config.roles" fallback there are exactly "the defaults".
+    // Kept as a hook (a test or an embedder may set it before boot), not as an operator setting.
     roles: {},
 
     // Environment — fail safe to 'production' (the hardened default). process.env.NODE_ENV wins so
@@ -620,3 +706,5 @@ function reloadFromFile(fresh?: any) {
 module.exports = config;
 // Not part of the config object: the boot-time secret gate, exported for its regression test.
 Object.defineProperty(module.exports, 'assertInstalledJwtSecretIsNotPublished', { value: assertInstalledJwtSecretIsNotPublished, enumerable: false });
+Object.defineProperty(module.exports, 'resolveDbStrictDriver', { value: resolveDbStrictDriver, enumerable: false });
+Object.defineProperty(module.exports, 'resolveBackendPort', { value: resolveBackendPort, enumerable: false });

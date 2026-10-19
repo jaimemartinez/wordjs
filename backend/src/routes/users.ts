@@ -20,8 +20,10 @@ const { getRoles } = require('../core/roles');
 // ACTIVE CORPORATE MAILBOX: the admin-owned grant + the one self-service email-write rule.
 const { refuseSelfServiceEmailChange, isValidAddress, mailboxFlagValue, hasProfessionalMailbox } = require('../core/mailbox');
 const { recordAudit } = require('../core/audit');
+const { protectsNetworkAdmin, refuseNetworkAdminTarget } = require('../core/network-auth');
 // THE SCALAR QUERY RULE — see core/query-params.
 const { requireScalarQuery, requireRouteId, routeIdOrNull } = require('../core/query-params');
+const { perPageParam, pageOffset } = require('../core/pagination');
 
 // THE ROUTE-ID CONTRACT — see core/query-params. `:id` is a user id: `/users/abc` reached
 // User.findById as NaN and was bound into `WHERE id = ?` — a 500 on Postgres/MySQL on read, edit and
@@ -273,8 +275,8 @@ router.get('/', can('list_users'), asyncHandler(async (req: Request, res: Respon
     // `parseInt` stringifies its argument before parsing, so `String(...)` here is the coercion the
     // untyped call already performed implicitly — a repeated `?per_page=5&per_page=7` still parses
     // "5,7" to 5, and a bracketed one still parses "[object Object]" to NaN and takes the default.
-    const limit = Math.min(parseInt(String(per_page), 10) || 10, 100);
-    const offset = (Math.max(parseInt(String(page), 10) || 1, 1) - 1) * limit;
+    const limit = perPageParam(per_page, 10);
+    const offset = pageOffset(page, limit);
 
     // SECURITY: Whitelist allowed orderBy columns to prevent SQL injection
     const allowedOrderBy = ['id', 'user_login', 'display_name', 'user_email', 'user_registered'];
@@ -380,14 +382,15 @@ router.get('/me', (req: Request, res: Response) => {
  *             schema:
  *               $ref: '#/components/schemas/RestError'
  *       403:
- *         description: "rest_forbidden (not you, and no list_users capability) or mfa_enrollment_required."
+ *         description: "mfa_enrollment_required."
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/RestError'
  *       404:
  *         description: >-
- *           rest_user_invalid_id — no such user, or the id is not a well-formed route id (the router-level
+ *           rest_user_invalid_id — no such user, a user that is not you while you lack list_users (the same
+ *           answer, so it cannot tell the two apart), or the id is not a well-formed route id (the router-level
  *           route-id contract answers 404 for a malformed id rather than letting NaN reach the database).
  *         content:
  *           application/json:
@@ -398,9 +401,11 @@ router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
     // `String(...)` is the coercion `parseInt` already applied to this argument implicitly; it is here
     // only because a route param is typed `string | string[]`, and it parses identically either way.
     const userId = parseInt(String(req.params.id), 10);
-    const user = await User.findById(userId);
 
-    if (!user) {
+    // Users can view themselves, admins can view anyone. Asked BEFORE the lookup, and answered with the
+    // SAME 404 as a missing id: a 403 for "exists, not yours" next to a 404 for "no such id" told any
+    // signed-in account which user ids exist.
+    if (req.user.id !== userId && !req.user.can('list_users')) {
         return res.status(404).json({
             code: 'rest_user_invalid_id',
             message: 'Invalid user ID.',
@@ -408,12 +413,12 @@ router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
         });
     }
 
-    // Users can view themselves, admins can view anyone
-    if (req.user.id !== userId && !req.user.can('list_users')) {
-        return res.status(403).json({
-            code: 'rest_forbidden',
-            message: 'You cannot view this user.',
-            data: { status: 403 }
+    const user = await User.findById(userId);
+    if (!user) {
+        return res.status(404).json({
+            code: 'rest_user_invalid_id',
+            message: 'Invalid user ID.',
+            data: { status: 404 }
         });
     }
 
@@ -891,7 +896,9 @@ const SUDO_INFLIGHT_MAX = 3;           // concurrent verifications per (account,
 const SUDO_INFLIGHT_STALE_MS = 30000;  // a crashed request must not leak its slot for ever
 
 /** account id -> consecutive failures within the window. Module-private: this IS the key space. */
-const _sudoFails = new Map<number, { n: number; at: number }>();
+const _sudoFails = new Map<string, { n: number; at: number }>();
+/** The bucket of `userId` on the current site: user ids repeat across a multisite network (site 1: the bare id). */
+const _sudoKey = (userId: number): string => require('../core/site-context').siteKeyPrefix() + String(userId);
 /** `${account}|${ip}` -> in-flight verifications. Same key space, same privacy. */
 const _sudoInflight = new Map<string, { n: number; at: number }>();
 
@@ -917,12 +924,12 @@ function sudoDelayMs(fails: any): number {
 function _sudoStore() {
     try { return require('../core/cache').getClient() || null; } catch { return null; }
 }
-const _sudoRedisKey = (userId: number) => `wjsudo:fails:${userId}`;
+const _sudoRedisKey = (userId: number) => `wjsudo:fails:${_sudoKey(userId)}`;
 
 function _sudoFailCountMem(userId: number): number {
-    const e = _sudoFails.get(userId);
+    const e = _sudoFails.get(_sudoKey(userId));
     if (!e) return 0;
-    if (Date.now() - e.at > SUDO_WINDOW_MS) { _sudoFails.delete(userId); return 0; }
+    if (Date.now() - e.at > SUDO_WINDOW_MS) { _sudoFails.delete(_sudoKey(userId)); return 0; }
     return e.n;
 }
 
@@ -947,7 +954,7 @@ async function sudoRecordFail(userId: number): Promise<void> {
             return;
         } catch { /* store hiccup → record in-process so this node still slows down */ }
     }
-    _sudoFails.set(userId, { n: _sudoFailCountMem(userId) + 1, at: Date.now() });
+    _sudoFails.set(_sudoKey(userId), { n: _sudoFailCountMem(userId) + 1, at: Date.now() });
 }
 
 async function sudoClearFails(userId: number): Promise<void> {
@@ -955,10 +962,11 @@ async function sudoClearFails(userId: number): Promise<void> {
     if (client) {
         try { await client.del(_sudoRedisKey(userId)); } catch { /* the TTL expires it anyway */ }
     }
-    _sudoFails.delete(userId);
+    _sudoFails.delete(_sudoKey(userId));
 }
 
-function sudoBeginAttempt(key: string): boolean {
+function sudoBeginAttempt(rawKey: string): boolean {
+    const key = require('../core/site-context').siteKeyPrefix() + rawKey;
     const now = Date.now();
     let e = _sudoInflight.get(key);
     if (!e || (now - e.at) > SUDO_INFLIGHT_STALE_MS) e = { n: 0, at: now };
@@ -968,7 +976,8 @@ function sudoBeginAttempt(key: string): boolean {
     return true;
 }
 
-function sudoEndAttempt(key: string): void {
+function sudoEndAttempt(rawKey: string): void {
+    const key = require('../core/site-context').siteKeyPrefix() + rawKey;
     const e = _sudoInflight.get(key);
     if (!e) return;
     e.n = Math.max(0, e.n - 1);
@@ -1022,6 +1031,37 @@ function isPrivilegedTarget(user: any): boolean {
             user.can('manage_options') || user.can('manage_roles')
         ))
     ));
+}
+
+/**
+ * The audit rows of a profile write (PUT /me and PUT /:id): one `user.update` naming the fields the
+ * request wrote — names only, never values — and, when a new password was stored, the reserved
+ * `auth.password.change`. The password is deliberately absent from the `user.update` field list: it has
+ * its own action, so "who changed whose password" is one query. Consumers of these rows (the audit log,
+ * outgoing webhooks) therefore never see a credential, only that one was set.
+ *
+ * A role change keeps its own `user.role_change` row (one row per role change). When the same request
+ * also wrote other fields, `user.update` lists `role` among them and the role_change row says so with
+ * `profileUpdate: true`, so a consumer that wants one event per profile write (core/webhooks) can tell
+ * the two rows describe the same save; a role-ONLY change writes no `user.update` row at all.
+ */
+function profileWriteFields(updateData: any): string[] {
+    const fields: string[] = [];
+    for (const [k, v] of Object.entries(updateData || {})) {
+        if (v === undefined || k === 'password') continue;
+        if (k === 'meta') {
+            if (v && typeof v === 'object') for (const m of Object.keys(v)) fields.push(m === 'personal_email' ? 'personalEmail' : m);
+            continue;
+        }
+        fields.push(k);
+    }
+    return fields;
+}
+
+async function recordProfileWriteAudit(actorId: number, userId: number, updateData: any): Promise<void> {
+    const fields = profileWriteFields(updateData);
+    if (updateData && updateData.password) await recordAudit(actorId, 'auth.password.change', 'user', userId, {});
+    if (fields.some((f) => f !== 'role')) await recordAudit(actorId, 'user.update', 'user', userId, { fields });
 }
 
 /**
@@ -1109,6 +1149,7 @@ router.put('/me', asyncHandler(async (req: Request, res: Response) => {
     const updated = await User.update(req.user.id, updateData);
     // A changed recovery address invalidates any reset link already in flight to the old one.
     if (recoveryChanged) await invalidatePendingPasswordReset(req.user.id);
+    await recordProfileWriteAudit(req.user.id, req.user.id, updateData);
     res.json(updated.toJSON());
 }));
 
@@ -1224,6 +1265,9 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
             data: { status: 403 }
         });
     }
+
+    // MULTISITE: a network administrator is changed only by a network administrator (core/network-auth).
+    if (!isOwn && protectsNetworkAdmin(req, userId)) return refuseNetworkAdminTarget(res);
 
     // SECURITY (privilege hierarchy / account takeover): editing ANOTHER user mutates their email +
     // password below. `edit_users` is a delegable capability, so without this a non-administrator could
@@ -1407,8 +1451,10 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
 
     // AUDIT: exactly one row per security-relevant change — a role change. No secret material.
     if (updateData.role !== undefined) {
-        await recordAudit(req.user.id, 'user.role_change', 'user', userId, { from: previousRole, to: updateData.role });
+        const profileUpdate = profileWriteFields(updateData).some((f) => f !== 'role');
+        await recordAudit(req.user.id, 'user.role_change', 'user', userId, { from: previousRole, to: updateData.role, profileUpdate });
     }
+    await recordProfileWriteAudit(req.user.id, userId, updateData);
     res.json(updated.toJSON());
 }));
 
@@ -1521,6 +1567,7 @@ router.post('/:id/mfa/reset', can('edit_users'), asyncHandler(async (req: Reques
             data: { status: 400 }
         });
     }
+    if (protectsNetworkAdmin(req, userId)) return refuseNetworkAdminTarget(res);
     if (isPrivilegedTarget(user) && req.user.getRole() !== 'administrator') {
         return res.status(403).json({
             code: 'rest_forbidden',
@@ -1618,6 +1665,7 @@ router.delete('/:id', isAdmin, asyncHandler(async (req: Request, res: Response) 
             data: { status: 400 }
         });
     }
+    if (protectsNetworkAdmin(req, userId)) return refuseNetworkAdminTarget(res);
 
     await User.delete(userId);
     // AUDIT: admin deleted a user. Record who + the deleted account's login/role (no secret material).

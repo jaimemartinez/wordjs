@@ -2,16 +2,16 @@
   "schemaVersion": 1,
   "snapshot": {
     "restSource": {
-      "routeFiles": 40,
-      "endpointDeclarations": 244,
-      "mountDeclarations": 85,
-      "semanticSha256": "1bfdbb1d30956698cd9d1115b89a2f85f9d3262e871951c74e4de203fcd1970b"
+      "routeFiles": 47,
+      "endpointDeclarations": 287,
+      "mountDeclarations": 115,
+      "semanticSha256": "a43f433fd74f26217ed638154746852ad3e9a11992b2454eddf801a555bb3df0"
     },
     "openapi": {
-      "paths": 191,
-      "operations": 241,
-      "coverage": 0.9877,
-      "semanticSha256": "0f0fe51a530de8ea6d6407acaee6e5496e4caf8acb0dbfe500a752ce1eb6222c"
+      "paths": 226,
+      "operations": 285,
+      "coverage": 0.993,
+      "semanticSha256": "f3224764f195f88f66ae881294eda2b86ac3683b6b08e3183faff036db80c3b9"
     },
     "typingDebt": {
       "requestAny": {
@@ -27,24 +27,32 @@
       "exportedSymbols": [
         "WordJS",
         "WordJSAdminMenuItem",
+        "WordJSAiCompleteRequest",
+        "WordJSAiCompleteResult",
         "WordJSDbType",
         "WordJSMailMessage",
         "WordJSNotification",
         "WordJSNotify",
         "WordJSPluginModule",
+        "WordJSPrivateMedia",
         "WordJSRouteHandler",
         "WordJSRouteOptions",
         "WordJSRouteRequest",
         "WordJSRouteResponse",
         "WordJSRouteUser",
         "WordJSSafeUser",
+        "WordJSSmtpHandlers",
+        "WordJSSmtpListenOptions",
+        "WordJSSmtpSession",
+        "WordJSSmtpStatus",
+        "WordJSSmtpVerdict",
         "WordJSUploadedFile"
       ],
-      "semanticSha256": "90543a6418b0584743de2e1156d73ab09d54e1ebb10c40ab7f58bde0f65faced"
+      "semanticSha256": "578d8cd838fdec4f29b31729a5fadfd86ccf2839a9f2beaa6101a38b9e4eee95"
     },
     "verificationSurface": {
-      "backendTestFiles": 315,
-      "frontendTestFiles": 243,
+      "backendTestFiles": 359,
+      "frontendTestFiles": 259,
       "sandboxWorkflowSemanticSha256": "6589c490e047c52e4330eed83db22c91501686ccf6f30ba7ce030938c995a913",
       "performanceBudgetsSha256": "5a608e783d98267030d14c9ce70edb7cc9f5354cbf006c31353648425d7a7556"
     }

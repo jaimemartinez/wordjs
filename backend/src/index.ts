@@ -9,6 +9,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const log = require('./core/module-logger').moduleLogger('index');
 
 // Load environment variables
 require('dotenv').config();
@@ -17,10 +18,10 @@ require('dotenv').config();
 const config = require('./config/app');
 
 // STRUCTURED LOGGING — installed immediately after the config that decides its level, and before any
-// other module in this file has had a chance to print. The bridge routes the backend's existing
-// console.log/info/warn/error/debug calls through core/logger, so boot output is JSON with a level and
-// a timestamp from the very first line, without editing 802 call sites in this change (they are marked
-// `legacy: true` and migrated in a follow-up). See documentation/observability.md.
+// other module in this file has had a chance to print. Backend modules log through core/module-logger;
+// the bridge routes what is left on console.log/info/warn/error/debug (the allowlisted call sites and
+// anything a dependency prints) through core/logger too, marked `legacy: true`, so boot output is JSON
+// with a level and a timestamp from the very first line. See documentation/observability.md.
 //
 // NOT under `node --test`: the unit suites read node:test's own output off this stream, and turning
 // every console line into JSON makes a failing assertion unreadable. NODE_ENV is not set to 'test' by
@@ -94,7 +95,7 @@ const app = express();
 setApp(app);
 
 const rateLimit = require('express-rate-limit');
-const { clientIpBucket, resolveTrustProxy } = require('./core/client-ip');
+const { clientIpBucket, resolveTrustProxy, untrustedProxyWarning } = require('./core/client-ip');
 
 // TRUST PROXY — from the single source of truth, NOT a hard-coded `1`. In the monolith there is no
 // fronting proxy, so trusting one X-Forwarded-For hop trusted a header the CLIENT wrote: an attacker
@@ -121,8 +122,11 @@ const ipKey = (req: any) => clientIpBucket(req);
 // request, so the latency histogram and the log can never disagree. Both are pure observers — they add
 // one response header and register one `finish` listener, and neither can end a response.
 const { requestContext } = require('./middleware/request-context');
+const siteContext = require('./core/site-context');
 const { httpMetrics } = require('./core/metrics');
 app.use(requestContext, httpMetrics);
+// Say so, once, when a reverse proxy on this machine is in front that nothing trusts (core/client-ip.ts).
+app.use(untrustedProxyWarning(log));
 
 // Security Headers
 const helmet = require('helmet');
@@ -140,6 +144,9 @@ app.use(helmet({
             styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
             fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
             imgSrc: ["'self'", "data:", "blob:", "https:", "*"], // Allow images from everywhere (CMS content)
+            // Audio/video: this origin, plus the ONE origin media is offloaded to (core/media-storage),
+            // read per response so a change in Settings → Media storage applies without a restart.
+            mediaSrc: ["'self'", () => require('./core/media-storage').resolveMediaStorage().publicOrigin || "'self'"],
             connectSrc: ["'self'", "*"], // Allow API calls
             objectSrc: ["'none'"], // Protect against Flash/Applet injections
             upgradeInsecureRequests: [], // Auto-upgrade http to https
@@ -199,10 +206,17 @@ app.use(hostPolicy.hostGateFactory({
     // stages an installed site by replacing configManager.isInstalled reaches the gate too.
     isInstalled: () => require('./core/configManager').isInstalled(),
     onNotice: raiseSiteAddressNotice,
+    logger: require('./core/module-logger').moduleLogger('core/host-policy'),
 }));
 // The same provider, published for the monolith's edge check (phase 2): it must judge the address
 // with the policy the backend applies, not a copy built from another read of the config.
 app.hostPolicy = siteHostPolicy;
+
+// MULTISITE: from here on every request runs as the site it was addressed to (core/site-resolver,
+// documentation/multisite-design.md) — CORS, cookies, limiters, every route, every database query. A
+// no-op on a single site.
+app.use(require('./core/site-resolver').siteResolver({ getPolicy: siteHostPolicy.get }));
+const multisiteGuards = require('./core/multisite-guards');
 
 // CORS — zero-config by design. A request's credentialed cross-origin access is granted only when it
 // is one of:
@@ -231,7 +245,7 @@ const CORS_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
 // an allow-listed but DIFFERENT origin from the backend, omitting it here would make every mutation
 // unreachable in the browser, before the gate could even see it. The listing does not weaken anything:
 // only an origin that already passed the check above is ever answered with these headers.
-const CORS_HEADERS = ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Install-Token', 'X-CSRF-Token'];
+const CORS_HEADERS = ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Install-Token', 'X-CSRF-Token', 'X-Collab-Epoch'];
 app.use(cors((req: any, done: any) => {
     const base = { credentials: true, methods: CORS_METHODS, allowedHeaders: CORS_HEADERS };
     const allow = () => done(null, { ...base, origin: true });   // reflect this origin + allow credentials
@@ -240,8 +254,9 @@ app.use(cors((req: any, done: any) => {
     const origin: string | undefined = req.headers.origin;
     if (!origin) return allow(); // no Origin: curl / server-to-server / same-origin navigation — nothing to gate
 
-    // (1) configured public origins
-    if ([config.site.url, config.frontendUrl].filter(Boolean).indexOf(origin) !== -1) return allow();
+    // (1) configured public origins — the MAIN site's: on another site of a multisite network they are a
+    // different site's pages, and only that site's own origin (2) is allowed.
+    if (!multisiteGuards.onSecondarySite() && [config.site.url, config.frontendUrl].filter(Boolean).indexOf(origin) !== -1) return allow();
 
     let originUrl: URL;
     try { originUrl = new URL(origin); } catch { return deny(); }
@@ -293,7 +308,7 @@ function limiterStore(prefix: string): any {
         const { RedisStore } = require('rate-limit-redis');
         return new RedisStore({ sendCommand: (...args: any[]) => client.call(...args), prefix });
     } catch (e: any) {
-        console.warn('[rate-limit] Redis store unavailable, using in-memory:', e && e.message);
+        log.warn({ err: e }, '[rate-limit] Redis store unavailable, using in-memory');
         return undefined;
     }
 }
@@ -472,6 +487,47 @@ const setupLimiter = rateLimit({
     message: { error: 'Too many setup attempts, please try again later.' }
 });
 
+// The MCP endpoint (routes/mcp.ts) gets its own bucket, keyed by the AGENT TOKEN (hashed — never the raw
+// secret in a store key) rather than the IP: one machine commonly runs several agents, and one agent loop
+// must not starve the others or the admin's own browser behind the same IP. Requests with no agent token
+// fall back to the IP key (they are refused by the route anyway). It is on top of the global per-IP
+// apiLimiter, and per-agent tool-call/write windows inside core/mcp-server bound a single request's fan-out.
+const mcpLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 240,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req: any) => {
+        const h = String((req.headers && req.headers.authorization) || '');
+        if (h.startsWith('Bearer wja_')) {
+            return 'agent:' + require('crypto').createHash('sha256').update(h.slice(7)).digest('hex').slice(0, 32);
+        }
+        return ipKey(req);
+    },
+    store: limiterStore('rl:mcp:'),
+    passOnStoreError: true,
+    message: { jsonrpc: '2.0', error: { code: -32029, message: 'Too many requests from this agent, please slow down.' }, id: null }
+});
+// ONE PATH, ONE SPELLING — mounted before every limiter below. Each per-route limiter is a PREFIX mount
+// ('/api/v1/auth/login', '/api/v1/media', …), and a prefix mount matches path SEGMENTS literally: an
+// extra slash ('/api/v1//auth/login', '/api/v1/auth//login') matches none of them, yet the router that
+// finally serves the request trims the empty segment away and reaches the very same handler. So every
+// throttle in this section could be stepped around by doubling a slash. Collapsing runs of '/' in the
+// PATH (never the query string) makes the request look the same to every mount after it; originalUrl
+// follows, so code that derives a sub-path from it (pathAfterApiPrefix, apiResourceOf) agrees too.
+const collapseSlashes = (u: string): string => {
+    const q = u.indexOf('?');
+    const p = q === -1 ? u : u.slice(0, q);
+    if (p.indexOf('//') === -1) return u;
+    return p.replace(/\/{2,}/g, '/') + (q === -1 ? '' : u.slice(q));
+};
+app.use((req: Request, _res: Response, next: NextFunction) => {
+    req.url = collapseSlashes(req.url);
+    req.originalUrl = collapseSlashes(req.originalUrl);
+    next();
+});
+app.use(`${config.api.prefix}/mcp`, mcpLimiter);
+
 // (#19) Collaboration's own budget, mounted BEFORE the global limiter — which now skips these paths
 // (see apiLimiter.skip). Both halves are required: mounting a second limiter does not exempt a
 // request from the first, and skipping without a replacement would leave the busiest write endpoint
@@ -512,6 +568,8 @@ app.use(`${config.api.prefix}/auth/verify-email`, authLimiter); // public token-
 app.use(`${config.api.prefix}/media`, uploadLimiter);
 app.use(`${config.api.prefix}/themes/upload`, uploadLimiter);
 app.use(`${config.api.prefix}/plugins/upload`, uploadLimiter);
+app.use(`${config.api.prefix}/plugins/:slug/update`, uploadLimiter);
+app.use(`${config.api.prefix}/themes/:slug/update`, uploadLimiter);
 app.use(`${config.api.prefix}/backups`, uploadLimiter); // Apply limiter to backups too
 // #26: /setup/migrate used to authenticate attacker-supplied admin credentials, an oracle this strict
 // authLimiter (10/hr/IP) capped. The route is now a 410 stub that evaluates no credential (routes/setup.ts);
@@ -535,6 +593,8 @@ app.post(`${config.api.prefix}/analytics/track`, analyticsLimiter);
 // F0 REST inventory. What stays here is the part this file owns for EVERY limiter — the shared Redis
 // store, without which a multi-node install enforces N× the configured cap.
 require('./routes/comments').useCommentLimiterStore(limiterStore('rl:comments:'));
+// Plugin activate/deactivate/reload (each spawns a sandboxed child): limiter built on the router, store here.
+require('./routes/plugins').usePluginLifecycleLimiterStore(limiterStore('rl:plugin-lifecycle:'));
 
 // SECURITY: CSRF Protection for all API routes
 const { csrfProtection } = require('./middleware/auth');
@@ -567,14 +627,37 @@ const EXECUTABLE_DOC_EXTS = new Set(['.html', '.htm', '.xhtml', '.xht', '.shtml'
 // a cached, transcoded derivative (same URL, ~50% fewer bytes); on any error / unsupported / non-raster it
 // falls through to express.static below, which serves the original exactly as before.
 const { imageNegotiation } = require('./middleware/image-negotiation');
+// MULTISITE: another site of the network serves /uploads from ITS OWN root (core/private-media
+// publicUploadsRoot), and a miss there never falls through to the main site's tree below. With S3 media
+// storage it is redirected to the bucket exactly as on the main site (the same uploadsRedirect, mounted
+// at the end of this chain) — that site's uploads go to the bucket too — and only then is it a 404.
+const siteUploadHandlers = new Map<string, any[]>();
+const secondarySiteUploadsRedirect = require('./core/media-storage').uploadsRedirect();
+app.use('/uploads', (req: Request, res: Response, next: NextFunction) => {
+    if (!multisiteGuards.onSecondarySite()) return next();
+    const root = require('./core/private-media').publicUploadsRoot();
+    let handlers = siteUploadHandlers.get(root);
+    if (!handlers) {
+        handlers = [imageNegotiation(root), express.static(root, UPLOADS_STATIC_OPTIONS)];
+        siteUploadHandlers.set(root, handlers);
+    }
+    const [negotiate, serve] = handlers;
+    negotiate(req, res, (err?: any) => {
+        if (err) return next(err);
+        serve(req, res, (err2?: any) => {
+            if (err2) return next(err2);
+            secondarySiteUploadsRedirect(req, res, (err3?: any) => (err3 ? next(err3) : res.status(404).end()));
+        });
+    });
+});
 app.use('/uploads', imageNegotiation(config.uploads.dir));
 // `config.uploads.dir` is OPERATOR-configured and is resolved the same way by every writer
 // (routes/media.ts, models/Media.ts, core/backup.ts) and by core/io-guard's configuredUploadsRoot(),
 // so this one deliberately stays on the cwd-relative resolution they share — moving only the READ
 // side would publish a directory nothing writes to. Aligning the whole set is the follow-up noted in
 // backend/src/tests/install-root-paths.test.ts.
-app.use('/uploads', express.static(path.resolve(config.uploads.dir), {
-    dotfiles: 'deny',
+const UPLOADS_STATIC_OPTIONS = {
+    dotfiles: 'deny' as const,
     // Media filenames are UUID-unique (never overwritten at the same URL), so they are safe to cache
     // aggressively + immutable — a re-upload gets a new URL. Huge repeat-visit / Core-Web-Vitals win.
     maxAge: '365d',
@@ -596,7 +679,15 @@ app.use('/uploads', express.static(path.resolve(config.uploads.dir), {
             res.setHeader('Content-Disposition', 'attachment');
         }
     }
-}));
+};
+app.use('/uploads', express.static(path.resolve(config.uploads.dir), UPLOADS_STATIC_OPTIONS));
+// MEDIA OFFLOAD (core/media-storage). A file this node does not hold on disk, with an s3 media store
+// configured, is answered with a redirect to its public bucket/CDN URL. That is what keeps every
+// reference ever written — /uploads/... in post HTML, in persisted srcsets, in theme settings — working
+// on ANY node without a shared uploads directory. It runs only after express.static missed, so a local
+// file (local storage, keepLocalCopy, a restore) is still served from disk exactly as before. 302, not
+// 301: a restore brings the file back to /uploads, and a permanent redirect would outlive it.
+app.use('/uploads', require('./core/media-storage').uploadsRedirect());
 // app.use('/admin', express.static(path.resolve('./admin'))); // Removed legacy admin
 // Theme/plugin assets CAN change in place on update, so cache 1h (not immutable) — the browser reuses
 // them for an hour, then ETag-revalidates (cheap 304). Big win without risking stale code after an update.
@@ -706,6 +797,8 @@ const pluginServing = require('./core/plugin-serving');
 const PLUGIN_ATTACH_EXTS = new Set(Array.from(EXECUTABLE_DOC_EXTS).filter((e: string) => e !== '.js' && e !== '.mjs' && e !== '.cjs'));
 app.use('/plugins', (req: Request, res: Response, next: NextFunction) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+    // Multisite: each site serves the public files of the plugins active on IT (plugin-serving asks the
+    // current site's active set), so no special case is needed here.
     let segs: string[];
     try {
         // req.path is post-mount and NOT percent-decoded; decode each segment exactly once, then let
@@ -722,11 +815,10 @@ app.use('/plugins', (req: Request, res: Response, next: NextFunction) => {
     const abs = resolveWithin(PLUGINS_ROOT, ...segs);
     if (!abs) return res.status(404).end();
 
-    // dist/ is build output of the plugin's browser bundle: the bundle's gate. public/**: active only.
+    // dist/ and any public/ JavaScript run in a browser: the bundle's gate (browser:script). The rest
+    // of public/**: active only. One rule, stated in core/plugin-serving pluginPathServable.
     const isBundleOutput = segs[1] === PLUGIN_BUNDLE_DIR;
-    const servable: Promise<boolean> = isBundleOutput
-        ? pluginServing.browserCodeServable(folder)
-        : pluginServing.pluginFilesServable(folder);
+    const servable: Promise<boolean> = pluginServing.pluginPathServable(folder, rel, PLUGIN_BUNDLE_DIR);
     servable.then((ok: boolean) => {
         if (!ok) return res.status(404).end();
 
@@ -800,7 +892,7 @@ if (process.env.WORDJS_QUERY_STATS === '1') {
         const start = (globalThis as any).__wjsQueryCount || 0;
         res.on('finish', () => {
             const n = ((globalThis as any).__wjsQueryCount || 0) - start;
-            console.log(`${new Date().toISOString()} ${logSafe(req.method)} ${logSafe(req.path)} → ${n} queries`);
+            log.info({ method: logSafe(req.method), path: logSafe(req.path), queries: n }, `${logSafe(req.method)} ${logSafe(req.path)} → ${n} queries`);
         });
         next();
     });
@@ -809,7 +901,7 @@ if (process.env.WORDJS_QUERY_STATS === '1') {
 // Request logging in development
 if (config.nodeEnv === 'development' && process.env.WORDJS_QUERY_STATS !== '1') {
     app.use((req: Request, res: Response, next: NextFunction) => {
-        console.log(`${new Date().toISOString()} ${logSafe(req.method)} ${logSafe(req.path)}`);
+        log.debug({ method: logSafe(req.method), path: logSafe(req.path) }, `${logSafe(req.method)} ${logSafe(req.path)}`);
         next();
     });
 }
@@ -976,22 +1068,22 @@ app.get('/metrics', async (req: Request, res: Response) => {
  *                 error:
  *                   type: string
  */
+// The verdict is cached ~1 s and shared by concurrent callers (core/readiness.ts): this route is
+// unauthenticated and rate-limit exempt, so its cost must not scale with the request rate. A failure's
+// detail is logged, never sent.
+// The database check has a deadline (WORDJS_READINESS_TIMEOUT_MS, 3 s by default): a query that never
+// answers is reported 503 instead of leaving /readyz pending forever.
+const readinessModule = require('./core/readiness');
+const readiness = readinessModule.createReadinessProbe({
+    isInstalled: () => require('./core/configManager').isInstalled(),
+    isBooted: () => appReady,
+    checkDatabase: (opts: { timeoutMs: number }) => require('./core/system-health').checkDatabase(opts),
+    timeoutMs: readinessModule.readinessTimeoutMs(process.env),
+    onError: (err: unknown) => log.warn({ err }, '/readyz: readiness check failed'),
+});
 app.get('/readyz', async (req: Request, res: Response) => {
-    const checks: any = { installed: false, booted: appReady, db: 'unknown' };
-    try {
-        const { isInstalled } = require('./core/configManager');
-        checks.installed = isInstalled();
-        if (!checks.installed) return res.status(503).json({ status: 'setup_required', checks });
-        if (!appReady) return res.status(503).json({ status: 'starting', checks });
-        const SystemHealth = require('./core/system-health');
-        const db = await SystemHealth.checkDatabase();
-        checks.db = db.status === 'OK' ? 'ok' : 'error';
-        if (checks.db !== 'ok') return res.status(503).json({ status: 'not_ready', checks });
-        return res.json({ status: 'ready', checks });
-    } catch (e: any) {
-        checks.db = 'error';
-        return res.status(503).json({ status: 'not_ready', checks, error: e && e.message });
-    }
+    const { statusCode, body } = await readiness();
+    res.status(statusCode).json(body);
 });
 
 // THE INSTALL FUNNEL — before installation, every request outside the static trees, /health and the
@@ -1027,6 +1119,9 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // instead of a 404 that reads as "this endpoint does not exist" (and would be cached as such by a
 // CDN). Scoped to /plugin/* only: every core route is fully functional at this point.
 app.use(`${config.api.prefix}/plugin`, (req: Request, res: Response, next: NextFunction) => {
+    // Multisite: every site's worker of a plugin mounts the same paths, and each mount answers only its own
+    // site's requests (core/plugin-isolate siteGate); a plugin not active on this site has no mount that
+    // answers here, so its routes fall through to the 404 below.
     if (pluginsReady.arePluginsReady()) return next();
     res.setHeader('Retry-After', '5');
     res.setHeader('Cache-Control', 'no-store');
@@ -1127,14 +1222,30 @@ app.use('/api/v1/analytics', require('./routes/analytics'));
 // Mounted here in the host (it runs around the DB lifecycle at boot; can't be isolated in a worker).
 require('./core/db-admin').register(app);
 
+// Backups archive the main site's database and files: the main site's only (multisite), and on the main
+// site of a network its network administrators only. Mounted with the app (it used to be mounted late in
+// initialize(), so an app built without the boot had no /backups at all and its guards went untested).
+app.use(`${config.api.prefix}/backups`, multisiteGuards.mainSiteOnly);
+app.use(`${config.api.prefix}/backups`, multisiteGuards.networkAdminOnMainSite);
+app.use(`${config.api.prefix}/backups`, require('./routes/backups'));
+
 // Note: 404 and error handlers are registered in initialize() after plugins load
 
 /**
  * Initialize the application
  */
+/**
+ * Boot. Runs as the main site (site 1): every database read and write of the boot sequence is the main
+ * site's. In a multisite network the other sites are prepared on their first request (core/site-resolver)
+ * and by background work (core/network-sites forEachSecondarySite).
+ */
 async function initialize() {
-    console.log('🚀 Starting WordJS...');
-    console.log(`   Environment: ${config.nodeEnv}`);
+    return siteContext.runWithSite(siteContext.PRIMARY_SITE_ID, () => initializeMainSite());
+}
+
+async function initializeMainSite() {
+    log.info('🚀 Starting WordJS...');
+    log.info(`   Environment: ${config.nodeEnv}`);
 
     // On-demand frontend cache purge. Registered UNCONDITIONALLY and FIRST: a fresh boot goes
     // through the uninstalled branch and then installs IN-PROCESS, so the installer's option/post
@@ -1205,7 +1316,7 @@ async function initialize() {
                 cn = cert && cert.subject ? cert.subject.CN : undefined;
             } catch { cn = undefined; }
             if (!ALLOWED_PEER_CNS.has(String(cn))) {
-                console.warn(`🛡️  mTLS: rejected direct peer CN='${cn}' — only the gateway may address the backend.`);
+                log.warn(`🛡️  mTLS: rejected direct peer CN='${cn}' — only the gateway may address the backend.`);
                 try { tlsSocket.destroy(); } catch { /* already gone */ }
             }
         });
@@ -1223,15 +1334,18 @@ async function initialize() {
     // Node's 5s default the server races the proxy's socket reuse and drops requests mid-flight.
     server.keepAliveTimeout = 65000;
     server.headersTimeout = 66000;
-    server.listen(config.port, bindHost, () => {
-        console.log('');
-        console.log(`✅ WordJS Backend is running via ${serverProtocol.toUpperCase()}!`);
+    // Multisite: the listener (and so every connection it accepts) belongs to NO site — each request is
+    // given its own by core/site-resolver, and anything that loses that context fails rather than
+    // landing on the main site. The listen callback below is boot work, the main site's.
+    siteContext.runWithSite(null, () => server.listen(config.port, bindHost, () => siteContext.runWithSite(siteContext.PRIMARY_SITE_ID, () => {
+        log.info(`✅ WordJS Backend is running via ${serverProtocol.toUpperCase()}!`);
+        log.info(`✅ WordJS Backend is running via ${serverProtocol.toUpperCase()}!`);
         if (serverProtocol === 'https') {
-            console.log('   🛡️  Security: mTLS (Identity Enforcement) is ACTIVE');
-            console.log(`   🪪  Identity: backend`);
+            log.info('   🛡️  Security: mTLS (Identity Enforcement) is ACTIVE');
+            log.info('   🪪  Identity: backend');
         }
-        console.log(`   🌐 URL: ${serverProtocol}://${config.host}:${config.port}`);
-        console.log(`   📡 API: ${serverProtocol}://${config.host}:${config.port}${config.api.prefix}`);
+        log.info({ serverProtocol }, `   🌐 URL: ${serverProtocol}://${config.host}:${config.port}`);
+        log.info({ serverProtocol }, `   📡 API: ${serverProtocol}://${config.host}:${config.port}${config.api.prefix}`);
 
         // Register with Gateway
         // Register with Gateway with Auto-Discovery (Zero Config)
@@ -1258,7 +1372,7 @@ async function initialize() {
                     return;
                 }
                 if (!announcedMtls) {
-                    console.log('   🛂 mTLS: Using client certificates for Gateway registration...');
+                    log.info('   🛂 mTLS: Using client certificates for Gateway registration...');
                     announcedMtls = true;
                 }
                 clientOpts = {
@@ -1323,7 +1437,7 @@ async function initialize() {
                     }, (res: any) => {
                         if (res.statusCode === 200) {
                             const actualProto = useMtls ? 'HTTPS (mTLS)' : protocolName.toUpperCase();
-                            console.log(`✅ ${serviceData.name} Registered with Gateway via ${actualProto}`);
+                            log.info(`✅ ${serviceData.name} Registered with Gateway via ${actualProto}`);
                             resolve(protocolName);
                         } else {
                             reject(new Error(`Status ${res.statusCode}`));
@@ -1386,14 +1500,14 @@ async function initialize() {
                                         await siteAddress.noteGatewaySiteUrl(info.siteUrl);
                                     }
                                 } catch (e) {
-                                    console.warn('[Sync] Could not compare the gateway\'s site address:', e.message);
+                                    log.warn({ err: e }, '[Sync] Could not compare the gateway\'s site address');
                                 }
                             }
                             resolve();
                         });
                     });
                     req.on('error', (e: any) => {
-                        console.warn('[Sync] Could not reach Gateway for URL sync:', e.message);
+                        log.warn({ err: e }, '[Sync] Could not reach Gateway for URL sync');
                         resolve();
                     });
                     req.end();
@@ -1415,7 +1529,7 @@ async function initialize() {
                             await tryRegister(fallbackProto, service);
                             preferredProto = fallbackProto;
                         } catch (e2) {
-                            console.warn(`⏳ Waiting for Gateway to register ${service.name}...`);
+                            log.warn({ name: service.name }, `⏳ Waiting for Gateway to register ${service.name}...`);
                             allSuccess = false;
                         }
                     }
@@ -1426,7 +1540,7 @@ async function initialize() {
                     _regAttempt++;
                     setTimeout(registerAll, Math.min(5000, [250, 1000, 2000][_regAttempt - 1] ?? 5000));
                 } else {
-                    console.log('🏁 All services successfully registered with Gateway.');
+                    log.info('🏁 All services successfully registered with Gateway.');
                     await syncFromGateway();
                     // Arm the gateway's address check with the addresses this backend answers (core/
                     // site-address): the push at the end of the boot reconcile may have run before the
@@ -1452,34 +1566,20 @@ async function initialize() {
         // public port), and the retry loop POSTs /register at ourselves every 5s forever.
         if (process.env.WORDJS_MODE !== 'mono') registerWithGateway();
 
-        console.log('');
-        console.log('📖 API Endpoints:');
-        console.log(`   POST   ${config.api.prefix}/auth/register`);
-        console.log(`   POST   ${config.api.prefix}/auth/login`);
-        console.log(`   GET    ${config.api.prefix}/posts`);
-        console.log(`   GET    ${config.api.prefix}/users`);
-        console.log(`   GET    ${config.api.prefix}/categories`);
-        console.log(`   GET    ${config.api.prefix}/tags`);
-        console.log(`   GET    ${config.api.prefix}/comments`);
-        console.log(`   GET    ${config.api.prefix}/media`);
-        console.log(`   GET    ${config.api.prefix}/settings`);
-        console.log(`   GET    ${config.api.prefix}/plugins`);
-        console.log(`   GET    ${config.api.prefix}/themes`);
-        console.log('');
+        log.info({ apiPrefix: config.api.prefix }, `📖 API Endpoints under ${config.api.prefix}: auth/register, auth/login, posts, users, categories, tags, comments, media, settings, plugins, themes`);
         // `config.site` is {url,name,description} — it has no frontendUrl, so this printed a literal
         // "undefined/admin" on every split/separate boot. The public origin lives at the top level.
         const publicUrl = config.frontendUrl || config.siteUrl || config.site?.url;
         if (publicUrl) {
-            console.log(`🎨 Admin Panel: ${publicUrl}/admin`);
-            console.log(`🏠 Public Site: ${publicUrl}`);
+            log.info(`🎨 Admin Panel: ${publicUrl}/admin`);
+            log.info(`🏠 Public Site: ${publicUrl}`);
         }
-        console.log('');
-    });
+    })));
     }
 
     if (isInstalled()) {
         // Initialize Database
-        console.log('📦 Initializing database...');
+        log.info('📦 Initializing database...');
         // The driver manager automatically loads the correct driver from config
         const { init, initializeDatabase } = require('./config/database');
         await init();
@@ -1500,8 +1600,24 @@ async function initialize() {
         await initializeDatabase();
 
         // Initialize default options
-        console.log('⚙️  Setting up default options...');
+        log.info('⚙️  Setting up default options...');
         await initDefaultOptions(config);
+
+        // Multisite: keep site 1's record in the network store in step with its main address. The other
+        // sites open on their first request. A store that cannot be read leaves only the main site
+        // answered (the host policy then lists no other site), which is the fail-closed direction.
+        if (siteContext.multisiteEnabled()) {
+            try {
+                const network = require('./core/network');
+                const main = network.normalizeSiteUrl(config.siteUrl);
+                if (main) network.registerPrimarySite(main.url);
+                log.info(`🌐 Multisite: ${network.listSites().length} site(s) in the network.`);
+                // Every network administrator row still names an account of the main site, and the same one.
+                await require('./core/network-auth').recheckNetworkAdmins();
+            } catch (e: any) {
+                log.error(`❌ Multisite: the network store could not be opened (${e && e.message}); only the main site is answered.`);
+            }
+        }
 
         // Initialize cache setting now that the DB and options are ready
         // (moved out of options.ts import-time to avoid a startup race).
@@ -1510,7 +1626,16 @@ async function initialize() {
         // Prime the L1 option cache with every autoload row in one query — /settings and the other
         // hot option readers then serve from memory instead of one SELECT per option per request.
         const preloaded = await require('./core/options').preloadAutoloadedOptions();
-        if (preloaded) console.log(`⚡ Option cache primed: ${preloaded} autoloaded options`);
+        if (preloaded) log.info(`⚡ Option cache primed: ${preloaded} autoloaded options`);
+
+        // Multisite + S3 media storage: each site other than site 1 has its own key space in the bucket
+        // (core/media-storage). Objects a site stored before that move into it, once per site, in the
+        // background (core/media-storage-migrate migrateSiteKeys; a no-op once done, or with no bucket).
+        if (siteContext.multisiteEnabled()) {
+            require('./core/media-storage-migrate').migrateSiteKeys()
+                .then((r: any) => { for (const s of r.sites) log.info(`🪣 Media storage: site ${s.siteId} keys moved (${s.copied} copied, ${s.removed} old removed, ${s.failed} failed)`); })
+                .catch((e: any) => log.warn(`Media storage: the move into per-site key spaces did not finish: ${e && e.message}`));
+        }
 
         // The site's addresses: bring wordjs-config.json (the master) and the `siteurl`/`home` mirrors
         // into agreement — the legacy upgrade, a change `npm run site` made while the server was down —
@@ -1519,10 +1644,10 @@ async function initialize() {
         try {
             const siteAddress = require('./core/site-address');
             const { state } = await siteAddress.reconcileAtBoot();
-            if (state !== 'ok') console.log(`🌐 Site address: ${state}`);
+            if (state !== 'ok') log.info(`🌐 Site address: ${state}`);
             siteAddress.startWatching();
         } catch (e: any) {
-            console.error(`❌ Site address reconciliation failed: ${e && e.message}`);
+            log.error({ err: e }, '❌ Site address reconciliation failed');
         }
 
         // Load the per-plugin permission grants (Android-style, default-deny). Then a non-breaking
@@ -1553,7 +1678,7 @@ async function initialize() {
             // grants an administrator has decided. See core/plugins.ts migrateBrowserCapabilityGrants.
             await require('./core/plugins').migrateBrowserCapabilityGrants();
         } catch (e: any) {
-            console.warn('[PluginPermissions] load/backfill skipped:', e && e.message);
+            log.warn({ err: e }, '[PluginPermissions] load/backfill skipped');
         }
 
         // Initialize Analytics Table
@@ -1561,12 +1686,6 @@ async function initialize() {
 
 
 
-        // Register routes that were not in the initial index.js routes list if needed
-        // But better to add it to src/routes/index.js if possible, OR just here dynamically.
-        // Let's add it to src/routes/index.js instead for cleanliness?
-        // Actually, looking at src/routes/index.js (I haven't seen it yet), but usually it's better.
-        // However, I can inject it here.
-        app.use(`${config.api.prefix}/backups`, require('./routes/backups'));
 
         const { initPostTypes, initTaxonomies } = require('./core/post-types');
         await initPostTypes();
@@ -1600,7 +1719,7 @@ async function initialize() {
             // base64url of 24 bytes: no shell-hostile characters, ~192 bits.
             const password = nodeCrypto.randomBytes(24).toString('base64url');
 
-            console.log('👤 No users found — creating the bootstrap administrator...');
+            log.info('👤 No users found — creating the bootstrap administrator...');
             await User.create({
                 username: 'admin',
                 email: 'admin@example.com',
@@ -1653,7 +1772,7 @@ async function initialize() {
         const categoryCount = await Term.count({ taxonomy: 'category' });
 
         if (categoryCount === 0) {
-            console.log('📁 Creating default category...');
+            log.info('📁 Creating default category...');
             // Await so the insert completes INSIDE the boot-lock critical section (matching the awaited
             // User.create above). On Postgres multi-node the boot lock serializes default seeding; if the
             // lease were released (line below) before this insert committed, a second node could pass its
@@ -1688,20 +1807,16 @@ async function initialize() {
         const { verifyDefaultTheme, defaultThemeNeedsAttention, isActiveThemeMissing, getCurrentTheme } = require('./core/themes');
         const defaultTheme = verifyDefaultTheme();
         if (defaultThemeNeedsAttention(defaultTheme)) {
-            console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            console.warn(`⚠️  The bundled default theme is missing ${defaultTheme.missing.join(', ')}: ${defaultTheme.dir}`);
-            console.warn('   An incomplete theme directory is not something WordJS creates — restore it with:');
-            console.warn('     POST /api/v1/themes/default   (admin — "Restore default theme")');
-            console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            log.warn(`⚠️  The bundled default theme is missing ${defaultTheme.missing.join(', ')}: ${defaultTheme.dir}`);
+            log.warn('   An incomplete theme directory is not something WordJS creates — restore it with:');
+            log.warn('     POST /api/v1/themes/default   (admin — "Restore default theme")');
         }
         if (await isActiveThemeMissing()) {
             const slug = await getCurrentTheme();
-            console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            console.warn(`⚠️  The active theme "${slug}" is NOT installed — no theme.json was found for it.`);
-            console.warn('   The public site is rendering with the framework default tokens only.');
-            console.warn('   Activate an installed theme (POST /api/v1/themes/:slug/activate) or restore');
-            console.warn('   the bundled default (POST /api/v1/themes/default).');
-            console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            log.warn(`⚠️  The active theme "${slug}" is NOT installed — no theme.json was found for it.`);
+            log.warn('   The public site is rendering with the framework default tokens only.');
+            log.warn('   Activate an installed theme (POST /api/v1/themes/:slug/activate) or restore');
+            log.warn('   the bundled default (POST /api/v1/themes/default).');
         }
 
         // Seeding done — release the boot guard (stops the heartbeat + frees the lease) so waiting
@@ -1715,19 +1830,19 @@ async function initialize() {
             const { recoverInterruptedPluginUpdates } = require('./routes/plugins');
             await recoverInterruptedPluginUpdates();
         } catch (e: any) {
-            console.warn('[boot] plugin-update recovery skipped:', e && e.message);
+            log.warn({ err: e }, '[boot] plugin-update recovery skipped');
         }
 
 
         // Load active plugins
-        console.log('🔌 Loading plugins...');
+        log.info('🔌 Loading plugins...');
         const { loadActivePlugins } = require('./core/plugins');
         await loadActivePlugins();
         // Plugin routes registered above sit BEHIND the 404/error handlers (which are now installed
         // before this point so the server could start listening early) — push those two back to the
         // end of the stack, exactly as runtime activation already does.
         try { require('./core/plugins').fixMiddlewareOrder(); } catch (e: any) {
-            console.warn('[boot] middleware reorder skipped:', e && e.message);
+            log.warn({ err: e }, '[boot] middleware reorder skipped');
         }
         pluginsReady.markPluginsReady();
 
@@ -1737,19 +1852,17 @@ async function initialize() {
         // we say so once at boot (boot-time twin of the admin `email_provider_available` settings flag and
         // the active-theme / sandbox-hardening warnings). Guarded so it can never break boot.
         try {
-            const { isEmailProviderAvailable } = require('./core/mail-provider');
-            if (!isEmailProviderAvailable()) {
-                console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-                console.warn('⚠️  No email provider is registered — WordJS core cannot send email on its own.');
-                console.warn('   Self-service PASSWORD RECOVERY is therefore unavailable: /auth/forgot-password');
-                console.warn('   fails closed and users cannot reset their own passwords.');
-                console.warn('   Install and activate a mail plugin (e.g. mail-server) and grant it the');
-                console.warn('   email:provider permission. Visible to admins on GET /api/v1/settings/all');
-                console.warn('   (email_provider_available).');
-                console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            // Password recovery and verification use ACCOUNT mail (core/account-mail): the built-in SMTP
+            // transport, or a mail provider plugin an administrator allowed by name.
+            if (!(await require('./core/account-mail').accountMailReady())) {
+                log.warn('⚠️  Account email cannot be sent — password-reset and verification links have no transport.');
+                log.warn('   Self-service PASSWORD RECOVERY is therefore unavailable: /auth/forgot-password');
+                log.warn('   fails closed and users cannot reset their own passwords.');
+                log.warn('   Configure the built-in SMTP transport in Admin → Settings → Account email');
+                log.warn('   (or allow a mail provider plugin there).');
             }
         } catch (e: any) {
-            console.warn('[boot] email-provider check skipped:', e && e.message);
+            log.warn({ err: e }, '[boot] email-provider check skipped');
         }
 
         // DEV hot-reload: watch each active isolated plugin's dir and re-spawn its child process
@@ -1759,7 +1872,7 @@ async function initialize() {
             const { startPluginDevWatch } = require('./core/plugin-dev-watch');
             await startPluginDevWatch();
         } catch (e: any) {
-            console.warn('[plugin-dev-watch] not started:', e && e.message);
+            log.warn({ err: e }, '[plugin-dev-watch] not started');
         }
 
         // Plugin-sandbox hardening: run the kernel-hardening probe at boot (fire-and-forget) and LOG the
@@ -1772,56 +1885,23 @@ async function initialize() {
                 // What the banner may say about plugins depends on the launch posture: REFUSED under the
                 // default fail-closed policy, unconfined only when that policy is off or exempt.
                 const banner = iso.sandboxBootBanner(iso.getSandboxHardeningState(), iso.isolatedLaunchPosture());
-                for (const l of banner.lines) (banner.level === 'warn' ? console.warn : console.log)(l);
+                for (const l of banner.lines) log[banner.level === 'warn' ? 'warn' : 'info'](l);
                 // The privilege the backend ITSELF was started with (root, AmbientCapabilities=). Logged
                 // after the probe settles, because what the warning may truthfully say about
                 // plugins depends on whether the sandbox is active. No-op off Linux and when nothing is held.
                 try { require('./core/host-privilege').warnHostPrivilegeAtBoot(); } catch { /* diagnostic only */ }
             }).catch(() => { /* the probe never throws; guard anyway so boot is unaffected */ });
         } catch (e: any) {
-            console.warn('[boot] sandbox hardening probe skipped:', e && e.message);
+            log.warn({ err: e }, '[boot] sandbox hardening probe skipped');
         }
 
-        // Start cron system
-        const { startCron, initDefaultCronEvents, scheduleEvent, scheduleSingleEvent, unscheduleEvent, nextScheduled } = require('./core/cron');
-        await initDefaultCronEvents();
-        // (#21) Daily analytics prune. Armed here rather than inside initDefaultCronEvents so the
-        // retention policy stays in one module with its handler; the guard is the same "only if not
-        // already scheduled" shape every default event uses, so a restart never duplicates it.
-        try {
-            const { HOOK: ANALYTICS_PRUNE_HOOK } = require('./core/analytics-retention');
-            if (!(await nextScheduled(ANALYTICS_PRUNE_HOOK))) {
-                await scheduleEvent(Date.now(), 'daily', ANALYTICS_PRUNE_HOOK);
-            }
-        } catch (e: any) {
-            console.error('Failed to schedule the analytics retention prune:', e && e.message);
-        }
-        startCron();
-
-        // Multi-node coherence: refresh in-process caches (roles) on cross-node option changes, and
-        // join the cluster notification bus so SSE pushes reach clients on any node. No-op w/o Redis.
-        require('./core/coherence').initCoherence();
-        require('./core/notifications').initClusterBus();
-        // Salas de edición colaborativa (Verso F8): el gateway hace round-robin en cada petición, así
-        // que dos editores de la misma página caen en nodos distintos por construcción. El bus reparte
-        // sus ops entre nodos; sin Redis (mononodo) es un no-op y el fan-out se queda en memoria.
-        require('./core/collab-rooms').initClusterBus();
-
-        // Outgoing webhooks: subscribe the dispatcher to content hooks and start the delivery poller.
-        require('./core/webhooks').initWebhooks();
-        // F3 content outbox: pending events from this or a crashed peer are leased and delivered only
-        // after their content transaction committed. Start it after hook consumers are registered.
-        require('./core/content-outbox').initContentOutbox();
-
-        // Expose Cron API to Plugins via global.wordjs
-        global.wordjs = global.wordjs || {};
-        global.wordjs.scheduleEvent = scheduleEvent;
-        global.wordjs.scheduleSingleEvent = scheduleSingleEvent;
-        global.wordjs.unscheduleEvent = unscheduleEvent;
-        global.wordjs.nextScheduled = nextScheduled;
+        // Cron, the coherence and cluster buses, the webhook dispatcher and the content outbox. One
+        // module (core/runtime-services) because POST /setup/install starts the same services in a
+        // process that booted in setup mode — otherwise a fresh site ran without them until a restart.
+        await require('./core/runtime-services').startRuntimeServices();
 
         // Initialize Robust Theme Engine
-        console.log('🎨 Initializing Theme Engine...');
+        log.info('🎨 Initializing Theme Engine...');
         const themeEngine = require('./core/theme-engine');
         await themeEngine.init();
 
@@ -1837,14 +1917,14 @@ async function initialize() {
         try {
             await require('./core/themes').syncActiveThemeLayout();
         } catch (e: any) {
-            console.warn(`⚠️  Could not reconcile the active theme layout: ${e && e.message}`);
+            log.warn({ err: e }, '⚠️  Could not reconcile the active theme layout');
         }
 
         // Fire init action
         await doAction('init');
     } else {
-        console.log('⚠️  WordJS is NOT installed. Starting in SETUP MODE.');
-        console.log('   Waiting for interactive installation via Frontend...');
+        log.info('⚠️  WordJS is NOT installed. Starting in SETUP MODE.');
+        log.info('   Waiting for interactive installation via Frontend...');
 
         // SECURITY: mint + print the one-time install token. The pre-install setup endpoints
         // (/setup/install, /setup/test-db) require it, so a not-yet-installed instance can't be
@@ -1866,24 +1946,24 @@ async function initialize() {
 
 // Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
-    console.error('Uncaught Exception:', error);
+    log.error({ err: error }, 'Uncaught Exception');
     process.exit(1);
 });
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (reason, promise) => {
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    log.error({ err: reason }, 'Unhandled Rejection');
 });
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
-    console.log('SIGTERM received. Shutting down gracefully...');
+    log.info('SIGTERM received. Shutting down gracefully...');
     saveDatabase();
     process.exit(0);
 });
 
 process.on('SIGINT', () => {
-    console.log('\nSIGINT received. Shutting down gracefully...');
+    log.info('SIGINT received. Shutting down gracefully...');
     saveDatabase();
     process.exit(0);
 });
@@ -1891,7 +1971,7 @@ process.on('SIGINT', () => {
 // Start the application — only when run directly (split mode via backend/server.js). When required by
 // the monolith (WORDJS_EMBEDDED=1), the entrypoint calls initialize() itself after mounting.
 if (require.main === module && !EMBEDDED) initialize().catch((error) => {
-    console.error('❌ Failed to initialize:', error);
+    log.error({ err: error }, '❌ Failed to initialize');
 
     // Auto-Fallback Logic
     const fs = require('fs');
@@ -1902,18 +1982,18 @@ if (require.main === module && !EMBEDDED) initialize().catch((error) => {
     const backupFile = configFile.replace(/\.json$/, '.backup.json');
 
     if (fs.existsSync(backupFile)) {
-        console.warn('⚠️  Startup Failed! Attempting automatic fallback to previous configuration...');
+        log.warn('⚠️  Startup Failed! Attempting automatic fallback to previous configuration...');
         try {
             // Restore config
             fs.copyFileSync(backupFile, configFile);
-            console.log('✅ Configuration restored from backup.');
+            log.info('✅ Configuration restored from backup.');
 
             // Force Restart by touching this file
             const time = new Date();
             fs.utimesSync(__filename, time, time);
-            console.log('🔄 Triggering server restart...');
+            log.info('🔄 Triggering server restart...');
         } catch (e) {
-            console.error('❌ Fallback failed:', e);
+            log.error({ err: e }, '❌ Fallback failed');
         }
     }
 

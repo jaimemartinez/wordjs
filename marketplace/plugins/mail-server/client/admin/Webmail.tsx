@@ -1,6 +1,7 @@
 // @ts-nocheck — backend plugin client source; bundled by the plugin loader, not type-checked by the frontend tsc.
 "use client";
 
+import { errorText } from "./i18n";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../../../../frontend/src/lib/api";
 import { sanitizeHTML } from "../../../../../frontend/src/lib/sanitize";
@@ -34,6 +35,40 @@ const readLocal = (k: string, d: any) => { try { const v = localStorage.getItem(
 const writeLocal = (k: string, v: any) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* blocked */ } };
 
 const addrOf = (s: string) => { const m = /<([^>]+)>/.exec(s || ''); return (m ? m[1] : String(s || '')).trim().toLowerCase(); };
+
+// SPF vouches for the ENVELOPE sender's domain only. When the From the reader sees is on a different
+// domain, even an SPF pass says nothing about it — so the reading pane flags the mismatch. Returns the
+// two domains when they differ, else null (no recorded verdict = internal mail, nothing to compare).
+const domainOfAddr = (a: string) => { const s = String(a || '').trim().toLowerCase(); const i = s.lastIndexOf('@'); return i > 0 ? s.slice(i + 1) : ''; };
+const senderMismatch = (header?: string, from?: string) => {
+    const h = String(header || '').trim();
+    if (!/^Received-SPF:/i.test(h)) return null;
+    const m = /envelope-from=<([^>]*)>/i.exec(h);
+    const envelope = domainOfAddr(m ? m[1] : '');
+    const fromDomain = domainOfAddr(addrOf(from || ''));
+    if (!fromDomain || fromDomain === envelope) return null;
+    return { from: fromDomain, envelope: envelope || '—' };
+};
+
+// The DKIM / DMARC verdict the server recorded (RFC 8601 Authentication-Results, auth_results).
+// Returns null when the message was not evaluated (outbound, internal, or the check turned off).
+const authVerdict = (header?: string) => {
+    const h = String(header || '');
+    if (!h) return null;
+    // A pass whose comment says unsigned content (an l= signature shorter than the body) verifies only
+    // part of the message: it is shown as such, and never as a verified sender.
+    const dkim = [...h.matchAll(/dkim=([a-z]+)(?: \(([^)]*)\))? header\.d=([^\s;]*)/g)]
+        .map(m => ({ result: m[1], domain: m[3], partial: m[1] === 'pass' && /unsigned-content/.test(m[2] || '') }));
+    const d = /dmarc=([a-z]+)(?: \(p=([a-z]+) dis=([a-z]+)\))?(?: \(from=([^)]*)\))? header\.from=([^\s;]*)/.exec(h);
+    const dmarc = d ? { result: d[1], policy: d[2] || '', disposition: d[3] || 'none', domain: d[5] } : null;
+    // Every From domain, when the From named several (the list shows only the first sender).
+    const severalFrom = d && d[4] ? d[4].split(',').filter(Boolean) : [];
+    const dkimPass = dkim.find(s => s.result === 'pass' && !s.partial);
+    const dkimPartial = dkim.find(s => s.partial);
+    const dkimBad = !dkimPass && !dkimPartial && dkim.find(s => s.result === 'fail' || s.result === 'permerror' || s.result === 'policy');
+    const verified = !!dmarc && dmarc.result === 'pass' && !dkimPartial && severalFrom.length < 2;
+    return { dkimPass, dkimPartial, dkimBad, dmarc, severalFrom, verified };
+};
 
 export default function Webmail({ access, user, t, locale, toasts, confirm, isAdmin, onOpenServer }: any) {
     const me = String(access?.address || user?.userEmail || '').toLowerCase();
@@ -97,7 +132,7 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
     const setShowPreview = (v: boolean) => { setShowPreviewState(v); writeLocal('wjp_mail_preview', v); };
     const { push: toast } = toasts;
     const ok = (text: string, opts?: any) => toast('success', text, opts);
-    const fail = (e: any) => toast('error', (e && e.message) || (typeof e === 'string' ? e : t('common.error')));
+    const fail = (e: any) => toast('error', errorText(e, t));
 
     // --- data ------------------------------------------------------------------------------------
     const loadList = useCallback(async ({ query = queryRef.current, silent = false, append = false } = {}) => {
@@ -233,7 +268,9 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
         const m = msg || lastOf(email);
         const head = `<br/><br/><div>${escapeHtml(t('comp.forwardedHeader'))}<br/>${escapeHtml(t('read.from'))}: ${escapeHtml(m.from_name || '')} &lt;${escapeHtml(m.from_address)}&gt;<br/>${escapeHtml(t('read.date'))}: ${escapeHtml(fullDate(m.date_received, locale))}<br/>${escapeHtml(t('comp.subject'))}: ${escapeHtml(m.subject)}<br/>${escapeHtml(t('comp.to'))}: ${escapeHtml(m.to_address)}</div><br/>`;
         const body = m.body_html || escapeHtml(m.body_text || '').replace(/\n/g, '<br/>');
-        startCompose({ kind: 'forward', subject: `Fwd: ${String(m.subject || '').replace(/^(re|fwd?):\s*/i, '')}`, body: head + body, attachments: [] });
+        startCompose({ kind: 'forward', subject: `Fwd: ${String(m.subject || '').replace(/^(re|fwd?):\s*/i, '')}`, body: head + body,
+            // The original files travel by id: the server checks the user may read them and copies them.
+            attachments: (m.attachments || []).map((a: any) => ({ attachmentId: a.id, filename: a.filename, size: a.size, contentType: a.content_type })) });
     };
 
     const onSent = (res: any, { scheduled }: any) => {
@@ -349,7 +386,8 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
         try {
             const res = await api('/plugin/mail-server/trash/empty', { method: 'DELETE' }) as any;
             closeMessage();
-            ok(t('toast.trashEmptied', { n: typeof res?.deleted === 'number' ? res.deleted : '' }));
+            const n = typeof res?.deleted === 'number' ? res.deleted : null;
+            ok(n === 1 ? t('toast.trashEmptiedOne') : n === null ? t('folder.emptyTrash') : t('toast.trashEmptied', { n }));
             loadList();
             loadQuota();
         } catch (e) { fail(e); }
@@ -415,7 +453,7 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
             const k = e.key;
             const current = openEmail || emails[cursor];
             if (k === 'g') { gPressed.current = Date.now(); return; }
-            if (k === 'i' && Date.now() - gPressed.current < 1200) { setFolder('inbox'); return; }
+            if (k === 'i' && Date.now() - gPressed.current < 1200) { go('inbox'); return; }
             const map: Record<string, () => void> = {
                 'c': () => startCompose(),
                 '/': () => searchRef.current?.focus(),
@@ -479,7 +517,19 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
     const showList = split || !openId;
     const effListWidth = Math.min(listWidth, Math.max(320, width - (sidebarMode === 'full' ? 248 : sidebarMode === 'rail' ? 72 : 0) - 420));
 
-    const go = (f: string) => { setFolder(f); setDrawer(false); closeMessage(); };
+    const go = (f: string) => {
+        setDrawer(false);
+        closeMessage();
+        // The folder effect only runs on a CHANGE: picking the folder already shown (to leave a search)
+        // must clear the search and reload it here, or the results simply stayed on screen.
+        if (f === folderRef.current) {
+            setSearchText('');
+            setActiveQuery('');
+            loadList({ query: '' });
+        } else {
+            setFolder(f);
+        }
+    };
     const runSearch = (q: string) => {
         const query = q.trim();
         setActiveQuery(query);
@@ -598,7 +648,7 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
                 ))}
             </div>
             <span className="flex-1"></span>
-            <IconBtn icon="fa-solid fa-bars" label={t('folder.labels')} onClick={() => setDrawer(true)} />
+            <IconBtn icon="fa-solid fa-folder-tree" label={t('folder.labels')} onClick={() => setDrawer(true)} />
             <IconBtn icon="fa-solid fa-gear" label={t('act.settings')} onClick={() => setSettings({ open: true, tab: 'general' })} />
             {isAdmin && <IconBtn icon="fa-solid fa-server" label={t('app.serverConsole')} onClick={onOpenServer} />}
         </div>
@@ -727,7 +777,15 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
         <section className={cx('flex min-h-0 min-w-0 flex-col bg-white', split ? 'shrink-0 border-r border-slate-200' : 'flex-1')} style={split ? { width: effListWidth } : undefined}>
             {/* App bar */}
             <div className="flex shrink-0 items-center gap-2 border-b border-slate-100 px-2 py-2 sm:px-3">
-                {sidebarMode === 'drawer' && <IconBtn icon="fa-solid fa-bars" label={t('folder.labels')} onClick={() => setDrawer(true)} />}
+                {sidebarMode === 'drawer' && (
+                    // Not a hamburger: the admin shell already shows one right above on phones. This opens
+                    // the MAIL folders, so it shows the current folder's icon.
+                    <button type="button" onClick={() => setDrawer(true)} aria-label={t('folder.labels')} title={t('folder.labels')}
+                        className="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full border border-slate-200 bg-white pl-3 pr-2.5 text-slate-600 hover:bg-slate-50">
+                        <i className={cx((FOLDERS.find(f => f.id === folder) || { icon: 'fa-solid fa-tag' }).icon, 'text-sm text-violet-600')}></i>
+                        <i className="fa-solid fa-chevron-down text-[10px] text-slate-400"></i>
+                    </button>
+                )}
                 <form className="relative min-w-0 flex-1" onSubmit={(e) => { e.preventDefault(); runSearch(searchText); }}>
                     <i className="fa-solid fa-magnifying-glass pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-sm text-slate-400"></i>
                     <input
@@ -821,8 +879,15 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
         const latest = msgs[msgs.length - 1];
         const sender = !latest.is_sent ? addrOf(latest.from_address) : '';
         const spf = SPF_TONE[spfVerdict(email.received_spf)] ? spfVerdict(email.received_spf) : '';
-        const inTrash = folder === 'trash' || email.is_trash;
-        const inSpam = folder === 'spam' || email.is_spam;
+        const auth = authVerdict(email.auth_results);
+        const dmarcPass = !!auth?.verified;
+        const dmarcFail = auth?.dmarc?.result === 'fail';
+        const severalFrom = auth && auth.severalFrom.length > 1 ? auth.severalFrom.join(', ') : '';
+        // An aligned DKIM signature (DMARC pass) authenticates the From domain, so no mismatch to flag.
+        const unaligned = dmarcPass ? null : senderMismatch(email.received_spf, email.from_address);
+        const authPills = !!(auth && (dmarcPass || dmarcFail || auth.dkimPass || auth.dkimPartial || auth.dkimBad || severalFrom));
+        const inTrash = folder === 'trash' || !!email.is_trash;
+        const inSpam = folder === 'spam' || !!email.is_spam;
 
         return (
             <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-white">
@@ -874,16 +939,32 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
                                 <i className={cx(email.is_starred ? 'fa-solid fa-star text-amber-400' : 'fa-regular fa-star text-slate-400', 'text-lg')}></i>
                             </button>
                         </div>
-                        {((email.labels || []).length > 0 || inSpam || spf) && (
+                        {((email.labels || []).length > 0 || inSpam || spf || unaligned || authPills) && (
                             <div className="-mt-2 mb-4 flex flex-wrap items-center gap-1.5">
                                 {inSpam && <Pill tone="orange"><i className="fa-solid fa-triangle-exclamation"></i>{t('badge.spam')}</Pill>}
                                 {spf && <Pill tone={SPF_TONE[spf]} title={`${t('spf.' + spf + 'Hint')}\n\n${email.received_spf}`}><i className="fa-solid fa-shield-halved"></i>{t('spf.' + spf)}</Pill>}
+                                {unaligned && <Pill tone="orange" title={`${t('spf.unalignedHint', unaligned)}\n\n${email.received_spf}`}><i className="fa-solid fa-user-shield"></i>{t('spf.unaligned')}</Pill>}
+                                {dmarcPass && <Pill tone="green" title={`${t('auth.dmarcPassHint', { domain: auth.dmarc.domain })}\n\n${email.auth_results}`}><i className="fa-solid fa-circle-check"></i>{t('auth.dmarcPass')}</Pill>}
+                                {dmarcFail && <Pill tone="red" title={`${t(auth.dmarc.disposition === 'quarantine' ? 'auth.dmarcQuarantineHint' : 'auth.dmarcFailHint', { domain: auth.dmarc.domain, policy: auth.dmarc.policy || 'none' })}\n\n${email.auth_results}`}><i className="fa-solid fa-circle-xmark"></i>{t(auth.dmarc.disposition === 'quarantine' ? 'auth.dmarcQuarantine' : 'auth.dmarcFail')}</Pill>}
+                                {!dmarcPass && auth?.dkimPass && <Pill tone="green" title={`${t('auth.dkimPassHint', { domain: auth.dkimPass.domain })}\n\n${email.auth_results}`}><i className="fa-solid fa-signature"></i>{t('auth.dkimPass', { domain: auth.dkimPass.domain })}</Pill>}
+                                {auth?.dkimPartial && <Pill tone="orange" title={`${t('auth.dkimPartialHint', { domain: auth.dkimPartial.domain })}\n\n${email.auth_results}`}><i className="fa-solid fa-signature"></i>{t('auth.dkimPartial', { domain: auth.dkimPartial.domain })}</Pill>}
+                                {severalFrom && <Pill tone="orange" title={`${t('auth.severalFromHint', { domains: severalFrom })}\n\n${email.auth_results}`}><i className="fa-solid fa-users"></i>{t('auth.severalFrom')}</Pill>}
+                                {auth?.dkimBad && <Pill tone="red" title={`${t(auth.dkimBad.result === 'fail' ? 'auth.dkimFailHint' : 'auth.dkimErrorHint', { domain: auth.dkimBad.domain })}\n\n${email.auth_results}`}><i className="fa-solid fa-signature"></i>{t('auth.dkimFail')}</Pill>}
                                 {(email.labels || []).map((l: any) => (
                                     <span key={l.id} className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium" style={{ background: `${l.color}1a`, color: l.color }}>
                                         {l.name}
                                         <button type="button" aria-label={t('common.delete')} onClick={() => toggleLabelOn(email, l)} className="opacity-60 hover:opacity-100"><i className="fa-solid fa-xmark text-[10px]"></i></button>
                                     </span>
                                 ))}
+                            </div>
+                        )}
+                        {(auth?.dkimPartial || severalFrom) && (
+                            <div role="note" className="mb-4 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-900">
+                                <i className="fa-solid fa-triangle-exclamation mt-0.5 text-amber-500"></i>
+                                <div className="min-w-0 flex-1 space-y-1">
+                                    {severalFrom && <p>{t('auth.severalFromBanner', { domains: severalFrom })}</p>}
+                                    {auth?.dkimPartial && <p>{t('auth.dkimPartialBanner', { domain: auth.dkimPartial.domain })}</p>}
+                                </div>
                             </div>
                         )}
                         {sender && isBlocked(sender) && (

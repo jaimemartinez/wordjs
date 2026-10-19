@@ -1,20 +1,43 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { webhooksApi, Webhook, WebhookDelivery } from "@/lib/api";
+import { webhooksApi, Webhook, WebhookDelivery, WebhookEventGroup } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
+import { formatServerTimestamp } from "@/lib/serverTimestamp";
 import { PageHeader, Button, Card, EmptyState, Input, StatusBadge } from "@/components/ui";
 import SecretRevealModal from "@/components/SecretRevealModal";
 
 const FALLBACK_EVENTS = ["post.created", "post.published", "post.updated", "post.deleted", "comment.created", "comment.deleted"];
 
-const fmtDate = (v: number | null | string | undefined) => {
-    if (v == null) return "—";
-    const ms = typeof v === "number" ? v * 1000 : Date.parse(v);
-    return Number.isFinite(ms) ? new Date(ms).toLocaleString() : "—";
+// Icon per entity of the catalogue (GET /webhooks/events → groups). An entity this list does not know
+// still renders, with a generic icon, so a newer backend never breaks the picker.
+const GROUP_ICONS: Record<string, string> = {
+    post: "fa-file-lines",
+    comment: "fa-comments",
+    user: "fa-user",
+    media: "fa-image",
+    term: "fa-tags",
+    menu: "fa-bars",
+    plugin: "fa-plug",
+    theme: "fa-palette",
+    settings: "fa-gear",
 };
+
+/** Group a flat event list by its `entity.` prefix (fallback for a backend that sends no groups). */
+const groupEvents = (events: string[]): WebhookEventGroup[] => {
+    const out: WebhookEventGroup[] = [];
+    for (const ev of events) {
+        const entity = ev.split(".")[0];
+        const g = out.find((x) => x.entity === entity);
+        if (g) g.events.push(ev); else out.push({ entity, events: [ev] });
+    }
+    return out;
+};
+
+// Delivery rows carry SQL UTC text, the webhook's last delivery epoch seconds: both in local time.
+const fmtDate = formatServerTimestamp;
 
 const deliveryStatusType = (s: string) => (s === "success" ? "success" : s === "dead" ? "error" : s === "delivering" ? "info" : "warning");
 
@@ -23,7 +46,9 @@ export default function WebhooksPage() {
     const { addToast } = useToast();
     const { t } = useI18n();
     const [webhooks, setWebhooks] = useState<Webhook[]>([]);
-    const [catalog, setCatalog] = useState<string[]>(FALLBACK_EVENTS);
+    const [groups, setGroups] = useState<WebhookEventGroup[]>(() => groupEvents(FALLBACK_EVENTS));
+    const [optIn, setOptIn] = useState<string[]>([]);
+    const [pinging, setPinging] = useState<number | null>(null);
     const [loading, setLoading] = useState(true);
     const [revealed, setRevealed] = useState<string | null>(null);
 
@@ -50,7 +75,10 @@ export default function WebhooksPage() {
     };
     useEffect(() => {
         load();
-        webhooksApi.events().then((r) => setCatalog(r.events)).catch(() => { /* keep fallback */ });
+        webhooksApi.events().then((r) => {
+            setGroups(r.groups && r.groups.length ? r.groups : groupEvents(r.events));
+            setOptIn(r.optIn || []);
+        }).catch(() => { /* keep fallback */ });
     }, []);
 
     const toggleEvent = (ev: string) => {
@@ -59,6 +87,48 @@ export default function WebhooksPage() {
             next.has(ev) ? next.delete(ev) : next.add(ev);
             return next;
         });
+    };
+
+    // "All of this entity" = the family wildcard (`post.*`). It replaces the family's individual picks,
+    // which it already covers — except an opt-in event, which no wildcard includes and stays separate.
+    const toggleFamily = (g: WebhookEventGroup) => {
+        const wildcard = `${g.entity}.*`;
+        setSelected((prev) => {
+            const next = new Set(prev);
+            if (next.has(wildcard)) next.delete(wildcard);
+            else {
+                next.add(wildcard);
+                for (const ev of g.events) if (!optIn.includes(ev)) next.delete(ev);
+            }
+            return next;
+        });
+    };
+
+    const eventLabel = (ev: string) => {
+        if (ev.endsWith(".*")) return `${t(`webhooks.group.${ev.slice(0, -2)}`)} · ${t("webhooks.allInGroup")}`;
+        return ev;
+    };
+
+    const sendTest = async (w: Webhook) => {
+        setPinging(w.id);
+        try {
+            const { delivered, delivery } = await webhooksApi.ping(w.id);
+            if (delivered) {
+                addToast(t("webhooks.testDelivered").replace("{status}", String(delivery?.responseStatus ?? "")), "success");
+            } else {
+                const reason = delivery?.responseStatus != null ? `HTTP ${delivery.responseStatus}` : (delivery?.error || "—");
+                addToast(t("webhooks.testFailed").replace("{reason}", reason), "error");
+            }
+            await load();
+            if (expandedId === w.id) {
+                const { deliveries } = await webhooksApi.deliveries(w.id);
+                setDeliveries(deliveries);
+            }
+        } catch (e: any) {
+            addToast(e?.message || t("webhooks.testFailed").replace("{reason}", "—"), "error");
+        } finally {
+            setPinging(null);
+        }
     };
 
     const handleCreate = async (e: React.FormEvent) => {
@@ -161,19 +231,53 @@ export default function WebhooksPage() {
                         <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">
                             {t("webhooks.events")} <span className="text-gray-300 normal-case tracking-normal font-medium">{t("webhooks.eventsHint")}</span>
                         </label>
-                        <div className="flex flex-wrap gap-2">
-                            {catalog.map((ev) => {
-                                const on = selected.has(ev);
+                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                            {groups.map((g) => {
+                                const familyOn = selected.has(`${g.entity}.*`);
                                 return (
-                                    <button
-                                        key={ev}
-                                        type="button"
-                                        onClick={() => toggleEvent(ev)}
-                                        className={`text-xs font-bold px-3 py-2 rounded-xl border-2 transition-all ${on ? "bg-blue-500 border-blue-500 text-white shadow-sm" : "bg-white border-gray-100 text-gray-500 hover:border-blue-200"}`}
-                                    >
-                                        <i className={`fa-solid ${on ? "fa-check" : "fa-plus"} mr-1.5 text-[10px]`}></i>
-                                        {ev}
-                                    </button>
+                                    <div key={g.entity} role="group" aria-label={t(`webhooks.group.${g.entity}`)} className="rounded-2xl border border-gray-100 bg-white p-4 min-w-0">
+                                        <div className="flex items-center justify-between gap-2 mb-3">
+                                            <span className="text-[11px] font-black uppercase tracking-widest text-gray-500 flex items-center gap-2">
+                                                <i className={`fa-solid ${GROUP_ICONS[g.entity] || "fa-bolt"} text-blue-500`}></i>
+                                                {t(`webhooks.group.${g.entity}`)}
+                                            </span>
+                                            {g.events.length > 1 && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => toggleFamily(g)}
+                                                    aria-pressed={familyOn}
+                                                    aria-label={eventLabel(g.entity + ".*")}
+                                                    title={`${g.entity}.*`}
+                                                    className={`text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded-lg transition-all ${familyOn ? "bg-blue-500 text-white" : "bg-gray-50 text-gray-400 hover:text-blue-600"}`}
+                                                >
+                                                    {t("webhooks.allInGroup")}
+                                                </button>
+                                            )}
+                                        </div>
+                                        <div className="flex flex-wrap gap-2">
+                                            {g.events.map((ev) => {
+                                                const isOptIn = optIn.includes(ev);
+                                                const covered = familyOn && !isOptIn;
+                                                const on = covered || selected.has(ev);
+                                                return (
+                                                    <button
+                                                        key={ev}
+                                                        type="button"
+                                                        onClick={() => { if (!covered) toggleEvent(ev); }}
+                                                        aria-pressed={on}
+                                                        aria-label={isOptIn ? ev + " (" + t("webhooks.optIn") + ")" : ev}
+                                                        disabled={covered}
+                                                        title={isOptIn ? t("webhooks.optInHint") : ev}
+                                                        className={`text-xs font-bold px-3 py-2 rounded-xl border-2 transition-all ${on ? "bg-blue-500 border-blue-500 text-white shadow-sm" : "bg-white border-gray-100 text-gray-500 hover:border-blue-200"} ${covered ? "opacity-70 cursor-default" : ""}`}
+                                                    >
+                                                        <i className={`fa-solid ${on ? "fa-check" : "fa-plus"} mr-1.5 text-[10px]`}></i>
+                                                        {ev.slice(g.entity.length + 1) || ev}
+                                                        {isOptIn && <span className={`ml-1.5 text-[9px] font-black uppercase tracking-wider ${on ? "text-blue-100" : "text-amber-500"}`}>{t("webhooks.optIn")}</span>}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
                                 );
                             })}
                         </div>
@@ -206,7 +310,7 @@ export default function WebhooksPage() {
                                             <code className="text-xs font-mono text-gray-400 break-all">{w.url}</code>
                                             <div className="flex flex-wrap gap-1 mt-3">
                                                 {(w.events.includes("*") ? [t("webhooks.allEvents")] : w.events).map((ev) => (
-                                                    <span key={ev} className="text-[10px] font-black uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2 py-1 rounded-md">{ev}</span>
+                                                    <span key={ev} title={ev} className="text-[10px] font-black uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2 py-1 rounded-md">{eventLabel(ev)}</span>
                                                 ))}
                                             </div>
                                             <div className="text-xs text-gray-400 mt-3">
@@ -216,6 +320,10 @@ export default function WebhooksPage() {
                                             </div>
                                         </div>
                                         <div className="flex items-center gap-2 shrink-0">
+                                            <button onClick={() => sendTest(w)} disabled={!w.active || pinging === w.id} title={w.active ? t("webhooks.sendTest") : t("webhooks.testPaused")} aria-label={t("webhooks.sendTest")} className="h-10 shrink-0 px-3 rounded-xl bg-gray-50 text-gray-500 hover:bg-blue-600 hover:text-white disabled:opacity-40 disabled:hover:bg-gray-50 disabled:hover:text-gray-500 flex items-center gap-2 text-xs font-bold transition-all">
+                                                <i className={`fa-solid ${pinging === w.id ? "fa-spinner fa-spin" : "fa-paper-plane"} text-xs`}></i>
+                                                <span className="hidden sm:inline">{t("webhooks.sendTest")}</span>
+                                            </button>
                                             <button onClick={() => openDeliveries(w)} title={t("webhooks.deliveries")} className="w-10 h-10 shrink-0 rounded-xl bg-gray-50 text-gray-500 hover:bg-gray-200 flex items-center justify-center transition-all">
                                                 <i className={`fa-solid ${expandedId === w.id ? "fa-chevron-up" : "fa-list"} text-xs`}></i>
                                             </button>

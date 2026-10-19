@@ -46,6 +46,11 @@ const https = require('https');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 
+// Every npm this process starts (release:install and the npm installs inside it, the server scripts)
+// inherits this: npm's "new major version of npm available" notice otherwise lands in the middle of
+// the install output, and it is advice about the operator's npm, not about the site.
+process.env.npm_config_update_notifier = 'false';
+
 const HELP = `
 create-wordjs — bootstrap or upgrade a WordJS site with one command
 
@@ -103,10 +108,11 @@ Separate mode (three machines) — run one command per machine:
   npx create-wordjs@latest join frontend --gateway 10.0.0.1 --token <t> --ca-hash <fp> --advertise 10.0.0.3
   (join needs 'openssl' on PATH. See documentation/separate-mode.md.)
 
-Upgrading preserves your database (backend/data), uploads (backend/uploads), config
-(wordjs-config.json + gateway secrets) and any user-installed plugins; it replaces the app code and
-runs the dependency install. Database schema migrations apply automatically the next time the server
-starts — then restart WordJS (e.g. 'systemctl restart wordjs', or stop it and 'npm run start:mono').
+Upgrading preserves your database (backend/data), uploads (backend/uploads), backups
+(backend/backups), config (wordjs-config.json + gateway secrets) and any user-installed plugins;
+it replaces the app code and runs the dependency install. Database schema migrations apply
+automatically the next time the server starts — then restart WordJS (e.g. 'systemctl restart
+wordjs', or stop it and 'npm run start:mono').
 `;
 
 function fail(message, hint) {
@@ -999,6 +1005,7 @@ function confirm(question) {
 const PRESERVE_ON_UPGRADE = new Set([
     'backend/data',                 // the database (+ WAL/SHM, ssl/, imports/)
     'backend/uploads',              // user uploads / media / fonts
+    'backend/backups',              // the site's own backups: a bundle never adds to or replaces them
     'backend/wordjs-config.json',   // site config + secrets
     'backend/.env',
     '.env',
@@ -1045,6 +1052,39 @@ async function obtainReleaseToTemp(opts) {
     } catch (e) {
         cleanup();
         throw e;
+    }
+}
+
+/**
+ * The account that owns the site, when this upgrade runs as root and the site is not root's: the files
+ * the upgrade creates are given back to it (restoreInstallOwner). Read from the install directory before
+ * anything is written. Only POSIX root can create files another account would have to own.
+ */
+function installDirOwner(installDir) {
+    if (typeof process.getuid !== 'function' || process.getuid() !== 0) return null;
+    try {
+        const st = fs.statSync(installDir);
+        return st.uid === 0 ? null : { uid: st.uid, gid: st.gid };
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * The documented upgrade is `sudo npx create-wordjs upgrade`, and every file it CREATES — the new
+ * frontend/.next and backend/dist, new modules, node_modules from release:install — then belonged to
+ * root while the service runs as the site's account (--systemd: `wordjs`): Next could no longer create
+ * frontend/.next/cache and every render logged EACCES until someone ran chown by hand.
+ */
+function restoreInstallOwner(installDir, owner) {
+    if (!owner) return;
+    const spec = `${owner.uid}:${owner.gid}`;
+    // -h: a symbolic link is re-owned itself, never what it points at.
+    const r = spawnSync('chown', ['-R', '-h', spec, installDir], { stdio: 'inherit' });
+    if (r.status === 0) {
+        console.log(`\n  Gave the upgraded files back to the site's owner (${spec}).`);
+    } else {
+        console.warn(`\n  ⚠ Could not restore the site's owner. Run:  chown -R -h ${spec} ${installDir}`);
     }
 }
 
@@ -1119,6 +1159,9 @@ async function upgrade(opts) {
             console.warn(`  (could not write config backup: ${e.message} — continuing; your DB/uploads/config are still preserved in place)`);
         }
 
+        // Read before the overlay creates any file (restoreInstallOwner).
+        const siteOwner = installDirOwner(installDir);
+
         // Clean-replace the build outputs so no stale chunks linger, then overlay the rest.
         for (const rel of CLEAN_REPLACE_ON_UPGRADE) {
             const target = path.join(installDir, rel);
@@ -1139,6 +1182,7 @@ async function upgrade(opts) {
         } else {
             console.log('\n  --no-install: skipped dependency sync. Run "npm run release:install" yourself if deps changed.');
         }
+        restoreInstallOwner(installDir, siteOwner);
 
         const line = '━'.repeat(64);
         console.log(`\n${line}`);
@@ -1424,5 +1468,7 @@ if (require.main === module) {
 module.exports = {
     pickBundleAsset, pickChecksumAsset, extractZip, normalizeSha256, parseChecksumFile, classifyZipSource, sha256File,
     parseArgs, buildSystemdFiles, systemdInstallSteps, writeSystemdFiles,
+    copyMerge, PRESERVE_ON_UPGRADE,
     sysctlDropIn, serviceUserProblem, systemdPreflight, createSystemdStagingDir, LOW_PORT_ADVICE, HELP, installedFileMode,
+    installDirOwner, restoreInstallOwner,
 };

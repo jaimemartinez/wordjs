@@ -100,6 +100,22 @@ const CAPABILITY_NAME_RE = /^[a-z][a-z0-9_]{0,127}$/;
 const SAFE_SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,127}$/;
 const DANGEROUS_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 
+// Core non-content capability names no content type may use (core/reserved-capabilities explains why).
+const { isReservedCoreCapability } = require('./reserved-capabilities');
+
+function assertContentCapability(capability: string, path: string): void {
+    if (isReservedCoreCapability(capability)) {
+        fail(path, `names the core capability "${capability}", which is not a content capability`);
+    }
+}
+
+/** The family's derived capabilities (operations + read_private) must all be content capabilities. */
+function assertContentFamily(capabilityType: string, path: string): void {
+    for (const capability of [...Object.values(operationsFor(capabilityType)), `read_private_${capabilityType}s`]) {
+        assertContentCapability(capability, path);
+    }
+}
+
 const FIELD_TYPES = new Set<ContentFieldType>([
     'string', 'text', 'rich-text', 'integer', 'number', 'boolean', 'datetime',
     'slug', 'email', 'url', 'json', 'media', 'reference', 'enum',
@@ -402,12 +418,14 @@ export function normalizeContentTypeSchema(value: unknown): ContentTypeSchemaV1 
     rejectUnknownKeys(permissions, new Set(['capabilityType', 'operations']), 'permissions');
     const capabilityType = requiredString(own(permissions, 'capabilityType'), 'permissions.capabilityType', 64);
     if (!CAPABILITY_TYPE_RE.test(capabilityType)) fail('permissions.capabilityType', 'has an invalid capability family');
+    assertContentCapability(`read_private_${capabilityType}s`, 'permissions.capabilityType');
     const operations = requireRecord(own(permissions, 'operations'), 'permissions.operations');
     rejectUnknownKeys(operations, new Set(OPERATION_KEYS), 'permissions.operations');
     const normalizedOperations: Record<string, string> = {};
     for (const key of OPERATION_KEYS) {
         const capability = requiredString(own(operations, key), `permissions.operations.${key}`, 128);
         if (!CAPABILITY_NAME_RE.test(capability)) fail(`permissions.operations.${key}`, 'has an invalid capability');
+        assertContentCapability(capability, `permissions.operations.${key}`);
         normalizedOperations[key] = capability;
     }
 
@@ -583,6 +601,7 @@ export function adaptLegacyPostType(
         : [];
     const capabilityType = typeof args.capability_type === 'string' && CAPABILITY_TYPE_RE.test(args.capability_type)
         ? args.capability_type : 'post';
+    assertContentFamily(capabilityType, 'capability_type');
     const runtimeExtensions: UnknownRecord = {};
     const serialisableExtensions: Record<string, JsonValue> = {};
     for (const key of Object.keys(args)) {

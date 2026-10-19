@@ -54,3 +54,15 @@ export function rolesHeldState(plugin: GrantStateOf, screen: "activation" | "per
     if (screen === "activation" && activationGrant(plugin, ROLES_TOKEN) === "stays-off") return "stays-off";
     return "returns-on-grant";
 }
+
+/**
+ * Multisite: does the network's grant ceiling allow `token` on this site? Mirrors the server's rule
+ * (core/plugin-permissions ceilingAllowsToken): the token itself, or `scope:admin` for read/write.
+ */
+export function ceilingAllows(ceiling: readonly string[], token: string): boolean {
+    if (ceiling.includes(token)) return true;
+    const i = token.indexOf(':');
+    if (i <= 0) return false;
+    const access = token.slice(i + 1);
+    return (access === 'read' || access === 'write') && ceiling.includes(`${token.slice(0, i)}:admin`);
+}

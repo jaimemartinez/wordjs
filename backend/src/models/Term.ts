@@ -4,6 +4,7 @@
  */
 
 const { db, dbAsync } = require('../config/database');
+const { clampLimit, clampOffset } = require('../core/pagination');
 const { sanitizeTitle, boundSlug } = require('../core/formatting');
 
 class Term {
@@ -247,7 +248,7 @@ class Term {
         sql += ` ORDER BY t.${safeOrderBy} ${safeOrder}`;
 
         sql += ' LIMIT ? OFFSET ?';
-        params.push(limit, offset);
+        params.push(clampLimit(limit, 100), clampOffset(offset));
 
         const rows = await dbAsync.all(sql, params);
         return rows.map((row: any) => new Term(row));

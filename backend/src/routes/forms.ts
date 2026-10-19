@@ -30,6 +30,7 @@ const { stripTags } = require('../core/formatting');
 // routeIdOrNull is THE ROUTE-ID CONTRACT — see core/query-params: one definition of "a route id"
 // for the whole route tree, so this router's 400 cannot drift from what every other router refuses.
 const { requireScalarQuery, routeIdOrNull } = require('../core/query-params');
+const { perPageParam, pageOffset } = require('../core/pagination');
 
 /**
  * Every query parameter GET /submissions reads, each a scalar in this API's contract. `page` is the
@@ -197,8 +198,8 @@ router.get('/submissions', authenticate, can('manage_options'), asyncHandler(asy
     // argument (ToString), so every one of those inputs still yields exactly the number it yielded
     // before: ['1','2'] stringifies to "1,2" and parses to 1, an object to "[object Object]" and so to
     // NaN, which falls through to the `||` default.
-    const limit = Math.min(parseInt(String(per_page), 10) || 20, 100);
-    const offset = (Math.max(parseInt(String(page), 10) || 1, 1) - 1) * limit;
+    const limit = perPageParam(per_page, 20);
+    const offset = pageOffset(page, limit);
     const filter = formName !== undefined ? { formName: String(formName) } : {};
 
     const submissions = await FormSubmission.findAll({ ...filter, limit, offset });

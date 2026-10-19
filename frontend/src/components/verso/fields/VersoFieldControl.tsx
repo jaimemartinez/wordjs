@@ -18,6 +18,7 @@
  *   lienzo — se renderiza un aviso, jamás un input.
  */
 import React, { useId, useState } from "react";
+import { useEditorTr } from "@/lib/verso/useEditorTr";
 import type {
   ArrayVersoField,
   CustomVersoField,
@@ -103,15 +104,16 @@ interface ControlProps<F extends VersoField> extends Omit<VersoFieldControlProps
 
 function TextControl(props: ControlProps<TextVersoField>) {
   const { field, value, onChange, readOnly } = props;
+  const { tr } = useEditorTr();
   const id = useId();
   return (
-    <FieldShell id={id} label={labelTextOf(props)}>
+    <FieldShell id={id} label={tr(labelTextOf(props))}>
       <input
         id={id}
         type="text"
         className={INPUT_CLS}
         value={asInputString(value)}
-        placeholder={field.placeholder}
+        placeholder={field.placeholder ? tr(field.placeholder) : undefined}
         readOnly={readOnly}
         onChange={(e) => onChange(e.target.value)}
       />
@@ -121,15 +123,16 @@ function TextControl(props: ControlProps<TextVersoField>) {
 
 function TextareaControl(props: ControlProps<TextareaVersoField>) {
   const { field, value, onChange, readOnly } = props;
+  const { tr } = useEditorTr();
   const id = useId();
   return (
-    <FieldShell id={id} label={labelTextOf(props)}>
+    <FieldShell id={id} label={tr(labelTextOf(props))}>
       <textarea
         id={id}
         rows={4}
         className={INPUT_CLS}
         value={asInputString(value)}
-        placeholder={field.placeholder}
+        placeholder={field.placeholder ? tr(field.placeholder) : undefined}
         readOnly={readOnly}
         onChange={(e) => onChange(e.target.value)}
       />
@@ -139,15 +142,16 @@ function TextareaControl(props: ControlProps<TextareaVersoField>) {
 
 function NumberControl(props: ControlProps<NumberVersoField>) {
   const { field, value, onChange, readOnly } = props;
+  const { tr } = useEditorTr();
   const id = useId();
   return (
-    <FieldShell id={id} label={labelTextOf(props)}>
+    <FieldShell id={id} label={tr(labelTextOf(props))}>
       <input
         id={id}
         type="number"
         className={INPUT_CLS}
         value={typeof value === "number" ? value : ""}
-        placeholder={field.placeholder}
+        placeholder={field.placeholder ? tr(field.placeholder) : undefined}
         min={field.min}
         max={field.max}
         step={field.step}
@@ -171,10 +175,11 @@ function groupRuns<T extends { group?: string }>(options: readonly T[]): { group
 
 function SelectControl(props: ControlProps<SelectVersoField>) {
   const { field, value, onChange, readOnly } = props;
+  const { tr } = useEditorTr();
   const id = useId();
   const selected = optionIndexOf(field.options, value);
   return (
-    <FieldShell id={id} label={labelTextOf(props)}>
+    <FieldShell id={id} label={tr(labelTextOf(props))}>
       <select
         id={id}
         className={INPUT_CLS}
@@ -185,17 +190,17 @@ function SelectControl(props: ControlProps<SelectVersoField>) {
         {selected === -1 && <option value="" disabled />}
         {groupRuns(field.options).map((run) =>
           run.group ? (
-            <optgroup key={`g${run.start}`} label={run.group}>
+            <optgroup key={`g${run.start}`} label={tr(run.group)}>
               {run.items.map((option, j) => (
                 <option key={run.start + j} value={String(run.start + j)}>
-                  {option.label}
+                  {tr(option.label)}
                 </option>
               ))}
             </optgroup>
           ) : (
             run.items.map((option, j) => (
               <option key={run.start + j} value={String(run.start + j)}>
-                {option.label}
+                {tr(option.label)}
               </option>
             ))
           ),
@@ -207,14 +212,16 @@ function SelectControl(props: ControlProps<SelectVersoField>) {
 
 function RadioControl(props: ControlProps<RadioVersoField>) {
   const { field, value, onChange, readOnly } = props;
+  const { tr } = useEditorTr();
   const groupName = useId();
   const selected = optionIndexOf(field.options, value);
+  const labelText = tr(labelTextOf(props));
   return (
     <fieldset className="mb-3">
-      <legend className={LABEL_CLS}>{labelTextOf(props)}</legend>
+      <legend className={LABEL_CLS}>{labelText}</legend>
       <div
         role="radiogroup"
-        aria-label={labelTextOf(props)}
+        aria-label={labelText}
         className="flex flex-wrap gap-1 rounded border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-high)] p-0.5"
       >
         {field.options.map((option, i) => (
@@ -234,7 +241,7 @@ function RadioControl(props: ControlProps<RadioVersoField>) {
               disabled={readOnly}
               onChange={() => onChange(optionValueAt(field.options, String(i)))}
             />
-            {option.label}
+            {tr(option.label)}
           </label>
         ))}
       </div>
@@ -244,14 +251,15 @@ function RadioControl(props: ControlProps<RadioVersoField>) {
 
 function ArrayControl(props: ControlProps<ArrayVersoField>) {
   const { field, value, onChange, readOnly, renderExternalPicker } = props;
-  const labelText = labelTextOf(props);
+  const { tr, trf } = useEditorTr();
+  const labelText = tr(labelTextOf(props));
   const items = asArrayItems(value);
   return (
     <div className="mb-3" role="group" aria-label={labelText}>
       {labelText && <span className={LABEL_CLS}>{labelText}</span>}
       <ul className="space-y-2">
         {items.map((item, i) => {
-          const summary = field.getItemSummary?.(item, i) ?? `${labelText || "Elemento"} ${i + 1}`;
+          const summary = field.getItemSummary?.(item, i) ?? (labelText ? `${labelText} ${i + 1}` : trf("Elemento {n}", { n: i + 1 }));
           return (
             <li key={i} className="rounded border border-[var(--ed-outline-variant)] p-2">
               <div className="mb-1 flex items-center justify-between gap-2">
@@ -260,7 +268,7 @@ function ArrayControl(props: ControlProps<ArrayVersoField>) {
                   <button
                     type="button"
                     className={BTN_CLS}
-                    aria-label={`Subir elemento ${i + 1}`}
+                    aria-label={trf("Subir elemento {n}", { n: i + 1 })}
                     disabled={readOnly || i === 0}
                     onClick={() => onChange(arrayMove(items, i, i - 1))}
                   >
@@ -269,7 +277,7 @@ function ArrayControl(props: ControlProps<ArrayVersoField>) {
                   <button
                     type="button"
                     className={BTN_CLS}
-                    aria-label={`Bajar elemento ${i + 1}`}
+                    aria-label={trf("Bajar elemento {n}", { n: i + 1 })}
                     disabled={readOnly || i === items.length - 1}
                     onClick={() => onChange(arrayMove(items, i, i + 1))}
                   >
@@ -278,7 +286,7 @@ function ArrayControl(props: ControlProps<ArrayVersoField>) {
                   <button
                     type="button"
                     className={BTN_CLS}
-                    aria-label={`Quitar elemento ${i + 1}`}
+                    aria-label={trf("Quitar elemento {n}", { n: i + 1 })}
                     disabled={readOnly || !canRemoveItem(field, items)}
                     onClick={() => onChange(arrayRemoveAt(field, items, i))}
                   >
@@ -304,11 +312,11 @@ function ArrayControl(props: ControlProps<ArrayVersoField>) {
       <button
         type="button"
         className={`${BTN_CLS} mt-2 w-full`}
-        aria-label={`Añadir elemento a ${labelText || "la lista"}`}
+        aria-label={trf("Añadir elemento a {label}", { label: labelText || tr("la lista") })}
         disabled={readOnly || !canAddItem(field, items)}
         onClick={() => onChange(arrayAppend(field, items))}
       >
-        + Añadir
+        {tr("+ Añadir")}
       </button>
     </div>
   );
@@ -316,7 +324,8 @@ function ArrayControl(props: ControlProps<ArrayVersoField>) {
 
 function ObjectControl(props: ControlProps<ObjectVersoField>) {
   const { field, value, onChange, readOnly, renderExternalPicker } = props;
-  const labelText = labelTextOf(props);
+  const { tr } = useEditorTr();
+  const labelText = tr(labelTextOf(props));
   const obj = asObjectValue(value);
   return (
     <fieldset className="mb-3 rounded border border-[var(--ed-outline-variant)] p-2">
@@ -338,14 +347,15 @@ function ObjectControl(props: ControlProps<ObjectVersoField>) {
 
 function ExternalControl(props: ControlProps<ExternalVersoField>) {
   const { field, value, onChange, readOnly, renderExternalPicker } = props;
+  const { tr } = useEditorTr();
   const id = useId();
   const [open, setOpen] = useState(false);
   const hasValue = value !== undefined && value !== null;
   const summary = hasValue
-    ? (field.getItemSummary?.(value) ?? "Seleccionado")
-    : (field.placeholder ?? "Sin selección");
+    ? (field.getItemSummary?.(value) ?? tr("Seleccionado"))
+    : (field.placeholder ? tr(field.placeholder) : tr("Sin selección"));
   return (
-    <FieldShell id={id} label={labelTextOf(props)}>
+    <FieldShell id={id} label={tr(labelTextOf(props))}>
       <div className="flex items-center gap-2">
         <span className="min-w-0 flex-1 truncate text-xs text-[var(--ed-on-surface-variant)]">{summary}</span>
         <button
@@ -356,13 +366,13 @@ function ExternalControl(props: ControlProps<ExternalVersoField>) {
           title={renderExternalPicker ? undefined : "Sin picker inyectado (renderExternalPicker)"}
           onClick={() => setOpen(true)}
         >
-          Seleccionar…
+          {tr("Seleccionar…")}
         </button>
         {hasValue && (
           <button
             type="button"
             className={BTN_CLS}
-            aria-label="Quitar selección"
+            aria-label={tr("Quitar selección")}
             disabled={readOnly}
             onClick={() => onChange(undefined)}
           >
@@ -396,14 +406,17 @@ function CustomControl(props: ControlProps<CustomVersoField>) {
 }
 
 function SlotNotice(props: ControlProps<SlotVersoField>) {
-  const labelText = labelTextOf(props);
+  const { tr, trf } = useEditorTr();
+  const labelText = tr(labelTextOf(props));
   return (
     <div
       data-verso-slot-field=""
       role="note"
       className="mb-3 rounded border border-dashed border-[var(--ed-outline-variant)] px-2 py-1.5 text-xs text-[var(--ed-on-surface-variant)]"
     >
-      Los bloques de «{labelText || "este slot"}» se editan arrastrando en el lienzo, no desde este panel.
+      {trf("Los bloques de «{label}» se editan arrastrando en el lienzo, no desde este panel.", {
+        label: labelText || tr("este slot"),
+      })}
     </div>
   );
 }

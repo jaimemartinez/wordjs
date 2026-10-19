@@ -25,6 +25,7 @@
  */
 
 const crypto = require('crypto');
+const log = require('./module-logger').moduleLogger('core/pending-registrations');
 
 const PREFIX = 'registration_pending_token_';
 /** The raw token the link carries: 32 random bytes, hex. Anything else is refused before any lookup. */
@@ -73,7 +74,7 @@ async function prunePendingRegistrations(now: number = Date.now()): Promise<numb
             if (await deleteOption(name)) removed++;
         }
     } catch (e: any) {
-        console.warn('[registration] pruning expired pending registrations failed:', e && e.message);
+        log.warn({ err: e }, '[registration] pruning expired pending registrations failed');
     }
     return removed;
 }

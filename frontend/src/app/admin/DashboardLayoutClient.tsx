@@ -49,7 +49,7 @@ export function SiteAddressBannerList({ banners, host, isAdmin, onDismissLinkBas
         }
     };
     return (
-        <div className="flex-shrink-0" data-wjs-site-address-banners="">
+        <div className="flex-shrink-0" data-wjs-site-address-banners="" data-wjs-host-ui="">
             {banners.map((banner) => (
                 <div
                     key={banner.kind}
@@ -289,6 +289,7 @@ export function DashboardLayoutContent({ children }: { children: React.ReactNode
 
             {/* Collapse Toggle Button (Desktop) */}
             <button
+                data-wjs-host-ui=""
                 onClick={() => setIsCollapsed(!isCollapsed)}
                 className={`
                     hidden md:flex absolute top-10 z-[5003] w-8 h-8 bg-white border border-gray-200 rounded-full items-center justify-center text-gray-500 hover:text-blue-500 hover:border-blue-200 shadow-lg transition-all duration-500 [transition-timing-function:cubic-bezier(0.4,0,0.2,1)]
@@ -306,7 +307,7 @@ export function DashboardLayoutContent({ children }: { children: React.ReactNode
                     clears the status bar when the admin runs full-screen (viewport-fit=cover). */}
                 {/* border-gray-100: a bare `border-b` is currentColor in Tailwind v4 — a black rule under the bar that
                     also showed, sharp, through the edge of every dialog's blurred backdrop. */}
-                <header className="md:hidden bg-white border-b border-gray-100 p-4 pt-[max(1rem,env(safe-area-inset-top))] flex items-center justify-between relative z-[5000] flex-shrink-0">
+                <header className="md:hidden bg-white border-b border-gray-100 p-4 pt-[max(1rem,env(safe-area-inset-top))] flex items-center justify-between relative z-[5000] flex-shrink-0" data-wjs-host-ui="">
                     <div className="flex items-center gap-3">
                         <button
                             onClick={() => setSidebarOpen(true)}
@@ -327,7 +328,7 @@ export function DashboardLayoutContent({ children }: { children: React.ReactNode
                 </header>
 
                 {graceDaysLeft !== null && (
-                    <div className="flex-shrink-0 bg-amber-50 border-b border-amber-200 px-4 py-2.5 flex items-center justify-center gap-3 text-sm">
+                    <div data-wjs-host-ui="" className="flex-shrink-0 bg-amber-50 border-b border-amber-200 px-4 py-2.5 flex items-center justify-center gap-3 text-sm">
                         <i className="fa-solid fa-shield-halved text-amber-500"></i>
                         <span className="text-amber-800 font-medium">
                             Two-factor authentication is required for your role

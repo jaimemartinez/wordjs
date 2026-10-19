@@ -9,6 +9,7 @@
  */
 
 const { dbAsync } = require('../config/database');
+const { clampLimit, clampOffset } = require('../core/pagination');
 
 function toDisplay(row: any) {
     let fields: Record<string, string> = {};
@@ -53,8 +54,8 @@ class FormSubmission {
         const params: any[] = [];
         if (opts.formName !== undefined) { where.push('form_name = ?'); params.push(String(opts.formName)); }
         const whereSql = where.length ? ` WHERE ${where.join(' AND ')}` : '';
-        const limit = Number.isInteger(opts.limit) ? opts.limit : 20;
-        const offset = Number.isInteger(opts.offset) ? opts.offset : 0;
+        const limit = clampLimit(Number.isInteger(opts.limit) ? opts.limit : 20, 20);
+        const offset = clampOffset(Number.isInteger(opts.offset) ? opts.offset : 0);
         const rows = await dbAsync.all(
             `SELECT * FROM form_submissions${whereSql} ORDER BY id DESC LIMIT ? OFFSET ?`,
             [...params, limit, offset]

@@ -87,9 +87,11 @@ the webfonts* below).
 > no static scan can fully prevent. Any hooks/shortcodes/mail the theme registers now flow through the
 > **same RPC bridge** isolated plugins use (the isolate layer already namespaces `theme:` slugs), and
 > the runtime guards (`secure-require`/`io-guard`) confine `fs`/`require` to the theme's own directory
-> and deny secret/DB files. By default a theme is granted only `settings:read` + `content:read`; a
-> theme that needs more must ship a `manifest.json`. (Handlebars helpers stay built-in and host-side —
-> they are not registered from `functions.js`.)
+> and deny secret/DB files. Its bridge calls are permission-checked on the host the way a plugin's
+> are: a call works only for a capability the theme declares (in an optional `manifest.json` next to
+> `functions.js`) **and** that is granted to it (`theme:<slug>`). Declaring is a request, not a grant —
+> a theme's server code runs sandboxed and gets only what is granted. (Handlebars helpers stay
+> built-in and host-side — they are not registered from `functions.js`.)
 
 ## Available Themes
 
@@ -700,7 +702,11 @@ generator uses: `--wjs-bg-canvas`, `--wjs-bg-surface`, `--wjs-bg-surface-raised`
 `--wjs-color-text-muted`, `--wjs-color-heading`, `--wjs-color-link`, `--wjs-color-link-hover`,
 `--wjs-border-subtle`, `--wjs-outline`, `--wjs-outline-variant`, `--wjs-focus-ring`.
 Surfaces mix toward white on dark canvases (luminance of `bg` < 0.35) and toward black on light
-ones; the `on-*` colors are picked for contrast against their base color.
+ones; the `on-*` colors are picked for contrast against their base color. The two text colors that
+sit on the canvas are guaranteed to read: `--wjs-color-link` / `-link-hover` darken or lighten the
+brand color until they reach 4.5:1, and `--wjs-color-text-muted` is the body text washed 38% toward the
+page, or less when 38% would fall under 4.5:1 (so a theme generated from valid seeds never gets a
+doctor contrast finding for its own muted text).
 
 ### `archetype` — personality label
 
@@ -1092,7 +1098,9 @@ that family of checks — linting must never break an install/activate/render fl
 ```
 
 Compiled, that emits `--wjs-hero-radius`, `--wjs-hero-bg` and `--wjs-hero-button-bg` as `:root`
-tokens; `letter-spacing` (no token candidate) as a declaration on `.wp-block-hero__button`; the
+tokens (`--wjs-hero-bg` paints the hero: with no `--wjs-hero-gradient*` and no image, the framework's
+default gradient takes both its ends from it, so a plain colour shows as that colour; set
+`hero.gradient-from` / `gradient-to` for a gradient); `letter-spacing` (no token candidate) as a declaration on `.wp-block-hero__button`; the
 `hover` block as `.wp-block-hero__button:hover { background: #0ea5e9; transform: translateY(-2px) }`;
 and the `body.mobile` block inside `@media (max-width: 767.98px)`.
 
@@ -1428,10 +1436,28 @@ independent of the plugin marketplace via `GET`/`PUT /marketplace/themes/sources
 
 ### From a ZIP upload
 
-You can also upload a packaged theme ZIP directly. **Admin → Themes** exposes an upload control backed
+You can also upload a packaged theme ZIP directly. **Admin → Themes → Install Theme** is backed
 by `POST /themes/upload` (`backend/src/routes/themes.ts`, `authenticate` + `isAdmin`); the archive is
 validated by the shared **zip-guard** (`assertZipWithinBudget` — rejects decompression bombs and
-path-traversal entries) before it is extracted into `backend/themes/{slug}/`.
+path-traversal entries) before it is extracted into `backend/themes/{slug}/`. The zip must hold exactly
+one top-level folder, the theme's slug — `node backend/cli/wordjs.js pack theme <slug>` builds it (see
+[cli.md](cli.md)).
+
+### Updating a theme (upload a newer ZIP)
+
+Upload the new ZIP the same way. When that theme is already installed, the upload answers
+`409 theme_exists` and the Themes screen asks *Update the theme?*; confirm and it is replaced in place
+(`POST /themes/:slug/update`, field `theme`). There is no need to activate another theme and delete
+this one first.
+
+- Every entry must live under `<slug>/` — a zip for another theme (or a version-suffixed folder) is
+  refused.
+- The new version is extracted to a private staging directory and checked there: it needs a
+  `style.css` or a `theme.json`, and a `theme.json` must compile without errors. A zip that fails
+  leaves the installed theme exactly as it was.
+- Then the two directories are swapped. An active theme stays active, its customizer settings (stored
+  in options, not in the folder) are kept, the theme engine is re-initialized and the cached public
+  pages are expired at once.
 
 ### Exporting a theme
 
@@ -1443,9 +1469,11 @@ Any installed theme can be packaged back into a ZIP for backup or transfer via
 
 1. Go to **Admin → Themes**
 2. Click **Activate** on the desired theme
-3. The public site serves the new theme on the next navigation or full page load: activation purges
-   the `settings` cache tag, so the next server render carries the new slug/version. An already-open
-   public tab keeps the theme it was rendered with until it navigates — nothing re-fetches on tab focus.
+3. The public site serves the new theme on the next navigation or full page load: activation
+   **expires** the `settings` cache tag (not merely marks it stale), so the next request renders with the
+   new slug/version instead of getting the previous theme once more while a refresh runs in the
+   background. An already-open public tab keeps the theme it was rendered with until it navigates —
+   nothing re-fetches on tab focus.
 
 Under the hood, activation calls `switchTheme()` in `backend/src/core/themes.ts`, which writes
 the `template` and `stylesheet` options, publishes the new theme's `theme.json` `layout` to the

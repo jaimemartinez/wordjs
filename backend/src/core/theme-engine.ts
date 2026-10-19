@@ -14,6 +14,7 @@ const path = require('path');
 const Handlebars = require('handlebars');
 const { getOption } = require('./options');
 const { doAction, applyFilters } = require('./hooks');
+const log = require('./module-logger').moduleLogger('core/theme-engine');
 
 const THEMES_DIR = path.resolve('./themes');
 
@@ -62,14 +63,14 @@ async function unloadThemeIsolates(incomingIsoSlug: string): Promise<void> {
     try {
         iso = require('./plugin-isolate');
     } catch (e: any) {
-        console.error('[Theme] cannot reach the isolate layer to retire theme isolates:', e && e.message);
+        log.error({ err: e }, '[Theme] cannot reach the isolate layer to retire theme isolates');
         return;
     }
     let slugs: string[];
     try {
         slugs = iso.listIsolates();
     } catch (e: any) {
-        console.error('[Theme] failed to enumerate loaded isolates — a previous theme child may survive this switch:', e && e.message);
+        log.error({ err: e }, '[Theme] failed to enumerate loaded isolates — a previous theme child may survive this switch');
         return;
     }
     for (const slug of Array.isArray(slugs) ? slugs : []) {
@@ -78,34 +79,47 @@ async function unloadThemeIsolates(incomingIsoSlug: string): Promise<void> {
             // Let a load that is still in flight finish before retiring it (see the note above). Bounded:
             // on timeout we unload what IS registered rather than block the switch, and say so.
             if (typeof iso.awaitIsolateSettled === 'function' && !(await iso.awaitIsolateSettled(slug))) {
-                console.error(`[Theme] isolate '${slug}' is still loading after the wait — retiring what is registered; a child of it may survive this switch.`);
+                log.error({ slug }, `[Theme] isolate '${slug}' is still loading after the wait — retiring what is registered; a child of it may survive this switch.`);
             }
             await iso.unloadIsolatedPlugin(slug);
-            if (slug !== incomingIsoSlug) console.log(`🎨 Theme switch: retired the outgoing theme isolate '${slug}'.`);
+            if (slug !== incomingIsoSlug) log.info({ slug }, `🎨 Theme switch: retired the outgoing theme isolate '${slug}'.`);
         } catch (e: any) {
             // BEST-EFFORT, BUT LOUD. A teardown that fails must not stop the incoming theme from loading
             // (the site would be left with no theme logic at all), yet it means a theme child may still be
             // alive and serving stale hooks — a silent catch here is precisely how this bug stayed hidden.
-            console.error(`[Theme] failed to retire theme isolate '${slug}' — it may still be running and serving stale hooks/shortcodes:`, e && e.message);
+            log.error({ slug, err: e }, `[Theme] failed to retire theme isolate '${slug}' — it may still be running and serving stale hooks/shortcodes`);
         }
     }
 }
 
-// Promise-chain mutex for ThemeEngine.init() — see the doc on init(). Module-scoped so it covers the one
-// engine instance this module exports (and any other), and so a re-require can never hand out a second.
-let initChain: Promise<void> = Promise.resolve();
-
-// The init that is QUEUED but has not started running yet, if any. Callers arriving while it waits JOIN it
-// instead of queueing another — see init(). Cleared the moment that queued run begins, so the next caller
-// queues a fresh one and can never be served by a run that started before its request.
-let pendingInit: Promise<void> | null = null;
+/**
+ * MULTISITE: each site has its own active theme (the `template` option is per site) and so its own theme
+ * worker — `theme:<slug>` runs once per site, keyed by core/plugin-isolate like a plugin (`s<id>:theme:<slug>`
+ * on a site other than the main one). The engine's state, and the lock that serializes its re-inits, are
+ * kept per site; a single site has the one state it always had.
+ *
+ *  - initChain: promise-chain mutex for ThemeEngine.init() — see the doc on init(). Module-scoped so it
+ *    covers the one engine instance this module exports (and any other), and so a re-require can never
+ *    hand out a second.
+ *  - pendingInit: the init that is QUEUED but has not started running yet, if any. Callers arriving while
+ *    it waits JOIN it instead of queueing another — see init(). Cleared the moment that queued run begins,
+ *    so the next caller queues a fresh one and can never be served by a run that started before its request.
+ */
+const siteContext = require('./site-context');
+const engineState = siteContext.perSite(() => ({
+    activeTheme: null as any,
+    initChain: Promise.resolve() as Promise<void>,
+    pendingInit: null as Promise<void> | null,
+}));
 
 class ThemeEngine {
-    activeTheme: any;
     partialsLoaded: boolean;
 
+    /** The current site's active theme (see engineState). */
+    get activeTheme(): any { return engineState.get().activeTheme; }
+    set activeTheme(v: any) { engineState.get().activeTheme = v; }
+
     constructor() {
-        this.activeTheme = null;
         this.partialsLoaded = false;
 
         // Register helpers
@@ -180,20 +194,21 @@ class ThemeEngine {
      * arriving while a queued run waits gets that run's result instead of scheduling another.
      */
     async init() {
+        const st = engineState.get();
         // Join a run that has not started yet — it will re-read `template` and so covers this request too.
-        if (pendingInit) return pendingInit;
+        if (st.pendingInit) return st.pendingInit;
 
         // Clearing pendingInit as the FIRST thing the queued run does is what bounds the coalescing window:
         // a caller arriving after this point queues its own run, so it can never be answered by work that
         // began before it asked.
-        const queued = initChain.then(
-            () => { pendingInit = null; return this.initLocked(); },
-            () => { pendingInit = null; return this.initLocked(); }
+        const queued = st.initChain.then(
+            () => { st.pendingInit = null; return this.initLocked(); },
+            () => { st.pendingInit = null; return this.initLocked(); }
         );
         // Joiners share the caller's outcome, failure included. The CHAIN takes a neutered copy: an init
         // that throws must not wedge every later switch.
-        pendingInit = queued;
-        initChain = queued.then(() => undefined, () => undefined);
+        st.pendingInit = queued;
+        st.initChain = queued.then(() => undefined, () => undefined);
         return queued;
     }
 
@@ -205,17 +220,17 @@ class ThemeEngine {
         // to run arbitrary in-process code from outside THEMES_DIR. Require a single safe path segment and
         // re-assert the resolved path stays under THEMES_DIR before doing anything with it.
         if (!/^[a-zA-Z0-9._-]+$/.test(themeSlug) || themeSlug === '.' || themeSlug === '..') {
-            console.error(`❌ Theme slug '${themeSlug}' is not a safe single path segment — refusing to load.`);
+            log.error({ themeSlug }, `❌ Theme slug '${themeSlug}' is not a safe single path segment — refusing to load.`);
             return;
         }
         const themePath = path.join(THEMES_DIR, themeSlug);
         if (!path.resolve(themePath).startsWith(path.resolve(THEMES_DIR) + path.sep)) {
-            console.error(`❌ Theme path '${themePath}' escaped the themes dir — refusing to load.`);
+            log.error(`❌ Theme path '${themePath}' escaped the themes dir — refusing to load.`);
             return;
         }
 
         if (!fs.existsSync(themePath)) {
-            console.error(`❌ Theme ${themeSlug} not found at ${themePath}`);
+            log.error({ themeSlug }, `❌ Theme ${themeSlug} not found at ${themePath}`);
             return;
         }
 
@@ -266,17 +281,19 @@ class ThemeEngine {
         try {
             // Static AST pre-scan (defense in depth). The REAL containment is the OS isolation below.
             const { validatePluginPermissions } = require('./plugins');
-            let manifest: any = { permissions: [{ scope: 'settings', access: 'read' }, { scope: 'content', access: 'read' }] };
+            // No manifest.json: the same default declaration the runtime gate applies (plugin-context).
+            const { DEFAULT_THEME_PERMISSIONS } = require('./plugin-context');
+            let manifest: any = { permissions: DEFAULT_THEME_PERMISSIONS.map((p: any) => ({ ...p })) };
             const manifestPath = path.join(this.activeTheme.path, 'manifest.json');
             if (fs.existsSync(manifestPath)) {
                 try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); }
-                catch (e) { console.warn(`[Theme] Failed to parse manifest for ${themeSlug}:`, e.message); }
+                catch (e) { log.warn({ err: e }, `[Theme] Failed to parse manifest for ${themeSlug}`); }
             }
             try {
                 validatePluginPermissions(themeSlug, this.activeTheme.path, manifest);
             } catch (securityError) {
-                console.error(`🚨 Security Block: Theme '${themeSlug}' contains unsafe code and was blocked.`);
-                console.error(securityError.message);
+                log.error(`🚨 Security Block: Theme '${themeSlug}' contains unsafe code and was blocked.`);
+                log.error(securityError);
                 return; // STOP loading
             }
 
@@ -293,7 +310,7 @@ class ThemeEngine {
             const { loadIsolatedPlugin } = require('./plugin-isolate');
             await loadIsolatedPlugin(isoSlug, logicPath);
         } catch (e) {
-            console.error(`❌ Error loading theme functions.js (isolated):`, (e as any) && (e as any).message);
+            log.error({ err: e }, '❌ Error loading theme functions.js (isolated)');
         }
     }
 
@@ -305,7 +322,7 @@ class ThemeEngine {
         // outgoing-isolate teardown covers it too — there is no second place to fix.
         const currentOption = await getOption('template', 'default');
         if (!this.activeTheme || this.activeTheme.slug !== currentOption) {
-            console.log(`🎨 Theme engine reloading: ${this.activeTheme?.slug} -> ${currentOption}`);
+            log.info(`🎨 Theme engine reloading: ${this.activeTheme?.slug} -> ${currentOption}`);
             await this.init();
         }
 

@@ -123,6 +123,8 @@ export default function AuctionsAdminPage() {
     const [auctions, setAuctions] = useState([]);
     const [symbol, setSymbol] = useState("$");
     const [symbolDraft, setSymbolDraft] = useState("$");
+    const [bidVerification, setBidVerification] = useState("email");
+    const [jumpPercent, setJumpPercent] = useState("100");
     const [msg, setMsg] = useState("");
     const [busy, setBusy] = useState(false);
     const [nowMs, setNowMs] = useState(() => Date.now());
@@ -172,7 +174,15 @@ export default function AuctionsAdminPage() {
         }
     };
 
-    useEffect(() => { loadAuctions(); }, []);
+    const loadSettings = async () => {
+        try {
+            const r = await api("/plugin/auctions/settings");
+            if (r.bidVerification) setBidVerification(r.bidVerification);
+            if (r.maxBidJumpPercent !== undefined) setJumpPercent(String(r.maxBidJumpPercent));
+        } catch { /* keep defaults */ }
+    };
+
+    useEffect(() => { loadAuctions(); loadSettings(); }, []);
     useEffect(() => {
         const t = setInterval(() => setNowMs(Date.now()), 1000);
         return () => clearInterval(t);
@@ -261,9 +271,15 @@ export default function AuctionsAdminPage() {
     };
     const saveSymbol = async () => {
         try {
-            const r = await apiPost("/plugin/auctions/settings", { currencySymbol: symbolDraft });
+            const r = await apiPost("/plugin/auctions/settings", {
+                currencySymbol: symbolDraft,
+                bidVerification,
+                maxBidJumpPercent: Number(jumpPercent),
+            });
             setSymbol(r.currencySymbol || "$");
-            setMsg("Símbolo de moneda guardado.");
+            if (r.bidVerification) setBidVerification(r.bidVerification);
+            if (r.maxBidJumpPercent !== undefined) setJumpPercent(String(r.maxBidJumpPercent));
+            setMsg("Ajustes guardados.");
         } catch (e) { setMsg(`Error: ${e?.message || e}`); }
     };
 
@@ -299,7 +315,7 @@ export default function AuctionsAdminPage() {
                     {tabBtn("bids", "Pujas")}
                     {tabBtn("report", "Reporte")}
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.5rem" }}>
                     <label className="cf-label" htmlFor="au-symbol" style={{ marginBottom: 0 }}>Moneda</label>
                     <input
                         id="au-symbol"
@@ -309,6 +325,14 @@ export default function AuctionsAdminPage() {
                         className="cf-input cf-symbol-input"
                         maxLength={8}
                     />
+                    <label className="cf-label" htmlFor="au-verify" style={{ marginBottom: 0 }}>Quién puja</label>
+                    <select id="au-verify" className="cf-input" style={{ width: "auto" }} value={bidVerification} onChange={(e) => setBidVerification(e.target.value)}>
+                        <option value="email">Correo confirmado con código</option>
+                        <option value="login">Solo usuarios con sesión</option>
+                        <option value="none">Cualquiera (sin verificar)</option>
+                    </select>
+                    <label className="cf-label" htmlFor="au-jump" style={{ marginBottom: 0 }} title="Cuánto puede subir el precio una sola puja (0 = sin límite)">Salto máx. %</label>
+                    <input id="au-jump" type="number" min={0} max={10000} className="cf-input cf-symbol-input" value={jumpPercent} onChange={(e) => setJumpPercent(e.target.value)} />
                     <button type="button" onClick={saveSymbol} className="cf-btn-ghost">Guardar</button>
                 </div>
             </div>

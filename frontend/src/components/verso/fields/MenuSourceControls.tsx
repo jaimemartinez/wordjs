@@ -15,6 +15,7 @@
  */
 import React from "react";
 import { menusApi, type Menu } from "@/lib/api";
+import { useEditorTr } from "@/lib/verso/useEditorTr";
 
 export interface MenuCatalog {
     /** location → menuId asignado (GET /menus/locations). */
@@ -103,6 +104,7 @@ export function MenuLocationPickerControl({ value, onChange }: {
     value: unknown;
     onChange: (v: unknown) => void;
 }) {
+    const { tr, trf } = useEditorTr();
     const catalog = useMenuCatalog();
     const id = React.useId();
     const current = typeof value === "string" ? value : value === undefined || value === null ? "" : String(value);
@@ -111,7 +113,7 @@ export function MenuLocationPickerControl({ value, onChange }: {
         // Degradación: sin catálogo, el input crudo de siempre (editable, nunca un bloqueo).
         return (
             <div>
-                <label htmlFor={id} className={LABEL_CLS}>Ubicación del menú (p. ej. header)</label>
+                <label htmlFor={id} className={LABEL_CLS}>{tr("Ubicación del menú (p. ej. header)")}</label>
                 <input
                     id={id}
                     type="text"
@@ -120,7 +122,7 @@ export function MenuLocationPickerControl({ value, onChange }: {
                     onChange={(e) => onChange(e.target.value)}
                 />
                 <p className="mt-1 text-[10px] text-[var(--ed-outline)]">
-                    No se pudieron cargar las ubicaciones registradas.
+                    {tr("No se pudieron cargar las ubicaciones registradas.")}
                 </p>
             </div>
         );
@@ -133,7 +135,7 @@ export function MenuLocationPickerControl({ value, onChange }: {
 
     return (
         <div>
-            <label htmlFor={id} className={LABEL_CLS}>Ubicación del menú</label>
+            <label htmlFor={id} className={LABEL_CLS}>{tr("Ubicación del menú")}</label>
             <select
                 id={id}
                 className={INPUT_CLS}
@@ -141,13 +143,13 @@ export function MenuLocationPickerControl({ value, onChange }: {
                 disabled={!catalog}
                 onChange={(e) => onChange(e.target.value)}
             >
-                {!known && <option value={current}>{`${current} (no registrada)`}</option>}
-                {current === "" && <option value="">— Elige una ubicación —</option>}
+                {!known && <option value={current}>{trf("{location} (no registrada)", { location: current })}</option>}
+                {current === "" && <option value="">{tr("— Elige una ubicación —")}</option>}
                 {locations.map((loc) => {
                     const assigned = menuName(Number(catalog!.locations[loc]));
                     return (
                         <option key={loc} value={loc}>
-                            {assigned ? `${loc} — ${assigned}` : `${loc} — sin menú`}
+                            {assigned ? `${loc} — ${assigned}` : trf("{location} — sin menú", { location: loc })}
                         </option>
                     );
                 })}
@@ -164,6 +166,7 @@ export function MenuPickerControl({ value, onChange }: {
     value: unknown;
     onChange: (v: unknown) => void;
 }) {
+    const { tr, trf } = useEditorTr();
     const catalog = useMenuCatalog();
     const id = React.useId();
     const parsed = Number(value);
@@ -172,7 +175,7 @@ export function MenuPickerControl({ value, onChange }: {
     if (catalog && !catalog.menusOk) {
         return (
             <div>
-                <label htmlFor={id} className={LABEL_CLS}>ID del menú (si el origen es Menú)</label>
+                <label htmlFor={id} className={LABEL_CLS}>{tr("ID del menú (si el origen es Menú)")}</label>
                 <input
                     id={id}
                     type="number"
@@ -185,7 +188,7 @@ export function MenuPickerControl({ value, onChange }: {
                     }}
                 />
                 <p className="mt-1 text-[10px] text-[var(--ed-outline)]">
-                    No se pudieron cargar los menús existentes.
+                    {tr("No se pudieron cargar los menús existentes.")}
                 </p>
             </div>
         );
@@ -195,7 +198,7 @@ export function MenuPickerControl({ value, onChange }: {
 
     return (
         <div>
-            <label htmlFor={id} className={LABEL_CLS}>Menú (si el origen es Menú)</label>
+            <label htmlFor={id} className={LABEL_CLS}>{tr("Menú (si el origen es Menú)")}</label>
             <select
                 id={id}
                 className={INPUT_CLS}
@@ -206,8 +209,8 @@ export function MenuPickerControl({ value, onChange }: {
                     onChange(Number.isFinite(n) && n > 0 ? n : 0);
                 }}
             >
-                <option value="0">— Sin menú elegido —</option>
-                {!known && <option value={String(current)}>{`Menú #${current} (no existe)`}</option>}
+                <option value="0">{tr("— Sin menú elegido —")}</option>
+                {!known && <option value={String(current)}>{trf("Menú #{id} (no existe)", { id: current })}</option>}
                 {(catalog?.menus ?? []).map((m) => (
                     <option key={m.id} value={String(m.id)}>{m.name}</option>
                 ))}

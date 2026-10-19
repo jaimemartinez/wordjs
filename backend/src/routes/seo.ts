@@ -6,6 +6,7 @@
 import type { Request, Response } from 'express';
 
 const express = require('express');
+const log = require('../core/module-logger').moduleLogger('routes/seo');
 const router = express.Router();
 const Post = require('../models/Post');
 const { getOption } = require('../core/options');
@@ -246,7 +247,7 @@ router.get('/sitemap.xml', async (req: Request, res: Response) => {
         res.set('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
         res.send(xml);
     } catch (error) {
-        console.error('Sitemap error:', error);
+        log.error({ err: error }, 'Sitemap error');
         res.status(500).send('Error generating sitemap');
     }
 });
@@ -294,7 +295,7 @@ router.get('/sitemap-:kind-:page.xml', async (req: Request, res: Response) => {
         res.set('Cache-Control', 'public, max-age=3600');
         res.send(generateSitemapUrlset(chunk.entries));
     } catch (error) {
-        console.error('Sitemap chunk error:', error);
+        log.error({ err: error }, 'Sitemap chunk error');
         res.status(500).send('Error generating sitemap');
     }
 });
@@ -323,7 +324,7 @@ router.get('/robots.txt', async (req: Request, res: Response) => {
         res.set('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
         res.send(robotsTxt);
     } catch (error) {
-        console.error('Robots.txt error:', error);
+        log.error({ err: error }, 'Robots.txt error');
         res.status(500).send('Error generating robots.txt');
     }
 });
@@ -384,7 +385,7 @@ router.get('/feed.xml', async (req: Request, res: Response) => {
 
         sendFeed(res, 'application/rss+xml; charset=utf-8', xml);
     } catch (error) {
-        console.error('RSS feed error:', error);
+        log.error({ err: error }, 'RSS feed error');
         res.status(500).send('Error generating feed');
     }
 });
@@ -415,7 +416,7 @@ router.get('/feed.atom', async (req: Request, res: Response) => {
 
         sendFeed(res, 'application/atom+xml; charset=utf-8', xml);
     } catch (error) {
-        console.error('Atom feed error:', error);
+        log.error({ err: error }, 'Atom feed error');
         res.status(500).send('Error generating feed');
     }
 });
@@ -448,7 +449,7 @@ router.get('/feed.json', async (req: Request, res: Response) => {
         // content type is the JSON Feed one, not application/json.
         sendFeed(res, 'application/feed+json; charset=utf-8', json);
     } catch (error) {
-        console.error('JSON feed error:', error);
+        log.error({ err: error }, 'JSON feed error');
         res.status(500).send('Error generating feed');
     }
 });
@@ -562,7 +563,7 @@ router.get('/category/:slug/feed.xml', async (req: Request, res: Response) => {
     try {
         await sendTermFeed(req, res, 'category', 'category');
     } catch (error) {
-        console.error('Category feed error:', error);
+        log.error({ err: error }, 'Category feed error');
         res.status(500).send('Error generating feed');
     }
 });
@@ -590,7 +591,7 @@ router.get('/tag/:slug/feed.xml', async (req: Request, res: Response) => {
     try {
         await sendTermFeed(req, res, 'post_tag', 'tag');
     } catch (error) {
-        console.error('Tag feed error:', error);
+        log.error({ err: error }, 'Tag feed error');
         res.status(500).send('Error generating feed');
     }
 });
@@ -612,19 +613,20 @@ router.get('/tag/:slug/feed.xml', async (req: Request, res: Response) => {
  *       200:
  *         description: RSS feed
  *       404:
- *         description: No such author
+ *         description: No such author, or an account that has not published a post
  */
 router.get('/author/:slug/feed.xml', async (req: Request, res: Response) => {
     try {
         const slug = usableSlug(req.params.slug);
         if (!slug) return feedNotFound(res);
 
-        // An author is addressed by user_nicename (WordPress's public author slug) — but nothing in
-        // WordJS populates that column yet, so user_login is accepted as the same identity, AND so is
-        // the numeric user id, because that is what the public author ARCHIVE is keyed by (the /users
-        // router is authenticated, so a post's serialised author is a bare number with no name on it).
-        // An all-digits segment is therefore read as an id: a user whose LOGIN is digits is not
-        // reachable here, which is the right trade when the archive URL it must match is the id.
+        // An author is addressed by user_nicename (the public author slug) or by the numeric user id,
+        // because that is what the public author ARCHIVE is keyed by when an account has no slug. An
+        // all-digits segment is therefore read as an id. The LOGIN is never accepted — not even for an
+        // account without a slug: a feed that answered `/author/<login>/feed.xml` with 200 or 404 would
+        // tell anyone whether that login exists. A slug an author was moved off by migration 0017 (it was
+        // derived from the login) resolves only when the administrator opted in (core/author-aliases —
+        // Post._authorCondition's same rule); otherwise it is answered exactly like an unknown slug.
         // Only the id and the display name are read — an author feed must not become an e-mail
         // enumeration.
         const { dbAsync } = require('../config/database');
@@ -635,40 +637,44 @@ router.get('/author/:slug/feed.xml', async (req: Request, res: Response) => {
         const digitsOnly = /^\d+$/.test(slug);
         const routeId = digitsOnly ? routeIdOrNull(slug) : null;
         if (digitsOnly && routeId === null) return feedNotFound(res);
+        const legacyAliases = routeId === null && await require('../core/author-aliases').legacyAuthorSlugsEnabled();
         const user = routeId !== null
-            ? await dbAsync.get('SELECT id, display_name, user_login, user_nicename FROM users WHERE id = ? LIMIT 1', [routeId])
+            ? await dbAsync.get('SELECT id, user_nicename FROM users WHERE id = ? LIMIT 1', [routeId])
+            : !legacyAliases
+            ? await dbAsync.get("SELECT id, user_nicename FROM users WHERE user_nicename = ? AND user_nicename <> '' LIMIT 1", [slug])
             : await dbAsync.get(
-                "SELECT id, display_name, user_login, user_nicename FROM users " +
-                // user_login is a fallback for a row whose nicename is EMPTY, never an alias for one that
-                // has a nicename: otherwise `/author/<login>/feed.xml` answers 200 or 404 by whether that
-                // LOGIN exists, and a public feed becomes a login-enumeration oracle for the sign-in form.
-                "WHERE (user_nicename = ? AND user_nicename <> '') " +
-                "OR (user_login = ? AND (user_nicename IS NULL OR user_nicename = '')) LIMIT 1",
+                "SELECT id, user_nicename FROM users WHERE user_nicename = ? AND user_nicename <> '' " +
+                "UNION SELECT u.id, u.user_nicename FROM users u JOIN user_meta m ON m.user_id = u.id " +
+                "AND m.meta_key = 'previous_nicename' AND m.meta_value = ? LIMIT 1",
                 [slug, slug],
             );
         if (!user) return feedNotFound(res);
 
-        // SAME RULE AS sendTermFeed: two spellings resolve one author (nicename and numeric id; login only
-        // while the nicename is empty), 
-        // and the channel has to name ONE of them or a reader that arrives by the id subscribes to a
-        // second copy of the same feed. `user_nicename` is the public author slug and wins when it is
-        // populated. When it is EMPTY the fallback is the numeric id — the SAME rule as
-        // `Post.getAuthorsForIds` (which serialises `slug: nicename || id`), so the archive the frontend
-        // canonicalises on `author.slug` and this channel name the same URL. The login is never an
-        // output: the lookup above accepts it for a nicename-less row so an old subscription keeps
-        // working, but a channel that printed it would publish the sign-in name of an account.
-        const canonical = String(user.user_nicename || user.id);
         const channel = await feedChannel();
         const posts = await Post.findAll({ type: 'post', status: 'publish', author: user.id, limit: channel.limit });
+        // AN ACCOUNT IS AN AUTHOR ONLY ONCE IT HAS PUBLISHED. Without this every user id answered 200
+        // with an empty channel — subscribers, administrators and pending sign-ups alike — so the feed
+        // enumerated accounts (and printed their names) one id at a time. The frontend archive draws the
+        // same line: no published post, no author page.
+        if (posts.length === 0) return feedNotFound(res);
+
+        // SAME RULE AS sendTermFeed: two spellings resolve one author (nicename and numeric id), and the
+        // channel has to name ONE of them or a reader that arrives by the id subscribes to a second copy
+        // of the same feed. `user_nicename` is the public author slug and wins when it is populated.
+        // When it is EMPTY the fallback is the numeric id — the SAME rule, and the SAME display name, as
+        // `Post.getAuthorsForIds`, so the archive the frontend canonicalises on `author.slug` and this
+        // channel name the same URL and the same person. The login is never an output.
+        const author = (await Post.getAuthorsForIds([user.id]))[user.id];
+        const canonical = String(user.user_nicename || user.id);
 
         await sendScopedRss(req, res, {
             posts,
-            name: String(user.display_name || user.user_login || canonical),
+            name: author ? author.displayName : canonical,
             link: `${channel.siteUrl}/author/${canonical}`,
             selfPath: `/author/${canonical}/feed.xml`,
         });
     } catch (error) {
-        console.error('Author feed error:', error);
+        log.error({ err: error }, 'Author feed error');
         res.status(500).send('Error generating feed');
     }
 });
@@ -718,7 +724,7 @@ router.get('/comments/feed.xml', async (req: Request, res: Response) => {
 
         sendFeed(res, 'application/rss+xml; charset=utf-8', xml);
     } catch (error) {
-        console.error('Comments feed error:', error);
+        log.error({ err: error }, 'Comments feed error');
         res.status(500).send('Error generating feed');
     }
 });
@@ -781,7 +787,7 @@ router.get('/meta/:postId', authenticate, can('edit_posts'), async (req: Request
             canonical: `/${post.postName || post.slug}` // live canonical is /<slug> for posts AND pages
         });
     } catch (error) {
-        console.error('SEO meta error:', error);
+        log.error({ err: error }, 'SEO meta error');
         res.status(500).json({ error: 'Error fetching SEO data' });
     }
 });

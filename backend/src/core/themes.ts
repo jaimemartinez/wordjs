@@ -10,8 +10,28 @@ const { doAction } = require('./hooks');
 // The one place a name becomes a path: allowlist the FORM, resolve canonically, prove containment on
 // the value RETURNED (core/safe-path).
 const { resolveThemeDir, resolveWithin, isThemeSlug, isPlainSegment } = require('./safe-path');
+const log = require('./module-logger').moduleLogger('core/themes');
 
 const THEMES_DIR = path.resolve('./themes');
+
+/**
+ * Optional per-language metadata from theme.json: `"translations": { "es": { "description": "…" } }`.
+ * The top-level `description` stays the default (English); the admin shows the entry for its own
+ * language when there is one. Only short string descriptions under a plain language code survive — the
+ * value is theme-supplied text and goes nowhere but a text node.
+ */
+function themeTranslations(raw: unknown): Record<string, { description?: string }> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out: Record<string, { description?: string }> = {};
+  for (const [lang, entry] of Object.entries(raw as Record<string, unknown>)) {
+    if (!/^[a-z]{2,3}(-[A-Za-z]{2,4})?$/.test(lang) || !entry || typeof entry !== 'object') continue;
+    const description = (entry as Record<string, unknown>).description;
+    if (typeof description === 'string' && description.trim() && description.length <= 1000) {
+      out[lang] = { description };
+    }
+  }
+  return Object.keys(out).length ? out : null;
+}
 
 /**
  * Theme metadata structure
@@ -27,6 +47,7 @@ class Theme {
   path: any;
   templatePath: any;
   layout: any;
+  translations: Record<string, { description?: string }> | null;
 
   constructor(data: any) {
     this.name = data.name;
@@ -41,6 +62,7 @@ class Theme {
     // Optional structure config from theme.json (e.g. { containerWidth, sidebar, headerStyle }).
     // The Next.js public layout honors it via the active_theme_layout option (see switchTheme).
     this.layout = (data.layout && typeof data.layout === 'object') ? data.layout : null;
+    this.translations = themeTranslations(data.translations);
   }
 
   /**
@@ -93,7 +115,7 @@ function parseThemeMetadata(themeDir: string, slug: string) {
       const content = fs.readFileSync(metadataFile, 'utf8');
       metadata = { ...metadata, ...JSON.parse(content) };
     } catch (e) {
-      console.error(`Error parsing theme.json for ${slug}:`, e.message);
+      log.error({ slug, err: e }, `Error parsing theme.json for ${slug}`);
     }
   }
 
@@ -387,7 +409,8 @@ async function doSwitchTheme(slug: string) {
   await updateOption('active_theme_layout', theme.layout ? JSON.stringify(theme.layout) : '');
   await updateOption('active_theme_mods', '');
 
-  // Trigger engine re-initialization
+  // Trigger engine re-initialization — the current site's engine and theme worker (multisite: each site
+  // runs its own; core/theme-engine).
   const themeEngine = require('./theme-engine');
   await themeEngine.init();
 
@@ -397,6 +420,11 @@ async function doSwitchTheme(slug: string) {
   // → the public settings payload), and both theme-engine.init() and a switch_theme listener may
   // have written inside THEMES_DIR by now — so this runs LAST, after those writes, not before them.
   invalidateThemeScanCache();
+
+  // The option writes above already queued a 'settings' purge, but a plain purge is
+  // stale-while-revalidate: the first visit to every cached page would still get the PREVIOUS theme.
+  // Expire them now instead, so the next navigation renders with this one.
+  try { require('./frontend-purge').purgeFrontend(['settings'], ['/'], { immediate: true }); } catch { /* best-effort */ }
 
   return { success: true, message: `Switched to theme ${theme.name}` };
 }
@@ -413,6 +441,7 @@ async function getAllThemes() {
     slug: theme.slug,
     version: theme.version,
     description: theme.description,
+    translations: theme.translations,
     author: theme.author,
     screenshot: theme.screenshot,
     layout: theme.layout,
@@ -467,6 +496,11 @@ function createDefaultTheme(force = false) {
     name: 'WordJS',
     version: '2.1.0',
     description: 'The default WordJS theme — modern, JavaScript-native, developer-first. Signature indigo→violet gradient, Space Grotesk display type, and a deep-indigo footer.',
+    // Same as the committed themes/default/theme.json, so a restore does not lose the translations.
+    translations: {
+      es: { description: 'El tema predeterminado de WordJS — moderno, nativo de JavaScript y pensado para desarrolladores. Degradado índigo→violeta característico, tipografía Space Grotesk y un pie de página índigo oscuro.' },
+      pt: { description: 'O tema padrão do WordJS — moderno, nativo de JavaScript e pensado para desenvolvedores. Gradiente índigo→violeta característico, tipografia Space Grotesk e um rodapé índigo escuro.' },
+    },
     author: 'WordJS'
   };
   // A restore rewrites style.css, and the stylesheet URL is keyed by this version — leaving it alone
@@ -1352,7 +1386,9 @@ async function createThemeZip(slug: string) {
 
   const AdmZip = require('adm-zip');
   const zip = new AdmZip();
-  zip.addLocalFolder(themeDir);
+  // Rooted at <slug>/ — the layout the upload and the in-place update (POST /themes/:slug/update) expect,
+  // so a downloaded theme can be uploaded back as it is.
+  zip.addLocalFolder(themeDir, theme.slug);
   zip.writeZip(tempPath);
   return tempPath;
 }
@@ -1433,9 +1469,124 @@ async function installThemeFromZip(zipPath: any, slug: any): Promise<{ ok: boole
   }
 }
 
+/**
+ * In-place UPDATE of an installed theme from a zip — the theme counterpart of the plugin update
+ * (routes/plugins.ts runPluginUpdate). It used to take three steps (activate another theme, delete this
+ * one, upload again), and they reset the site's look in between.
+ *
+ * Same gates as the strict installer above (zip-bomb budget, every entry under `<slug>/`, no '..'
+ * segment, containment), plus: the new version is extracted into a private STAGING dir under os-tmp and
+ * checked there — it must carry a style.css or a theme.json, and a theme.json must compile without
+ * errors — so a zip that fails leaves the installed theme exactly as it was. Only then are the two
+ * directories swapped by rename (old one aside, staged one in, old one removed; put back if the second
+ * rename fails). The customizer's saved mods live in options and are untouched. When the theme is the
+ * active one, the theme engine is re-initialized and the cached public pages are expired at once.
+ * Returns {ok, status, body} and always deletes `zipPath`.
+ */
+async function updateThemeFromZip(zipPath: string, slug: string): Promise<{ ok: boolean; status: number; body: any }> {
+  const AdmZip = require('adm-zip');
+  const { assertZipWithinBudget } = require('./zip-guard');
+  const osTmp = path.resolve(THEMES_DIR, '..', 'os-tmp');
+  const zipAbs = typeof zipPath === 'string' && !zipPath.includes('\0') ? path.resolve(zipPath) : '';
+  const cleanup = () => {
+    if (zipAbs.startsWith(osTmp + path.sep)) { try { fs.unlinkSync(zipAbs); } catch { /* already gone */ } }
+  };
+  const refuse = (status: number, error: string, extra: any = {}) => { cleanup(); return { ok: false, status, body: { error, unchanged: true, ...extra } }; };
+
+  if (!zipAbs.startsWith(osTmp + path.sep)) return refuse(400, 'Update package is not inside the theme scratch directory');
+  if (!slug) return refuse(404, 'That theme is not installed.');
+  const targetDir = resolveThemeDir(THEMES_DIR, slug);
+  if (targetDir === null) return refuse(400, 'Invalid theme slug');
+  if (!fs.existsSync(path.join(targetDir, 'style.css')) && !fs.existsSync(path.join(targetDir, 'theme.json'))) {
+    return refuse(404, `Theme "${slug}" is not installed.`);
+  }
+
+  let stageRoot: string | null = null;
+  try {
+    const zip = new AdmZip(zipAbs);
+    const entries = zip.getEntries();
+    try { assertZipWithinBudget(entries, { kind: 'theme' }); }
+    catch (e: any) { return refuse(400, e.message); }
+
+    fs.mkdirSync(osTmp, { recursive: true, mode: 0o700 });
+    stageRoot = fs.mkdtempSync(path.join(osTmp, 'theme-stage-'));
+    const stagedDir = resolveWithin(stageRoot as string, slug);
+    if (stagedDir === null) return refuse(400, 'Invalid theme slug');
+
+    // STRICT layout: the update must name THIS theme — a zip rooted at another folder (or a
+    // version-suffixed one) would otherwise replace this theme with something else.
+    for (const entry of entries) {
+      const name = String(entry.entryName).replace(/\\/g, '/');
+      const segments = name.split('/').filter((s: string) => s !== '');
+      if (segments.includes('..') || segments.includes('.')) return refuse(400, 'Malicious zip file detected (path traversal)');
+      if (segments[0] !== slug) {
+        return refuse(400, `This zip does not update "${slug}": every entry must live under "${slug}/" (found "${name}"). `
+          + `Pack it with \`node backend/cli/wordjs.js pack theme ${slug}\`.`);
+      }
+      const dest = segments.length ? resolveWithin(stageRoot as string, ...segments) : null;
+      if (dest === null || !(dest === stagedDir || dest.startsWith(stagedDir + path.sep))) {
+        return refuse(400, 'Malicious zip file detected (Zip Slip)');
+      }
+      if (entry.isDirectory) continue; // re-created from file paths; never extract-enumerate them
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.writeFileSync(dest, entry.getData());
+    }
+
+    const hasManifest = fs.existsSync(path.join(stagedDir, 'theme.json'));
+    if (!hasManifest && !fs.existsSync(path.join(stagedDir, 'style.css'))) {
+      return refuse(400, 'Not a valid WordJS theme (no style.css or theme.json).');
+    }
+    if (hasManifest) {
+      const { compileTheme } = require('./theme-compile');
+      const result = compileTheme(stagedDir, { slug, dryRun: true });
+      const errors = (result.diagnostics || []).filter((d: any) => d.level === 'error');
+      if (errors.length) {
+        return refuse(400, `The new theme.json does not compile: ${errors.slice(0, 3).map((d: any) => `${d.path}: ${d.message}`).join('; ')}`, { diagnostics: result.diagnostics });
+      }
+    }
+
+    const readVersion = (dir: string): string | null => {
+      for (const f of ['theme.json', 'package.json']) {
+        try { const v = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')).version; if (v != null) return String(v).slice(0, 64); } catch { /* next */ }
+      }
+      return null;
+    };
+    const fromVersion = readVersion(targetDir);
+    const toVersion = readVersion(stagedDir);
+
+    // SWAP. Two renames inside one filesystem (os-tmp is THEMES_DIR's sibling); the old version is
+    // removed only once the new one is in place, and put back if that second rename fails.
+    const asideDir = path.join(stageRoot as string, '.previous');
+    fs.renameSync(targetDir, asideDir);
+    try {
+      fs.renameSync(stagedDir, targetDir);
+    } catch (e) {
+      fs.renameSync(asideDir, targetDir);
+      throw e;
+    }
+    invalidateThemeScanCache();
+
+    const active = (await getCurrentTheme()) === slug;
+    if (active) {
+      // The worker and the compiled-token cache read the files that just changed.
+      try { await require('./theme-engine').init(); } catch (e: any) { log.warn({ slug, err: e }, `[themes] engine re-init after updating "${slug}" failed`); }
+      invalidateThemeScanCache();
+      try { require('./frontend-purge').purgeFrontend(['settings'], ['/'], { immediate: true }); } catch { /* purge is best-effort */ }
+    }
+    cleanup();
+    return { ok: true, status: 200, body: { success: true, updated: true, slug, fromVersion, toVersion, active, message: `Theme "${slug}" updated${toVersion ? ` to v${toVersion}` : ''}` } };
+  } catch (error: any) {
+    cleanup();
+    return { ok: false, status: 500, body: { error: `Failed to update theme: ${error && error.message}` } };
+  } finally {
+    if (stageRoot) { try { fs.rmSync(stageRoot, { recursive: true, force: true }); } catch { /* best-effort */ } }
+  }
+}
+
 module.exports = {
   Theme,
   scanThemes,
+  updateThemeFromZip,
   invalidateThemeScanCache,
   getCurrentTheme,
   getActiveTheme,

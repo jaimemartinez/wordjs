@@ -119,7 +119,7 @@ export default function EventTicketsAdminPage() {
     const checkinInputRef = useRef(null);
 
     // Configuración
-    const [config, setConfig] = useState({ currencySymbol: "$", manualInstructions: "", notifyEmail: "" });
+    const [config, setConfig] = useState({ currencySymbol: "$", manualInstructions: "", notifyEmail: "", pendingHoldPercent: 50, pendingTtlMinutes: 20 });
 
     const flash = (msg) => { setMessage(msg); };
 
@@ -565,7 +565,7 @@ export default function EventTicketsAdminPage() {
                                             <td className="cf-cell-main" style={{ fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{fmtMoney(o.total_cents, config.currencySymbol)}</td>
                                             <td>
                                                 <span className={`cf-pill ${o.payment_status === "paid" ? "is-ok" : o.payment_status === "pending" ? "is-warn" : "is-muted"}`}>
-                                                    {o.payment_status === "paid" ? "Pagado" : o.payment_status === "pending" ? "Pendiente" : "Cancelado"}
+                                                    {o.payment_status === "paid" ? "Pagado" : o.payment_status === "pending" ? "Pendiente" : o.payment_status === "unverified" || o.payment_status === "verifying" ? "Sin confirmar" : o.payment_status === "expired" ? "Caducado" : "Cancelado"}
                                                 </span>
                                             </td>
                                             <td className="cf-cell-date">{fmtDate(o.created_at)}</td>
@@ -714,6 +714,16 @@ export default function EventTicketsAdminPage() {
                             <div>
                                 <label className="cf-label" htmlFor="et-cfg-notify">Correo de notificaciones</label>
                                 <input id="et-cfg-notify" type="email" className="cf-input" value={config.notifyEmail} onChange={(e) => setConfig({ ...config, notifyEmail: e.target.value })} placeholder="opcional — recibe cada pedido nuevo" />
+                            </div>
+                            <div>
+                                <label className="cf-label" htmlFor="et-cfg-hold">Máximo reservado sin pagar (% del aforo)</label>
+                                <input id="et-cfg-hold" type="number" min={1} max={100} className="cf-input" value={config.pendingHoldPercent} onChange={(e) => setConfig({ ...config, pendingHoldPercent: Number(e.target.value) })} />
+                                <p className="cf-help">Parte de cada tipo de entrada que pueden ocupar los pedidos pendientes de pago.</p>
+                            </div>
+                            <div>
+                                <label className="cf-label" htmlFor="et-cfg-ttl">Caducidad de pedidos sin pagar (minutos)</label>
+                                <input id="et-cfg-ttl" type="number" min={5} max={1440} className="cf-input" value={config.pendingTtlMinutes} onChange={(e) => setConfig({ ...config, pendingTtlMinutes: Number(e.target.value) })} />
+                                <p className="cf-help">Pasado este tiempo sin confirmar el pago, el pedido caduca y sus entradas vuelven a la venta.</p>
                             </div>
                             <div className="cf-span-2">
                                 <label className="cf-label" htmlFor="et-cfg-instr">Instrucciones de pago manual</label>

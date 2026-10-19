@@ -66,6 +66,24 @@ Address values are parsed by one strict parser. Things that browsers and resolve
 `localhost:1@evil.example`, two `Host` headers) are refused with `400 rest_invalid_host`. One trailing
 dot is ignored (`example.com.` is `example.com`), and IPv6 is compared in its compressed form.
 
+### With multisite on
+
+On a network of sites ([Multisite](multisite.md)) the same gate also decides **which site** a request
+belongs to (`backend/src/core/site-resolver.ts`):
+
+- The **main site** (site 1) keeps everything on this page: its main address, its aliases, the
+  environment addresses, and the loopback and IP-literal classes. A request sent to `localhost` or to an
+  IP address always means the main site.
+- **Every other site** is answered on its own main address, which a network administrator declares when
+  creating the site (a domain or subdomain, never an IP address or `localhost`). Those addresses are kept
+  in the network store, not in `siteAliases`, and an entry that repeats one of the main site's addresses
+  is ignored.
+- An address no site declares gets `421`, exactly as on a single site. A suspended site answers `503`
+  (`rest_site_suspended`).
+
+In split and separate mode the backend pushes the other sites' addresses to the gateway with the rest of
+the policy (see [gateway.md](gateway.md#host-policy-push)), so the edge answers them too.
+
 ## What an unaccepted address gets
 
 There are two layers.
@@ -260,7 +278,7 @@ Every change:
   links, on purpose.
 
 The REST API behind it is `GET /api/v1/site-address` and `PUT /api/v1/site-address/{canonical,aliases,policy}`
-(see [api.md](api.md#site-address)).
+(see [api.md](api.md#622-site-address-)).
 
 ## Managing addresses: command line
 
@@ -638,4 +656,6 @@ payment return URLs, ACME) cannot follow a request, and because letting the requ
 base would let anyone who triggers a password reset choose which listed address receives the token.
 Caches have no host in their key either. Pages in the browser use relative URLs (`Media.sourceUrl`,
 `featuredMedia.path`), so browsing works the same on every accepted address. Several domains, each with
-its own identity in links, is multisite or domain mapping: a separate feature.
+its own identity in links, is multisite: a separate feature, in which each site of a network has its own
+main address and its own content ([Multisite](multisite.md); design notes in
+[multisite-design.md](multisite-design.md)).

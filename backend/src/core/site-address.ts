@@ -42,6 +42,7 @@ import type { SiteUrl, SiteHost, LastSeen, HostPolicy, PolicyProvider } from './
 const hostPolicy: typeof import('./host-policy') = require('./host-policy');
 const configManager = require('./configManager');
 const { logSafe } = require('./log-safe');
+const mlog = require('./module-logger').moduleLogger('core/site-address');
 
 // ─── Constants ──────────────────────────────────────────────────────────────────────────────────────
 
@@ -158,6 +159,14 @@ function canonicalOrigin(): string | null {
  * choose where a reset token is sent (SPEC §5, the reason this function exists).
  */
 async function linkBase(): Promise<string> {
+    // Multisite: another site's links are built on ITS main address, from the network registry (the
+    // single writer of those addresses) — never from an option its administrators could edit, never
+    // from the request, and never the main site's.
+    if (require('./multisite-guards').onSecondarySite()) {
+        const site = hostPolicy.parseSiteUrl(require('./network').currentSiteUrl());
+        if (site) return site.origin;
+        throw new Error('This site of the network has no valid main address.');
+    }
     const { getOption } = require('./options');
     for (const name of ['siteurl', 'home']) {
         const site = hostPolicy.parseSiteUrl(await getOption(name, null));
@@ -882,7 +891,7 @@ function policyProvider(): PolicyProvider {
 }
 
 function warn(message: string) {
-    console.warn(`[site-address] ${logSafe(message)}`);
+    mlog.warn(`[site-address] ${logSafe(message)}`);
 }
 
 function notice(id: string, level: 'warning' | 'error', title: string, message: string) {
@@ -971,6 +980,17 @@ const POLICY_ENV_KEYS = ['WORDJS_ALLOWED_HOSTS', 'WORDJS_IP_HOSTS', 'WORDJS_DEV_
  * `hostPolicy` carries only the two keys buildPolicy reads, with their real types: anything else in a
  * hand-edited file would make the gateway refuse the whole push, where buildPolicy simply ignores it.
  */
+/** Multisite: `{ networkSites }` for the gateway's policy, or nothing on a single site. Never throws. */
+function networkSitesForPush(): { networkSites?: unknown[] } {
+    try {
+        if (!require('./site-context').multisiteEnabled()) return {};
+        return { networkSites: require('./network').policySites() };
+    } catch (e: any) {
+        warn(`the network's sites could not be read for the gateway: ${e && e.message}`);
+        return {};
+    }
+}
+
 function gatewayPolicyPush(cfg: any): { enforce: boolean; config: Record<string, unknown>; env: Record<string, string>; nodeEnv: string | null } {
     const env: Record<string, string> = {};
     for (const key of POLICY_ENV_KEYS) {
@@ -993,6 +1013,8 @@ function gatewayPolicyPush(cfg: any): { enforce: boolean; config: Record<string,
             siteAliases: cfg && Array.isArray(cfg.siteAliases) ? cfg.siteAliases : [],
             hostPolicy: policy,
             ...(cfg && cfg.trustProxy !== undefined && cfg.trustProxy !== null ? { trustProxy: cfg.trustProxy } : {}),
+            // Multisite: the other sites' main addresses, so the edge answers them (and only them) too.
+            ...networkSitesForPush(),
         },
         env,
         nodeEnv,
@@ -1229,8 +1251,8 @@ async function pushPolicyToGateway(cfg: any, opts: { periodic?: boolean } = {}):
         const answer = await require('./cert-manager').pushHostPolicyToGateway({ ...gatewayPolicyPush(cfg), ...(onlyIfMissing ? { onlyIfMissing: true } : {}) });
         noteEdgeRefusals(answer);
         noteEdgeOwnAddresses(answer);
-        if (gatewayPushFailing) console.log('[site-address] the gateway is reachable again and has the site\'s addresses.');
-        else if (opts.periodic && answer && answer.stored === 'written') console.log('[site-address] the gateway had no site addresses stored (restarted or replaced); it has them again.');
+        if (gatewayPushFailing) mlog.info('[site-address] the gateway is reachable again and has the site\'s addresses.');
+        else if (opts.periodic && answer && answer.stored === 'written') mlog.info('[site-address] the gateway had no site addresses stored (restarted or replaced); it has them again.');
         if (answer && answer.stored === 'kept') {
             if (!gatewayKeepsOtherSet) warn('the gateway keeps a set of site addresses that differs from this backend\'s: another backend sent it, or a change made here is not applied yet. Every backend must hold the same site-address settings (share wordjs-config.json, or make each change on every node); the gateway takes this backend\'s set at its next change or boot.');
             gatewayKeepsOtherSet = true;
@@ -1435,7 +1457,7 @@ async function tellAdmins(message: string) {
                 transports: ['db', 'sse'],
             });
         }
-        const send = (global as any).wordjs_send_mail;
+        const send = require('./mail-provider').sendMailFn();
         if (typeof send === 'function') {
             const { getOption } = require('./options');
             const to = String((await getOption('admin_email', '')) || '').trim();
@@ -1625,7 +1647,7 @@ async function commitUnlocked(
             lastAppliedRev = null;
             policyProvider().invalidate();
         }
-        console.error(`[site-address] the database refused the address change (${e && e.message}); ${restored ? 'the previous configuration was restored' : 'the configuration file could not be restored'}.`);
+        mlog.error({ err: e }, `[site-address] the database refused the address change (${e && e.message}); ${restored ? 'the previous configuration was restored' : 'the configuration file could not be restored'}.`);
         throw new SiteAddressError(500, 'rest_site_address_rollback',
             restored ? 'The change could not be stored in the database, so it was undone. Nothing changed.' : 'The change could not be stored in the database.',
             { restored });
@@ -1788,7 +1810,7 @@ async function reconcileUnlocked(): Promise<ReconcileState> {
     lastAppliedRev = null;
     const fresh = configManager.readConfigFresh();
     if (!fresh.exists || fresh.parseError) {
-        console.error('[site-address] wordjs-config.json cannot be read; the site addresses are not reconciled at this boot.');
+        mlog.error('[site-address] wordjs-config.json cannot be read; the site addresses are not reconciled at this boot.');
         return 'unreadable';
     }
     const cfg = fresh.parsed;
@@ -1819,7 +1841,7 @@ async function reconcileUnlocked(): Promise<ReconcileState> {
             const dbSite = hostPolicy.parseSiteUrl(dbText) || salvageSiteUrl(dbText);
             if (dbText === null || dbText === cfg.siteUrl.trim() || (dbSite && dbSite.origin === salvaged.origin)) {
                 await commitUnlocked((c) => planRepair(c, salvaged.origin, 'scheme-list', Date.now()), { expectRev: 0, via: 'repair', actorId: null });
-                console.log(`[site-address] repaired the main address ${JSON.stringify(cfg.siteUrl)} → ${salvaged.origin}.`);
+                mlog.info({ origin: salvaged.origin }, `[site-address] repaired the main address ${JSON.stringify(cfg.siteUrl)} → ${salvaged.origin}.`);
                 return 'repaired';
             }
             raiseConflict({ config: String(cfg.siteUrl), db: dbText });
@@ -1830,7 +1852,7 @@ async function reconcileUnlocked(): Promise<ReconcileState> {
             raiseConflict({ config: String(cfg.siteUrl), db: dbText ?? '' });
             return 'conflict';
         }
-        console.error(`[site-address] siteUrl ${JSON.stringify(cfg.siteUrl ?? null)} is not a valid site address; set it in Settings → Site address or with npm run site -- canonical <url>.`);
+        mlog.error(`[site-address] siteUrl ${JSON.stringify(cfg.siteUrl ?? null)} is not a valid site address; set it in Settings → Site address or with npm run site -- canonical <url>.`);
         return 'invalid';
     }
 
@@ -1890,7 +1912,7 @@ function noteGatewaySiteUrl(reported: unknown): Promise<{ outcome: 'ignored' | '
         if (isAutomaticUpgrade(c, g) && !conflict) {
             const result = await commitUnlocked((current) => planRepair(current, g.origin, 'gateway-https', Date.now()),
                 { expectRev: siteAddressRev(cfg), via: 'gateway', actorId: null });
-            console.log(`[site-address] the gateway now serves ${g.origin}; the main address moved from ${c.origin} (same host, http → https).`);
+            mlog.info({ origin: g.origin, previousOrigin: c.origin }, `[site-address] the gateway now serves ${g.origin}; the main address moved from ${c.origin} (same host, http → https).`);
             return { outcome: 'upgraded' as const, canonical: g.origin, warnings: result.warnings };
         }
         gatewayDrift = { gateway: g.origin, config: c.origin };

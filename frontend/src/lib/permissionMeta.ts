@@ -19,6 +19,11 @@ export interface PermissionMeta {
     risk: PermissionRisk;
     /** Font Awesome class (e.g. "fa-database"). */
     icon?: string;
+    /**
+     * Granting this is as good as making the plugin an administrator (it can take over accounts). Every
+     * grant screen shows an explicit "administrator-level" badge next to the risk.
+     */
+    adminEquivalent?: boolean;
 }
 
 /**
@@ -94,16 +99,23 @@ export const PERMISSION_META: Record<string, PermissionMeta> = {
         icon: 'fa-envelope',
     },
     'email:provider': {
-        label: 'Send email as provider',
-        description: 'Act as the site\'s outbound email provider — it can send mail on your behalf.',
+        label: 'Send email as provider (administrator-level)',
+        description: 'Act as the site\'s outbound email provider: it sends, and can read, every message the site sends through it. If you also let it carry password-reset and verification email (Settings → Account email), it receives those links and can take over any account, administrators included — treat this grant like making the plugin an administrator.',
         risk: 'high',
         icon: 'fa-paper-plane',
+        adminEquivalent: true,
     },
     'smtp:inbound': {
         label: 'Receive internet email (port 25)',
         description: 'WordJS opens the public SMTP port 25 for this plugin and hands it every email that arrives from the internet. Only ONE plugin can hold this permission at a time: revoke it from the current holder first.',
         risk: 'high',
         icon: 'fa-inbox',
+    },
+    'ai:use': {
+        label: "Use the site's AI provider",
+        description: 'Ask the AI provider an administrator configured for generated text. The plugin never sees the key; every request is billed to the site and rate-limited.',
+        risk: 'med',
+        icon: 'fa-wand-magic-sparkles',
     },
     'notifications:send': {
         label: 'Send notifications',
@@ -118,10 +130,11 @@ export const PERMISSION_META: Record<string, PermissionMeta> = {
         icon: 'fa-bell',
     },
     'notifications:provider': {
-        label: 'Notifications provider',
-        description: 'Act as the site\'s notification delivery backend. It receives the full content of every notification it delivers.',
+        label: 'Notifications provider (administrator-level)',
+        description: 'Act as the site\'s notification delivery backend. It receives the full, unredacted content of every notification it delivers — including the sign-in codes and links other plugins send — so treat this grant like making the plugin an administrator.',
         risk: 'high',
         icon: 'fa-bell',
+        adminEquivalent: true,
     },
     'express:register_route': {
         label: 'Register API routes',

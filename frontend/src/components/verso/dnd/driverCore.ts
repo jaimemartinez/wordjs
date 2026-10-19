@@ -16,6 +16,8 @@
 
 import { ROOT_ID, ROOT_SLOT, type VersoDoc, type VersoNode } from "@/lib/verso/types";
 import type { BlockRegistry, SlotVersoField } from "@/lib/verso/registry";
+import { trFmt, trStr } from "@/lib/editorI18n";
+import type { Language } from "@/lib/i18n";
 import type {
   ComponentGeom,
   DndDirection,
@@ -429,16 +431,17 @@ export function moveAnnouncement(
   registry: BlockRegistry,
   nodeId: string,
   target: KeyboardMoveTarget,
+  lang: Language = "es",
 ): string {
   const node = doc.nodes[nodeId];
-  const typeLabel = node ? (registry.get(node.type)?.label ?? node.type) : nodeId;
-  let slotLabel = "raíz";
+  const typeLabel = node ? trStr(registry.get(node.type)?.label ?? node.type, lang) : nodeId;
+  let slotLabel = trStr("raíz", lang);
   if (target.toParentId !== ROOT_ID) {
     const parent = doc.nodes[target.toParentId];
-    const parentLabel = parent ? (registry.get(parent.type)?.label ?? parent.type) : target.toParentId;
+    const parentLabel = parent ? trStr(registry.get(parent.type)?.label ?? parent.type, lang) : target.toParentId;
     slotLabel = `${parentLabel} › ${target.toSlotKey}`;
   }
-  return `${typeLabel} movido a ${slotLabel} posición ${target.toIndex + 1}`;
+  return trFmt("{block} movido a {slot} posición {n}", lang, { block: typeLabel, slot: slotLabel, n: target.toIndex + 1 });
 }
 
 /* ------------------------------------------------------------------ */
@@ -467,6 +470,8 @@ export interface KeyboardMoverDeps {
   registry: BlockRegistry;
   /** Canal del live-region del overlay. */
   announce(message: string): void;
+  /** Idioma del anuncio de movimiento (los mensajes fijos los traduce quien pinta el live-region). */
+  language?: Language;
 }
 
 export interface KeyboardMover {
@@ -507,7 +512,7 @@ export function createKeyboardMover(deps: KeyboardMoverDeps): KeyboardMover {
       (tx) => tx.moveNode(nodeId, target.toParentId, target.toSlotKey, target.toIndex),
       { label: "Mover bloque (teclado)" },
     );
-    if (ok) deps.announce(moveAnnouncement(deps.handle.getDoc(), deps.registry, nodeId, target));
+    if (ok) deps.announce(moveAnnouncement(deps.handle.getDoc(), deps.registry, nodeId, target, deps.language));
     return ok;
   };
 

@@ -2436,8 +2436,10 @@ h6.wjs-block-heading, h6.wp-block-heading { font-size: var(--wjs-heading-size, v
   border-radius: var(--wjs-hero-radius, 0);
   box-shadow: var(--wjs-hero-shadow, none);
   background-color: var(--wjs-hero-bg, var(--wjs-bg-muted));
-  /* An uploaded image wins; with none, the gradient pair paints the surface. */
-  background-image: var(--wjs-hero-bg-image, var(--wjs-hero-gradient, linear-gradient(var(--wjs-hero-gradient-angle, 135deg), var(--wjs-hero-gradient-from, var(--wjs-bg-muted)), var(--wjs-hero-gradient-to, var(--wjs-bg-canvas)))));
+  /* An uploaded image wins; with none, the gradient pair paints the surface. A theme that sets only
+     --wjs-hero-bg gets that colour: both ends of the default gradient fall back to it before the
+     muted/canvas pair (the image layer used to paint over it, so the colour never showed). */
+  background-image: var(--wjs-hero-bg-image, var(--wjs-hero-gradient, linear-gradient(var(--wjs-hero-gradient-angle, 135deg), var(--wjs-hero-gradient-from, var(--wjs-hero-bg, var(--wjs-bg-muted))), var(--wjs-hero-gradient-to, var(--wjs-hero-bg, var(--wjs-bg-canvas))))));
   background-size: cover;
   background-position: center;
 }

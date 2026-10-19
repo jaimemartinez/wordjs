@@ -463,7 +463,14 @@ function validateOp(raw: any, siteId: string): ValidateResult {
                 const sub = key.slice(key.indexOf(':') + 1);
                 if (!okKey(sub)) return bad('bad-shape-key');
             }
-            const value = cleanValueEx(raw.value, null);
+            // LA PISTA DE CLAVE ES LA DEL ÁRBOL. `extras:<k>` y `orphanZones:<k>` son el valor que el
+            // árbol guarda bajo `<k>`, y `PUT /posts/:id` lo sanea con esa clave (`css` → hoja de
+            // estilo, `look` → especificación de aspecto, un campo HTML → HTML). Sin la pista, un
+            // `extras:css` entraba por aquí con el saneado genérico de cadenas y salía en el estilo.
+            const hint = key.startsWith('extras:') || key.startsWith('orphanZones:')
+                ? key.slice(key.indexOf(':') + 1)
+                : key;
+            const value = cleanValueEx(raw.value, hint);
             if (value.value === undefined) return bad('bad-value');
             return { ok: true, kind: k, counter: opId.counter, changed: value.changed, op: { ...base, key, value: value.value } };
         }
