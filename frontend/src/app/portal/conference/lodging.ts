@@ -44,6 +44,19 @@ export type LodgingRoom = {
     /** Beds taken as counted by the server (status-agnostic; a foreign stray counts but is never listed). */
     occupied?: number | null;
     occupants?: LodgingAttendee[];
+    /**
+     * A room the location SHARES with other locations (conference-manager 2.18.0): `capacity` / `occupied`
+     * above are already the location's own beds; `beds` = how many the administration gave it there and
+     * `room_capacity` = the whole room. Absent for a room that is entirely the location's.
+     */
+    shared?: {
+        beds: number;
+        room_capacity: number;
+        /** conference-manager 2.21.0: the value «Sugerir reparto» fixed for the whole room (the gender, usually) — see lockRefuses. */
+        lock?: { field: string; value: string }[] | null;
+    } | null;
+    /** conference-manager 2.21.0: blocked by the administration — nobody goes in or out from the portal (see heldBy). */
+    blocked?: boolean | null;
 };
 
 export type PlacedElsewhere = {
@@ -84,14 +97,28 @@ export type LodgingData = {
     note?: string | null;
     submitted_at?: string | null;
     reviewed_at?: string | null;
+    /**
+     * conference-manager 2.17.0: when the administration last changed the arrangement while it was submitted /
+     * validated (the admin may adjust it without reopening it), and how many such changes since the last
+     * submission. Null / 0 = none; the next submission resets them.
+     */
+    admin_changed_at?: string | null;
+    admin_changes?: number | null;
     can_edit?: boolean | null;
-    /** The admin's deadline for arranging ('YYYY-MM-DD' or a datetime); null = none. */
+    /**
+     * The opening of this location's arranging ('YYYY-MM-DD' or a datetime; conference-manager 2.21.0: the general
+     * one, or the location's own); null = right away. Older plugins send none.
+     */
+    opens?: string | null;
+    /** Server-computed: before the opening — every portal write answers 403 until then. */
+    not_yet_open?: boolean | null;
+    /** The closing that applies to this location ('YYYY-MM-DD' or a datetime: the general one or its own); null = none. */
     deadline?: string | null;
     /** Server-computed: the deadline is over, every portal write answers 403. */
     deadline_passed?: boolean | null;
-    /** The admin's exception for this location: it may keep arranging after the deadline (2.8.0). */
+    /** The admin's exception for this location (2.8.0–2.20.0; since 2.21.0 a location's own closing is its `deadline`). */
     permission?: LodgingPermission | null;
-    /** Server verdict: the deadline is not over, or the location holds an active permission. */
+    /** Server verdict: after the opening and before the closing (or, before 2.21.0, the location holds an active permission). */
     window_open?: boolean | null;
     rooms?: LodgingRoom[];
     unassigned?: LodgingAttendee[];
@@ -137,7 +164,28 @@ export const roomsWithSpace = (rooms: LodgingRoom[] | null | undefined): Lodging
 // ---------------------------------------------------------------------------------------------------
 
 /** Why a drop is refused client-side: `same` = the attendee is already there (no-op), `full` = no free bed, `unknown` = an id not in the payload. */
-export type DragRefusal = 'same' | 'full' | 'unknown';
+export type DragRefusal = 'same' | 'full' | 'unknown' | 'locked' | 'blocked';
+
+/**
+ * Held by the administration (conference-manager 2.21.0): a blocked room takes nobody in and lets nobody out from the
+ * portal, and a person the administration fixed in their room stays there (the server answers 409).
+ */
+export const isPinned = (a: LodgingAttendee | null | undefined): boolean => !!(a && Number(a.room_locked));
+export const isHeldRoom = (room: LodgingRoom | null | undefined): boolean => !!(room && room.blocked);
+
+/**
+ * A shared room's class (conference-manager 2.21.0; «la habitación compartida se queda con el género que le dio el
+ * reparto»): the plan that shared the room fixed the value of a hard «Separar por» field for all of it, and someone
+ * with another value never takes a bed there (the server answers 409). A blank value is no value.
+ */
+export const lockRefuses = (room: LodgingRoom | null | undefined, a: LodgingAttendee | null | undefined): boolean => {
+    const lock = room?.shared?.lock;
+    if (!a || !Array.isArray(lock) || !lock.length) return false;
+    return lock.some((x) => {
+        const v = String(a[x.field] ?? '').trim().toLowerCase();
+        return v !== '' && v !== String(x.value ?? '').trim().toLowerCase();
+    });
+};
 
 export type DragDecision = { ok: true; reason?: undefined } | { ok: false; reason: DragRefusal };
 
@@ -175,11 +223,14 @@ export const dragDecision = ({ attendeeId, fromRoomId, toRoomId, rooms, unassign
     if (!inRoom && !inUnassigned) return { ok: false, reason: 'unknown' };
     const from = inRoom ? Number(inRoom.id) : null;
     if (from !== fromRoomId) return { ok: false, reason: 'unknown' };
-    if (toRoomId == null) return from == null ? { ok: false, reason: 'same' } : { ok: true };
+    const who = inRoom ? inRoom.occupants!.find((a) => a && Number(a.id) === attendeeId) : unassigned!.find((a) => a && Number(a.id) === attendeeId);
+    if (toRoomId == null) return from == null ? { ok: false, reason: 'same' } : isHeldRoom(inRoom) || isPinned(who) ? { ok: false, reason: 'blocked' } : { ok: true };
     const target = list.find((r) => Number(r.id) === toRoomId);
     if (!target) return { ok: false, reason: 'unknown' };
     if (from === toRoomId) return { ok: false, reason: 'same' };
+    if (isHeldRoom(target) || (from != null && (isHeldRoom(inRoom) || isPinned(who)))) return { ok: false, reason: 'blocked' };
     if (freeBeds(target) <= 0) return { ok: false, reason: 'full' };
+    if (lockRefuses(target, who)) return { ok: false, reason: 'locked' };
     return { ok: true };
 };
 
@@ -242,13 +293,25 @@ export const statusLabel = (status: unknown): string => STATUS_LABELS[normalizeL
 export const unassignedHint = (status: unknown): string => {
     const s = normalizeLodgingStatus(status);
     if (s === 'submitted') return 'Retira el envío para acomodarlos.';
-    if (s === 'validated') return 'Pide al administrador reabrir el hospedaje para acomodarlos.';
+    if (s === 'validated') return 'El administrador puede acomodarlos; para hacerlo tú, pídele reabrir el hospedaje.';
     return '';
 };
 
 /** `3 participantes sin habitación` / `1 participante sin habitación`. */
 export const unassignedLabel = (n: number): string =>
     `${count(n)} ${count(n) === 1 ? 'participante' : 'participantes'} sin habitación`;
+
+/**
+ * The «Enviar a validación» confirmation. Since conference-manager 2.17.0 the administration may adjust a
+ * submitted or validated arrangement without reopening it: the coordinator is told so BEFORE sending, not
+ * only by the «Ajustado por la administración» notice afterwards.
+ */
+export const submitConfirmText = (unplaced: number): string => {
+    const lead = count(unplaced) > 0
+        ? `Hay ${unassignedLabel(unplaced)}. El administrador revisará la acomodación tal como está y no podrás modificarla hasta que la devuelva o retires el envío.`
+        : 'El administrador revisará la acomodación y no podrás modificarla hasta que la devuelva o retires el envío.';
+    return `${lead} La administración puede ajustarla mientras la revisa o después de validarla; si lo hace, verás aquí un aviso. ¿Enviar?`;
+};
 
 /** The portal's message for a 401 (an expired/rotated token, or the login throttle's in-flight cap). */
 export const SESSION_EXPIRED_MSG = 'Tu sesión del portal caducó; vuelve a entrar.';
@@ -276,18 +339,23 @@ export const fmtDeadline = (v: unknown): string => {
 };
 
 /**
- * 'none' = no deadline; 'open' = before it; 'extended' = after it, but the admin gave THIS location a
- * permission that is still active; 'passed' = after it and no active permission.
+ * 'not_yet' = before the opening (2.21.0); 'none' = no deadline; 'open' = before it; 'extended' = after it, but
+ * the admin gave THIS location a permission that is still active (a plugin older than 2.21.0); 'passed' = after
+ * it and no active permission.
  */
-export type DeadlineState = 'none' | 'open' | 'extended' | 'passed';
+export type DeadlineState = 'not_yet' | 'none' | 'open' | 'extended' | 'passed';
 
 /** The admin's per-location exception, as GET /portal/lodging reports it (`until` null = until revoked). */
 export type LodgingPermission = { granted?: boolean | null; until?: string | null; active?: boolean | null; expired?: boolean | null };
 
-type DeadlineFields = Pick<LodgingData, 'deadline' | 'deadline_passed' | 'permission'>;
+type DeadlineFields = Pick<LodgingData, 'opens' | 'not_yet_open' | 'deadline' | 'deadline_passed' | 'permission'>;
 
-/** The server decides (`deadline_passed`, `permission.active`); a payload from an older plugin has no deadline → 'none'. */
+/**
+ * The server decides (`not_yet_open`, `deadline_passed`, `permission.active`); a payload from an older plugin
+ * has no deadline → 'none'.
+ */
 export const deadlineState = (d: DeadlineFields | null | undefined): DeadlineState => {
+    if (d?.not_yet_open && d.opens != null && d.opens !== '') return 'not_yet';
     if (!d || d.deadline == null || d.deadline === '') return 'none';
     if (!d.deadline_passed) return 'open';
     return d.permission?.active ? 'extended' : 'passed';
@@ -295,10 +363,14 @@ export const deadlineState = (d: DeadlineFields | null | undefined): DeadlineSta
 
 const isBareDate = (v: unknown): boolean => /^\d{4}-\d{2}-\d{2}$/.test(String(v ?? '').trim());
 
-/** The banner line for the deadline (and the location's permission), or null when there is no deadline. */
+/** The banner line for the dates (and the location's permission), or null when there is no date to tell. */
 export const deadlineMessage = (d: DeadlineFields | null | undefined): string | null => {
     const state = deadlineState(d);
     if (state === 'none') return null;
+    if (state === 'not_yet') {
+        const until = d!.deadline != null && d!.deadline !== '' ? ` hasta el ${fmtDeadline(d!.deadline)}${isBareDate(d!.deadline) ? ' (inclusive)' : ''}` : '';
+        return `Los hospedajes se habilitan el ${fmtDeadline(d!.opens)}. Desde ese día podrás acomodarlos y enviarlos${until}.`;
+    }
     const date = fmtDeadline(d!.deadline);
     if (state === 'open') return `Puedes acomodar y enviar los hospedajes hasta el ${date} (inclusive).`;
     const until = d!.permission?.until;
@@ -319,6 +391,18 @@ export const fmtTimestamp = (v: unknown, locale = 'es'): string => {
     const sql = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?)$/.exec(s);
     const d = new Date(sql ? `${sql[1]}T${sql[2]}Z` : s);
     return isNaN(d.getTime()) ? s : d.toLocaleString(locale);
+};
+
+/**
+ * «Ajustado por la administración el 08/10/2026, 10:30 (2 cambios desde tu envío).» — the line the tab shows
+ * when the administration changed the arrangement while it was submitted / validated (conference-manager
+ * 2.17.0: the admin adjusts it without reopening it); null without such a change (or from an older plugin).
+ * The portal never says who: only that the administration did, and when.
+ */
+export const adminAdjustLine = (d: Pick<LodgingData, 'admin_changed_at' | 'admin_changes'> | null | undefined, locale = 'es'): string | null => {
+    if (!d || d.admin_changed_at == null || d.admin_changed_at === '') return null;
+    const n = Math.max(1, count(d.admin_changes, 1));
+    return `Ajustado por la administración el ${fmtTimestamp(d.admin_changed_at, locale)} (${n} ${n === 1 ? 'cambio' : 'cambios'} desde tu envío).`;
 };
 
 // ---------------------------------------------------------------------------------------------------
@@ -361,7 +445,7 @@ export const roomLabel = (room: { hotel_name?: unknown; room_number?: unknown } 
 
 export const RULE_TYPE_OPTIONS: ReadonlyArray<{ v: RuleType; label: string; desc: string }> = [
     { v: 'keep_together', label: 'Mantener juntos', desc: 'Los participantes con el mismo valor del campo van a la misma habitación (con tamaño mínimo).' },
-    { v: 'separate_by', label: 'Separar por', desc: 'Una habitación admite un solo valor de este campo (p. ej. género).' },
+    { v: 'separate_by', label: 'Separar por', desc: 'Una habitación admite un solo valor de este campo (p. ej. género). Excepción: una familia que una regla «Mantener juntos» de más prioridad deja junta puede estar en una habitación mixta, pero esa habitación es solo para ella.' },
     { v: 'split_by', label: 'Al dividir, agrupar por', desc: 'Cuando un grupo no cabe entero, se divide siguiendo este campo.' },
     { v: 'require_companion', label: 'Requiere acompañante', desc: 'Una habitación con alguien que cumple una condición exige N que cumplen otra (p. ej. un niño necesita un adulto).' },
 ];
@@ -436,6 +520,32 @@ export type RuleForm = {
 export type RuleParamsForm = Pick<RuleForm, 'min_size' | 'subject' | 'needs' | 'min'>;
 
 export const emptyPredicate = (): RulePredicate => ({ field: '', op: 'eq', value: '' });
+
+/**
+ * Rule priorities (conference-manager 2.21.0): the HIGHER number applies first — the engine's order, the
+ * administrator's rules and the location's own together — ties by age (older first). Each rule's place in it, 1-based.
+ */
+export const ruleRanks = (rules: LodgingRule[]): Map<number, number> => {
+    const sorted = [...rules].sort((a, b) => (Number(b.priority) || 0) - (Number(a.priority) || 0) || Number(a.id) - Number(b.id));
+    return new Map(sorted.map((r, i) => [Number(r.id), i + 1]));
+};
+
+/** A number no rule uses, below the others (a new rule goes last); 1…100 when none is left below. */
+export const freeRulePriority = (rules: LodgingRule[]): number => {
+    const used = new Set(rules.map((r) => Number(r.priority)));
+    let p = (rules.length ? Math.min(...rules.map((r) => Number(r.priority) || 0)) : 60) - 10;
+    while (p >= 1 && used.has(p)) p--;
+    if (p < 1) { p = 1; while (used.has(p) && p < 100) p++; }
+    return p;
+};
+
+/** The rule (other than `editingId`) that already uses the priority typed, or null — two may not share one. */
+export const priorityClash = (rules: LodgingRule[], priority: string, editingId: number | null): LodgingRule | null => {
+    if (String(priority).trim() === '') return null;
+    const n = Number(priority);
+    if (!Number.isFinite(n)) return null;
+    return rules.find((r) => Number(r.id) !== Number(editingId) && Number(r.priority) === n) || null;
+};
 
 export const emptyRuleForm = (type: RuleType = 'keep_together'): RuleForm => ({
     name: '',

@@ -104,10 +104,11 @@ export const usePerms = (): Perms => useContext(PermsContext) || ADMIN_PERMS;
 
 /**
  * GET /inscriptions (the roster other views name people from) and GET /hotels answer for any of these
- * sections — mirrors the server's route table, so the UI only asks for what it will be given.
+ * sections — mirrors the server's route table, so the UI only asks for what it will be given. Not Pagos
+ * (2.18.0, D-P20): «Pagos de cuotas» names people from its own view (GET /fee-payments), never the roster.
  */
 export const canReadRoster = (p: Perms) =>
-    p.can('inscriptions') || p.can('payments') || p.can('lodging') || p.can('transport') || p.can('accounting') || p.can('dashboard') || p.can('reports');
+    p.can('inscriptions') || p.can('lodging') || p.can('transport') || p.can('accounting') || p.can('dashboard') || p.can('reports');
 export const canReadHotels = (p: Perms) => p.can('lodging') || p.can('inscriptions') || p.can('dashboard') || p.can('reports');
 
 /** Does the role open at least one section (is there anything to show)? */

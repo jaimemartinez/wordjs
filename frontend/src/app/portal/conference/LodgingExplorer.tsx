@@ -58,6 +58,7 @@ import {
     GENDER_FILTER_LABELS,
     GENDER_FILTERS,
     genderKey,
+    lockLabel,
     genderLabel,
     groupRoomsByHotel,
     hotelStats,
@@ -267,6 +268,18 @@ function FamilyBadge({ room }: { room: LodgingRoom }) {
     return <Badge tone="indigo" size="xs" icon="fa-people-roof">Familiar{room.family_name ? ` · ${String(room.family_name)}` : ''}</Badge>;
 }
 
+/** A room shared with other locations: only the location's own beds (and people) are shown. */
+function SharedBadge({ room }: { room: LodgingRoom }) {
+    const sh = room.shared;
+    if (!sh) return null;
+    const beds = Number(sh.beds) || 0, total = Number(sh.room_capacity) || 0;
+    return (
+        <Badge tone="orange" size="xs" icon="fa-people-arrows" title="Las demás camas de esta habitación son de otras localidades" data-room-shared="">
+            {`Compartida · tuyas ${beds} de ${total} camas${lockLabel(room) ? ` · solo ${lockLabel(room)}` : ''}`}
+        </Badge>
+    );
+}
+
 const initials = (a: LodgingAttendee): string => {
     const parts = [a.first_name, a.last_name].map((v) => String(v ?? '').trim()).filter(Boolean);
     return (parts.map((p) => p.charAt(0)).join('').slice(0, 2) || '#').toUpperCase();
@@ -451,6 +464,7 @@ function RoomCard({ room, canDrag, draggingId, chipDragProps, dropProps, ring, o
                     </button>
                     <div className="flex flex-wrap items-center gap-1.5 mt-2">
                         <FamilyBadge room={room} />
+                        <SharedBadge room={room} />
                         <RoomGenderBadge room={room} />
                     </div>
                 </div>
@@ -611,6 +625,11 @@ function OccupantCard({ attendee, fields, editable, busy, canDrag, dragging, chi
                             <GenderDot gender={attendee.gender} decorative />{gender || 'Género sin indicar'}
                         </span>
                         )}
+                        {Number(attendee.room_locked) ? (
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-xs font-bold text-amber-800" data-occupant-pinned="">
+                                <i className="fa-solid fa-thumbtack text-[10px]" aria-hidden="true"></i>Fijada por la administración
+                            </span>
+                        ) : null}
                         {attendee.family_group ? (
                             <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-50 border border-amber-100 text-xs font-bold text-amber-700 max-w-full">
                                 <i className="fa-solid fa-people-roof text-[10px]" aria-hidden="true"></i>
@@ -712,11 +731,15 @@ function RoomView({ hotel, room, fields, editable, busy, canDrag, draggingId, ch
     const st = roomStats(room);
     const occ = roomOccupants(room);
     const num = String(room.room_number ?? '');
+    // Held by the administration (2.21.0): nobody goes in or out of a blocked room from here.
+    const held = !!room.blocked;
     const shownFree = Math.min(st.free, ROOM_VIEW_SLOTS);
     const shownUnlisted = Math.min(st.unlisted, ROOM_VIEW_SLOTS);
     const position = neighbours.index >= 0 ? `${neighbours.index + 1} de ${neighbours.total}${filtered ? ' (con filtros)' : ''}` : '';
     let state: React.ReactNode = null;
-    if (st.capacity === 0) {
+    if (held) {
+        state = <Notice tone="amber" icon="fa-lock">La administración bloqueó esta habitación: aquí no puedes acomodar ni quitar a nadie. Si necesitas un cambio, pídeselo al administrador.</Notice>;
+    } else if (st.capacity === 0) {
         state = <Notice tone="amber" icon="fa-bed">Esta habitación no tiene camas configuradas. Pide al administrador que revise su capacidad.</Notice>;
     } else if (st.occupied > st.capacity) {
         state = <Notice tone="rose" icon="fa-triangle-exclamation">Hay más personas que camas en esta habitación ({st.occupied} para {st.capacity}). Mueve o quita a alguien, o pide al administrador que revise la capacidad.</Notice>;
@@ -735,7 +758,9 @@ function RoomView({ hotel, room, fields, editable, busy, canDrag, draggingId, ch
                         <p className="text-sm font-bold text-gray-500 mt-2"><i className="fa-solid fa-hotel mr-1.5 text-xs text-blue-500" aria-hidden="true"></i>{hotel.name}</p>
                         <div className="flex flex-wrap items-center gap-1.5 mt-3">
                             <FamilyBadge room={room} />
+                            <SharedBadge room={room} />
                             <RoomGenderBadge room={room} />
+                            {held && <Badge tone="amber" size="xs" icon="fa-lock" data-room-blocked="">Bloqueada por la administración</Badge>}
                             {!editable && <Badge tone="amber" size="xs" icon="fa-lock">Solo lectura</Badge>}
                         </div>
                     </div>
@@ -774,9 +799,9 @@ function RoomView({ hotel, room, fields, editable, busy, canDrag, draggingId, ch
                                 key={a.id}
                                 attendee={a}
                                 fields={fields}
-                                editable={editable}
+                                editable={editable && !held && !Number(a.room_locked)}
                                 busy={busy}
-                                canDrag={canDrag}
+                                canDrag={canDrag && !held && !Number(a.room_locked)}
                                 dragging={draggingId === Number(a.id)}
                                 chipDragProps={chipDragProps}
                                 roomId={Number(room.id)}
@@ -800,7 +825,7 @@ function RoomView({ hotel, room, fields, editable, busy, canDrag, draggingId, ch
                                     <span className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 flex items-center justify-center shrink-0" aria-hidden="true"><i className="fa-solid fa-bed"></i></span>
                                     <span className="text-sm font-black text-gray-500 uppercase tracking-widest">Cama libre</span>
                                 </span>
-                                {editable && (
+                                {editable && !held && (
                                     <Button size="sm" icon="fa-user-plus" block onClick={(e) => onAssignBed(e.currentTarget)} disabled={busy} aria-label={`Asignar participante a una cama libre de la habitación ${num}`}>
                                         Asignar participante
                                     </Button>
@@ -922,10 +947,15 @@ function CandidatePicker({ room, hotelName, rooms, unassigned, busy, onPick, onC
                 )}
                 {blocked === 'full' ? (
                     <Notice tone="blue" icon="fa-bed" align="center">La habitación {num} está completa: no quedan camas libres.</Notice>
+                ) : blocked === 'blocked' ? (
+                    <Notice tone="amber" icon="fa-lock" align="center">La administración bloqueó la habitación {num}: aquí no puedes acomodar a nadie.</Notice>
                 ) : blocked === 'unknown' ? (
                     <Notice tone="rose" icon="fa-triangle-exclamation" align="center">Esta habitación ya no está en tu cupo. Cierra y vuelve a la lista de hoteles.</Notice>
                 ) : (
                     <>
+                        {lockLabel(room) && (
+                            <Notice tone="amber" icon="fa-lock" align="center">Habitación compartida solo para {lockLabel(room)}: aquí aparecen solo las personas que pueden ocuparla.</Notice>
+                        )}
                         <div className="relative">
                             <i className="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-gray-300 text-xs" aria-hidden="true"></i>
                             <input
@@ -1057,7 +1087,7 @@ function RoomPicker({ attendeeId, hotels, rooms, unassigned, busy, onPick, onClo
                                         {h.rooms.map(({ room: r, verdict }) => {
                                             const st = roomStats(r);
                                             const current = verdict === 'same';
-                                            const note = verdict === 'ok' ? plural(st.free, 'libre', 'libres') : current ? 'Está aquí' : verdict === 'full' ? 'Llena' : 'No disponible';
+                                            const note = verdict === 'ok' ? plural(st.free, 'libre', 'libres') : current ? 'Está aquí' : verdict === 'full' ? 'Llena' : verdict === 'locked' ? `Solo ${lockLabel(r)}` : verdict === 'blocked' ? 'Bloqueada' : 'No disponible';
                                             const num = String(r.room_number ?? '');
                                             return (
                                                 <li key={r.id}>
@@ -1356,6 +1386,8 @@ export default function LodgingExplorer({
             const verdict = decide(from.id, from.fromRoomId, toRoomId);
             if (!verdict.ok) {
                 if (verdict.reason === 'full') notify('La habitación está llena.', 'error');
+                else if (verdict.reason === 'blocked') notify('La administración bloqueó este cambio: la habitación está bloqueada o la persona está fijada en su habitación.', 'error');
+                else if (verdict.reason === 'locked') notify(`Esta habitación compartida es solo para ${lockLabel(rooms.find((r) => Number(r.id) === toRoomId))}.`, 'error');
                 else if (verdict.reason === 'unknown') notify('No se pudo identificar al participante; vuelve a intentarlo.', 'error');
                 return; // `same`: dropped where it already was — nothing to do.
             }
@@ -1432,19 +1464,23 @@ export default function LodgingExplorer({
                         maxLength={100}
                         onChange={(e) => setPanelQuery(e.target.value)}
                     />
+                    {/* While a placed attendee is dragged, the drop hint COVERS the search box instead of being
+                        inserted above the list: an insertion moves the list, the page's scroll anchoring scrolls
+                        to compensate, and the chip under the pointer slides away (the browser then cancels the
+                        drag — seen in the admin's twin explorer). Nothing moves when it appears. */}
+                    {draggingFromRoom && (
+                        <div className="absolute inset-0 z-10 flex items-center justify-center px-2 rounded-xl bg-rose-50 border-2 border-dashed border-rose-200 text-[10px] font-black text-rose-600 uppercase tracking-widest text-center leading-tight" data-drop-unassign-hint="">
+                            <span><i className="fa-solid fa-arrow-down mr-1" aria-hidden="true"></i>Suelta aquí para liberar la cama</span>
+                        </div>
+                    )}
                 </div>
-                {draggingFromRoom && (
-                    <div className="text-[10px] font-black text-rose-600 uppercase tracking-widest text-center py-2 border-2 border-dashed border-rose-200 rounded-xl">
-                        <i className="fa-solid fa-arrow-down mr-1" aria-hidden="true"></i>Suelta aquí para liberar la cama
-                    </div>
-                )}
                 {unassigned.length === 0 ? (
                     <p className="text-sm font-bold text-gray-500 text-center py-6"><i className="fa-solid fa-circle-check text-emerald-500 mr-1.5" aria-hidden="true"></i>Todos los participantes tienen habitación.</p>
                 ) : panelList.length === 0 ? (
                     <p className="text-sm font-bold text-gray-500 text-center py-6">Nadie coincide con la búsqueda.</p>
                 ) : (
                     // At xl the panel sticks at top-36 (below both sticky bars): the list scrolls inside so the
-                    // whole panel, its «Suelta aquí» strip included, stays within the window.
+                    // whole panel (the «Suelta aquí» hint covers the search box, it adds no height) stays within the window.
                     <ul className="space-y-2 xl:max-h-[calc(100vh-22rem)] xl:overflow-y-auto pr-1" data-testid="lodging-unassigned">
                         {panelList.map((a) => {
                             const gender = genderLabel(a.gender);

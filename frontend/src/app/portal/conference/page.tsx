@@ -3,15 +3,24 @@
 import React, { useState, useEffect } from "react";
 import { ToastProvider, useToast } from "@/contexts/ToastContext";
 import { csrfHeaders } from "@/lib/csrf";
-import { portalPersonName } from "./form";
 // Pure form helpers (seeding, string-only values, request body, money) — see form.ts for the contract
 // with conference-manager: values travel as strings, the SERVER canonicalises numbers.
 import { fieldOptions, fmtMoney, formBody, initialFormValues, inputToFormValue, isLocationFull, paymentMethodsOf, seatsLabel, type PortalField } from "./form";
 // The Hospedajes tab (lodging per location): its own data flow, one GET /portal/lodging, mounted only while selected.
 import Hospedajes from "./LodgingTab";
+// Participantes: the paged roster with compact rows and the «⋮» participant sheet (participants.ts holds the rules).
+import ParticipantList from "./ParticipantList";
+import ParticipantSheet from "./ParticipantSheet";
+import { familyGroupsOf, isCancelled, personName, pruneSelection, type PortalPerson } from "./participants";
+// «Pagos de cuotas» (conference-manager ≥ 2.18.0): the tab, its data hub and its sheets (feePayments.ts holds the rules).
+import FeePaymentsTab, { FeeSheets, useFeeHub } from "./FeePaymentsTab";
+import { feeBadge, hasFeePayments, mergeBalances, rowBalanceC, type PortalFeeView } from "./feePayments";
+import { hasBadges } from "./badges";
+import { PortalBadgeBulk } from "./PortalBadges";
+// Version skew: the old bulk-payment dialog, only for a plugin without «Pagos de cuotas».
+import LegacyBulkPayment from "./LegacyBulkPayment";
 // Visual primitives shared with the conference-manager admin design language (see ui.tsx).
-import { Button, Card, CardHeader, EmptyState, Field, HeroCard, IconButton, Modal, Notice, Spinner, captionCls, captionWideCls, checkboxCls, cx, headingCls, inputBoldCls, inputCls, selectCls, tdCls, thCls, trCls } from "./ui";
-import { StatCard } from "@/components/ui/StatCard";
+import { Badge, Button, Card, CardHeader, EmptyState, Field, HeroCard, IconButton, Notice, Spinner, captionCls, captionWideCls, cx, headingCls, inputBoldCls, inputCls, selectCls } from "./ui";
 // Import global API helper specifically suitable for handling custom headers or URLs if needed,
 // but basically we can reuse the generic apiGet/Post if we can override headers or just use fetch for the auth ones.
 // We'll create a simple local fetcher for the portal to manage the custom token auth simpler.
@@ -39,33 +48,16 @@ interface Location {
     inscribed?: number | null;
     /** Forms of payment enabled for this location (see paymentMethodsOf). */
     payment_methods?: string[];
+    /** conference-manager ≥ 2.18.0: `{ fee_payments: 1 }` — «Pagos de cuotas» exists (else the old bulk flow). */
+    features?: { fee_payments?: number; badges?: number };
+    /** The fee tab's badge: this location's own payments returned by / awaiting the administration. */
+    fees?: { pending?: number; returned?: number };
 }
 
-interface Inscription {
-    id: number;
-    first_name: string;
-    last_name: string;
-    gender: string;
-    email: string;
-    phone: string;
-    status: string;
-    payment_status: string;
-    total_due: number;
-    amount_paid: number;
-}
-
-// The registration form is the source of truth: attendee data lives in real columns named after each
-// field (custom_data fallback for legacy rows). These read a field's value + build a display name —
-// same helpers as the admin list so both views follow the form (no hardcoded person columns).
-const fieldVal = (person: any, field: any) => {
-    const v = person?.[field.name];
-    if (v !== undefined && v !== null && v !== '') return v;
-    const cd = person?.custom_data?.[field.name];
-    return (cd !== undefined && cd !== null && cd !== '') ? cd : '';
-};
-// The display name, as the admin names people (form.ts portalPersonName: the fields tagged Nombre /
-// Apellido, else the first form fields fit to stand in for a name — never an ID document or a contact).
-const personDisplayName = (person: any, fields: any[]) => portalPersonName(person, fields);
+// A roster row of GET /portal/inscriptions (participants.ts PortalPerson): the payment columns, the form's
+// field columns flat on the row (custom_data fallback for legacy rows) and, from 2.18.0, pending_amount /
+// returned_amount / cancelled. Names follow the form (form.ts portalPersonName), as in the admin.
+type Inscription = PortalPerson;
 
 // Combobox for the GROUPING field: search/pick an existing group (with member preview) or create a
 // new one. Module-level (never define a component inside a component — it steals input focus).
@@ -163,8 +155,9 @@ function LocationPortalContent() {
     // Dashboard State
     const [inscriptions, setInscriptions] = useState<Inscription[]>([]);
     const [view, setView] = useState<'list' | 'add'>('list');
-    // Dashboard tab. The participants tab is the pre-existing UI, untouched; Hospedajes mounts on demand.
-    const [tab, setTab] = useState<'participants' | 'lodging'>('participants');
+    // Dashboard tab. «Pagos de cuotas» exists only when the plugin says so (features.fee_payments); it and
+    // Hospedajes mount on demand (one request each).
+    const [tab, setTab] = useState<'participants' | 'fees' | 'lodging'>('participants');
     const [error, setError] = useState<string | null>(null);
 
     // Dynamic Form Data. Every value is a STRING (a blank number field is '' — never 0 — and the raw
@@ -176,14 +169,25 @@ function LocationPortalContent() {
     // current values are not quotable (a 400 for an invalid number just hides the line until it is fixed).
     const [quote, setQuote] = useState<{ total: number } | null>(null);
 
-    // Payment State
-    const [selectedIds, setSelectedIds] = useState<number[]>([]);
-    const [showPaymentModal, setShowPaymentModal] = useState(false);
-    const [paymentForm, setPaymentForm] = useState({
-        amount_per_person: '',
-        method: 'Efectivo',
-        reference: '',
-        proof: ''
+    // The participant whose sheet («⋮») is open — read BY ID from the live roster, so it shows the new
+    // balance after a payment and closes itself if the person disappears.
+    const [sheetId, setSheetId] = useState<number | null>(null);
+    // Version skew only (a plugin without «Pagos de cuotas»): the old multi-select and bulk dialog.
+    const [legacySelected, setLegacySelected] = useState<number[]>([]);
+    const [legacyPayIds, setLegacyPayIds] = useState<number[] | null>(null);
+    const [legacyAmount, setLegacyAmount] = useState('');
+    // «Pagos de cuotas»: its data and sheets live here so both tabs reach them (a participant's sheet opens
+    // the payment sheet on top). Every fresh view patches the roster rows and the tab's badge — no reload.
+    const feeHub = useFeeHub({
+        authHeaders: (extra) => portalAuthHeaders(extra),
+        onView: (v: PortalFeeView) => {
+            setInscriptions((rows) => mergeBalances(rows, v.people));
+            setMyLocation((l) => (l ? { ...l, fees: { pending: v.counts.pending, returned: v.counts.returned } } : l));
+        },
+        onUnauthorized: () => sessionExpired(),
+        notify: (m, t) => addToast(m, t),
+        // A participant's sheet open: the hub says things in it (a payment sent from it), not in a toast over it.
+        sheetOpen: () => sheetId != null,
     });
 
     // 1. Initial Load: Check token (via cookie) & Load Conferences
@@ -322,6 +326,8 @@ function LocationPortalContent() {
             // Parse defensively — a 500/HTML/proxy error must not throw before we can read the status.
             const data = await res.json().catch(() => ({}));
             if (res.ok && data.success) {
+                // A new session: nothing a previous coordinator of this device left loading may show up.
+                feeHub.reset();
                 setToken(data.token);
                 setMyLocation(data.location);
                 setStep('dashboard');
@@ -353,12 +359,22 @@ function LocationPortalContent() {
                 if (k && k.startsWith("cm.portal.lodging.explorer.")) sessionStorage.removeItem(k);
             }
         } catch { /* storage unavailable: nothing to forget */ }
+        resetDashboard();
+        loadConferences();
+    };
+
+    // Everything that belongs to the signed-in location goes (a shared device must never show the
+    // previous coordinator's people or payments).
+    const resetDashboard = () => {
         setToken(null);
         setMyLocation(null);
         setInscriptions([]);
-        setSelectedIds([]);
+        setSheetId(null);
+        setLegacySelected([]);
+        setLegacyPayIds(null);
+        setTab('participants');
+        feeHub.reset();
         setStep('login');
-        loadConferences();
     };
 
     // Re-read the seat count after a registration (the list projection has no status, so it cannot
@@ -369,6 +385,30 @@ function LocationPortalContent() {
             if (res.ok) setMyLocation(await res.json());
         } catch { /* non-critical: the header keeps the last known count */ }
     };
+    // What the conference turned on or off meanwhile («Escarapelas», «Pagos de cuotas»): re-read when the
+    // coordinator comes back to the page (tab, window, phone, back button) and once a minute while it is on
+    // screen, so a portal left open sees it without a reload. At most one read every 5 s.
+    useEffect(() => {
+        if (step !== 'dashboard') return undefined;
+        let last = Date.now();
+        const reread = () => {
+            if (document.visibilityState !== 'visible' || Date.now() - last < 5000) return;
+            last = Date.now();
+            refreshMyLocation();
+        };
+        document.addEventListener('visibilitychange', reread);
+        window.addEventListener('focus', reread);
+        window.addEventListener('pageshow', reread);
+        const timer = window.setInterval(reread, 60000);
+        return () => {
+            document.removeEventListener('visibilitychange', reread);
+            window.removeEventListener('focus', reread);
+            window.removeEventListener('pageshow', reread);
+            window.clearInterval(timer);
+        };
+        // refreshMyLocation is a plain closure over the portal token.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [step]);
 
     const loadInscriptions = async () => {
         try {
@@ -376,7 +416,11 @@ function LocationPortalContent() {
                 credentials: 'include',
                 headers: portalAuthHeaders()
             });
-            if (res.ok) setInscriptions(await res.json());
+            if (res.ok) {
+                const rows: Inscription[] = await res.json();
+                setInscriptions(rows);
+                setLegacySelected((sel) => pruneSelection(sel, rows.filter((r) => !isCancelled(r)).map((r) => Number(r.id))));
+            }
         } catch (e) { console.error(e); }
         loadGroups();
     };
@@ -422,67 +466,11 @@ function LocationPortalContent() {
         }
     };
 
-    const handleBulkPayment = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (selectedIds.length === 0) return;
-        const amt = Number(paymentForm.amount_per_person);
-        if (!Number.isFinite(amt) || amt <= 0) {
-            addToast('El monto debe ser mayor que cero.', 'error');
-            return;
-        }
-        if (!paymentForm.proof) {
-            addToast('El comprobante es obligatorio.', 'error');
-            return;
-        }
-        setLoading(true);
-        try {
-            const res = await fetch('/api/v1/plugin/conference-manager/portal/payments/bulk', {
-                method: 'POST',
-                headers: portalAuthHeaders({ 'Content-Type': 'application/json' }),
-                body: JSON.stringify({
-                    inscription_ids: selectedIds,
-                    amount_per_person: amt,
-                    method: paymentForm.method,
-                    reference: paymentForm.reference,
-                    proof: paymentForm.proof
-                }),
-                credentials: 'include'
-            });
-
-            const data = await res.json().catch(() => ({}));
-            if (res.ok) {
-                // Report what actually applied — the backend now returns applied/skipped counts.
-                const applied = data.applied ?? selectedIds.length;
-                const skipped = data.skipped ?? 0;
-                addToast(skipped > 0 ? `Se registraron ${applied} pagos (${skipped} omitidos) — pendientes de validación.` : 'Pagos registrados — pendientes de validación por un administrador.', skipped > 0 ? 'warning' : 'success');
-                setShowPaymentModal(false);
-                setSelectedIds([]);
-                setPaymentForm({ amount_per_person: '', method: 'Efectivo', reference: '', proof: '' });
-                loadInscriptions();
-            } else {
-                addToast(data.error || 'Error al procesar pagos', 'error');
-            }
-        } catch {
-            addToast('Error de conexión', 'error');
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-        // Cap the receipt photo — the data URL is embedded in the JSON body (and stored per row).
-        if (file.size > 1024 * 1024) {
-            addToast('La imagen es demasiado grande (máx. 1 MB).', 'error');
-            e.target.value = '';
-            return;
-        }
-        const reader = new FileReader();
-        reader.onloadend = () => {
-            setPaymentForm({ ...paymentForm, proof: reader.result as string });
-        };
-        reader.readAsDataURL(file);
+    // A request answered 401 (the session expired or the access code changed): back to the login screen.
+    const sessionExpired = () => {
+        addToast('Tu sesión terminó. Vuelve a ingresar con el código de tu localidad.', 'warning');
+        resetDashboard();
+        loadConferences();
     };
 
     if (loading && !myLocation && step === 'dashboard') {
@@ -605,17 +593,47 @@ function LocationPortalContent() {
     }
 
     // === DASHBOARD VIEW ===
-    const paidCount = inscriptions.filter(i => i.payment_status === 'paid').length;
-    const totalPaid = inscriptions.reduce((sum, i) => sum + (Number(i.amount_paid) || 0), 0);
-    const totalPending = inscriptions.reduce((sum, i) => sum + ((Number(i.total_due) || 0) - (Number(i.amount_paid) || 0)), 0);
+    const paidCount = inscriptions.filter(i => !isCancelled(i) && i.payment_status === 'paid').length;
+    // The caption counts what the hero counts: ACTIVE inscriptions, the cancelled ones apart (the admin's words).
+    const cancelledCount = inscriptions.filter((i) => isCancelled(i)).length;
+    const activeCount = inscriptions.length - cancelledCount;
     const locationFull = isLocationFull(myLocation);
     const methods = paymentMethodsOf(myLocation);
+    // «Pagos de cuotas» only when the plugin has it (an older one keeps the bulk flow — version skew).
+    const feesOn = hasFeePayments(myLocation);
+    // «Escarapelas» (conference-manager ≥ 2.19.0): while the conference lets coordinators share them.
+    const badgesOn = hasBadges(myLocation);
+    const conferenceName = (conferences.find((c) => String(c.id) === String(selectedConference)) || { name: '' }).name || '';
+    const activeTab = tab === 'fees' && !feesOn ? 'participants' : tab;
+    const badge = feesOn ? feeBadge(myLocation?.fees) : null;
+    const byId = new Map(inscriptions.map((i) => [Number(i.id), i]));
+    const nameOf = (id: number) => { const p = byId.get(id); return p ? personName(p, fields) : `#${id}`; };
+    const familyGroups = familyGroupsOf(inscriptions, fields);
+    const sheetPerson = sheetId != null ? byId.get(sheetId) ?? null : null;
+    const tabs: { key: 'participants' | 'fees' | 'lodging'; label: string; icon: string }[] = [
+        { key: 'participants', label: 'Participantes', icon: 'fa-users' },
+        ...(feesOn ? [{ key: 'fees' as const, label: 'Pagos de cuotas', icon: 'fa-file-invoice-dollar' }] : []),
+        { key: 'lodging', label: 'Hospedajes', icon: 'fa-bed' },
+    ];
+    // A participant's «Registrar pago»: the new payment sheet on top of theirs, or (an older plugin) the old dialog.
+    const payFor = (id: number) => {
+        if (feesOn) { void feeHub.openRegister([id]); return; }
+        const p = byId.get(id);
+        setLegacyPayIds([id]);
+        setLegacyAmount(p ? (rowBalanceC(p).toCover / 100).toFixed(2) : '');
+    };
+    const seePaymentsOf = (id: number) => {
+        setSheetId(null);
+        feeHub.setPersonFilter(id);
+        feeHub.setSegment('transfers');
+        setTab('fees');
+    };
     return (
         <div className="min-h-screen bg-gray-50">
             {/* Slim sticky bar: product name + logout. The location identity lives in the hero below, as the admin dashboard. */}
-            <header className="bg-white/90 backdrop-blur border-b border-gray-100 shadow-sm shadow-gray-100/50 sticky top-0 z-30">
+            <header className="bg-white/90 backdrop-blur border-b border-gray-100 shadow-sm shadow-gray-100/50 sticky top-0 z-30 pt-[env(safe-area-inset-top)]">
                 <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
-                    <div className="flex justify-between items-center gap-4 py-3">
+                    <div className="flex justify-between items-center gap-4 py-2 sm:py-3">
                         <div className="flex items-center gap-3 min-w-0">
                             <div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center text-white text-sm shadow-lg shadow-blue-200 shrink-0">
                                 <i className="fa-solid fa-map-marker-alt"></i>
@@ -626,24 +644,25 @@ function LocationPortalContent() {
                             icon="fa-right-from-bracket"
                             tone="rose"
                             onClick={logout}
-                            title="Cerrar Sessión"
+                            title="Cerrar sesión"
+                            aria-label="Cerrar sesión"
                             className="shrink-0"
                         />
                     </div>
                 </div>
             </header>
 
-            <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8 animate-in fade-in duration-500">
-                {/* The admin ConferenceDashboard hero: tile + caption, black italic name, gray-50 pills */}
+            <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-5 sm:py-8 space-y-5 sm:space-y-8 animate-in fade-in duration-500">
+                {/* The admin ConferenceDashboard hero: tile + caption, black italic name, gray-50 pills (smaller on phones) */}
                 <HeroCard tone="blue">
-                    <div className="flex items-center gap-3 mb-3">
+                    <div className="flex items-center gap-3 mb-2 sm:mb-3">
                         <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-lg shadow-blue-200 shrink-0">
                             <i className="fa-solid fa-map-marker-alt"></i>
                         </div>
                         <span className={cx(captionWideCls, "text-blue-600 truncate")}>{myLocation?.responsible_name}</span>
                     </div>
-                    <h1 className={cx("text-3xl sm:text-4xl mb-3 break-words", headingCls)}>{myLocation?.name}</h1>
-                    <div className="flex flex-wrap items-center gap-3 sm:gap-4">
+                    <h1 className={cx("text-2xl sm:text-4xl mb-3 break-words", headingCls)}>{myLocation?.name}</h1>
+                    <div className="flex flex-wrap items-center gap-2 sm:gap-4">
                         <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-full border border-gray-100" data-testid="portal-seats">
                             <i className={cx("fa-solid fa-users text-xs text-center w-4", locationFull ? "text-rose-500" : "text-emerald-500")}></i>
                             <span className={cx("text-xs font-bold", locationFull ? "text-rose-600" : "text-gray-600")}>
@@ -659,75 +678,60 @@ function LocationPortalContent() {
                     </div>
                 </HeroCard>
 
-                {/* Stats */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-                    <StatCard icon="fa-users" label="Total Inscritos" value={inscriptions.length} color="blue" />
-                    <StatCard icon="fa-sack-dollar" label="Total Recaudado" value={`$${fmtMoney(totalPaid)}`} color="green" />
-                    <StatCard icon="fa-hourglass-half" label="Saldo Pendiente" value={`$${fmtMoney(totalPending)}`} color="red" />
-                </div>
-
-                {/* Tabs: Participantes (the original dashboard) | Hospedajes (lodging per location) */}
-                <div className="flex border-b border-gray-200 overflow-x-auto" role="tablist" data-testid="portal-tabs">
-                    {([['participants', 'Participantes', 'fa-users'], ['lodging', 'Hospedajes', 'fa-bed']] as const).map(([key, label, icon]) => (
+                {/* Tabs: Participantes | Pagos de cuotas (plugin ≥ 2.18.0) | Hospedajes. The money figures live in
+                    «Pagos de cuotas › Resumen» (the old StatCards above the tabs counted cancelled people). */}
+                {/* On a phone the tabs share the width in equal columns (icon over a label that may wrap), so all
+                    three are always visible — no strip scrolling sideways; from 640 px, one row as before. */}
+                <div className="grid grid-flow-col auto-cols-fr sm:flex border-b border-gray-200" role="tablist" data-testid="portal-tabs">
+                    {tabs.map(({ key, label, icon }) => (
                         <button
                             key={key}
                             type="button"
                             role="tab"
-                            aria-selected={tab === key}
+                            aria-selected={activeTab === key}
                             onClick={() => setTab(key)}
-                            className={`flex items-center gap-2 px-6 py-3 border-b-2 font-medium text-sm transition-colors whitespace-nowrap ${tab === key ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
+                            className={`relative flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 px-1 sm:px-6 py-2 sm:py-0 min-h-14 sm:min-h-12 min-w-0 border-b-2 font-medium text-xs sm:text-sm leading-tight text-center transition-colors sm:whitespace-nowrap ${activeTab === key ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
+                            data-tab={key}
                         >
-                            <i className={`fa-solid ${icon}`}></i> {label}
+                            <i className={`fa-solid ${icon}`} aria-hidden="true"></i>
+                            <span className="break-words">{label}</span>
+                            {key === 'fees' && badge && <Badge tone={badge.tone} size="xs" className="whitespace-nowrap" data-testid="fees-badge">{badge.text}</Badge>}
                         </button>
                     ))}
                 </div>
 
                 {/* storageScope ties the lodging explorer's remembered hotel/room to THIS location, so a shared
                     device never reopens another coordinator's place. */}
-                {tab === 'lodging' ? (
+                {activeTab === 'lodging' ? (
                     <Hospedajes authHeaders={portalAuthHeaders} onLocationRefresh={refreshMyLocation}
                         storageScope={myLocation ? `${myLocation.conference_id ?? ""}:${myLocation.id}` : undefined} />
+                ) : activeTab === 'fees' ? (
+                    <FeePaymentsTab hub={feeHub} nameOf={nameOf} groups={familyGroups} onOpenPerson={setSheetId} />
                 ) : (
-                <Card className="animate-in slide-in-from-bottom-4 duration-500">
+                <Card clip className="animate-in slide-in-from-bottom-4 duration-500">
                     <CardHeader
                         icon={view === 'list' ? 'fa-users' : 'fa-user-plus'}
                         title={view === 'list' ? 'Participantes' : 'Nueva Inscripción'}
                         caption={view === 'list' ? (
-                            <span className="inline-flex flex-wrap items-center gap-3">
-                                <span>{inscriptions.length} {inscriptions.length === 1 ? 'participante' : 'participantes'}</span>
-                                <span className="w-1 h-1 rounded-full bg-gray-200"></span>
-                                <span className="text-blue-500 font-black">{paidCount} {paidCount === 1 ? 'pagado' : 'pagados'}</span>
+                            // Each fact whole, its «·» with it: on a phone the line breaks BETWEEN them, never leaving a
+                            // separator alone at the end of a line.
+                            <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-0.5" data-testid="participants-caption">
+                                <span className="whitespace-nowrap">{activeCount} {activeCount === 1 ? 'participante' : 'participantes'}</span>
+                                <span className="whitespace-nowrap text-blue-500 font-black">· {paidCount} {paidCount === 1 ? 'pagado' : 'pagados'}</span>
+                                {cancelledCount > 0 && <span className="whitespace-nowrap">· {cancelledCount === 1 ? '1 cancelada' : `${cancelledCount} canceladas`}</span>}
                             </span>
                         ) : undefined}
                         actions={view === 'list' ? (
-                            <>
-                                {selectedIds.length > 0 && (
-                                    <Button
-                                        variant="success"
-                                        icon="fa-file-invoice-dollar"
-                                        onClick={() => {
-                                            // Pre-fill amount if only one selected or just leave blank
-                                            const defaultAmount = selectedIds.length === 1 ? (inscriptions.find(i => i.id === selectedIds[0])?.total_due || 0) - (inscriptions.find(i => i.id === selectedIds[0])?.amount_paid || 0) : '';
-                                            const methods = paymentMethodsOf(myLocation);
-                                            setPaymentForm(prev => ({ ...prev, amount_per_person: String(defaultAmount), method: methods.includes(prev.method) ? prev.method : (methods[0] || '') }));
-                                            setShowPaymentModal(true);
-                                        }}
-                                        disabled={paymentMethodsOf(myLocation).length === 0}
-                                        title={paymentMethodsOf(myLocation).length === 0 ? 'No hay formas de pago habilitadas para esta localidad.' : undefined}
-                                        className="animate-in zoom-in duration-200"
-                                    >
-                                        Registrar Pago ({selectedIds.length})
-                                    </Button>
-                                )}
-                                <Button
-                                    icon="fa-plus"
-                                    onClick={() => setView('add')}
-                                    disabled={isLocationFull(myLocation)}
-                                    title={isLocationFull(myLocation) ? 'La localidad ha alcanzado su cupo máximo.' : undefined}
-                                >
-                                    Registrar Nuevo
-                                </Button>
-                            </>
+                            <Button
+                                icon="fa-plus"
+                                block
+                                className="sm:w-auto"
+                                onClick={() => setView('add')}
+                                disabled={isLocationFull(myLocation)}
+                                title={isLocationFull(myLocation) ? 'La localidad ha alcanzado su cupo máximo.' : undefined}
+                            >
+                                Registrar Nuevo
+                            </Button>
                         ) : (
                             <Button variant="ghost" icon="fa-arrow-left" onClick={() => setView('list')}>
                                 Volver a la lista
@@ -735,84 +739,22 @@ function LocationPortalContent() {
                         )}
                     />
 
+                    {view === 'list' && badgesOn && inscriptions.length > 0 && (
+                        <PortalBadgeBulk authHeaders={portalAuthHeaders} nameOf={nameOf} />
+                    )}
                     {view === 'list' ? (
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-sm text-left border-collapse">
-                                <thead>
-                                    <tr className="bg-gray-50/50">
-                                        <th scope="col" className={cx(thCls, "w-10 text-center")}>
-                                            <input
-                                                type="checkbox"
-                                                aria-label="Seleccionar todos los participantes"
-                                                checked={selectedIds.length === inscriptions.length && inscriptions.length > 0}
-                                                onChange={(e) => {
-                                                    if (e.target.checked) setSelectedIds(inscriptions.map(i => i.id));
-                                                    else setSelectedIds([]);
-                                                }}
-                                                className={checkboxCls}
-                                            />
-                                        </th>
-                                        <th scope="col" className={cx(thCls, "px-8")}>Participante</th>
-                                        {fields.map((field) => (
-                                            <th key={field.name} scope="col" className={thCls}>{field.label}</th>
-                                        ))}
-                                        <th scope="col" className={cx(thCls, "text-center")}>Pago</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-gray-50">
-                                    {inscriptions.length === 0 ? (
-                                        <tr>
-                                            <td colSpan={fields.length + 3} className="p-6">
-                                                <EmptyState icon="fa-users" padding="sm" title="No hay participantes registrados en esta localidad." />
-                                            </td>
-                                        </tr>
-                                    ) : (
-                                        inscriptions.map(i => (
-                                            <tr key={i.id} className={cx(trCls, selectedIds.includes(i.id) && 'bg-blue-50/50')}>
-                                                <td className={cx(tdCls, "text-center")}>
-                                                    <input
-                                                        type="checkbox"
-                                                        aria-label={`Seleccionar a ${personDisplayName(i, fields)}`}
-                                                        checked={selectedIds.includes(i.id)}
-                                                        onChange={(e) => {
-                                                            if (e.target.checked) setSelectedIds([...selectedIds, i.id]);
-                                                            else setSelectedIds(selectedIds.filter(id => id !== i.id));
-                                                        }}
-                                                        className={checkboxCls}
-                                                    />
-                                                </td>
-                                                <td className="px-8 py-5 font-bold text-gray-900 group-hover/row:text-blue-700 transition-colors whitespace-nowrap">
-                                                    {/* Display name follows the form — first 1-2 field values. */}
-                                                    {personDisplayName(i, fields)}
-                                                </td>
-                                                {fields.map((field) => {
-                                                    const v = String(fieldVal(i, field) || '');
-                                                    return (
-                                                        <td key={field.name} className={tdCls}>
-                                                            <div className="text-gray-600 text-xs font-medium truncate max-w-[180px]">
-                                                                {v !== '' ? v : <span className="text-gray-300 italic">-</span>}
-                                                            </div>
-                                                        </td>
-                                                    );
-                                                })}
-                                                <td className={tdCls}>
-                                                    <div className="flex flex-col items-center gap-1">
-                                                        <span className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest whitespace-nowrap ${i.payment_status === 'paid' ? 'bg-emerald-50 text-emerald-600' :
-                                                            i.payment_status === 'partial' ? 'bg-amber-50 text-amber-600' : 'bg-rose-50 text-rose-600'
-                                                            }`}>
-                                                            {i.payment_status === 'unpaid' ? 'Sin Pagar' : (i.payment_status === 'paid' ? 'Pagado' : 'Abono')}
-                                                        </span>
-                                                        <div className="text-[10px] text-gray-400 font-bold whitespace-nowrap">
-                                                            PAGADO: <span className="text-gray-900">${fmtMoney(i.amount_paid)}</span> / <span className="text-gray-400">${fmtMoney(i.total_due)}</span>
-                                                        </div>
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        ))
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
+                        <ParticipantList
+                            people={inscriptions}
+                            fields={fields}
+                            onOpen={setSheetId}
+                            openId={sheetId}
+                            legacy={feesOn ? null : {
+                                selected: legacySelected,
+                                setSelected: setLegacySelected,
+                                canPay: methods.length > 0,
+                                onPay: (ids) => { setLegacyPayIds(ids); setLegacyAmount(''); },
+                            }}
+                        />
                     ) : (
                         <div className="p-6 sm:p-8">
                             {isLocationFull(myLocation) && (
@@ -906,114 +848,31 @@ function LocationPortalContent() {
                 </Card>
                 )}
             </main>
-            {showPaymentModal && (
-                <Modal
-                    title="Registrar Pago Grupal"
-                    subtitle={`Se aplicará a ${selectedIds.length} personas seleccionadas`}
-                    onClose={() => setShowPaymentModal(false)}
-                    footer={(
-                        <>
-                            <Button variant="ghost" onClick={() => setShowPaymentModal(false)}>
-                                Cancelar
-                            </Button>
-                            <Button
-                                type="submit"
-                                form="bulk-payment-form"
-                                size="lg"
-                                disabled={loading || !paymentForm.amount_per_person || !paymentForm.proof}
-                            >
-                                {loading ? 'Procesando...' : 'Confirmar Pago'}
-                            </Button>
-                        </>
-                    )}
-                >
-                    <form id="bulk-payment-form" onSubmit={handleBulkPayment} className="space-y-5">
-                        <Field label="Monto por Persona">
-                            {(id) => (
-                                <div className="relative">
-                                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold">$</span>
-                                    <input
-                                        id={id}
-                                        required
-                                        type="number"
-                                        min="0"
-                                        step="any"
-                                        className={cx(inputBoldCls, "pl-10")}
-                                        value={paymentForm.amount_per_person}
-                                        onChange={e => setPaymentForm({ ...paymentForm, amount_per_person: e.target.value })}
-                                        placeholder="0.00"
-                                    />
-                                </div>
-                            )}
-                        </Field>
-
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <Field label="Método">
-                                {(id) => (
-                                    <>
-                                        <select
-                                            id={id}
-                                            className={selectCls}
-                                            value={paymentForm.method}
-                                            onChange={e => setPaymentForm({ ...paymentForm, method: e.target.value })}
-                                        >
-                                            {paymentMethodsOf(myLocation).map(m => <option key={m} value={m}>{m}</option>)}
-                                        </select>
-                                        {paymentMethodsOf(myLocation).length === 0 && (
-                                            <p className="text-xs text-rose-600 font-medium ml-1">No hay formas de pago habilitadas para esta localidad; contacta al administrador.</p>
-                                        )}
-                                    </>
-                                )}
-                            </Field>
-                            <Field label="Referencia (Opcional)">
-                                {(id) => (
-                                    <input
-                                        id={id}
-                                        className={inputCls}
-                                        value={paymentForm.reference}
-                                        onChange={e => setPaymentForm({ ...paymentForm, reference: e.target.value })}
-                                        placeholder="# Recibo / Trans"
-                                    />
-                                )}
-                            </Field>
-                        </div>
-
-                        <Field label={<>Comprobante de Pago <span className="text-rose-500">*</span></>}>
-                            {(id) => (
-                                <>
-                                    <div className="border-2 border-dashed border-gray-200 rounded-2xl p-4 bg-gray-50/30 transition-colors hover:border-blue-400 focus-within:border-blue-500 relative overflow-hidden group">
-                                        <input
-                                            id={id}
-                                            type="file"
-                                            accept="image/*"
-                                            aria-label="Adjuntar foto del comprobante"
-                                            onChange={handleFileChange}
-                                            className="absolute inset-0 opacity-0 cursor-pointer z-10"
-                                        />
-                                        {paymentForm.proof ? (
-                                            <div className="flex items-center gap-3">
-                                                <img src={paymentForm.proof} alt="Comprobante de pago" className="w-14 h-14 rounded-xl object-cover border border-gray-200 shadow-sm" />
-                                                <div className="flex-1 min-w-0">
-                                                    <p className="text-xs font-bold text-blue-600 truncate">Imagen cargada correctamente</p>
-                                                    <p className="text-[10px] text-gray-400 italic">Haz clic para cambiar</p>
-                                                </div>
-                                                <button type="button" onClick={() => setPaymentForm({ ...paymentForm, proof: '' })} title="Quitar comprobante" aria-label="Quitar comprobante" className="relative z-20 w-9 h-9 shrink-0 flex items-center justify-center rounded-xl bg-white text-rose-500 hover:bg-rose-600 hover:text-white transition-all shadow-sm border border-rose-100">
-                                                    <i className="fa-solid fa-trash-can text-xs"></i>
-                                                </button>
-                                            </div>
-                                        ) : (
-                                            <div className="text-center py-2">
-                                                <i className="fa-solid fa-cloud-arrow-up text-gray-300 text-2xl mb-2 group-hover:text-blue-400 transition-colors"></i>
-                                                <p className="text-xs text-gray-500 font-bold">Adjuntar foto del comprobante</p>
-                                            </div>
-                                        )}
-                                    </div>
-                                    <p className="text-[10px] text-gray-400 italic ml-1">Obligatorio. El pago quedará <b>pendiente de validación</b> por un administrador.</p>
-                                </>
-                            )}
-                        </Field>
-                    </form>
-                </Modal>
+            {sheetPerson && (
+                <ParticipantSheet
+                    person={sheetPerson}
+                    fields={fields}
+                    onClose={() => { setSheetId(null); feeHub.clearNotice(); }}
+                    notice={feeHub.sheet ? null : feeHub.notice}
+                    feesOn={feesOn}
+                    canRecord={methods.length > 0}
+                    onPay={payFor}
+                    onSeePayments={feesOn ? seePaymentsOf : undefined}
+                    badges={badgesOn ? { authHeaders: portalAuthHeaders, conferenceName } : null}
+                    payBusy={feeHub.preparing}
+                />
+            )}
+            {feesOn && <FeeSheets hub={feeHub} nameOf={nameOf} groups={familyGroups} />}
+            {!feesOn && legacyPayIds && (
+                <LegacyBulkPayment
+                    ids={legacyPayIds}
+                    methods={methods}
+                    defaultAmount={legacyAmount}
+                    authHeaders={portalAuthHeaders}
+                    notify={(m, t) => addToast(m, t)}
+                    onClose={() => setLegacyPayIds(null)}
+                    onDone={() => { setLegacyPayIds(null); setLegacySelected([]); loadInscriptions(); }}
+                />
             )}
         </div>
     );
@@ -1021,7 +880,7 @@ function LocationPortalContent() {
 
 export default function LocationPortalPage() {
     return (
-        <ToastProvider>
+        <ToastProvider closeLabel="Cerrar">
             <LocationPortalContent />
         </ToastProvider>
     );

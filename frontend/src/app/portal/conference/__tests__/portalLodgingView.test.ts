@@ -24,6 +24,7 @@ import {
     GENDER_FILTER_LABELS,
     genderKey,
     genderLabel,
+    lockLabel,
     groupRoomsByHotel,
     hotelOfRoom,
     hotelStats,
@@ -502,6 +503,8 @@ describe("readOnlyReason", () => {
         { status: 'draft', can_edit: false, deadline: '2026-01-01', deadline_passed: true },
         { status: 'draft', can_edit: false, deadline: '2026-01-01', deadline_passed: true, permission: { active: false, expired: true, until: '2026-01-05' } },
         { status: 'draft', can_edit: false },
+        { status: 'draft', can_edit: false, opens: '2026-10-15', not_yet_open: true, deadline: '2026-10-30', deadline_passed: false, window_open: false },
+        { status: 'submitted', can_edit: false, opens: '2026-10-15', not_yet_open: true, deadline: null },
     ];
 
     it("is null exactly when the tab's edit gate is open", () => {
@@ -514,6 +517,9 @@ describe("readOnlyReason", () => {
         expect(readOnlyReason({ status: 'validated' })).toMatch(/validó/);
         expect(readOnlyReason({ status: 'draft', can_edit: false, deadline: '2026-01-01', deadline_passed: true })).toBe('Solo lectura: venció el plazo para acomodar los hospedajes.');
         expect(readOnlyReason({ status: 'draft', can_edit: false })).toMatch(/no se puede modificar/);
+        // Before the opening (conference-manager 2.21.0): when it opens, and «Retirar envío» is not offered.
+        expect(readOnlyReason({ status: 'draft', can_edit: false, opens: '2026-10-15', not_yet_open: true, deadline: '2026-10-30' })).toBe('Todavía no puedes acomodar: los hospedajes se habilitan el 15/10/2026.');
+        expect(readOnlyReason({ status: 'submitted', can_edit: false, opens: '2026-10-15', not_yet_open: true })).toBe('Solo lectura: el hospedaje está enviado a validación y los hospedajes se habilitan el 15/10/2026.');
     });
 
     it("never repeats the sentence the status hero above already shows", () => {
@@ -585,5 +591,27 @@ describe("occupant fields", () => {
     it("tolerates missing input", () => {
         expect(fieldEntries(null, fields)).toEqual([]);
         expect(fieldEntries(a, null)).toEqual([]);
+    });
+});
+
+describe("a shared room's class (conference-manager 2.21.0)", () => {
+    const locked = (lock: { field: string; value: string }[]) => room({ id: 9, capacity: 1, occupants: [], shared: { beds: 1, room_capacity: 4, lock } });
+    it("reads the gender as words and any other value as it is", () => {
+        expect(lockLabel(locked([{ field: 'gender', value: 'Femenino' }]))).toBe('mujeres');
+        expect(lockLabel(locked([{ field: 'gender', value: 'M' }]))).toBe('hombres');
+        expect(lockLabel(locked([{ field: 'iglesia', value: 'Central' }]))).toBe('Central');
+        expect(lockLabel(room({ id: 10 }))).toBe('');
+    });
+    it("the «Asignar» picker offers only who may take its bed", () => {
+        const r = locked([{ field: 'gender', value: 'F' }]);
+        const c = assignCandidates({ roomId: 9, rooms: [r], unassigned: [{ id: 1, gender: 'M' }, { id: 2, gender: 'F' }] });
+        expect(c.unassigned.map((x) => x.attendee.id)).toEqual([2]);
+    });
+});
+
+describe("held by the administration (conference-manager 2.21.0)", () => {
+    it("the «Asignar» picker of a blocked room offers nobody and says why", () => {
+        const r = room({ id: 11, capacity: 2, occupants: [], blocked: true });
+        expect(assignCandidates({ roomId: 11, rooms: [r], unassigned: [{ id: 1 }] }).blocked).toBe('blocked');
     });
 });

@@ -20,9 +20,18 @@
  * LIKE with user text escapes its wildcards with `!` (LIKE … ESCAPE '!'), never with a backslash.
  */
 
+// «Pagos de cuotas» (2.18.0): split fee payments — schema, money readers, writes and their routes.
+const { createFeePayments } = require('./server/fee-payments');
+const { createBadges } = require('./server/badges');
+// «Mi inscripción» (2.23.0): the registrant's own page behind their badge's QR; hotel positions.
+const { createSelfPage } = require('./server/selfpage');
+const { parseGeo, GEO_MESSAGES } = require('./server/geo');
+// Room packing (2.20.0): the fewest rooms and empty beds — the engine's and «Sugerir reparto»'s arithmetic.
+const pack = require('./server/lodging-pack');
+
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.17.2',
+    version: '2.23.0',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -40,8 +49,14 @@ exports.init = async function (wordjs) {
         locations: `${P}locations`,
         hotels: `${P}hotels`,
         rooms: `${P}rooms`,
+        // Beds of a room SHARED between locations (2.18.0): room_id, location_id, beds. See sharesByRoom.
+        roomBeds: `${P}room_beds`,
         inscriptions: `${P}inscriptions`,
+        // Fee payments (2.18.0): a payment is one receipt (`payment_transfers`, the header) split into
+        // parts — rows of `payments` linked by transfer_id. See server/fee-payments.js.
         payments: `${P}payments`,
+        transfers: `${P}payment_transfers`,
+        transferEvents: `${P}payment_transfer_events`,
         rules: `${P}assignment_rules`,
         fields: `${P}fields`,
         feeRules: `${P}fee_rules`,
@@ -94,7 +109,7 @@ exports.init = async function (wordjs) {
     // phone / family_group / document_number are FORM-owned columns and are deliberately NOT reserved.
     const RESERVED_INSCRIPTION_COLUMNS = new Set([
         'id', 'conference_id', 'location', 'location_id', 'custom_data', 'registration_date', 'status',
-        'payment_status', 'total_due', 'amount_paid', 'room_id', 'notes', 'reg_code',
+        'payment_status', 'total_due', 'amount_paid', 'room_id', 'notes', 'reg_code', 'room_locked',
     ]);
     // SQL reserved words that isSafeColumn would otherwise accept as a column name.
     const SQL_RESERVED_WORDS = new Set(['select', 'from', 'where', 'table', 'order', 'group', 'by', 'index', 'primary',
@@ -119,6 +134,69 @@ exports.init = async function (wordjs) {
             console.warn(`[conference-manager] ALTER TABLE ${table} ADD COLUMN ${col} failed: ${msg}`);
             return false;
         }
+    }
+
+    // LODGING DATES (see lodgingWindow): the sentinels of a location's own dates, and the date arithmetic —
+    // function declarations, self-contained, because initSchema's migration uses them before init gets further.
+    const LODGING_NO_WAIT = 'now', LODGING_NO_CLOSE = 'never';
+    // A stored date as the admin typed it: a bare date stays bare, and so does a driver's DATETIME read back as
+    // a Date / its JSON (Postgres, MySQL: midnight UTC); a datetime stays; '' / corrupt → null.
+    function lodgingDay(v) {
+        if (v == null || v === '') return null;
+        if (v instanceof Date) v = Number.isFinite(v.getTime()) ? v.toISOString() : '';
+        const str = String(v).trim();
+        const json = /^(\d{4}-\d{2}-\d{2})T00:00:00\.000Z$/.exec(str);
+        if (json) return json[1];
+        const bare = /^(\d{4})-(\d{2})-(\d{2})$/.exec(str);
+        if (bare) {
+            const t = Date.UTC(+bare[1], +bare[2] - 1, +bare[3]);
+            return new Date(t).toISOString().slice(0, 10) === str ? str : null;
+        }
+        return str && Number.isFinite(new Date(str).getTime()) ? str : null;
+    }
+    // A valid IANA zone, or null (UTC).
+    function lodgingZone(tz) {
+        if (typeof tz !== 'string' || !tz || tz.length > 64) return null;
+        try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return tz; } catch { return null; }
+    }
+    // The instant (ms) a calendar day starts in `tz` (null = UTC): local midnight minus the zone's offset there,
+    // taken twice so a day that starts across a DST change still lands on its first instant.
+    function zoneDayStart(y, m, d, tz) {
+        const utc = Date.UTC(y, m - 1, d);
+        if (!tz) return utc;
+        try {
+            const fmt = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            const offset = (t) => {
+                const p = {};
+                for (const x of fmt.formatToParts(new Date(t))) p[x.type] = x.value;
+                return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second) - Math.floor(t / 1000) * 1000;
+            };
+            return utc - offset(utc - offset(utc));
+        } catch { return utc; }
+    }
+    // When a lodging date starts / ends: a bare date from its first instant to the next day's first instant;
+    // a datetime is that instant both ways.
+    function lodgingStart(v, tz) {
+        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+        return m ? zoneDayStart(+m[1], +m[2], +m[3], tz) : new Date(v).getTime();
+    }
+    function lodgingEnd(v, tz) {
+        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+        return m ? zoneDayStart(+m[1], +m[2], +m[3] + 1, tz) : new Date(v).getTime();
+    }
+    // A lodging date from a request: '' / null = none; else a real date ('2026-10-15', or a datetime) or 400.
+    function lodgingDateInput(v, label) {
+        if (v === undefined || v === null || (typeof v === 'string' && v.trim() === '')) return null;
+        const day = typeof v === 'string' ? lodgingDay(v) : null;
+        if (!day) throw httpError(400, `Fecha inválida (${label}).`);
+        return day;
+    }
+    // A zone from a request: '' / null = UTC; else an IANA zone or 400.
+    function lodgingTzInput(v) {
+        if (v === undefined || v === null || v === '') return null;
+        const tz = lodgingZone(v);
+        if (!tz) throw httpError(400, 'Zona horaria inválida.');
+        return tz;
     }
 
     // Indexes for the common filtered/joined lookups. Names AND targets must use the plugin prefix
@@ -152,7 +230,11 @@ exports.init = async function (wordjs) {
             'is_form_published INT DEFAULT 0',
             'fee_default REAL DEFAULT 0',
             'description TEXT',
-            'lodging_deadline DATETIME'
+            'lodging_deadline DATETIME',
+            // The general opening of the coordinators' lodging (2.21.0; NULL = right away) and the zone its bare
+            // dates are judged in (the admin's; NULL = UTC). See LODGING DATES.
+            'lodging_opens TEXT',
+            'lodging_tz TEXT'
         ]);
 
         // 2. Locations
@@ -172,9 +254,23 @@ exports.init = async function (wordjs) {
             'lodging_reviewed_at DATETIME',
             'lodging_reviewed_by TEXT',
             // Exception to the conference's lodging deadline (2.8.0): 1 = this location may keep arranging
-            // after it, until lodging_permission_until (NULL = until the admin revokes it).
+            // after it, until lodging_permission_until (NULL = until the admin revokes it). Since 2.21.0 read
+            // only once, by the boot that moves it into lodging_closes (see LODGING DATES).
             'lodging_permission INT DEFAULT 0',
             'lodging_permission_until DATETIME',
+            // The location's own lodging dates (2.21.0): NULL = the general one; a date; 'now' (opening: no
+            // wait) / 'never' (closing: none). See LODGING DATES.
+            'lodging_opens TEXT',
+            'lodging_closes TEXT',
+            // Its place when «Sugerir reparto» hands out beds that do not reach everyone (2.21.0; NULL = after the
+            // ordered ones, by name).
+            'lodging_order INT',
+            // Administration adjustments (2.17.0): the admin side changed the arrangement while it was
+            // submitted / validated — when, who, and how many changes since the coordinator's last
+            // submission (stampAdminAdjustment; cleared by POST /portal/lodging/submit).
+            'lodging_admin_changed_at DATETIME',
+            'lodging_admin_changed_by TEXT',
+            'lodging_admin_changes INT DEFAULT 0',
             `FOREIGN KEY (conference_id) REFERENCES ${T.conferences}(id) ON DELETE CASCADE`
         ]);
 
@@ -202,7 +298,22 @@ exports.init = async function (wordjs) {
             // NULL = pool room (the admin's conference-wide assignment); non-null = allotted to that
             // location. Plain column, no FK (ALTER cannot add one on SQLite; both install paths must agree).
             'location_id INT',
+            // A shared room's class (2.21.0): JSON [{ field, value }] — see «THE CLASS OF A SHARED ROOM».
+            'share_lock TEXT',
+            // Blocked by the administration (2.21.0): see «HELD BY THE ADMINISTRATION».
+            'blocked INT',
             `FOREIGN KEY (hotel_id) REFERENCES ${T.hotels}(id) ON DELETE CASCADE`
+        ]);
+
+        // 4b. Beds of a room shared between locations (2.18.0, «camas por localidad»). A room with rows
+        // here keeps location_id NULL; each row gives `beds` of it to one location, and the rest of its
+        // capacity are pool beds. One row per (room, location).
+        await db.createTable(T.roomBeds, [
+            'id INT_PK',
+            'room_id INT NOT NULL',
+            'location_id INT NOT NULL',
+            'beds INT NOT NULL',
+            `FOREIGN KEY (room_id) REFERENCES ${T.rooms}(id) ON DELETE CASCADE`
         ]);
 
         // 5. Inscriptions. `location_id` is the ISOLATION KEY of the coordinator portal (a location's
@@ -227,6 +338,8 @@ exports.init = async function (wordjs) {
             'total_due REAL DEFAULT 0',
             'amount_paid REAL DEFAULT 0',
             'room_id INT',
+            // The room this person was fixed in by the administration (2.21.0): see «HELD BY THE ADMINISTRATION».
+            'room_locked INT',
             'notes TEXT',
             // Registration code (2.9.0): unique, random, admin-only — the barcode payload. VARCHAR, not TEXT,
             // so MySQL can index it.
@@ -655,25 +768,22 @@ exports.init = async function (wordjs) {
         });
     }
 
+    // «Pagos de cuotas» (2.18.0). THE money model lives in server/fee-payments.js: the payment headers, the
+    // ONE definition of a part's effective status (fees.EFFECTIVE — every SQL that reads payment money goes
+    // through it or through fees.personSum / fees.PERSON_MONEY) and the writes. Routes are installed later
+    // (fees.install), once the request-time helpers exist.
+    const fees = createFeePayments({ db, T, P, toCents, fromCents, addColumnIfMissing, createIndex, createUniqueIndex, httpError });
+    // «Escarapelas» (2.19.0): the badge design, links, tickets and the PDF live in server/badges.js; its
+    // routes are installed later (badges.install), once the request-time helpers exist.
+    const badges = createBadges({ db, T, P, addColumnIfMissing, createIndex, createUniqueIndex, httpError });
+    const selfPage = createSelfPage({ db, T, P, createIndex, createUniqueIndex });
     /**
      * Set-based payment recompute: ONE statement for a set of inscriptions. `where` is 'id = ?' |
-     * 'id IN (?, ?, …)' | 'conference_id = ?'. Recomputes amount_paid straight from the payments ledger
-     * in a SINGLE statement, so two concurrent payment posts cannot lose an update (there is no
-     * read-in-JS-then-write). The sandbox db bridge exposes no transaction primitive, so this
-     * single-statement form is the correct way to stay race-free. `+ 0.005` = half-cent tolerance so
-     * `0.1 + 0.7` vs `0.8` reads `paid` (ROUND(x, 2) is NOT portable — Postgres has no
-     * round(double precision, int)).
+     * 'id IN (?, ?, …)' | 'conference_id = ?' | '1 = 1'. amount_paid / payment_status come from VALIDATED
+     * live parts only (fees.recomputePayments), in a single statement, so two concurrent payment writes
+     * cannot lose an update. `+ 0.005` = half-cent tolerance (ROUND(x, 2) is NOT portable).
      */
-    async function recomputePayments(where, params) {
-        await db.run(`UPDATE ${T.inscriptions}
-            SET amount_paid = (SELECT COALESCE(SUM(amount), 0) FROM ${T.payments} WHERE inscription_id = ${T.inscriptions}.id AND status = 'validated'),
-                payment_status = CASE
-                    WHEN total_due <= 0 THEN 'paid'
-                    WHEN (SELECT COALESCE(SUM(amount), 0) FROM ${T.payments} WHERE inscription_id = ${T.inscriptions}.id AND status = 'validated') + 0.005 >= total_due THEN 'paid'
-                    WHEN (SELECT COALESCE(SUM(amount), 0) FROM ${T.payments} WHERE inscription_id = ${T.inscriptions}.id AND status = 'validated') > 0 THEN 'partial'
-                    ELSE 'unpaid' END
-            WHERE ${where}`, params);
-    }
+    const recomputePayments = (where, params) => fees.recomputePayments(where, params);
     const recomputePayment = (id) => recomputePayments('id = ?', [id]);
 
     // Run `writes` ([sql, params] pairs) through db.batch, chunked by COUNT (200 — the bridge's cap)
@@ -757,7 +867,36 @@ exports.init = async function (wordjs) {
         catch (e) { console.warn('[conference-manager] ticket unique index skipped:', e.message); }
         // Deadline for the coordinators' lodging arrangements (NULL = none). Admin-only writes ignore it.
         await addColumnIfMissing(T.conferences, 'lodging_deadline', 'DATETIME');
+        // Lodging dates (2.21.0): the general opening and its zone; a location's own dates. TEXT (not
+        // DATETIME) keeps a bare date bare on every driver.
+        await addColumnIfMissing(T.conferences, 'lodging_opens', 'TEXT');
+        await addColumnIfMissing(T.conferences, 'lodging_tz', 'TEXT');
+        await addColumnIfMissing(T.locations, 'lodging_opens', 'TEXT');
+        await addColumnIfMissing(T.locations, 'lodging_closes', 'TEXT');
+        await addColumnIfMissing(T.locations, 'lodging_order', 'INT');
+        await addColumnIfMissing(T.rooms, 'share_lock', 'TEXT');
+        await addColumnIfMissing(T.rooms, 'blocked', 'INT');
+        await addColumnIfMissing(T.inscriptions, 'room_locked', 'INT');
+        // A hotel's position (2.23.0): 'lat,lng' (6 decimals) from the link or coordinates the admin pasted —
+        // TEXT, never REAL (a Postgres REAL is float4 and would move the pin by metres).
+        await addColumnIfMissing(T.hotels, 'geo', 'TEXT');
+        // A fix holds only in its room (see «HELD BY THE ADMINISTRATION»): none left over from a bed since freed.
+        try { await db.run(`UPDATE ${T.inscriptions} SET room_locked = NULL WHERE room_locked IS NOT NULL AND (room_id IS NULL OR room_locked <> room_id)`); } catch (e) { console.warn('[conference-manager] stale room_locked cleanup skipped:', e.message); }
+        // The 2.8.0 permission becomes the location's own closing, once: the location could arrange until the
+        // later of the general deadline and its permission's date (no date = until revoked → no closing). An
+        // expired one keeps its date — closed, as it was. Cleared as it moves, so a reboot finds nothing.
+        try {
+            const granted = await db.all(`SELECT l.id, l.lodging_permission_until AS until_at, c.lodging_deadline AS deadline FROM ${T.locations} l JOIN ${T.conferences} c ON c.id = l.conference_id WHERE l.lodging_permission = 1`);
+            for (const g of granted) {
+                const until = lodgingDay(g.until_at), deadline = lodgingDay(g.deadline);
+                const closes = !until ? LODGING_NO_CLOSE : (deadline && lodgingEnd(deadline, null) > lodgingEnd(until, null) ? deadline : until);
+                await db.run(`UPDATE ${T.locations} SET lodging_closes = COALESCE(lodging_closes, ?), lodging_permission = 0, lodging_permission_until = NULL WHERE id = ?`, [closes, g.id]);
+            }
+        } catch (e) { console.warn('[conference-manager] lodging permission → own closing skipped:', e.message); }
         await createIndex(`${P}idx_rooms_location`, T.rooms, 'location_id');
+        await createIndex(`${P}idx_room_beds_location`, T.roomBeds, 'location_id');
+        try { await db.run(`CREATE UNIQUE INDEX IF NOT EXISTS ${P}uidx_room_beds_room_location ON ${T.roomBeds} (room_id, location_id)`); }
+        catch (e) { console.warn('[conference-manager] room_beds unique index skipped:', e.message); }
         await createIndex(`${P}idx_rules_location`, T.rules, 'location_id');
         // Stable location identity: `location_id` is the portal ISOLATION KEY; the free-text `location`
         // stays as the display label. ONE-OFF backfill from the label, run only on the boot that creates
@@ -809,27 +948,45 @@ exports.init = async function (wordjs) {
     } catch (e) {
         console.warn('[conference-manager] schema-follows-form migration skipped:', e.message);
     }
+    // (b0) Fee payments (2.18.0): the payment headers + their history, the parts' transfer_id / alloc_gen
+    //      columns, their indexes, and the WRAP of every pre-2.18 payment into a 1-part payment
+    //      (idempotent; see fees.wrapLegacyPayments). Its own block: when it fails (or a swallowed ALTER left
+    //      a column out — migrate() ends with a schema probe) fees.ready stays false, and every money reader
+    //      falls back to the pre-2.18 query (the part's own, mirrored status, no header join): the roster,
+    //      the portal and the reports keep working, /portal/login and /portal/me advertise no «Pagos de
+    //      cuotas», and the fee routes answer 503 `unavailable` after one more migration attempt of their own.
+    try {
+        await fees.migrate();
+    } catch (e) {
+        console.warn('[conference-manager] fee payments migration failed — «Pagos de cuotas» is unavailable until it succeeds:', e.message);
+    }
+    // Badges (2.19.0): their own tables; a failure leaves the badge routes answering 503 until a retry works.
+    try {
+        await badges.migrate();
+    } catch (e) {
+        console.warn('[conference-manager] badges migration failed — «Escarapelas» is unavailable until it succeeds:', e.message);
+    }
+    try {
+        await selfPage.migrate();
+    } catch (e) {
+        console.warn('[conference-manager] self page migration failed — «Mi inscripción» is unavailable until it succeeds:', e.message);
+    }
 
     // ── one-time data hygiene (idempotent, safe to run every boot) ───────────────────────────────
     // (a) Purge garbage inscriptions bound to a non-existent conference — residue of the old admin
     //     createInscription arity bug that posted the whole form object as conference_id.
-    // (b) Recompute amount_paid / payment_status from the payments ledger so any row left stale by
-    //     the previous read-modify-write race is corrected.
+    // (a2) Fee payments (2.18.0): crashed drafts, orphan / stale-generation parts, headers without a live
+    //     part, and the part status mirrors (fees.bootHygiene) — before the recompute below.
+    // (b) Recompute amount_paid / payment_status from the live validated parts (the one recompute) so any
+    //     row left stale by an interrupted write is corrected.
     try {
         // NOTE: keep a space before the closing ')' — the host SQL guard's table-attribution regex
         // captures up to whitespace/'('/';' but NOT ')', so `FROM ${T.conferences})` would read the
         // table name as '...conferences)' and wrongly deny it. `FROM ${T.conferences} )` parses clean.
         await db.run(`DELETE FROM ${T.inscriptions} WHERE conference_id NOT IN (SELECT id FROM ${T.conferences} )`);
-        await db.run(`
-            UPDATE ${T.inscriptions}
-            SET amount_paid = (SELECT COALESCE(SUM(amount), 0) FROM ${T.payments} WHERE inscription_id = ${T.inscriptions}.id AND status = 'validated'),
-                payment_status = CASE
-                    WHEN total_due <= 0 THEN 'paid'
-                    WHEN (SELECT COALESCE(SUM(amount), 0) FROM ${T.payments} WHERE inscription_id = ${T.inscriptions}.id AND status = 'validated') + 0.005 >= total_due THEN 'paid'
-                    WHEN (SELECT COALESCE(SUM(amount), 0) FROM ${T.payments} WHERE inscription_id = ${T.inscriptions}.id AND status = 'validated') > 0 THEN 'partial'
-                    ELSE 'unpaid'
-                END
-        `);
+        try { await fees.bootHygiene(); }
+        catch (e) { console.warn('[conference-manager] fee payments hygiene skipped:', e.message); }
+        await recomputePayments('1 = 1', []);
     } catch (e) {
         console.warn('[conference-manager] data hygiene skipped:', e.message);
     }
@@ -852,6 +1009,12 @@ exports.init = async function (wordjs) {
     //      addColumnIfMissing never throws, and a failure there must not leave this column out. Every read
     //      of it tolerates its absence (the default applies), so a scan never fails over a display setting.
     await addColumnIfMissing(T.conferences, 'meal_display_fields', 'TEXT');
+    // (b4) Lodging (2.17.0): the administration's adjustments of a submitted / validated arrangement (see
+    //      stampAdminAdjustment). Outside the migration block for the same reason as (b3); every read
+    //      tolerates their absence (no stamp), and the stamp and its reset are best-effort writes.
+    await addColumnIfMissing(T.locations, 'lodging_admin_changed_at', 'DATETIME');
+    await addColumnIfMissing(T.locations, 'lodging_admin_changed_by', 'TEXT');
+    await addColumnIfMissing(T.locations, 'lodging_admin_changes', 'INT DEFAULT 0');
     // (c) Registration codes (2.9.0): unique index + a code for every attendee that has none — run at
     //     the end of init (see below), once the code generator exists.
 
@@ -1030,11 +1193,89 @@ exports.init = async function (wordjs) {
     // A payment proof must be an image data URL of at most ~1 MB (1 MB of image → ~1.37 M base64 chars).
     const PROOF_RE = /^data:image\/(png|jpe?g|gif|webp);base64,[A-Za-z0-9+/]+=*$/;
     const MAX_PROOF_CHARS = 1400000;
+    // ...and of a sane SIZE IN PIXELS (2.18.0). A few hundred KB of PNG can declare 30000 × 30000 pixels
+    // (deflated zeros compress ~1000:1): the browser that shows it — the admin review queue opens the oldest
+    // receipt by itself — tries to decode gigabytes and the tab dies. The phone shrinks a real receipt to
+    // ≤ 1600 px; a caller of the API skips that, so the declared size is read from the image header here.
+    const MAX_PROOF_SIDE = 8192;
+    const MAX_PROOF_PIXELS = 24000000;
+    /**
+     * The pixel size a PNG / GIF / WebP / JPEG declares in its header: { w, h } (for a GIF the largest of the
+     * logical screen and every frame), or null when the header cannot be read. `bin` = the decoded bytes as a
+     * binary string (atob).
+     */
+    function proofImageSize(kind, bin) {
+        const u8 = (i) => (i < bin.length ? bin.charCodeAt(i) & 0xff : -1);
+        const be16 = (i) => (u8(i) << 8) | u8(i + 1);
+        const le16 = (i) => u8(i) | (u8(i + 1) << 8);
+        const be32 = (i) => ((u8(i) << 24) >>> 0) + (u8(i + 1) << 16) + (u8(i + 2) << 8) + u8(i + 3);
+        if (bin.length < 24) return null;
+        if (kind === 'png') {
+            if (bin.slice(0, 8) !== '\x89PNG\r\n\x1a\n' || bin.slice(12, 16) !== 'IHDR') return null;
+            return { w: be32(16), h: be32(20) };
+        }
+        if (kind === 'gif') {
+            if (!/^GIF8[79]a/.test(bin.slice(0, 6))) return null;
+            let w = le16(6), h = le16(8);
+            let i = 13;
+            if (u8(10) & 0x80) i += 3 * (2 << (u8(10) & 7));
+            const skipBlocks = () => { while (i < bin.length) { const n = u8(i); i += 1; if (n <= 0) return n === 0; i += n; } return false; };
+            for (let guard = 0; guard < 100000 && i < bin.length; guard++) {
+                const b = u8(i);
+                if (b === 0x3b) break;                                                  // trailer
+                if (b === 0x21) { i += 2; if (!skipBlocks()) return null; continue; }  // extension
+                if (b !== 0x2c) return null;                                            // not a GIF block
+                w = Math.max(w, le16(i + 1) + le16(i + 5));
+                h = Math.max(h, le16(i + 3) + le16(i + 7));
+                const packed = u8(i + 9);
+                i += 10;
+                if (packed & 0x80) i += 3 * (2 << (packed & 7));
+                i += 1;                                                                 // LZW minimum code size
+                if (!skipBlocks()) return null;
+            }
+            return { w, h };
+        }
+        if (kind === 'webp') {
+            if (bin.slice(0, 4) !== 'RIFF' || bin.slice(8, 12) !== 'WEBP') return null;
+            const chunk = bin.slice(12, 16);
+            if (chunk === 'VP8 ') return u8(23) === 0x9d && u8(24) === 0x01 && u8(25) === 0x2a ? { w: le16(26) & 0x3fff, h: le16(28) & 0x3fff } : null;
+            if (chunk === 'VP8L') {
+                if (u8(20) !== 0x2f) return null;
+                const bits = u8(21) | (u8(22) << 8) | (u8(23) << 16) | ((u8(24) << 24) >>> 0);
+                return { w: (bits & 0x3fff) + 1, h: ((bits >>> 14) & 0x3fff) + 1 };
+            }
+            if (chunk === 'VP8X') return { w: (u8(24) | (u8(25) << 8) | (u8(26) << 16)) + 1, h: (u8(27) | (u8(28) << 8) | (u8(29) << 16)) + 1 };
+            return null;
+        }
+        // JPEG: walk the segments to the first frame header (SOF0..SOF15 except DHT / JPG / DAC).
+        if (u8(0) !== 0xff || u8(1) !== 0xd8) return null;
+        let i = 2;
+        while (i + 3 < bin.length) {
+            if (u8(i) !== 0xff) return null;
+            let m = u8(i + 1);
+            while (m === 0xff && i + 2 < bin.length) { i += 1; m = u8(i + 1); }     // fill bytes
+            if (m === 0x01 || (m >= 0xd0 && m <= 0xd8)) { i += 2; continue; }         // markers without a length
+            if (m === 0xd9 || m === 0xda) return null;                                // end / scan before any frame header
+            const len = be16(i + 2);
+            if (len < 2) return null;
+            if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return { w: be16(i + 7), h: be16(i + 5) };
+            i += 2 + len;
+        }
+        return null;
+    }
     function assertProof(proof) {
         const p = typeof proof === 'string' ? proof.trim() : '';
         if (!p) throw httpError(400, 'El comprobante es obligatorio.');
         if (p.length > MAX_PROOF_CHARS) throw httpError(400, 'El comprobante es demasiado grande (máximo 1 MB).');
-        if (!PROOF_RE.test(p)) throw httpError(400, 'El comprobante debe ser una imagen (PNG, JPG, GIF o WebP).');
+        const m = PROOF_RE.exec(p);
+        if (!m) throw httpError(400, 'El comprobante debe ser una imagen (PNG, JPG, GIF o WebP).');
+        let bin = '';
+        try { bin = atob(p.slice(p.indexOf(',') + 1)); } catch { bin = ''; }
+        const size = proofImageSize(m[1] === 'jpg' || m[1] === 'jpeg' ? 'jpeg' : m[1], bin);
+        if (!size || !(size.w > 0) || !(size.h > 0)) throw httpError(400, 'El comprobante no es una imagen válida.');
+        if (size.w > MAX_PROOF_SIDE || size.h > MAX_PROOF_SIDE || size.w * size.h > MAX_PROOF_PIXELS) {
+            throw httpError(400, `El comprobante es una imagen demasiado grande (${size.w} × ${size.h} px; máximo ${MAX_PROOF_SIDE} px por lado y 24 megapíxeles).`);
+        }
         return p;
     }
     const shortText = (v, max) => (v === undefined || v === null || v === '' ? null : String(v).slice(0, max));
@@ -1050,6 +1291,137 @@ exports.init = async function (wordjs) {
     const isFrozen = (row) => lodgingStatusOf(row) !== 'draft';
     // Invariant 1: a pool room takes anyone; an allotted room takes only its location's attendees.
     const roomAllows = (room, person) => room.location_id == null || Number(room.location_id) === Number(person.location_id);
+    // Rooms SHARED between locations (2.18.0, «camas por localidad»). A room's beds may be split between
+    // several locations — rows of room_beds (room_id, location_id, beds) — the rest of its capacity being
+    // POOL beds. So a room is one of:
+    //   POOL   — location_id NULL, no share: anyone; the admin's conference-wide assignment fills it;
+    //   WHOLE  — location_id = L, no share: only L's attendees (2.5.0, unchanged);
+    //   SHARED — location_id NULL, ≥1 share: each sharing location fills up to its beds; the remaining
+    //            capacity − Σ beds are pool beds that anyone may take.
+    // A sharing location's occupants use its beds first; any beyond them (an admin's manual placement)
+    // use pool beds, as do the occupants of every other location. A location with a share is DELEGATED
+    // like one with a whole room.
+    async function sharesByRoom(roomIds) {
+        const map = new Map();
+        const ids = [...new Set((roomIds || []).map(Number).filter(n => Number.isInteger(n) && n > 0))];
+        for (let i = 0; i < ids.length; i += 400) {
+            const chunk = ids.slice(i, i + 400);
+            const rows = await db.all(`SELECT room_id, location_id, beds FROM ${T.roomBeds} WHERE room_id IN (${chunk.map(() => '?').join(', ')}) ORDER BY id`, chunk);
+            for (const r of rows) {
+                const k = Number(r.room_id);
+                if (!map.has(k)) map.set(k, []);
+                map.get(k).push({ location_id: Number(r.location_id), beds: Math.max(0, Number(r.beds) || 0) });
+            }
+        }
+        return map;
+    }
+    const roomCapacityOf = (room) => Math.max(1, Number(room.capacity) || 1);
+    // Beds of a room's `shares` given to `locationId` (0 = none).
+    const shareBedsOf = (shares, locationId) => {
+        if (locationId == null) return 0;
+        const share = (shares || []).find(x => Number(x.location_id) === Number(locationId));
+        return share ? share.beds : 0;
+    };
+    // Pool beds of a room: all of a pool room, none of a whole room, capacity − Σ beds of a shared one.
+    const poolBedsOf = (room, shares) => {
+        if (room.location_id != null) return 0;
+        const given = (shares || []).reduce((n, x) => n + x.beds, 0);
+        return Math.max(0, roomCapacityOf(room) - given);
+    };
+    // Pool beds in use by `occupants`: each occupant of a location without a share in the room, plus a
+    // sharing location's occupants beyond its beds.
+    const poolUsedOf = (shares, occupants) => {
+        const byLoc = new Map();
+        let pool = 0;
+        for (const o of occupants || []) {
+            const lid = o.location_id == null ? null : Number(o.location_id);
+            if (!shareBedsOf(shares, lid)) { pool++; continue; }
+            byLoc.set(lid, (byLoc.get(lid) || 0) + 1);
+        }
+        for (const [lid, n] of byLoc) pool += Math.max(0, n - shareBedsOf(shares, lid));
+        return pool;
+    };
+    // Invariant 1 with shares: may `person` take a bed of `room` (holding `occupants`) now?
+    const bedFreeFor = (room, shares, occupants, person) => {
+        const others = (occupants || []).filter(o => Number(o.id) !== Number(person.id));
+        if (others.length >= roomCapacityOf(room)) return false;
+        if (room.location_id != null) return Number(room.location_id) === Number(person.location_id);
+        if (!shares || !shares.length) return true;
+        const lid = person.location_id == null ? null : Number(person.location_id);
+        const mine = shareBedsOf(shares, lid);
+        if (mine && others.filter(o => o.location_id != null && Number(o.location_id) === lid).length < mine) return true;
+        return poolUsedOf(shares, others) < poolBedsOf(room, shares);
+    };
+    // The locations with a share in any room (they are delegated, like the owners of whole rooms).
+    const SHARE_LOCATIONS_SQL = () => `SELECT DISTINCT location_id FROM ${T.roomBeds}`;
+    // The rooms a location has beds in — its whole rooms and the rooms it shares. Takes [locationId, locationId].
+    const LOCATION_ROOMS_SQL = () => `SELECT id FROM ${T.rooms} WHERE location_id = ? UNION SELECT room_id FROM ${T.roomBeds} WHERE location_id = ?`;
+    // THE CLASS OF A SHARED ROOM (2.21.0; the owner: «si el motor comparte habitación entre dos localidades es obligatorio
+    // que se quede el género que asignó el motor a esa habitación»). When «Sugerir reparto» shares a room, the value its
+    // people have for each hard «Separar por» field (the gender, usually) is written on the room — `share_lock`, JSON
+    // [{ field, value }] — and binds every bed of it from then on, even while the room is empty: the engine's runs, the
+    // planner, a coordinator's placement and the admin's never put there anyone with another value (a blank value is no
+    // value, as for the rule itself). In force only while the room is shared and only on a field an enabled hard «Separar
+    // por» rule (the conference's or a location's) still separates by; the admin frees it in «Repartir camas».
+    const parseShareLock = (raw) => {
+        let v = raw;
+        if (typeof v === 'string') { try { v = JSON.parse(v); } catch { v = null; } }
+        return Array.isArray(v) ? v.filter(x => x && typeof x.field === 'string' && x.value != null && String(x.value).trim() !== '').map(x => ({ field: x.field, value: String(x.value).trim() })) : [];
+    };
+    // The class in force for `room`: `shared` = its shares (or how many), `lockFields` = lockFieldsOf(…).
+    const shareLockOf = (room, shared, lockFields) => {
+        const n = Array.isArray(shared) ? shared.length : Number(shared) || 0;
+        if (!room || room.location_id != null || !n || !room.share_lock) return [];
+        return parseShareLock(room.share_lock).filter(x => lockFields.has(x.field));
+    };
+    const lockAllows = (lock, person) => !lock || lock.every(x => {
+        const v = ruleVal(person, x.field);
+        return v == null || String(v).trim() === '' || String(v).trim().toLowerCase() === x.value.toLowerCase();
+    });
+    // The fields a class binds: those of the enabled hard «Separar por» rules on the form.
+    const lockFieldsOf = (ruleRows, fieldNames) => new Set(ruleRows.map(parseRuleRow).filter(ruleOnFormFields(fieldNames))
+        .filter(r => r.enabled && r.type === 'separate_by' && r.hard && r.field).map(r => r.field));
+    async function shareLockFields(conferenceId) {
+        return lockFieldsOf(await db.all(`SELECT * FROM ${T.rules} WHERE conference_id = ? AND type = 'separate_by' ORDER BY priority DESC, id ASC`, [conferenceId]), await ruleFieldNames(conferenceId));
+    }
+    // A placement into a shared room whose class is fixed: 409 when the person has another value.
+    async function assertShareLock(room, person, conferenceId, { admin = false } = {}) {
+        if (!room || room.location_id != null || !room.share_lock) return;
+        const shares = (await sharesByRoom([room.id])).get(Number(room.id)) || [];
+        const lock = shareLockOf(room, shares, await shareLockFields(conferenceId));
+        const p = { ...person, custom_data: parseCd(person.custom_data) };
+        const bad = lock.find(x => !lockAllows([x], p));
+        if (!bad) return;
+        const mine = String(ruleVal(p, bad.field)).trim();
+        // The gender in words (the form's options may be letters: «M» / «F»); any other value as the form spells it.
+        const word = (v, plural) => {
+            const s = String(v).trim().toLowerCase();
+            if (bad.field === 'gender' && /^(f|fem|femenin[oa]|female|woman|mujer|mulher|feminino)$/.test(s)) return plural ? 'mujeres' : 'mujer';
+            if (bad.field === 'gender' && /^(m|masc|masculin[oa]|male|man|hombre|homem|var[oó]n)$/.test(s)) return plural ? 'hombres' : 'hombre';
+            return null;
+        };
+        const forRoom = word(bad.value, true) || `«${bad.value}»`;
+        const who = word(mine, false) ? `esta persona es ${word(mine, false)}` : `esta persona tiene «${mine}»`;
+        throw httpError(409, `Esta habitación es compartida entre localidades y el reparto la dejó solo para ${forRoom}; ${who}. `
+            + (admin ? 'Para cambiarlo, libera la habitación en «Repartir camas».' : 'Elige otra habitación.'));
+    }
+    // HELD BY THE ADMINISTRATION (2.21.0; the owner: «el admin puede bloquear a alguien una habitación o bloquear una
+    // habitación entera para que la siguiente sugerencia no los tenga en cuenta»; «solo el admin» changes them by hand).
+    // `rooms.blocked`: a room the engine leaves exactly as it is — no run (the admin's, a coordinator's, the overflow),
+    // no «Sugerir reparto» (not even «Rehacer todo»), no «Dar camas» places anyone in it or moves anyone out, and no
+    // reset empties it. `inscriptions.room_locked`: the room a person was fixed in, held the same way — only while they
+    // are in THAT room: whatever takes them out of it (the admin by hand, a cancellation, a change of location, a room,
+    // hotel or location deleted) ends the fix, and a later placement never inherits it. Both hold until the
+    // administration lifts them. A coordinator can neither place anyone in a blocked room nor take anyone out of it, nor
+    // move a fixed person (409); only who manages lodging does it by hand (an edit that would free a held bed included).
+    const isBlocked = (room) => !!(room && Number(room.blocked));
+    const isPinned = (p) => !!(p && p.room_id != null && Number(p.room_locked) > 0 && Number(p.room_locked) === Number(p.room_id));
+    const HELD_ROOM_MSG = 'La administración bloqueó esta habitación: solo el administrador puede cambiar quién duerme en ella.';
+    const HELD_PERSON_MSG = 'La administración fijó a esta persona en su habitación: solo el administrador puede moverla.';
+    // People a reset may take out of their beds: not fixed ones, not those in a blocked room.
+    const NOT_HELD_SQL = () => `(room_id IS NULL OR COALESCE(room_locked, 0) <> room_id) AND (room_id IS NULL OR room_id NOT IN (SELECT id FROM ${T.rooms} WHERE COALESCE(blocked, 0) = 1))`;
+    // A room no longer shared keeps no class (so a later share starts free).
+    const STALE_LOCKS_SQL = () => `UPDATE ${T.rooms} SET share_lock = NULL WHERE share_lock IS NOT NULL AND (location_id IS NOT NULL OR id NOT IN (SELECT room_id FROM ${T.roomBeds}))`;
     // `:id` route params (and body ids): a positive integer or null.
     const positiveInt = (v) => {
         if (typeof v !== 'number' && typeof v !== 'string') return null;
@@ -1057,16 +1429,64 @@ exports.init = async function (wordjs) {
         const n = Number(v);
         return Number.isInteger(n) && n > 0 ? n : null;
     };
-    // Invariant 3: a frozen location's rooms and occupants are read-only for everyone. `locationIdOrRow`
-    // is a location id (looked up) or a row carrying { id, name, lodging_status }. A missing location
-    // (deleted meanwhile) is not frozen. Throws 409.
-    async function assertLocationNotFrozen(locationIdOrRow, action) {
-        if (locationIdOrRow == null) return;
+    // Invariant 3 (2.17.0): a frozen location's rooms and occupants are read-only for its COORDINATOR — every
+    // portal write answers 409 (assertPortalDraft) — but not for the administration. The site owner's rule:
+    // the admin who validates (or is reviewing) an arrangement must be able to change it without reopening
+    // it. So the admin-panel lodging writes (Hospedaje › gestionar: placements, allotments, rooms, hotels)
+    // go through on a submitted / validated location, the status stays as it is, and every such change is
+    // an ADMINISTRATION ADJUSTMENT recorded on the location (stampAdminAdjustment) — shown to the admin in
+    // the review and on the location card, and to the coordinator in the portal. Bulk operations (the
+    // conference-wide run and reset) still skip frozen locations: they arrange what nobody arranged by
+    // hand, and must not rewrite (or empty) a reviewed arrangement as a side effect.
+    //
+    // The frozen row of a location id (null when the location is a draft or gone). `locationIdOrRow` may be
+    // a row already carrying { id, name, lodging_status }.
+    async function frozenLocationRow(locationIdOrRow) {
+        if (locationIdOrRow == null) return null;
         const row = typeof locationIdOrRow === 'object' ? locationIdOrRow
             : await db.get(`SELECT id, name, lodging_status FROM ${T.locations} WHERE id = ?`, [locationIdOrRow]);
-        if (!row || !isFrozen(row)) return;
-        throw httpError(409, `El hospedaje de la localidad «${row.name}» está en validación/validado; reábrelo antes de ${action}.`);
+        return row && isFrozen(row) ? row : null;
     }
+    // «ya está validado» / «está enviado a validación» — the frozen state of a row, for a message.
+    const frozenPhrase = (row) => (lodgingStatusOf(row) === 'validated' ? 'ya está validado' : 'está enviado a validación');
+    // How a frozen row becomes a draft again, for a message: a VALIDATED one is reopened (POST …/lodging/reopen,
+    // which takes nothing else), a SUBMITTED one is returned to its coordinator (POST …/lodging/return).
+    // Impersonal — whoever reads the refusal may not be the one who can do either.
+    const releasePhrase = (row) => (lodgingStatusOf(row) === 'validated' ? 'cuando se reabra desde Localidades' : 'cuando se devuelva al encargado desde Localidades');
+    // Record an administration adjustment on every location of `locationIds` that is frozen RIGHT NOW (a
+    // compare-and-set on the status: a location that went back to draft meanwhile is not stamped). Callers
+    // hold withAssignmentLock — where every lodging status transition runs too (submit, withdraw, validate,
+    // return, reopen) — so the status cannot move between the write and its stamp. Best-effort: a failed
+    // stamp (a column a failed migration left out) never undoes or fails the change itself. Returns the
+    // stamped locations, as { location_id, name, status }, for the response (`lodging_adjusted`).
+    async function stampAdminAdjustment(req, locationIds) {
+        const ids = [...new Set((locationIds || []).map(positiveInt).filter(Boolean))];
+        if (!ids.length) return [];
+        const marks = ids.map(() => '?').join(', ');
+        let stamped = null;
+        try {
+            const r = await db.run(
+                `UPDATE ${T.locations} SET lodging_admin_changed_at = CURRENT_TIMESTAMP, lodging_admin_changed_by = ?, lodging_admin_changes = COALESCE(lodging_admin_changes, 0) + 1 WHERE id IN (${marks}) AND ${frozenSql}`,
+                [actorOf(req), ...ids]);
+            stamped = Number(r && r.changes) || 0;
+        } catch (e) {
+            console.warn('[conference-manager] lodging adjustment stamp skipped:', e && e.message);
+        }
+        if (stamped === 0) return [];
+        const rows = await db.all(`SELECT id, name, lodging_status FROM ${T.locations} WHERE id IN (${marks}) AND ${frozenSql} ORDER BY name`, ids);
+        return rows.map(l => ({ location_id: l.id, name: l.name, status: lodgingStatusOf(l) }));
+    }
+    // The stamp as the admin panel reads it (GET /locations, GET /locations/:id/lodging); `by` only for
+    // whoever may read the review stamps (locations:view).
+    const adminAdjustmentOf = (row, withActor) => {
+        const n = Number(row && row.lodging_admin_changes) || 0;
+        const at = row && row.lodging_admin_changed_at != null ? row.lodging_admin_changed_at : null;
+        return {
+            lodging_admin_changes: at ? n : 0,
+            lodging_admin_changed_at: at,
+            lodging_admin_changed_by: withActor && at && row.lodging_admin_changed_by != null ? row.lodging_admin_changed_by : null,
+        };
+    };
 
     // ── rule validation (shared by POST /assignment/rules and the portal's rule editor) ──────────
     // Fields a rule (or a predicate inside its params) may read: the conference's defined form fields
@@ -1250,8 +1670,9 @@ exports.init = async function (wordjs) {
     // «a | b» = any of them; «admin» = administrators only, enforced by the host AND in the handler):
     //   GET    /list                                   staff (context: the conference list)
     //   POST   /create                                 settings:manage
-    //   PUT    /:id                                    settings:manage — a body that ONLY sets lodging_deadline
-    //                                                  (the «plazos» of Localidades): locations:manage | settings:manage
+    //   PUT    /:id                                    settings:manage — a body that ONLY sets the lodging dates
+    //                                                  (lodging_opens, lodging_deadline, lodging_tz — the «fechas» of
+    //                                                  Localidades): locations:manage | settings:manage
     //   DELETE /:id                                    settings:manage, plus manage on each section whose records
     //                                                  the conference holds: inscriptions (attendees), payments
     //                                                  (fee payments), transport (transport payments), accounting
@@ -1266,26 +1687,50 @@ exports.init = async function (wordjs) {
     //                                                  the access `code` only with locations:manage (else null)
     //   POST   /locations, PUT/DELETE /locations/:id   locations:manage (codes = who can log in to the portal)
     //   GET    /locations/:id/lodging                  locations:view (the ID document only with inscriptions:view)
-    //   POST   /locations/:id/lodging/validate|return|reopen   locations:manage
+    //   POST   /locations/:id/lodging/validate|return|reopen   locations:manage (validate / return: `seen`
+    //                                                  = the review's submitted_at + admin_changes, else 409
+    //                                                  `lodging_changed`; 2.17.0)
     //   GET    /hotels                                 lodging:view | inscriptions:view | dashboard:view | reports:view
     //   POST   /hotels, PUT/DELETE /hotels/:id         lodging:manage
     //   POST   /hotels/:id/allot                       lodging:manage
     //   POST   /rooms, PUT/DELETE /rooms/:id           lodging:manage
+    //   (2.17.0: the lodging writes reach a submitted / validated location too — an administration
+    //   adjustment, stamped on it and reported as `lodging_adjusted`; see stampAdminAdjustment)
     //   GET    /assignment/rules                       lodging:view
-    //   POST   /assignment/rules, DELETE /assignment/rules/:id, POST /assignment/reset, POST /assignment/run
+    //   POST   /assignment/rules, DELETE /assignment/rules/:id, POST /assignment/reset, POST /assignment/run,
+    //          POST /assignment/plan, /plan/apply, /simulate, /location-order
     //                                                  lodging:manage
     //   POST   /inscriptions/:id/assign                lodging:manage
-    //   GET    /inscriptions                           inscriptions:view | payments:view | lodging:view |
-    //                                                  transport:view | accounting:view | dashboard:view | reports:view
-    //                                                  (the roster those pages name people from); `reg_code` and
-    //                                                  `document_number` only with inscriptions:view (else null)
-    //   POST   /inscriptions, PUT/DELETE /inscriptions/:id   inscriptions:manage
-    //   GET    /inscriptions/export                    reports:view | inscriptions:view (the Código column and the
-    //                                                  ID document's only with inscriptions:view)
-    //   GET    /inscriptions/:id/payments              payments:view | inscriptions:view
-    //   POST   /inscriptions/:id/payments              payments:manage
-    //   DELETE /payments/:id                           payments:manage
-    //   POST   /payments/:id/validate|reject           payments:manage
+    //   GET    /inscriptions                           inscriptions:view | lodging:view | transport:view |
+    //                                                  accounting:view | dashboard:view | reports:view (the roster
+    //                                                  those pages name people from; since 2.18.0 not payments:view,
+    //                                                  D-P20); `reg_code` and `document_number` only with
+    //                                                  inscriptions:view (else null)
+    //   GET    /inscriptions/:id                       same as GET /inscriptions (one row; 2.18.0)
+    //   POST   /inscriptions, PUT/DELETE /inscriptions/:id   inscriptions:manage — a PUT that moves an attendee
+    //                                                  WHO HOLDS A BED out of a submitted / validated location,
+    //                                                  or into one with the bed they keep, also needs
+    //                                                  lodging:manage (409 otherwise; 2.17.0). Without a bed,
+    //                                                  in or out, inscriptions:manage alone (the bed rule).
+    //                                                  DELETE of a person with fee payments also needs
+    //                                                  payments:manage; 409 when the person is part of a payment
+    //                                                  shared with others (2.18.0)
+    //   GET    /inscriptions/export                    reports:view | inscriptions:view (the Código column only
+    //                                                  with inscriptions:view)
+    //   «Pagos de cuotas» (2.18.0, D-P20): payments:view to look, payments:manage to register, correct, validate,
+    //   return, reject and delete. «Inscripciones» no longer opens with Pagos alone — in the panel (the client's
+    //   viewAllowed) and here: the roster (GET /inscriptions[/:id]) refuses payments:view; the section names
+    //   people from GET /fee-payments `people[]` (name, live location, family group; reg_code only with
+    //   inscriptions:view) and never sees a contact, a form answer or a note.
+    //   GET    /fee-payments, /fee-payments/:id        payments:view (no receipt image in either)
+    //   GET    /fee-payments/:id/proof                 payments:view
+    //   POST   /fee-payments, PUT/DELETE /fee-payments/:id   payments:manage
+    //   POST   /fee-payments/:id/validate|return|reject      payments:manage
+    //   GET    /inscriptions/:id/payments              payments:view | inscriptions:view (the person's parts, no
+    //                                                  receipts; `with_proof=1` adds them for payments:view only)
+    //   POST   /inscriptions/:id/payments              payments:manage (pre-2.18: a 1-person payment, left pending)
+    //   DELETE /payments/:id                           payments:manage (pre-2.18: acts on a 1-person payment)
+    //   POST   /payments/:id/validate|reject           payments:manage (pre-2.18: idem; 409 for a shared payment)
     //   GET    /reports/summary                        reports:view
     //   GET    /buses                                  transport:view | reports:view
     //   POST   /buses, PUT/DELETE /buses/:id           transport:manage
@@ -1314,7 +1759,9 @@ exports.init = async function (wordjs) {
     //   GET|POST /staff/roles, PUT|DELETE /staff/roles/:id       admin
     //   GET|POST /staff/members, PUT|DELETE /staff/members/:id   admin
     //   GET    /staff/user-search                      admin
-    //   /public/*, /portal/*                           unchanged (no WordJS session involved)
+    //   /public/*, /portal/*                           no WordJS session: the portal's location code (the
+    //                                                  /portal/fee-payments* routes see the coordinator's own
+    //                                                  location only)
     const STAFF_SECTIONS = [
         { key: 'dashboard', levels: ['none', 'view'] },
         { key: 'inscriptions', levels: ['none', 'view', 'manage'] },
@@ -1325,6 +1772,9 @@ exports.init = async function (wordjs) {
         { key: 'accounting', levels: ['none', 'view', 'manage'] },
         { key: 'meals', levels: ['none', 'view', 'manage'] },
         { key: 'meals_delivery', levels: ['none', 'manage'] },
+        // «Escarapelas» (2.19.0): view = see / share / download badges (with inscriptions:view, as they carry
+        // the code); manage = the design and regenerating or revoking links. Existing roles get none.
+        { key: 'badges', levels: ['none', 'view', 'manage'] },
         { key: 'reports', levels: ['none', 'view'] },
         { key: 'settings', levels: ['none', 'view', 'manage'] },
     ];
@@ -1859,11 +2309,12 @@ exports.init = async function (wordjs) {
     // in the body are changed, so partial updates are safe.
     const CONFERENCE_STATUSES = new Set(['draft', 'active', 'archived']);
     http.route('put', '/:id', { auth: true }, async (req, res) => {
-        // Only the lodging deadline (the «plazos» of Localidades) → locations:manage suffices too.
-        const editKeys = ['name', 'slug', 'date_start', 'date_end', 'fee_default', 'description', 'status', 'lodging_deadline'].filter(k => (req.body || {})[k] !== undefined);
-        const deadlineOnly = editKeys.length === 1 && editKeys[0] === 'lodging_deadline';
-        if (!await (deadlineOnly ? allowAny(req, res, [['settings', 'manage'], ['locations', 'manage']]) : allow(req, res, 'settings', 'manage'))) return;
-        const { name, slug, date_start, date_end, fee_default, description, status, lodging_deadline } = req.body;
+        // Only the lodging dates (the «fechas» of Localidades) → locations:manage suffices too.
+        const LODGING_DATE_KEYS = ['lodging_opens', 'lodging_deadline', 'lodging_tz'];
+        const editKeys = ['name', 'slug', 'date_start', 'date_end', 'fee_default', 'description', 'status', ...LODGING_DATE_KEYS].filter(k => (req.body || {})[k] !== undefined);
+        const datesOnly = editKeys.length > 0 && editKeys.every(k => LODGING_DATE_KEYS.includes(k));
+        if (!await (datesOnly ? allowAny(req, res, [['settings', 'manage'], ['locations', 'manage']]) : allow(req, res, 'settings', 'manage'))) return;
+        const { name, slug, date_start, date_end, fee_default, description, status, lodging_opens, lodging_deadline, lodging_tz } = req.body;
         try {
             const conf = await db.get(`SELECT * FROM ${T.conferences} WHERE id = ?`, [req.params.id]);
             if (!conf) return res.status(404).json({ error: 'Conferencia no encontrada.' });
@@ -1892,7 +2343,19 @@ exports.init = async function (wordjs) {
                 sets.push('fee_default = ?'); params.push(normFee(fee_default));
             }
             if (description !== undefined) { sets.push('description = ?'); params.push(description || null); }
-            if (lodging_deadline !== undefined) { sets.push('lodging_deadline = ?'); params.push(normDate(lodging_deadline, 'plazo de hospedaje')); }
+            // The general lodging dates: the opening may not come after the closing (judged in the zone the
+            // request brings, else the stored one).
+            const tz = lodging_tz !== undefined ? lodgingTzInput(lodging_tz) : lodgingZone(conf.lodging_tz);
+            if (lodging_opens !== undefined || lodging_deadline !== undefined) {
+                const opens = lodging_opens !== undefined ? lodgingDateInput(lodging_opens, 'apertura de hospedajes') : lodgingDay(conf.lodging_opens);
+                const closes = lodging_deadline !== undefined ? lodgingDateInput(lodging_deadline, 'cierre de hospedajes') : lodgingDay(conf.lodging_deadline);
+                if (opens && closes && lodgingStart(opens, tz) >= lodgingEnd(closes, tz)) {
+                    return res.status(400).json({ error: 'La apertura de los hospedajes no puede ser posterior a su cierre.' });
+                }
+                if (lodging_opens !== undefined) { sets.push('lodging_opens = ?'); params.push(opens); }
+                if (lodging_deadline !== undefined) { sets.push('lodging_deadline = ?'); params.push(closes); }
+            }
+            if (lodging_tz !== undefined) { sets.push('lodging_tz = ?'); params.push(tz); }
             if (status !== undefined) {
                 if (!CONFERENCE_STATUSES.has(status)) return res.status(400).json({ error: 'Estado inválido (draft, active o archived).' });
                 sets.push('status = ?'); params.push(status);
@@ -1916,6 +2379,9 @@ exports.init = async function (wordjs) {
             sql: `SELECT 1 FROM ${T.inscriptions} WHERE conference_id = ?`, args: 1 },
         { section: 'payments', what: 'pagos de inscripción',
             sql: `SELECT 1 FROM ${T.payments} p JOIN ${T.inscriptions} i ON i.id = p.inscription_id WHERE i.conference_id = ?`, args: 1 },
+        // 2.18.0: a fee payment's header (a portal or admin transfer) — only once its table exists (fees.ready).
+        { section: 'payments', what: 'pagos de inscripción', when: () => fees.ready,
+            sql: `SELECT 1 FROM ${T.transfers} WHERE conference_id = ?`, args: 1 },
         { section: 'transport', what: 'pagos de transporte',
             sql: `SELECT 1 FROM ${T.transportPayments} tp JOIN ${T.tickets} t ON t.id = tp.ticket_id`
                 + ` WHERE t.bus_id IN (SELECT id FROM ${T.buses} WHERE conference_id = ?) OR t.inscription_id IN (SELECT id FROM ${T.inscriptions} WHERE conference_id = ?)`, args: 2 },
@@ -1927,15 +2393,19 @@ exports.init = async function (wordjs) {
         if (!perms) return;
         try {
             const id = req.params.id;
-            const guards = CONFERENCE_DELETE_GUARDS.filter(g => !hasLevel(perms, g.section, 'manage'));
+            const guards = CONFERENCE_DELETE_GUARDS.filter(g => (!g.when || g.when()) && !hasLevel(perms, g.section, 'manage'));
             const argsOf = (g) => Array.from({ length: g.args }, () => id);
-            // Under the assignment lock (transport payments are recorded under it) and, inside it, the meals
-            // lock (see withMealsLock / deleteMealsOfConference: parent first). The checks are part of the
-            // DELETE itself (NOT EXISTS), so a record written between a check and the delete by a route that
-            // takes neither lock (a fee payment, a ledger entry) keeps the conference: it is never erased by
-            // a role that may not erase it. Meals (2.14.0): the FKs cascade; the explicit deletes keep it so
-            // with foreign keys off too.
-            const held = await withAssignmentLock(() => withMealsLock(async () => {
+            // Under the fee payments lock (2.18.0: a fee payment is recorded under it), inside it the assignment
+            // lock (transport payments are recorded under it) and inside that the meals lock — the order every
+            // route takes them in (see withMealsLock /
+            // deleteMealsOfConference: parent first). The checks are part of the DELETE itself (NOT EXISTS), so a
+            // record written between a check and the delete by a route that takes none of these locks (a ledger
+            // entry) keeps the conference: it is never erased by a role that may not erase it. Fee payments
+            // (2.18.0): their history rows are found through the headers, which the conference's delete would
+            // cascade away, so they go once the conference is gone (explicit for foreign keys off too); their
+            // parts go with the inscriptions; a part left without its header never counts (fees.EFFECTIVE).
+            // Meals (2.14.0): the FKs cascade; the explicit deletes keep it so with foreign keys off too.
+            const held = await fees.withPaymentsLock(() => withAssignmentLock(() => withMealsLock(async () => {
                 const r = await db.run(
                     `DELETE FROM ${T.conferences} WHERE id = ?${guards.map(g => ` AND NOT EXISTS (${g.sql})`).join('')}`,
                     [id, ...guards.flatMap(argsOf)]);
@@ -1944,15 +2414,16 @@ exports.init = async function (wordjs) {
                     for (const g of guards) if (await db.get(g.sql, argsOf(g))) found.push(g);
                     return found.length ? found : guards;
                 }
+                await fees.deleteConference(id);
                 await deleteMealsOfConference(id);
                 return null;
-            }));
+            })));
             if (held) {
                 return res.status(409).json({
-                    error: `La conferencia tiene ${held.map(g => g.what).join(', ')}: eliminarla las borraría, y tu rol no las gestiona. `
+                    error: `La conferencia tiene ${[...new Set(held.map(g => g.what))].join(', ')}: eliminarla las borraría, y tu rol no las gestiona. `
                         + 'Pide a quien las gestiona (o a un administrador) que la elimine, o archívala.',
                     code: 'conference_has_records',
-                    sections: held.map(g => g.section),
+                    sections: [...new Set(held.map(g => g.section))],
                 });
             }
             res.json({ success: true });
@@ -1981,6 +2452,41 @@ exports.init = async function (wordjs) {
                 WHERE h.conference_id = ?
             `, [conference_id]);
 
+            // Shared rooms (2.18.0): each room carries `shares` — [{ location_id, location_name, beds,
+            // occupied }] — and its `pool_beds` / `pool_occupied`. A whole or a pool room has no share.
+            const shareMap = await sharesByRoom(rooms.map(r => r.id));
+            const sharedIds = [...shareMap.keys()];
+            const occByRoomLoc = new Map();
+            const locNames = new Map();
+            if (sharedIds.length) {
+                for (let i = 0; i < sharedIds.length; i += 400) {
+                    const chunk = sharedIds.slice(i, i + 400);
+                    const rows = await db.all(`SELECT id, room_id, location_id FROM ${T.inscriptions} WHERE room_id IN (${chunk.map(() => '?').join(', ')})`, chunk);
+                    for (const o of rows) {
+                        if (!occByRoomLoc.has(Number(o.room_id))) occByRoomLoc.set(Number(o.room_id), []);
+                        occByRoomLoc.get(Number(o.room_id)).push(o);
+                    }
+                }
+                for (const l of await db.all(`SELECT id, name FROM ${T.locations} WHERE conference_id = ?`, [conference_id])) locNames.set(Number(l.id), l.name);
+            }
+            const lockFields = await shareLockFields(conference_id);
+            for (const r of rooms) {
+                const shares = shareMap.get(Number(r.id)) || [];
+                // A shared room's class (see «THE CLASS OF A SHARED ROOM»), as in force — only when there is one.
+                const lock = shareLockOf(r, shares, lockFields);
+                if (lock.length) r.lock = lock;
+                delete r.share_lock;
+                if (!shares.length) { r.shares = []; continue; }
+                const occupants = occByRoomLoc.get(Number(r.id)) || [];
+                r.shares = shares.map(sh => ({
+                    location_id: sh.location_id,
+                    location_name: locNames.get(sh.location_id) || null,
+                    beds: sh.beds,
+                    occupied: Math.min(sh.beds, occupants.filter(o => o.location_id != null && Number(o.location_id) === sh.location_id).length),
+                }));
+                r.pool_beds = poolBedsOf(r, shares);
+                r.pool_occupied = poolUsedOf(shares, occupants);
+            }
             const roomsByHotel = new Map();
             for (const r of rooms) {
                 if (!roomsByHotel.has(r.hotel_id)) roomsByHotel.set(r.hotel_id, []);
@@ -2023,25 +2529,44 @@ exports.init = async function (wordjs) {
         return where;
     }
 
+    // ONE roster row shape for GET /inscriptions and GET /inscriptions/:id: the inscription, its room and
+    // hotel, and its fee money still under review — `pending_amount` (payments por validar) and
+    // `returned_amount` (payments the admin returned for correction), both from LIVE parts (fees.personSum).
+    // Cancelled rows keep `status: 'cancelled'` (the admin shows them struck through).
+    // Built PER REQUEST, like every other money reader: fees.personSum follows the payments' readiness — a
+    // string built once at init would keep a failed boot migration's degraded SQL (the parts' own mirrored
+    // status, no header join) after a later request recovers the schema.
+    // NOT payments:view (2.18.0, D-P20): «Pagos de cuotas» is a section of its own and learns who each person
+    // is from GET /fee-payments (name, location, family group) — never the roster's contacts and form answers.
+    const ROSTER_ACCESS = [['inscriptions', 'view'], ['lodging', 'view'], ['transport', 'view'], ['accounting', 'view'], ['dashboard', 'view'], ['reports', 'view']];
+    const rosterSelect = () => `
+                SELECT i.*, r.room_number, r.hotel_id, r.location_id AS room_location_id, h.name as hotel_name,
+                       CASE WHEN EXISTS (SELECT 1 FROM ${T.roomBeds} b WHERE b.room_id = i.room_id) THEN 1 ELSE 0 END AS room_shared,
+                       ${fees.personSum('pending', 'i.id')} as pending_amount,
+                       ${fees.personSum('returned', 'i.id')} as returned_amount
+                FROM ${T.inscriptions} i
+                LEFT JOIN ${T.rooms} r ON i.room_id = r.id
+                LEFT JOIN ${T.hotels} h ON r.hotel_id = h.id`;
+    // Stable order (2.18.0): the id breaks ties between equal names, so a page boundary never repeats or
+    // drops a person.
+    const ROSTER_ORDER = ` ORDER BY i.last_name, i.first_name, i.id`;
+    // One roster row: the registration code (badge payload) and the ID document only reach inscriptions:view.
+    const rosterRow = (item, perms) => maskDocument({ ...item, custom_data: parseCd(item.custom_data), reg_code: canSeeRegCodes(perms) ? item.reg_code : null }, perms);
+
     // Inscriptions for a conference
     http.route('get', '/inscriptions', { auth: true }, async (req, res) => {
-        const perms = await allowAny(req, res, [['inscriptions', 'view'], ['payments', 'view'], ['lodging', 'view'], ['transport', 'view'], ['accounting', 'view'], ['dashboard', 'view'], ['reports', 'view']]);
+        const perms = await allowAny(req, res, ROSTER_ACCESS);
         if (!perms) return;
         const { conference_id } = req.query;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
 
         try {
-            let query = `
-                SELECT i.*, r.room_number, r.hotel_id, h.name as hotel_name,
-                       (SELECT COALESCE(SUM(amount), 0) FROM ${T.payments} WHERE inscription_id = i.id AND status = 'pending') as pending_amount
-                FROM ${T.inscriptions} i
-                LEFT JOIN ${T.rooms} r ON i.room_id = r.id
-                LEFT JOIN ${T.hotels} h ON r.hotel_id = h.id
+            let query = `${rosterSelect()}
                 WHERE i.conference_id = ?
             `;
             const params = [conference_id];
             query += await inscriptionFilters(req.query, params, perms);
-            query += ` ORDER BY i.last_name, i.first_name`;
+            query += ROSTER_ORDER;
 
             // Optional pagination — only kicks in when the caller passes `limit` (keeps the existing
             // admin list, which reads the full array, working unchanged).
@@ -2057,10 +2582,7 @@ exports.init = async function (wordjs) {
 
             // Parse custom_data (guarded — one malformed legacy row must not 500 the whole roster). The
             // registration code (barcode payload) only reaches inscriptions:view.
-            const showCodes = canSeeRegCodes(perms);
-            const parsedList = list.map(item => maskDocument({ ...item, custom_data: parseCd(item.custom_data), reg_code: showCodes ? item.reg_code : null }, perms));
-
-            res.json(parsedList);
+            res.json(list.map(item => rosterRow(item, perms)));
         } catch (e) { sendError(res, e); }
     });
 
@@ -2345,7 +2867,9 @@ exports.init = async function (wordjs) {
 
             // The admin explicitly PICKS the location (unlike the portal, which forces the coordinator's
             // own). It's an operational column, not a form field: `location_id` (preferred) or the
-            // legacy `location` name, both resolved against this conference's locations.
+            // legacy `location` name, both resolved against this conference's locations. A new attendee holds
+            // no bed, so registering them into a submitted / validated location adjusts nobody's arrangement
+            // (the bed rule of PUT /inscriptions/:id): inscriptions:manage alone, no stamp.
             const loc = await resolveAdminLocation(confId, fieldValues);
             if (loc) { await assertLocationHasRoom(loc); values.location_id = loc.id; values.location = loc.name; }
 
@@ -2388,8 +2912,8 @@ exports.init = async function (wordjs) {
             // and its non-cancelled attendees still without one.
             const locations = await db.all(
                 `SELECT l.*, (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.location_id = l.id AND ${occupiedSql('i.status')}) AS inscribed,`
-                + ` (SELECT COUNT(*) FROM ${T.rooms} r WHERE r.location_id = l.id) AS rooms_allotted,`
-                + ` (SELECT COALESCE(SUM(r.capacity), 0) FROM ${T.rooms} r WHERE r.location_id = l.id) AS beds_allotted,`
+                + ` (SELECT COUNT(*) FROM ${T.rooms} r WHERE r.location_id = l.id) + (SELECT COUNT(*) FROM ${T.roomBeds} b WHERE b.location_id = l.id) AS rooms_allotted,`
+                + ` (SELECT COALESCE(SUM(r.capacity), 0) FROM ${T.rooms} r WHERE r.location_id = l.id) + (SELECT COALESCE(SUM(b.beds), 0) FROM ${T.roomBeds} b WHERE b.location_id = l.id) AS beds_allotted,`
                 + ` (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.location_id = l.id AND i.room_id IS NOT NULL) AS lodged,`
                 + ` (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.location_id = l.id AND i.room_id IS NULL AND ${occupiedSql('i.status')}) AS unlodged`
                 + ` FROM ${T.locations} l WHERE l.conference_id = ? ORDER BY l.name`, [conference_id]);
@@ -2400,20 +2924,32 @@ exports.init = async function (wordjs) {
                 l.beds_allotted = Number(l.beds_allotted) || 0;
                 l.lodged = Number(l.lodged) || 0;
                 l.unlodged = Number(l.unlodged) || 0;
+                // Its lodging dates (2.21.0): its own (lodging_opens / lodging_closes as stored: null = the general
+                // one) and the window they make with the general ones.
                 const win = lodgingWindow(conf, l);
-                l.lodging_permission = win.permission.granted;
-                l.lodging_permission_until = win.permission.until;
-                l.lodging_permission_active = win.permission.active;
-                l.lodging_permission_expired = win.permission.expired;
+                l.lodging_opens = win.own_opens;
+                l.lodging_closes = win.own_closes;
+                l.lodging_window = lodgingWindowView(win);
+                delete l.lodging_permission; delete l.lodging_permission_until;
                 // Can the coordinator change the lodging right now? (window open AND still a draft)
                 l.lodging_can_edit = win.open && l.lodging_status === 'draft';
+                // The administration's adjustments since the coordinator's last submission (2.17.0).
+                Object.assign(l, adminAdjustmentOf(l, hasLevel(perms, 'locations', 'view')));
                 // The access code IS the coordinator's portal login: only who may change it sees it.
                 if (!showCodes) l.code = null;
                 // Every team member gets the locations as context (names, capacity, lodging state); the
                 // coordinator's contact and the admin's review notes are the Localidades section's business.
                 if (!hasLevel(perms, 'locations', 'view')) { l.responsible_name = null; l.responsible_phone = null; l.lodging_note = null; l.lodging_reviewed_by = null; }
             }
-            if (conf) conf.lodging_deadline_passed = lodgingDeadlineInfo(conf).passed;
+            if (conf) {
+                // The general dates as typed, and their window (no location's own dates).
+                const general = lodgingWindow(conf, null);
+                conf.lodging_opens = general.opens;
+                conf.lodging_deadline = general.closes;
+                conf.lodging_tz = general.tz;
+                conf.lodging_window = lodgingWindowView(general);
+                conf.lodging_deadline_passed = general.passed;
+            }
             res.json({ locations, conference: conf });
         } catch (e) { sendError(res, e); }
     });
@@ -2449,11 +2985,16 @@ exports.init = async function (wordjs) {
     // A rename also refreshes the display label on the location's inscriptions (location_id stays).
     // `capacity` may go up or down, but never below the seats already taken (409 with the current count).
     // `payment_methods` replaces the enabled set (a form of payment not enabled at creation can be enabled here).
-    // `lodging_permission` (true/false) lets this location keep arranging lodging after the conference deadline,
-    // until `lodging_permission_until` (optional date; '' / null = until revoked). Revoking clears the date.
+    // Its own lodging dates (2.21.0): `lodging_opens` — '' / null = the general opening, 'now' = no wait, or a
+    // date; `lodging_closes` — '' / null = the general closing, 'never' = no closing, or a date (a past one
+    // closes it now). Together with the general ones they may not make a window that never opens (400).
+    // `lodging_tz`: the admin's zone, stored on the conference with the dates. The 2.8.0 permission is an
+    // own closing: `lodging_permission` true = until `lodging_permission_until` (none = no closing), false
+    // = the general closing.
     http.route('put', '/locations/:id', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'locations', 'manage')) return;
-        const { name, responsible_name, responsible_phone, rotate_code, capacity, payment_methods, lodging_permission, lodging_permission_until } = req.body;
+        const { name, responsible_name, responsible_phone, rotate_code, capacity, payment_methods, lodging_opens, lodging_permission, lodging_permission_until, lodging_tz } = req.body;
+        let { lodging_closes } = req.body;
         try {
             const loc = await db.get(`SELECT * FROM ${T.locations} WHERE id = ?`, [req.params.id]);
             if (!loc) return res.status(404).json({ error: 'Localidad no encontrada.' });
@@ -2476,18 +3017,25 @@ exports.init = async function (wordjs) {
                 sets.push('capacity = ?'); params.push(cap);
             }
             if (payment_methods !== undefined) { sets.push('payment_methods = ?'); params.push(JSON.stringify(parsePaymentMethods(payment_methods))); }
-            if (lodging_permission !== undefined || lodging_permission_until !== undefined) {
+            if (lodging_closes === undefined && (lodging_permission !== undefined || lodging_permission_until !== undefined)) {
                 const PERM = { true: 1, false: 0, 1: 1, 0: 0 };
-                const granted = lodging_permission === undefined ? (Number(loc.lodging_permission) ? 1 : 0) : PERM[String(lodging_permission)];
+                const granted = lodging_permission === undefined ? 1 : PERM[String(lodging_permission)];
                 if (granted === undefined) return res.status(400).json({ error: 'El permiso debe ser verdadero o falso.' });
-                let until = null;
-                if (granted) {
-                    until = lodging_permission_until === undefined ? (loc.lodging_permission_until || null) : normDate(lodging_permission_until, 'permiso de hospedaje');
-                    if (until && lodgingPermissionInfo({ lodging_permission: 1, lodging_permission_until: until }).expired) {
-                        return res.status(400).json({ error: 'La fecha del permiso ya pasó.' });
-                    }
+                lodging_closes = granted ? (lodging_permission_until || LODGING_NO_CLOSE) : null;
+            }
+            let tz = null;
+            if (lodging_opens !== undefined || lodging_closes !== undefined) {
+                const conf = await db.get(`SELECT lodging_opens, lodging_deadline, lodging_tz FROM ${T.conferences} WHERE id = ?`, [loc.conference_id]);
+                tz = lodging_tz !== undefined ? lodgingTzInput(lodging_tz) : lodgingZone(conf && conf.lodging_tz);
+                const own = (v, current, none, label) => (v === undefined ? current : v === null || String(v).trim() === '' ? null
+                    : String(v).trim() === none ? none : lodgingDateInput(v, label));
+                const opens = own(lodging_opens, loc.lodging_opens || null, LODGING_NO_WAIT, 'apertura de hospedajes');
+                const closes = own(lodging_closes, loc.lodging_closes || null, LODGING_NO_CLOSE, 'cierre de hospedajes');
+                const win = lodgingWindow({ ...conf, lodging_tz: tz }, { lodging_opens: opens, lodging_closes: closes });
+                if (win.opens && win.closes && lodgingStart(win.opens, tz) >= lodgingEnd(win.closes, tz)) {
+                    return res.status(400).json({ error: `Con esas fechas la localidad nunca podría acomodar: la apertura (${fmtDeadline(win.opens)}) es posterior al cierre (${fmtDeadline(win.closes)}).` });
                 }
-                sets.push('lodging_permission = ?', 'lodging_permission_until = ?'); params.push(granted, until);
+                sets.push('lodging_opens = ?', 'lodging_closes = ?'); params.push(opens, closes);
             }
             let newCode = null;
             if (rotate_code) { newCode = await genAccessCode(); sets.push('code = ?'); params.push(newCode); }
@@ -2496,6 +3044,7 @@ exports.init = async function (wordjs) {
                 await db.run(`UPDATE ${T.locations} SET ${sets.join(', ')} WHERE id = ?`, params);
             }
             if (newName !== null) await db.run(`UPDATE ${T.inscriptions} SET location = ? WHERE location_id = ?`, [newName, loc.id]);
+            if (tz && lodging_tz !== undefined) await db.run(`UPDATE ${T.conferences} SET lodging_tz = ? WHERE id = ?`, [tz, loc.conference_id]);
             res.json({ success: true, code: newCode || loc.code });
         } catch (e) { sendError(res, e); }
     });
@@ -2507,21 +3056,46 @@ exports.init = async function (wordjs) {
             if (!id) return res.status(404).json({ error: 'Localidad no encontrada.' });
             // Lodging: its attendees leave the rooms that were allotted to it (those rooms go back to
             // the pool and would otherwise hold people of no location), and its own rules go with it.
-            await db.run(`UPDATE ${T.inscriptions} SET room_id = NULL WHERE location_id = ? AND room_id IN (SELECT id FROM ${T.rooms} WHERE location_id = ?)`, [id, id]);
-            await db.run(`UPDATE ${T.rooms} SET location_id = NULL WHERE location_id = ?`, [id]);
-            await db.run(`DELETE FROM ${T.rules} WHERE location_id = ?`, [id]);
-            // Under the meals lock: a plan write re-reads the location inside that lock, so it can never
-            // add a plan row for this location once it is gone.
-            await withMealsLock(async () => {
+            // Under the assignment lock (2.18.0), like every write of rooms and beds.
+            await withAssignmentLock(async () => {
+                // Nobody held by the administration (see «HELD BY THE ADMINISTRATION»): their rooms become pool rooms.
+                await db.run(`UPDATE ${T.inscriptions} SET room_id = NULL, room_locked = NULL WHERE location_id = ? AND room_id IN (SELECT id FROM ${T.rooms} WHERE location_id = ?) AND ${NOT_HELD_SQL()}`, [id, id]);
+                await db.run(`UPDATE ${T.rooms} SET location_id = NULL WHERE location_id = ?`, [id]);
+                // Its beds in shared rooms (2.18.0) become pool beds; its attendees there leave them, like above.
+                await db.run(`UPDATE ${T.inscriptions} SET room_id = NULL, room_locked = NULL WHERE location_id = ? AND room_id IN (SELECT room_id FROM ${T.roomBeds} WHERE location_id = ?) AND ${NOT_HELD_SQL()}`, [id, id]);
+                await db.run(`DELETE FROM ${T.roomBeds} WHERE location_id = ?`, [id]);
+                await db.run(STALE_LOCKS_SQL());
+                await db.run(`DELETE FROM ${T.rules} WHERE location_id = ?`, [id]);
+            });
+            // Under the payments lock, then the meals lock (the order DELETE /inscriptions takes them in):
+            // - a portal payment of this location being recorded right now (it checks its people, then
+            //   writes its header) finishes BEFORE the location goes — and detachLocation then clears its
+            //   recorder location — or starts after, when its people no longer belong to the location (400).
+            //   Without it the header could be written with the deleted id after the detach ran: a payment
+            //   that offers «Devolver» to a portal that no longer exists;
+            // - a plan write re-reads the location inside the meals lock, so it can never add a plan row for
+            //   this location once it is gone.
+            await fees.withPaymentsLock(() => withMealsLock(async () => {
                 // No FK can be added by ALTER in SQLite: detach the attendees explicitly. The label is kept
                 // for history (reports/CSV still show where they registered; the meals views show the
                 // live location of location_id instead).
                 await db.run(`UPDATE ${T.inscriptions} SET location_id = NULL WHERE location_id = ?`, [id]);
                 await db.run(`DELETE FROM ${T.locations} WHERE id = ?`, [id]);
+                // Fee payments (2.18.0): a payment the location's portal recorded keeps its people and money;
+                // it just no longer names a recorder location (plain column, no FK).
+                await fees.detachLocation(id);
                 // Meals (2.14.0): the location's plan goes with it (parent first; the FK cascades too); its
                 // attendees keep only their explicit per-person includes (and every delivery already made —
                 // that is history).
                 await db.run(`DELETE FROM ${T.mealPlan} WHERE location_id = ?`, [id]);
+            }));
+            // A room or bed write that was already waiting for the lock when the location was read may have
+            // given it a room or beds in between: one last sweep, under the lock, once the row is gone (every
+            // later write re-reads the location under the lock and finds nothing).
+            await withAssignmentLock(async () => {
+                await db.run(`UPDATE ${T.rooms} SET location_id = NULL WHERE location_id = ?`, [id]);
+                await db.run(`DELETE FROM ${T.roomBeds} WHERE location_id = ?`, [id]);
+                await db.run(STALE_LOCKS_SQL());
             });
             res.json({ success: true });
         } catch (e) { sendError(res, e); }
@@ -2542,15 +3116,46 @@ exports.init = async function (wordjs) {
     });
     // State transitions are compare-and-set: ONE conditional UPDATE under the assignment lock; a 409 is
     // derived from `changes === 0` (someone else moved the state first).
+    //
+    // Validate / return also take what the reviewer SAW (2.17.0): since the administration may change a
+    // submitted arrangement while it is under review (an administration adjustment, possibly by another
+    // admin or team member), `seen: { submitted_at, admin_changes }` — the `lodging_submitted_at` and
+    // `lodging_admin_changes` of the review the admin was looking at — must still be the location's, or
+    // the answer is 409 `lodging_changed` and the admin reviews again. It catches an adjustment made
+    // meanwhile and a coordinator who withdrew and sent again. Checked under the lock, where every stamp and
+    // every submission is written, so nothing lands between the check and the UPDATE. Without `seen` (an
+    // API caller) the status alone decides, as before; without the stamp columns (a failed migration) the
+    // submission time alone does.
+    const LODGING_CHANGED = 'El hospedaje cambió mientras lo revisabas (un ajuste de la administración o un nuevo envío del encargado): revísalo de nuevo antes de validarlo o devolverlo.';
+    const canonStamp = (v) => (v == null || v === '' ? null : (v instanceof Date ? v.toISOString() : String(v)));
+    async function reviewStillSeen(id, seen) {
+        if (!seen || typeof seen !== 'object') return true;
+        let now;
+        try {
+            now = await db.get(`SELECT lodging_status, lodging_submitted_at, lodging_admin_changed_at, lodging_admin_changes FROM ${T.locations} WHERE id = ?`, [id]);
+        } catch (e) {
+            now = await db.get(`SELECT lodging_status, lodging_submitted_at FROM ${T.locations} WHERE id = ?`, [id]);
+            if (now) now.lodging_admin_changes = undefined;
+        }
+        // Not submitted any more (or gone): the status compare-and-set answers that.
+        if (!now || lodgingStatusOf(now) !== 'submitted') return true;
+        if (canonStamp(now.lodging_submitted_at) !== canonStamp(seen.submitted_at)) return false;
+        if (now.lodging_admin_changes === undefined) return true;
+        return adminAdjustmentOf(now, false).lodging_admin_changes === (Number(seen.admin_changes) || 0);
+    }
     http.route('post', '/locations/:id/lodging/validate', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'locations', 'manage')) return;
         try {
             const id = positiveInt(req.params.id);
             const loc = id ? await db.get(`SELECT id FROM ${T.locations} WHERE id = ?`, [id]) : null;
             if (!loc) return res.status(404).json({ error: 'Localidad no encontrada.' });
-            const r = await withAssignmentLock(() => db.run(
-                `UPDATE ${T.locations} SET lodging_status = 'validated', lodging_reviewed_at = CURRENT_TIMESTAMP, lodging_reviewed_by = ?, lodging_note = NULL WHERE id = ? AND COALESCE(lodging_status, 'draft') = 'submitted'`,
-                [reviewerOf(req), id]));
+            const r = await withAssignmentLock(async () => {
+                if (!await reviewStillSeen(id, (req.body || {}).seen)) return { stale: true };
+                return db.run(
+                    `UPDATE ${T.locations} SET lodging_status = 'validated', lodging_reviewed_at = CURRENT_TIMESTAMP, lodging_reviewed_by = ?, lodging_note = NULL WHERE id = ? AND COALESCE(lodging_status, 'draft') = 'submitted'`,
+                    [reviewerOf(req), id]);
+            });
+            if (r && r.stale) return res.status(409).json({ error: LODGING_CHANGED, code: 'lodging_changed' });
             if (!r || !r.changes) return res.status(409).json({ error: 'El hospedaje no está enviado a validación.' });
             res.json({ success: true, lodging_status: 'validated' });
         } catch (e) { sendError(res, e); }
@@ -2564,9 +3169,13 @@ exports.init = async function (wordjs) {
             const note = typeof (req.body || {}).note === 'string' ? req.body.note.trim() : '';
             if (!note) return res.status(400).json({ error: 'Indica las observaciones para el encargado.' });
             if (note.length > 2000) return res.status(400).json({ error: 'Las observaciones son demasiado largas (máximo 2000 caracteres).' });
-            const r = await withAssignmentLock(() => db.run(
-                `UPDATE ${T.locations} SET lodging_status = 'draft', lodging_note = ?, lodging_reviewed_at = CURRENT_TIMESTAMP, lodging_reviewed_by = ? WHERE id = ? AND COALESCE(lodging_status, 'draft') = 'submitted'`,
-                [note, reviewerOf(req), id]));
+            const r = await withAssignmentLock(async () => {
+                if (!await reviewStillSeen(id, (req.body || {}).seen)) return { stale: true };
+                return db.run(
+                    `UPDATE ${T.locations} SET lodging_status = 'draft', lodging_note = ?, lodging_reviewed_at = CURRENT_TIMESTAMP, lodging_reviewed_by = ? WHERE id = ? AND COALESCE(lodging_status, 'draft') = 'submitted'`,
+                    [note, reviewerOf(req), id]);
+            });
+            if (r && r.stale) return res.status(409).json({ error: LODGING_CHANGED, code: 'lodging_changed' });
             if (!r || !r.changes) return res.status(409).json({ error: 'El hospedaje no está enviado a validación.' });
             res.json({ success: true, lodging_status: 'draft' });
         } catch (e) { sendError(res, e); }
@@ -2586,24 +3195,36 @@ exports.init = async function (wordjs) {
     });
 
     // === HOTELS & ROOMS (full CRUD) ===
+    // `location` (2.23.0): what the admin pasted for the hotel's position — a Google Maps / OpenStreetMap link or
+    // coordinates (server/geo.js). Absent = unchanged; '' = no position. → { value: 'lat,lng' | null } | { error }.
+    function geoOfBody(location) {
+        if (location === undefined || location === null || String(location).trim() === '') return { value: null };
+        const g = parseGeo(location);
+        return g.ok ? { value: g.geo } : { error: GEO_MESSAGES[g.code] || GEO_MESSAGES.no_coords };
+    }
     http.route('post', '/hotels', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'lodging', 'manage')) return;
-        const { conference_id, name, address, description, capacity } = req.body;
+        const { conference_id, name, address, description, capacity, location } = req.body;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         if (!String(name || '').trim()) return res.status(400).json({ error: 'El nombre del hotel es obligatorio.' });
+        const geo = geoOfBody(location);
+        if (geo.error) return res.status(400).json({ error: geo.error, code: 'geo' });
         try {
             const conf = await db.get(`SELECT id FROM ${T.conferences} WHERE id = ?`, [conference_id]);
             if (!conf) return res.status(404).json({ error: 'Conferencia no encontrada.' });
-            const r = await db.run(`INSERT INTO ${T.hotels} (conference_id, name, address, description, capacity) VALUES (?, ?, ?, ?, ?)`,
-                [conference_id, String(name).trim(), address || null, description || null, Number(capacity) || 0]);
+            const r = await db.run(`INSERT INTO ${T.hotels} (conference_id, name, address, description, capacity, geo) VALUES (?, ?, ?, ?, ?, ?)`,
+                [conference_id, String(name).trim(), address || null, description || null, Number(capacity) || 0, geo.value || null]);
             res.json({ success: true, id: r.lastID });
         } catch (e) { sendError(res, e); }
     });
     http.route('put', '/hotels/:id', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'lodging', 'manage')) return;
-        const { name, address, description, capacity } = req.body;
+        const { name, address, description, capacity, location } = req.body;
+        const geo = geoOfBody(location);
+        if (geo.error) return res.status(400).json({ error: geo.error, code: 'geo' });
         try {
             const sets = [], params = [];
+            if (location !== undefined) { sets.push('geo = ?'); params.push(geo.value || null); }
             if (name !== undefined) {
                 if (!String(name).trim()) return res.status(400).json({ error: 'El nombre del hotel es obligatorio.' });
                 sets.push('name = ?'); params.push(String(name).trim());
@@ -2622,21 +3243,29 @@ exports.init = async function (wordjs) {
         try {
             const id = positiveInt(req.params.id);
             if (!id) return res.status(404).json({ error: 'Hotel no encontrado.' });
-            // A room allotted to a frozen location is part of an arrangement under review.
-            const frozen = await db.get(
-                `SELECT l.id, l.name, l.lodging_status FROM ${T.rooms} r JOIN ${T.locations} l ON r.location_id = l.id WHERE r.hotel_id = ? AND ${frozenSqlOf('l.lodging_status')} ORDER BY l.name LIMIT 1`, [id]);
-            if (frozen) await assertLocationNotFrozen(frozen, 'eliminar sus habitaciones');
-            // Free any attendees assigned to this hotel's rooms before the FK cascade drops the rooms,
-            // so occupancy counts stay honest.
-            await db.run(`UPDATE ${T.inscriptions} SET room_id = NULL WHERE room_id IN (SELECT id FROM ${T.rooms} WHERE hotel_id = ?)`, [id]);
-            await db.run(`DELETE FROM ${T.hotels} WHERE id = ?`, [id]);
-            res.json({ success: true });
+            // Under the assignment lock (an engine run's load→flush window, a status transition): rooms
+            // allotted to a submitted / validated location go too — an administration adjustment of that
+            // location (2.17.0; it used to be a 409 until the location was reopened). So is every location
+            // whose attendees lose a bed here: an attendee the admin placed in a POOL room of this hotel is
+            // part of their location's arrangement (`placed_elsewhere`) as much as one in an allotted room.
+            const adjusted = await withAssignmentLock(async () => {
+                const owners = await db.all(`SELECT DISTINCT location_id FROM ${T.rooms} WHERE hotel_id = ? AND location_id IS NOT NULL UNION SELECT DISTINCT location_id FROM ${T.roomBeds} WHERE room_id IN (SELECT id FROM ${T.rooms} WHERE hotel_id = ?)`, [id, id]);
+                const sleepers = await db.all(`SELECT DISTINCT location_id FROM ${T.inscriptions} WHERE room_id IN (SELECT id FROM ${T.rooms} WHERE hotel_id = ?) AND location_id IS NOT NULL`, [id]);
+                // Free any attendees assigned to this hotel's rooms before the FK cascade drops the rooms,
+                // so occupancy counts stay honest.
+                await db.run(`UPDATE ${T.inscriptions} SET room_id = NULL, room_locked = NULL WHERE room_id IN (SELECT id FROM ${T.rooms} WHERE hotel_id = ?)`, [id]);
+                await db.run(`DELETE FROM ${T.roomBeds} WHERE room_id IN (SELECT id FROM ${T.rooms} WHERE hotel_id = ?)`, [id]);
+                const r = await db.run(`DELETE FROM ${T.hotels} WHERE id = ?`, [id]);
+                return r && r.changes ? stampAdminAdjustment(req, [...owners, ...sleepers].map(o => o.location_id)) : [];
+            });
+            res.json({ success: true, lodging_adjusted: adjusted });
         } catch (e) { sendError(res, e); }
     });
 
     // Allot every room of a hotel (or only `room_ids`) to a location — `location_id` null = back to the
-    // pool. All-or-nothing: the frozen checks (target + every affected room's current location) and the
-    // occupant check run first, then ONE UPDATE.
+    // pool. All-or-nothing: the occupant check runs first, then ONE UPDATE. A submitted / validated
+    // location on either side (the target, or a location whose rooms change hands) is no longer a 409:
+    // the change goes through and is stamped on it as an administration adjustment (2.17.0).
     http.route('post', '/hotels/:id/allot', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'lodging', 'manage')) return;
         const { location_id, room_ids } = req.body || {};
@@ -2664,12 +3293,6 @@ exports.init = async function (wordjs) {
             // into memory and flushes at the end, so an allotment landing in between would let it place
             // a non-delegated attendee into a room that is no longer a pool room.
             const outcome = await withAssignmentLock(async () => {
-                // Frozen: the target, then every location whose rooms would change hands.
-                if (target) await assertLocationNotFrozen(target.id, 'cambiar sus habitaciones');
-                const frozen = await db.get(
-                    `SELECT l.id, l.name, l.lodging_status FROM ${T.rooms} r JOIN ${T.locations} l ON r.location_id = l.id WHERE r.hotel_id = ?${inSql} AND ${frozenSqlOf('l.lodging_status')} ORDER BY l.name LIMIT 1`,
-                    [hotelId, ...inParams]);
-                if (frozen) await assertLocationNotFrozen(frozen, 'cambiar sus habitaciones');
                 // Occupants: an allotted room may only hold the target location's attendees.
                 if (target) {
                     const bad = await db.all(
@@ -2677,17 +3300,38 @@ exports.init = async function (wordjs) {
                         [hotelId, ...inParams, target.id]);
                     if (bad.length) return { bad };
                 }
-                const r = await db.run(`UPDATE ${T.rooms} SET location_id = ? WHERE hotel_id = ?${roomIds ? ` AND id IN (${roomIds.map(() => '?').join(', ')})` : ''}`, [target ? target.id : null, hotelId, ...inParams]);
-                return { changes: Number(r && r.changes) || 0 };
+                // The rooms that actually change hands, and whose they were: an allotment that changes
+                // nothing is no adjustment of anybody's arrangement.
+                // A shared room (2.18.0) changes hands as well: it becomes a whole room (or a pool room) and
+                // its sharers lose their beds there.
+                const hasShare = `EXISTS (SELECT 1 FROM ${T.roomBeds} b WHERE b.room_id = r.id)`;
+                const moving = await db.all(
+                    `SELECT r.id, r.location_id FROM ${T.rooms} r WHERE r.hotel_id = ?${inSql} AND ${target ? `(r.location_id IS NULL OR r.location_id != ? OR ${hasShare})` : `(r.location_id IS NOT NULL OR ${hasShare})`}`,
+                    [hotelId, ...inParams, ...(target ? [target.id] : [])]);
+                const movingShares = await sharesByRoom(moving.map(m => m.id));
+                const r = await db.run(`UPDATE ${T.rooms} SET location_id = ?, share_lock = NULL WHERE hotel_id = ?${roomIds ? ` AND id IN (${roomIds.map(() => '?').join(', ')})` : ''}`, [target ? target.id : null, hotelId, ...inParams]);
+                if (movingShares.size) {
+                    const ids = [...movingShares.keys()];
+                    await db.run(`DELETE FROM ${T.roomBeds} WHERE room_id IN (${ids.map(() => '?').join(', ')})`, ids);
+                }
+                const sharers = [...movingShares.values()].flat().map(x => x.location_id);
+                const touched = moving.length ? [...moving.map(m => m.location_id), ...sharers, ...(target ? [target.id] : [])] : [];
+                return { changes: Number(r && r.changes) || 0, adjusted: await stampAdminAdjustment(req, touched) };
             });
             if (outcome.bad) {
                 const names = outcome.bad.map(b => b.room_number).slice(0, 20).join(', ');
                 return res.status(409).json({ error: `Hay ocupantes de otra localidad en ${outcome.bad.length === 1 ? 'la habitación' : 'las habitaciones'} ${names}; libéralas antes de asignarlas.`, rooms: outcome.bad.map(b => b.room_number) });
             }
-            res.json({ success: true, rooms: outcome.changes });
+            res.json({ success: true, rooms: outcome.changes, lodging_adjusted: outcome.adjusted });
         } catch (e) { sendError(res, e); }
     });
 
+    // A room number as stored: trimmed, inner runs of spaces collapsed. Two numbers are the same room when
+    // they match ignoring case («A1» = «a1» = « A1 »); a hotel holds each number once.
+    const roomNumberOf = (v) => String(v == null ? '' : v).trim().replace(/\s+/g, ' ');
+    const roomWithNumber = (hotelId, number, exceptId) => db.get(
+        `SELECT id, room_number FROM ${T.rooms} WHERE hotel_id = ? AND LOWER(room_number) = LOWER(?)${exceptId ? ' AND id <> ?' : ''} ORDER BY id LIMIT 1`,
+        exceptId ? [hotelId, number, exceptId] : [hotelId, number]);
     http.route('post', '/rooms', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'lodging', 'manage')) return;
         const { hotel_id, room_number, capacity, gender, is_family, family_name, notes } = req.body;
@@ -2696,15 +3340,25 @@ exports.init = async function (wordjs) {
         try {
             const hotel = await db.get(`SELECT id FROM ${T.hotels} WHERE id = ?`, [hotel_id]);
             if (!hotel) return res.status(404).json({ error: 'Hotel no encontrado.' });
-            const r = await db.run(`INSERT INTO ${T.rooms} (hotel_id, room_number, capacity, gender, is_family, family_name, notes) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                [hotel_id, String(room_number).trim(), Math.max(1, Number(capacity) || 1), gender || 'Mixed', is_family ? 1 : 0, family_name || null, notes || null]);
-            res.json({ success: true, id: r.lastID });
+            const number = roomNumberOf(room_number);
+            // Check and insert under the lodging lock: two requests for the same number (a double tap, a
+            // bulk run started twice) must not both pass the check.
+            const outcome = await withAssignmentLock(async () => {
+                const existing = await roomWithNumber(hotel.id, number);
+                if (existing) return { existing };
+                const r = await db.run(`INSERT INTO ${T.rooms} (hotel_id, room_number, capacity, gender, is_family, family_name, notes) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                    [hotel.id, number, Math.max(1, Number(capacity) || 1), gender || 'Mixed', is_family ? 1 : 0, family_name || null, notes || null]);
+                return { id: r.lastID };
+            });
+            if (outcome.existing) return res.status(409).json({ error: `Ya existe la habitación «${outcome.existing.room_number}» en este hotel.`, code: 'duplicate_room', id: outcome.existing.id, room_number: outcome.existing.room_number });
+            res.json({ success: true, id: outcome.id });
         } catch (e) { sendError(res, e); }
     });
     // `location_id` (positive integer | null | '' → null) allots the room to a location of the room's
-    // conference. Checks, in order: frozen (the room's current location when location_id/capacity
-    // changes; the target location when allotting), then occupants (an allotted room may only hold the
-    // target location's attendees).
+    // conference. Checks: capacity (never below the occupants), then occupants (an allotted room may only
+    // hold the target location's attendees). A re-allotment or a capacity change of a room of a submitted
+    // / validated location — or an allotment to one — is stamped on it as an administration adjustment
+    // (2.17.0; it used to be a 409 until the location was reopened).
     http.route('put', '/rooms/:id', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'lodging', 'manage')) return;
         const { room_number, capacity, gender, is_family, family_name, notes, location_id } = req.body;
@@ -2714,10 +3368,13 @@ exports.init = async function (wordjs) {
             if (!room) return res.status(404).json({ error: 'Habitación no encontrada.' });
             const sets = [], params = [];
             if (room_number !== undefined) {
-                if (!String(room_number).trim()) return res.status(400).json({ error: 'El número de habitación es obligatorio.' });
-                sets.push('room_number = ?'); params.push(String(room_number).trim());
+                const number = roomNumberOf(room_number);
+                if (!number) return res.status(400).json({ error: 'El número de habitación es obligatorio.' });
+                const clash = await roomWithNumber(room.hotel_id, number, room.id);
+                if (clash) return res.status(409).json({ error: `Ya existe la habitación «${clash.room_number}» en este hotel.`, code: 'duplicate_room', id: clash.id, room_number: clash.room_number });
+                sets.push('room_number = ?'); params.push(number);
             }
-            // Resolve the target location first so every 400 precedes the frozen/occupant 409s.
+            // Resolve the target location first so every 400 precedes the occupant 409.
             let target;   // undefined = not in the body; null = back to the pool; row = allot
             if (location_id !== undefined) {
                 if (location_id === null || location_id === '') target = null;
@@ -2727,10 +3384,8 @@ exports.init = async function (wordjs) {
                     if (!target) return res.status(400).json({ error: 'Localidad no encontrada en esta conferencia.' });
                 }
             }
-            const locationChanges = target !== undefined && (target ? Number(target.id) : null) !== (room.location_id == null ? null : Number(room.location_id));
             let cap = null;
             if (capacity !== undefined) cap = Math.max(1, Number(capacity) || 1);
-            const capacityChanges = cap !== null && cap !== Number(room.capacity);
             if (gender !== undefined) { sets.push('gender = ?'); params.push(gender || 'Mixed'); }
             if (is_family !== undefined) { sets.push('is_family = ?'); params.push(is_family ? 1 : 0); }
             if (family_name !== undefined) { sets.push('family_name = ?'); params.push(family_name || null); }
@@ -2738,13 +3393,27 @@ exports.init = async function (wordjs) {
             // The occupant checks and the UPDATE are serialised with the engine (which loads occupancy
             // into memory, places people, then flushes): a re-allotment or a capacity change may not
             // interleave with a run's load→flush window.
-            await withAssignmentLock(async () => {
-                if ((locationChanges || capacityChanges) && room.location_id != null) await assertLocationNotFrozen(room.location_id, 'cambiar sus habitaciones');
-                if (locationChanges && target) await assertLocationNotFrozen(target.id, 'cambiar sus habitaciones');
+            const adjusted = await withAssignmentLock(async () => {
+                // Whose arrangement this changes is decided on the room as it is NOW (re-read under the lock):
+                // a concurrent allotment of this room must not leave the stamp on its previous owner.
+                const now = await db.get(`SELECT location_id, capacity FROM ${T.rooms} WHERE id = ?`, [id]);
+                if (!now) throw httpError(404, 'Habitación no encontrada.');
+                const ownerId = now.location_id == null ? null : Number(now.location_id);
+                const locationChanges = target !== undefined && (target ? Number(target.id) : null) !== ownerId;
+                const capacityChanges = cap !== null && cap !== Number(now.capacity);
+                const nowShares = (await sharesByRoom([id])).get(id) || [];
                 if (cap !== null) {
                     // Never shrink capacity below the people already placed in the room.
                     const occ = await db.get(`SELECT COUNT(*) as c FROM ${T.inscriptions} WHERE room_id = ?`, [id]);
                     if (cap < (occ?.c || 0)) throw httpError(400, `La capacidad no puede ser menor que los ${occ.c} ocupantes actuales.`);
+                    // …nor below the beds given to locations in a shared room (2.18.0), whose pool beds must
+                    // still hold the pool occupants.
+                    if (nowShares.length && target === undefined) {
+                        const given = nowShares.reduce((n, x) => n + x.beds, 0);
+                        if (cap < given) throw httpError(400, `La capacidad no puede ser menor que las ${given} camas repartidas entre localidades; cambia antes el reparto.`);
+                        const occupants = await db.all(`SELECT id, location_id FROM ${T.inscriptions} WHERE room_id = ?`, [id]);
+                        if (poolUsedOf(nowShares, occupants) > cap - given) throw httpError(400, 'Con esa capacidad no caben los ocupantes que usan camas libres; libera alguna cama antes.');
+                    }
                     sets.push('capacity = ?'); params.push(cap);
                 }
                 if (target !== undefined) {
@@ -2754,23 +3423,250 @@ exports.init = async function (wordjs) {
                     }
                     sets.push('location_id = ?'); params.push(target ? target.id : null);
                 }
-                if (!sets.length) return;
+                if (!sets.length) return [];
                 params.push(id);
                 await db.run(`UPDATE ${T.rooms} SET ${sets.join(', ')} WHERE id = ?`, params);
+                // A whole-room allotment (or a return to the pool) replaces any split of the room (2.18.0).
+                const sharesGo = target !== undefined && nowShares.length > 0;
+                if (sharesGo) {
+                    await db.run(`DELETE FROM ${T.roomBeds} WHERE room_id = ?`, [id]);
+                    await db.run(`UPDATE ${T.rooms} SET share_lock = NULL WHERE id = ?`, [id]);
+                }
+                // Whose arrangement this changed: the room's location (its beds moved or resized) and the
+                // location it was allotted to. A rename, a gender or a note is no adjustment.
+                const touched = [];
+                if ((locationChanges || capacityChanges) && ownerId != null) touched.push(ownerId);
+                if (locationChanges && target) touched.push(target.id);
+                if (sharesGo || (capacityChanges && nowShares.length)) touched.push(...nowShares.map(x => x.location_id));
+                return stampAdminAdjustment(req, touched);
             });
-            res.json({ success: true });
+            res.json({ success: true, lodging_adjusted: adjusted });
         } catch (e) { sendError(res, e); }
     });
+    // Split a room's beds between locations (2.18.0, «camas por localidad»): body { shares: [{ location_id,
+    // beds }] }. No share (or every one at 0) makes it a pool room; ONE location with every bed makes it
+    // that location's whole room, as POST /hotels/:id/allot does. Otherwise the room keeps location_id NULL,
+    // each location gets its beds there and the rest of the capacity are pool beds. Refused (409) when the
+    // room's occupants would not fit the new split: each location's beds first, then the pool beds for
+    // everyone else. Stamped on every location whose beds in the room change (an administration adjustment
+    // of a reviewed arrangement, 2.17.0).
+    http.route('put', '/rooms/:id/beds', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'lodging', 'manage')) return;
+        try {
+            const id = positiveInt(req.params.id);
+            const room = id ? await db.get(`SELECT r.id, r.capacity, h.conference_id FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id WHERE r.id = ?`, [id]) : null;
+            if (!room) return res.status(404).json({ error: 'Habitación no encontrada.' });
+            const raw = req.body ? req.body.shares : undefined;
+            if (!Array.isArray(raw) || raw.length > 50) return res.status(400).json({ error: 'Reparto de camas inválido.' });
+            // `release_lock`: the admin frees the class the plan fixed (see «THE CLASS OF A SHARED ROOM»).
+            const releaseLock = !!(req.body && req.body.release_lock === true);
+            const wanted = new Map();
+            for (const x of raw) {
+                const lid = positiveInt(x && x.location_id);
+                const beds = Number(x && x.beds);
+                if (!lid || !Number.isInteger(beds) || beds < 0) return res.status(400).json({ error: 'Reparto de camas inválido.' });
+                if (wanted.has(lid)) return res.status(400).json({ error: 'Una localidad aparece dos veces en el reparto.' });
+                if (beds > 0) wanted.set(lid, beds);
+            }
+            if (wanted.size) {
+                const ids = [...wanted.keys()];
+                const found = await db.all(`SELECT id FROM ${T.locations} WHERE conference_id = ? AND id IN (${ids.map(() => '?').join(', ')})`, [room.conference_id, ...ids]);
+                if (found.length !== ids.length) return res.status(400).json({ error: 'Localidad no encontrada en esta conferencia.' });
+            }
+            const adjusted = await withAssignmentLock(async () => {
+                const now = await db.get(`SELECT id, location_id, capacity, share_lock FROM ${T.rooms} WHERE id = ?`, [id]);
+                if (!now) throw httpError(404, 'Habitación no encontrada.');
+                // A location may have been deleted while this request waited for the lock.
+                if (wanted.size) {
+                    const ids = [...wanted.keys()];
+                    const still = await db.all(`SELECT id FROM ${T.locations} WHERE conference_id = ? AND id IN (${ids.map(() => '?').join(', ')})`, [room.conference_id, ...ids]);
+                    if (still.length !== ids.length) throw httpError(400, 'Localidad no encontrada en esta conferencia.');
+                }
+                const cap = roomCapacityOf(now);
+                const shares = [...wanted].map(([location_id, beds]) => ({ location_id, beds }));
+                const given = shares.reduce((n, x) => n + x.beds, 0);
+                if (given > cap) throw httpError(400, `El reparto suma ${given} camas y la habitación tiene ${cap}.`);
+                const whole = shares.length === 1 && shares[0].beds === cap ? shares[0].location_id : null;
+                const occupants = await db.all(`SELECT id, location_id FROM ${T.inscriptions} WHERE room_id = ?`, [id]);
+                if (whole != null) {
+                    if (occupants.some(o => o.location_id == null || Number(o.location_id) !== whole)) throw httpError(409, 'La habitación tiene ocupantes de otra localidad; libérala antes de dársela entera a una localidad.');
+                } else if (poolUsedOf(shares, occupants) > poolBedsOf({ location_id: null, capacity: cap }, shares)) {
+                    throw httpError(409, 'Con este reparto no caben los ocupantes actuales de la habitación; mueve a alguien antes.');
+                }
+                // Before → after, per location: whose beds in this room change.
+                const beforeShares = (await sharesByRoom([id])).get(id) || [];
+                const before = new Map(beforeShares.map(x => [x.location_id, x.beds]));
+                if (now.location_id != null) before.set(Number(now.location_id), cap);
+                const after = new Map(whole != null ? [[whole, cap]] : shares.map(x => [x.location_id, x.beds]));
+                const touched = [...new Set([...before.keys(), ...after.keys()])].filter(lid => (before.get(lid) || 0) !== (after.get(lid) || 0));
+                // The class goes with the share, or when the admin frees it.
+                const keepLock = whole == null && shares.length > 0 && !releaseLock ? (now.share_lock || null) : null;
+                if (!touched.length && (now.location_id == null) === (whole == null)) {
+                    if ((now.share_lock || null) !== keepLock) await db.run(`UPDATE ${T.rooms} SET share_lock = ? WHERE id = ?`, [keepLock, id]);
+                    return [];
+                }
+                const writes = [[`DELETE FROM ${T.roomBeds} WHERE room_id = ?`, [id]]];
+                if (whole == null) for (const x of shares) writes.push([`INSERT INTO ${T.roomBeds} (room_id, location_id, beds) VALUES (?, ?, ?)`, [id, x.location_id, x.beds]]);
+                writes.push([`UPDATE ${T.rooms} SET location_id = ?, share_lock = ? WHERE id = ?`, [whole, keepLock, id]]);
+                await runBatched(writes);
+                return stampAdminAdjustment(req, touched);
+            });
+            res.json({ success: true, lodging_adjusted: adjusted });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // Block / unblock a room (2.21.0, see «HELD BY THE ADMINISTRATION»): body { blocked }.
+    http.route('put', '/rooms/:id/block', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'lodging', 'manage')) return;
+        try {
+            const id = positiveInt(req.params.id);
+            const blocked = !!(req.body && (req.body.blocked === true || req.body.blocked === 1 || req.body.blocked === '1'));
+            const r = id ? await withAssignmentLock(() => db.run(`UPDATE ${T.rooms} SET blocked = ? WHERE id = ?`, [blocked ? 1 : 0, id])) : null;
+            if (!r || !r.changes) return res.status(404).json({ error: 'Habitación no encontrada.' });
+            res.json({ success: true, blocked });
+        } catch (e) { sendError(res, e); }
+    });
+    // Fix / unfix a person in their room (2.21.0, see «HELD BY THE ADMINISTRATION»): body { pinned }. Only someone in a
+    // room can be fixed; taking them out of it by hand lifts it.
+    http.route('put', '/inscriptions/:id/pin', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'lodging', 'manage')) return;
+        try {
+            const id = positiveInt(req.params.id);
+            const pinned = !!(req.body && (req.body.pinned === true || req.body.pinned === 1 || req.body.pinned === '1'));
+            await withAssignmentLock(async () => {
+                const ins = id ? await db.get(`SELECT id, room_id FROM ${T.inscriptions} WHERE id = ?`, [id]) : null;
+                if (!ins) throw httpError(404, 'Inscripción no encontrada.');
+                if (pinned && ins.room_id == null) throw httpError(400, 'Solo se puede fijar a alguien que ya tiene habitación.');
+                // The room they are fixed in (see «HELD BY THE ADMINISTRATION»).
+                await db.run(`UPDATE ${T.inscriptions} SET room_locked = ? WHERE id = ?`, [pinned ? ins.room_id : null, id]);
+            });
+            res.json({ success: true, pinned });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // Give a location N beds (2.18.0): body { beds, hotel_id? }. Takes FREE beds only — nobody already
+    // placed moves: first pool rooms with no occupant, whole, in hotel and room order (each while it fits
+    // in what is left); then the rest from rooms with free pool beds — a room this location already shares
+    // first, then any other — as shares, which splits the last room. All-or-nothing: 409 with `available`
+    // when the free beds are fewer than asked. Stamped on the location.
+    http.route('post', '/locations/:id/beds', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'lodging', 'manage')) return;
+        try {
+            const lid = positiveInt(req.params.id);
+            const location = lid ? await db.get(`SELECT id, name, conference_id FROM ${T.locations} WHERE id = ?`, [lid]) : null;
+            if (!location) return res.status(404).json({ error: 'Localidad no encontrada.' });
+            const want = Number(req.body && req.body.beds);
+            if (!Number.isInteger(want) || want < 1 || want > 5000) return res.status(400).json({ error: 'Indica cuántas camas (un número entre 1 y 5000).' });
+            let hotelId = null;
+            if (req.body && req.body.hotel_id != null && req.body.hotel_id !== '') {
+                hotelId = positiveInt(req.body.hotel_id);
+                const hotel = hotelId ? await db.get(`SELECT id FROM ${T.hotels} WHERE id = ? AND conference_id = ?`, [hotelId, location.conference_id]) : null;
+                if (!hotel) return res.status(400).json({ error: 'Hotel no encontrado en esta conferencia.' });
+            }
+            const outcome = await withAssignmentLock(async () => {
+                // The location may have been deleted while this request waited for the lock.
+                if (!await db.get(`SELECT id FROM ${T.locations} WHERE id = ?`, [location.id])) throw httpError(404, 'Localidad no encontrada.');
+                const rows = await db.all(
+                    `SELECT r.id, r.room_number, r.capacity, r.location_id, h.name AS hotel_name FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id
+                     WHERE h.conference_id = ? AND r.location_id IS NULL AND COALESCE(r.blocked, 0) = 0${hotelId ? ' AND h.id = ?' : ''} ORDER BY h.name, h.id, r.id`,
+                    hotelId ? [location.conference_id, hotelId] : [location.conference_id]);
+                // Natural room order inside a hotel: «A2» before «A10».
+                const collator = new Intl.Collator('es', { numeric: true, sensitivity: 'base' });
+                rows.sort((a, b) => (a.hotel_name === b.hotel_name ? collator.compare(String(a.room_number), String(b.room_number)) || a.id - b.id : 0));
+                const shareMap = await sharesByRoom(rows.map(r => r.id));
+                const occ = new Map();
+                for (let i = 0; i < rows.length; i += 400) {
+                    const chunk = rows.slice(i, i + 400).map(r => r.id);
+                    if (!chunk.length) continue;
+                    for (const o of await db.all(`SELECT id, room_id, location_id FROM ${T.inscriptions} WHERE room_id IN (${chunk.map(() => '?').join(', ')})`, chunk)) {
+                        if (!occ.has(Number(o.room_id))) occ.set(Number(o.room_id), []);
+                        occ.get(Number(o.room_id)).push(o);
+                    }
+                }
+                const freePool = (r) => {
+                    const shares = shareMap.get(Number(r.id)) || [];
+                    const occupants = occ.get(Number(r.id)) || [];
+                    return Math.max(0, Math.min(roomCapacityOf(r) - occupants.length, poolBedsOf(r, shares) - poolUsedOf(shares, occupants)));
+                };
+                let left = want;
+                const wholeRooms = [];
+                const shareAdds = new Map();   // room id -> beds to add for this location
+                for (const r of rows) {
+                    if (!left) break;
+                    if ((shareMap.get(Number(r.id)) || []).length || (occ.get(Number(r.id)) || []).length) continue;
+                    const cap = roomCapacityOf(r);
+                    if (cap <= left) { wholeRooms.push(r); left -= cap; }
+                }
+                const takenWhole = new Set(wholeRooms.map(r => r.id));
+                const partial = rows.filter(r => !takenWhole.has(r.id) && freePool(r) > 0);
+                const mineFirst = (r) => ((shareMap.get(Number(r.id)) || []).some(x => x.location_id === Number(location.id)) ? 0 : 1);
+                partial.sort((a, b) => mineFirst(a) - mineFirst(b));
+                for (const r of partial) {
+                    if (!left) break;
+                    const take = Math.min(left, freePool(r));
+                    shareAdds.set(r.id, take);
+                    left -= take;
+                }
+                if (left > 0) return { available: want - left };
+                const writes = [];
+                for (const r of wholeRooms) writes.push([`UPDATE ${T.rooms} SET location_id = ? WHERE id = ?`, [location.id, r.id]]);
+                const shared = [];
+                for (const [roomId, beds] of shareAdds) {
+                    const r = rows.find(x => x.id === roomId);
+                    const prev = shareBedsOf(shareMap.get(Number(roomId)) || [], location.id);
+                    // The location's people the administration already put on pool beds there join its share:
+                    // they are its beds now, not free beds given (`beds` are the free ones taken on top).
+                    const own = (occ.get(Number(roomId)) || []).filter(o => o.location_id != null && Number(o.location_id) === Number(location.id)).length;
+                    const absorbed = Math.max(0, own - prev);
+                    const total = prev + absorbed + beds;
+                    // A whole free room taken through this pass (no other share, every bed) becomes a whole room.
+                    const others = (shareMap.get(Number(roomId)) || []).filter(x => x.location_id !== Number(location.id));
+                    if (!others.length && total === roomCapacityOf(r) && !(occ.get(Number(roomId)) || []).some(o => o.location_id == null || Number(o.location_id) !== Number(location.id))) {
+                        writes.push([`DELETE FROM ${T.roomBeds} WHERE room_id = ?`, [roomId]]);
+                        writes.push([`UPDATE ${T.rooms} SET location_id = ?, share_lock = NULL WHERE id = ?`, [location.id, roomId]]);
+                        wholeRooms.push(r);
+                        continue;
+                    }
+                    if (prev) writes.push([`UPDATE ${T.roomBeds} SET beds = ? WHERE room_id = ? AND location_id = ?`, [total, roomId, location.id]]);
+                    else writes.push([`INSERT INTO ${T.roomBeds} (room_id, location_id, beds) VALUES (?, ?, ?)`, [roomId, location.id, total]]);
+                    shared.push({ room_id: roomId, room_number: r.room_number, hotel_name: r.hotel_name, beds: total, added: beds });
+                }
+                await runBatched(writes);
+                return {
+                    whole: wholeRooms.map(r => ({ room_id: r.id, room_number: r.room_number, hotel_name: r.hotel_name, beds: roomCapacityOf(r) })),
+                    shared,
+                    adjusted: await stampAdminAdjustment(req, [location.id]),
+                };
+            });
+            if (outcome.available !== undefined) {
+                const where = hotelId ? ' en ese hotel' : '';
+                const free = outcome.available === 0 ? `No quedan camas libres${where}`
+                    : outcome.available === 1 ? `Solo queda 1 cama libre${where}` : `Solo quedan ${outcome.available} camas libres${where}`;
+                return res.status(409).json({ error: `${free}; pediste ${want}.`, code: 'not_enough_beds', available: outcome.available });
+            }
+            res.json({ success: true, beds: want, whole_rooms: outcome.whole, shared_rooms: outcome.shared, lodging_adjusted: outcome.adjusted });
+        } catch (e) { sendError(res, e); }
+    });
+
     http.route('delete', '/rooms/:id', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'lodging', 'manage')) return;
         try {
             const id = positiveInt(req.params.id);
             if (!id) return res.status(404).json({ error: 'Habitación no encontrada.' });
-            const room = await db.get(`SELECT id, location_id FROM ${T.rooms} WHERE id = ?`, [id]);
-            if (room && room.location_id != null) await assertLocationNotFrozen(room.location_id, 'eliminar sus habitaciones');
-            await db.run(`UPDATE ${T.inscriptions} SET room_id = NULL WHERE room_id = ?`, [id]);
-            await db.run(`DELETE FROM ${T.rooms} WHERE id = ?`, [id]);
-            res.json({ success: true });
+            // A room of a submitted / validated location goes too: an administration adjustment (2.17.0) of
+            // the location it is allotted to, and of every location whose attendees sleep in it — a POOL room
+            // holding an attendee of a reviewed arrangement (`placed_elsewhere`) changes that arrangement too.
+            const adjusted = await withAssignmentLock(async () => {
+                const room = await db.get(`SELECT id, location_id FROM ${T.rooms} WHERE id = ?`, [id]);
+                const sleepers = await db.all(`SELECT DISTINCT location_id FROM ${T.inscriptions} WHERE room_id = ? AND location_id IS NOT NULL`, [id]);
+                const sharers = (await sharesByRoom([id])).get(id) || [];
+                await db.run(`UPDATE ${T.inscriptions} SET room_id = NULL, room_locked = NULL WHERE room_id = ?`, [id]);
+                await db.run(`DELETE FROM ${T.roomBeds} WHERE room_id = ?`, [id]);
+                const r = await db.run(`DELETE FROM ${T.rooms} WHERE id = ?`, [id]);
+                if (!room || !r || !r.changes) return [];
+                return stampAdminAdjustment(req, [room.location_id, ...sharers.map(x => x.location_id), ...sleepers.map(s => s.location_id)]);
+            });
+            res.json({ success: true, lodging_adjusted: adjusted });
         } catch (e) { sendError(res, e); }
     });
 
@@ -3060,15 +3956,17 @@ exports.init = async function (wordjs) {
         if (!cid) return res.status(400).json({ error: 'Missing conference_id' });
         try {
             const manual = (await db.all(`SELECT * FROM ${T.ledger} WHERE conference_id = ? ORDER BY date DESC, id DESC`, [cid])).map(ledgerRow);
-            const fees = await db.all(
-                `SELECT p.id, p.amount, p.method, p.reference, p.date, p.reviewed_at, p.inscription_id, i.location, i.reg_code`
-                + ` FROM ${T.payments} p JOIN ${T.inscriptions} i ON p.inscription_id = i.id WHERE i.conference_id = ? AND p.status = 'validated'`, [cid]);
+            // Fee income (2.18.0, D-P15 / D-P14): ONE line per validated payment — «Pago de cuotas · 3 personas»
+            // with its `allocations` (or «Pago de inscripción» and `inscription_id` for one person) — dated by
+            // the payment date the recorder typed. Its amount is the sum of the live parts.
+            const feeLines = await fees.ledgerFeeLines(cid);
             const rides = await db.all(
-                `SELECT tp.id, tp.amount, tp.method, tp.reference, tp.date, t.inscription_id, b.name AS bus_name`
-                + ` FROM ${T.transportPayments} tp JOIN ${T.tickets} t ON tp.ticket_id = t.id JOIN ${T.buses} b ON t.bus_id = b.id WHERE b.conference_id = ?`, [cid]);
+                `SELECT tp.id, tp.amount, tp.method, tp.reference, tp.date, t.inscription_id, b.name AS bus_name, i.location_id`
+                + ` FROM ${T.transportPayments} tp JOIN ${T.tickets} t ON tp.ticket_id = t.id JOIN ${T.buses} b ON t.bus_id = b.id`
+                + ` LEFT JOIN ${T.inscriptions} i ON i.id = t.inscription_id WHERE b.conference_id = ?`, [cid]);
             const auto = [
-                ...fees.map(f => ({ id: `fee-${f.id}`, kind: 'income', date: f.date, category: 'Inscripciones', description: 'Pago de inscripción', amount: roundMoney(Number(f.amount) || 0), method: f.method || null, reference: f.reference || null, inscription_id: f.inscription_id, source: 'inscription', readonly: true })),
-                ...rides.map(r => ({ id: `transport-${r.id}`, kind: 'income', date: r.date, category: 'Transporte', description: `Pasaje — ${r.bus_name}`, amount: roundMoney(Number(r.amount) || 0), method: r.method || null, reference: r.reference || null, inscription_id: r.inscription_id, source: 'transport', readonly: true })),
+                ...feeLines,
+                ...rides.map(r => ({ id: `transport-${r.id}`, kind: 'income', date: r.date, category: 'Transporte', description: `Pasaje — ${r.bus_name}`, amount: roundMoney(Number(r.amount) || 0), method: r.method || null, reference: r.reference || null, inscription_id: r.inscription_id, location_id: r.location_id == null ? null : r.location_id, source: 'transport', readonly: true })),
             ];
             const entries = [...manual, ...auto].sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')) || String(b.id).localeCompare(String(a.id)));
             const cents = { income: 0, expense: 0 };
@@ -3285,6 +4183,9 @@ exports.init = async function (wordjs) {
     async function findByScanCode(raw) {
         const text = String(raw == null ? '' : raw);
         if (text.length > 256) return null;
+        // The badge's «Mi inscripción» link (2.23.0): the code is the `c=` of its fragment (or query).
+        const linked = /[#?&]c=([A-Za-z0-9]{10})(?=$|[&#\s])/.exec(text.trim());
+        if (linked) return (await db.get(`${PERSON_SQL} WHERE i.reg_code = ?`, [linked[1].toUpperCase()])) || null;
         const code = normalizeScanCode(text);
         if (code.length < REG_CODE_LEN || code.length > 64) return null;
         if (code.length === REG_CODE_LEN) return (await db.get(`${PERSON_SQL} WHERE i.reg_code = ?`, [code])) || null;
@@ -4097,6 +4998,8 @@ exports.init = async function (wordjs) {
     });
 
     // The latest deliveries of a service, newest first (`limit` ≤ 100, default 20) — the scan history.
+    // `service` says WHAT every row delivered (day, meal, label — as /meals/check and /meals/deliver name
+    // it) and each row carries its `service_id`: «Últimas entregas» named the person but never the meal.
     http.route('get', '/meals/services/:id/deliveries', MEAL_ROUTE, async (req, res) => {
         const perms = await allowAny(req, res, [['meals', 'view'], ['meals_delivery', 'manage']]);
         if (!perms) return;
@@ -4111,7 +5014,8 @@ exports.init = async function (wordjs) {
                 + ` FROM ${T.mealDeliveries} d JOIN ${T.inscriptions} i ON d.inscription_id = i.id${LOCATION_JOIN} WHERE d.service_id = ? ORDER BY d.delivered_at DESC, d.id DESC LIMIT ?`, [svc.id, limit]);
             res.json({
                 service_id: svc.id,
-                deliveries: rows.map(r => ({ delivery_id: r.delivery_id, inscription_id: r.inscription_id, name: personName({ ...r, id: r.inscription_id }, nameCols), location: liveLocation(r), location_id: r.location_id == null ? null : r.location_id, family_group: r.family_group || null, reg_code: showCodes ? (r.reg_code || null) : null, delivered_at: r.delivered_at, delivered_by: r.delivered_by || null, method: r.method || null, note: r.note || null })),
+                service: scanServiceOf(svc),
+                deliveries: rows.map(r => ({ delivery_id: r.delivery_id, service_id: svc.id, inscription_id: r.inscription_id, name: personName({ ...r, id: r.inscription_id }, nameCols), location: liveLocation(r), location_id: r.location_id == null ? null : r.location_id, family_group: r.family_group || null, reg_code: showCodes ? (r.reg_code || null) : null, delivered_at: r.delivered_at, delivered_by: r.delivered_by || null, method: r.method || null, note: r.note || null })),
             });
         } catch (e) { sendError(res, e); }
     });
@@ -4177,72 +5081,130 @@ exports.init = async function (wordjs) {
     // rules or the base fee changed since registration: those reach existing attendees only through
     // /reprice, for EVERYONE at once, never one attendee at a time through an unrelated edit.
     http.route('put', '/inscriptions/:id', { auth: true }, async (req, res) => {
-        if (!await allow(req, res, 'inscriptions', 'manage')) return;
+        const perms = await allow(req, res, 'inscriptions', 'manage');
+        if (!perms) return;
         const { conference_id, ...fieldValues } = req.body || {};
         try {
-            // Read, decide and write under the assignment lock, like every other write that moves a bed
-            // or freezes a location (manual and portal placement, the engine run, the lodging submit and
-            // review): the lodging checks below read the row and its room, and an edit decided outside
-            // the lock let a placement land between its read and its write — a cancelled attendee then
-            // kept the bed it had just been given — and a move out of a location could pass the frozen
-            // check while the location's arrangement was being submitted.
-            const existing = await withAssignmentLock(async () => {
-                const existing = await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ?`, [req.params.id]);
-                if (!existing) throw httpError(404, 'Inscripción no encontrada.');
-                const id = existing.id;
+            // Every decision that touches a bed or a frozen location is taken again on the row as it is under
+            // the assignment lock (see «touchesLodging» below): a placement landing between this read and the
+            // write, or a submit of the location's arrangement, is seen there. A notes-only edit skips the lock.
+            const existing = await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ?`, [req.params.id]);
+            if (!existing) return res.status(404).json({ error: 'Inscripción no encontrada.' });
+            const id = existing.id;
 
-                // Write each DEFINED field's canonical value to its column (schema follows the form) + the
-                // operational edits the admin is allowed to change directly (status, notes, location_id).
-                const confFields = await db.all(FIELD_COLUMNS_SQL, [existing.conference_id]);
-                const vals = canonicalFieldValues(confFields, fieldValues);
-                assertRequired(confFields, vals, true);
-                await assertUnique(confFields, vals, { conference_id: existing.conference_id }, id);
+            // Write each DEFINED field's canonical value to its column (schema follows the form) + the
+            // operational edits the admin is allowed to change directly (status, notes, location_id).
+            const confFields = await db.all(FIELD_COLUMNS_SQL, [existing.conference_id]);
+            const vals = canonicalFieldValues(confFields, fieldValues);
+            assertRequired(confFields, vals, true);
+            await assertUnique(confFields, vals, { conference_id: existing.conference_id }, id);
 
-                const sets = [], params = [];
-                for (const [k, v] of Object.entries(vals)) { sets.push(`${k} = ?`); params.push(v); }
-                let newStatus = existing.status;
-                if (fieldValues.status !== undefined) {
-                    // Closed vocabulary — the same rule the conference `status` already follows. 'pending' is the
-                    // insert default, 'active' is what the admin's toggle writes; anything else is a typo or a probe.
-                    const st = fieldValues.status == null ? null : String(fieldValues.status);
-                    if (st !== null && !INSCRIPTION_STATUSES.has(st)) throw httpError(400, 'Estado de inscripción inválido.');
-                    sets.push('status = ?'); params.push(st);
-                    newStatus = st;
+            const sets = [], params = [];
+            for (const [k, v] of Object.entries(vals)) { sets.push(`${k} = ?`); params.push(v); }
+            let newStatus = existing.status;
+            if (fieldValues.status !== undefined) {
+                // Closed vocabulary — the same rule the conference `status` already follows. 'pending' is the
+                // insert default, 'active' is what the admin's toggle writes; anything else is a typo or a probe.
+                const st = fieldValues.status == null ? null : String(fieldValues.status);
+                if (st !== null && !INSCRIPTION_STATUSES.has(st)) return res.status(400).json({ error: 'Estado de inscripción inválido.' });
+                sets.push('status = ?'); params.push(st);
+                newStatus = st;
+            }
+            if (fieldValues.notes !== undefined) { sets.push('notes = ?'); params.push(fieldValues.notes == null ? null : String(fieldValues.notes)); }
+            const loc = await resolveAdminLocation(existing.conference_id, { location_id: fieldValues.location_id });
+            if (loc === null) { sets.push('location_id = ?', 'location = ?'); params.push(null, null); }
+            else if (loc) { sets.push('location_id = ?', 'location = ?'); params.push(loc.id, loc.name); }
+            const currentLocationId = existing.location_id == null ? null : Number(existing.location_id);
+            const locationChanges = loc !== undefined && (loc ? Number(loc.id) : null) !== currentLocationId;
+            // Capacity: the edit takes a seat when the attendee ends up counted in a location where they were
+            // not counted before — moved in from elsewhere (or from no location), or un-cancelled in place.
+            // Staying put, cancelling, or leaving a location never needs a free seat.
+            const target = loc !== undefined ? loc
+                : (existing.location_id != null ? await db.get(`SELECT id, name, capacity FROM ${T.locations} WHERE id = ?`, [existing.location_id]) : null);
+            const willCount = !!target && newStatus !== 'cancelled';
+            const wasCountedThere = !!target && existing.location_id === target.id && existing.status !== 'cancelled';
+            if (willCount && !wasCountedThere) await assertLocationHasRoom(target);
+            // The write that takes the seat repeats that check under the location's seat lock (2.17.1, takeSeat):
+            // two edits (or an edit and a registration) racing for the last seat cannot both pass.
+            const takesSeat = willCount && !wasCountedThere;
+            // Lodging: a move out of an ALLOTTED room frees the bed (invariant 1) unless the room is allotted
+            // to the DESTINATION location (the placement stays valid), and a cancellation always frees the
+            // bed (invariant 2).
+            //
+            // Against a submitted / validated ("reviewed") arrangement (2.17.0) the rule is the BED RULE — the
+            // same here, in DELETE /inscriptions/:id and in every door that adds an attendee to a location
+            // (POST /inscriptions, POST /portal/inscriptions, the public form): a reviewed arrangement is who
+            // sleeps where, so only an attendee who HOLDS A BED changes it, in either direction.
+            //   - WITH a bed: moving them OUT of a reviewed location (the move frees the bed, or they take a
+            //     pool bed with them) or INTO one with the bed they keep (a pool bed, or one of its own rooms)
+            //     re-arranges it: Hospedaje › gestionar's to do as well (409 to a role that may only manage
+            //     inscriptions — it must not re-arrange one through this door) and stamped on it. Cancelling
+            //     or deleting them frees the bed (invariant 2) with inscriptions:manage alone, as before 2.17.0,
+            //     and is stamped on it.
+            //   - WITHOUT a bed (none, or one the move itself frees on the way): entering, leaving, cancelling
+            //     or deleting changes nobody's bed — inscriptions:manage alone and never stamped, going in AND
+            //     coming out (like a new registration into the location; the review's «sin habitación» count
+            //     shows them). One permission for both directions: a role that may register someone into a
+            //     reviewed location may also take them out while they hold no bed.
+            // An edit that changes neither the location nor the cancellation touches no bed: it skips the
+            // assignment lock (a conference-wide run holds it while it loads and flushes, and must not stall
+            // every notes edit). The others decide on the row as it is under the lock (re-read there), where
+            // every lodging status transition runs too: the statuses read are the ones the write lands on.
+            const touchesLodging = locationChanges || newStatus === 'cancelled';
+            const writeEdit = async (extraSets = [], extraParams = []) => {
+                const s = [...sets, ...extraSets];
+                if (!s.length) return false;
+                const write = () => db.run(`UPDATE ${T.inscriptions} SET ${s.join(', ')} WHERE id = ?`, [...params, ...extraParams, id]);
+                if (takesSeat) await takeSeat(target, write); else await write();
+                return true;
+            };
+            const adjusted = !touchesLodging ? (await writeEdit(), []) : await withAssignmentLock(async () => {
+                const cur = await db.get(`SELECT location_id, room_id FROM ${T.inscriptions} WHERE id = ?`, [id]);
+                if (!cur) throw httpError(404, 'Inscripción no encontrada.');
+                const curLocationId = cur.location_id == null ? null : Number(cur.location_id);
+                // The move (and the seat check above) were decided against the location read before the lock:
+                // if another edit moved the attendee meanwhile, refuse rather than act on a stale origin.
+                if (locationChanges && curLocationId !== currentLocationId) {
+                    throw httpError(409, 'La localidad de este participante cambió mientras guardabas; recarga y vuelve a intentarlo.');
                 }
-                if (fieldValues.notes !== undefined) { sets.push('notes = ?'); params.push(fieldValues.notes == null ? null : String(fieldValues.notes)); }
-                const loc = await resolveAdminLocation(existing.conference_id, { location_id: fieldValues.location_id });
-                if (loc === null) { sets.push('location_id = ?', 'location = ?'); params.push(null, null); }
-                else if (loc) { sets.push('location_id = ?', 'location = ?'); params.push(loc.id, loc.name); }
-                // Lodging: moving an attendee out of a frozen location is refused (the arrangement is under
-                // review); a move out of an ALLOTTED room frees the bed (invariant 1) unless the room is
-                // allotted to the DESTINATION location (the placement stays valid), and a cancellation
-                // always frees the bed (invariant 2) — even in a frozen location.
-                const currentLocationId = existing.location_id == null ? null : Number(existing.location_id);
-                const locationChanges = loc !== undefined && (loc ? Number(loc.id) : null) !== currentLocationId;
+                const hasBed = cur.room_id != null;
                 let freeBed = false;
-                if (locationChanges) {
-                    if (currentLocationId != null) await assertLocationNotFrozen(currentLocationId, 'mover a sus participantes');
-                    if (existing.room_id != null) {
-                        const curRoom = await db.get(`SELECT location_id FROM ${T.rooms} WHERE id = ?`, [existing.room_id]);
+                if (hasBed) {
+                    if (newStatus === 'cancelled') freeBed = true;
+                    else if (locationChanges) {
+                        const curRoom = await db.get(`SELECT id, location_id, capacity FROM ${T.rooms} WHERE id = ?`, [cur.room_id]);
                         if (curRoom && curRoom.location_id != null && Number(curRoom.location_id) !== (loc ? Number(loc.id) : NaN)) freeBed = true;
+                        else if (curRoom && curRoom.location_id == null) {
+                            // A shared room (2.18.0): the bed stays only if the new location has a free bed of
+                            // its own there, or a pool bed is free.
+                            const shares = (await sharesByRoom([curRoom.id])).get(Number(curRoom.id)) || [];
+                            if (shares.length) {
+                                const occupants = await db.all(`SELECT id, location_id FROM ${T.inscriptions} WHERE room_id = ?`, [curRoom.id]);
+                                if (!bedFreeFor(curRoom, shares, occupants, { id, location_id: loc ? loc.id : null })) freeBed = true;
+                            }
+                        }
                     }
                 }
-                if (newStatus === 'cancelled' && existing.room_id != null) freeBed = true;
-                if (freeBed) { sets.push('room_id = ?'); params.push(null); }
-                // Capacity: the edit takes a seat when the attendee ends up counted in a location where they were
-                // not counted before — moved in from elsewhere (or from no location), or un-cancelled in place.
-                // Staying put, cancelling, or leaving a location never needs a free seat.
-                const target = loc !== undefined ? loc
-                    : (existing.location_id != null ? await db.get(`SELECT id, name, capacity FROM ${T.locations} WHERE id = ?`, [existing.location_id]) : null);
-                const willCount = !!target && newStatus !== 'cancelled';
-                const wasCountedThere = !!target && existing.location_id === target.id && existing.status !== 'cancelled';
-                params.push(id);
-                const write = () => (sets.length ? db.run(`UPDATE ${T.inscriptions} SET ${sets.join(', ')} WHERE id = ?`, params) : null);
-                if (willCount && !wasCountedThere) await takeSeat(target, write);
-                else await write();
-                return existing;
+                const keepsBed = hasBed && !freeBed;
+                // The bed rule (above): an attendee without a bed is part of no arrangement — no source, no into.
+                const source = hasBed && curLocationId != null && (locationChanges || freeBed) ? await frozenLocationRow(curLocationId) : null;
+                const into = locationChanges && keepsBed && loc ? await frozenLocationRow(loc.id) : null;
+                if (!hasLevel(perms, 'lodging', 'manage')) {
+                    // A bed the administration holds (see «HELD BY THE ADMINISTRATION»): freeing it is lodging's.
+                    if (freeBed) {
+                        const held = await db.get(`SELECT i.room_id, i.room_locked, r.blocked FROM ${T.inscriptions} i LEFT JOIN ${T.rooms} r ON r.id = i.room_id WHERE i.id = ?`, [id]);
+                        if (held && (isPinned(held) || isBlocked(held))) throw httpError(409, isPinned(held) ? HELD_PERSON_MSG : HELD_ROOM_MSG);
+                    }
+                    if (source && locationChanges) {
+                        throw httpError(409, `El hospedaje de la localidad «${source.name}» ${frozenPhrase(source)}: sacar de ella a un participante que tiene cama lo cambia, y eso lo hace quien gestiona el Hospedaje (o se podrá ${releasePhrase(source)}).`);
+                    }
+                    if (into) {
+                        throw httpError(409, `El hospedaje de la localidad «${into.name}» ${frozenPhrase(into)}: este participante entraría en él con la cama que ya tiene, y eso lo hace quien gestiona el Hospedaje (sin habitación sí podría entrar; con ella, se podrá ${releasePhrase(into)}).`);
+                    }
+                }
+                const wrote = freeBed ? await writeEdit(['room_id = ?', 'room_locked = ?'], [null, null]) : await writeEdit();
+                return wrote ? stampAdminAdjustment(req, [source && source.id, into && into.id]) : [];
             });
-            const id = existing.id;
             // Re-price ONLY if the edit changed the outcome of the CURRENT rules (before vs after the
             // update, same rules, same base fee) — so a rule added since registration cannot leak onto
             // one attendee through a notes-only edit (see the route comment). Then keep payment_status
@@ -4256,47 +5218,96 @@ exports.init = async function (wordjs) {
                 await db.run(`UPDATE ${T.inscriptions} SET total_due = ? WHERE id = ?`, [feeAfter, id]);
             }
             await recomputePayment(id);
-            res.json({ success: true });
+            res.json({ success: true, lodging_adjusted: adjusted });
         } catch (e) { sendError(res, e); }
     });
     http.route('delete', '/inscriptions/:id', { auth: true }, async (req, res) => {
         const perms = await allow(req, res, 'inscriptions', 'manage');
         if (!perms) return;
         try {
-            // Deleting the attendee deletes its money too (fee payments cascade, transport payments below).
-            // That is a payments / transport decision: a role that may only manage inscriptions must not
-            // erase validated income through this door (DELETE /payments/:id and DELETE /buses/:id refuse it).
-            // The transport side runs under the assignment lock, the lock transport payments are recorded
-            // under: a payment landing between the check and the deletes (or between the two deletes) was
-            // either erased by a role that may not erase it, or answered as recorded and then erased
-            // with its ticket.
-            const refused = await withAssignmentLock(async () => {
+            // A fee migration that failed at boot gets one more attempt first: in degraded mode a person with
+            // payments cannot be deleted (fees.inscriptionDeletePlan answers 503).
+            if (!fees.ready) await fees.ensureReady();
+            let adjusted = [];
+            // Under the payments lock: no payment of THIS node can take this person in between the checks and the
+            // delete (another node's: see the «tombstone» below).
+            // Inside it, the assignment lock (the lock transport payments are recorded under, and where the lodging
+            // status transitions run): a transport payment landing between the check below and the deletes was
+            // either erased by a role that may not erase it, or answered as recorded and then erased with its ticket.
+            // Lock order: payments, then assignment, then meals (nothing takes them the other way).
+            await fees.withPaymentsLock(() => withAssignmentLock(async () => {
+                // Deleting the attendee deletes its money too (fee payments, transport payments below). That is a
+                // payments / transport decision: a role that may only manage inscriptions must not erase validated
+                // income through this door (DELETE /fee-payments/:id and DELETE /buses/:id refuse it). Checked
+                // FIRST: such a role gets this generic answer, never the payment numbers, statuses and sizes of
+                // the shared-payment answer below — payment data belongs to Pagos (D-P20).
                 const fee = await db.get(`SELECT COUNT(*) AS n FROM ${T.payments} WHERE inscription_id = ?`, [req.params.id]);
                 const rides = await db.get(`SELECT COUNT(*) AS n FROM ${T.transportPayments} WHERE ticket_id IN (SELECT id FROM ${T.tickets} WHERE inscription_id = ? )`, [req.params.id]);
-                if ((Number(fee && fee.n) > 0 && !hasLevel(perms, 'payments', 'manage')) || (Number(rides && rides.n) > 0 && !hasLevel(perms, 'transport', 'manage'))) return true;
+                if ((Number(fee && fee.n) > 0 && !hasLevel(perms, 'payments', 'manage')) || (Number(rides && rides.n) > 0 && !hasLevel(perms, 'transport', 'manage'))) {
+                    throw httpError(409, 'La inscripción tiene pagos registrados: pide a quien gestiona los pagos que los anule, o cancela la inscripción en lugar de eliminarla.');
+                }
+                // Fee payments (2.18.0): a person who is a part of a payment SHARED with others cannot be
+                // deleted (the receipt's split would no longer add up) — 409 `shared`: correct the split or
+                // cancel the inscription. Their 1-person payments go with them (header first).
+                let plan = await fees.inscriptionDeletePlan(req.params.id);
+                // Several nodes (2.18.0 review R4-L2): another node may record a payment with this person between
+                // that check and the delete (its lock is its own), and the delete would take that payment's part
+                // — a receipt left with a part missing. So the person is first marked cancelled (a «tombstone»:
+                // a cancelled inscription owes nothing, so any payment another node adds for them from now on
+                // fails its own re-check after writing and backs off — fees.overAfterWrite), and THEN checked
+                // again: a payment that landed before the tombstone is seen here (409 shared, the person stays as
+                // they were), one after it never stands.
+                // The person's 1-person payments go FIRST, each only at the split it has (R5-L1 / R6-L2,
+                // fees.deleteForInscription): every one is read again before anything is deleted; one another node
+                // moved to someone else meanwhile is left alone (it is no longer theirs), one that became shared
+                // answers 409 stale — before anything is deleted, or, in the instant between two deletes, naming
+                // the payments already deleted (validated ones go last). A refusal puts the person back as they were.
+                const was = await db.get(`SELECT status FROM ${T.inscriptions} WHERE id = ?`, [req.params.id]);
+                const marked = !!(was && was.status !== 'cancelled');
+                if (marked) await db.run(`UPDATE ${T.inscriptions} SET status = 'cancelled' WHERE id = ?`, [req.params.id]);
+                try {
+                    if (marked) plan = await fees.inscriptionDeletePlan(req.params.id);
+                    await fees.deleteForInscription(req.params.id, plan.transfers);
+                } catch (e) {
+                    if (marked) await db.run(`UPDATE ${T.inscriptions} SET status = ? WHERE id = ? AND status = 'cancelled'`, [was.status, req.params.id]);
+                    throw e;
+                }
                 await db.run(`DELETE FROM ${T.transportPayments} WHERE ticket_id IN (SELECT id FROM ${T.tickets} WHERE inscription_id = ? )`, [req.params.id]);
                 await db.run(`DELETE FROM ${T.tickets} WHERE inscription_id = ?`, [req.params.id]);
-                return false;
-            });
-            if (refused) {
-                return res.status(409).json({ error: 'La inscripción tiene pagos registrados: pide a quien gestiona los pagos que los anule, o cancela la inscripción en lugar de eliminarla.' });
-            }
-            // Meals (2.14.0): the attendee first, then its meal rows (the FKs cascade; the explicit deletes
-            // keep it so with foreign keys off). Under the meals lock an override write cannot slip in for
-            // a deleted attendee, and a scan racing this re-checks the attendee after its INSERT.
-            await withMealsLock(async () => {
-                await db.run(`DELETE FROM ${T.inscriptions} WHERE id = ?`, [req.params.id]);
-                await db.run(`DELETE FROM ${T.mealDeliveries} WHERE inscription_id = ?`, [req.params.id]);
-                await db.run(`DELETE FROM ${T.mealOverrides} WHERE inscription_id = ?`, [req.params.id]);
-            });
-            res.json({ success: true });
-        } catch (e) { sendError(res, e); }
+                // Meals (2.14.0): the attendee first, then its meal rows (the FKs cascade; the explicit deletes
+                // keep it so with foreign keys off). Under the meals lock an override write cannot slip in for a
+                // deleted attendee, and a scan racing this re-checks the attendee after its INSERT. `onlyIfRoomless`
+                // makes the attendee's DELETE conditional on holding no bed (and then nothing else runs when no
+                // row went). Answers whether the attendee's row went.
+                const deleteAttendee = (onlyIfRoomless) => withMealsLock(async () => {
+                    const r = await db.run(`DELETE FROM ${T.inscriptions} WHERE id = ?${onlyIfRoomless ? ' AND room_id IS NULL' : ''}`, [req.params.id]);
+                    const gone = !!(r && r.changes);
+                    if (onlyIfRoomless && !gone) return false;
+                    await db.run(`DELETE FROM ${T.mealDeliveries} WHERE inscription_id = ?`, [req.params.id]);
+                    await db.run(`DELETE FROM ${T.mealOverrides} WHERE inscription_id = ?`, [req.params.id]);
+                    return gone;
+                });
+                // Lodging (2.17.0) — the bed rule of PUT /inscriptions/:id: deleting someone who holds a bed
+                // changes the arrangement of THEIR location when it is submitted / validated — an administration
+                // adjustment, stamped here under the assignment lock (where the status transitions run), with
+                // inscriptions:manage alone, like a cancellation (invariant 2 frees the bed). Someone WITHOUT a bed
+                // changes nobody's arrangement: never stamped, whatever their location's state — the same as moving
+                // them in or out of it. The fee «tombstone» above only changes the status: a bed, if any, is still
+                // held here, so the stamp sees it.
+                const victim = await db.get(`SELECT location_id, room_id FROM ${T.inscriptions} WHERE id = ?`, [req.params.id]);
+                const gone = await deleteAttendee(false);
+                adjusted = gone && victim && victim.room_id != null && victim.location_id != null ? await stampAdminAdjustment(req, [victim.location_id]) : [];
+            }));
+            res.json({ success: true, lodging_adjusted: adjusted });
+        } catch (e) { fees.sendFeeError(res, e); }
     });
 
     // Manual room assignment — validates capacity + same-conference scope (auto-assign already does;
     // the manual path used to bare-UPDATE and could overfill or cross-place). Pass room_id null to free.
-    // Lodging (2.5.0): the attendee's location must not be frozen; a cancelled attendee is never placed;
-    // an allotted room only takes its own location's attendees (roomAllows).
+    // Lodging (2.5.0): a cancelled attendee is never placed; an allotted room only takes its own
+    // location's attendees (roomAllows). An attendee of a submitted / validated location is placed,
+    // moved or freed all the same: an administration adjustment, stamped on that location (2.17.0 — it
+    // used to be a 409 until the location was reopened).
     http.route('post', '/inscriptions/:id/assign', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'lodging', 'manage')) return;
         const { room_id: rawRoomId } = req.body || {};
@@ -4310,98 +5321,225 @@ exports.init = async function (wordjs) {
             // assign racing an engine run's load→flush window) would otherwise overbook the room. The
             // attendee is read INSIDE the lock, where an edit (PUT /inscriptions) cannot cancel or move
             // them between the read and the write: read before the lock, a cancellation landing in
-            // between left the cancelled attendee holding the bed.
-            await withAssignmentLock(async () => {
-                const ins = await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ?`, [id]);
-                if (!ins) throw httpError(404, 'Inscripción no encontrada.');
-                if (ins.location_id != null) await assertLocationNotFrozen(ins.location_id, 'cambiar su hospedaje');
+            // between left the cancelled attendee holding the bed. The UPDATE is conditional on the
+            // capacity as well, so a lost race answers "llena" instead of writing.
+            const adjusted = await withAssignmentLock(async () => {
+                // What the stamp and the "already here / nothing to free" no-ops look at is what the write lands on.
+                const cur = await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ?`, [id]);
+                if (!cur) throw httpError(404, 'Inscripción no encontrada.');
+                const person = cur;
                 if (unassign) {
-                    await db.run(`UPDATE ${T.inscriptions} SET room_id = NULL WHERE id = ?`, [id]);
-                    return;
+                    if (cur.room_id == null) return [];
+                    // Out of the room, a fixed person is fixed nowhere (see «HELD BY THE ADMINISTRATION»).
+                    await db.run(`UPDATE ${T.inscriptions} SET room_id = NULL, room_locked = NULL WHERE id = ?`, [id]);
+                    return stampAdminAdjustment(req, [cur.location_id]);
                 }
-                if (ins.status === 'cancelled') throw httpError(400, 'Un participante cancelado no ocupa habitación.');
+                if (person.status === 'cancelled') throw httpError(400, 'Un participante cancelado no ocupa habitación.');
                 const room = await db.get(
                     `SELECT r.*, h.conference_id, l.name AS location_name,
                             (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.room_id = r.id) as occupied
                      FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id LEFT JOIN ${T.locations} l ON r.location_id = l.id WHERE r.id = ?`, [roomId]);
                 if (!room) throw httpError(404, 'Habitación no encontrada.');
-                if (Number(room.conference_id) !== Number(ins.conference_id)) throw httpError(400, 'Esa habitación pertenece a otra conferencia.');
-                if (!roomAllows(room, ins)) throw httpError(400, `Esa habitación está asignada a la localidad «${room.location_name || room.location_id}».`);
-                const alreadyHere = Number(ins.room_id) === Number(roomId);
-                if (alreadyHere) return;
+                if (Number(room.conference_id) !== Number(person.conference_id)) throw httpError(400, 'Esa habitación pertenece a otra conferencia.');
+                if (!roomAllows(room, person)) throw httpError(400, `Esa habitación está asignada a la localidad «${room.location_name || room.location_id}».`);
+                const alreadyHere = Number(cur.room_id) === Number(roomId);
+                if (alreadyHere) return [];
                 if (room.occupied >= room.capacity) throw httpError(400, 'La habitación está llena.');
+                // A shared room (2.18.0): the person takes one of their location's beds there, or a pool bed.
+                const shares = (await sharesByRoom([room.id])).get(Number(room.id)) || [];
+                if (shares.length) {
+                    const occupants = await db.all(`SELECT id, location_id FROM ${T.inscriptions} WHERE room_id = ?`, [room.id]);
+                    if (!bedFreeFor(room, shares, occupants, person)) {
+                        throw httpError(400, shareBedsOf(shares, person.location_id)
+                            ? 'Las camas de su localidad en esta habitación ya están ocupadas y no quedan camas libres.'
+                            : 'Esta habitación está repartida entre localidades y no le quedan camas libres.');
+                    }
+                }
+                await assertShareLock(room, person, person.conference_id, { admin: true });
                 // Plain UPDATE on purpose: the capacity check above runs under the assignment lock, and an
                 // UPDATE whose subquery reads the table being updated is refused by MySQL (error 1093).
-                await db.run(`UPDATE ${T.inscriptions} SET room_id = ? WHERE id = ?`, [roomId, id]);
+                await db.run(`UPDATE ${T.inscriptions} SET room_id = ?, room_locked = NULL WHERE id = ?`, [roomId, id]);
+                return stampAdminAdjustment(req, [cur.location_id]);
             });
-            res.json({ success: true });
+            res.json({ success: true, lodging_adjusted: adjusted });
         } catch (e) { sendError(res, e); }
     });
 
-    // === PAYMENTS: add / void / validate / reject ===
-    // State machine: pending → validated | rejected; validated ↔ rejected; only pending/rejected may be
-    // deleted (a validated payment is part of the ledger — reject it first). validate/reject stamp
-    // reviewed_at/reviewed_by (the host forwards req.user {id, role, userLogin, …} to isolated routes): the
-    // acting user's login — an administrator's or a team member's (actorOf) — else the user id.
+    // === PAYMENTS ===
+    // «Pagos de cuotas» (2.18.0): /fee-payments* (admin) and /portal/fee-payments* (coordinators) — the
+    // routes, the model and the state machine are in server/fee-payments.js:
+    //   pending → validated | returned | rejected; returned → pending (corrected and resent) | validated |
+    //   rejected; validated → rejected (void, with a reason); rejected → validated. A validated payment is
+    //   never edited or deleted. Reviews stamp reviewed_at / reviewed_by with the acting user's login (actorOf).
     const reviewerOf = (req) => actorOf(req);
+    fees.install({
+        http, allow, positiveInt, actorOf, resolvePortalLocation, personName, nameFallbackColumns, canSeeRegCodes,
+        PAYMENT_METHODS, MAX_PROOF_CHARS, assertPaymentMethod, enabledPaymentMethods, assertProof,
+    });
+    // «Mi inscripción» (2.23.0). The badge's QR carries `<site>/portal/conference/yo#c=<code>` while the
+    // conference's participant page is on and the site's address is readable (grant settings:read); otherwise the
+    // bare code, as in 2.22.0. The meal scanner reads both (findByScanCode). The address is the site's ONE link
+    // base (wordjs.site.url), cached for a minute.
+    let siteBase = { v: null, at: 0 };
+    async function siteLinkBase() {
+        if (Date.now() - siteBase.at < 60 * 1000) return siteBase.v;
+        let v = null;
+        try {
+            const u = String((await wordjs.site.url()) || '').trim().replace(/\/+$/, '');
+            v = /^https?:\/\/[^\s#?]+$/i.test(u) ? u : null;
+        } catch (e) { v = null; }
+        siteBase = { v, at: Date.now() };
+        return v;
+    }
+    const SELF_PATH = '/portal/conference/yo#c=';
+    async function selfLinkPrefix(cid, cfg) {
+        const c = cfg || await badges.configOf(cid);
+        if (!c.policy.self_page.enabled) return null;
+        const base = await siteLinkBase();
+        return base ? `${base}${SELF_PATH}` : null;
+    }
+    async function qrText(code, cid, cfg) {
+        const prefix = code ? await selfLinkPrefix(cid, cfg) : null;
+        return prefix ? `${prefix}${code}` : code;
+    }
+    // A stored delivery time as ISO UTC: SQLite / MySQL keep 'YYYY-MM-DD HH:MM:SS' (UTC, utcStamp), Postgres
+    // hands back a Date.
+    const isoUtc = (v) => {
+        if (v == null || v === '') return null;
+        if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v.toISOString();
+        const s = String(v).trim().replace(' ', 'T');
+        return /Z$|[+-]\d{2}:?\d{2}$/.test(s) ? s : `${s}Z`;
+    };
+    // One person's meals for «Mi inscripción»: those delivered (and when) and those still to come — the
+    // services they are entitled to (entitlementFrom, THE rule) and have not received yet. Day, then meal order.
+    async function mealsOfPerson(ins) {
+        const services = await db.all(`SELECT id, service_date, meal, label, start_time, end_time FROM ${T.mealServices} WHERE conference_id = ?`, [ins.conference_id]);
+        if (!services.length) return { delivered: [], pending: [] };
+        const delivered = new Map((await db.all(`SELECT service_id, delivered_at FROM ${T.mealDeliveries} WHERE inscription_id = ?`, [ins.id])).map(d => [Number(d.service_id), d.delivered_at]));
+        const modes = new Map((await db.all(`SELECT service_id, mode FROM ${T.mealOverrides} WHERE inscription_id = ?`, [ins.id])).map(o => [Number(o.service_id), o.mode]));
+        const planned = new Set(ins.location_id == null ? [] : (await db.all(`SELECT service_id FROM ${T.mealPlan} WHERE location_id = ?`, [ins.location_id])).map(r => Number(r.service_id)));
+        const order = (s) => `${s.service_date} ${MEALS.indexOf(s.meal) < 0 ? 9 : MEALS.indexOf(s.meal)}`;
+        const out = { delivered: [], pending: [] };
+        for (const s of services.slice().sort((a, b) => (order(a) < order(b) ? -1 : order(a) > order(b) ? 1 : 0))) {
+            const base = { date: s.service_date, meal: s.meal, label: s.label || null, start_time: s.start_time || null, end_time: s.end_time || null };
+            const id = Number(s.id);
+            if (delivered.has(id)) out.delivered.push({ ...base, delivered_at: isoUtc(delivered.get(id)) });
+            else if (entitlementFrom(ins.status, modes.get(id) || null, planned.has(id)).entitled) out.pending.push(base);
+        }
+        return out;
+    }
+    badges.install({
+        http, allow, positiveInt, actorOf, resolvePortalLocation, personWithName, isFieldColumn, hasLevel,
+        randomToken: (n) => wordjs.crypto.randomToken(n), qrText,
+    });
+    selfPage.install({
+        http, isFieldColumn, personWithName, badges, mealsOf: mealsOfPerson,
+        randomToken: (n) => wordjs.crypto.randomToken(n),
+    });
+    // GET /qr-link?conference_id → { prefix } — what the admin's code viewer and the Excel QR column put before
+    // a code (null = the bare code). inscriptions:view, like the codes themselves.
+    http.route('get', '/qr-link', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'inscriptions', 'view')) return;
+        try {
+            const cid = positiveInt(req.query.conference_id);
+            if (!cid) return res.status(400).json({ error: 'Missing conference_id' });
+            await badges.ensureReady();
+            res.json({ prefix: await selfLinkPrefix(cid) });
+        } catch (e) { sendError(res, e); }
+    });
+    // The portal's feature flags (/portal/login, /portal/me): fee payments' and badges', merged — two spreads
+    // that both set `features` would overwrite each other.
+    const portalFeaturesOf = async (location) => {
+        const f = await fees.portalFeatures(location), b = await badges.portalFeatures(location);
+        const out = { ...f, ...b };
+        // No flag at all when neither has one: a portal without «Pagos de cuotas» keeps its older flow.
+        if (f.features || b.features) out.features = { ...(f.features || {}), ...(b.features || {}) };
+        else delete out.features;
+        return out;
+    };
+
+    // The pre-2.18 payment routes stay, as thin wrappers over the payment model, for any client still on
+    // them. They name ONE person (or one part): a payment shared with others answers 409 `shared`. The part
+    // routes check that (and the status) BEFORE the payments lock, so they hand the operation the
+    // { status, alloc_gen } they inspected as `expected`: a payment re-split meanwhile (now shared) or
+    // changed answers 409 `stale` instead of being validated / rejected / deleted unseen.
+    const feesReady = async (res) => {
+        if (await fees.ensureReady()) return true;
+        res.status(503).json({ error: fees.MSG.unavailable, code: 'unavailable' });
+        return false;
+    };
+    const inspected = (of) => ({ status: of.header.status, alloc_gen: Number(of.header.alloc_gen) });
+    // POST /inscriptions/:id/payments { amount, method, reference?, proof?, paid_on?, note? } → a 1-person
+    // payment, left 'pending' as before (the receipt is optional for cash, D-P12; never over what is owed).
     http.route('post', '/inscriptions/:id/payments', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'payments', 'manage')) return;
-        const { amount, method, reference, proof } = req.body;
+        if (!await feesReady(res)) return;
         try {
-            if (!Number.isFinite(Number(amount)) || Number(amount) > MAX_MONEY) return res.status(400).json({ error: 'El monto debe ser mayor que cero.' });
-            const amt = roundMoney(amount);
-            if (amt <= 0) return res.status(400).json({ error: 'El monto debe ser mayor que cero.' });
-            const p = assertProof(proof);
-            const m = assertPaymentMethod(method);
-            const ins = await db.get(`SELECT id FROM ${T.inscriptions} WHERE id = ?`, [req.params.id]);
+            const iid = positiveInt(req.params.id);
+            const ins = iid ? await db.get(`SELECT id, conference_id FROM ${T.inscriptions} WHERE id = ?`, [iid]) : null;
             if (!ins) return res.status(404).json({ error: 'Inscripción no encontrada.' });
-            // New payments start 'pending' — an admin must validate before they count toward the balance.
-            await db.run(`INSERT INTO ${T.payments} (inscription_id, amount, method, reference, proof, status) VALUES (?, ?, ?, ?, ?, 'pending')`,
-                [ins.id, amt, m, shortText(reference, 100), p]);
-            await recomputePayment(ins.id); // validated-only recompute → pending doesn't count yet
-            res.json({ success: true });
-        } catch (e) { sendError(res, e); }
+            const body = req.body || {};
+            const input = fees.parseBody({ ...body, allocations: [{ inscription_id: ins.id, amount: body.amount }], leave_pending: body.leave_pending === undefined ? true : body.leave_pending });
+            const r = await fees.createTransfer({ via: 'admin', conferenceId: ins.conference_id, actor: actorOf(req) }, input);
+            res.json({ success: true, id: r.id, transfer_id: r.id });
+        } catch (e) { fees.sendFeeError(res, e); }
     });
     http.route('delete', '/payments/:id', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'payments', 'manage')) return;
+        if (!await feesReady(res)) return;
         try {
-            const pay = await db.get(`SELECT inscription_id, status FROM ${T.payments} WHERE id = ?`, [req.params.id]);
-            if (!pay) return res.status(404).json({ error: 'Pago no encontrado.' });
-            if (pay.status === 'validated') return res.status(409).json({ error: 'Un pago validado no se puede eliminar; recházalo primero.' });
-            await db.run(`DELETE FROM ${T.payments} WHERE id = ?`, [req.params.id]);
-            await recomputePayment(pay.inscription_id);
+            const of = await fees.paymentOfPart(positiveInt(req.params.id));
+            if (!of) return res.status(404).json({ error: 'Pago no encontrado.' });
+            if (of.people > 1) throw fees.sharedError(of.people);
+            if (of.header.status === 'validated') return res.status(409).json({ error: 'Un pago validado no se puede eliminar; recházalo primero.', code: 'validated_delete' });
+            await fees.deleteTransfer({ via: 'admin', actor: actorOf(req) }, of.header.id, inspected(of));
             res.json({ success: true });
-        } catch (e) { sendError(res, e); }
+        } catch (e) { fees.sendFeeError(res, e); }
     });
-    // Validate / reject a payment (admin gate). Only a VALIDATED payment counts toward amount_paid.
+    // Validate / reject a 1-person payment by its part id (admin gate). Only VALIDATED money counts toward
+    // amount_paid. The reject reason is optional here (the new routes require it).
     http.route('post', '/payments/:id/validate', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'payments', 'manage')) return;
+        if (!await feesReady(res)) return;
         try {
-            const pay = await db.get(`SELECT inscription_id, status FROM ${T.payments} WHERE id = ?`, [req.params.id]);
-            if (!pay) return res.status(404).json({ error: 'Pago no encontrado.' });
-            if (pay.status === 'validated') return res.status(409).json({ error: 'El pago ya está validado.' });
-            await db.run(`UPDATE ${T.payments} SET status = 'validated', reviewed_at = CURRENT_TIMESTAMP, reviewed_by = ? WHERE id = ?`, [reviewerOf(req), req.params.id]);
-            await recomputePayment(pay.inscription_id);
-            res.json({ success: true, status: 'validated' });
-        } catch (e) { sendError(res, e); }
+            const of = await fees.paymentOfPart(positiveInt(req.params.id));
+            if (!of) return res.status(404).json({ error: 'Pago no encontrado.' });
+            if (of.people > 1) throw fees.sharedError(of.people);
+            if (of.header.status === 'validated') return res.status(409).json({ error: 'El pago ya está validado.', code: 'invalid_transition' });
+            const allowRef = [true, 1, '1'].includes((req.body || {}).allow_duplicate_reference);
+            await fees.transition({ via: 'admin', actor: actorOf(req) }, of.header.id, 'validate', { legacy: true, expected: inspected(of), allowDuplicateReference: allowRef });
+            res.json({ success: true, status: 'validated', transfer_id: of.header.id });
+        } catch (e) { fees.sendFeeError(res, e); }
     });
     http.route('post', '/payments/:id/reject', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'payments', 'manage')) return;
+        if (!await feesReady(res)) return;
         try {
-            const pay = await db.get(`SELECT inscription_id, status FROM ${T.payments} WHERE id = ?`, [req.params.id]);
-            if (!pay) return res.status(404).json({ error: 'Pago no encontrado.' });
-            if (pay.status === 'rejected') return res.status(409).json({ error: 'El pago ya está rechazado.' });
-            await db.run(`UPDATE ${T.payments} SET status = 'rejected', reviewed_at = CURRENT_TIMESTAMP, reviewed_by = ? WHERE id = ?`, [reviewerOf(req), req.params.id]);
-            await recomputePayment(pay.inscription_id);
-            res.json({ success: true, status: 'rejected' });
-        } catch (e) { sendError(res, e); }
+            const of = await fees.paymentOfPart(positiveInt(req.params.id));
+            if (!of) return res.status(404).json({ error: 'Pago no encontrado.' });
+            if (of.people > 1) throw fees.sharedError(of.people);
+            if (of.header.status === 'rejected') return res.status(409).json({ error: 'El pago ya está rechazado.', code: 'invalid_transition' });
+            await fees.transition({ via: 'admin', actor: actorOf(req) }, of.header.id, 'reject', { legacy: true, note: (req.body || {}).note, expected: inspected(of) });
+            res.json({ success: true, status: 'rejected', transfer_id: of.header.id });
+        } catch (e) { fees.sendFeeError(res, e); }
     });
 
+    // A person's payment parts (newest first) with their payment's summary and EFFECTIVE status — no receipt
+    // images (`has_proof` + GET /fee-payments/:id/proof); `with_proof=1` adds them, for payments:view only.
+    // A role with Inscripciones but without Pagos › ver (D-P20: payment data belongs to Pagos) reads each part's
+    // amount, date, method and status only — never the payment it is part of (its number, size, people), its
+    // reference, its receipt or its review (note, reviewer): the twin of DELETE /inscriptions/:id's generic 409
+    // (2.18.0 review R6-L1).
     http.route('get', '/inscriptions/:id/payments', { auth: true }, async (req, res) => {
-        if (!await allowAny(req, res, [['payments', 'view'], ['inscriptions', 'view']])) return;
+        const perms = await allowAny(req, res, [['payments', 'view'], ['inscriptions', 'view']]);
+        if (!perms) return;
         try {
-            const list = await db.all(`SELECT * FROM ${T.payments} WHERE inscription_id = ? ORDER BY date DESC`, [req.params.id]);
-            res.json(list);
+            const iid = positiveInt(req.params.id);
+            if (!iid) return res.json([]);
+            const full = hasLevel(perms, 'payments', 'view');
+            const withProof = String((req.query || {}).with_proof || '') === '1' && full;
+            const list = await fees.partsOfPerson(iid, withProof);
+            res.json(full ? list : list.map(fees.briefPart));
         } catch (e) { sendError(res, e); }
     });
 
@@ -4412,30 +5550,26 @@ exports.init = async function (wordjs) {
         const { conference_id } = req.query;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
-            const totals = await db.get(`
-                SELECT COUNT(*) as total,
-                       COALESCE(SUM(total_due), 0) as due,
-                       COALESCE(SUM(amount_paid), 0) as paid,
-                       SUM(CASE WHEN payment_status = 'paid' THEN 1 ELSE 0 END) as paid_count,
-                       SUM(CASE WHEN payment_status = 'partial' THEN 1 ELSE 0 END) as partial_count,
-                       SUM(CASE WHEN payment_status = 'unpaid' OR payment_status IS NULL THEN 1 ELSE 0 END) as unpaid_count,
-                       SUM(CASE WHEN room_id IS NOT NULL THEN 1 ELSE 0 END) as assigned_count
+            // 2.18.0: the money and the counts follow ONE per-person model — «Pagos de cuotas» › Resumen's and
+            // the Dashboard's (fees.reportFigures): a cancelled person owes nothing, validated / pending money
+            // counts up to the fee, «Saldo pendiente» (due − paid) is Por validar + Por cobrar; the counts are
+            // the roster pills of ACTIVE people (cancelled apart). One read of the people with their LIVE money
+            // (fees.PERSON_MONEY — one derived table of this conference, bound first).
+            const people = await db.all(`
+                SELECT i.id, COALESCE(NULLIF(i.location, ''), '—') as location, i.status, i.total_due, i.payment_status,
+                       COALESCE(m.validated, 0) as validated, COALESCE(m.pending, 0) as pending, COALESCE(m.returned, 0) as returned
+                FROM ${T.inscriptions} i LEFT JOIN ${fees.PERSON_MONEY} m ON m.iid = i.id WHERE i.conference_id = ?`, [conference_id, conference_id]);
+            const fig = fees.reportFigures(people);
+            const rooms = await db.get(`SELECT COUNT(*) as total, SUM(CASE WHEN room_id IS NOT NULL THEN 1 ELSE 0 END) as assigned_count
                 FROM ${T.inscriptions} WHERE conference_id = ?`, [conference_id]);
-            const byLocation = await db.all(`
-                SELECT COALESCE(NULLIF(location, ''), '—') as location,
-                       COUNT(*) as count,
-                       COALESCE(SUM(total_due), 0) as due,
-                       COALESCE(SUM(amount_paid), 0) as paid
-                FROM ${T.inscriptions} WHERE conference_id = ?
-                GROUP BY COALESCE(NULLIF(location, ''), '—') ORDER BY count DESC`, [conference_id]);
+            const totals = { ...fig.totals, total: Number(rooms && rooms.total) || 0, assigned_count: Number(rooms && rooms.assigned_count) || 0 };
+            const byLocation = fig.byLocation;
             // The gender breakdown exists only while the form has a «Género» field (column `gender`); without
             // one it is [] and the report hides it, instead of a single «—» bar for everybody.
             const genderField = await db.get(`SELECT id FROM ${T.fields} WHERE conference_id = ? AND name = 'gender'`, [conference_id]);
             const byGender = !genderField ? [] : await db.all(`
                 SELECT COALESCE(NULLIF(gender, ''), '—') as gender, COUNT(*) as count
                 FROM ${T.inscriptions} WHERE conference_id = ? GROUP BY COALESCE(NULLIF(gender, ''), '—')`, [conference_id]);
-            if (totals) { totals.due = roundMoney(totals.due); totals.paid = roundMoney(totals.paid); }
-            for (const row of byLocation) { row.due = roundMoney(row.due); row.paid = roundMoney(row.paid); }
             res.json({ totals, byLocation, byGender });
         } catch (e) { sendError(res, e); }
     });
@@ -4453,22 +5587,23 @@ exports.init = async function (wordjs) {
             const safeFlds = flds.filter(f => isFieldColumn(f.name) && (canSeeDocuments(perms) || f.name !== DOCUMENT_COLUMN));
 
             let query = `
-                SELECT i.*, r.room_number, h.name as hotel_name
+                SELECT i.*, r.room_number, h.name as hotel_name, ${fees.personSum('pending', 'i.id')} as pending_amount
                 FROM ${T.inscriptions} i
                 LEFT JOIN ${T.rooms} r ON i.room_id = r.id
                 LEFT JOIN ${T.hotels} h ON r.hotel_id = h.id
                 WHERE i.conference_id = ?`;
             const params = [conference_id];
             query += await inscriptionFilters(req.query, params, perms);
-            query += ` ORDER BY i.last_name, i.first_name`;
+            query += ROSTER_ORDER;
             const rows = await db.all(query, params);
 
-            const MONEY_COLS = new Set(['total_due', 'amount_paid']);
-            // The Código column (barcode payload) only for inscriptions:view.
+            const MONEY_COLS = new Set(['total_due', 'amount_paid', 'pending_amount']);
+            // The Código column (barcode payload) only for inscriptions:view. «Por validar» (2.18.0) = fee money
+            // registered and still awaiting the admin's validation.
             const cols = [
                 ...safeFlds.map(f => [f.name, f.label || f.name]),
                 ...(canSeeRegCodes(perms) ? [['reg_code', 'Código']] : []), ['status', 'Estado'], ['payment_status', 'Pago'],
-                ['total_due', 'Cuota'], ['amount_paid', 'Pagado'],
+                ['total_due', 'Cuota'], ['amount_paid', 'Pagado'], ['pending_amount', 'Por validar'],
                 ['hotel_name', 'Hotel'], ['room_number', 'Habitación'],
             ];
             const esc = (v) => {
@@ -4485,6 +5620,21 @@ exports.init = async function (wordjs) {
             // NOTE: the sandbox's res.send() JSON-encodes string bodies (quotes + escaped newlines),
             // which corrupts raw CSV. Return the CSV as a JSON field and let the client build the file.
             res.json({ csv, filename: `inscripciones-${conference_id}.csv`, count: rows.length });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // One roster row (2.18.0) — exactly a row of GET /inscriptions (same SELECT, same gate, the same reg_code
+    // masking), so a page patches one person after an action instead of reloading the whole roster.
+    // Registered AFTER /inscriptions/export: a `/inscriptions/:id` route registered before it would capture
+    // «export». A non-integer id is 404.
+    http.route('get', '/inscriptions/:id', { auth: true }, async (req, res) => {
+        const perms = await allowAny(req, res, ROSTER_ACCESS);
+        if (!perms) return;
+        try {
+            const id = positiveInt(req.params.id);
+            const row = id ? await db.get(`${rosterSelect()} WHERE i.id = ?`, [id]) : null;
+            if (!row) return res.status(404).json({ error: 'Inscripción no encontrada.' });
+            res.json(rosterRow(row, perms));
         } catch (e) { sendError(res, e); }
     });
 
@@ -4508,6 +5658,26 @@ exports.init = async function (wordjs) {
     });
 
     const RULE_TYPES = new Set(['keep_together', 'separate_by', 'split_by', 'require_companion']);
+    // Two rules that apply together may not share a priority (2.21.0; the owner: «dos reglas no pueden tener el
+    // mismo número de prioridad») — the higher number goes first, and a tie used to be broken by age, unseen. A
+    // conference rule applies with every location's own rules, so its number may be no other rule's of the
+    // conference; a location's rule, no conference rule's and no other of that location's. Checked only when the
+    // number is new or changes (a rule saved again as it was — e.g. switched on — is never refused for an older tie).
+    async function assertFreePriority({ conferenceId, locationId, ruleId, priority }) {
+        if (ruleId) {
+            const was = await db.get(`SELECT priority FROM ${T.rules} WHERE id = ?`, [ruleId]);
+            if (was && Number(was.priority) === Number(priority)) return;
+        }
+        const clash = await db.get(locationId == null
+            ? `SELECT r.id, r.name, l.name AS location_name FROM ${T.rules} r LEFT JOIN ${T.locations} l ON l.id = r.location_id WHERE r.conference_id = ? AND r.priority = ? AND r.id != ? ORDER BY r.location_id IS NOT NULL, r.id LIMIT 1`
+            : `SELECT r.id, r.name, l.name AS location_name FROM ${T.rules} r LEFT JOIN ${T.locations} l ON l.id = r.location_id WHERE r.conference_id = ? AND r.priority = ? AND r.id != ? AND (r.location_id IS NULL OR r.location_id = ?) ORDER BY r.location_id IS NOT NULL, r.id LIMIT 1`,
+            locationId == null ? [conferenceId, priority, ruleId || 0] : [conferenceId, priority, ruleId || 0, locationId]);
+        if (!clash) return;
+        const whose = clash.location_name == null ? (locationId == null ? '' : ' de la administración') : (locationId == null ? ` de la localidad ${clash.location_name}` : '');
+        const err = httpError(409, `La prioridad ${priority} ya la usa la regla «${clash.name}»${whose}. Dos reglas no pueden tener la misma prioridad: usa otro número.`);
+        err.code = 'priority_taken';
+        throw err;
+    }
     // The admin's CONFERENCE rules (location_id IS NULL). A location's own rules are the coordinator's
     // (portal) and are never reachable through this route: an `id` of a location rule is a 404.
     http.route('post', '/assignment/rules', { auth: true }, async (req, res) => {
@@ -4517,6 +5687,7 @@ exports.init = async function (wordjs) {
         try {
             const rule = normalizeRule({ name, type, enabled, priority, config, params, hard }, { conferenceId: conference_id, fieldNames: await ruleFieldNames(conference_id) });
             const paramsStr = JSON.stringify(rule.params);
+            await assertFreePriority({ conferenceId: conference_id, locationId: null, ruleId: positiveInt(id), priority: rule.priority });
             if (id) {
                 // Verify the rule belongs to the specified conference before updating.
                 const existing = await db.get(`SELECT conference_id, location_id FROM ${T.rules} WHERE id = ?`, [id]);
@@ -4550,8 +5721,9 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
 
-    // Clears every room of the conference EXCEPT those of frozen locations (their arrangement is
-    // under review); those are listed in `skipped_frozen` so the admin knows to reopen them.
+    // Clears every room of the conference EXCEPT those of frozen locations (their arrangement is under
+    // review or validated: a bulk reset must not empty it as a side effect); those are listed in
+    // `skipped_frozen` so the admin knows — they are adjusted one change at a time, or reopened.
     http.route('post', '/assignment/reset', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'lodging', 'manage')) return;
         const { conference_id } = req.body;
@@ -4559,16 +5731,19 @@ exports.init = async function (wordjs) {
         try {
             // Serialize with runs so a reset can't interleave with an in-flight assignment.
             const skipped = await withAssignmentLock(async () => {
-                const frozen = await db.all(`SELECT id, name FROM ${T.locations} WHERE conference_id = ? AND ${frozenSql} ORDER BY name`, [conference_id]);
-                await db.run(`UPDATE ${T.inscriptions} SET room_id = NULL WHERE conference_id = ? AND (location_id IS NULL OR location_id NOT IN (SELECT id FROM ${T.locations} WHERE ${frozenSql} ))`, [conference_id]);
-                return frozen.map(l => ({ location_id: l.id, name: l.name }));
+                const frozen = await db.all(`SELECT id, name, lodging_status FROM ${T.locations} WHERE conference_id = ? AND ${frozenSql} ORDER BY name`, [conference_id]);
+                // Nobody the administration fixed, nor anyone in a blocked room (see «HELD BY THE ADMINISTRATION»).
+                await db.run(`UPDATE ${T.inscriptions} SET room_id = NULL, room_locked = NULL WHERE conference_id = ? AND (location_id IS NULL OR location_id NOT IN (SELECT id FROM ${T.locations} WHERE ${frozenSql} )) AND ${NOT_HELD_SQL()}`, [conference_id]);
+                // `status` as in the run's report: the admin panel names it («ya está validado» / «está enviado…»).
+                return frozen.map(l => ({ location_id: l.id, name: l.name, status: lodgingStatusOf(l) }));
             });
             res.json({ success: true, skipped_frozen: skipped });
         } catch (e) { sendError(res, e); }
     });
 
     // Conference-wide run: the pool scope plus every delegated location that is not frozen (see
-    // runAssignment). Returns totals + by_location + skipped_frozen.
+    // runAssignment). Returns totals + by_location + skipped_frozen (each with its `unassigned`) +
+    // skipped_unassigned.
     http.route('post', '/assignment/run', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'lodging', 'manage')) return;
         const { conference_id } = req.body;
@@ -4577,6 +5752,95 @@ exports.init = async function (wordjs) {
             // Mutex: two concurrent runs (or a run racing a manual assign/reset) would double-book.
             const result = await withAssignmentLock(() => runAssignment(conference_id));
             res.json({ success: true, ...result });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // «Sugerir reparto» (2.20.0, see planOnSnapshot): POST /assignment/plan { conference_id, replan?, share?,
+    // hotel_id? } answers the suggestion — nothing is written; POST /assignment/plan/apply { …, token } plans
+    // again under the lock and writes it — the allotments and the people it places, then the automatic assignment for
+    // whoever is still without a bed — only when it is still the plan the admin saw (409 plan_changed with the new
+    // one otherwise) and never when it is worse than today (409 plan_worse). Hospedaje › gestionar.
+    // `fresh` (2.21.0): the whole arrangement thought again — see planOnSnapshot.
+    const planOptionsOf = (b) => {
+        const off = (v) => v === false || v === 0 || v === '0' || v === 'false';
+        const on = (v) => v === true || v === 1 || v === '1' || v === 'true';
+        return { replan: !off(b.replan), share: !off(b.share), hotelId: positiveInt(b.hotel_id), fresh: on(b.fresh), divideFamilies: on(b.divide_families) };
+    };
+    const planConference = async (req, res) => {
+        const cid = positiveInt((req.body || {}).conference_id);
+        if (!cid) { res.status(400).json({ error: 'Missing conference_id' }); return null; }
+        if (!await db.get(`SELECT id FROM ${T.conferences} WHERE id = ?`, [cid])) { res.status(404).json({ error: 'Conferencia no encontrada.' }); return null; }
+        const hotelId = positiveInt((req.body || {}).hotel_id);
+        if (hotelId && !await db.get(`SELECT id FROM ${T.hotels} WHERE id = ? AND conference_id = ?`, [hotelId, cid])) { res.status(400).json({ error: 'Hotel no encontrado en esta conferencia.' }); return null; }
+        return cid;
+    };
+    // The locations' order for «Sugerir reparto» when the beds do not reach everyone (2.21.0): { conference_id,
+    // location_ids } — that order first; a location left out goes after them, by name. Hospedaje › gestionar.
+    http.route('post', '/assignment/location-order', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'lodging', 'manage')) return;
+        const cid = positiveInt((req.body || {}).conference_id);
+        const ids = (req.body || {}).location_ids;
+        if (!cid) return res.status(400).json({ error: 'Missing conference_id' });
+        if (!Array.isArray(ids) || ids.length > 2000) return res.status(400).json({ error: 'location_ids debe ser una lista de localidades.' });
+        try {
+            const mine = new Set((await db.all(`SELECT id FROM ${T.locations} WHERE conference_id = ?`, [cid])).map(l => Number(l.id)));
+            const list = [...new Set(ids.map(Number))];
+            if (list.some(id => !mine.has(id))) return res.status(400).json({ error: 'Localidad inválida.' });
+            await runBatched([[`UPDATE ${T.locations} SET lodging_order = NULL WHERE conference_id = ?`, [cid]],
+                ...list.map((id, i) => [`UPDATE ${T.locations} SET lodging_order = ? WHERE id = ? AND conference_id = ?`, [i + 1, id, cid]])]);
+            res.json({ success: true, location_ids: list });
+        } catch (e) { sendError(res, e); }
+    });
+
+    http.route('post', '/assignment/plan', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'lodging', 'manage')) return;
+        try {
+            const cid = await planConference(req, res);
+            if (!cid) return;
+            const plan = await withAssignmentLock(async () => planOnSnapshot(await loadAssignmentSnapshot(cid), planOptionsOf(req.body || {})));
+            res.json({ success: true, plan });
+        } catch (e) { sendError(res, e); }
+    });
+    http.route('post', '/assignment/plan/apply', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'lodging', 'manage')) return;
+        try {
+            const cid = await planConference(req, res);
+            if (!cid) return;
+            const token = typeof (req.body || {}).token === 'string' ? req.body.token : '';
+            if (!token) return res.status(400).json({ error: 'Falta la sugerencia que quieres aplicar.' });
+            const out = await withAssignmentLock(async () => {
+                const plan = await planOnSnapshot(await loadAssignmentSnapshot(cid), planOptionsOf(req.body || {}));
+                if (plan.token !== token) return { stale: true, plan };
+                // Never what would leave the people worse off than today (more hard rules broken, more without a bed).
+                if (plan.worse) return { worse: true, plan };
+                // «Rehacer todo»: the people the plan moves leave their beds first (only those still in them).
+                if (plan.moved_ids.length) await runBatched(plan.moved_ids.map(x => [`UPDATE ${T.inscriptions} SET room_id = NULL, room_locked = NULL WHERE id = ? AND room_id = ?`, [x.inscription_id, x.room_id]]));
+                await applyPlanChanges(plan.changes, plan.placements);
+                // Then the automatic assignment for whoever is still without a bed — the arrangement the plan measured.
+                const run = await runAssignment(cid);
+                return { plan, run };
+            });
+            if (out.worse) return res.status(409).json({ error: 'Esta sugerencia dejaría a las personas peor que el reparto actual; no se aplica.', code: 'plan_worse', plan: out.plan });
+            if (out.stale) return res.status(409).json({ error: 'Algo cambió desde que se calculó la sugerencia (inscripciones, habitaciones o repartos). Revisa la nueva antes de aplicarla.', code: 'plan_changed', plan: out.plan });
+            res.json({ success: true, changed: out.plan.changes.length, placed: out.plan.placements.length, run_placed: out.run.assignedCount, remaining: out.run.remaining, plan: out.plan });
+        } catch (e) { sendError(res, e); }
+    });
+    // What the automatic assignment WOULD do now (2.20.0) — the run on a copy; nothing is written. Its report,
+    // and every bed it would change (`from_room_id` null = a new placement).
+    http.route('post', '/assignment/simulate', { auth: true }, async (req, res) => {
+        if (!await allow(req, res, 'lodging', 'view')) return;
+        try {
+            const cid = await planConference(req, res);
+            if (!cid) return;
+            const out = await withAssignmentLock(async () => {
+                const snap = await loadAssignmentSnapshot(cid);
+                const { result, snap: after } = await simulateSweep(snap);
+                const was = new Map(snap.people.map(p => [p.id, p.room_id]));
+                // Everyone whose bed changes: a new placement, or a move (the hard companion repair moves people who had a bed).
+                const placements = after.people.filter(p => p.room_id !== was.get(p.id)).map(p => ({ inscription_id: p.id, room_id: p.room_id, from_room_id: was.get(p.id) ?? null }));
+                return { ...result, placements };
+            });
+            res.json({ success: true, ...out });
         } catch (e) { sendError(res, e); }
     });
 
@@ -4623,31 +5887,37 @@ exports.init = async function (wordjs) {
     };
     // FIRST MATCH. Rules are consulted in priority order (priority DESC, then id ASC = the older rule) and
     // the first one that applies to a person wins a conflict: a family kept together by a keep_together
-    // rule that outranks a separate_by rule may mix that rule's field, and the separate_by rule says
-    // nothing about those members; a separate_by rule that outranks the family rule divides the family
+    // rule that outranks a separate_by rule may mix that rule's field — in a room of its own: nobody from outside
+    // joins a family's mixed room (judgedBy, 2.21.0); a separate_by rule that outranks the family rule divides the family
     // and the family rule says nothing about that division. `rank` = the rule's index in that order.
     const rankRules = (rules) => [...rules]
         .sort((a, b) => (Number(b.priority) || 0) - (Number(a.priority) || 0) || (Number(a.id) || 0) - (Number(b.id) || 0))
         .map((r, i) => ({ ...r, rank: i }));
-    // Is `person` explained for a lower-ranked rule by one of `keepRules` (all outranking it)? Yes when a
-    // keep_together rule applies to the person (`when`), the person has a value for its field and at
-    // least one other member of the same room shares that value — they are together on purpose.
-    const explainedBy = (person, members, keepRules) => {
-        for (const k of keepRules) {
-            if (!k.field || !condMatches(k.params.when, person)) continue;
-            const v = ruleVal(person, k.field);
-            if (v == null || String(v).trim() === '') continue;
-            const key = String(v).trim().toLowerCase();
-            if (members.some(m => m !== person && m.id !== person.id && condMatches(k.params.when, m)
-                && String(ruleVal(m, k.field) == null ? '' : ruleVal(m, k.field)).trim().toLowerCase() === key)) return true;
-        }
-        return false;
-    };
-    // The members of a room composition a separate_by rule still judges (the ones no outranking
-    // keep_together rule explains).
+    // The members of a room composition a separate_by rule judges: all of them, unless every two of them with
+    // different values are of the same family (the same value of an outranking keep_together rule, `when`
+    // honoured) — then nobody (`[]`): a family's mixed room is the family's alone (2.21.0; the owner: «si se
+    // agrupa una familia en una habitación mixta no se pueda añadir a nadie más que no sea del grupo familiar»).
+    // Before, the family was left out and only the others were compared among themselves, so a woman from outside
+    // could join a room with a family's men, or a man a women-only family's room. A room with a single value is
+    // judged as before (anyone of that value may complete it).
+    const sameFamily = (a, b, keepRules) => keepRules.some(k => {
+        if (!k.field || !condMatches(k.params.when, a) || !condMatches(k.params.when, b)) return false;
+        const va = ruleVal(a, k.field), vb = ruleVal(b, k.field);
+        if (va == null || vb == null) return false;
+        const ka = String(va).trim().toLowerCase();
+        return ka !== '' && ka === String(vb).trim().toLowerCase();
+    });
     const judgedBy = (sepRule, members, keepRules) => {
         const outranking = keepRules.filter(k => k.rank < sepRule.rank);
-        return outranking.length ? members.filter(m => !explainedBy(m, members, outranking)) : members;
+        if (!outranking.length) return members;
+        const keyOf = (p) => { const v = ruleVal(p, sepRule.field); return v == null ? '' : String(v).trim().toLowerCase(); };
+        const valued = members.filter(m => keyOf(m) !== '');
+        for (let i = 0; i < valued.length; i++) {
+            for (let j = i + 1; j < valued.length; j++) {
+                if (keyOf(valued[i]) !== keyOf(valued[j]) && !sameFamily(valued[i], valued[j], outranking)) return members;
+            }
+        }
+        return [];
     };
     // Companion rules a room's occupants do not satisfy.
     const companionUnmetIn = (companionRules, occupants) => {
@@ -4679,100 +5949,99 @@ exports.init = async function (wordjs) {
     // allotted to L ↔ L's attendees, conference rules ∪ L's own rules). Occupants already in a scope's
     // rooms count for capacity; those outside the scope's participant filter (a foreign stray, a
     // cancelled row) are `fixed` and never moved by the repair pass. `runAssignmentScope` runs ONE
-    // scope; `runAssignment(conferenceId, { locationId })` runs a location scope when `locationId` is
+    // scope. OVERFLOW (2.18.0): the conference-wide sweep ends with one pool run PER swept location whose
+    // own beds could not hold all its attendees: its participants are that location's leftovers, it fills
+    // only pool beds still free after the pool's own attendees (a second pool pass runs first), moves
+    // nobody already placed (every occupant is fixed) and applies the conference (admin) rules only — it is
+    // the administration's run, not the location's. It never fills a bed of the location's own share: a
+    // shared room where that location still has free beds of its own is no overflow target. RULE VIEWS
+    // (2.18.0): a location's own rule only ever judges that location's people;
+    // a conference require_companion judges the scope location's people in a location scope and everyone
+    // in the room in the pool scopes.
+    // `runAssignment(conferenceId, { locationId })` runs a location scope when `locationId` is
     // given and, when it is undefined, the admin's conference-wide sweep (pool + every non-frozen
-    // delegated location). Callers hold withAssignmentLock.
+    // delegated location; a frozen one is skipped by decision, not because it is locked — see below).
+    // Callers hold withAssignmentLock.
     const ASSIGN_MAX_PARTICIPANTS = 5000;
-    async function runAssignmentScope(conferenceId, locationId, opts = {}) {
-        const isPool = locationId == null;
-        const ruleRows = isPool
-            ? await db.all(`SELECT * FROM ${T.rules} WHERE conference_id = ? AND enabled = 1 AND location_id IS NULL ORDER BY priority DESC, id ASC`, [conferenceId])
-            : await db.all(`SELECT * FROM ${T.rules} WHERE conference_id = ? AND enabled = 1 AND (location_id IS NULL OR location_id = ?) ORDER BY priority DESC, id ASC`, [conferenceId, locationId]);
-        const rules = rankRules(ruleRows.map(parseRuleRow).filter(ruleOnFormFields(await ruleFieldNames(conferenceId))));
+    // WHERE THE ENGINE READS AND WRITES (2.20.0). The engine below never touches `db` itself: it reads the
+    // conference through an `io` — the database (dbAssignmentIo, the default) or an in-memory copy of it
+    // (snapshotAssignmentIo) — so «Sugerir reparto» can run the very same code on a hypothetical allotment
+    // and know what the automatic assignment WOULD do, without writing anything. Every read is ordered (by id,
+    // or by name where the sweep goes in name order; a location's rooms hotel by hotel, the order 2.19 walked
+    // them), so a run is deterministic and its simulation identical.
+    function dbAssignmentIo(conferenceId) {
+        const inRooms = (lid) => (lid == null
+            ? { sql: 'r.location_id IS NULL', params: [conferenceId] }
+            : { sql: `(r.location_id = ? OR EXISTS (SELECT 1 FROM ${T.roomBeds} b WHERE b.room_id = r.id AND b.location_id = ?))`, params: [conferenceId, lid, lid] });
+        return {
+            conferenceId,
+            rules: (ruleLocation) => (ruleLocation == null
+                ? db.all(`SELECT * FROM ${T.rules} WHERE conference_id = ? AND enabled = 1 AND location_id IS NULL ORDER BY priority DESC, id ASC`, [conferenceId])
+                : db.all(`SELECT * FROM ${T.rules} WHERE conference_id = ? AND enabled = 1 AND (location_id IS NULL OR location_id = ?) ORDER BY priority DESC, id ASC`, [conferenceId, ruleLocation])),
+            companionRules: () => db.all(`SELECT * FROM ${T.rules} WHERE conference_id = ? AND enabled = 1 AND type = 'require_companion' ORDER BY priority DESC, id ASC`, [conferenceId]),
+            fieldNames: () => ruleFieldNames(conferenceId),
+            delegatedIds: async () => new Set((await db.all(`SELECT DISTINCT location_id FROM ${T.rooms} WHERE location_id IS NOT NULL UNION ${SHARE_LOCATIONS_SQL()}`)).map(r => Number(r.location_id))),
+            frozenRows: () => db.all(`SELECT id, name, lodging_status FROM ${T.locations} WHERE conference_id = ? AND ${frozenSql} ORDER BY name`, [conferenceId]),
+            delegatedLocations: () => delegatedLocations(conferenceId),
+            // A location's attendees still without a bed (also the overflow's participants).
+            participants: (lid) => db.all(`SELECT * FROM ${T.inscriptions} WHERE conference_id = ? AND location_id = ? AND room_id IS NULL AND ${occupiedSql()} ORDER BY id`, [conferenceId, lid]),
+            // The pool scope's: no location, or a location with no bed of its own that is not frozen.
+            poolParticipants: () => db.all(`SELECT * FROM ${T.inscriptions} WHERE conference_id = ? AND room_id IS NULL AND ${occupiedSql()} AND (location_id IS NULL OR location_id NOT IN (SELECT DISTINCT location_id FROM ${T.rooms} WHERE location_id IS NOT NULL )) AND (location_id IS NULL OR location_id NOT IN (${SHARE_LOCATIONS_SQL()} )) AND (location_id IS NULL OR location_id NOT IN (SELECT id FROM ${T.locations} WHERE ${frozenSql} )) ORDER BY id`, [conferenceId]),
+            // A scope's rooms: every pool room (null), or a location's whole and shared rooms.
+            scopeRooms: (lid) => { const s = inRooms(lid); return db.all(`SELECT r.*, h.name as hotel_name FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id WHERE h.conference_id = ? AND ${s.sql} ORDER BY ${lid == null ? 'r.id' : 'h.id, r.id'}`, s.params); },
+            scopeOccupants: (lid) => { const s = inRooms(lid); return db.all(`SELECT i.* FROM ${T.inscriptions} i WHERE i.room_id IN (SELECT r.id FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id WHERE h.conference_id = ? AND ${s.sql} ) ORDER BY i.id`, s.params); },
+            shares: (roomIds) => sharesByRoom(roomIds),
+            lockFields: () => shareLockFields(conferenceId),
+            flush: async (placements) => {
+                const writes = [];
+                for (const [personId, roomId] of placements) writes.push([`UPDATE ${T.inscriptions} SET room_id = ?, room_locked = NULL WHERE id = ?`, [roomId, personId]]);
+                await runBatched(writes);
+            },
+            unassignedByLocation: async (ids) => {
+                const out = new Map();
+                if (!ids.length) return out;
+                const marks = ids.map(() => '?').join(', ');
+                const counts = await db.all(
+                    `SELECT location_id, COUNT(*) AS n FROM ${T.inscriptions} WHERE conference_id = ? AND room_id IS NULL AND ${occupiedSql()} AND location_id IN (${marks}) GROUP BY location_id`,
+                    [conferenceId, ...ids]);
+                for (const c of counts) out.set(Number(c.location_id), Number(c.n) || 0);
+                return out;
+            },
+            reportRooms: () => db.all(`SELECT r.id, r.room_number, r.location_id FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id WHERE h.conference_id = ? ORDER BY h.name, r.room_number, r.id`, [conferenceId]),
+            placed: () => db.all(`SELECT * FROM ${T.inscriptions} WHERE conference_id = ? AND room_id IS NOT NULL ORDER BY id`, [conferenceId]),
+        };
+    }
+    // ── the engine's view of the rules and its grouping (2.20.0) ─────────────────────────────────────
+    // Lifted out of runAssignmentScope so «Sugerir reparto» groups people exactly as a run does. A scope is the
+    // pool (isPool) or one location; `rules` are parsed and ranked (rankRules).
+    function scopeRuleContext(rules, { isPool, locationId }) {
         const keepRules = rules.filter(r => r.type === 'keep_together');
         const separateRules = rules.filter(r => r.type === 'separate_by');
         const splitRules = rules.filter(r => r.type === 'split_by');
         const companionRules = rules.filter(r => r.type === 'require_companion');
-
-        // The set of delegated locations decides who belongs to the pool scope; a FROZEN location's
-        // attendees are out of every scope but their own (reset/manual assign refuse to touch them,
-        // so the sweep must not place them either — see `skipped_frozen`).
-        let delegated = opts.delegatedIds;
-        if (isPool && !delegated) {
-            delegated = new Set((await db.all(`SELECT DISTINCT location_id FROM ${T.rooms} WHERE location_id IS NOT NULL`)).map(r => Number(r.location_id)));
-        }
-        let frozenIds = opts.frozenIds;
-        if (isPool && !frozenIds) {
-            frozenIds = new Set((await db.all(`SELECT id FROM ${T.locations} WHERE conference_id = ? AND ${frozenSql}`, [conferenceId])).map(r => Number(r.id)));
-        }
-        const inScope = (p) => (p.status == null || p.status !== 'cancelled') && (isPool
-            ? (p.location_id == null || (!delegated.has(Number(p.location_id)) && !frozenIds.has(Number(p.location_id))))
-            : Number(p.location_id) === Number(locationId));
-
-        const participantRows = isPool
-            ? await db.all(`SELECT * FROM ${T.inscriptions} WHERE conference_id = ? AND room_id IS NULL AND ${occupiedSql()} AND (location_id IS NULL OR location_id NOT IN (SELECT DISTINCT location_id FROM ${T.rooms} WHERE location_id IS NOT NULL )) AND (location_id IS NULL OR location_id NOT IN (SELECT id FROM ${T.locations} WHERE ${frozenSql} ))`, [conferenceId])
-            : await db.all(`SELECT * FROM ${T.inscriptions} WHERE conference_id = ? AND location_id = ? AND room_id IS NULL AND ${occupiedSql()}`, [conferenceId, locationId]);
-        const participants = participantRows.map(p => ({ ...p, custom_data: parseCd(p.custom_data) }));
-        if (participants.length > ASSIGN_MAX_PARTICIPANTS) throw httpError(400, `Demasiados inscritos sin asignar para una sola ejecución (máximo ${ASSIGN_MAX_PARTICIPANTS}).`);
-
-        const roomScopeSql = isPool ? 'r.location_id IS NULL' : 'r.location_id = ?';
-        const roomScopeParams = isPool ? [conferenceId] : [conferenceId, locationId];
-        const roomRows = await db.all(
-            `SELECT r.*, h.name as hotel_name FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id WHERE h.conference_id = ? AND ${roomScopeSql}`,
-            roomScopeParams
-        );
-        // Occupancy in ONE query (no per-room SELECT), grouped by room in JS.
-        const occRows = await db.all(
-            `SELECT i.* FROM ${T.inscriptions} i WHERE i.room_id IN (SELECT r.id FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id WHERE h.conference_id = ? AND ${roomScopeSql} )`,
-            roomScopeParams
-        );
-        const occByRoom = new Map();
-        for (const o of occRows) {
-            if (!occByRoom.has(o.room_id)) occByRoom.set(o.room_id, []);
-            const occ = { ...o, custom_data: parseCd(o.custom_data) };
-            if (!inScope(occ)) occ.fixed = true;   // counts for capacity, never moved by this run
-            occByRoom.get(o.room_id).push(occ);
-        }
-        const rooms = roomRows.map(r => ({ id: r.id, capacity: Math.max(1, Number(r.capacity) || 1), room_number: r.room_number, hotel_name: r.hotel_name, location_id: r.location_id == null ? null : r.location_id, occupants: occByRoom.get(r.id) || [] }));
-
         const val = ruleVal;
-        const cond = condMatches;
-
-        let assignedCount = 0;
-        const violations = [];
-        const noteViol = (rule, detail, hard) => { if (!violations.some(v => v.rule === rule && v.detail === detail)) violations.push({ rule, detail, hard: !!hard }); };
-
+        // Who a rule judges in a room (2.18.0). A location's OWN rule: that location's people only — in a
+        // shared or pool room it never reads, nor reacts to, another location's attendees, and it still
+        // holds for its people on pool beds (the overflow). A conference require_companion in a LOCATION
+        // scope: that location's people (the audit of a location's arrangement judges the same); in the pool
+        // scopes, everyone in the room. Every other conference rule: everyone in the room.
+        const peopleOf = (lid, list) => list.filter(o => o.location_id != null && Number(o.location_id) === lid);
+        const viewFor = (rule, list) => {
+            if (rule.location_id != null) return peopleOf(Number(rule.location_id), list);
+            if (rule.type === 'require_companion' && !isPool) return peopleOf(Number(locationId), list);
+            return list;
+        };
         // A merged set (a room's occupants + candidate people) is OK for a HARD separate rule iff it has
         // at most one distinct non-blank value of that rule's field.
         const mergedSeparateOk = (occupants, people) => {
             const after = occupants.concat(people);
             for (const rule of separateRules) {
                 if (!rule.hard) continue;
-                if (distinctValues(judgedBy(rule, after, keepRules), rule.field).length > 1) return false;
+                if (distinctValues(judgedBy(rule, viewFor(rule, after), keepRules), rule.field).length > 1) return false;
             }
             return true;
         };
-        // Invariant 1 + hard separate_by, at EVERY placement site.
-        const compatible = (room, people) => people.every(p => roomAllows(room, p)) && mergedSeparateOk(room.occupants, people);
-        const companionUnmet = (occupants) => companionUnmetIn(companionRules, occupants);
-        // Higher = better room for placing `people`: penalize soft-separate mixing, companion gaps, waste.
-        const score = (room, people) => {
-            let s = 0;
-            const after = room.occupants.concat(people);
-            for (const rule of separateRules) {
-                if (rule.hard) continue;
-                if (distinctValues(judgedBy(rule, after, keepRules), rule.field).length > 1) s -= 5;
-            }
-            s -= companionUnmet(after).length * 3;
-            s -= Math.abs(room.capacity - after.length) * 0.1;
-            return s;
-        };
-
-        // Deferred writes: mutate memory now, flush every placement once at the end.
-        const placements = new Map(); // inscription id -> room id
-        const assignTo = (room, person) => { placements.set(person.id, room.id); room.occupants.push(person); assignedCount++; };
-        const moveTo = (room, donor, person) => { placements.set(person.id, room.id); donor.occupants = donor.occupants.filter(o => o.id !== person.id); room.occupants.push(person); };
-
+        const companionUnmet = (occupants) => companionRules.filter(rule => companionUnmetIn([rule], viewFor(rule, occupants)).length > 0);
         const partitionBy = (people, fields) => {
             if (!fields.length) return [people];
             const map = new Map();
@@ -4786,59 +6055,22 @@ exports.init = async function (wordjs) {
 
         // The hard separate_by rules that outrank a unit's keep_together rule (every one, for a loner).
         const dividingRules = (group) => separateRules.filter(r => r.hard && (!group || r.rank < group.rule.rank));
-
-        // `group` = null | { rule, key } — the keep_together rule that formed this unit and its display
-        // value, so a forced division can be reported under that rule's name.
-        const placePartition = (people, group) => {
-            if (people.length === 0) return;
-            const feasible = rooms.filter(room => (room.capacity - room.occupants.length) >= people.length && compatible(room, people));
-            if (feasible.length) {
-                feasible.sort((a, b) => score(b, people) - score(a, people));
-                for (const p of [...people]) assignTo(feasible[0], p);
-                return;
-            }
-            if (people.length > 1) {
-                // Divide along a configured split_by field first, then fall back to chunking.
-                for (const sr of splitRules) {
-                    const sub = partitionBy(people, [sr.field]);
-                    if (sub.length > 1) {
-                        if (group) noteViol(group.rule.name, `El grupo «${group.key}» se dividió por «${sr.name}» en ${sub.length} partes.`, group.rule.hard);
-                        for (const s of sub) placePartition(s, group);
-                        return;
-                    }
-                }
-                let target = null, freeMax = 0;
-                for (const room of rooms) {
-                    const free = room.capacity - room.occupants.length;
-                    if (free >= 1 && free > freeMax && compatible(room, [people[0]])) { target = room; freeMax = free; }
-                }
-                if (target && freeMax >= 1) {
-                    for (const p of people.slice(0, freeMax)) assignTo(target, p);
-                    if (group) noteViol(group.rule.name, `El grupo «${group.key}» (${people.length}) no cupo junto y se dividió.`, group.rule.hard);
-                    placePartition(people.slice(freeMax), group);
-                    return;
-                }
-                // No room left with any free, compatible capacity — leave them unassigned; they're
-                // counted in `remaining` and reported once (aggregated by count) at the end.
-                return;
-            }
-            let target = null, best = -Infinity;
-            for (const room of rooms) {
-                if ((room.capacity - room.occupants.length) >= 1 && compatible(room, people)) { const s = score(room, people); if (s > best) { best = s; target = room; } }
-            }
-            if (target) assignTo(target, people[0]);
-            // else: left unassigned → aggregated into the single capacity violation at the end.
-        };
-
-        // Hard separate_by forces a unit to divide along those fields before placement.
-        const placeUnit = (unit) => {
-            const dividing = dividingRules(unit.group);
-            const parts = partitionBy(unit.people, dividing.map(r => r.field));
-            // Expected under first match (the separate_by rule ranks first): information, not a broken rule.
-            if (parts.length > 1 && unit.group) noteViol(unit.group.rule.name, `El grupo «${unit.group.key}» (${unit.people.length}) se dividió por «${dividing.map(r => r.name).join('», «')}», que tiene prioridad.`, false);
-            for (const part of parts) placePartition(part, unit.group);
-        };
-
+        return { keepRules, separateRules, splitRules, companionRules, hardSeparate: separateRules.filter(r => r.hard), softSeparate: separateRules.filter(r => !r.hard), viewFor, mergedSeparateOk, companionUnmet, partitionBy, dividingRules };
+    }
+    // A scope's people as the engine places them: units, parts, bundled companions and CLASSES (see the
+    // packing notes in runAssignmentScope). Returns { classList, units, notes } — `units` are 2.19's placement
+    // units (larger first, each with its `parts`, no companion bundled); notes are information, never hard.
+    // `maxRoom`: the most beds one room offers — a companion is bundled only while the part still fits one.
+    // `splitSoftMixed` (2.21.0): a PREFERRED keep_together group is divided by every hard separate_by (as if they
+    // outranked it) — a mixed family then goes as its men and its women, each able to complete a room of their value.
+    // true = every such group; a function (unit) → boolean = only those it picks. Used only where that gives a bed to
+    // more people (runAssignmentScope's 'pack-split…' strategies, planOnSnapshot).
+    function scopeClasses(ctx, participants, { maxRoom = Infinity, splitSoftMixed = false } = {}) {
+        const wantsSplit = typeof splitSoftMixed === 'function' ? splitSoftMixed : () => !!splitSoftMixed;
+        const { keepRules, separateRules, companionRules, viewFor, mergedSeparateOk, partitionBy, dividingRules } = ctx;
+        const val = ruleVal, cond = condMatches;
+        const notes = [];
+        const note = (rule, detail, hard) => ({ rule, detail, hard: !!hard });
         // Build placement units — highest-priority keep_together first; each member is claimed once.
         // Grouping key is case-insensitive ("Perez"/"perez" = one family); the first-seen spelling is
         // the display value.
@@ -4862,42 +6094,448 @@ exports.init = async function (wordjs) {
         }
         for (const p of participants) if (!claimed.has(p.id)) units.push({ people: [p], group: null });
 
-        // Larger units first, so families get contiguous space before individuals fill the rooms.
+        const hardSeparate = separateRules.filter(r => r.hard);
+        const softSeparate = separateRules.filter(r => !r.hard);
+        const parts = [];
         units.sort((a, b) => b.people.length - a.people.length);
-        for (const u of units) placeUnit(u);
-
-        // Repair pass for HARD require_companion: pull a "needs" member into a room that has a subject
-        // but too few companions (respecting capacity + hard separate + roomAllows), without stranding
-        // the donor. Only occupants of THIS scope are movable (`fixed` ones stay where they are).
-        for (const rule of companionRules) {
-            if (!rule.hard) continue;
+        for (const unit of units) {
+            const yields = !!(unit.group && !unit.group.rule.hard && wantsSplit(unit));
+            const dividing = yields ? separateRules.filter(r => r.hard && r.field) : dividingRules(unit.group);
+            const split = partitionBy(unit.people, dividing.map(r => r.field));
+            // Expected under first match (the separate_by rule ranks first): information, not a broken rule.
+            if (split.length > 1 && unit.group) {
+                const own = dividingRules(unit.group);
+                if (yields && partitionBy(unit.people, own.map(r => r.field)).length < split.length) {
+                    notes.push(note(unit.group.rule.name, `El grupo «${unit.group.key}» (${unit.people.length}) se separó por «${dividing.map(r => r.name).join('», «')}» para que más personas tengan cama (la regla es preferente).`, false));
+                    unit.yielded = true;
+                } else notes.push(note(unit.group.rule.name, `El grupo «${unit.group.key}» (${unit.people.length}) se dividió por «${dividing.map(r => r.name).join('», «')}», que tiene prioridad.`, false));
+            }
+            unit.parts = split;
+            for (const people of split) parts.push({ people, group: unit.group });
+        }
+        for (const rule of [...companionRules.filter(r => r.hard), ...companionRules.filter(r => !r.hard)]) {
             const min = Number(rule.params.min) || 1;
-            for (const room of rooms) {
-                if (!room.occupants.some(o => cond(rule.params.subject, o))) continue;
-                let have = room.occupants.filter(o => cond(rule.params.needs, o)).length;
-                while (have < min && (room.capacity - room.occupants.length) >= 1) {
-                    let moved = false;
-                    for (const donor of rooms) {
-                        if (donor === room) continue;
-                        const donorHasSubject = donor.occupants.some(o => cond(rule.params.subject, o));
-                        const donorNeeds = donor.occupants.filter(o => cond(rule.params.needs, o)).length;
-                        if (donorHasSubject && donorNeeds <= min) continue; // don't break the donor's own rule
-                        const cand = donor.occupants.find(o => !o.fixed && cond(rule.params.needs, o) && compatible(room, [o]));
-                        if (cand) { moveTo(room, donor, cand); have++; moved = true; break; }
-                    }
-                    if (!moved) break;
+            for (const part of parts) {
+                if (part.gone) continue;
+                const view = viewFor(rule, part.people);
+                if (!view.some(o => cond(rule.params.subject, o))) continue;
+                let have = view.filter(o => cond(rule.params.needs, o)).length;
+                for (const donor of parts) {
+                    if (have >= min) break;
+                    if (donor === part || donor.gone || donor.group || donor.people.length !== 1) continue;
+                    const p = donor.people[0];
+                    if (!viewFor(rule, [p]).length || !cond(rule.params.needs, p) || cond(rule.params.subject, p)) continue;
+                    if (!mergedSeparateOk(part.people, [p])) continue;
+                    if (part.people.length + 1 > maxRoom) break;
+                    part.people = part.people.concat([p]); part.donors = (part.donors || []).concat([p]); donor.gone = true; have++;
                 }
             }
         }
+        const MIX = '\u0002';
+        // A part's class: the value its people share for each hard field — '' (fits any class) only when NOBODY in it
+        // has one; a group whose values differ (a family an outranking keep_together keeps whole) is a class of its own.
+        const classKey = (people, list) => list.map(r => {
+            const v = distinctValues(viewFor(r, people), r.field);
+            return v.length === 0 ? '' : v.length === 1 ? v[0].toLowerCase() : MIX;
+        });
+        const classes = new Map();
+        parts.filter(p => !p.gone).forEach((p, i) => {
+            const hard = classKey(p.people, hardSeparate);
+            const key = hard.includes(MIX) ? `${MIX}${i}` : hard.join('\u0001');
+            if (!classes.has(key)) classes.set(key, { wild: hard.includes(''), size: 0, big: 0, parts: [] });
+            const c = classes.get(key);
+            c.parts.push({ people: p.people, group: p.group, size: p.people.length, donors: p.donors || [] });
+            c.size += p.people.length;
+            c.big = Math.max(c.big, p.people.length);
+        });
+        // The class with the largest indivisible part first (a family of 4 gets the room of 4 before loners take
+        // it), then the larger; people with no value for a hard field last — they fill the beds left.
+        const classList = [...classes.values()].sort((a, b) => (Number(a.wild) - Number(b.wild)) || (b.big - a.big) || (b.size - a.size));
+        return { classList, units, notes };
+    }
+    async function runAssignmentScope(conferenceId, locationId, opts = {}) {
+        const io = opts.io || dbAssignmentIo(conferenceId);
+        const isPool = locationId == null;
+        // The overflow of location L (2.18.0): a pool-bed run for L's leftovers, under the admin's rules.
+        const overflowOf = isPool && opts.overflowLocationId != null ? Number(opts.overflowLocationId) : null;
+        const ruleLocation = isPool ? null : locationId;
+        const ruleRows = await io.rules(ruleLocation);
+        const rules = rankRules(ruleRows.map(parseRuleRow).filter(ruleOnFormFields(await io.fieldNames())));
+        const ctx = scopeRuleContext(rules, { isPool, locationId });
+        const { keepRules, separateRules, splitRules, companionRules, viewFor, mergedSeparateOk, companionUnmet, partitionBy, dividingRules } = ctx;
+
+        // The set of delegated locations decides who belongs to the pool scope; a FROZEN location's
+        // attendees are out of every scope but their own. That is a decision about BULK operations, not a
+        // lock: a conference-wide run (like the reset) must not rewrite a submitted / validated arrangement
+        // as a side effect — see `skipped_frozen`. The administration still adjusts such an arrangement one
+        // change at a time (manual assign, allotments, rooms), and each change is stamped on the location
+        // (stampAdminAdjustment, 2.17.0).
+        let delegated = opts.delegatedIds;
+        if (isPool && !delegated) delegated = await io.delegatedIds();
+        let frozenIds = opts.frozenIds;
+        if (isPool && !frozenIds) frozenIds = new Set((await io.frozenRows()).map(r => Number(r.id)));
+        const inScope = (p) => overflowOf == null && (p.status == null || p.status !== 'cancelled') && (isPool
+            ? (p.location_id == null || (!delegated.has(Number(p.location_id)) && !frozenIds.has(Number(p.location_id))))
+            : Number(p.location_id) === Number(locationId));
+
+        const participantRows = overflowOf != null ? await io.participants(overflowOf)
+            : isPool ? await io.poolParticipants()
+            : await io.participants(locationId);
+        const participants = participantRows.map(p => ({ ...p, custom_data: parseCd(p.custom_data) }));
+        if (participants.length > ASSIGN_MAX_PARTICIPANTS) throw httpError(400, `Demasiados inscritos sin asignar para una sola ejecución (máximo ${ASSIGN_MAX_PARTICIPANTS}).`);
+
+        // A location scope covers its WHOLE rooms and the rooms it SHARES; the pool scope every room with
+        // location_id NULL (pool rooms, and shared rooms for their pool beds — filtered by quota below).
+        const roomRows = await io.scopeRooms(isPool ? null : locationId);
+        // Occupancy in ONE query (no per-room SELECT), grouped by room in JS.
+        const occRows = await io.scopeOccupants(isPool ? null : locationId);
+        const occByRoom = new Map();
+        for (const o of occRows) {
+            if (!occByRoom.has(o.room_id)) occByRoom.set(o.room_id, []);
+            const occ = { ...o, custom_data: parseCd(o.custom_data) };
+            // Counts for capacity, never moved by this run; a probe («Sugerir reparto») moves nobody who has a bed.
+            if (!inScope(occ) || opts.probe || isPinned(occ)) occ.fixed = true;
+            occByRoom.get(o.room_id).push(occ);
+        }
+        // Each room's QUOTA for this scope — the beds this run may fill there — and how many of them are
+        // in use: a whole room's (or a pool room's) capacity; a shared room's beds of this location, or
+        // its pool beds for the pool scope (2.18.0). A shared room with no pool bed left is not in the pool
+        // scope at all.
+        const roomShares = await io.shares(roomRows.map(r => r.id));
+        const lockFields = await io.lockFields();
+        const rooms = roomRows.map(r => {
+            const occupants = occByRoom.get(r.id) || [];
+            const shares = roomShares.get(Number(r.id)) || [];
+            const room = { id: r.id, capacity: Math.max(1, Number(r.capacity) || 1), room_number: r.room_number, hotel_name: r.hotel_name, location_id: r.location_id == null ? null : r.location_id, occupants,
+                // A shared room's class (see «THE CLASS OF A SHARED ROOM»): nobody of another value takes a bed of it.
+                lock: shareLockOf(r, shares, lockFields), blocked: isBlocked(r) };
+            if (isPool) {
+                room.quota = shares.length ? poolBedsOf(room, shares) : room.capacity;
+                room.used = shares.length ? poolUsedOf(shares, occupants) : occupants.length;
+            } else {
+                room.quota = room.location_id != null ? room.capacity : shareBedsOf(shares, locationId);
+                room.used = occupants.filter(o => o.location_id != null && Number(o.location_id) === Number(locationId)).length;
+            }
+            return room;
+        }).filter(room => room.quota > 0 && !room.blocked
+            // The overflow of L fills pool beds only: a room where L still has free beds of its own is out.
+            && !(overflowOf != null && shareBedsOf(roomShares.get(Number(room.id)) || [], overflowOf) > peopleOfLocation(overflowOf, room.occupants).length));
+        function peopleOfLocation(lid, list) { return list.filter(o => o.location_id != null && Number(o.location_id) === lid); }
+        // Free beds of a room for THIS scope: what is left of its quota, never above its free capacity.
+        const freeOf = (room) => Math.max(0, Math.min(room.capacity - room.occupants.length, room.quota - room.used));
+
+        const val = ruleVal;
+        const cond = condMatches;
+
+        // Invariant 1 + a shared room's class + hard separate_by, at EVERY placement site.
+        const compatible = (room, people) => people.every(p => roomAllows(room, p) && lockAllows(room.lock, p)) && mergedSeparateOk(room.occupants, people);
+        // Higher = better room for placing `people`: penalize soft-separate mixing, companion gaps, waste.
+        const score = (room, people) => {
+            let s = 0;
+            const after = room.occupants.concat(people);
+            for (const rule of separateRules) {
+                if (rule.hard) continue;
+                if (distinctValues(judgedBy(rule, viewFor(rule, after), keepRules), rule.field).length > 1) s -= 5;
+            }
+            s -= companionUnmet(after).length * 3;
+            s -= Math.abs(freeOf(room) - people.length) * 0.1;
+            return s;
+        };
+        // Ties between equally full rooms: the one where the soft rules (and companions) hold best.
+        const { softSeparate } = ctx;
+        const softCost = (room, people) => {
+            const after = room.occupants.concat(people);
+            let s = 0;
+            for (const rule of softSeparate) if (distinctValues(judgedBy(rule, viewFor(rule, after), keepRules), rule.field).length > 1) s += 5;
+            return s + companionUnmet(after).length * 3;
+        };
+
+        // ROOM PACKING (2.20.0). The site owner: «la menor cantidad de habitaciones … y sin o la menor cantidad
+        // de camas vacías en las habitaciones con personas». The hard rules are never broken; within them a run
+        // uses the fewest rooms, then leaves the fewest empty beds in the rooms it fills; a SOFT rule (a
+        // preference) gives way when keeping it would cost a room or beds — the owner's choice — and is reported.
+        //   1. Each unit is divided by the hard separate_by rules that outrank it (a hard rule always wins): PARTS.
+        //   2. A part with someone a companion rule asks company for takes the companions it lacks from the single
+        //      people of its class, while it still fits one room — a child and an adult then travel together.
+        //   3. Parts are grouped into CLASSES (the values of every hard separate_by field), which never share a
+        //      room — the class with the largest indivisible part first. Each fills (a) the rooms already holding
+        //      people, where it fits the rules — no new room, fewer empty beds; then (b) new rooms, chosen exactly
+        //      (the fewest rooms whose beds reach the class, then the fewest spare beds — server/lodging-pack.js),
+        //      keeping the preferences when that costs nothing; (c) whatever still has no bed takes the old path
+        //      (placePartition: split_by, then chunks; a bundled companion goes back on its own first).
+        // STRATEGIES. That packing (classes by largest part, and by size) and 2.19's placement (units one by one,
+        // larger first) each run on a copy of the rooms; the run keeps the best by, in order: fewer hard rules
+        // broken, fewer people without a bed, fewer rooms used, fewer empty beds in them, fewer preferences broken.
+        // So a run never does worse than 2.19 on the rules or the beds — and packs whenever it can.
+        const { classList: packClasses, units, notes: groupNotes } = scopeClasses(ctx, participants, { maxRoom: Math.max(0, opts.maxRoom || 0, ...rooms.map(freeOf)) });
+        // Preferred mixed families given way (2.21.0): the same people, such families as their men and their women —
+        // first only those no empty room here fits exactly ('pack-split-a'), then all of them ('pack-split'); each
+        // tried only when some family does divide so, and taken only when it beds more people.
+        const exactCaps = new Set(rooms.filter(r => !r.occupants.length).map(r => r.capacity));
+        const splitMax = Math.max(0, opts.maxRoom || 0, ...rooms.map(freeOf));
+        const splitAlts = {
+            'pack-split-a': scopeClasses(ctx, participants, { maxRoom: splitMax, splitSoftMixed: (u) => !exactCaps.has(u.people.length) }),
+            'pack-split': scopeClasses(ctx, participants, { maxRoom: splitMax, splitSoftMixed: true }),
+        };
+        const splitClassesOf = (kind) => (splitAlts[kind] && splitAlts[kind].units.some(u => u.yielded) ? splitAlts[kind].classList : null);
+        const roomsAtStart = rooms.map(r => ({ ...r, occupants: r.occupants.slice() }));
+        const runStrategy = (kind) => {
+            // 'greedy' is 2.19's placement exactly — its chunking and its repair — so the sweep's 'legacy' mode is a
+            // true floor: whatever the packing does, the run never ends worse than 2.19 (see THE SWEEP'S MODE).
+            const legacy = kind === 'greedy';
+            const R = roomsAtStart.map(r => ({ ...r, occupants: r.occupants.slice() }));
+            let placed = 0;
+            const violations = [];
+            const noteViol = (rule, detail, hard) => { if (!violations.some(v => v.rule === rule && v.detail === detail)) violations.push({ rule, detail, hard: !!hard }); };
+            for (const n of (splitAlts[kind] ? splitAlts[kind].notes : groupNotes)) noteViol(n.rule, n.detail, n.hard);
+            // Deferred writes: mutate memory now, flush every placement once at the end.
+            const placements = new Map(); // inscription id -> room id
+            const assignTo = (room, person) => { placements.set(person.id, room.id); room.occupants.push(person); room.used++; placed++; };
+            const moveTo = (room, donor, person) => { placements.set(person.id, room.id); donor.occupants = donor.occupants.filter(o => o.id !== person.id); donor.used--; room.occupants.push(person); room.used++; };
+
+            // `group` = null | { rule, key } — the keep_together rule that formed this unit and its display
+            // value, so a forced division can be reported under that rule's name.
+            const placePartition = (people, group) => {
+                if (people.length === 0) return;
+                const feasible = R.filter(room => freeOf(room) >= people.length && compatible(room, people));
+                if (feasible.length) {
+                    feasible.sort((a, b) => score(b, people) - score(a, people));
+                    for (const p of [...people]) assignTo(feasible[0], p);
+                    return;
+                }
+                if (people.length > 1) {
+                    // Divide along a configured split_by field first, then fall back to chunking.
+                    for (const sr of splitRules) {
+                        const sub = partitionBy(people, [sr.field]);
+                        if (sub.length > 1) {
+                            if (group) noteViol(group.rule.name, `El grupo «${group.key}» se dividió por «${sr.name}» en ${sub.length} partes.`, group.rule.hard);
+                            for (const x of sub) placePartition(x, group);
+                            return;
+                        }
+                    }
+                    // The room with the most free beds that takes the longest run of these people the rules allow
+                    // together (every one checked, not only the first). 2.19's own rule — the most free beds where the
+                    // FIRST person fits, then as many as fit — for its placement ('greedy'), so that one stays 2.19's
+                    // exactly: its parts are units, uniform on the dividing fields or explained by their family.
+                    let target = null, freeMax = 0, take = 0;
+                    for (const room of R) {
+                        const free = freeOf(room);
+                        if (free < 1 || free <= freeMax) continue;
+                        if (legacy) {
+                            if (compatible(room, [people[0]])) {
+                                // 2.19's run, stopped before anyone a shared room's class refuses (2.21.0: the class binds
+                                // every bed of the room, not only the first person's).
+                                const run = people.slice(0, Math.min(free, people.length));
+                                const stop = run.findIndex(p => !lockAllows(room.lock, p));
+                                target = room; freeMax = free; take = stop < 0 ? run.length : stop;
+                            }
+                            continue;
+                        }
+                        let k = Math.min(free, people.length);
+                        while (k > 0 && !compatible(room, people.slice(0, k))) k--;
+                        if (k > 0) { target = room; freeMax = free; take = k; }
+                    }
+                    if (target) {
+                        for (const p of people.slice(0, take)) assignTo(target, p);
+                        if (group) noteViol(group.rule.name, `El grupo «${group.key}» (${people.length}) no cupo junto y se dividió.`, group.rule.hard);
+                        placePartition(people.slice(take), group);
+                        return;
+                    }
+                    // No room left with any free, compatible capacity — leave them unassigned; they're
+                    // counted in `remaining` and reported once (aggregated by count) at the end.
+                    return;
+                }
+                let target = null, best = -Infinity;
+                for (const room of R) {
+                    if (freeOf(room) >= 1 && compatible(room, people)) { const sc = score(room, people); if (sc > best) { best = sc; target = room; } }
+                }
+                if (target) assignTo(target, people[0]);
+                // else: left unassigned → aggregated into the single capacity violation at the end.
+            };
+
+            if (kind === 'greedy') {
+                // 2.19: units one by one, larger first (each divided by the hard rules that outrank it).
+                for (const u of units) for (const part of u.parts) placePartition(part, u.group);
+            } else {
+                const peopleIn = (inside) => inside.flatMap(x => x.people);
+                // A bed a child still needs for its adult (a HARD require_companion subject without enough companions
+                // in the room) goes only to someone who brings one: anyone else would leave the child alone for good.
+                const blocksCompanion = (room, people) => {
+                    const after = room.occupants.concat(people);
+                    const left = freeOf(room) - people.length;
+                    for (const rule of companionRules) {
+                        if (!rule.hard) continue;
+                        const view = viewFor(rule, after);
+                        if (!view.some(o => cond(rule.params.subject, o))) continue;
+                        const missing = (Number(rule.params.min) || 1) - view.filter(o => cond(rule.params.needs, o)).length;
+                        if (missing > 0 && left < missing) return true;
+                    }
+                    return false;
+                };
+                const fitsBin = (b, it, inside) => compatible(b.room, peopleIn(inside).concat(it.people)) && !blocksCompanion(b.room, peopleIn(inside).concat(it.people));
+                const costBin = (b, it, inside) => softCost(b.room, peopleIn(inside).concat(it.people));
+                const baseClasses = splitAlts[kind] ? splitClassesOf(kind) : packClasses;
+                const classes = kind === 'pack-size' ? [...baseClasses].sort((a, b) => (Number(a.wild) - Number(b.wild)) || (b.size - a.size)) : baseClasses;
+                for (const cls of classes) {
+                    let pending = cls.parts;
+                    const partial = R.filter(r => r.occupants.length > 0 && freeOf(r) > 0).map(r => ({ room: r, free: freeOf(r) }));
+                    if (partial.length) {
+                        const res = pack.packInto(pending, partial, fitsBin, costBin);
+                        for (const [it, b] of res.placed) for (const p of it.people) assignTo(b.room, p);
+                        pending = res.left;
+                    }
+                    if (pending.length) {
+                        const empty = R.filter(r => r.occupants.length === 0 && freeOf(r) > 0).map(r => ({ room: r, free: freeOf(r) }));
+                        const res = pack.packNew(pending, empty, fitsBin, costBin);
+                        for (const [it, b] of res.placed) for (const p of it.people) assignTo(b.room, p);
+                        pending = res.left;
+                    }
+                    // A probe («Sugerir reparto») leaves what did not fit whole for the plan to place — except a group
+                    // bigger than every room (here and among the plan's free ones): no arrangement keeps it together, so
+                    // it goes in piece by piece, as a run places it.
+                    if (opts.probe) {
+                        const biggest = Math.max(Number(opts.maxRoom) || 0, ...R.map(r => r.capacity));
+                        pending = pending.filter(it => it.people.length > biggest);
+                    }
+                    // A part mixed on a hard «separar por» (a family an outranking rule keeps together) that no room
+                    // took whole — its mixed room is the family's alone (judgedBy): divided along those values, each
+                    // piece packed like any part (rooms with people first). The family is divided anyway; this way
+                    // the «separar por» holds and the pieces may complete rooms of their value (2.21.0).
+                    else if (pending.length && ctx.hardSeparate.length) {
+                        const fields = ctx.hardSeparate.map(r => r.field).filter(Boolean);
+                        const pieces = [], whole = [];
+                        for (const it of pending) {
+                            const own = it.people.filter(p => !it.donors.includes(p));
+                            const split = ctx.partitionBy(own, fields);
+                            if (split.length < 2) { whole.push(it); continue; }
+                            for (const people of split) pieces.push({ people, group: it.group, size: people.length, donors: [] });
+                            for (const d of it.donors) pieces.push({ people: [d], group: null, size: 1, donors: [] });
+                        }
+                        let left = pieces;
+                        const partialRooms = R.filter(r => r.occupants.length > 0 && freeOf(r) > 0).map(r => ({ room: r, free: freeOf(r) }));
+                        if (left.length && partialRooms.length) {
+                            const res = pack.packInto(left, partialRooms, fitsBin, costBin);
+                            for (const [it, b] of res.placed) for (const p of it.people) assignTo(b.room, p);
+                            left = res.left;
+                        }
+                        if (left.length) {
+                            const emptyRooms = R.filter(r => r.occupants.length === 0 && freeOf(r) > 0).map(r => ({ room: r, free: freeOf(r) }));
+                            const res = pack.packNew(left, emptyRooms, fitsBin, costBin);
+                            for (const [it, b] of res.placed) for (const p of it.people) assignTo(b.room, p);
+                            left = res.left;
+                        }
+                        pending = whole.concat(left);
+                    }
+                    for (const it of pending) {
+                        const own = it.people.filter(p => !it.donors.includes(p));
+                        placePartition(own, it.group);
+                        for (const d of it.donors) placePartition([d], null);
+                    }
+                }
+            }
+
+            // The room a repair takes someone from must keep its hard rules without them: no hard separate_by mix
+            // left unexplained, and no hard keep_together family taken apart — a family (its block of the hard
+            // separate_by rules that outrank it) that is WHOLE in that room: nobody of it elsewhere, nobody of it still
+            // without a bed. A family already divided loses nothing more (2.19 checked only the receiving room).
+            const norm = (v) => (v == null ? '' : String(v).trim().toLowerCase());
+            const leavesOk = (donor, o) => {
+                const rest = donor.occupants.filter(x => x.id !== o.id);
+                if (!mergedSeparateOk(rest, [])) return false;
+                for (const k of keepRules) {
+                    if (!k.hard || !k.field || !cond(k.params.when, o)) continue;
+                    const key = norm(val(o, k.field));
+                    if (!key) continue;
+                    const dividing = separateRules.filter(r => r.hard && r.field && r.rank < k.rank);
+                    const sameBlock = (x) => x.id !== o.id && cond(k.params.when, x) && norm(val(x, k.field)) === key && dividing.every(r => norm(val(x, r.field)) === norm(val(o, r.field)));
+                    if (!rest.some(sameBlock)) continue;
+                    const elsewhere = R.some(r => r !== donor && r.occupants.some(sameBlock));
+                    const waiting = participants.some(p => !placements.has(p.id) && sameBlock(p));
+                    if (!elsewhere && !waiting) return false;
+                }
+                return true;
+            };
+            // Repair pass for HARD require_companion: pull a "needs" member into a room that has a subject
+            // but too few companions (respecting capacity + hard separate + roomAllows), without stranding
+            // the donor. Only occupants of THIS scope are movable (`fixed` ones stay where they are).
+            for (const rule of companionRules) {
+                if (!rule.hard) continue;
+                const min = Number(rule.params.min) || 1;
+                for (const room of R) {
+                    if (!viewFor(rule, room.occupants).some(o => cond(rule.params.subject, o))) continue;
+                    let have = viewFor(rule, room.occupants).filter(o => cond(rule.params.needs, o)).length;
+                    while (have < min && freeOf(room) >= 1) {
+                        let moved = false;
+                        for (const donor of R) {
+                            if (donor === room) continue;
+                            const donorView = viewFor(rule, donor.occupants);
+                            const donorHasSubject = donorView.some(o => cond(rule.params.subject, o));
+                            const donorNeeds = donorView.filter(o => cond(rule.params.needs, o)).length;
+                            if (donorHasSubject && donorNeeds <= min) continue; // don't break the donor's own rule
+                            const cand = donorView.find(o => !o.fixed && cond(rule.params.needs, o) && compatible(room, [o]) && (legacy || leavesOk(donor, o)));
+                            if (cand) { moveTo(room, donor, cand); have++; moved = true; break; }
+                        }
+                        if (!moved) break;
+                    }
+                }
+            }
+            return { kind, rooms: R, placements, assignedCount: placed, violations };
+        };
+        // [hard broken, without a bed, rooms used, empty beds in them, preferences broken] — lower is better.
+        const scoreOf = (st) => {
+            let hard = st.violations.filter(v => v.hard).length, soft = st.violations.filter(v => !v.hard).length, used = 0, empty = 0;
+            for (const room of st.rooms) {
+                if (!room.occupants.length) continue;
+                used++; empty += freeOf(room);
+                if (!mergedSeparateOk(room.occupants, [])) hard++;
+                for (const rule of companionUnmet(room.occupants)) { if (rule.hard) hard++; else soft++; }
+                for (const rule of softSeparate) if (distinctValues(judgedBy(rule, viewFor(rule, room.occupants), keepRules), rule.field).length > 1) soft++;
+            }
+            return [hard, participants.length - st.assignedCount, used, empty, soft];
+        };
+        const lexLess = (a, b) => { for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) return a[k] < b[k]; return false; };
+        let chosen = null;
+        const kinds = opts.probe ? ['pack'] : opts.strategies || ['pack', 'pack-size', 'greedy'];
+        for (const kind of kinds) {
+            const st = runStrategy(kind);
+            st.score = scoreOf(st);
+            if (!chosen || lexLess(st.score, chosen.score)) chosen = st;
+        }
+        // A preferred mixed family gives way only when someone would otherwise be left without a bed (the owner: «que
+        // ceda si falta cama»): the split is taken when it beds more people and breaks no more hard rules — with beds
+        // enough, families stay together even in a room bigger than them.
+        if (!opts.probe && kinds.includes('pack')) {
+            for (const kind of ['pack-split-a', 'pack-split']) {
+                if (chosen.score[1] === 0 || !splitClassesOf(kind)) continue;
+                const st = runStrategy(kind);
+                st.score = scoreOf(st);
+                if (st.score[0] <= chosen.score[0] && st.score[1] < chosen.score[1]) chosen = st;
+            }
+        }
+        const finalRooms = chosen.rooms;
+        const placements = chosen.placements;
+        const assignedCount = chosen.assignedCount;
+        const violations = chosen.violations;
+        const noteViol = (rule, detail, hard) => { if (!violations.some(v => v.rule === rule && v.detail === detail)) violations.push({ rule, detail, hard: !!hard }); };
 
         // Single flush of every placement (chunks of 200 through db.batch; the assignment lock still
-        // serialises runs, so nothing else writes room_id meanwhile).
-        const writes = [];
-        for (const [personId, roomId] of placements) writes.push([`UPDATE ${T.inscriptions} SET room_id = ? WHERE id = ?`, [roomId, personId]]);
-        await runBatched(writes);
+        // serialises runs, so nothing else writes room_id meanwhile). A simulation writes to its copy.
+        await io.flush(placements);
 
-        // Report every remaining companion gap (hard ones we couldn't repair + soft preferences).
-        for (const room of rooms) {
+        // The preferences this run gave way to (2.20.0): a soft separate_by mixed in a room it filled, to use fewer
+        // rooms (the owner's choice: rooms over preferences). Reported, never hard.
+        const filled = new Set(placements.values());
+        for (const room of finalRooms) {
+            if (!filled.has(room.id)) continue;
+            for (const rule of softSeparate) {
+                const values = distinctValues(judgedBy(rule, viewFor(rule, room.occupants), keepRules), rule.field);
+                if (values.length > 1) noteViol(rule.name, `Habitación ${room.room_number || room.id}: mezcla ${values.length} valores de «${rule.field}» (${values.join(', ')}) para usar menos habitaciones.`, false);
+            }
+        }
+
+        // Report every remaining companion gap (hard ones we couldn't repair + soft preferences). The sweep
+        // reports them once, on the final rooms (sweepCompanionReport), so its scopes stay quiet here.
+        if (!opts.quietRooms) for (const room of finalRooms) {
             for (const rule of companionUnmet(room.occupants)) {
                 noteViol(rule.name, `Habitación ${room.room_number || room.id}: no se cumplió «${rule.name}».`, rule.hard);
             }
@@ -4905,16 +6543,51 @@ exports.init = async function (wordjs) {
 
         // One clear, count-accurate capacity report (instead of per-person lines that would dedupe).
         const remaining = participants.length - assignedCount;
-        if (remaining > 0) noteViol('capacidad', remaining === 1 ? '1 inscrito quedó sin cupo — faltan habitaciones.' : `${remaining} inscritos quedaron sin cupo — faltan habitaciones.`, true);
+        if (remaining > 0 && !opts.quietCapacity) noteViol('capacidad', capacityDetail(remaining), true);
         return { assignedCount, remaining, violations };
     }
+    const capacityDetail = (n) => (n === 1 ? '1 inscrito quedó sin cupo — faltan habitaciones.' : `${n} inscritos quedaron sin cupo — faltan habitaciones.`);
 
     // Delegated locations of a conference (at least one allotted room), with their review status.
     async function delegatedLocations(conferenceId) {
         const rows = await db.all(
-            `SELECT l.id, l.name, l.lodging_status FROM ${T.locations} l WHERE l.conference_id = ? AND EXISTS (SELECT 1 FROM ${T.rooms} r WHERE r.location_id = l.id ) ORDER BY l.name`,
+            `SELECT l.id, l.name, l.lodging_status FROM ${T.locations} l WHERE l.conference_id = ? AND (EXISTS (SELECT 1 FROM ${T.rooms} r WHERE r.location_id = l.id ) OR EXISTS (SELECT 1 FROM ${T.roomBeds} b WHERE b.location_id = l.id )) ORDER BY l.name`,
             [conferenceId]);
         return rows.map(l => ({ id: l.id, name: l.name, status: lodgingStatusOf(l) }));
+    }
+
+    // The sweep's companion breaches (2.18.0), judged once on the final rooms instead of per scope (the
+    // scopes overlapped: the pool, the overflow and a location saw the same shared room). A location's own
+    // rule judges that location's people; a conference rule judges the owner's people in a whole room and
+    // everyone in a pool or shared room. Rooms of a frozen location, and frozen locations' own rules, are
+    // left out (the sweep did not touch them). Each breach carries the location whose line it belongs to
+    // (null = the conference's).
+    async function sweepCompanionReport(conferenceId, frozenIds, io = dbAssignmentIo(conferenceId)) {
+        const rules = rankRules((await io.companionRules())
+            .map(parseRuleRow).filter(ruleOnFormFields(await io.fieldNames())));
+        if (!rules.length) return [];
+        const rooms = await io.reportRooms();
+        const byRoom = new Map();
+        for (const o of await io.placed()) {
+            if (!byRoom.has(Number(o.room_id))) byRoom.set(Number(o.room_id), []);
+            byRoom.get(Number(o.room_id)).push({ ...o, custom_data: parseCd(o.custom_data) });
+        }
+        const out = [];
+        for (const room of rooms) {
+            const owner = room.location_id == null ? null : Number(room.location_id);
+            if (owner != null && frozenIds.has(owner)) continue;
+            const occupants = byRoom.get(Number(room.id)) || [];
+            if (!occupants.length) continue;
+            for (const rule of rules) {
+                const ruleLoc = rule.location_id == null ? null : Number(rule.location_id);
+                if (ruleLoc != null && frozenIds.has(ruleLoc)) continue;
+                const judged = ruleLoc != null ? ruleLoc : owner;
+                const view = judged != null ? occupants.filter(o => o.location_id != null && Number(o.location_id) === judged) : occupants;
+                if (!view.length || !companionUnmetIn([rule], view).length) continue;
+                out.push({ location_id: judged, rule: rule.name, detail: `Habitación ${room.room_number || room.id}: no se cumplió «${rule.name}».`, hard: !!rule.hard });
+            }
+        }
+        return out;
     }
 
     // `locationId` given (number) → that location's scope only (the coordinator's run; the admin's
@@ -4922,26 +6595,1124 @@ exports.init = async function (wordjs) {
     // conference-wide sweep: the pool scope, then one scope per delegated location that is not frozen,
     // in name order. Totals on top, per-location detail in `by_location`, EVERY frozen location of the
     // conference (delegated or not — its attendees are untouchable either way) in `skipped_frozen`.
-    async function runAssignment(conferenceId, { locationId } = {}) {
-        if (locationId === null) return runAssignmentScope(conferenceId, null);
-        if (locationId !== undefined) return runAssignmentScope(conferenceId, locationId);
-        const delegated = await delegatedLocations(conferenceId);
-        const frozenRows = await db.all(`SELECT id, name, lodging_status FROM ${T.locations} WHERE conference_id = ? AND ${frozenSql} ORDER BY name`, [conferenceId]);
+    // `io` (2.20.0): the database by default; an in-memory copy for a simulation (see dbAssignmentIo).
+    async function runAssignment(conferenceId, { locationId, io = dbAssignmentIo(conferenceId), mode, snap } = {}) {
+        if (locationId === null) return runAssignmentScope(conferenceId, null, { io });
+        if (locationId !== undefined) return runAssignmentScope(conferenceId, locationId, { io });
+        // THE SWEEP'S MODE (2.20.0). Each scope keeps its best strategy, but scopes meet — in shared rooms and in
+        // the overflow — where one scope's best can leave the next worse off. So the whole sweep is first run on
+        // copies of the conference: «best» (each scope its best) and «legacy» (2.19's placement in every scope);
+        // the run takes the one that leaves the conference better off: fewer hard rules broken, fewer people
+        // without a bed, fewer rooms, fewer empty beds, fewer preferences broken. `snap`: the copy a simulation
+        // already holds (otherwise the conference is loaded).
+        if (!mode) {
+            const start = snap ? cloneSnapshot(snap) : await loadAssignmentSnapshot(conferenceId);
+            let bestScore = null;
+            for (const m of ['best', 'legacy']) {
+                const copy = cloneSnapshot(start);
+                await runAssignment(conferenceId, { io: snapshotAssignmentIo(copy), mode: m });
+                const sc = sweepScore(copy);
+                if (!bestScore || sweepLess(sc, bestScore)) { bestScore = sc; mode = m; }
+            }
+        }
+        const strategies = mode === 'legacy' ? ['greedy'] : undefined;
+        const delegated = await io.delegatedLocations();
+        const frozenRows = await io.frozenRows();
         const frozenIds = new Set(frozenRows.map(l => Number(l.id)));
-        const pool = await runAssignmentScope(conferenceId, null, { delegatedIds: new Set(delegated.map(l => Number(l.id))), frozenIds });
+        const delegatedIds = new Set(delegated.map(l => Number(l.id)));
+        // Every scope of the sweep keeps its capacity line and its per-room companion report for the end.
+        const quiet = { quietCapacity: true, quietRooms: true, io, strategies };
+        const pool = await runAssignmentScope(conferenceId, null, { delegatedIds, frozenIds, ...quiet });
         const result = {
-            assignedCount: pool.assignedCount, remaining: pool.remaining, violations: pool.violations.slice(), by_location: [],
+            assignedCount: pool.assignedCount, remaining: 0, violations: pool.violations.slice(), by_location: [],
             skipped_frozen: frozenRows.map(l => ({ location_id: l.id, name: l.name, status: lodgingStatusOf(l) })),
         };
+        const pushOnce = (list, v) => { if (!list.some(x => x.rule === v.rule && x.detail === v.detail)) list.push(v); };
+        const swept = [];
         for (const l of delegated) {
             if (frozenIds.has(Number(l.id))) continue;
-            const r = await runAssignmentScope(conferenceId, l.id);
-            result.assignedCount += r.assignedCount;
-            result.remaining += r.remaining;
-            for (const v of r.violations) result.violations.push({ rule: v.rule, detail: `«${l.name}»: ${v.detail}`, hard: v.hard });
-            result.by_location.push({ location_id: l.id, name: l.name, assignedCount: r.assignedCount, remaining: r.remaining, violations: r.violations });
+            swept.push({ l, r: await runAssignmentScope(conferenceId, l.id, quiet) });
         }
+        // A pool bed a location run freed (its repair pass moved one of its people off a pool bed) goes
+        // to the pool's own attendees first.
+        let poolLeft = pool.remaining;
+        if (poolLeft > 0 && swept.length) {
+            const again = await runAssignmentScope(conferenceId, null, { delegatedIds, frozenIds, ...quiet });
+            result.assignedCount += again.assignedCount;
+            poolLeft = again.remaining;
+            for (const v of again.violations) pushOnce(result.violations, v);
+        }
+        if (poolLeft > 0) result.violations.push({ rule: 'capacidad', detail: capacityDetail(poolLeft), hard: true });
+        result.remaining = poolLeft;
+        // Overflow (2.18.0), location by location in name order: the people a location's own beds could not
+        // hold take the pool beds still free, under the admin's (conference) rules.
+        for (const { l, r } of swept) {
+            const o = r.remaining > 0 ? await runAssignmentScope(conferenceId, null, { delegatedIds, frozenIds, overflowLocationId: l.id, ...quiet }) : null;
+            const inPool = o ? o.assignedCount : 0;
+            const left = Math.max(0, r.remaining - inPool);
+            const violations = r.violations.slice();
+            if (o) for (const v of o.violations) pushOnce(violations, { rule: v.rule, detail: `Camas del pool: ${v.detail}`, hard: v.hard });
+            if (left > 0) violations.push({ rule: 'capacidad', detail: capacityDetail(left), hard: true });
+            result.assignedCount += r.assignedCount + inPool;
+            result.remaining += left;
+            result.by_location.push({ location_id: l.id, name: l.name, assignedCount: r.assignedCount + inPool, pool_beds: inPool, remaining: left, violations });
+        }
+        // Companion breaches, once, on the final rooms of the sweep (2.18.0): a breach in a location's whole
+        // room, or of a location's own rule, goes on that location's line too.
+        const companion = await sweepCompanionReport(conferenceId, frozenIds, io);
+        const lineOf = new Map(result.by_location.map(x => [Number(x.location_id), x]));
+        for (const v of companion) {
+            const line = v.location_id != null ? lineOf.get(Number(v.location_id)) : null;
+            if (line) pushOnce(line.violations, { rule: v.rule, detail: v.detail, hard: v.hard });
+            else if (v.location_id == null) pushOnce(result.violations, { rule: v.rule, detail: v.detail, hard: v.hard });
+        }
+        for (const line of result.by_location) {
+            for (const v of line.violations) result.violations.push({ rule: v.rule, detail: `«${line.name}»: ${v.detail}`, hard: v.hard });
+        }
+        // The skipped locations' attendees still without a bed (each skipped location's `unassigned`, and
+        // their sum): `remaining` only counts the scopes the run covered, so without these the report said
+        // «Pendientes: 0» next to the explorer's «2 sin asignar» (2.17.0). remaining + skipped_unassigned is
+        // every non-cancelled attendee still without a bed once the run is done (read under the same lock).
+        const byFrozen = await io.unassignedByLocation(frozenRows.map(l => Number(l.id)));
+        for (const s of result.skipped_frozen) s.unassigned = byFrozen.get(Number(s.location_id)) || 0;
+        result.skipped_unassigned = result.skipped_frozen.reduce((n, s) => n + s.unassigned, 0);
         return result;
+    }
+
+    // ── the engine on a copy (2.20.0) ─────────────────────────────────────────────────────────────
+    // A SNAPSHOT is the conference as the engine reads it — rules, the form's field names, locations (in
+    // the database's name order, the sweep's order), rooms (by id, with their hotel), the bed shares and
+    // every inscription — loaded in one go. snapshotAssignmentIo answers the engine's reads from it exactly
+    // as dbAssignmentIo answers them from the database (same filters, same order) and writes placements into
+    // it, so runAssignment on a snapshot does what it would do on the database. The planner changes a copy's
+    // allotment (setRoomWhole / setRoomShares / setRoomPool) and runs the engine on it.
+    async function loadAssignmentSnapshot(conferenceId) {
+        const [rules, fieldNames, locations, rooms, reportOrder, people] = await Promise.all([
+            db.all(`SELECT * FROM ${T.rules} WHERE conference_id = ? ORDER BY priority DESC, id ASC`, [conferenceId]),
+            ruleFieldNames(conferenceId),
+            db.all(`SELECT id, name, lodging_status, lodging_order FROM ${T.locations} WHERE conference_id = ? ORDER BY name`, [conferenceId]),
+            db.all(`SELECT r.*, h.name AS hotel_name FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id WHERE h.conference_id = ? ORDER BY r.id`, [conferenceId]),
+            db.all(`SELECT r.id FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id WHERE h.conference_id = ? ORDER BY h.name, r.room_number, r.id`, [conferenceId]),
+            db.all(`SELECT * FROM ${T.inscriptions} WHERE conference_id = ? ORDER BY id`, [conferenceId]),
+        ]);
+        const roomIds = rooms.map(r => r.id);
+        const roomBeds = [];
+        for (let i = 0; i < roomIds.length; i += 400) {
+            const chunk = roomIds.slice(i, i + 400);
+            if (chunk.length) roomBeds.push(...await db.all(`SELECT id, room_id, location_id, beds FROM ${T.roomBeds} WHERE room_id IN (${chunk.map(() => '?').join(', ')}) ORDER BY id`, chunk));
+        }
+        roomBeds.sort((a, b) => Number(a.id) - Number(b.id));
+        return {
+            conferenceId: Number(conferenceId), rules, fieldNames, locations,
+            rooms: rooms.map(r => ({ ...r, id: Number(r.id), location_id: r.location_id == null ? null : Number(r.location_id) })),
+            reportOrder: reportOrder.map(r => Number(r.id)),
+            roomBeds: roomBeds.map(b => ({ id: Number(b.id), room_id: Number(b.room_id), location_id: Number(b.location_id), beds: Number(b.beds) || 0 })),
+            people: people.map(p => ({ ...p, id: Number(p.id), room_id: p.room_id == null ? null : Number(p.room_id), location_id: p.location_id == null ? null : Number(p.location_id) })),
+        };
+    }
+    const cloneSnapshot = (s) => ({ ...s, rooms: s.rooms.map(r => ({ ...r })), roomBeds: s.roomBeds.map(b => ({ ...b })), people: s.people.map(p => ({ ...p })) });
+    // Allotment edits on a copy (the planner's): a room whole to a location, split into shares, or pool.
+    const nextBedId = (s) => s.roomBeds.reduce((n, b) => Math.max(n, b.id), 0) + 1;
+    const setRoomPool = (s, roomId) => { const r = s.rooms.find(x => x.id === roomId); if (r) { r.location_id = null; r.share_lock = null; } s.roomBeds = s.roomBeds.filter(b => b.room_id !== roomId); };
+    const setRoomWhole = (s, roomId, lid) => { setRoomPool(s, roomId); const r = s.rooms.find(x => x.id === roomId); if (r) r.location_id = Number(lid); };
+    const setRoomShares = (s, roomId, shares) => {
+        setRoomPool(s, roomId);
+        let id = nextBedId(s);
+        for (const x of shares) if (x.beds > 0) s.roomBeds.push({ id: id++, room_id: roomId, location_id: Number(x.location_id), beds: x.beds });
+    };
+    // `delegated`: locations to treat as having beds although the copy gives them none yet (the planner's
+    // probe: their people are not the pool's).
+    function snapshotAssignmentIo(s, { delegated: forced = new Set() } = {}) {
+        const live = (p) => p.status == null || p.status !== 'cancelled';
+        const byId = (a, b) => a.id - b.id;
+        const ruleOn = (r) => Number(r.enabled) === 1;
+        const frozen = () => s.locations.filter(isFrozen);
+        const owners = () => new Set(s.rooms.filter(r => r.location_id != null).map(r => r.location_id));
+        const sharers = () => new Set(s.roomBeds.map(b => b.location_id));
+        const roomsOf = (lid) => s.rooms.filter(r => (lid == null ? r.location_id == null : r.location_id === Number(lid) || s.roomBeds.some(b => b.room_id === r.id && b.location_id === Number(lid))));
+        return {
+            conferenceId: s.conferenceId,
+            rules: async (ruleLocation) => s.rules.filter(r => ruleOn(r) && (r.location_id == null || (ruleLocation != null && Number(r.location_id) === Number(ruleLocation)))),
+            companionRules: async () => s.rules.filter(r => ruleOn(r) && r.type === 'require_companion'),
+            fieldNames: async () => s.fieldNames,
+            delegatedIds: async () => new Set([...owners(), ...sharers(), ...forced]),
+            frozenRows: async () => frozen().map(l => ({ id: l.id, name: l.name, lodging_status: l.lodging_status })),
+            delegatedLocations: async () => {
+                const o = owners(), sh = sharers();
+                return s.locations.filter(l => o.has(Number(l.id)) || sh.has(Number(l.id))).map(l => ({ id: l.id, name: l.name, status: lodgingStatusOf(l) }));
+            },
+            participants: async (lid) => s.people.filter(p => p.location_id === Number(lid) && p.room_id == null && live(p)).map(p => ({ ...p })),
+            poolParticipants: async () => {
+                const o = owners(), sh = sharers(), fz = new Set(frozen().map(l => Number(l.id)));
+                return s.people.filter(p => p.room_id == null && live(p) && (p.location_id == null
+                    || (!o.has(p.location_id) && !sh.has(p.location_id) && !fz.has(p.location_id) && !forced.has(p.location_id)))).map(p => ({ ...p }));
+            },
+            scopeRooms: async (lid) => roomsOf(lid).sort(lid == null ? byId : (a, b) => Number(a.hotel_id) - Number(b.hotel_id) || a.id - b.id).map(r => ({ ...r })),
+            scopeOccupants: async (lid) => { const ids = new Set(roomsOf(lid).map(r => r.id)); return s.people.filter(p => p.room_id != null && ids.has(p.room_id)).map(p => ({ ...p })); },
+            lockFields: async () => lockFieldsOf(s.rules, s.fieldNames),
+            shares: async (roomIds) => {
+                const want = new Set((roomIds || []).map(Number));
+                const map = new Map();
+                for (const b of s.roomBeds) {
+                    if (!want.has(b.room_id)) continue;
+                    if (!map.has(b.room_id)) map.set(b.room_id, []);
+                    map.get(b.room_id).push({ location_id: b.location_id, beds: Math.max(0, b.beds) });
+                }
+                return map;
+            },
+            flush: async (placements) => { const at = new Map(s.people.map(p => [p.id, p])); for (const [pid, rid] of placements) { const p = at.get(Number(pid)); if (p) p.room_id = Number(rid); } },
+            unassignedByLocation: async (ids) => {
+                const want = new Set(ids.map(Number)), out = new Map();
+                for (const p of s.people) if (p.room_id == null && live(p) && p.location_id != null && want.has(p.location_id)) out.set(p.location_id, (out.get(p.location_id) || 0) + 1);
+                return out;
+            },
+            reportRooms: async () => { const at = new Map(s.rooms.map(r => [r.id, r])); return s.reportOrder.map(id => at.get(id)).filter(Boolean).map(r => ({ id: r.id, room_number: r.room_number, location_id: r.location_id })); },
+            placed: async () => s.people.filter(p => p.room_id != null).map(p => ({ ...p })),
+        };
+    }
+    // A conference's rules as a run reads them (enabled, on form fields, ranked), each location's view of them, and
+    // the audit of a snapshot's rooms: every location present applies its view to the room (a conference rule sees
+    // everyone, its own rules its people — the engine's mergedSeparateOk); a require_companion as
+    // sweepCompanionReport does (its own rule on its people; a conference rule on the owner's people in a whole
+    // room, on everyone in a pool or shared room). `who`: the people whose rooms are judged.
+    function makeAuditor(S) {
+        const allRules = rankRules(S.rules.filter(r => Number(r.enabled) === 1).map(parseRuleRow).filter(ruleOnFormFields(S.fieldNames)));
+        const cache = new Map();
+        const ctxFor = (lid) => {
+            const k = lid == null ? 'pool' : String(lid);
+            if (!cache.has(k)) cache.set(k, scopeRuleContext(allRules.filter(r => r.location_id == null || (lid != null && Number(r.location_id) === Number(lid))), { isPool: lid == null, locationId: lid == null ? null : Number(lid) }));
+            return cache.get(k);
+        };
+        const audit = (T2, who) => {
+            const hard = [], soft = [];
+            const occ = new Map();
+            for (const p of T2.people) {
+                if (p.room_id == null) continue;
+                if (!occ.has(p.room_id)) occ.set(p.room_id, []);
+                occ.get(p.room_id).push({ ...p, custom_data: parseCd(p.custom_data) });
+            }
+            const seen = new Set();
+            const note = (list, v) => { const k = v.key || `${v.room_id}|${v.rule}`; if (!seen.has(k)) { seen.add(k); list.push(v); } };
+            // keep_together, as auditArrangement: a family (the rule's value, `when` honoured, at least min_size people)
+            // in more than one room, or in a room while someone of it has no bed — judged per block of the hard
+            // separate_by rules that outrank it (a family divided by gender on purpose is no breach). A conference
+            // rule's family spans locations (a group split between scopes IS split); a location's own rule, its people.
+            const norm = (v) => (v == null ? '' : String(v).trim().toLowerCase());
+            const liveOnes = T2.people.filter(p => p.status == null || p.status !== 'cancelled').map(p => ({ ...p, custom_data: parseCd(p.custom_data) }));
+            for (const rule of allRules) {
+                if (rule.type !== 'keep_together' || !rule.field) continue;
+                const own = rule.location_id == null ? null : Number(rule.location_id);
+                const dividing = allRules.filter(r => r.type === 'separate_by' && r.hard && r.field && r.rank < rule.rank && (r.location_id == null || Number(r.location_id) === own));
+                const groups = new Map();
+                for (const p of liveOnes) {
+                    if (own != null && p.location_id !== own) continue;
+                    if (!condMatches(rule.params.when, p)) continue;
+                    const k = norm(ruleVal(p, rule.field));
+                    if (!k) continue;
+                    if (!groups.has(k)) groups.set(k, { display: String(ruleVal(p, rule.field)).trim(), members: [] });
+                    groups.get(k).members.push(p);
+                }
+                const min = Number(rule.params.min_size) || 1;
+                for (const g of groups.values()) {
+                    if (g.members.length < min || !g.members.some(who)) continue;
+                    const blocks = new Map();
+                    for (const p of g.members) { const bk = dividing.map(d => norm(ruleVal(p, d.field))).join('\u0001'); if (!blocks.has(bk)) blocks.set(bk, []); blocks.get(bk).push(p); }
+                    for (const [bk, b] of blocks) {
+                        const rooms = new Set(b.filter(p => p.room_id != null).map(p => p.room_id));
+                        const out = b.filter(p => p.room_id == null).length;
+                        if (rooms.size > 1 || (rooms.size === 1 && out > 0)) note(rule.hard ? hard : soft, { room_id: null, key: `keep|${rule.id}|${norm(g.display)}|${bk}`, location_id: own,
+                            location_ids: [...new Set(b.map(p => p.location_id))], rule: rule.name, hard: !!rule.hard,
+                            detail: `El grupo «${g.display}» está en ${rooms.size === 1 ? '1 habitación' : rooms.size + ' habitaciones'}${out ? ` y ${out} sin cama` : ''}.` });
+                    }
+                }
+            }
+            for (const room of T2.rooms) {
+                const list = occ.get(room.id);
+                if (!list || !list.some(who)) continue;
+                const owner = room.location_id == null ? null : Number(room.location_id);
+                const label = `Habitación ${room.room_number || room.id}`;
+                for (const lid of [...new Set(list.map(o => o.location_id))]) {
+                    const c = ctxFor(lid);
+                    for (const rule of c.separateRules) {
+                        if (!rule.field) continue;
+                        const values = distinctValues(judgedBy(rule, c.viewFor(rule, list), c.keepRules), rule.field);
+                        if (values.length > 1) note(rule.hard ? hard : soft, { room_id: room.id, location_id: rule.location_id == null ? owner : Number(rule.location_id), rule: rule.name, hard: !!rule.hard,
+                            detail: `${label}: mezcla ${values.length} valores de «${rule.field}» (${values.join(', ')})${rule.hard ? '' : ' para usar menos habitaciones'}.` });
+                    }
+                }
+                for (const rule of allRules) {
+                    if (rule.type !== 'require_companion') continue;
+                    const own = rule.location_id == null ? null : Number(rule.location_id);
+                    const view = own != null ? list.filter(o => o.location_id === own) : owner != null ? list.filter(o => o.location_id === owner) : list;
+                    if (view.length && companionUnmetIn([rule], view).length) note(rule.hard ? hard : soft, { room_id: room.id, location_id: own != null ? own : owner, rule: rule.name, hard: !!rule.hard,
+                        detail: `${label}: no se cumplió «${rule.name}».` });
+                }
+            }
+            return { hard, soft };
+        };
+        // What an arrangement gives `who`: hard rules broken, people without a bed, rooms used, their empty beds.
+        const measure = (T2, who) => {
+            const a = audit(T2, who);
+            const live = (p) => p.status == null || p.status !== 'cancelled';
+            const roomsWith = new Set(T2.people.filter(p => p.room_id != null && who(p)).map(p => p.room_id));
+            const count = new Map();
+            for (const p of T2.people) if (p.room_id != null) count.set(p.room_id, (count.get(p.room_id) || 0) + 1);
+            let empty = 0;
+            for (const r of T2.rooms) if (roomsWith.has(r.id)) empty += roomCapacityOf(r) - (count.get(r.id) || 0);
+            return { hard: a.hard.length, unplaced: T2.people.filter(p => who(p) && live(p) && p.room_id == null).length, rooms: roomsWith.size, empty_beds: empty, soft: a.soft.length, audit: a };
+        };
+        return { allRules, ctxFor, audit, measure };
+    }
+    // A finished sweep, for the choice of its mode: everyone not in a frozen location.
+    const sweepScore = (S) => {
+        const frozen = new Set(S.locations.filter(isFrozen).map(l => Number(l.id)));
+        const m = makeAuditor(S).measure(S, (p) => p.location_id == null || !frozen.has(Number(p.location_id)));
+        return [m.hard, m.unplaced, m.rooms, m.empty_beds, m.soft];
+    };
+    const sweepLess = (a, b) => { for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) return a[k] < b[k]; return false; };
+    // What the automatic assignment (the admin's conference-wide run) would do on `snap` — on a copy; returns
+    // the run's report and the copy with everyone placed.
+    async function simulateSweep(snap, opts = {}) {
+        const copy = cloneSnapshot(snap);
+        const result = await runAssignment(copy.conferenceId, { io: snapshotAssignmentIo(copy, opts), snap: copy });
+        return { result, snap: copy };
+    }
+
+    // ── «Sugerir reparto» (2.20.0) ────────────────────────────────────────────────────────────────
+    // The site owner: allotting rooms to locations by head count alone leaves arrangements the automatic
+    // assignment cannot fill without breaking a rule; the panel must SUGGEST how to give beds to the locations
+    // «de tal forma que se usen la menor cantidad de habitaciones y que no se incumplan las reglas».
+    //
+    // planOnSnapshot works on a copy of the conference:
+    //   1. Rooms it may (re)allot: nobody inside, in the chosen hotel, not a frozen location's; with `replan`
+    //      also the empty rooms already given to a draft location (they are reconsidered — kept when they
+    //      still fit best). Every other room, and everyone already placed, stays as it is.
+    //   2. Who needs a bed: every draft location's attendees without one, minus those its rooms that stay
+    //      can still take (a probe run of the engine on the rooms that stay), and the pool's (no location).
+    //   3. Each location's people are grouped exactly as a run groups them (scopeClasses) and packed into
+    //      the free rooms by the engine's arithmetic (lodging-pack.js): per class, the fewest rooms, then the
+    //      fewest spare beds. Rooms a location had are preferred, then rooms in a hotel it already uses.
+    //   4. With `share`, each class (the conference's hard separate_by values) is also packed with every
+    //      location together — shared rooms, beds per location — and that is kept only when it leaves fewer
+    //      people out, or uses fewer rooms, or leaves fewer empty beds than each location on its own rooms. Then
+    //      each room is swapped for a smaller free one when its people fit (fewer empty beds).
+    //   5. The plan PLACES its people too — those packed into its rooms and those the probe put in rooms their
+    //      location keeps — so the arrangement is exactly the one shown: a run left to itself, given only the
+    //      allotment, may give a shared room to another class than the plan meant (both fit the first location it
+    //      sweeps) and push the next locations' people onto pool beds. «Aplicar» then runs the automatic
+    //      assignment for whoever is still without a bed, so every candidate is judged after that run (settle:
+    //      simulateSweep, then makeAuditor's measure); a location left with someone without a bed or a hard rule
+    //      broken is planned again on its own rooms (no sharing), then with spare beds; the best plan wins.
+    // When the free beds do not reach everyone waiting (2.21.0; the owner: «en orden por localidad»), they go
+    // location by location in ORDER — the order the admin set in the sheet (POST /assignment/location-order), else
+    // the Localidades list (by name): the first gets every bed it needs, then the next, and so on; the score puts
+    // the earlier locations' people without a bed before rooms and empty beds. A hard keep_together group bigger
+    // than every free room (e.g. «mantener juntos» by gender) cannot be kept together by any arrangement: its
+    // people are packed one by one, and the plan says so (`oversized`).
+    // «Aplicar» re-plans under the assignment lock and writes the allotments and the placements only when the
+    // plan is still the same (`token`); nobody who has a bed is moved.
+    const PLAN_ATTEMPTS = 4;
+    async function planOnSnapshot(snap, opts = {}) {
+        const replan = opts.replan !== false, share = opts.share !== false;
+        const hotelId = opts.hotelId == null ? null : Number(opts.hotelId);
+        // «Rehacer todo el reparto» (`fresh`, 2.21.0 — the owner: a second suggestion after a new rule did nothing,
+        // since nobody with a bed is ever moved): the plan is made on a copy where every live person of a draft
+        // location, and of the pool, is out of their bed — unless the room is a frozen location's (whole or a share
+        // of it), or, with a hotel chosen, in another hotel. «Aplicar» unassigns them first (`moved_ids`); today's
+        // arrangement is still what the plan is measured against.
+        const original = snap;
+        const movedIds = [];
+        if (opts.fresh) {
+            const frozen0 = new Set(snap.locations.filter(isFrozen).map(l => Number(l.id)));
+            const roomById = new Map(snap.rooms.map(r => [r.id, r]));
+            const keepRoom = (roomId) => {
+                const r = roomById.get(roomId);
+                if (!r || isBlocked(r)) return true;
+                if (hotelId != null && Number(r.hotel_id) !== hotelId) return true;
+                if (r.location_id != null && frozen0.has(Number(r.location_id))) return true;
+                return snap.roomBeds.some(b => b.room_id === roomId && frozen0.has(Number(b.location_id)));
+            };
+            snap = cloneSnapshot(snap);
+            for (const p of snap.people) {
+                if (p.room_id == null || (p.status != null && p.status === 'cancelled')) continue;
+                if (p.location_id != null && frozen0.has(Number(p.location_id))) continue;
+                if (isPinned(p) || keepRoom(p.room_id)) continue;
+                movedIds.push({ inscription_id: p.id, room_id: p.room_id });
+                p.room_id = null;
+            }
+        }
+        const cid = snap.conferenceId;
+        const live = (p) => p.status == null || p.status !== 'cancelled';
+        const frozenIds = new Set(snap.locations.filter(isFrozen).map(l => Number(l.id)));
+        const locName = new Map(snap.locations.map(l => [Number(l.id), l.name]));
+        const occupied = new Set(snap.people.filter(p => p.room_id != null).map(p => p.room_id));
+        const sharesOf = (s, roomId) => s.roomBeds.filter(b => b.room_id === roomId);
+        const inHotel = (r) => hotelId == null || Number(r.hotel_id) === hotelId;
+        // Who waits for a bed: every draft location with someone without one (the plan's TARGETS), and the pool.
+        const targets = snap.locations.filter(l => !frozenIds.has(Number(l.id)) && snap.people.some(p => p.location_id === Number(l.id) && p.room_id == null && live(p)));
+        // In ORDER: the admin's (lodging_order), then the rest by name (the snapshot's order; a stable sort).
+        const rankOf = (l) => (l.lodging_order == null || l.lodging_order === '' ? Infinity : Number(l.lodging_order));
+        const byRank = (a, b) => { const x = rankOf(a), y = rankOf(b); return x === y ? 0 : x < y ? -1 : 1; };
+        targets.sort(byRank);
+        const targetIds = new Set(targets.map(l => Number(l.id)));
+        // 1. The rooms it may (re)allot: nobody inside, in the hotel chosen — a pool room, and with `replan` an
+        //    empty room of a location with someone waiting (a location with nobody waiting keeps its rooms).
+        const reusable = snap.rooms.filter(r => {
+            if (occupied.has(r.id) || !inHotel(r) || isBlocked(r)) return false;
+            const sh = sharesOf(snap, r.id);
+            if (r.location_id == null && !sh.length) return true;
+            if (!replan) return false;
+            if (r.location_id != null) return targetIds.has(r.location_id);
+            return sh.every(b => targetIds.has(b.location_id));
+        });
+        const reusableIds = new Set(reusable.map(r => r.id));
+        const base = cloneSnapshot(snap);
+        for (const r of reusable) setRoomPool(base, r.id);
+
+        // 2. Who still needs a bed once the rooms that stay are used — the engine itself, on a copy without the free
+        //    rooms, as a PROBE: a group that does not fit those rooms whole is left for the plan (never divided there).
+        const probe = cloneSnapshot(base);
+        probe.rooms = probe.rooms.filter(r => !reusableIds.has(r.id));
+        probe.roomBeds = probe.roomBeds.filter(b => !reusableIds.has(b.room_id));
+        const probeIo = snapshotAssignmentIo(probe, { delegated: targetIds });
+        // A child and its adult stay one group even where only one bed is left (`maxRoom`: the plan's rooms are bigger).
+        const quiet = { io: probeIo, quietCapacity: true, quietRooms: true, probe: true, maxRoom: Math.max(0, ...reusable.map(roomCapacityOf)) };
+        for (const l of targets) await runAssignmentScope(cid, l.id, quiet);
+        await runAssignmentScope(cid, null, { ...quiet, delegatedIds: await probeIo.delegatedIds(), frozenIds });
+        // What the probe placed (people into rooms their location keeps): part of the plan, applied with it.
+        const roomBefore = new Map(snap.people.map(p => [p.id, p.room_id]));
+        const probePlaced = probe.people.filter(p => p.room_id != null && roomBefore.get(p.id) == null).map(p => ({ inscription_id: p.id, room_id: p.room_id }));
+        // The rules as a run reads them, each location's view of them (ctxFor), and the audit (makeAuditor).
+        const auditor = makeAuditor(snap);
+        const { allRules, ctxFor } = auditor;
+        // The fields a shared room's class binds (see «THE CLASS OF A SHARED ROOM»), and the class the plan gives one:
+        // each field's one value among the people it ends with (a field none of them fills keeps the room's value).
+        const lockFields = lockFieldsOf(snap.rules, snap.fieldNames);
+        const lockFor = (s, roomId, prev) => {
+            const inRoom = s.people.filter(p => p.room_id === roomId && live(p)).map(p => ({ ...p, custom_data: parseCd(p.custom_data) }));
+            const out = [];
+            for (const field of lockFields) {
+                const vals = distinctValues(inRoom, field);
+                if (vals.length === 1) out.push({ field, value: vals[0] });
+                else if (!vals.length) { const old = prev.find(x => x.field === field); if (old) out.push(old); }
+            }
+            return out;
+        };
+
+        // Where each free room stood before (for the preference and the report).
+        const prevOwners = (roomId) => {
+            const r = snap.rooms.find(x => x.id === roomId);
+            if (r && r.location_id != null) return [r.location_id];
+            return sharesOf(snap, roomId).map(b => b.location_id);
+        };
+        const inventory = reusable.map(r => ({ room: r, cap: roomCapacityOf(r), hotel: Number(r.hotel_id), order: snap.reportOrder.indexOf(r.id) }));
+        // Free beds in rooms that already hold people (a pool room, or the pool beds of a shared one — never a frozen
+        // location's): the pool's people may take them, and with `share` a location too, as beds of its own there.
+        const partials = probe.rooms.filter(r => r.location_id == null && !isBlocked(r) && inHotel(r) && probe.people.some(p => p.room_id === r.id) && sharesOf(probe, r.id).every(b => !frozenIds.has(b.location_id)))
+            .map(r => {
+                const occ = probe.people.filter(p => p.room_id === r.id).map(p => ({ ...p, custom_data: parseCd(p.custom_data) }));
+                const shares = sharesOf(probe, r.id).map(b => ({ location_id: b.location_id, beds: b.beds }));
+                const free = Math.max(0, Math.min(roomCapacityOf(r) - occ.length, poolBedsOf(r, shares) - poolUsedOf(shares, occ)));
+                return { room: snap.rooms.find(x => x.id === r.id), cap: roomCapacityOf(r), hotel: Number(r.hotel_id), order: snap.reportOrder.indexOf(r.id), occ, shares, free, lock: shareLockOf(r, shares, lockFields) };
+            }).filter(x => x.free > 0);
+        const maxRoom = Math.max(0, ...inventory.map(x => x.cap), ...partials.map(x => x.free));
+
+        const groups = [];
+        const leftOf = (lid) => probe.people.filter(p => p.room_id == null && live(p) && (lid == null ? p.location_id == null : p.location_id === lid)).map(p => ({ ...p, custom_data: parseCd(p.custom_data) }));
+        for (const l of targets) {
+            const people = leftOf(Number(l.id));
+            if (people.length) groups.push({ id: Number(l.id), name: l.name, people, ctx: ctxFor(Number(l.id)) });
+        }
+        const poolPeople = leftOf(null);
+        if (poolPeople.length) groups.push({ id: null, name: null, people: poolPeople, ctx: ctxFor(null) });
+        // Preferred mixed families as their men and their women (2.21.0), for the rounds when beds are short: first only
+        // the families no free room fits exactly, then all of them.
+        const exactCaps = new Set(inventory.map(x => x.cap));
+        const splitLevels = [(u) => !exactCaps.has(u.people.length), true];
+        for (const g of groups) {
+            g.classes = scopeClasses(g.ctx, g.people, { maxRoom }).classList;
+            g.split = splitLevels.map(level => {
+                const alt = scopeClasses(g.ctx, g.people, { maxRoom, splitSoftMixed: level });
+                const yielded = alt.units.filter(u => u.yielded).length;
+                return yielded ? { classes: alt.classList, yielded } : null;
+            });
+        }
+        // A part no free room can hold (a keep_together group bigger than every room — a family of 5 and rooms of 4,
+        // or a rule misused on a whole gender): split into the fewest pieces a room holds (5 → 4 + 1), in its order,
+        // so it stays as together as the rooms allow.
+        const tooBig = (part) => maxRoom > 0 && part.size > maxRoom;
+        const piecesOf = (whole) => {
+            if (!tooBig(whole)) return [whole];
+            const out = [];
+            for (let i = 0; i < whole.people.length; i += maxRoom) {
+                const people = whole.people.slice(i, i + maxRoom);
+                out.push({ people, group: whole.group, size: people.length });
+            }
+            return out;
+        };
+        const oversizedBy = new Map();
+        for (const g of groups) for (const cls of g.classes) for (const part of cls.parts) {
+            if (!tooBig(part) || !part.group) continue;
+            const k = `${part.group.rule.name}\u0001${String(part.group.key).toLowerCase()}`;
+            if (!oversizedBy.has(k)) oversizedBy.set(k, { rule: part.group.rule.name, value: part.group.key, people: 0, largest_room: maxRoom, hard: !!part.group.rule.hard });
+            oversizedBy.get(k).people += part.size;
+        }
+        // Beds short: more people waiting than free beds (whole free rooms and free beds next to people).
+        const demand = groups.reduce((n, g) => n + g.people.length, 0);
+        const supply = inventory.reduce((n, x) => n + x.cap, 0) + partials.reduce((n, x) => n + x.free, 0);
+        const shortage = demand > supply;
+        const rankOfGroup = new Map(groups.map((g, i) => [g.id, i]));
+
+        const attempt = (level) => {
+            // level: Map(group key → 0 normal | 1 its own rooms only | 2 … plus a spare bed per class | 3 … two)
+            const taken = new Set();
+            const bins = [];
+            const keyOfGroup = (g) => (g.id == null ? 'pool' : String(g.id));
+            const lvOf = (g) => (g.pseudo ? 0 : level.get(keyOfGroup(g)) || 0);
+            const used = (b) => b.members.reduce((n, m) => n + m.size, 0);
+            const groupsIn = (b) => [...new Set(b.members.map(m => m.g))];
+            // The people already in a room take part in its rules as their own location's people.
+            const pseudo = new Map();
+            const gOf = (lid) => groups.find(g => g.id === lid) || pseudo.get(lid) || (pseudo.set(lid, { id: lid, ctx: ctxFor(lid), pseudo: true }), pseudo.get(lid));
+            const partialBins = partials.map(x => ({ room: x.room, cap: x.cap, hotel: x.hotel, partial: x, members: x.occ.map(o => ({ people: [o], size: 1, g: gOf(o.location_id), fixed: true })) }));
+            const added = (b) => b.members.filter(m => !m.fixed).reduce((n, m) => n + m.size, 0);
+            const spareOf = (b) => (b.partial ? b.partial.free - added(b) : b.cap - used(b));
+            // Every group present keeps its rules on the whole room (a conference rule sees everyone; a location's
+            // own rule, its people).
+            const composedOk = (members) => [...new Set(members.map(m => m.g))].every(g => g.ctx.mergedSeparateOk([], members.flatMap(m => m.people)));
+            // A room that holds people and is shared keeps its class.
+            const lockOk = (b, it) => !b.partial || it.people.every(p => lockAllows(b.partial.lock, p));
+            // Free rooms for `g`, best first: rooms it had, then rooms in a hotel it already uses, then hotel order.
+            const freeFor = (g) => {
+                const hotels = new Set(bins.filter(b => b.members.some(m => m.g === g)).map(b => b.hotel));
+                const rank = (x) => (g && prevOwners(x.room.id).includes(g.id) ? 0 : g && hotels.has(x.hotel) ? 1 : 2);
+                return inventory.filter(x => !taken.has(x.room.id)).sort((a, b) => rank(a) - rank(b) || a.order - b.order || a.room.id - b.room.id);
+            };
+            // `items` into new rooms by the engine's arithmetic; nothing is committed yet.
+            const tryPack = (items, free, prefer) => {
+                const res = pack.packNew(items, free.map(x => ({ x, free: x.cap })), (bin, it, inside) => composedOk(inside.concat([it])), prefer);
+                const binOf = new Map();
+                for (const [it, b] of res.placed) {
+                    if (!binOf.has(b)) binOf.set(b, { room: b.x.room, cap: b.x.cap, hotel: b.x.hotel, members: [] });
+                    binOf.get(b).members.push(it);
+                }
+                const out = [...binOf.values()];
+                return { bins: out, left: res.left, rooms: out.length, empty: out.reduce((n, b) => n + b.cap - used(b), 0) };
+            };
+            const commit = (r) => { for (const b of r.bins) { bins.push(b); taken.add(b.room.id); } return r.left; };
+            // Beds short: the free rooms `items` can FILL with the most beds, then the fewest rooms (lodging-pack
+            // fillSets) — the people in by Best Fit Decreasing; a set they cannot fill exactly is skipped.
+            const fillRooms = (items, free) => {
+                const have = items.reduce((n, it) => n + it.size, 0);
+                for (const set of pack.fillSets(free.map(x => x.cap), have)) {
+                    const cand = set.map(i => ({ x: free[i], free: free[i].cap }));
+                    const res = pack.packInto(items, cand, (bin, it, inside) => composedOk(inside.concat([it])));
+                    const filled = new Map(cand.map(b => [b, 0]));
+                    for (const [it, b] of res.placed) filled.set(b, filled.get(b) + it.size);
+                    if (![...filled].every(([b, n]) => n === b.x.cap)) continue;
+                    return { bins: cand.map(b => ({ room: b.x.room, cap: b.x.cap, hotel: b.x.hotel, members: res.placed.filter(([, x]) => x === b).map(([it]) => it) })), left: res.left };
+                }
+                return { bins: [], left: items };
+            };
+            // Spare beds before any new room: rooms the plan already fills, and the free beds of rooms that hold
+            // people — where the rules allow; a location shares a room (or takes beds of a pool room) only with `share`.
+            const fillSpare = (items) => {
+                if (!items.length) return items;
+                const cands = bins.concat(partialBins).filter(b => spareOf(b) > 0 && !groupsIn(b).some(g => lvOf(g) >= 1));
+                if (!cands.length) return items;
+                const mixOk = (b, it, inside) => (b.partial ? it.g.id == null || share : share || b.members.concat(inside).every(m => m.g === it.g));
+                // First the companions: a room where a group's child (a hard require_companion subject) has no adult
+                // takes one of that group's single adults before anyone else may take the bed.
+                items = items.slice();
+                for (const b of cands) {
+                    for (const g of groupsIn(b)) {
+                        for (const rule of g.ctx.companionRules) {
+                            if (!rule.hard) continue;
+                            const mine = b.members.filter(m => m.g === g).flatMap(m => m.people);
+                            const view = g.ctx.viewFor(rule, mine);
+                            if (!view.some(o => condMatches(rule.params.subject, o))) continue;
+                            if (view.filter(o => condMatches(rule.params.needs, o)).length >= (Number(rule.params.min) || 1)) continue;
+                            const k = items.findIndex(it => it.g === g && it.size === 1 && condMatches(rule.params.needs, it.people[0]) && spareOf(b) >= 1
+                                && mixOk(b, it, []) && lockOk(b, it) && composedOk(b.members.concat([it])));
+                            if (k >= 0) { b.members.push(items[k]); items.splice(k, 1); }
+                        }
+                    }
+                }
+                const res = pack.packInto(items, cands.map(b => ({ b, free: spareOf(b) })),
+                    (x, it, inside) => mixOk(x.b, it, inside) && lockOk(x.b, it) && composedOk(x.b.members.concat(inside, [it])),
+                    (x, it) => (x.b.members.some(m => m.g === it.g) ? 0 : 1));
+                for (const [it, x] of res.placed) x.b.members.push(it);
+                return res.left;
+            };
+            // Every group's parts, keyed by the CONFERENCE's hard separate_by values: a location's own rule judges
+            // only its people, so it never keeps two locations apart (composedOk still holds it inside a room).
+            const confHard = allRules.filter(r => r.type === 'separate_by' && r.hard && r.location_id == null);
+            const MIX = '\u0002';
+            const classes = new Map();
+            let mixN = 0;
+            for (const g of groups) {
+                g.unpacked = [];
+                for (const cls of g.classes) for (const whole of cls.parts) for (const part of piecesOf(whole)) {
+                    const vals = confHard.map(r => { const v = distinctValues(part.people, r.field); return v.length === 0 ? '' : v.length === 1 ? v[0].toLowerCase() : MIX; });
+                    const key = vals.includes(MIX) ? `${MIX}${mixN++}` : vals.join('\u0001');
+                    if (!classes.has(key)) classes.set(key, { wild: vals.includes(''), size: 0, big: 0, items: [] });
+                    const c = classes.get(key);
+                    c.items.push({ people: part.people, group: part.group, size: part.size, g });
+                    c.size += part.size;
+                    c.big = Math.max(c.big, part.size);
+                }
+            }
+            const classList = [...classes.values()].sort((a, b) => Number(a.wild) - Number(b.wild) || b.big - a.big || b.size - a.size);
+            const groupOrder = (items) => [...new Set(items.map(it => it.g))].sort((a, b) => (a.id == null) - (b.id == null)
+                || (shortage ? rankOfGroup.get(a.id) - rankOfGroup.get(b.id) : b.people.length - a.people.length));
+            // Beds short: location by location in ORDER. First each one, in turn, takes the spare beds the plan
+            // already has and only the new rooms its classes (largest part first) FILL — a bed left empty while people
+            // wait is a bed lost; then, in order again, whatever is still free goes class by class. So a location
+            // never loses a room it fills to a later one, and no bed stays empty that someone could use.
+            if (shortage) {
+                const restOf = new Map();
+                for (const g of groups) {
+                    const mine = classList.map(cls => cls.items.filter(it => it.g === g)).filter(items => items.length);
+                    if (lvOf(g) >= 1) {
+                        for (const items of mine) {
+                            if (lvOf(g) >= 2) items.push({ people: [], size: lvOf(g) - 1, g, spare: true });
+                            g.unpacked.push(...commit(tryPack(items, freeFor(g))).filter(it => !it.spare));
+                        }
+                        continue;
+                    }
+                    const rest = [];
+                    for (const items of mine) {
+                        const open = fillSpare(items);
+                        if (open.length) rest.push(...commit(fillRooms(open, freeFor(g))));
+                    }
+                    restOf.set(g, rest);
+                }
+                for (const g of groups) {
+                    const rest = restOf.get(g) || [];
+                    for (const cls of classList) {
+                        const items = rest.filter(it => cls.items.includes(it));
+                        if (!items.length) continue;
+                        const open = fillSpare(items);
+                        if (open.length) for (const it of commit(tryPack(open, freeFor(g)))) it.g.unpacked.push(it);
+                    }
+                }
+            }
+            else for (const cls of classList) {
+                const solo = cls.items.filter(it => lvOf(it.g) >= 1);
+                const open = fillSpare(cls.items.filter(it => lvOf(it.g) < 1));
+                // A location kept to its own rooms (a retry): its own packing, with its spare beds.
+                for (const g of groupOrder(solo)) {
+                    const items = solo.filter(it => it.g === g);
+                    if (lvOf(g) >= 2) items.push({ people: [], size: lvOf(g) - 1, g, spare: true });
+                    g.unpacked.push(...commit(tryPack(items, freeFor(g))).filter(it => !it.spare));
+                }
+                if (!open.length) continue;
+                // Each location on rooms of its own…
+                const own = { bins: [], left: [], rooms: 0, empty: 0 };
+                const scratch = new Set();
+                for (const g of groupOrder(open)) {
+                    const r = tryPack(open.filter(it => it.g === g), freeFor(g).filter(x => !scratch.has(x.room.id)));
+                    for (const b of r.bins) scratch.add(b.room.id);
+                    own.bins.push(...r.bins); own.left.push(...r.left); own.rooms += r.rooms; own.empty += r.empty;
+                }
+                // …or the whole class together, sharing rooms (each location kept in as few rooms as it can) —
+                // taken only when it leaves fewer people out, or uses fewer rooms, or leaves fewer empty beds.
+                let pick = own;
+                if (share && groupOrder(open).length > 1) {
+                    const together = tryPack(open, freeFor(null), (bin, it, inside) => (inside.some(m => m.g === it.g) ? 0 : inside.length ? 2 : 1));
+                    const outOwn = own.left.reduce((n, it) => n + it.size, 0), outTog = together.left.reduce((n, it) => n + it.size, 0);
+                    if (outTog < outOwn || (outTog === outOwn && (together.rooms < own.rooms || (together.rooms === own.rooms && together.empty < own.empty)))) pick = together;
+                }
+                for (const it of commit(pick)) it.g.unpacked.push(it);
+            }
+            // Whatever is still out: the spare beds left anywhere (a class the rules allow there).
+            for (const g of groups) if (lvOf(g) < 1 && g.unpacked.length) g.unpacked = fillSpare(g.unpacked);
+            // A room holding only reserved spare beds is no room for anyone: left free.
+            const live2 = bins.filter(b => b.members.some(m => !m.spare));
+            for (const b of bins) if (!live2.includes(b)) taken.delete(b.room.id);
+            // A smaller free room for the same people (fewer empty beds); same hotel first.
+            for (const b of [...live2].sort((x, y) => (y.cap - used(y)) - (x.cap - used(x)) || x.room.id - y.room.id)) {
+                const need = used(b);
+                const owners = groupsIn(b);
+                const swap = inventory.filter(x => !taken.has(x.room.id) && x.cap >= need && x.cap < b.cap)
+                    .sort((x, y) => x.cap - y.cap || (x.hotel === b.hotel ? 0 : 1) - (y.hotel === b.hotel ? 0 : 1)
+                        || (owners.some(g => prevOwners(x.room.id).includes(g.id)) ? 0 : 1) - (owners.some(g => prevOwners(y.room.id).includes(g.id)) ? 0 : 1)
+                        || x.order - y.order)[0];
+                if (!swap) continue;
+                taken.delete(b.room.id); taken.add(swap.room.id);
+                b.room = swap.room; b.cap = swap.cap; b.hotel = swap.hotel;
+            }
+
+            // The allotment AND the placements, on a copy. The plan places its people itself: a run left to
+            // itself may give a shared room to another class than the plan meant (both fit the first location
+            // swept) and push the next locations' people onto pool beds — seen live, 5 rooms planned, 7 used.
+            const cand = cloneSnapshot(base);
+            const at = new Map(cand.people.map(p => [p.id, p]));
+            const placements = probePlaced.map(x => ({ ...x }));
+            for (const x of probePlaced) at.get(x.inscription_id).room_id = x.room_id;
+            const plannedRooms = [];
+            const placeMembers = (b) => { for (const m of b.members) if (!m.spare && !m.fixed) for (const p of m.people) { at.get(p.id).room_id = b.room.id; placements.push({ inscription_id: p.id, room_id: b.room.id }); } };
+            for (const b of live2) {
+                const byLoc = new Map();
+                for (const m of b.members) { if (m.spare) continue; const k = m.g.id; byLoc.set(k, (byLoc.get(k) || 0) + m.size); }
+                const spare = b.members.filter(m => m.spare).reduce((n, m) => n + m.size, 0);
+                const locs = [...byLoc.keys()].filter(k => k != null);
+                let after;
+                if (!locs.length) after = { kind: 'pool' };
+                else if (locs.length === 1 && !byLoc.has(null)) { after = { kind: 'whole', location_id: locs[0] }; setRoomWhole(cand, b.room.id, locs[0]); }
+                else {
+                    // Shared: each location its people's beds (its spare beds too); the rest are pool beds.
+                    const spareFor = (lid) => b.members.filter(m => m.spare && m.g.id === lid).reduce((n, m) => n + m.size, 0);
+                    const shares = locs.map(lid => ({ location_id: lid, beds: byLoc.get(lid) + spareFor(lid) }));
+                    after = { kind: 'shared', shares };
+                    setRoomShares(cand, b.room.id, shares);
+                }
+                placeMembers(b);
+                plannedRooms.push({ room: b.room, cap: b.cap, after, members: [...byLoc].map(([lid, n]) => ({ location_id: lid, count: n })), spare, added: used(b) - spare,
+                    labels: [...new Set(b.members.filter(m => !m.spare).map(m => classLabel(m.g.ctx, m.people)).filter(Boolean))] });
+            }
+            // A room that already held people: a location that takes beds there gets them as its share (its people
+            // already on pool beds there count in it, as «Dar camas» does); the pool's people use pool beds.
+            for (const b of partialBins) {
+                if (!added(b)) continue;
+                const shares = b.partial.shares.map(x => ({ ...x }));
+                const newBy = new Map();
+                for (const m of b.members) if (!m.fixed && m.g.id != null) newBy.set(m.g.id, (newBy.get(m.g.id) || 0) + m.size);
+                for (const [lid, n] of newBy) {
+                    const prev = shareBedsOf(shares, lid);
+                    const own = b.partial.occ.filter(o => o.location_id === lid).length;
+                    const total = prev + Math.max(0, own - prev) + n;
+                    const x = shares.find(y => y.location_id === lid);
+                    if (x) x.beds = total; else shares.push({ location_id: lid, beds: total });
+                }
+                const after = shares.length ? { kind: 'shared', shares } : { kind: 'pool' };
+                if (newBy.size) setRoomShares(cand, b.room.id, shares);
+                placeMembers(b);
+                const byLoc = new Map();
+                for (const m of b.members) byLoc.set(m.g.id, (byLoc.get(m.g.id) || 0) + m.size);
+                plannedRooms.push({ room: b.room, cap: b.cap, after, members: [...byLoc].map(([lid, n]) => ({ location_id: lid, count: n })), spare: 0, added: added(b), partial: true,
+                    labels: [...new Set(b.members.filter(m => !m.fixed).map(m => classLabel(m.g.ctx, m.people)).filter(Boolean))] });
+            }
+            // Each room the plan shares keeps the class it gives it (the run after the plan, and every bed of it later).
+            for (const pr of plannedRooms) {
+                if (pr.after.kind !== 'shared') continue;
+                pr.after.lock = lockFor(cand, pr.room.id, pr.partial ? shareLockOf(pr.room, sharesOf(snap, pr.room.id), lockFields) : []);
+                const r = cand.rooms.find(x => x.id === pr.room.id);
+                if (r) r.share_lock = pr.after.lock.length ? JSON.stringify(pr.after.lock) : null;
+            }
+            placements.sort((x, y) => x.inscription_id - y.inscription_id);
+            const unplacedBy = new Map(groups.map(g => [g.id, g.unpacked.reduce((n, it) => n + it.size, 0)]));
+            return { cand, plannedRooms, placements, unplacedBy };
+        };
+        // A class's display: the values of the hard separate_by fields its people share («Masculino»).
+        function classLabel(ctx, people) {
+            return ctx.hardSeparate.map(r => distinctValues(people, r.field)).filter(v => v.length === 1).map(v => v[0]).join(' · ');
+        }
+        // The people the plan is about: the targets' and the pool's (frozen locations are left as they are).
+        const isTouched = (p) => live(p) && (p.location_id == null ? true : targetIds.has(p.location_id));
+        // What an arrangement gives them once the automatic assignment has placed whoever is still without a bed —
+        // which is what «Aplicar» does: the plan, then the run (the same engine, here on a copy).
+        const settle = async (S) => { const { snap: done } = await simulateSweep(S); return { done, m: auditor.measure(done, isTouched) }; };
+        // Lexicographic: fewer hard breaches, then fewer people without a bed, then fewer rooms, then fewer empty beds.
+        const lexLess = (a, b) => { for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) return a[k] < b[k]; return false; };
+        const groupKey = (g) => (g.id == null ? 'pool' : String(g.id));
+        const runAttempts = async () => {
+        const level = new Map();
+        let best = null;
+        for (let i = 0; i < PLAN_ATTEMPTS; i++) {
+            const a = attempt(level);
+            const { done, m } = await settle(a.cand);
+            // A breach belongs to the locations with people in its room; a location left without beds is trouble too.
+            const inRoom = (roomId) => new Set(done.people.filter(p => p.room_id === roomId).map(p => p.location_id));
+            const outOf = (g) => done.people.filter(p => isTouched(p) && p.room_id == null && (g.id == null ? p.location_id == null : p.location_id === g.id)).length;
+            // Beds short: someone is left out whatever the plan; only a broken hard rule is worth another attempt.
+            const trouble = groups.filter(g => (!shortage && outOf(g) > 0) || m.audit.hard.some(v => (v.room_id != null ? inRoom(v.room_id).has(g.id) : (v.location_ids || []).includes(g.id))));
+            // Beds short: the locations in order — fewer without a bed in an earlier one wins before rooms and empty beds.
+            const score = [m.hard, m.unplaced, ...(shortage ? groups.map(outOf) : []), m.rooms, m.empty_beds];
+            if (!best || lexLess(score, best.score)) best = { ...a, m, done, score };
+            if (!trouble.length) break;
+            let raised = false;
+            for (const g of trouble) { const k = groupKey(g); const lv = level.get(k) || 0; if (lv < 3) { level.set(k, lv + 1); raised = true; } }
+            if (!raised) break;
+        }
+        return best;
+        };
+        // The attempts with the preferred mixed families of a split level as their men and their women (computed once).
+        const splitRuns = [];
+        const runSplit = async (lv) => {
+            if (splitRuns[lv] === undefined) {
+                const splitGroups = groups.filter(g => g.split[lv]);
+                if (!splitGroups.length) splitRuns[lv] = null;
+                else {
+                    for (const g of splitGroups) { g.classesWhole = g.classes; g.classes = g.split[lv].classes; }
+                    const run = await runAttempts();
+                    for (const g of splitGroups) g.classes = g.classesWhole;
+                    splitRuns[lv] = { run, yielded: splitGroups.reduce((n, g) => n + g.split[lv].yielded, 0) };
+                }
+            }
+            return splitRuns[lv];
+        };
+        let best = await runAttempts();
+        // Someone still without a bed and a preferred mixed family whose room is its own (2.21.0; the owner: «que ceda
+        // si falta cama»): the attempts again with such families as their men and their women.
+        for (let lv = 0; lv < splitLevels.length && best.m.unplaced > 0; lv++) {
+            const s = await runSplit(lv);
+            if (s && s.run.score[0] <= best.score[0] && s.run.score[1] < best.score[1]) best = s.run;
+        }
+        // «DIVIDIR FAMILIAS» (2.21.0; the owner: «que lo de dividir las familias sea una opción, que calcule ambos, le
+        // diga al admin cuántas habitaciones serían en ambos casos y en el caso que se dividen las familias diga cuántas
+        // se dividieron»). Two answers, both always computed, each the best of every arrangement the plan computed:
+        //   KEEP   — [hard, unplaced, (location order), families divided, rooms, empty beds]: a family is divided only
+        //            when that gives someone a bed;
+        //   DIVIDE — [hard, unplaced, (location order), rooms, families divided, empty beds]: preferred mixed families may
+        //            go as their men and their women to use fewer rooms.
+        // Only with beds enough: when they are short every free room is used anyway (KEEP alone, as before).
+        // FAMILIES: the groups of the preferred rules whose mixed groups can yield, one per location (a conference
+        // rule's «Pérez» in two locations are two families), of at least min_size people. Divided: its people sleep in
+        // more than one room, or some have a bed and some do not.
+        const yieldRuleIds = new Set();
+        for (const g of groups) for (const u of scopeClasses(g.ctx, g.people, { maxRoom, splitSoftMixed: true }).units) if (u.yielded) yieldRuleIds.add(u.group.rule.id);
+        const yieldRules = allRules.filter(r => yieldRuleIds.has(r.id));
+        const dividedOf = new Map();
+        const familiesDivided = (c) => {
+            if (dividedOf.has(c)) return dividedOf.get(c);
+            const fams = new Map();
+            for (const p0 of c.done.people) {
+                if (!isTouched(p0)) continue;
+                const p = { ...p0, custom_data: parseCd(p0.custom_data) };
+                for (const rule of yieldRules) {
+                    if (!condMatches(rule.params.when, p)) continue;
+                    const v = ruleVal(p, rule.field);
+                    if (v == null || String(v).trim() === '') continue;
+                    const k = `${rule.id}|${p.location_id == null ? '' : p.location_id}|${String(v).trim().toLowerCase()}`;
+                    if (!fams.has(k)) fams.set(k, { min: Number(rule.params.min_size) || 1, n: 0, rooms: new Set(), out: 0 });
+                    const fam = fams.get(k);
+                    fam.n++;
+                    if (p.room_id == null) fam.out++; else fam.rooms.add(p.room_id);
+                }
+            }
+            let n = 0;
+            for (const fam of fams.values()) if (fam.n >= fam.min && (fam.rooms.size > 1 || (fam.rooms.size === 1 && fam.out > 0))) n++;
+            dividedOf.set(c, n);
+            return n;
+        };
+        // Last, the preferences broken (`soft`): between arrangements alike in everything else, the one that keeps more.
+        const keepKey = (c) => [...c.score.slice(0, -2), familiesDivided(c), ...c.score.slice(-2), c.m.soft];
+        const divideKey = (c) => [...c.score.slice(0, -1), familiesDivided(c), c.score[c.score.length - 1], c.m.soft];
+        const candidates = [best];
+        const consider = (c) => { if (c && !candidates.includes(c)) candidates.push(c); };
+        for (const s of splitRuns) if (s) consider(s.run);
+        const bestBy = (key) => candidates.reduce((a, b) => (lexLess(key(b), key(a)) ? b : a));
+        let divideBest = null;
+        if (!shortage && yieldRules.length) {
+            const all = await runSplit(splitLevels.length - 1);
+            consider(all && all.run);
+            divideBest = bestBy(divideKey);
+            // The families that could be divided, in the order they are best kept whole — those a free room fits exactly
+            // first (no bed lost), then the larger first — and two searches over how many of them, in that order, stay
+            // whole (each try is one more set of attempts, shared by both searches):
+            //   DIVIDE: the most kept whole without needing more rooms than the best divided answer;
+            //   KEEP:   the most kept whole without leaving more people without a bed (or a location earlier in the order).
+            // Fewer tries for a big event — by its size, never by the clock: «Aplicar» re-plans and must find the very
+            // same answer.
+            const tries = demand <= 1200 ? 16 : demand <= 2000 ? 3 : 0;
+            if (tries) {
+                const famId = (g, u) => `${g.id == null ? 'pool' : g.id}|${u.group.rule.id}|${String(u.group.key).trim().toLowerCase()}`;
+                const order = [];
+                for (const g of groups) for (const u of scopeClasses(g.ctx, g.people, { maxRoom, splitSoftMixed: true }).units) if (u.yielded) order.push({ id: famId(g, u), size: u.people.length, exact: exactCaps.has(u.people.length) });
+                order.sort((x, y) => Number(y.exact) - Number(x.exact) || y.size - x.size || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
+                const tried = new Map();
+                const keeping = async (k) => {
+                    if (tried.has(k)) return tried.get(k);
+                    const whole = new Set(order.slice(0, k).map(x => x.id));
+                    for (const g of groups) { g.classesWhole = g.classes; g.classes = scopeClasses(g.ctx, g.people, { maxRoom, splitSoftMixed: (u) => !whole.has(famId(g, u)) }).classList; }
+                    const run = await runAttempts();
+                    for (const g of groups) g.classes = g.classesWhole;
+                    tried.set(k, run);
+                    consider(run);
+                    return run;
+                };
+                // The largest k (in at most `tries` steps) whose answer still `fits`.
+                const most = async (fits) => {
+                    let lo = 0, hi = order.length;
+                    for (let t = tries; lo < hi && t > 0; t--) {
+                        const mid = Math.ceil((lo + hi) / 2);
+                        if (fits(await keeping(mid))) lo = mid; else hi = mid - 1;
+                    }
+                };
+                // [hard, unplaced, (location order), rooms] and [hard, unplaced, (location order)].
+                const upToRooms = (c) => c.score.slice(0, -1);
+                const upToBeds = (c) => c.score.slice(0, -2);
+                if (familiesDivided(divideBest) > 0) {
+                    const target = upToRooms(divideBest);
+                    await most((run) => !lexLess(target, upToRooms(run)));
+                }
+                const keepNow = bestBy(keepKey);
+                if (familiesDivided(keepNow) > 0) {
+                    const target = upToBeds(bestBy((c) => upToBeds(c)));
+                    await most((run) => !lexLess(target, upToBeds(run)));
+                }
+            }
+            divideBest = bestBy(divideKey);
+        }
+        // TODAY is an answer too (2.21.0; the owner, on a suggestion for one hotel that used 180 rooms and left 5 beds
+        // empty where today's arrangement used 179 with none: «revísalo»): leaving everything as it is — no room allotted
+        // or released, nobody moved, the automatic assignment for whoever waits — is scored like the arrangements the
+        // plan tried, and replaces an answer it beats on that answer's own key (families together, or divided). On a tie
+        // it replaces an answer that would move someone who has a bed, or change nothing at all (moving people for nothing
+        // gains nothing); an answer that moves nobody and only gives out or back empty rooms keeps the tie. The plan never
+        // suggests something worse than what there is: when nothing beats today, the suggestion is to leave it
+        // (`keeps_today`; nothing to apply but the automatic assignment for whoever waits). And only as an allotment at
+        // least as good as the answer it replaces: of the people whose beds the plan decides (whoever waits; with
+        // «Rehacer todo», whoever it took out of a bed — the others are where they are in every answer), no more in a
+        // room that is not their location's (the pool's people: not in a pool room) — not a pool where locations mix,
+        // before the rooms are given out.
+        const today = await settle(original);
+        const decided = new Set(snap.people.filter(p => isTouched(p) && p.room_id == null).map(p => p.id));
+        const offAllot = new Map();
+        const offAllotOf = (c) => {
+            if (offAllot.has(c)) return offAllot.get(c);
+            const S = c.done, byId = new Map(S.rooms.map(r => [r.id, r]));
+            let n = 0;
+            for (const p of S.people) {
+                if (!decided.has(p.id) || p.room_id == null) continue;
+                const r = byId.get(p.room_id);
+                if (!r) continue;
+                const theirs = p.location_id == null ? r.location_id == null
+                    : Number(r.location_id) === Number(p.location_id) || sharesOf(S, r.id).some(b => Number(b.location_id) === Number(p.location_id));
+                if (!theirs) n++;
+            }
+            offAllot.set(c, n);
+            return n;
+        };
+        const allotmentOf = (S) => JSON.stringify([S.rooms.map(r => [r.id, r.location_id == null ? null : Number(r.location_id)]).sort((x, y) => x[0] - y[0]),
+            S.roomBeds.map(b => [b.room_id, Number(b.location_id), Number(b.beds) || 0]).sort((x, y) => x[0] - y[0] || x[1] - y[1])]);
+        const movesOf = (c) => { const at = new Map(c.done.people.map(p => [p.id, p.room_id])); return movedIds.filter(x => at.get(x.inscription_id) !== x.room_id).length; };
+        const outToday = (g) => today.done.people.filter(p => isTouched(p) && p.room_id == null && (g.id == null ? p.location_id == null : p.location_id === g.id)).length;
+        const todayC = { today: true, cand: original, done: today.done, m: today.m, plannedRooms: [], placements: [],
+            score: [today.m.hard, today.m.unplaced, ...(shortage ? groups.map(outToday) : []), today.m.rooms, today.m.empty_beds] };
+        const orToday = (c, key) => {
+            if (offAllotOf(todayC) > offAllotOf(c)) return c;
+            const kt = key(todayC), kc = key(c);
+            if (lexLess(kt, kc)) return todayC;
+            if (lexLess(kc, kt)) return c;
+            return movesOf(c) > 0 || allotmentOf(c.done) === allotmentOf(today.done) ? todayC : c;
+        };
+        if (divideBest) divideBest = orToday(divideBest, divideKey);
+        const keepBest = orToday(bestBy(keepKey), keepKey);
+        best = opts.divideFamilies && divideBest ? divideBest : keepBest;
+        // The rooms as the sheet shows them (2.21.0; the owner: «¿no deberían quedar las mismas camas vacías? Lo que debería
+        // cambiar es el número de habitaciones vacías»), per answer: the rooms used and their empty beds, the rooms nobody
+        // is in and their beds, all of one set — the rooms the plan may fill (in the hotel chosen, not blocked: a pool room,
+        // a room of a location with someone waiting, a shared room with pool beds or such a location's share), and any
+        // other room holding the people it places (another hotel's, a blocked one…), used. Two answers that bed the same
+        // people leave the same beds over: together, a family's room keeps the beds it does not fill; divided, they gather
+        // into rooms nobody needs. (`rooms` / `empty_beds` stay the plan's own measure, the rooms holding its people.)
+        const reach = snap.rooms.filter(r => {
+            if (!inHotel(r) || isBlocked(r)) return false;
+            if (r.location_id != null) return targetIds.has(Number(r.location_id));
+            const sh = sharesOf(snap, r.id);
+            return !sh.length || sh.some(b => targetIds.has(Number(b.location_id))) || sh.reduce((n, b) => n + (Number(b.beds) || 0), 0) < roomCapacityOf(r);
+        });
+        const reachIds = new Set(reach.map(r => r.id));
+        const roomsViewOf = (done) => {
+            const inRoom = new Map(), theirs = new Set();
+            for (const p of done.people) {
+                if (p.room_id == null || !live(p)) continue;
+                inRoom.set(p.room_id, (inRoom.get(p.room_id) || 0) + 1);
+                if (isTouched(p)) theirs.add(p.room_id);
+            }
+            const v = { used_rooms: 0, used_empty_beds: 0, free_rooms: 0, free_beds: 0 };
+            for (const r of reach) {
+                const n = inRoom.get(r.id) || 0;
+                if (n) { v.used_rooms++; v.used_empty_beds += Math.max(0, roomCapacityOf(r) - n); } else { v.free_rooms++; v.free_beds += roomCapacityOf(r); }
+            }
+            for (const r of done.rooms) if (!reachIds.has(r.id) && theirs.has(r.id)) { v.used_rooms++; v.used_empty_beds += Math.max(0, roomCapacityOf(r) - inRoom.get(r.id)); }
+            return v;
+        };
+        const variantOf = (c) => ({ hard: c.m.hard, unplaced: c.m.unplaced, rooms: c.m.rooms, empty_beds: c.m.empty_beds, ...roomsViewOf(c.done), families_divided: familiesDivided(c), today: !!c.today });
+        // Today, without the plan: the current allotment and the automatic assignment (the same engine, on a copy).
+        const current = { ...today.m, ...roomsViewOf(today.done) };
+
+        // The report: every room the plan fills or frees, every location it plans for, every placement.
+        const before = (roomId) => {
+            const r = snap.rooms.find(x => x.id === roomId);
+            const sh = sharesOf(snap, roomId);
+            if (r.location_id != null) return { kind: 'whole', location_id: r.location_id };
+            if (sh.length) return { kind: 'shared', shares: sh.map(b => ({ location_id: b.location_id, beds: b.beds })), lock: shareLockOf(r, sh, lockFields) };
+            return { kind: 'pool' };
+        };
+        const sameAllot = (x, y) => JSON.stringify(x) === JSON.stringify(y);
+        const roomOut = (r) => ({ room_id: r.id, room_number: r.room_number, hotel_id: Number(r.hotel_id), hotel_name: r.hotel_name, capacity: roomCapacityOf(r) });
+        const named = (a) => (a.kind === 'whole' ? { ...a, location_name: locName.get(a.location_id) || null }
+            : a.kind === 'shared' ? { ...a, shares: a.shares.map(x => ({ ...x, location_name: locName.get(x.location_id) || null })) } : a);
+        const usedIds = new Set(best.plannedRooms.map(p => p.room.id));
+        const rooms = best.plannedRooms.map(p => {
+            const b = before(p.room.id);
+            return { ...roomOut(p.room), before: named(b), after: named(p.after), changed: !sameAllot(b, p.after), had_people: !!p.partial, added: p.added,
+                people: p.members.map(m => ({ location_id: m.location_id, location_name: m.location_id == null ? null : locName.get(m.location_id) || null, count: m.count })),
+                labels: p.labels, empty_beds: p.cap - p.members.reduce((n, m) => n + m.count, 0) };
+        }).sort((x, y) => snap.reportOrder.indexOf(x.room_id) - snap.reportOrder.indexOf(y.room_id));
+        // Today's answer releases nothing either.
+        const released = best.today ? [] : reusable.filter(r => !usedIds.has(r.id) && before(r.id).kind !== 'pool').map(r => ({ ...roomOut(r), before: named(before(r.id)), after: { kind: 'pool' } }));
+        const keptOf = (lid) => probePlaced.filter(x => (snap.people.find(p => p.id === x.inscription_id) || {}).location_id === lid).length;
+        const all = [...best.m.audit.hard, ...best.m.audit.soft];
+        // After the plan and the run: who is still without a bed, and how many the run places after the plan.
+        const outAfter = (lid) => best.done.people.filter(p => isTouched(p) && p.room_id == null && (lid == null ? p.location_id == null : p.location_id === lid)).length;
+        const inCand = new Map(best.cand.people.map(p => [p.id, p.room_id]));
+        const runPlaced = best.done.people.filter(p => isTouched(p) && p.room_id != null && inCand.get(p.id) == null).length;
+        const waiting = best.cand.people.filter(p => isTouched(p) && p.room_id == null).length;
+        // Today's answer plans no room: each location as today's arrangement has it (the rooms its people are in, its
+        // beds there, who is still without one).
+        const todayRow = (lid) => {
+            const S = today.done, theirs = S.people.filter(p => isTouched(p) && (lid == null ? p.location_id == null : p.location_id === lid));
+            const roomIds = [...new Set(theirs.filter(p => p.room_id != null).map(p => p.room_id))];
+            let beds = 0, shared = 0;
+            for (const id of roomIds) {
+                const r = S.rooms.find(x => x.id === id), sh = sharesOf(S, id), own = sh.find(b => Number(b.location_id) === lid);
+                if (lid != null && r && Number(r.location_id) === lid) beds += roomCapacityOf(r);
+                else if (own) { beds += Number(own.beds) || 0; shared++; } else beds += theirs.filter(p => p.room_id === id).length;
+            }
+            return { people: theirs.length, rooms: roomIds.length, beds, shared_rooms: shared, unplaced: outAfter(lid) };
+        };
+        const poolToday = best.today ? todayRow(null) : null;
+        const locations = targets.map(l => {
+            const lid = Number(l.id);
+            if (best.today) return { location_id: lid, name: l.name, kept: 0, ...todayRow(lid),
+                violations: all.filter(v => v.location_id === lid || (v.location_ids || []).includes(lid)).map(({ rule, detail, hard }) => ({ rule, detail, hard })) };
+            const g = groups.find(x => x.id === lid);
+            const mine = rooms.filter(r => r.people.some(m => m.location_id === lid));
+            return {
+                location_id: lid, name: l.name, people: (g ? g.people.length : 0) + keptOf(lid), kept: keptOf(lid),
+                rooms: mine.length, beds: mine.reduce((n, r) => n + (r.after.kind === 'whole' ? r.capacity : ((r.after.shares || []).find(x => x.location_id === lid) || {}).beds || 0), 0),
+                shared_rooms: mine.filter(r => r.after.kind === 'shared').length,
+                unplaced: outAfter(lid),
+                violations: all.filter(v => v.location_id === lid || (v.location_ids || []).includes(lid)).map(({ rule, detail, hard }) => ({ rule, detail, hard })),
+            };
+        }).filter(l => l.people > 0);
+        // The draft locations with everyone in a bed (not touched): listed too, with the rules today's arrangement
+        // breaks for their people — a rule added since shows here, and «Rehacer todo» is what fixes it.
+        const targetSet = new Set(targets.map(l => Number(l.id)));
+        const settledLocs = snap.locations.filter(l => !frozenIds.has(Number(l.id)) && !targetSet.has(Number(l.id))).sort(byRank);
+        if (settledLocs.length) {
+            const settledIds = new Set(settledLocs.map(l => Number(l.id)));
+            const seen = auditor.measure(today.done, (p) => live(p) && p.location_id != null && settledIds.has(p.location_id));
+            const settledAll = [...seen.audit.hard, ...seen.audit.soft];
+            for (const l of settledLocs) {
+                const lid = Number(l.id);
+                const theirs = original.people.filter(p => live(p) && p.location_id === lid);
+                if (!theirs.length) continue;
+                locations.push({
+                    location_id: lid, name: l.name, people: theirs.length, kept: 0, settled: true,
+                    rooms: new Set(theirs.map(p => p.room_id)).size, beds: theirs.length, shared_rooms: 0, unplaced: 0,
+                    violations: settledAll.filter(v => v.location_id === lid || (v.location_ids || []).includes(lid)).map(({ rule, detail, hard }) => ({ rule, detail, hard })),
+                });
+            }
+        }
+        const pool = groups.find(g => g.id == null);
+        const changes = [...rooms.filter(r => r.changed).map(r => ({ room_id: r.room_id, after: r.after.kind === 'whole' ? { kind: 'whole', location_id: r.after.location_id } : r.after.kind === 'shared' ? { kind: 'shared', shares: r.after.shares.map(x => ({ location_id: x.location_id, beds: x.beds })), lock: r.after.lock || [] } : { kind: 'pool' } })),
+            ...released.map(r => ({ room_id: r.room_id, after: { kind: 'pool' } }))].sort((x, y) => x.room_id - y.room_id);
+        const after = { hard: best.m.hard, unplaced: best.m.unplaced, rooms: best.m.rooms, empty_beds: best.m.empty_beds, ...roomsViewOf(best.done) };
+        // A proof where there is one (2.21.0; the owner: «¿el motor me puede demostrar matemáticamente que esa siempre
+        // va a ser la mejor acomodación?»). A proof for every case is out of reach — placing people in rooms under
+        // rules is NP-hard — but two bounds hold for ANY arrangement, ignoring every rule: nobody beds more people than
+        // there are beds for them, and P people need at least as many rooms as the biggest rooms reaching P beds. A
+        // plan that reaches a bound (with no hard rule broken) is proven the best possible on that count.
+        let proof = null;
+        if (hotelId == null) {
+            const touched = snap.people.filter(isTouched);
+            const others = new Map();
+            for (const p of snap.people) if (p.room_id != null && live(p) && !isTouched(p)) others.set(p.room_id, (others.get(p.room_id) || 0) + 1);
+            const caps = [];
+            for (const r of snap.rooms) {
+                if (r.location_id != null && frozenIds.has(Number(r.location_id))) continue;
+                // A blocked room holds only who is in it.
+                if (isBlocked(r)) { const held = snap.people.filter(p => p.room_id === r.id && live(p) && isTouched(p)).length; if (held > 0) caps.push(held); continue; }
+                const frozenBeds = sharesOf(snap, r.id).filter(b => frozenIds.has(Number(b.location_id))).reduce((n, b) => n + (Number(b.beds) || 0), 0);
+                const usable = roomCapacityOf(r) - Math.max(others.get(r.id) || 0, frozenBeds);
+                if (usable > 0) caps.push(usable);
+            }
+            const beds = caps.reduce((n, c) => n + c, 0);
+            const unplacedMin = Math.max(0, touched.length - beds);
+            const placedNow = touched.length - best.m.unplaced;
+            caps.sort((a, b) => b - a);
+            let roomsMin = 0;
+            for (let sum = 0; sum < placedNow && roomsMin < caps.length; roomsMin++) sum += caps[roomsMin];
+            const bedsOptimal = best.m.hard === 0 && best.m.unplaced === unplacedMin;
+            proof = { people: touched.length, beds, unplaced_min: unplacedMin, rooms_min: roomsMin, beds_optimal: bedsOptimal, rooms_optimal: bedsOptimal && best.m.rooms === roomsMin };
+        }
+        // «Rehacer todo»: who actually changes bed (the others are put back where they were).
+        const finalRoom = new Map(best.done.people.map(p => [p.id, p.room_id]));
+        const moved = opts.fresh && !best.today ? movedIds.filter(x => finalRoom.get(x.inscription_id) !== x.room_id).length : 0;
+        const movedOut = best.today ? [] : movedIds;
+        return {
+            options: { replan, share, hotel_id: hotelId, fresh: !!opts.fresh, divide_families: !!(opts.divideFamilies && divideBest) },
+            // What the administration holds and the plan leaves as it is (see «HELD BY THE ADMINISTRATION»).
+            held: { rooms: snap.rooms.filter(r => inHotel(r) && isBlocked(r)).length, people: snap.people.filter(p => live(p) && isPinned(p) && snap.rooms.some(r => r.id === p.room_id && inHotel(r))).length },
+            // «Dividir familias»: both answers (see «DIVIDIR FAMILIAS»), whichever is the plan below; null when no
+            // preferred family could be divided or beds are short. `same`: the engine found nothing better by dividing.
+            variants: divideBest ? { chosen: opts.divideFamilies ? 'divide' : 'keep', keep: variantOf(keepBest), divide: variantOf(divideBest), same: divideBest === keepBest } : null,
+            // «Rehacer todo»: everyone the plan takes out of a bed before placing (`moved_ids`), and how many end up
+            // in another bed or none (`moved`).
+            moved, moved_ids: movedOut,
+            // Nothing the plan found beats today's arrangement: the suggestion is to leave it (see «TODAY is an answer too»).
+            keeps_today: !!best.today,
+            // The order the locations get beds in when they do not reach everyone, and whether they do not (`short`).
+            // Every location, in order (so the arrows keep each one's place): `state` waiting (people without a bed),
+            // settled (everyone in a bed — not touched unless «Rehacer todo») or frozen (submitted / validated).
+            order: [...snap.locations].sort(byRank).map(l => ({ location_id: Number(l.id), name: l.name,
+                state: frozenIds.has(Number(l.id)) ? 'frozen' : targetSet.has(Number(l.id)) ? 'waiting' : 'settled' })),
+            short: shortage ? { people: demand, beds: supply } : null,
+            oversized: [...oversizedBy.values()],
+            // The families this plan divides (see «DIVIDIR FAMILIAS»: one per location, of a rule whose groups can yield).
+            families_split: yieldRules.length ? familiesDivided(best) : 0,
+            // The bounds no arrangement beats, and whether this plan reaches them (see «A proof where there is one»).
+            proof,
+            people: best.today ? snap.people.filter(p => isTouched(p) && p.room_id == null).length : best.placements.length + waiting, kept: best.today ? 0 : probePlaced.length,
+            rooms, released, locations,
+            pool: poolToday ? (poolToday.people ? { people: poolToday.people, rooms: poolToday.rooms, unplaced: poolToday.unplaced } : null) : pool || keptOf(null) ? { people: (pool ? pool.people.length : 0) + keptOf(null), rooms: rooms.filter(r => r.people.some(m => m.location_id == null)).length, unplaced: outAfter(null) } : null,
+            totals: { rooms: rooms.length, beds: rooms.reduce((n, r) => n + r.capacity, 0), empty_beds: rooms.reduce((n, r) => n + r.empty_beds, 0), shared: rooms.filter(r => r.after.kind === 'shared').length, changed: changes.length },
+            outcome: {
+                // `run_placed`: people the automatic assignment places after the plan (with «Aplicar» too).
+                placed: best.placements.length, run_placed: runPlaced, unplaced: best.m.unplaced, hard: best.m.hard,
+                violations: all.slice(0, 200).map(({ rule, detail, hard }) => ({ rule, detail, hard })),
+            },
+            // Today (the current allotment and the automatic assignment) against the plan (and the automatic
+            // assignment for whoever it leaves), for the same people; `worse`: more hard rules broken or more people
+            // without a bed than today — never applied.
+            current: { hard: current.hard, unplaced: current.unplaced, rooms: current.rooms, empty_beds: current.empty_beds,
+                used_rooms: current.used_rooms, used_empty_beds: current.used_empty_beds, free_rooms: current.free_rooms, free_beds: current.free_beds },
+            after,
+            worse: lexLess([current.hard, current.unplaced], [after.hard, after.unplaced]),
+            skipped_frozen: snap.locations.filter(isFrozen).map(l => ({ location_id: l.id, name: l.name, status: lodgingStatusOf(l) })),
+            changes, placements: best.placements,
+            token: planToken({ changes, placements: best.placements, waiting: snap.people.filter(p => isTouched(p) && p.room_id == null).map(p => p.id), moved: movedOut }),
+        };
+    }
+    // The plan's identity (FNV-1a over its changes, its placements and who was waiting): «Aplicar» writes only the
+    // plan the admin saw — a registration since, even one the plan leaves to the automatic run, changes it.
+    function planToken(plan) {
+        const text = JSON.stringify(plan);
+        let h = 0x811c9dc5;
+        for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+        return `${plan.changes.length}-${plan.placements.length}-${h.toString(16)}`;
+    }
+    // Write a plan (callers hold withAssignmentLock and re-planned under it): the allotments, then the people —
+    // only those still without a bed.
+    async function applyPlanChanges(changes, placements = []) {
+        const writes = [];
+        for (const c of changes) {
+            writes.push([`DELETE FROM ${T.roomBeds} WHERE room_id = ?`, [c.room_id]]);
+            if (c.after.kind === 'whole') writes.push([`UPDATE ${T.rooms} SET location_id = ?, share_lock = NULL WHERE id = ?`, [c.after.location_id, c.room_id]]);
+            else {
+                // A shared room's class (see «THE CLASS OF A SHARED ROOM»); a pool room has none.
+                const lock = c.after.kind === 'shared' && c.after.lock && c.after.lock.length ? JSON.stringify(c.after.lock) : null;
+                writes.push([`UPDATE ${T.rooms} SET location_id = NULL, share_lock = ? WHERE id = ?`, [lock, c.room_id]]);
+                if (c.after.kind === 'shared') for (const x of c.after.shares) writes.push([`INSERT INTO ${T.roomBeds} (room_id, location_id, beds) VALUES (?, ?, ?)`, [c.room_id, x.location_id, x.beds]]);
+            }
+        }
+        for (const x of placements) writes.push([`UPDATE ${T.inscriptions} SET room_id = ?, room_locked = NULL WHERE id = ? AND room_id IS NULL`, [x.room_id, x.inscription_id]]);
+        await runBatched(writes);
     }
 
     // ── arrangement audit (pure — no db) ──────────────────────────────────────────────────────────
@@ -5047,21 +7818,25 @@ exports.init = async function (wordjs) {
             const named = nameRoleCols.map(c => (p[c] == null ? '' : String(p[c]).trim())).filter(Boolean).join(' ');
             return named || personName(p, nameFallbackCols);
         };
-        const attendeeCols = [...new Set(['id', 'first_name', 'last_name', 'gender', 'family_group', ...(forAdmin ? ['status'] : []), ...fields.map(f => f.name)])];
+        const attendeeCols = [...new Set(['id', 'first_name', 'last_name', 'gender', 'family_group', 'room_locked', ...(forAdmin ? ['status'] : []), ...fields.map(f => f.name)])];
         // No «Género» field in the form (2.16.0: every field is optional) → no gender at all, so a value left
         // in the column by a deleted field never drives the gender hints of the lodging boards.
         const hasGender = fields.some(f => f.name === 'gender');
         const projectAttendee = (p) => {
             const o = {};
             for (const c of attendeeCols) o[c] = p[c] === undefined ? null : p[c];
+            o.room_locked = isPinned(p) ? 1 : 0;
             if (!hasGender) o.gender = null;
             o.display_name = displayNameOf(p);
             return perms ? maskDocument(o, perms) : o;
         };
+        // A room the location SHARES (2.18.0) is part of its arrangement too: `share_beds` are its beds there.
         const roomRows = await db.all(
-            `SELECT r.*, h.name AS hotel_name, (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.room_id = r.id) AS occupied
+            `SELECT r.*, h.name AS hotel_name, (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.room_id = r.id) AS occupied,
+                    (SELECT b.beds FROM ${T.roomBeds} b WHERE b.room_id = r.id AND b.location_id = ?) AS share_beds
              FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id
-             WHERE r.location_id = ? AND h.conference_id = ? ORDER BY h.name, r.room_number, r.id`, [L.id, cid]);
+             WHERE (r.location_id = ? OR EXISTS (SELECT 1 FROM ${T.roomBeds} b2 WHERE b2.room_id = r.id AND b2.location_id = ?)) AND h.conference_id = ?
+             ORDER BY h.name, r.room_number, r.id`, [L.id, L.id, L.id, cid]);
         const people = (await db.all(
             `SELECT i.*, r.room_number, r.location_id AS room_location_id, h.name AS hotel_name
              FROM ${T.inscriptions} i LEFT JOIN ${T.rooms} r ON i.room_id = r.id LEFT JOIN ${T.hotels} h ON r.hotel_id = h.id
@@ -5086,14 +7861,34 @@ exports.init = async function (wordjs) {
                 unassignedRows.push(p);
             }
         }
-        const auditRooms = roomRows.map(r => ({ id: r.id, room_number: r.room_number, capacity: r.capacity, occupied: r.occupied, occupants: occByRoom.get(Number(r.id)) || [] }));
+        // In a shared room the location sees its own beds and its own people only: the capacity is its
+        // share (or more, when the administration put one of its people in a free bed of the room) and
+        // `occupied` counts its own occupants. `shared` says how big the room really is.
+        const shareOf = (r) => {
+            if (r.location_id != null || r.share_beds == null) return null;
+            const own = (occByRoom.get(Number(r.id)) || []).filter(p => p.status !== 'cancelled').length;
+            return { beds: Number(r.share_beds) || 0, own, capacity: Math.max(Number(r.share_beds) || 0, own) };
+        };
+        const auditRooms = roomRows.map(r => {
+            const sh = shareOf(r);
+            return { id: r.id, room_number: r.room_number, capacity: sh ? sh.capacity : r.capacity, occupied: sh ? sh.own : r.occupied, occupants: occByRoom.get(Number(r.id)) || [] };
+        });
         const formNames = new Set([...RULE_ALWAYS_FILLED, ...fieldRows.map(f => f.name).filter(isFieldColumn)]);
         const effectiveRules = ruleRows.map(parseRuleRow).filter(ruleOnFormFields(formNames));
         const { violations, counts } = auditArrangement({ rooms: auditRooms, unassigned: unassignedRows, rules: effectiveRules, placed_elsewhere: elsewhereRows });
         counts.placed_elsewhere = elsewhereRows.length;
 
+        const lockFields = await shareLockFields(cid);
         const rooms = roomRows.map(r => {
-            const base = { id: r.id, hotel_name: r.hotel_name, room_number: r.room_number, capacity: r.capacity, is_family: r.is_family, family_name: r.family_name, occupied: Number(r.occupied) || 0 };
+            const sh = shareOf(r);
+            const base = { id: r.id, hotel_name: r.hotel_name, room_number: r.room_number, capacity: sh ? sh.capacity : r.capacity, is_family: r.is_family, family_name: r.family_name, occupied: sh ? sh.own : (Number(r.occupied) || 0) };
+            if (sh) {
+                base.shared = { beds: sh.beds, room_capacity: Number(r.capacity) || 0 };
+                // `lock`: the class the plan fixed for the whole room, when there is one (see «THE CLASS OF A SHARED ROOM»).
+                const lock = shareLockOf(r, 1, lockFields);
+                if (lock.length) base.shared.lock = lock;
+            }
+            if (isBlocked(r)) base.blocked = true;
             if (forAdmin) { base.gender = r.gender; base.notes = r.notes; }
             base.occupants = (occByRoom.get(Number(r.id)) || []).map(projectAttendee);
             return base;
@@ -5106,6 +7901,9 @@ exports.init = async function (wordjs) {
                 lodging_status: lodgingStatusOf(L), lodging_note: L.lodging_note == null ? null : L.lodging_note,
                 lodging_submitted_at: L.lodging_submitted_at == null ? null : L.lodging_submitted_at,
                 lodging_reviewed_at: L.lodging_reviewed_at == null ? null : L.lodging_reviewed_at,
+                // The administration's adjustments since the last submission (2.17.0); who made them only
+                // for the admin (the portal never names the reviewing account).
+                ...adminAdjustmentOf(L, forAdmin),
                 capacity: L.capacity == null ? null : L.capacity,
                 inscribed: people.filter(p => p.status !== 'cancelled').length,
             },
@@ -5254,7 +8052,9 @@ exports.init = async function (wordjs) {
                 maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days (host clamps anything longer)
             });
 
-            res.json({ success: true, token, location: { id: location.id, name: location.name, responsible_name: location.responsible_name, conference_id: location.conference_id, capacity: location.capacity, inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location), ...(await portalLodgingSummary(location)) } });
+            // `features.fee_payments` (2.18.0) tells a core portal that «Pagos de cuotas» exists here (an older
+            // plugin sends no flag and the portal keeps its previous payment flow); `fees` = the badge counters.
+            res.json({ success: true, token, location: { id: location.id, name: location.name, responsible_name: location.responsible_name, conference_id: location.conference_id, capacity: location.capacity, inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location), ...(await portalLodgingSummary(location)), ...(await portalFeaturesOf(location)) } });
         } catch (e) { sendError(res, e); }
     });
 
@@ -5267,11 +8067,11 @@ exports.init = async function (wordjs) {
         // full, plus the lodging summary (status, rooms allotted, attendees without a room). The other
         // lodging columns stay out too: GET /portal/lodging is the only source of the note/stamps and it
         // hides the note once the arrangement is submitted — this twin surface must not leak it.
-        const { code, lodging_reviewed_by, lodging_note, lodging_submitted_at, lodging_reviewed_at, lodging_status, lodging_permission, lodging_permission_until, ...safe } = location;
-        // Inside a catch: the handler answers every failure itself (sendError: a generic reply, the
-        // details in the server log).
+        // The administration-adjustment stamp (2.17.0) too: `lodging_admin_changed_by` is an admin's login.
+        const { code, lodging_reviewed_by, lodging_note, lodging_submitted_at, lodging_reviewed_at, lodging_status, lodging_permission, lodging_permission_until,
+            lodging_opens, lodging_closes, lodging_admin_changed_at, lodging_admin_changed_by, lodging_admin_changes, ...safe } = location;
         try {
-            res.json({ ...safe, inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location), ...(await portalLodgingSummary(location)) });
+            res.json({ ...safe, inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location), ...(await portalLodgingSummary(location)), ...(await portalFeaturesOf(location)) });
         } catch (e) { sendError(res, e); }
     });
 
@@ -5290,6 +8090,9 @@ exports.init = async function (wordjs) {
 
     // 5. Get Inscriptions for Location — isolated by location_id, projected to what the coordinator
     // needs: payment state + the form fields. Never notes/custom_data/room_id/status/location(_id).
+    // 2.18.0: plus the fee money still under review — `pending_amount` (por validar) and `returned_amount`
+    // (devuelto) from live parts — and `cancelled` (D-P19: shown «Cancelada», no fee owed, cannot be paid;
+    // a boolean, never the raw status). Ordered by first name, then id (stable pages).
     const PORTAL_BASE_COLS = ['id', 'payment_status', 'total_due', 'amount_paid', 'registration_date'];
     http.route('get', '/portal/inscriptions', async (req, res) => {
         const location = await resolvePortalLocation(req);
@@ -5297,8 +8100,10 @@ exports.init = async function (wordjs) {
         try {
             const fields = await db.all(`SELECT name FROM ${T.fields} WHERE conference_id = ? ORDER BY sort_order ASC`, [location.conference_id]);
             const cols = [...new Set([...PORTAL_BASE_COLS, ...fields.map(f => f.name).filter(isFieldColumn)])];
-            const list = await db.all(`SELECT ${cols.join(', ')} FROM ${T.inscriptions} WHERE location_id = ? AND conference_id = ? ORDER BY first_name`, [location.id, location.conference_id]);
-            res.json(list);
+            const list = await db.all(`SELECT ${cols.map(c => `i.${c}`).join(', ')}, ${fees.personSum('pending', 'i.id')} AS pending_amount,`
+                + ` ${fees.personSum('returned', 'i.id')} AS returned_amount, CASE WHEN i.status = 'cancelled' THEN 1 ELSE 0 END AS cancelled`
+                + ` FROM ${T.inscriptions} i WHERE i.location_id = ? AND i.conference_id = ? ORDER BY i.first_name, i.id`, [location.id, location.conference_id]);
+            res.json(list.map(r => ({ ...r, pending_amount: roundMoney(r.pending_amount), returned_amount: roundMoney(r.returned_amount), cancelled: !!Number(r.cancelled) })));
         } catch (e) { sendError(res, e); }
     });
 
@@ -5406,13 +8211,20 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
 
-    // 7. Bulk Payments (Portal). Bounded: ids are deduplicated and capped at BULK_MAX_IDS, ownership is
-    // ONE query keyed by location_id, the inserts go through db.batch and payment_status is refreshed
-    // with ONE set-based statement — 1 SELECT + ≤1 batch + 1 UPDATE per request, whatever the input.
+    // 7. Bulk Payments (Portal) — kept for core portals older than «Pagos de cuotas» (2.18.0). The same
+    // amount for each selected person becomes ONE payment of N equal parts with the receipt stored once,
+    // 'pending' for the admin. All or nothing: an id outside this coordinator's location (or cancelled, or
+    // already covered — never more than what is owed) refuses the whole request. ≤ BULK_MAX_IDS people.
+    // A repeated transfer reference is accepted here: that portal has no «Registrar de todas formas» to
+    // confirm it with, and its one-amount-per-person form needs two posts with the same transfer for a family
+    // whose fees differ. The administration's queue still flags the payment «Referencia repetida».
     const BULK_MAX_IDS = 200;
     http.route('post', '/portal/payments/bulk', async (req, res) => {
         const location = await resolvePortalLocation(req);
         if (!location) return res.status(401).json({ error: 'No token' });
+        // Degraded mode (the fee migration did not complete): no payment can be recorded until it does — the
+        // coordinator gets a message meant for them, not the administrator's (2.18.0 review R5-L3).
+        if (!await fees.ensureReady()) return res.status(503).json({ error: fees.MSG.unavailable_portal, code: 'unavailable' });
         const { inscription_ids, amount_per_person, method, reference, proof } = req.body || {};
         try {
             if (!Array.isArray(inscription_ids) || inscription_ids.length === 0) {
@@ -5423,31 +8235,17 @@ exports.init = async function (wordjs) {
             if (ids.some(n => !Number.isInteger(n) || n <= 0)) return res.status(400).json({ error: 'Identificadores de inscripción inválidos.' });
             if (ids.length > BULK_MAX_IDS) return res.status(400).json({ error: `Máximo ${BULK_MAX_IDS} personas por pago.` });
             if (!Number.isFinite(Number(amount_per_person)) || Number(amount_per_person) > MAX_MONEY) return res.status(400).json({ error: 'El monto debe ser mayor que cero.' });
-            const amt = roundMoney(amount_per_person);
-            if (amt <= 0) return res.status(400).json({ error: 'El monto debe ser mayor que cero.' });
-            const p = assertProof(proof);
+            const amtC = toCents(amount_per_person);
+            if (amtC <= 0) return res.status(400).json({ error: 'El monto debe ser mayor que cero.' });
             // The coordinator may only record a form of payment the admin enabled for this location.
-            const m = assertPaymentMethod(method, enabledPaymentMethods(location));
-
-            // ONE ownership query — every id must belong to this coordinator's location (by id).
-            const owned = await db.all(
-                `SELECT id FROM ${T.inscriptions} WHERE conference_id = ? AND location_id = ? AND id IN (${ids.map(() => '?').join(', ')})`,
-                [location.conference_id, location.id, ...ids]
-            );
-            const skipped = ids.length - owned.length;
-            if (owned.length === 0) return res.status(400).json({ error: 'No se aplicó ningún pago (las personas seleccionadas no pertenecen a esta localidad).' });
-
-            // Coordinator-recorded payments also start 'pending' — the admin validates the comprobante.
-            const ref = shortText(reference, 100);
-            await runBatched(owned.map(o => [
-                `INSERT INTO ${T.payments} (inscription_id, amount, method, reference, proof, status) VALUES (?, ?, ?, ?, ?, 'pending')`,
-                [o.id, amt, m, ref, p]
-            ]));
-            // validated-only recompute → pending doesn't count yet (keeps payment_status coherent anyway).
-            const ownedIds = owned.map(o => o.id);
-            await recomputePayments(`id IN (${ownedIds.map(() => '?').join(', ')})`, ownedIds);
-            res.json({ success: true, applied: owned.length, skipped });
-        } catch (e) { sendError(res, e); }
+            const input = fees.parseBody({
+                amount: fromCents(amtC * ids.length), method, reference, proof,
+                allocations: ids.map(id => ({ inscription_id: id, amount: fromCents(amtC) })),
+                allow_duplicate_reference: true,
+            }, { methods: enabledPaymentMethods(location) });
+            const r = await fees.createTransfer({ via: 'portal', conferenceId: location.conference_id, location }, input);
+            res.json({ success: true, applied: ids.length, skipped: 0, id: r.id });
+        } catch (e) { fees.sendFeeError(res, e); }
     });
 
     // === PORTAL LODGING (2.5.0) — the coordinator arranges THEIR attendees in THEIR allotted rooms ===
@@ -5456,32 +8254,32 @@ exports.init = async function (wordjs) {
     // is submitted / validated); state transitions are compare-and-set UPDATEs under the assignment
     // lock. Nothing here can reach a pool room, another location's room or another location's rules.
     const PORTAL_FROZEN_MSG = 'El hospedaje está en validación/validado y no se puede modificar.';
+    // A room L shares (2.18.0) where the administration placed more of L's people than L has beds: the
+    // extras sit on POOL beds, which are the administration's — the coordinator neither empties nor moves
+    // L's people out of that room (it could never fill those beds again).
+    const PORTAL_POOL_BEDS_MSG = 'En esta habitación compartida la administración puso a gente de tu localidad en camas del pool: ese cambio lo hace la administración.';
+    async function holdsAdminPoolBeds(roomId, locationId) {
+        if (roomId == null) return false;
+        const r = await db.get(
+            `SELECT r.location_id, (SELECT b.beds FROM ${T.roomBeds} b WHERE b.room_id = r.id AND b.location_id = ?) AS share_beds,
+                    (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.room_id = r.id AND i.location_id = ?) AS own
+             FROM ${T.rooms} r WHERE r.id = ?`, [locationId, locationId, roomId]);
+        return !!r && r.location_id == null && r.share_beds != null && Number(r.own) > Number(r.share_beds);
+    }
     const PORTAL_RULES_MAX = 50;
     const PORTAL_RUN_COOLDOWN_MS = 5000;
     // Lodging summary for the /portal/login and /portal/me payloads: status (COALESCE'd), the number of
     // rooms allotted to the location and its non-cancelled attendees without a room.
     async function portalLodgingSummary(location) {
         const row = await db.get(
-            `SELECT (SELECT COUNT(*) FROM ${T.rooms} r WHERE r.location_id = ?) AS rooms_allotted,`
+            `SELECT (SELECT COUNT(*) FROM ${T.rooms} r WHERE r.location_id = ?) + (SELECT COUNT(*) FROM ${T.roomBeds} b WHERE b.location_id = ?) AS rooms_allotted,`
             + ` (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.location_id = ? AND i.conference_id = ? AND i.room_id IS NULL AND ${occupiedSql('i.status')}) AS unlodged`,
-            [location.id, location.id, location.conference_id]);
+            [location.id, location.id, location.id, location.conference_id]);
         return {
             lodging_status: lodgingStatusOf(location),
             rooms_allotted: Number(row && row.rooms_allotted) || 0,
             unlodged: Number(row && row.unlodged) || 0,
         };
-    }
-    // The admin's deadline for the coordinators' arrangements (conferences.lodging_deadline). NULL = no
-    // deadline. A bare date ('2026-10-01') covers the WHOLE day, like date_end for registrations; a
-    // datetime is exact. Only portal writes honour it — the admin keeps arranging whenever it likes.
-    const DAY_MS = 24 * 60 * 60 * 1000;
-    const isBareDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v).trim());
-    function lodgingDeadlineInfo(conf) {
-        const rawValue = conf && conf.lodging_deadline;
-        if (rawValue == null || rawValue === '') return { deadline: null, passed: false };
-        const t = new Date(rawValue).getTime();
-        if (!Number.isFinite(t)) return { deadline: null, passed: false };
-        return { deadline: rawValue, passed: Date.now() > (isBareDate(rawValue) ? t + DAY_MS : t) };
     }
     // '2026-10-01' → '01/10/2026'; a datetime keeps its clock ('01/10/2026 18:00').
     const fmtDeadline = (v) => {
@@ -5489,34 +8287,39 @@ exports.init = async function (wordjs) {
         if (!m) return String(v);
         return `${m[3]}/${m[2]}/${m[1]}${m[4] ? ` ${m[4]}:${m[5]}` : ''}`;
     };
-    // The admin's exception for ONE location (locations.lodging_permission / _until): it may keep arranging
-    // after the conference deadline, until `until` (a bare date covers its whole day, like the deadline) or,
-    // with no date, until the admin revokes it. A corrupt date reads as "no end" — the admin granted it.
-    function lodgingPermissionInfo(loc) {
-        if (!loc || !Number(loc.lodging_permission)) return { granted: false, until: null, active: false, expired: false };
-        const rawValue = loc.lodging_permission_until;
-        const t = rawValue == null || rawValue === '' ? NaN : new Date(rawValue).getTime();
-        if (!Number.isFinite(t)) return { granted: true, until: null, active: true, expired: false };
-        const expired = Date.now() > (isBareDate(rawValue) ? t + DAY_MS : t);
-        return { granted: true, until: rawValue, active: !expired, expired };
+    // LODGING DATES (2.21.0). The coordinators arrange their lodging from the portal between a general
+    // OPENING (conferences.lodging_opens; NULL = right away) and a general CLOSING (conferences.lodging_deadline;
+    // NULL = none). A location may have dates of its own that replace them (locations.lodging_opens /
+    // lodging_closes: NULL = the general one, a date = its own, 'now' = no wait, 'never' = no closing — the
+    // 2.8.0 «permiso fuera de plazo» became such a closing). A bare date ('2026-10-15') is a whole day: the
+    // opening from its first instant, the closing until its last, in the conference's zone (lodging_tz: the
+    // admin's browser zone, saved with the dates; none = UTC, as before 2.21.0). A datetime is exact. Only
+    // portal writes honour them — the admin arranges whenever it likes. The date arithmetic (lodgingDay,
+    // lodgingStart / lodgingEnd, lodgingZone) sits near the top of init: initSchema's migration needs it first.
+    function lodgingWindow(conf, loc, now = Date.now()) {
+        const ownOf = (v) => (v == null || String(v).trim() === '' ? null : String(v).trim());
+        const ownOpens = ownOf(loc && loc.lodging_opens), ownCloses = ownOf(loc && loc.lodging_closes);
+        const tz = lodgingZone(conf && conf.lodging_tz);
+        const opens = ownOpens ? (ownOpens === LODGING_NO_WAIT ? null : lodgingDay(ownOpens)) : lodgingDay(conf && conf.lodging_opens);
+        const closes = ownCloses ? (ownCloses === LODGING_NO_CLOSE ? null : lodgingDay(ownCloses)) : lodgingDay(conf && conf.lodging_deadline);
+        const passed = closes != null && now >= lodgingEnd(closes, tz);
+        const notYet = !passed && opens != null && now < lodgingStart(opens, tz);
+        return { opens, closes, own_opens: ownOpens, own_closes: ownCloses, tz, not_yet: notYet, passed, open: !notYet && !passed };
     }
-    // May this location's coordinator change its lodging right now (deadline-wise)? The frozen state
-    // (submitted / validated) is a separate check.
-    function lodgingWindow(conf, loc) {
-        const deadline = lodgingDeadlineInfo(conf);
-        const permission = lodgingPermissionInfo(loc);
-        return { deadline, permission, open: !deadline.passed || permission.active };
+    // What the admin's screens get of a window.
+    const lodgingWindowView = (w) => ({ opens: w.opens, closes: w.closes, not_yet: w.not_yet, passed: w.passed, open: w.open });
+    // The window of ONE location, both rows re-read (dates changed a moment ago apply at once).
+    async function lodgingWindowOf(location) {
+        return lodgingWindow(
+            await db.get(`SELECT lodging_opens, lodging_deadline, lodging_tz FROM ${T.conferences} WHERE id = ?`, [location.conference_id]),
+            await db.get(`SELECT lodging_opens, lodging_closes FROM ${T.locations} WHERE id = ?`, [location.id]));
     }
-    // Every portal lodging write: 403 once the deadline has passed, unless the location holds an active
-    // permission. Both rows are re-read so a permission granted or revoked a moment ago applies at once.
+    // Every portal lodging write: 403 before the location's opening and after its closing.
     async function assertLodgingWindowOpen(location) {
-        const conf = await db.get(`SELECT lodging_deadline FROM ${T.conferences} WHERE id = ?`, [location.conference_id]);
-        const loc = await db.get(`SELECT lodging_permission, lodging_permission_until FROM ${T.locations} WHERE id = ?`, [location.id]);
-        const w = lodgingWindow(conf, loc);
+        const w = await lodgingWindowOf(location);
         if (w.open) return;
-        const d = fmtDeadline(w.deadline.deadline);
-        if (w.permission.expired) throw httpError(403, `El plazo para acomodar los hospedajes venció el ${d} y el permiso de tu localidad venció el ${fmtDeadline(w.permission.until)}. Solo el administrador puede modificarlos.`);
-        throw httpError(403, `El plazo para acomodar los hospedajes venció el ${d}. Solo el administrador puede modificarlos.`);
+        if (w.passed) throw httpError(403, `El plazo para acomodar los hospedajes venció el ${fmtDeadline(w.closes)}. Solo el administrador puede modificarlos.`);
+        throw httpError(403, `Los hospedajes se habilitan el ${fmtDeadline(w.opens)}. Hasta entonces solo el administrador puede acomodarlos.`);
     }
     // Re-reads the status (the resolved row may be a few ms old) and throws 409 unless it is a draft.
     // Used inside the assignment lock by the routes that write.
@@ -5541,21 +8344,25 @@ exports.init = async function (wordjs) {
         try {
             const view = await loadLodging(location, { forAdmin: false });
             const status = view.location.lodging_status;
-            const win = lodgingWindow(
-                await db.get(`SELECT lodging_deadline FROM ${T.conferences} WHERE id = ?`, [location.conference_id]),
-                await db.get(`SELECT lodging_permission, lodging_permission_until FROM ${T.locations} WHERE id = ?`, [location.id]));
-            const deadline = win.deadline;
+            const win = await lodgingWindowOf(location);
             res.json({
                 status,
-                deadline: deadline.deadline,
-                deadline_passed: deadline.passed,
-                // The admin's exception for this location (see lodgingPermissionInfo) and the verdict.
-                permission: win.permission,
+                // The dates THIS location arranges between (its own where the admin set them, the general ones
+                // otherwise — see LODGING DATES). `deadline` / `deadline_passed` keep their meaning (the closing
+                // that applies), so a portal older than 2.21.0 still tells the truth.
+                opens: win.opens,
+                not_yet_open: win.not_yet,
+                deadline: win.closes,
+                deadline_passed: win.passed,
                 window_open: win.open,
                 // The admin's observations only matter while the coordinator can act on them.
                 note: status === 'draft' ? view.location.lodging_note : null,
                 submitted_at: view.location.lodging_submitted_at,
                 reviewed_at: view.location.lodging_reviewed_at,
+                // «Ajustado por la administración el …» (2.17.0): when the admin last changed the arrangement
+                // while it was submitted / validated, and how many changes since the last submission.
+                admin_changed_at: view.location.lodging_admin_changed_at,
+                admin_changes: view.location.lodging_admin_changes,
                 can_edit: status === 'draft' && win.open,
                 rooms: view.rooms,
                 unassigned: view.unassigned,
@@ -5589,34 +8396,51 @@ exports.init = async function (wordjs) {
             // still having a free bed, so a lost race writes nothing.
             await withAssignmentLock(async () => {
                 await assertPortalDraft(location);
-                const ins = await db.get(`SELECT id, status, room_id, location_id FROM ${T.inscriptions} WHERE id = ? AND location_id = ? AND conference_id = ?`, [insId, location.id, location.conference_id]);
+                const ins = await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ? AND location_id = ? AND conference_id = ?`, [insId, location.id, location.conference_id]);
                 if (!ins) throw httpError(404, 'Inscripción no encontrada.');
+                // Held by the administration (see «HELD BY THE ADMINISTRATION»): a fixed person, or anyone in a blocked room.
+                if (ins.room_id != null && Number(ins.room_id) !== Number(roomId)) {
+                    if (isPinned(ins)) throw httpError(409, HELD_PERSON_MSG);
+                    if (await db.get(`SELECT id FROM ${T.rooms} WHERE id = ? AND COALESCE(blocked, 0) = 1`, [ins.room_id])) throw httpError(409, HELD_ROOM_MSG);
+                }
 
+                if (ins.room_id != null && Number(ins.room_id) !== Number(roomId) && await holdsAdminPoolBeds(ins.room_id, location.id)) {
+                    throw httpError(409, PORTAL_POOL_BEDS_MSG);
+                }
                 if (roomId === null) {
                     if (ins.room_id == null) return;
                     const r = await db.run(
-                        `UPDATE ${T.inscriptions} SET room_id = NULL WHERE id = ? AND location_id = ? AND room_id IN (SELECT id FROM ${T.rooms} WHERE location_id = ?)`,
-                        [ins.id, location.id, location.id]);
+                        `UPDATE ${T.inscriptions} SET room_id = NULL, room_locked = NULL WHERE id = ? AND location_id = ? AND room_id IN (${LOCATION_ROOMS_SQL()})`,
+                        [ins.id, location.id, location.id, location.id]);
                     if (!r || !r.changes) throw httpError(404, 'Habitación no encontrada.');
                     return;
                 }
+                // L's whole room, or a room L shares (2.18.0) — where only L's beds are L's to fill.
                 const room = await db.get(
-                    `SELECT r.id, r.capacity, (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.room_id = r.id) AS occupied
+                    `SELECT r.id, r.capacity, r.location_id, r.share_lock, r.blocked, (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.room_id = r.id) AS occupied,
+                            (SELECT b.beds FROM ${T.roomBeds} b WHERE b.room_id = r.id AND b.location_id = ?) AS share_beds,
+                            (SELECT COUNT(*) FROM ${T.inscriptions} i2 WHERE i2.room_id = r.id AND i2.location_id = ?) AS own_occupied
                      FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id
-                     WHERE r.id = ? AND r.location_id = ? AND h.conference_id = ?`, [roomId, location.id, location.conference_id]);
+                     WHERE r.id = ? AND (r.location_id = ? OR EXISTS (SELECT 1 FROM ${T.roomBeds} b2 WHERE b2.room_id = r.id AND b2.location_id = ?)) AND h.conference_id = ?`,
+                    [location.id, location.id, roomId, location.id, location.id, location.conference_id]);
                 if (!room) throw httpError(404, 'Habitación no encontrada.');
                 if (ins.status === 'cancelled') throw httpError(400, 'Un participante cancelado no ocupa habitación.');
                 const alreadyHere = Number(ins.room_id) === Number(room.id);
                 if (alreadyHere) return;
+                if (isBlocked(room)) throw httpError(409, HELD_ROOM_MSG);
                 if (Number(room.occupied) >= Number(room.capacity)) throw httpError(400, 'La habitación está llena.');
+                if (room.location_id == null && Number(room.own_occupied) >= (Number(room.share_beds) || 0)) {
+                    throw httpError(400, 'Las camas de tu localidad en esta habitación ya están ocupadas.');
+                }
+                await assertShareLock(room, ins, location.conference_id);
                 // The room must still be L's when the write lands (an admin re-allotment cannot interleave
                 // thanks to the lock, but the predicate costs nothing). No self-referencing capacity
                 // subquery here: MySQL refuses an UPDATE whose subquery reads the updated table (1093);
                 // the capacity check above is serialised by the assignment lock instead.
                 const r = await db.run(
-                    `UPDATE ${T.inscriptions} SET room_id = ? WHERE id = ? AND location_id = ? AND conference_id = ?`
-                    + ` AND EXISTS (SELECT 1 FROM ${T.rooms} x WHERE x.id = ? AND x.location_id = ?)`,
-                    [room.id, ins.id, location.id, location.conference_id, room.id, location.id]);
+                    `UPDATE ${T.inscriptions} SET room_id = ?, room_locked = NULL WHERE id = ? AND location_id = ? AND conference_id = ?`
+                    + ` AND EXISTS (SELECT 1 FROM ${T.rooms} x WHERE x.id = ? AND (x.location_id = ? OR EXISTS (SELECT 1 FROM ${T.roomBeds} b WHERE b.room_id = x.id AND b.location_id = ?)))`,
+                    [room.id, ins.id, location.id, location.conference_id, room.id, location.id, location.id]);
                 if (!r || !r.changes) throw httpError(404, 'Habitación no encontrada.');
             });
             res.json({ success: true });
@@ -5661,9 +8485,15 @@ exports.init = async function (wordjs) {
             await assertLodgingWindowOpen(location);
             await withAssignmentLock(async () => {
                 await assertPortalDraft(location);
+                // The rooms L shares where the administration put L's people on pool beds keep them all.
+                const kept = (await db.all(
+                    `SELECT b.room_id, b.beds, (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.room_id = b.room_id AND i.location_id = ?) AS own
+                     FROM ${T.roomBeds} b JOIN ${T.rooms} r ON r.id = b.room_id WHERE b.location_id = ? AND r.location_id IS NULL`, [location.id, location.id]))
+                    .filter(x => Number(x.own) > Number(x.beds)).map(x => Number(x.room_id));
                 await db.run(
-                    `UPDATE ${T.inscriptions} SET room_id = NULL WHERE location_id = ? AND conference_id = ? AND room_id IN (SELECT id FROM ${T.rooms} WHERE location_id = ?)`,
-                    [location.id, location.conference_id, location.id]);
+                    `UPDATE ${T.inscriptions} SET room_id = NULL, room_locked = NULL WHERE location_id = ? AND conference_id = ? AND room_id IN (${LOCATION_ROOMS_SQL()}) AND ${NOT_HELD_SQL()}`
+                    + (kept.length ? ` AND room_id NOT IN (${kept.map(() => '?').join(', ')})` : ''),
+                    [location.id, location.conference_id, location.id, location.id, ...kept]);
             });
             res.json({ success: true });
         } catch (e) { sendError(res, e); }
@@ -5686,6 +8516,7 @@ exports.init = async function (wordjs) {
             // re-read, so a rule can never land on an arrangement that was submitted meanwhile.
             const saved = await withAssignmentLock(async () => {
                 await assertPortalDraft(location);
+                await assertFreePriority({ conferenceId: cid, locationId: location.id, ruleId: positiveInt(id), priority: rule.priority });
                 if (id !== undefined && id !== null && id !== '') {
                     const ruleId = positiveInt(id);
                     const existing = ruleId ? await db.get(`SELECT id FROM ${T.rules} WHERE id = ? AND location_id = ? AND conference_id = ?`, [ruleId, location.id, cid]) : null;
@@ -5733,15 +8564,22 @@ exports.init = async function (wordjs) {
             await withAssignmentLock(async () => {
                 const c = await db.get(
                     `SELECT COUNT(*) AS present,`
-                    + ` SUM(CASE WHEN i.room_id IN (SELECT id FROM ${T.rooms} WHERE location_id = ?) THEN 1 ELSE 0 END) AS placed`
+                    + ` SUM(CASE WHEN i.room_id IN (${LOCATION_ROOMS_SQL()}) THEN 1 ELSE 0 END) AS placed`
                     + ` FROM ${T.inscriptions} i WHERE i.location_id = ? AND i.conference_id = ? AND ${occupiedSql('i.status')}`,
-                    [location.id, location.id, location.conference_id]);
+                    [location.id, location.id, location.id, location.conference_id]);
                 const present = Number(c && c.present) || 0, placed = Number(c && c.placed) || 0;
                 if (present > 0 && placed === 0) throw httpError(400, 'No hay ninguna asignación de hospedaje para enviar.');
                 const r = await db.run(
                     `UPDATE ${T.locations} SET lodging_status = 'submitted', lodging_submitted_at = CURRENT_TIMESTAMP WHERE id = ? AND COALESCE(lodging_status, 'draft') = 'draft'`,
                     [location.id]);
                 if (!r || !r.changes) throw httpError(409, 'El hospedaje ya fue enviado.');
+                // A new submission is the coordinator's arrangement as it stands — the administration's
+                // earlier adjustments included, which the coordinator has seen: the stamp starts over
+                // (2.17.0). Same lock as every stamp, so no adjustment can fall between the two writes.
+                // Best-effort: a missing stamp column must not cost the coordinator the submission.
+                try {
+                    await db.run(`UPDATE ${T.locations} SET lodging_admin_changed_at = NULL, lodging_admin_changed_by = NULL, lodging_admin_changes = 0 WHERE id = ?`, [location.id]);
+                } catch (e) { console.warn('[conference-manager] lodging adjustment reset skipped:', e && e.message); }
             });
             res.json({ success: true, lodging_status: 'submitted' });
         } catch (e) { sendError(res, e); }

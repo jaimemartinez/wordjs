@@ -18,6 +18,7 @@ import {
     canEditLodging,
     deadlineState,
     dragDecision,
+    fmtDeadline,
     freeBeds,
     normalizeLodgingStatus,
     type DragRefusal,
@@ -206,6 +207,13 @@ export const genderLabel = (v: unknown): string => {
     const k = genderKey(raw);
     return k === 'F' ? 'Mujer' : k === 'M' ? 'Hombre' : raw;
 };
+
+/** A shared room's class as words for a sentence (conference-manager 2.21.0): «mujeres» / «hombres» for the gender, the value otherwise. */
+export const lockLabel = (room: LodgingRoom | null | undefined): string =>
+    (room?.shared?.lock || []).map((x) => {
+        const k = x.field === 'gender' ? genderKey(x.value) : '';
+        return k === 'F' ? 'mujeres' : k === 'M' ? 'hombres' : String(x.value);
+    }).join(' · ');
 
 /** The make-up of a room by its listed occupants' genders: 'none' when nobody (with a known gender) is in it. */
 export type RoomGender = 'M' | 'F' | 'mixed' | 'none';
@@ -477,7 +485,7 @@ export type AssignCandidate = { attendee: LodgingAttendee; fromRoom: LodgingRoom
 
 export type AssignCandidates = {
     /** Why nobody may go into the room (null = the lists below apply). */
-    blocked: 'full' | 'unknown' | null;
+    blocked: 'full' | 'unknown' | 'blocked' | null;
     /** Attendees without a room who may take a bed here. */
     unassigned: AssignCandidate[];
     /** Attendees in ANOTHER of the location's rooms who may be moved here. */
@@ -502,6 +510,7 @@ export const assignCandidates = ({ roomId, rooms, unassigned, query = '' }: {
     const list = Array.isArray(rooms) ? rooms : [];
     const target = list.find((r) => Number(r.id) === roomId);
     if (!target) return { blocked: 'unknown', unassigned: [], elsewhere: [] };
+    if (target.blocked) return { blocked: 'blocked', unassigned: [], elsewhere: [] };
     if (freeBeds(target) <= 0) return { blocked: 'full', unassigned: [], elsewhere: [] };
     const q = normalizeSearch(query);
     const pool = Array.isArray(unassigned) ? unassigned : [];
@@ -615,14 +624,19 @@ export const readOnlyReason = (d: LodgingData | null | undefined): string | null
     const status = normalizeLodgingStatus(d?.status);
     const editable = canEditLodging(status) && d?.can_edit !== false;
     if (editable) return null;
-    const passed = deadlineState(d) === 'passed';
+    const state = deadlineState(d);
+    const passed = state === 'passed';
+    const opensOn = state === 'not_yet' ? fmtDeadline(d?.opens) : null;
     if (status === 'submitted') {
         return passed
             ? 'Solo lectura: el hospedaje está enviado a validación y el plazo ya venció.'
-            : 'Enviaste el hospedaje a validación: solo puedes consultarlo. Usa «Retirar envío» para volver a acomodar.';
+            : opensOn
+                ? `Solo lectura: el hospedaje está enviado a validación y los hospedajes se habilitan el ${opensOn}.`
+                : 'Enviaste el hospedaje a validación: solo puedes consultarlo. Usa «Retirar envío» para volver a acomodar.';
     }
     if (status === 'validated') return 'Solo lectura: el administrador validó el hospedaje.';
     if (passed) return 'Solo lectura: venció el plazo para acomodar los hospedajes.';
+    if (opensOn) return `Todavía no puedes acomodar: los hospedajes se habilitan el ${opensOn}.`;
     return 'El hospedaje no se puede modificar en este momento. Solo el administrador puede cambiar la acomodación.';
 };
 

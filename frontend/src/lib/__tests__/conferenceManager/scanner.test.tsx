@@ -36,6 +36,7 @@ import {
 } from '../../../../../marketplace/plugins/conference-manager/client/admin/MealScanner';
 import { classifyRead, createReadRouter, createScanMeter, isRegCode, normalizeCode, scanLoopDelay } from '../../../../../marketplace/plugins/conference-manager/client/lib/meals';
 import { translations } from '../../../../../marketplace/plugins/conference-manager/client/lib/i18n';
+import { encodeQr } from '../../../../../marketplace/plugins/conference-manager/client/lib/qr';
 
 const es = makeTx((k: string) => translations.es[k] ?? k);
 const flat = (html: string) => html.replace(/<!-- -->/g, '');
@@ -144,11 +145,12 @@ describe('scanLoopDelay: the built-in reader leaves the main thread free at leas
 });
 
 describe('BarcodeDetector is asked for every format it supports', () => {
-    it('code_128 plus the rest (2.15.0 asked for code_128 only)', () => {
+    it('qr_code plus the rest (2.15.0 asked for code_128 only; the badges are QR since 2.22.0)', () => {
         expect(pickNativeFormats(['code_128', 'ean_13', 'upc_e', 'qr_code', 'unknown'])).toEqual(['code_128', 'ean_13', 'upc_e', 'qr_code']);
-        expect(pickNativeFormats(undefined)).toEqual(expect.arrayContaining(['code_128', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_39']));
-        // Without Code 128 it cannot read the badges: the built-in reader is used instead.
-        expect(pickNativeFormats(['qr_code', 'ean_13'])).toBeNull();
+        expect(pickNativeFormats(undefined)).toEqual(expect.arrayContaining(['qr_code', 'code_128', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_39']));
+        expect(pickNativeFormats(['qr_code', 'ean_13'])).toEqual(['qr_code', 'ean_13']);
+        // Without QR it cannot read the badges: the built-in reader (QR + Code 128) is used instead.
+        expect(pickNativeFormats(['code_128', 'ean_13'])).toBeNull();
     });
 });
 
@@ -183,11 +185,44 @@ describe('the built-in path decodes the aiming band, nothing filtered', () => {
         const fw = 640 * 0.82, fh = fw / 2.6;
         const aim = { getBoundingClientRect: () => ({ left: (640 - fw) / 2, top: (720 - fh) / 2, width: fw, height: fh }) };
         expect(decodeCameraFrame(video, canvas, aim)).toEqual({ text: '96385074', format: 'ean_8' });
-        // Only the band under the frame was drawn, 1:1 (full resolution, nothing downscaled).
+        // First a QR was looked for (2.22.0) in a square around the frame, at most 720 px a side; then the band
+        // under the frame was drawn 1:1 (full resolution, nothing downscaled) for the barcode.
+        expect(draws).toHaveLength(2);
+        expect(draws[0][0]).toBe(draws[0][1]);
+        expect(Math.max(draws[0][2], draws[0][3])).toBeLessThanOrEqual(720);
         expect(canvas.width).toBeLessThan(W);
         expect(canvas.height).toBeLessThan(H);
-        expect(draws[0][0]).toBe(draws[0][2]);
-        expect(draws[0][1]).toBe(draws[0][3]);
+        expect(draws[1][0]).toBe(draws[1][2]);
+        expect(draws[1][1]).toBe(draws[1][3]);
+    });
+
+    it('a badge QR under the aiming frame is read first, as qr_code (2.22.0)', () => {
+        // The badge's QR (version 1-H, the registration code), 9 px per module, in the middle of the camera.
+        const qr = encodeQr('EUVWPL73N7', 'H');
+        const W = 1280, H = 720, px = 9;
+        const frame = new Uint8ClampedArray(W * H).fill(235);
+        const x0 = Math.round((W - qr.size * px) / 2), y0 = Math.round((H - qr.size * px) / 2);
+        for (let y = 0; y < qr.size; y++) for (let x = 0; x < qr.size; x++) if (qr.modules[y][x]) {
+            for (let dy = 0; dy < px; dy++) for (let dx = 0; dx < px; dx++) frame[(y0 + y * px + dy) * W + x0 + x * px + dx] = 20;
+        }
+        let target = new Uint8ClampedArray(0);
+        const canvas = {
+            width: 0, height: 0,
+            getContext: () => ({
+                drawImage: (_v: unknown, sx: number, sy: number, sw: number, sh: number, _dx: number, _dy: number, dw: number, dh: number) => {
+                    target = new Uint8ClampedArray(dw * dh * 4);
+                    for (let y = 0; y < dh; y++) for (let x = 0; x < dw; x++) {
+                        const v = frame[Math.floor(sy + (y * sh) / dh) * W + Math.floor(sx + (x * sw) / dw)];
+                        target.set([v, v, v, 255], (y * dw + x) * 4);
+                    }
+                },
+                getImageData: () => ({ data: target }),
+            }),
+        };
+        const video = { videoWidth: W, videoHeight: H, getBoundingClientRect: () => ({ left: 0, top: 0, width: 640, height: 720 }) };
+        const fw = 640 * 0.82, fh = fw / 2.6;
+        const aim = { getBoundingClientRect: () => ({ left: (640 - fw) / 2, top: (720 - fh) / 2, width: fw, height: fh }) };
+        expect(decodeCameraFrame(video, canvas, aim)).toEqual({ text: 'EUVWPL73N7', format: 'qr_code' });
     });
 });
 

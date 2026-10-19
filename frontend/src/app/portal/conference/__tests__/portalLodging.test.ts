@@ -13,9 +13,13 @@ import {
     deadlineMessage,
     deadlineState,
     dragDecision,
+    lockRefuses,
     fmtDeadline,
     emptyRuleForm,
     fieldLabelOf,
+    freeRulePriority,
+    priorityClash,
+    ruleRanks,
     fmtTimestamp,
     formToRuleParams,
     freeBeds,
@@ -348,6 +352,17 @@ describe("lodging deadline — deadlineState / deadlineMessage / fmtDeadline (th
         expect(fmtDeadline('garbage')).toBe('garbage');
         expect(fmtDeadline(null)).toBe('');
     });
+    it("before the opening (conference-manager 2.21.0) says when it opens — with the closing when there is one", () => {
+        expect(deadlineState({ opens: '2026-10-15', not_yet_open: true, deadline: '2026-10-30', deadline_passed: false })).toBe('not_yet');
+        expect(deadlineState({ opens: '2026-10-15', not_yet_open: true })).toBe('not_yet');
+        expect(deadlineMessage({ opens: '2026-10-15', not_yet_open: true, deadline: '2026-10-30' })).toBe('Los hospedajes se habilitan el 15/10/2026. Desde ese día podrás acomodarlos y enviarlos hasta el 30/10/2026 (inclusive).');
+        expect(deadlineMessage({ opens: '2026-10-15', not_yet_open: true, deadline: null })).toBe('Los hospedajes se habilitan el 15/10/2026. Desde ese día podrás acomodarlos y enviarlos.');
+        // Once open, the opening says nothing more: the closing (if any) is the line; none → no banner.
+        expect(deadlineState({ opens: '2026-10-01', not_yet_open: false, deadline: '2026-10-30' })).toBe('open');
+        expect(deadlineMessage({ opens: '2026-10-01', not_yet_open: false, deadline: null })).toBeNull();
+        // An opening without its date is no state of its own (the server never sends that).
+        expect(deadlineState({ opens: null, not_yet_open: true, deadline: '2026-10-30' })).toBe('open');
+    });
     it("phrases the banner for open and passed deadlines", () => {
         expect(deadlineMessage({ deadline: '2026-10-01', deadline_passed: false })).toBe('Puedes acomodar y enviar los hospedajes hasta el 01/10/2026 (inclusive).');
         expect(deadlineMessage({ deadline: '2026-10-01', deadline_passed: true })).toBe('El plazo para acomodar los hospedajes venció el 01/10/2026. Solo el administrador puede modificarlos.');
@@ -456,5 +471,56 @@ describe("lodging permission — the admin's per-location exception to the deadl
             .toBe('El plazo para acomodar los hospedajes venció el 01/10/2026 y el permiso de tu localidad venció el 03/10/2026. Solo el administrador puede modificarlos.');
         expect(deadlineMessage({ deadline: '2026-10-01', deadline_passed: true, permission: { granted: false } }))
             .toBe('El plazo para acomodar los hospedajes venció el 01/10/2026. Solo el administrador puede modificarlos.');
+    });
+});
+
+describe("rule priorities (conference-manager 2.21.0): the higher number first, no two the same", () => {
+    const r = (id: number, priority: number, name = `R${id}`) => ({ id, name, type: "keep_together", priority } as any);
+    it("ranks the administrator's rules and the location's together, the highest number first, an older tie first", () => {
+        const ranks = ruleRanks([r(1, 10), r(2, 90), r(3, 50), r(4, 50)]);
+        expect([2, 3, 4, 1].map((id) => ranks.get(id))).toEqual([1, 2, 3, 4]);
+    });
+    it("offers a free number below the others for a new rule", () => {
+        expect(freeRulePriority([])).toBe(50);
+        expect(freeRulePriority([r(1, 50), r(2, 40)])).toBe(30);
+        expect(freeRulePriority([r(1, 10), r(2, 1)])).toBe(2);
+    });
+    it("says which rule already uses the number typed (not the one being edited; blank says nothing)", () => {
+        const rules = [r(1, 50, "Familias"), r(2, 40)];
+        expect(priorityClash(rules, "50", null)?.name).toBe("Familias");
+        expect(priorityClash(rules, "50", 1)).toBeNull();
+        expect(priorityClash(rules, "", null)).toBeNull();
+        expect(priorityClash(rules, "45", null)).toBeNull();
+    });
+});
+
+describe("a shared room's class (conference-manager 2.21.0: the gender «Sugerir reparto» fixed for a shared room stays)", () => {
+    // Room 5: the location's one bed of a room of 4 the plan left for men; room 6 holds one of its men.
+    const shared = room({ id: 5, capacity: 1, occupied: 0, occupants: [], shared: { beds: 1, room_capacity: 4, lock: [{ field: 'gender', value: 'M' }] } });
+    const rooms: LodgingRoom[] = [shared, room({ id: 6, capacity: 2, occupied: 1, occupants: [{ id: 41, gender: 'M' }] })];
+    const unassigned = [{ id: 51, gender: 'F' }, { id: 52, gender: 'm' }, { id: 53, gender: '' }];
+
+    it("refuses someone of another value (`locked`); the room's value, in any case, and a blank one may go in", () => {
+        expect(lockRefuses(shared, { id: 51, gender: 'F' })).toBe(true);
+        expect(lockRefuses(shared, { id: 52, gender: 'm' })).toBe(false);
+        expect(lockRefuses(room({ id: 7 }), { id: 51, gender: 'F' })).toBe(false);
+        expect(dragDecision({ attendeeId: 51, fromRoomId: null, toRoomId: 5, rooms, unassigned })).toEqual({ ok: false, reason: 'locked' });
+        expect(dragDecision({ attendeeId: 52, fromRoomId: null, toRoomId: 5, rooms, unassigned })).toEqual({ ok: true });
+        expect(dragDecision({ attendeeId: 53, fromRoomId: null, toRoomId: 5, rooms, unassigned })).toEqual({ ok: true });
+        expect(dragDecision({ attendeeId: 41, fromRoomId: 6, toRoomId: 5, rooms, unassigned })).toEqual({ ok: true });
+    });
+});
+
+describe("held by the administration (conference-manager 2.21.0): a blocked room, a person fixed in their room", () => {
+    const blockedRoom = room({ id: 8, capacity: 2, occupied: 1, occupants: [{ id: 81 }], blocked: true });
+    const open = room({ id: 9, capacity: 3, occupied: 1, occupants: [{ id: 91, room_locked: 1 }] });
+    const rooms: LodgingRoom[] = [blockedRoom, open];
+    const unassigned = [{ id: 99 }];
+    it("nobody goes into or out of a blocked room, and a fixed person stays (`blocked`)", () => {
+        expect(dragDecision({ attendeeId: 99, fromRoomId: null, toRoomId: 8, rooms, unassigned })).toEqual({ ok: false, reason: 'blocked' });
+        expect(dragDecision({ attendeeId: 81, fromRoomId: 8, toRoomId: 9, rooms, unassigned })).toEqual({ ok: false, reason: 'blocked' });
+        expect(dragDecision({ attendeeId: 81, fromRoomId: 8, toRoomId: null, rooms, unassigned })).toEqual({ ok: false, reason: 'blocked' });
+        expect(dragDecision({ attendeeId: 91, fromRoomId: 9, toRoomId: null, rooms, unassigned })).toEqual({ ok: false, reason: 'blocked' });
+        expect(dragDecision({ attendeeId: 99, fromRoomId: null, toRoomId: 9, rooms, unassigned })).toEqual({ ok: true });
     });
 });

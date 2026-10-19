@@ -399,7 +399,7 @@ test('an assignment rule on a field the form no longer has takes no effect (engi
     // A NEW rule on it is refused (the form does not have it); one on the location (always filled) is accepted.
     const again = await p.call('post', '/assignment/rules', { body: { conference_id: cid, name: 'Otra', type: 'separate_by', config: 'gender' } });
     assert.strictEqual(again.status, 400, JSON.stringify(again.body));
-    const byLoc = await p.call('post', '/assignment/rules', { body: { conference_id: cid, name: 'Por localidad', type: 'keep_together', config: 'location' } });
+    const byLoc = await p.call('post', '/assignment/rules', { body: { conference_id: cid, name: 'Por localidad', type: 'keep_together', config: 'location', priority: 20 } });
     assert.strictEqual(byLoc.status, 200, JSON.stringify(byLoc.body));
 });
 

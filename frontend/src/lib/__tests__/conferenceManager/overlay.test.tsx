@@ -134,8 +134,9 @@ describe('a sheet taller than a phone keeps its title, close button and buttons 
         expect(foot).toMatch(/background-color:\s*#fff/);
         // A field scrolled into view (focus, the keyboard) stops clear of both pinned rows.
         const pad = rule('[data-cm-sheet]');
-        expect(pad).toMatch(/scroll-padding-top:\s*6\.5rem/);
-        expect(pad).toMatch(/scroll-padding-bottom:\s*6rem/);
+        // Round 6: the pinned rows' MEASURED heights (Overlay → --cm-head-h / --cm-foot-h), 6.5rem / 6rem until measured.
+        expect(pad).toMatch(/scroll-padding-top:\s*calc\(var\(--cm-head-h, 6\.5rem\)/);
+        expect(pad).toMatch(/scroll-padding-bottom:\s*var\(--cm-foot-h, 6rem\)/);
         // Only on phones: none of it outside the media query.
         expect(OVERLAY_CSS.slice(0, at)).not.toMatch(/sticky|data-cm-sheet-foot|overflow:\s*clip|scroll-padding/);
     });
@@ -219,10 +220,16 @@ describe('the plugin\'s sources: every modal goes through Overlay', () => {
         expect(offenders).toEqual([]);
     });
     it('every dialog file renders through Overlay', () => {
+        // RecentDeliveries.tsx: its only «dialog» is the inline «¿Deshacer…?» question inside a row of «Últimas
+        // entregas» (no backdrop, never takes the scan input's focus) — and it renders no modal at all.
+        const INLINE_ONLY = 'RecentDeliveries.tsx';
         for (const { f, src } of files) {
-            if (!/role="(alert)?dialog"/.test(src) || f === 'MealScanner.tsx' || f === 'Overlay.tsx') continue;
+            if (!/role="(alert)?dialog"/.test(src) || f === 'MealScanner.tsx' || f === 'Overlay.tsx' || f === INLINE_ONLY) continue;
             expect(src, f).toMatch(/<Overlay[\s>]/);
         }
+        const inline = files.find((x) => x.f === INLINE_ONLY)!.src;
+        expect(inline.match(/role="(alert)?dialog"/g)).toEqual(['role="alertdialog"']);
+        expect(inline).not.toMatch(/fixed|<Overlay|<Modal|createPortal/);
     });
     it('inside an overlay no field autofocuses unconditionally', () => {
         const offenders: string[] = [];

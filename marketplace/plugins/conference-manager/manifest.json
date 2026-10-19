@@ -1,7 +1,7 @@
 {
     "id": "conference-manager",
     "name": "Conference Manager",
-    "version": "2.17.2",
+    "version": "2.23.0",
     "description": "Manage conference inscriptions, payments, and lodging assignments.",
     "author": "WordJS",
     "isolated": true,
@@ -44,6 +44,11 @@
             "scope": "users",
             "access": "read",
             "reason": "Required to find WordJS users to add to the conference team (staff roles)."
+        },
+        {
+            "scope": "settings",
+            "access": "read",
+            "reason": "Read the site's address, to put the link to each registrant's «Mi inscripción» page in their badge's QR code. Without it the QR carries only the registration code (the meal scanner still reads it)."
         },
         {
             "scope": "roles",

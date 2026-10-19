@@ -267,15 +267,16 @@ export default function TransportPage({ conferenceId, slug }: { conferenceId: nu
                     {canManage && <p className="text-xs text-gray-400 mt-1">{t('transport.empty.hint') || 'Crea un bus con su trayecto, salida, capacidad y precio para empezar a vender pasajes.'}</p>}
                 </div>
             ) : (
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="grid gap-6" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 24rem), 1fr))' }}>
                     {buses.map(b => {
                         const sold = Number(b.sold) || 0, cap = Number(b.capacity) || 0;
                         const pct = cap ? Math.min(100, Math.round((sold / cap) * 100)) : 0;
                         const route = [b.origin, b.destination].filter(Boolean).join(' → ');
                         return (
                             <div key={b.id} className="bg-white p-6 sm:p-8 rounded-[32px] border-2 border-gray-50 shadow-sm hover:border-sky-200 hover:shadow-xl transition-all">
-                                <div className="flex items-start justify-between gap-4">
-                                    <div className="flex items-center gap-4 min-w-0">
+                                {/* Wraps: on a phone the three icon buttons left ~36px for the name and the departure time. */}
+                                <div className="flex flex-wrap items-start justify-between gap-4">
+                                    <div className="flex items-center gap-4 min-w-0" style={{ flex: '1 1 12rem' }}>
                                         <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-sky-50 to-blue-50 text-sky-600 flex items-center justify-center text-xl shadow-inner shrink-0"><i className="fa-solid fa-bus-simple"></i></div>
                                         <div className="min-w-0">
                                             <h3 className="text-2xl font-black text-gray-900 italic tracking-tighter truncate">{b.name}</h3>
@@ -297,10 +298,10 @@ export default function TransportPage({ conferenceId, slug }: { conferenceId: nu
                                     <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
                                         <div className={`h-full rounded-full ${pct >= 100 ? 'bg-rose-500' : pct >= 80 ? 'bg-amber-400' : 'bg-sky-500'}`} style={{ width: `${pct}%` }}></div>
                                     </div>
-                                    <div className="grid grid-cols-3 gap-2 mt-4 text-center">
+                                    <div className="grid gap-2 mt-4 text-center" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(6.5rem, 1fr))' }}>
                                         {[[t('transport.stat.sold') || 'Vendido', money(b.revenue), 'text-gray-900'], [t('transport.stat.collected') || 'Recaudado', money(b.collected), 'text-emerald-600'], [t('transport.stat.pending') || 'Por cobrar', money((Number(b.revenue) || 0) - (Number(b.collected) || 0)), 'text-rose-600']].map(([l, v, c]) => (
                                             <div key={l} className="bg-gray-50/70 rounded-xl py-2">
-                                                <div className={`text-sm font-black ${c}`}>{v}</div>
+                                                <div className={`text-sm font-black ${c}`} style={{ overflowWrap: 'anywhere' }}>{v}</div>
                                                 <div className="text-[8px] font-black text-gray-400 uppercase tracking-widest">{l}</div>
                                             </div>
                                         ))}

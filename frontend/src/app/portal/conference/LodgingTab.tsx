@@ -3,12 +3,16 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useToast } from "@/contexts/ToastContext";
 import {
+    adminAdjustLine,
     attendeeName,
     canEditLodging,
     deadlineMessage,
     deadlineState,
     emptyPredicate,
     emptyRuleForm,
+    freeRulePriority,
+    priorityClash,
+    ruleRanks,
     fmtTimestamp,
     lodgingSummary,
     normalizeLodgingStatus,
@@ -23,6 +27,7 @@ import {
     ruleToForm,
     ruleTypeLabel,
     statusLabel,
+    submitConfirmText,
     unassignedHint,
     unassignedLabel,
     type AssignmentRunResult,
@@ -89,6 +94,20 @@ const violationText = (v: unknown): { text: string; hard: boolean } => {
     }
     return { text: String(v ?? ''), hard: false };
 };
+
+/**
+ * conference-manager 2.17.0: the administration changed the arrangement while it was submitted / validated
+ * (it may adjust it without reopening it) — «Ajustado por la administración el …». Nothing otherwise.
+ */
+export function AdminAdjustedNotice({ data }: { data: Pick<LodgingData, 'admin_changed_at' | 'admin_changes'> | null | undefined }) {
+    const line = adminAdjustLine(data);
+    if (!line) return null;
+    return (
+        <Notice tone="blue" icon="fa-pen-to-square" data-testid="lodging-admin-adjusted">
+            <span>{line}</span>
+        </Notice>
+    );
+}
 
 /** Font Awesome icon of a rule type, as the admin's AssignmentPage rule rows. */
 const ruleTypeIcon = (type: unknown): string => {
@@ -255,6 +274,8 @@ export default function Hospedajes({ authHeaders, onLocationRefresh, storageScop
     const violations = Array.isArray(d.violations) ? d.violations : [];
     const adminRules = Array.isArray(d.rules?.conference) ? d.rules.conference : [];
     const myRules = Array.isArray(d.rules?.location) ? d.rules.location : [];
+    // Each rule's place in the order the engine applies them (the highest priority first, both lists together).
+    const ranks = ruleRanks([...adminRules, ...myRules]);
     const fields = Array.isArray(d.fields) ? d.fields : [];
     const summary = lodgingSummary(d);
     const hasRooms = rooms.length > 0;
@@ -285,9 +306,7 @@ export default function Hospedajes({ authHeaders, onLocationRefresh, storageScop
 
     const askSubmit = () => openConfirm({
         title: 'Enviar a validación',
-        text: summary.unplaced > 0
-            ? `Hay ${unassignedLabel(summary.unplaced)}. El administrador revisará la acomodación tal como está y no podrás modificarla hasta que la devuelva o retires el envío. ¿Enviar?`
-            : 'El administrador revisará la acomodación y no podrás modificarla hasta que la devuelva o retires el envío. ¿Enviar?',
+        text: submitConfirmText(summary.unplaced),
         okLabel: 'Enviar',
         onOk: () => { setEditor(null); act('/portal/lodging/submit', {}, { okMessage: 'Hospedaje enviado a validación.' }); },
     });
@@ -328,16 +347,17 @@ export default function Hospedajes({ authHeaders, onLocationRefresh, storageScop
                         {status === 'submitted' && d.submitted_at && <div className={cx(captionCls, "mt-2")}>Enviado el {fmtTimestamp(d.submitted_at)}</div>}
                         {status === 'validated' && d.reviewed_at && <div className={cx(captionCls, "mt-2")}>Validado el {fmtTimestamp(d.reviewed_at)}</div>}
                     </div>
-                    {status === 'submitted' && deadlineState(d) !== 'passed' && (
+                    {status === 'submitted' && deadlineState(d) !== 'passed' && deadlineState(d) !== 'not_yet' && (
                         <Button variant="outline" icon="fa-rotate-left" onClick={withdraw} disabled={busy} className="shrink-0">Retirar envío</Button>
                     )}
-                    {status === 'validated' && <span className="text-xs text-emerald-800 font-bold sm:max-w-xs sm:text-right">Solo lectura. Para cambiar la acomodación, pide al administrador reabrir el hospedaje.</span>}
+                    {status === 'validated' && <span className="text-xs text-emerald-800 font-bold sm:max-w-xs sm:text-right">Solo lectura. El administrador puede ajustar la acomodación; para cambiarla tú, pídele reabrir el hospedaje.</span>}
                 </div>
                 {deadlineMessage(d) && (
-                    <Notice tone={deadlineState(d) === 'passed' ? 'rose' : deadlineState(d) === 'extended' ? 'emerald' : 'blue'} icon={deadlineState(d) === 'passed' ? 'fa-lock' : deadlineState(d) === 'extended' ? 'fa-unlock' : 'fa-calendar-check'} data-testid="lodging-deadline">
+                    <Notice tone={deadlineState(d) === 'passed' ? 'rose' : deadlineState(d) === 'extended' ? 'emerald' : deadlineState(d) === 'not_yet' ? 'amber' : 'blue'} icon={deadlineState(d) === 'passed' ? 'fa-lock' : deadlineState(d) === 'extended' ? 'fa-unlock' : deadlineState(d) === 'not_yet' ? 'fa-hourglass-half' : 'fa-calendar-check'} data-testid="lodging-deadline">
                         <span>{deadlineMessage(d)}</span>
                     </Notice>
                 )}
+                <AdminAdjustedNotice data={d} />
                 {status === 'draft' && d.note && (
                     <Notice tone="amber" icon="fa-comment-dots" data-testid="lodging-note">
                         <span className="font-black">Observaciones del administrador:</span> {String(d.note)}
@@ -471,11 +491,11 @@ export default function Hospedajes({ authHeaders, onLocationRefresh, storageScop
                     title="Reglas de asignación"
                     caption={`${adminRules.length + myRules.length} reglas · orden por prioridad`}
                     actions={hasRooms && editable && !editor ? (
-                        <Button variant="outlineIndigo" icon="fa-plus" onClick={() => setEditor({ id: null, form: emptyRuleForm() })} disabled={busy}>Nueva regla</Button>
+                        <Button variant="outlineIndigo" icon="fa-plus" onClick={() => setEditor({ id: null, form: { ...emptyRuleForm(), priority: String(freeRulePriority([...adminRules, ...myRules])) } })} disabled={busy}>Nueva regla</Button>
                     ) : undefined}
                 />
                 <div className="p-5 sm:p-8 space-y-8">
-                    <p className="text-xs text-gray-500 leading-relaxed -mt-2">La asignación automática aplica las reglas del administrador y las tuyas, por prioridad.</p>
+                    <p className="text-xs text-gray-500 leading-relaxed -mt-2" data-testid="lodging-rules-order">La asignación automática aplica las reglas del administrador y las tuyas en orden de prioridad: el número más alto primero (1.ª, 2.ª…). Dos reglas no pueden tener el mismo número.</p>
                     <div className="space-y-4">
                         <SectionDivider>Reglas del administrador</SectionDivider>
                         {adminRules.length === 0 ? (
@@ -484,7 +504,7 @@ export default function Hospedajes({ authHeaders, onLocationRefresh, storageScop
                             <ul className="divide-y divide-gray-50 -mx-5 sm:-mx-8">
                                 {adminRules.map((r) => (
                                     <li key={r.id}>
-                                        <RuleRow rule={r} fields={fields} readOnly />
+                                        <RuleRow rule={r} fields={fields} readOnly rank={ranks.get(Number(r.id))} />
                                     </li>
                                 ))}
                             </ul>
@@ -501,6 +521,7 @@ export default function Hospedajes({ authHeaders, onLocationRefresh, storageScop
                                         <RuleRow
                                             rule={r}
                                             fields={fields}
+                                            rank={ranks.get(Number(r.id))}
                                             actions={editable ? (
                                                 <>
                                                     <IconButton variant="soft" icon="fa-pen" tone="blue" onClick={() => setEditor({ id: r.id, form: ruleToForm(r) })} disabled={busy} title="Editar" aria-label={`Editar regla ${r.name}`} />
@@ -515,6 +536,7 @@ export default function Hospedajes({ authHeaders, onLocationRefresh, storageScop
                         {editor && editable && (
                             <RuleEditorForm
                                 editor={editor}
+                                rules={[...adminRules, ...myRules]}
                                 fields={fields}
                                 busy={busy}
                                 onChange={(form) => setEditor({ ...editor, form })}
@@ -551,7 +573,7 @@ export default function Hospedajes({ authHeaders, onLocationRefresh, storageScop
  * italic name, type + hard/soft pills, priority chip, one-line summary, soft white action buttons. On
  * phones the actions wrap under the text so the name keeps its width.
  */
-function RuleRow({ rule, fields, readOnly, actions }: { rule: LodgingRule; fields: { name: string; label: string }[]; readOnly?: boolean; actions?: React.ReactNode }) {
+function RuleRow({ rule, fields, readOnly, actions, rank }: { rule: LodgingRule; fields: { name: string; label: string }[]; readOnly?: boolean; actions?: React.ReactNode; rank?: number }) {
     const enabled = rule.enabled == null ? true : !!Number(rule.enabled);
     const hard = !!Number(rule.hard);
     return (
@@ -568,7 +590,7 @@ function RuleRow({ rule, fields, readOnly, actions }: { rule: LodgingRule; field
                 <div className="flex flex-wrap items-center gap-3">
                     <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 rounded-lg text-[9px] font-bold text-gray-500 uppercase tracking-tight whitespace-nowrap">
                         <i className="fa-solid fa-bolt text-amber-500"></i>
-                        Prioridad: {rule.priority == null ? '' : String(rule.priority)}
+                        {rank ? `${rank}.ª · ` : ''}Prioridad {rule.priority == null ? '' : String(rule.priority)}
                     </div>
                     <div className="text-xs text-gray-500 leading-relaxed min-w-0">{ruleSummary(rule, fields)}</div>
                 </div>
@@ -596,8 +618,10 @@ function PredicateRow({ label, value, fields, onChange }: { label: string; value
     );
 }
 
-function RuleEditorForm({ editor, fields, busy, onChange, onCancel, onSave }: {
+function RuleEditorForm({ editor, rules, fields, busy, onChange, onCancel, onSave }: {
     editor: RuleEditor;
+    /** Every rule that applies with this one (the administrator's and the location's): a priority may be no other's. */
+    rules: LodgingRule[];
     fields: { name: string; label: string }[];
     busy: boolean;
     onChange: (form: RuleForm) => void;
@@ -609,6 +633,7 @@ function RuleEditorForm({ editor, fields, busy, onChange, onCancel, onSave }: {
     const set = (patch: Partial<RuleForm>) => onChange({ ...form, ...patch });
     const typeMeta = RULE_TYPE_OPTIONS.find((o) => o.v === form.type);
     const formId = 'lodging-rule-form';
+    const clash = priorityClash(rules, form.priority, editor.id);
     return (
         <Modal
             size="lg"
@@ -618,7 +643,7 @@ function RuleEditorForm({ editor, fields, busy, onChange, onCancel, onSave }: {
             footer={(
                 <>
                     <Button variant="ghost" onClick={onCancel}>Cancelar</Button>
-                    <Button type="submit" form={formId} variant="indigo" disabled={busy} icon="fa-check">{editor.id == null ? 'Crear regla' : 'Guardar regla'}</Button>
+                    <Button type="submit" form={formId} variant="indigo" disabled={busy || !!clash} icon="fa-check">{editor.id == null ? 'Crear regla' : 'Guardar regla'}</Button>
                 </>
             )}
         >
@@ -664,9 +689,10 @@ function RuleEditorForm({ editor, fields, busy, onChange, onCancel, onSave }: {
                     </div>
                 )}
                 <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-end gap-4">
-                    <Field label="Prioridad" className="sm:w-32">
-                        {(id) => <input id={id} type="number" step={1} className={inputIndigoCls} value={form.priority} onChange={(e) => set({ priority: e.target.value })} />}
+                    <Field label="Prioridad" className="sm:w-56" help={clash ? undefined : 'El número más alto se aplica primero. No puede repetirse.'}>
+                        {(id) => <input id={id} type="number" step={1} className={inputIndigoCls} value={form.priority} onChange={(e) => set({ priority: e.target.value })} aria-invalid={!!clash} />}
                     </Field>
+                    {clash && <p className="basis-full text-xs font-bold text-rose-600 sm:order-last" role="alert" data-testid="lodging-rule-priority-clash">Ya la usa la regla «{clash.name}»: elige otro número.</p>}
                     <label className="flex items-center gap-2 text-sm font-medium text-gray-700 sm:pb-3 cursor-pointer">
                         <input type="checkbox" className={checkboxCls} checked={form.hard} onChange={(e) => set({ hard: e.target.checked })} /> Obligatoria (nunca se incumple)
                     </label>
