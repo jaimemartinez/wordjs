@@ -163,6 +163,15 @@ function blockedBaseUrl(): AiError {
     );
 }
 
+/** Link-local, cloud-metadata, multicast or unspecified: refused on every site, whatever the opt-in. */
+function neverAllowedBaseUrl(): AiError {
+    return new AiError(
+        'That AI server address can never be used: link-local and cloud-metadata addresses are refused on every site. Use the address of the AI server itself.',
+        400,
+        'ai_provider_address_blocked',
+    );
+}
+
 /** A lookup that only refuses addresses no opt-in opens (link-local, metadata, multicast, unspecified). */
 function neverExemptLookup(hostname: string, options: any, callback?: any): void {
     if (typeof options === 'function') { callback = options; options = {}; }
@@ -170,7 +179,7 @@ function neverExemptLookup(hostname: string, options: any, callback?: any): void
     require('dns').lookup(hostname, { ...options, all: true, verbatim: true }, (err: any, list: any) => {
         if (err) return callback(err);
         const all = Array.isArray(list) ? list : [{ address: list, family: options.family || 4 }];
-        if (all.some((a: any) => egress.isNeverExemptIp(a.address))) return callback(blockedBaseUrl());
+        if (all.some((a: any) => egress.isNeverExemptIp(a.address))) return callback(neverAllowedBaseUrl());
         if (options.all) return callback(null, all);
         return callback(null, all[0].address, all[0].family);
     });
@@ -185,9 +194,14 @@ async function assertBaseUrlAllowed(baseUrl: string): Promise<(hostname: string,
     let u: URL;
     try { u = new URL(baseUrl); } catch { throw new AiError('The base URL is not a valid URL.', 400, 'rest_invalid_param'); }
     const host = u.hostname.replace(/^\[|\]$/g, '');
-    if (privateProviderAllowed()) {
-        if (require('net').isIP(host) && egress.isNeverExemptIp(host)) throw blockedBaseUrl();
-        return neverExemptLookup;
+    if (require('net').isIP(host) && egress.isNeverExemptIp(host)) throw neverAllowedBaseUrl();
+    if (privateProviderAllowed()) return neverExemptLookup;
+    // A loopback NAME is refused as such, without depending on how this host resolves it.
+    if (isLoopbackHost(host)) throw blockedBaseUrl();
+    // An IP literal is judged directly (URL keeps IPv6 literals in brackets, which a resolver cannot read).
+    if (require('net').isIP(host)) {
+        if (egress.isBlockedIp(host)) throw blockedBaseUrl();
+        return egress.validatingLookup;
     }
     try { await egress.assertUrlAllowed(u.href); } catch (e: any) {
         if (e && (e.code === 'ENOTFOUND' || e.code === 'EAI_AGAIN')) {

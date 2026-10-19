@@ -385,6 +385,8 @@ test('base URL: loopback and private servers only from the primary site or with 
     assert.strictEqual(await allowed(1, 'http://127.0.0.1:11434/v1'), true);
     assert.strictEqual(await allowed(1, 'https://10.0.0.5/v1'), true);
     assert.strictEqual(await allowed(1, 'http://169.254.169.254/v1'), false, 'cloud metadata is never a provider');
+    await assert.rejects(ai.assertBaseUrlAllowed('https://169.254.169.254/v1'), (e: any) => /can never be used/.test(e.message),
+        'the refusal says it applies everywhere, not "use the primary site"');
     const prev = (config as any).multisite;
     const prevEnv = process.env.WORDJS_AI_ALLOW_PRIVATE_PROVIDER;
     (config as any).multisite = { enabled: true };
