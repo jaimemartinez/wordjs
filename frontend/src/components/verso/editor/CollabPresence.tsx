@@ -26,6 +26,7 @@ import { trFmt, trStr } from "@/lib/editorI18n";
 import type { CollabMember, CollabNotice, CollabSelf, CollabStatus } from "@/lib/verso/collab";
 import {
     initialsOf,
+    memberIdentity,
     memberLabel,
     noticeSeverity,
     onColor,
@@ -172,7 +173,7 @@ export default function CollabPresence({
                                     ? "1 persona más editando esta página"
                                     : `${members.length} personas más editando esta página`,
                             )}
-                            title={members.map((m) => m.name).join(", ")}
+                            title={members.map((m) => memberIdentity(m, language)).join(", ")}
                             className="flex items-center h-7 pl-1 pr-1.5 rounded-full border border-[var(--ed-outline-variant)] hover:bg-[var(--ed-surface-container)] transition-colors"
                         >
                             <span className="flex items-center -space-x-1.5">
@@ -200,7 +201,7 @@ export default function CollabPresence({
                                         <li className="flex items-center gap-2 px-2 py-1.5 rounded-lg">
                                             <Avatar name={self.name} color={self.color} size={22} />
                                             <span className="text-[12px] text-[var(--ed-on-surface)] truncate">
-                                                {self.name} <span className="text-[var(--ed-on-surface-variant)]">({tr("tú")})</span>
+                                                {memberIdentity(self, language)} <span className="text-[var(--ed-on-surface-variant)]">({tr("tú")})</span>
                                             </span>
                                         </li>
                                     )}

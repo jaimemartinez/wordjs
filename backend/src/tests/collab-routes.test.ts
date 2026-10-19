@@ -936,8 +936,12 @@ describe('ciclo de vida de la sala: el epoch sube de verdad', () => {
         a.close();
         await settle(300);
 
+        // POR DEBAJO del modelo (SQL directo, como un plugin o una copia restaurada): una escritura por
+        // el modelo ya reinicia la sala ella sola (collab-session-hardening.test.ts); aquí se fija que
+        // `ensureDoc` se da cuenta igualmente al reabrir.
         const nuevo = { root: { props: { title: 'restaurado' } }, content: [] };
-        await Post.updateMeta(P.ciclo, '_puck_data', JSON.stringify(nuevo));
+        await dbAsync.run("UPDATE post_meta SET meta_value = ? WHERE post_id = ? AND meta_key = '_puck_data'", [JSON.stringify(nuevo), P.ciclo]);
+        await require('../core/cache').del(`post:id:${P.ciclo}`);
 
         const b = await openSession('colabora', P.ciclo, NONCE_A);
         assert.equal(b.welcome.epoch, epochAntes + 1, 'contenido nuevo ⇒ generación nueva');

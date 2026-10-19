@@ -1,4 +1,5 @@
 import { applyCsrfHeader, csrfHeaders } from './csrf';
+import { collabSaveHeaders } from './verso/collab/saveEpoch';
 import { createContentClient } from './generated/content-client.generated';
 import { HERMETIC_BACKEND_BASE, isHermeticBuild } from '../../hermetic-build.js';
 export type {
@@ -177,6 +178,9 @@ export async function api<T>(endpoint: string, options: ApiOptions = {}): Promis
         // requests is a mutation — and BEFORE options.headers, so an explicit caller override still
         // wins, exactly like Content-Type.
         ...csrfHeaders(),
+        // A save made from a live collaborative editing session names the room generation it was seeded
+        // from, so the backend can tell it from a write made outside the session (lib/verso/collab/saveEpoch).
+        ...collabSaveHeaders(endpoint, options.method),
         ...options.headers,
     };
 

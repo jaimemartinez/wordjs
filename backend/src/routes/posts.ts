@@ -36,7 +36,7 @@ interface MetaWriteBody { key?: unknown; value?: unknown }
 interface LanguageBody { language?: unknown }
 interface TranslationBody { translationId?: unknown }
 const Post = require('../models/Post');
-const { authenticate, optionalAuth } = require('../middleware/auth');
+const { authenticate, optionalAuth, isHeadless } = require('../middleware/auth');
 const { can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 // THE SCALAR QUERY RULE (core/query-params): a parameter declared scalar arrives once, as a string,
@@ -1372,6 +1372,12 @@ router.post('/', authenticate, asyncHandler(async (req: AuthenticatedRequest<Rec
  *         required: true
  *         schema:
  *           type: integer
+ *       - in: header
+ *         name: X-Collab-Epoch
+ *         required: false
+ *         description: Sent by the collaborative editor with a save made from a live editing session - the room epoch its document was seeded from. A save that writes meta._puck_data and does not come from the live session (no header, and the caller is not a live member) resets that session so its members reload the saved content.
+ *         schema:
+ *           type: integer
  *     requestBody:
  *       content:
  *         application/json:
@@ -1391,6 +1397,8 @@ router.post('/', authenticate, asyncHandler(async (req: AuthenticatedRequest<Rec
  *         description: Forbidden
  *       404:
  *         description: Post not found
+ *       409:
+ *         description: X-Collab-Epoch names a live editing session generation that no longer exists (collab_epoch_stale) - the content was changed outside that session after the editor loaded it. Nothing was written.
  */
 router.put('/:id', authenticate, asyncHandler(async (req: AuthenticatedRequest<IdParams, ContentUpdateInput>, res: Response) => {
     // The TWIN of the check in POST / — the same table, the same reason, and the field that mattered
@@ -1530,8 +1538,30 @@ router.put('/:id', authenticate, asyncHandler(async (req: AuthenticatedRequest<I
     // AND IT FAILS CLOSED, like the meta route: if the recovery point cannot be created, the
     // destructive write does not happen. Logging and writing anyway is the failure mode the snapshot
     // exists to prevent, performed silently.
+    // A LIVE COLLABORATION ROOM ON THIS POST. The collaborative editor saves through this same route,
+    // and its save IS the room's state; any other write of the page tree resets the room so its members
+    // re-seed from what was written instead of saving their stale copy back over it (core/collab-rooms).
+    // The editor names the room generation it was seeded from in X-Collab-Epoch: a save from a generation
+    // that no longer exists is refused rather than allowed to undo whatever reset the room.
+    let collabSave = false;
+    if (safeMetaEntries.some(([key]) => canonicalMetaKey(key) === '_puck_data') && !isHeadless(req)) {
+        const rawEpoch = req.get('X-Collab-Epoch');
+        const epoch = rawEpoch === undefined ? null : (/^[1-9][0-9]{0,8}$/.test(rawEpoch) ? Number(rawEpoch) : 0);
+        const kind = await require('../core/collab-rooms').classifySave(postId, req.user.id, epoch);
+        if (kind === 'stale') {
+            return res.status(409).json({
+                code: 'collab_epoch_stale',
+                message: 'This content was changed outside the live editing session. Your editor is reloading the saved version; review it and save again.',
+                data: { status: 409 }
+            });
+        }
+        collabSave = kind === 'collab';
+    }
+    const writeAll = (work: () => Promise<void>) =>
+        collabSave ? require('../core/collab-rooms').runAsCollabSave(postId, work) : work();
+
     try {
-        await runContentMutation(async () => {
+        await writeAll(() => runContentMutation(async () => {
             if (autosave !== true) {
                 try { await saveRevision(postId); }
                 catch (error: any) {
@@ -1563,7 +1593,7 @@ router.put('/:id', authenticate, asyncHandler(async (req: AuthenticatedRequest<I
             for (const [key, value] of safeMetaEntries) {
                 await Post.updateMeta(postId, key, value);
             }
-        });
+        }));
     } catch (error: any) {
         if (!error?.contentRevisionFailure) throw error;
         log.error({ err: error }, 'Failed to save revision before update');

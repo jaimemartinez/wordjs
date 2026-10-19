@@ -206,6 +206,13 @@ makes the ops durable and the shared **Redis** that makes the other node hear ab
 cross-node fan-out degrades **visibly** (the editors are told) and nothing is written silently into a
 void; when Redis returns, the bus reconnects and fan-out resumes without restarting the nodes.
 
+The collaboration bus (`wordjs:collab`) is signed: every message carries an HMAC under a key derived
+from the site's JWT secret (which every node already shares), and a node drops anything unsigned,
+forged, older than two minutes, naming an event outside the fixed set, or carrying operations the
+upload route would refuse. The same bus relays revocations — a sign-out, a password or role change, a
+change of a post's status or author, a deleted post — so a stream served by another node is re-checked
+at once. The per-room and per-user connection caps are counted across the cluster (`collab_members`).
+
 ## How coordination works (automatic)
 
 - **Concurrent boot** — the first replica to boot takes a distributed lease lock (`wordjs:boot`) and
