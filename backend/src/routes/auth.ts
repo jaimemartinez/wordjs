@@ -500,12 +500,12 @@ function withSignInEligibility(req: Request, res: Response, next: () => void): v
  *     MfaTokenExposure:
  *       type: object
  *       description: >-
- *         Counts (never token data) of ACTIVE API tokens the policy reaches. All zero while no role
- *         requires MFA.
+ *         Counts (never token data) of ACTIVE API tokens and live AI agent connections the policy
+ *         reaches. All zero while no role requires MFA.
  *       properties:
  *         requiredRoleTokens:
  *           type: integer
- *           description: Active tokens owned by users whose role requires 2FA.
+ *           description: Active tokens and live agent connections owned by users whose role requires 2FA.
  *         unenrolledOwnerTokens:
  *           type: integer
  *           description: >-
@@ -1813,6 +1813,117 @@ router.get('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), async
  *   'posts:write','media:read' (comma-string or array). write implies read; a token holding only
  *   resource scopes is confined to those resources. Unrecognized scopes are REJECTED (400).
  */
+// ─── THE SECOND FACTOR AT THE DOORS A SESSION CAN REACH ──────────────────────────────────────────
+/**
+ * Past this many wrong codes on one ACCOUNT inside the failure window, a code alone no longer opens the
+ * code-checking account doors (POST /mfa/disable, POST /mfa/backup-codes, and the `mfaCode` step-up when
+ * minting a machine credential): the request must also carry the account password (`currentPassword`).
+ *
+ * WHY a ceiling on top of the wait. payFailureDelay is a per-request wait, and the in-flight slot is per
+ * (account, address) on purpose — an account-wide slot is a refusal anyone could inflict on the owner.
+ * Together they leave throughput proportional to the number of source addresses. The failure COUNTER is
+ * account-wide, so it is the one thing more addresses cannot multiply, and asking for the password once
+ * it passes the ceiling stops the guessing without taking a hostage: the owner knows the password and
+ * keeps every door, while a session alone stops at the ceiling. The password check is routes/users.ts's
+ * sudo gate itself (its own ladder, its own account-wide counter). The 'mfa_manage' bucket stays
+ * count-only: sign-in (POST /auth/mfa) never reads it.
+ */
+const MFA_MANAGE_PASSWORD_AFTER = 10;
+
+/**
+ * Check a TOTP/backup code on one of the session-reachable account doors: the in-flight slot, the
+ * account-wide password ceiling above, the bounded wait, the check, and the failure count — in that
+ * order, the ONE implementation all of them share. Returns true when the code is good; otherwise it has
+ * answered the request (429 / 403 / 400) and returns false. `onFail` runs on a wrong code, before the 400.
+ *
+ * 'mfa_manage' (count-only), never 'mfa': these doors need `authenticate` + `sessionOnly`, and while they
+ * wrote the 'mfa' bucket, wrong codes here answered the owner's CORRECT code at POST /auth/mfa with 429.
+ */
+async function verifyManagedMfaCode(req: Request, res: Response, code: unknown, onFail?: () => Promise<void>): Promise<boolean> {
+    const lk = lockBucket('mfa_manage', req.user.id);
+    const slot = inflightBucket('mfa_manage', req.user.id, req);
+    if (!(await beginLoginAttempt(slot))) {
+        res.status(429).json({ code: 'rest_login_throttled', message: 'Too many simultaneous attempts. Try again in a moment.', data: { status: 429 } });
+        return false;
+    }
+    try {
+        if ((await loginFailCount(lk)) >= MFA_MANAGE_PASSWORD_AFTER) {
+            const pw = (req.body || {}).currentPassword;
+            if (typeof pw !== 'string' || !pw) {
+                res.status(403).json({
+                    code: 'rest_mfa_password_required',
+                    message: 'Too many invalid authentication codes for this account. Enter your current password together with the code.',
+                    data: { status: 403 }
+                });
+                return false;
+            }
+            if (await require('./users').requireSudoPassword(req, res, pw)) return false;
+        }
+        await payFailureDelay(lk); // bounded wait INSIDE the slot, never a refusal — see payFailureDelay
+        if (!(await mfa.verifyLoginCode(req.user.id, code))) {
+            await recordLoginFail(lk);
+            if (onFail) await onFail();
+            res.status(400).json({ code: 'rest_mfa_invalid', message: 'Invalid authentication code.', data: { status: 400 } });
+            return false;
+        }
+        await clearLoginFails(lk);
+        return true;
+    } finally {
+        await endLoginAttempt(slot);
+    }
+}
+
+type MfaAssurance = 'not_required' | 'session' | 'step_up';
+interface MachineCredentialKind {
+    /** "…Enable 2FA on your account before <before>." */
+    before: string;
+    /** "…Enter a current authentication code to <action>." */
+    action: string;
+    /** Extra detail on the 'auth.token.create_refused' row written when the step-up code is wrong. */
+    auditDetail?: Record<string, string>;
+}
+const MFA_CREDENTIAL_API_TOKEN: MachineCredentialKind = { before: 'creating API tokens', action: 'create an API token' };
+
+/**
+ * The MFA-by-role rule for anything that hands out a HEADLESS credential — an API token (POST /tokens), an
+ * AI agent connection (POST /agents) or authority for one (PUT /agents/:id/grant). Such credentials are
+ * exempt from the compliance gate unless the admin opted in, and they outlive the session that made them,
+ * so for a role the policy covers:
+ *   · ENROLLMENT, even during the grace window — otherwise a required-role user mints the credential while
+ *     still in grace and keeps using it forever, permanently sidestepping the policy;
+ *   · STEP-UP — being enrolled is not having USED the second factor. A session signed in before the
+ *     account enrolled (or before its role came under the policy) never answered a code, so the request
+ *     must come from a session that signed in WITH the second factor (`amr`), or carry a fresh TOTP/backup
+ *     code in `mfaCode` (checked through verifyManagedMfaCode, with its throttle and ceiling).
+ * Users outside the policy are unchanged. Returns how the second factor was proven, or null when it has
+ * already answered the request.
+ */
+async function requireMfaForMachineCredential(req: Request, res: Response, kind: MachineCredentialKind): Promise<MfaAssurance | null> {
+    const mfaStatus = await mfa.evaluate(req.user);
+    if (!mfaStatus.required) return 'not_required';
+    if (!mfaStatus.enabled) {
+        res.status(403).json({
+            code: 'rest_mfa_required_for_tokens',
+            message: `Your role requires two-factor authentication. Enable 2FA on your account before ${kind.before}.`,
+            data: { status: 403 }
+        });
+        return null;
+    }
+    if (sessionMfaVerified(req)) return 'session';
+    const mfaCode = req.body && req.body.mfaCode;
+    if (typeof mfaCode !== 'string' || !mfaCode.trim()) {
+        res.status(403).json({
+            code: 'rest_mfa_step_up_required',
+            message: `Your role requires two-factor authentication. Enter a current authentication code to ${kind.action}.`,
+            data: { status: 403 }
+        });
+        return null;
+    }
+    const ok = await verifyManagedMfaCode(req, res, mfaCode, () =>
+        recordAudit(req.user.id, 'auth.token.create_refused', 'user', req.user.id, { reason: 'mfa_step_up_failed', ...(kind.auditDetail || {}) }));
+    return ok ? 'step_up' : null;
+}
+
 /**
  * @swagger
  * /auth/tokens:
@@ -1862,6 +1973,11 @@ router.get('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), async
  *                   factor; a session signed in through POST /auth/mfa does not need it. The outcome is
  *                   recorded on the `auth.token.create` audit row as `mfa` (session, step_up or
  *                   not_required).
+ *               currentPassword:
+ *                 type: string
+ *                 description: >-
+ *                   The account password. Required, together with the code, once the account has collected
+ *                   too many invalid codes across the code-checking account doors (answered 403 rest_mfa_password_required).
  *     responses:
  *       201:
  *         description: Token created — this is the only time the secret is disclosed
@@ -1900,7 +2016,9 @@ router.get('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), async
  *           rest_mfa_step_up_required: the role requires 2FA, the account is enrolled, but this session was
  *           not signed in with the second factor and no `mfaCode` was sent — or rest_token_bound_session:
  *           the session was started at an address other than the main one (an alias, an IP, a tunnel
- *           name); API tokens can only be created from a main-address session.
+ *           name); API tokens can only be created from a main-address session. Also
+ *           rest_mfa_password_required / rest_bad_current_password when the account is past its
+ *           invalid-code ceiling (send `currentPassword` with `mfaCode`).
  *         content:
  *           application/json:
  *             schema:
@@ -1957,56 +2075,9 @@ router.post('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), asyn
         });
     }
 
-    // If the account is subject to the enforced-MFA-by-role policy but hasn't enrolled, refuse to mint a
-    // token — even DURING the grace window. Otherwise a required-role user could mint a `wjt_` token while
-    // still in grace and keep using it forever (API tokens are exempt from the compliance gate), permanently
-    // sidestepping the policy. They must enable 2FA first.
-    const mfaStatus = await mfa.evaluate(req.user);
-    if (mfaStatus.required && !mfaStatus.enabled) {
-        return res.status(403).json({
-            code: 'rest_mfa_required_for_tokens',
-            message: 'Your role requires two-factor authentication. Enable 2FA on your account before creating API tokens.',
-            data: { status: 403 }
-        });
-    }
-
-    // STEP-UP AT CREATION. Being enrolled is not the same as having USED the second factor: a session
-    // signed in before the account enrolled (or before its role came under the policy) never answered a
-    // code, and a token minted from it is a long-lived credential the compliance gate exempts by default.
-    // So for a role that requires 2FA the mint must come from a session that signed in WITH the second
-    // factor (`amr`), or carry a fresh TOTP/backup code in `mfaCode`. Users outside the policy are unchanged.
-    let mfaAssurance: 'not_required' | 'session' | 'step_up' = 'not_required';
-    if (mfaStatus.required) {
-        if (sessionMfaVerified(req)) {
-            mfaAssurance = 'session';
-        } else {
-            const mfaCode = req.body && req.body.mfaCode;
-            if (typeof mfaCode !== 'string' || !mfaCode.trim()) {
-                return res.status(403).json({
-                    code: 'rest_mfa_step_up_required',
-                    message: 'Your role requires two-factor authentication. Enter a current authentication code to create an API token.',
-                    data: { status: 403 }
-                });
-            }
-            // Same throttle as the other code-checking account doors (/auth/mfa/disable): the count-only
-            // 'mfa_manage' bucket plus an in-flight cap, never the 'mfa' bucket POST /auth/mfa refuses on.
-            const lk = lockBucket('mfa_manage', req.user.id);
-            const slot = inflightBucket('mfa_manage', req.user.id, req);
-            if (!(await beginLoginAttempt(slot))) return res.status(429).json({ code: 'rest_login_throttled', message: 'Too many simultaneous attempts. Try again in a moment.', data: { status: 429 } });
-            try {
-                await payFailureDelay(lk);
-                if (!(await mfa.verifyLoginCode(req.user.id, mfaCode))) {
-                    await recordLoginFail(lk);
-                    await recordAudit(req.user.id, 'auth.token.create_refused', 'user', req.user.id, { reason: 'mfa_step_up_failed' });
-                    return res.status(400).json({ code: 'rest_mfa_invalid', message: 'Invalid authentication code.', data: { status: 400 } });
-                }
-                await clearLoginFails(lk);
-            } finally {
-                await endLoginAttempt(slot);
-            }
-            mfaAssurance = 'step_up';
-        }
-    }
+    // Enrollment + step-up for a role the MFA policy covers — see requireMfaForMachineCredential.
+    const mfaAssurance = await requireMfaForMachineCredential(req, res, MFA_CREDENTIAL_API_TOKEN);
+    if (!mfaAssurance) return;
 
     const created = await ApiToken.generate({
         userId: req.user.id,
@@ -2529,6 +2600,11 @@ router.post('/mfa/enable', authenticate, sessionOnly, asyncHandler(async (req: R
  *               code:
  *                 type: string
  *                 description: A current TOTP code, or one of the account's backup codes.
+ *               currentPassword:
+ *                 type: string
+ *                 description: >-
+ *                   The account password. Required, together with the code, once the account has collected
+ *                   too many invalid codes across these doors (answered 403 rest_mfa_password_required).
  *     responses:
  *       200:
  *         description: Two-factor disabled
@@ -2552,7 +2628,7 @@ router.post('/mfa/enable', authenticate, sessionOnly, asyncHandler(async (req: R
  *             schema:
  *               $ref: '#/components/schemas/RestError'
  *       403:
- *         description: "The caller is headless, or rest_csrf_token / rest_csrf_invalid."
+ *         description: "The caller is headless, rest_csrf_token / rest_csrf_invalid, rest_mfa_password_required (too many invalid codes on this account: send currentPassword too), or rest_bad_current_password."
  *         content:
  *           application/json:
  *             schema:
@@ -2570,25 +2646,14 @@ router.post('/mfa/disable', authenticate, sessionOnly, asyncHandler(async (req: 
     // sudo password, so it is the cheapest door in the file to reach with a hijacked session — and while
     // it wrote the 'mfa' bucket, twelve wrong codes here answered the owner's CORRECT code at POST
     // /auth/mfa with 429, renewably and with no recovery path.
-    const lk = lockBucket('mfa_manage', req.user.id);
-    const slot = inflightBucket('mfa_manage', req.user.id, req);
-    // Concurrency backstop (AUTH-A3 class): a hijacked session must not brute-force the code to turn MFA OFF.
-    if (!(await beginLoginAttempt(slot))) return res.status(429).json({ code: 'rest_login_throttled', message: 'Too many simultaneous attempts. Try again in a moment.', data: { status: 429 } });
-    try {
-        await payFailureDelay(lk); // bounded wait INSIDE the slot, never a refusal — see payFailureDelay
-        if (!(await mfa.verifyLoginCode(req.user.id, (req.body || {}).code))) {
-            await recordLoginFail(lk);
-            return res.status(400).json({ code: 'rest_mfa_invalid', message: 'Invalid authentication code.', data: { status: 400 } });
-        }
-        await clearLoginFails(lk);
-        await mfa.disable(req.user.id);
-        // Turning the second factor OFF is the direction that weakens the account — and this is the
-        // cheapest door in the file to reach with a hijacked session (no sudo password). It leaves a row.
-        await recordAudit(req.user.id, 'auth.mfa.disable', 'user', req.user.id, {});
-        res.json({ disabled: true });
-    } finally {
-        await endLoginAttempt(slot);
-    }
+    // Concurrency backstop (AUTH-A3 class), bounded wait and account-wide ceiling: a hijacked session must
+    // not brute-force the code to turn MFA OFF — see verifyManagedMfaCode.
+    if (!(await verifyManagedMfaCode(req, res, (req.body || {}).code))) return;
+    await mfa.disable(req.user.id);
+    // Turning the second factor OFF is the direction that weakens the account — and this is the
+    // cheapest door in the file to reach with a hijacked session (no sudo password). It leaves a row.
+    await recordAudit(req.user.id, 'auth.mfa.disable', 'user', req.user.id, {});
+    res.json({ disabled: true });
 }));
 
 /** POST /auth/mfa/backup-codes — regenerate backup codes (requires a current code); returns them once. */
@@ -2621,6 +2686,11 @@ router.post('/mfa/disable', authenticate, sessionOnly, asyncHandler(async (req: 
  *             properties:
  *               code:
  *                 type: string
+ *               currentPassword:
+ *                 type: string
+ *                 description: >-
+ *                   The account password. Required, together with the code, once the account has collected
+ *                   too many invalid codes across these doors (answered 403 rest_mfa_password_required).
  *     responses:
  *       200:
  *         description: A fresh set of backup codes, shown once
@@ -2648,7 +2718,7 @@ router.post('/mfa/disable', authenticate, sessionOnly, asyncHandler(async (req: 
  *             schema:
  *               $ref: '#/components/schemas/RestError'
  *       403:
- *         description: "The caller is headless, or rest_csrf_token / rest_csrf_invalid."
+ *         description: "The caller is headless, rest_csrf_token / rest_csrf_invalid, rest_mfa_password_required (too many invalid codes on this account: send currentPassword too), or rest_bad_current_password."
  *         content:
  *           application/json:
  *             schema:
@@ -2664,29 +2734,16 @@ router.post('/mfa/backup-codes', authenticate, sessionOnly, asyncHandler(async (
     if (!(await mfa.isEnabled(req.user.id))) {
         return res.status(400).json({ code: 'rest_mfa_not_enabled', message: 'MFA is not enabled.', data: { status: 400 } });
     }
-    // 'mfa_manage' (count-only), never 'mfa' — see POST /auth/mfa/disable above.
-    const lk = lockBucket('mfa_manage', req.user.id);
-    const slot = inflightBucket('mfa_manage', req.user.id, req);
-    // Concurrency backstop (AUTH-A3 class): a hijacked session must not brute-force the code to regenerate
-    // backup codes (which would grant persistent 2FA access).
-    if (!(await beginLoginAttempt(slot))) return res.status(429).json({ code: 'rest_login_throttled', message: 'Too many simultaneous attempts. Try again in a moment.', data: { status: 429 } });
-    try {
-        await payFailureDelay(lk); // bounded wait INSIDE the slot, never a refusal — see payFailureDelay
-        if (!(await mfa.verifyLoginCode(req.user.id, (req.body || {}).code))) {
-            await recordLoginFail(lk);
-            return res.status(400).json({ code: 'rest_mfa_invalid', message: 'Invalid authentication code.', data: { status: 400 } });
-        }
-        await clearLoginFails(lk);
-        const backupCodes = await mfa.regenerateBackupCodes(req.user.id);
-        // Regenerating backup codes grants a fresh set of second factors — persistence, in an attacker's
-        // hands. The codes are never passed to the log; only the fact and the count.
-        await recordAudit(req.user.id, 'auth.mfa.backup_codes', 'user', req.user.id, {
-            count: Array.isArray(backupCodes) ? backupCodes.length : 0
-        });
-        res.json({ backupCodes, message: 'Save these backup codes now — they replace your previous set.' });
-    } finally {
-        await endLoginAttempt(slot);
-    }
+    // 'mfa_manage' (count-only), never 'mfa' — see POST /auth/mfa/disable above. A hijacked session must
+    // not brute-force the code to regenerate backup codes (which would grant persistent 2FA access).
+    if (!(await verifyManagedMfaCode(req, res, (req.body || {}).code))) return;
+    const backupCodes = await mfa.regenerateBackupCodes(req.user.id);
+    // Regenerating backup codes grants a fresh set of second factors — persistence, in an attacker's
+    // hands. The codes are never passed to the log; only the fact and the count.
+    await recordAudit(req.user.id, 'auth.mfa.backup_codes', 'user', req.user.id, {
+        count: Array.isArray(backupCodes) ? backupCodes.length : 0
+    });
+    res.json({ backupCodes, message: 'Save these backup codes now — they replace your previous set.' });
 }));
 
 // ─── Admin-enforced MFA-by-role policy ─────────────────────────────────────────────────────────────
@@ -2887,3 +2944,7 @@ module.exports.loginFailCount = loginFailCount;
 // The bounded wait itself, so a credential door in another module throttles with the SAME primitive
 // instead of the check-then-refuse that makes a door a hostage. See payFailureDelay.
 module.exports.payFailureDelay = payFailureDelay;
+// The MFA rule for minting a headless credential, shared with routes/agents.ts so an agent connection
+// cannot be created or granted under a looser rule than an API token. See requireMfaForMachineCredential.
+module.exports.requireMfaForMachineCredential = requireMfaForMachineCredential;
+module.exports.MFA_MANAGE_PASSWORD_AFTER = MFA_MANAGE_PASSWORD_AFTER;
