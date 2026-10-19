@@ -109,7 +109,7 @@ async function boot(extraOptions: Record<string, string> = {}): Promise<Boot> {
     // Capture the queue timer instead of letting it run on its own clock.
     let queueTick: any = null;
     const realSetInterval = global.setInterval;
-    (global as any).setInterval = (fn: any, ms: number) => { if (!queueTick) queueTick = fn; return realSetInterval(() => { }, 1 << 30); };
+    (global as any).setInterval = (fn: any) => { if (!queueTick) queueTick = fn; return realSetInterval(() => { }, 1 << 30); };
     try { await plugin.init(bridge); } finally { (global as any).setInterval = realSetInterval; }
     assert.ok(queueTick, 'the plugin registers its queue timer at init');
     const suite = plugin.__relaySuite;
@@ -353,7 +353,9 @@ function loadIsSafeUrl(): (attr: string, v: string) => boolean {
 test('the webmail URL filter is an allowlist and sees through control characters', () => {
     const isSafeUrl = loadIsSafeUrl();
     // The same normalisation prepareEmailHtml applies before asking.
-    const compact = (v: string) => v.replace(/[\u0000- \u007f-\u009f]+/g, '').toLowerCase();
+    // eslint-disable-next-line no-control-regex -- the point of the test is control characters
+    const CONTROL = new RegExp('[\\u0000-\\u0020\\u007f-\\u009f]+', 'g');
+    const compact = (v: string) => v.replace(CONTROL, '').toLowerCase();
     assert.ok(UI_SRC.includes('attr.value.replace(/[\\u0000-\\u0020\\u007f-\\u009f]+/g'), 'prepareEmailHtml strips control characters');
     for (const ok of ['https://example.com/', 'http://x', 'mailto:a@b.c', 'cid:part1', '#top', '/relative', 'page.html']) {
         assert.ok(isSafeUrl('href', compact(ok)), ok);
