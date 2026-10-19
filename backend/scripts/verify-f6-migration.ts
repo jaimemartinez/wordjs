@@ -60,10 +60,11 @@ const MAX_RESPONSE_ANY_OCCURRENCES = 0;
 const MAX_UNTYPED_BOUNDARY_FILES = 0;
 /**
  * Boundary files that are FULLY migrated: at least one typed `req` and not one `req: any` left.
- * 44, not 45: the 45th was routes/frontend.ts, the never-mounted legacy page renderer, which was DELETED
- * (tests/route-modules-mounted.test.ts) rather than un-migrated. Every file that remains is still counted.
+ * 50: routes/frontend.ts, the never-mounted legacy page renderer, was DELETED (tests/route-modules-mounted.test.ts)
+ * rather than un-migrated (44); the 2.6.0 route files graphql.ts, media-storage.ts, agents.ts, mcp.ts, ai.ts and
+ * network.ts were born fully typed. Every file that remains is still counted.
  */
-const MIN_FULLY_TYPED_BOUNDARY_FILES = 45;
+const MIN_FULLY_TYPED_BOUNDARY_FILES = 52;
 /**
  * Does this workflow actually HAND `needle` to a runner, inside a `run:` step?
  *

@@ -50,11 +50,25 @@ const B = config.api.prefix;
 const SECRET = config.jwt.secret;
 const PASSWORD = 'Correct-Horse-9!';
 
+const siteContext = require('../core/site-context');
+const network = require('../core/network');
+const NETWORK_DB = path.join(os.tmpdir(), `wjs-sudo-classes-network-${process.pid}-${Date.now()}.db`);
+
 const app = express();
+// The real app runs every request as the site it was addressed to (core/site-resolver); this suite has
+// one site, the main one. A no-op while multisite is off, which is every door but the network ones.
+app.use((req: any, res: any, next: any) => siteContext.runWithSite(1, next));
 app.use(express.json());
 app.use(cookieParser());
 app.use(B, csrfProtection);
 app.use(B, require('../routes'));
+
+/** Multisite on for one call (the network doors exist only then), and off again before the next. */
+async function withMultisite(fn: () => Promise<any>) {
+    const saved = config.multisite;
+    config.multisite = { enabled: true, networkDbPath: NETWORK_DB };
+    try { return await fn(); } finally { config.multisite = saved; }
+}
 
 const U: Record<string, number> = {};
 let dbAsync: any;
@@ -84,7 +98,11 @@ const metaOf = (userId: number, key: string) => dbAsync.get(
 /** Every persona that a per-door test needs its OWN copy of, so one door's failures never fund another's. */
 const DOOR_PERSONAS = ['doorMe', 'doorTwin', 'doorMfa', 'doorMfaEnable', 'doorSessions', 'doorPassword'];
 /** …and the doors that need a privileged caller to be reachable at all (DELETE /plugins/:slug is isAdmin). */
-const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy'];
+const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy', 'doorAccountMailSmtp', 'doorAccountMailProvider'];
+/** …and the network doors (routes/network.ts), whose caller must also be a NETWORK administrator. */
+const NETWORK_DOOR_PERSONAS = ['doorNetworkCreate', 'doorNetworkSuspend', 'doorNetworkResume', 'doorNetworkOffer', 'doorNetworkWithdraw', 'doorNetworkQuotaDefault', 'doorNetworkQuotaSite'];
+/** …and the code-checking doors that ask for the password only past the account's failure ceiling. */
+const CEILING_DOOR_PERSONAS = ['doorMfaDisable', 'doorMfaBackup', 'doorTokenStepUp', 'doorAgentCreate', 'doorAgentGrant'];
 
 before(async () => {
     await database.init({ driver: 'sqlite-native' });
@@ -100,12 +118,19 @@ before(async () => {
     await seedUser('blankVictim', 'author');// CLASS 3 — its own account, so the blank/null matrix starts clean
     for (const p of DOOR_PERSONAS) await seedUser(p, 'author');
     for (const p of ADMIN_DOOR_PERSONAS) await seedUser(p, 'administrator');
+    for (const p of CEILING_DOOR_PERSONAS) await seedUser(p, 'administrator');
+    for (const p of NETWORK_DOOR_PERSONAS) {
+        await seedUser(p, 'administrator');
+        await withMultisite(async () => network.addNetworkAdmin(U[p]));
+    }
 });
 
 after(async () => {
     try { const db = database.getDbAsync(); if (db && db.close) await db.close(); } catch { /* */ }
     try { fs.rmSync(TMP_DB, { force: true }); } catch { /* */ }
     try { fs.rmSync(TMP_DB + '-wal', { force: true }); fs.rmSync(TMP_DB + '-shm', { force: true }); } catch { /* */ }
+    try { network.closeNetworkStore(); } catch { /* */ }
+    for (const f of [NETWORK_DB, NETWORK_DB + '-wal', NETWORK_DB + '-shm']) { try { fs.rmSync(f, { force: true }); } catch { /* */ } }
 });
 
 // ─── CLASS 1 · no string an outsider can supply may reach the sudo bucket ─────────────────────────
@@ -425,29 +450,61 @@ function deriveSudoDoors(units: Array<{ name: string; text: string }>): Derivati
     const delegations: string[] = [];
     const unattributed: string[] = [];
 
-    for (const unit of units) {
-        const sf = ts.createSourceFile(unit.name, unit.text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-        // Local names for the gate: the export itself plus any alias this file binds it to, in either
-        // spelling (`const { requireSudoPassword: sudo } = require('./users')`, `const sudo = u.requireSudoPassword`).
-        const gateNames = new Set<string>([SUDO_GATE]);
-        for (let pass = 0; pass < 4; pass++) {
-            const before = gateNames.size;
-            walkAst(sf, (n: any) => {
-                if (!ts.isVariableDeclaration(n) || !n.initializer) return;
-                if (ts.isIdentifier(n.name)) {
-                    const ref = refName(n.initializer);
-                    if (ref && gateNames.has(ref)) gateNames.add(n.name.text);
-                } else if (ts.isObjectBindingPattern(n.name)) {
-                    for (const el of n.name.elements) {
-                        const prop = (el.propertyName ? el.propertyName.getText(sf) : el.name.getText(sf)).replace(/['"]/g, '');
-                        if (gateNames.has(prop)) gateNames.add(el.name.getText(sf));
-                    }
-                }
-            });
-            if (gateNames.size === before) break;
-        }
+    const parsed = units.map((unit) => ({ unit, sf: ts.createSourceFile(unit.name, unit.text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS) }));
+    const gateNamesOf = new Map<string, Set<string>>();
+    for (const { unit, sf } of parsed) gateNamesOf.set(unit.name, localGateNames(sf));
 
+    /** The name of the function a node sits directly inside: a declaration, or a const-bound expression. */
+    const enclosingFnName = (node: any): string | null => {
+        for (let p = node.parent; p; p = p.parent) {
+            if (ts.isFunctionDeclaration(p) || ts.isFunctionExpression(p) || ts.isArrowFunction(p) || ts.isMethodDeclaration(p)) {
+                if (p.name && ts.isIdentifier(p.name)) return p.name.text;
+                if (p.parent && ts.isVariableDeclaration(p.parent) && ts.isIdentifier(p.parent.name)) return p.parent.name.text;
+                return null;
+            }
+        }
+        return null;
+    };
+
+    // CARRIERS — helpers that reach the gate on some path without being the gate (routes/auth.ts
+    // verifyManagedMfaCode asks for the password once an account passes its failure ceiling, and the
+    // helpers above it are shared with routes/agents.ts). Their doors are the registrations that call
+    // them, in ANY unit, directly or through another carrier — so a carrier is followed, not dropped.
+    // Fixed point over all units; a delegation (a function named like the gate) is not a carrier.
+    const carriers = new Set<string>();
+    for (let pass = 0; pass < 8; pass++) {
+        const before = carriers.size;
+        for (const { unit, sf } of parsed) {
+            const gateNames = gateNamesOf.get(unit.name) as Set<string>;
+            walkAst(sf, (node: any) => {
+                if (!ts.isCallExpression(node)) return;
+                const callee = refName(node.expression);
+                if (!callee || !(gateNames.has(callee) || carriers.has(callee))) return;
+                const fn = enclosingFnName(node);
+                if (fn && !gateNames.has(fn) && fn !== callee) carriers.add(fn);
+            });
+        }
+        if (carriers.size === before) break;
+    }
+    // A carrier that is only a precomputed middleware binding (`const GUARD = requireSudoPassword('x')`
+    // has no enclosing function) never lands here; every name in the set encloses a gate call.
+
+    for (const { unit, sf } of parsed) {
+        const gateNames = gateNamesOf.get(unit.name) as Set<string>;
         const regs = routeRegistrations(sf, unit.name);
+        // A call to a carrier inside a registration is a door of that registration.
+        walkAst(sf, (node: any) => {
+            if (!ts.isCallExpression(node)) return;
+            const callee = refName(node.expression);
+            if (!callee || !carriers.has(callee) || gateNames.has(callee)) return;
+            const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
+            const enclosing = regs.filter((r) => node.getStart(sf) >= r.node.getStart(sf) && node.getEnd() <= r.node.getEnd());
+            for (const r of enclosing) {
+                if (r.routePath === null) {
+                    unattributed.push(`${unit.name}:${line} — the carrier ${callee}() sits inside a registration with a non-literal path`);
+                } else doors.push({ file: unit.name, method: r.method, routePath: r.routePath, line });
+            }
+        });
         walkAst(sf, (node: any) => {
             if (!ts.isCallExpression(node)) return;
             const callee = refName(node.expression);
@@ -472,15 +529,15 @@ function deriveSudoDoors(units: Array<{ name: string; text: string }>): Derivati
             // (2) a DELEGATION: a function that merely re-exposes the gate under the same name (routes/auth.ts
             //     wraps the routes/users.ts implementation). Recognised structurally — the enclosing function
             //     is itself one of the gate names — not by being unreadable.
-            let fnName: string | null = null;
-            for (let p = node.parent; p; p = p.parent) {
-                if (ts.isFunctionDeclaration(p) || ts.isFunctionExpression(p) || ts.isArrowFunction(p) || ts.isMethodDeclaration(p)) {
-                    if (p.name && ts.isIdentifier(p.name)) fnName = p.name.text;
-                    else if (p.parent && ts.isVariableDeclaration(p.parent) && ts.isIdentifier(p.parent.name)) fnName = p.parent.name.text;
-                    break;
-                }
-            }
+            const fnName = enclosingFnName(node);
             if (fnName && gateNames.has(fnName)) { delegations.push(`${unit.name}:${line} — ${fnName}() delegates`); return; }
+
+            // (2b) inside a CARRIER: attributed above, to every registration that reaches the carrier. One
+            //     that no registration reaches is an orphan and is reported like any other.
+            if (fnName && carriers.has(fnName)) {
+                if (!doorsReach(fnName)) unattributed.push(`${unit.name}:${line} — ${fnName}() reaches the sudo gate but no route calls it`);
+                return;
+            }
 
             // (3) a PRECOMPUTED middleware: `const guard = requireSudoPassword('…')`, later handed to one or
             //     more registrations. Every registration that uses that name is a door.
@@ -507,6 +564,46 @@ function deriveSudoDoors(units: Array<{ name: string; text: string }>): Derivati
         });
     }
     return { doors, delegations, unattributed };
+
+    /** Does any registration, in any unit, reach this carrier (directly or through another carrier)? */
+    function doorsReach(name: string, seen = new Set<string>()): boolean {
+        if (seen.has(name)) return false;
+        seen.add(name);
+        for (const { sf } of parsed) {
+            const regs = routeRegistrations(sf, '');
+            let hit = false;
+            walkAst(sf, (node: any) => {
+                if (hit || !ts.isCallExpression(node) || refName(node.expression) !== name) return;
+                if (regs.some((r) => node.getStart(sf) >= r.node.getStart(sf) && node.getEnd() <= r.node.getEnd())) { hit = true; return; }
+                const outer = enclosingFnName(node);
+                if (outer && outer !== name && carriers.has(outer) && doorsReach(outer, seen)) hit = true;
+            });
+            if (hit) return true;
+        }
+        return false;
+    }
+}
+
+/** Local names for the gate: the export itself plus any alias this file binds it to, in either spelling. */
+function localGateNames(sf: any): Set<string> {
+    const gateNames = new Set<string>([SUDO_GATE]);
+    for (let pass = 0; pass < 4; pass++) {
+        const before = gateNames.size;
+        walkAst(sf, (n: any) => {
+            if (!ts.isVariableDeclaration(n) || !n.initializer) return;
+            if (ts.isIdentifier(n.name)) {
+                const ref = refName(n.initializer);
+                if (ref && gateNames.has(ref)) gateNames.add(n.name.text);
+            } else if (ts.isObjectBindingPattern(n.name)) {
+                for (const el of n.name.elements) {
+                    const prop = (el.propertyName ? el.propertyName.getText(sf) : el.name.getText(sf)).replace(/['"]/g, '');
+                    if (gateNames.has(prop)) gateNames.add(el.name.getText(sf));
+                }
+            }
+        });
+        if (gateNames.size === before) break;
+    }
+    return gateNames;
 }
 
 /**
@@ -596,9 +693,81 @@ test('CLASS 2 — the door derivation reads every ordinary Express spelling, and
 });
 
 test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report named', async () => {
+    // The code-checking doors (routes/auth.ts verifyManagedMfaCode) reach the sudo gate only once the
+    // account is past its failure ceiling, and the token/agent doors only when the MFA policy asks that
+    // caller for a step-up code. `prepare` puts the door in exactly that state: enrolled, policy on where
+    // it matters, the 'mfa_manage' counter at the ceiling. The code sent is wrong on purpose, so a door that
+    // OPENS on the password is then refused on the merits (400 rest_mfa_invalid) and changes nothing.
+    const authRoutes = require('../routes/auth');
+    const mfa = require('../core/mfa');
+    const totp = require('../core/totp');
+    const AgentConnection = require('../models/AgentConnection');
+    const atCeiling = async (p: string, policy: boolean) => {
+        await User.updateMeta(U[p], mfa.META.lastStep, '-1');
+        await User.updateMeta(U[p], mfa.META.secret, totp.generateSecret());
+        await User.updateMeta(U[p], mfa.META.backup, '[]');
+        await User.updateMeta(U[p], mfa.META.enabled, '1');
+        const key = authRoutes.lockBucket('mfa_manage', U[p]);
+        await authRoutes.clearLoginFails(key);
+        for (let i = 0; i < authRoutes.MFA_MANAGE_PASSWORD_AFTER; i++) await authRoutes.recordLoginFail(key);
+        // The ceiling keeps its own, longer-lived count (routes/auth.ts chargeMfaCeiling).
+        await authRoutes.clearMfaCeiling(U[p]);
+        for (let i = 0; i < authRoutes.MFA_MANAGE_PASSWORD_AFTER; i++) await authRoutes.chargeMfaCeiling(U[p]);
+        if (policy) await mfa.setPolicy({ requiredRoles: ['administrator'], graceDays: 30 });
+    };
+    const ceilingCleanup = async (p: string) => {
+        await mfa.setPolicy({ requiredRoles: [], graceDays: 0 });
+        await authRoutes.clearLoginFails(authRoutes.lockBucket('mfa_manage', U[p]));
+        await authRoutes.clearMfaCeiling(U[p]);
+    };
+    const refusedOnTheMerits = (r: any) => r.status === 400 && r.body.code === 'rest_mfa_invalid';
+    let grantTarget = 0;
+
     // One row per door that calls requireSudoPassword — and the rows are CHECKED AGAINST THE SOURCE
     // below, so this list cannot quietly fall behind the routers again.
-    const doors: Array<{ site: string; name: string; persona: string; send: (p: string, pw: string) => any; alsoExpect?: (res: any) => boolean }> = [
+    const doors: Array<{
+        site: string; name: string; persona: string; send: (p: string, pw: string) => any; alsoExpect?: (res: any) => boolean;
+        prepare?: (p: string) => Promise<void>; cleanup?: (p: string) => Promise<void>;
+    }> = [
+        {
+            site: 'auth.ts POST /mfa/disable', name: 'POST /auth/mfa/disable (past the ceiling)', persona: 'doorMfaDisable',
+            prepare: (p) => atCeiling(p, false), cleanup: ceilingCleanup,
+            send: (p, pw) => request(app).post(`${B}/auth/mfa/disable`).set('Authorization', asUser(p))
+                .send({ code: '000000', currentPassword: pw }),
+            alsoExpect: refusedOnTheMerits,
+        },
+        {
+            site: 'auth.ts POST /mfa/backup-codes', name: 'POST /auth/mfa/backup-codes (past the ceiling)', persona: 'doorMfaBackup',
+            prepare: (p) => atCeiling(p, false), cleanup: ceilingCleanup,
+            send: (p, pw) => request(app).post(`${B}/auth/mfa/backup-codes`).set('Authorization', asUser(p))
+                .send({ code: '000000', currentPassword: pw }),
+            alsoExpect: refusedOnTheMerits,
+        },
+        {
+            site: 'auth.ts POST /tokens', name: 'POST /auth/tokens (step-up past the ceiling)', persona: 'doorTokenStepUp',
+            prepare: (p) => atCeiling(p, true), cleanup: ceilingCleanup,
+            send: (p, pw) => request(app).post(`${B}/auth/tokens`).set('Authorization', asUser(p))
+                .send({ name: 'door-probe', scopes: 'read', mfaCode: '000000', currentPassword: pw }),
+            alsoExpect: refusedOnTheMerits,
+        },
+        {
+            site: 'agents.ts POST /', name: 'POST /agents (step-up past the ceiling)', persona: 'doorAgentCreate',
+            prepare: (p) => atCeiling(p, true), cleanup: ceilingCleanup,
+            send: (p, pw) => request(app).post(`${B}/agents`).set('Authorization', asUser(p))
+                .send({ name: 'door-probe', requested: ['content:read'], mfaCode: '000000', currentPassword: pw }),
+            alsoExpect: refusedOnTheMerits,
+        },
+        {
+            site: 'agents.ts PUT /:id/grant', name: 'PUT /agents/:id/grant (step-up past the ceiling)', persona: 'doorAgentGrant',
+            prepare: async (p) => {
+                grantTarget = (await AgentConnection.create({ userId: U[p], name: 'door-probe', requested: ['content:read'], createdBy: U[p] })).connection.id;
+                await atCeiling(p, true);
+            },
+            cleanup: ceilingCleanup,
+            send: (p, pw) => request(app).put(`${B}/agents/${grantTarget}/grant`).set('Authorization', asUser(p))
+                .send({ granted: ['content:read'], mfaCode: '000000', currentPassword: pw }),
+            alsoExpect: refusedOnTheMerits,
+        },
         {
             site: 'users.ts PUT /me', name: 'PUT /users/me {personalEmail}', persona: 'doorMe',
             send: (p, pw) => request(app).put(`${B}/users/me`).set('Authorization', asUser(p))
@@ -648,6 +817,21 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
                 .send({ password: pw }),
             alsoExpect: (r) => r.status === 404,   // past the credential, refused on the merits
         },
+        // The account-email writes (routes/account-mail.ts): the password is checked BEFORE the value, so
+        // an empty transport is refused on the merits (400, the host is missing) and an invalid plugin
+        // name likewise — nothing is written either way.
+        {
+            site: 'account-mail.ts PUT /smtp', name: 'PUT /account-mail/smtp', persona: 'doorAccountMailSmtp',
+            send: (p: string, pw: string) => request(app).put(`${B}/account-mail/smtp`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw }),
+            alsoExpect: (r: any) => r.status === 400 && r.body.code === 'rest_invalid_param',
+        },
+        {
+            site: 'account-mail.ts PUT /provider', name: 'PUT /account-mail/provider', persona: 'doorAccountMailProvider',
+            send: (p: string, pw: string) => request(app).put(`${B}/account-mail/provider`).set('Authorization', asUser(p))
+                .send({ slug: '!!', allowed: true, currentPassword: pw }),
+            alsoExpect: (r: any) => r.status === 400 && r.body.code === 'rest_invalid_param',
+        },
         // The site-address writes (routes/site-address.ts): the password is checked BEFORE the body, so a
         // body without `rev` exercises the door and is then refused on the merits — 400 naming `rev` —
         // without anything being written.
@@ -658,6 +842,52 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
                 .send({ currentPassword: pw }),
             alsoExpect: (r: any) => r.status === 400 && JSON.stringify(r.body.data && r.body.data.params) === '["rev"]',
         })),
+        // The network writes (routes/network.ts, multisite): the password is checked BEFORE the body, so a
+        // create with no fields is refused on the merits (the title comes first) and a status change on a
+        // site that does not exist is a 404 — nothing is created or changed.
+        {
+            site: 'network.ts POST /sites', name: 'POST /network/sites', persona: 'doorNetworkCreate',
+            send: (p: string, pw: string) => withMultisite(() => request(app).post(`${B}/network/sites`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw })),
+            alsoExpect: (r: any) => r.status === 400 && r.body.code === 'network_invalid_title',
+        },
+        ...(['suspend', 'resume'] as const).map((what) => ({
+            site: `network.ts POST /sites/:id/${what}`, name: `POST /network/sites/:id/${what}`,
+            persona: `doorNetwork${what[0].toUpperCase()}${what.slice(1)}`,
+            send: (p: string, pw: string) => withMultisite(() => request(app).post(`${B}/network/sites/999/${what}`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw })),
+            alsoExpect: (r: any) => r.status === 404 && r.body.code === 'network_site_not_found',
+        })),
+        // Offering a plugin to the sites, and withdrawing it (multisite phase 2): the password is checked
+        // first; a plugin that is not installed is then a 404, and withdrawing an offer that was never made
+        // changes nothing (200, `withdrawn: false`).
+        {
+            site: 'network.ts PUT /plugins/:slug/ceiling', name: 'PUT /network/plugins/:slug/ceiling', persona: 'doorNetworkOffer',
+            send: (p: string, pw: string) => withMultisite(() => request(app).put(`${B}/network/plugins/zz-door-probe/ceiling`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw, tokens: [] })),
+            alsoExpect: (r: any) => r.status === 404 && r.body.code === 'plugin_not_found',
+        },
+        {
+            site: 'network.ts DELETE /plugins/:slug/ceiling', name: 'DELETE /network/plugins/:slug/ceiling', persona: 'doorNetworkWithdraw',
+            send: (p: string, pw: string) => withMultisite(() => request(app).delete(`${B}/network/plugins/zz-door-probe/ceiling`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw })),
+            alsoExpect: (r: any) => r.status === 200 && r.body.withdrawn === false,
+        },
+        // The media storage quotas (multisite): the password is checked first; a value that is not a
+        // number of bytes is then refused on the merits, and a site that does not exist is a 404 —
+        // nothing is stored either way.
+        {
+            site: 'network.ts PUT /quotas/default', name: 'PUT /network/quotas/default', persona: 'doorNetworkQuotaDefault',
+            send: (p: string, pw: string) => withMultisite(() => request(app).put(`${B}/network/quotas/default`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw, bytes: 'not-a-number' })),
+            alsoExpect: (r: any) => r.status === 400 && r.body.code === 'network_invalid_quota',
+        },
+        {
+            site: 'network.ts PUT /sites/:id/quota', name: 'PUT /network/sites/:id/quota', persona: 'doorNetworkQuotaSite',
+            send: (p: string, pw: string) => withMultisite(() => request(app).put(`${B}/network/sites/999/quota`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw, bytes: 1 })),
+            alsoExpect: (r: any) => r.status === 404 && r.body.code === 'network_site_not_found',
+        },
     ];
 
     // ── THE BIJECTION: the rows and the call sites are the same set ──────────────────────────────
@@ -674,21 +904,26 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
         'a row names a door that no longer calls requireSudoPassword — a stale row claims coverage that is not there');
 
     for (const door of doors) {
-        for (let i = 0; i < 4; i++) {
-            const bad = await door.send(door.persona, 'wrong-password');
-            assert.strictEqual(bad.status, 403, `${door.name}: a wrong password must be a 403, got ${bad.status}`);
-            assert.strictEqual(bad.body.code, 'rest_bad_current_password', `${door.name}: ${JSON.stringify(bad.body)}`);
-        }
-        const good = await door.send(door.persona, PASSWORD);
-        // THE CLASS PROPERTY, stated once for every door regardless of what the handler does next: the
-        // correct credential is never refused AS A CREDENTIAL, and no failure count may answer 429.
-        assert.notStrictEqual(good.body && good.body.code, 'rest_bad_current_password',
-            `${door.name}: the RIGHT password was refused after failures — ${JSON.stringify(good.body)}`);
-        assert.notStrictEqual(good.status, 429,
-            `${door.name}: a failure count answered the correct credential with a lockout — ${JSON.stringify(good.body)}`);
-        if (door.alsoExpect) {
-            assert.ok(door.alsoExpect(good),
-                `${door.name}: the door did not open as declared — ${good.status} ${JSON.stringify(good.body)}`);
+        if (door.prepare) await door.prepare(door.persona);
+        try {
+            for (let i = 0; i < 4; i++) {
+                const bad = await door.send(door.persona, 'wrong-password');
+                assert.strictEqual(bad.status, 403, `${door.name}: a wrong password must be a 403, got ${bad.status}`);
+                assert.strictEqual(bad.body.code, 'rest_bad_current_password', `${door.name}: ${JSON.stringify(bad.body)}`);
+            }
+            const good = await door.send(door.persona, PASSWORD);
+            // THE CLASS PROPERTY, stated once for every door regardless of what the handler does next: the
+            // correct credential is never refused AS A CREDENTIAL, and no failure count may answer 429.
+            assert.notStrictEqual(good.body && good.body.code, 'rest_bad_current_password',
+                `${door.name}: the RIGHT password was refused after failures — ${JSON.stringify(good.body)}`);
+            assert.notStrictEqual(good.status, 429,
+                `${door.name}: a failure count answered the correct credential with a lockout — ${JSON.stringify(good.body)}`);
+            if (door.alsoExpect) {
+                assert.ok(door.alsoExpect(good),
+                    `${door.name}: the door did not open as declared — ${good.status} ${JSON.stringify(good.body)}`);
+            }
+        } finally {
+            if (door.cleanup) await door.cleanup(door.persona);
         }
     }
 });

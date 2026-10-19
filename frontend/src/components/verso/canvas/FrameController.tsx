@@ -24,6 +24,7 @@
  */
 import React from "react";
 import { createPortal } from "react-dom";
+import { useEditorTr } from "@/lib/verso/useEditorTr";
 
 /** Id del root dentro del documento del iframe (contrato con canvas-frame/page.tsx). */
 export const CANVAS_ROOT_ID = "verso-canvas-root";
@@ -135,9 +136,10 @@ export default function FrameController({
     overlay,
     src = "/admin/canvas-frame",
     className = "block h-full w-full border-0 bg-white",
-    title = "Lienzo de edición",
+    title,
     onFrameReady,
 }: FrameControllerProps) {
+    const { tr } = useEditorTr();
     const iframeRef = React.useRef<HTMLIFrameElement | null>(null);
     const [root, setRoot] = React.useState<HTMLElement | null>(null);
     // Ref para no re-crear el watcher si el llamador pasa un callback inline
@@ -204,7 +206,7 @@ export default function FrameController({
 
     return (
         <VersoCanvasContext.Provider value={api}>
-            <iframe ref={iframeRef} src={src} title={title} className={className} />
+            <iframe ref={iframeRef} src={src} title={title ?? tr("Lienzo de edición")} className={className} />
             {root ? createPortal(children, root) : null}
             {overlay}
         </VersoCanvasContext.Provider>

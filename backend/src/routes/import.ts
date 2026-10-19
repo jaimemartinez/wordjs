@@ -19,7 +19,7 @@ const fs = require('fs');
 // refuseAccountAuthority).
 const { authenticate, accountAuthorityOnly } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
-const { asyncHandler } = require('../middleware/errorHandler');
+const { asyncHandler, UploadRejectedError } = require('../middleware/errorHandler');
 const { analyzeWxr, importWxr } = require('../core/wxr-import');
 
 /**
@@ -44,7 +44,7 @@ const upload = multer({
         if (okType || name.endsWith('.xml') || name.endsWith('.wxr')) {
             cb(null, true);
         } else {
-            cb(new Error('Only WordPress WXR .xml files are allowed'));
+            cb(new UploadRejectedError(415, 'rest_upload_invalid_type', 'Only WordPress WXR .xml files are allowed'));
         }
     },
 });
@@ -165,11 +165,14 @@ const MEDIA_MODES: ReadonlySet<string> = new Set(['download', 'link', 'skip']);
  *               media:
  *                 type: string
  *                 enum: [download, link, skip]
+ *                 default: download
  *                 description: >
  *                   What to do with attachment items. `download` fetches every file named in the export and stores it
  *                   in the media library (bounded by a 50 MB per-file and a 1 GB per-run cap, https only unless
  *                   allowHttp is set); `link` creates the record and keeps the remote URL, downloading nothing;
- *                   `skip` ignores attachments entirely. Omitted, the legacy importAttachments switch decides.
+ *                   `skip` ignores attachments entirely. Omitted (or not one of these), the legacy importAttachments
+ *                   switch decides; with neither field the import uses `download`, the same default as the core
+ *                   importer and the admin screen.
  *               allowHttp:
  *                 type: string
  *                 enum: ["0", "1"]
@@ -181,8 +184,7 @@ const MEDIA_MODES: ReadonlySet<string> = new Set(['download', 'link', 'skip']);
  *               importAttachments:
  *                 type: string
  *                 enum: ["0", "1"]
- *                 default: "0"
- *                 description: Legacy coarse switch, used only when `media` is absent. 1 means `media=download`, anything else `media=skip`.
+ *                 description: Legacy coarse switch, used only when `media` is absent. 0 means `media=skip`; 1, or the field omitted, means `media=download`.
  *     responses:
  *       200:
  *         description: The import summary
@@ -221,12 +223,13 @@ router.post('/wordpress', authenticate, isAdmin, accountAuthorityOnly, upload.si
     const requested = parseInt(req.body?.defaultAuthorId, 10);
     const defaultAuthorId = Number.isInteger(requested) && requested > 0 ? requested : req.user.id;
 
-    // `media` wins when it is a mode we know; otherwise the legacy boolean decides, unchanged, so a
-    // caller that only ever sent `importAttachments` keeps the behaviour it had.
+    // `media` wins when it is a mode we know; otherwise the legacy boolean decides, and with neither the
+    // route falls back to core's own default (`download`), the same one the admin UI preselects. Only an
+    // explicit `importAttachments=0` opts out through the legacy switch.
     const requestedMode = String(req.body?.media ?? '');
     const media = MEDIA_MODES.has(requestedMode)
         ? (requestedMode as 'download' | 'link' | 'skip')
-        : (req.body?.importAttachments === '1' ? 'download' : 'skip');
+        : (req.body?.importAttachments === '0' ? 'skip' : 'download');
 
     try {
         const summary = await importWxr(xml, {

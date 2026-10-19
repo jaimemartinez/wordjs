@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import type { SiteHost, SiteUrl } from '../core/host-policy';
 const express = require('express');
+const log = require('../core/module-logger').moduleLogger('routes/setup');
 const router = express.Router();
 const { getConfig, updateConfig, restoreConfigText, siteAddressRev, isInstalled } = require('../core/configManager');
 const config = require('../config/app');
@@ -11,6 +12,17 @@ const { siteHostPolicy, signInRefusal, signInRetiring, sessionCookieOptions } = 
 // The installer runs before any account exists, so its 500s are the most exposed in the product:
 // whatever broke (a filesystem path, a database DSN, a TLS library) is logged, never answered.
 const { publicErrorText } = require('../middleware/errorHandler');
+const { dbTlsOptions, isCertificateError, DB_TLS_VERIFY_HINT } = require('../drivers/db-tls');
+
+/**
+ * The TLS settings an installer request may carry for a server database. `sslCa` is accepted INLINE
+ * (PEM text) only: a path would make this unauthenticated-until-installed probe read a file of the
+ * caller's choosing. A path can still be set in wordjs-config.json after install.
+ */
+function installerDbTls(dbConn: any): { ssl: boolean; sslCa?: string; sslRejectUnauthorized: boolean } {
+    const ca = typeof dbConn?.sslCa === 'string' && dbConn.sslCa.includes('-----BEGIN') ? dbConn.sslCa : undefined;
+    return { ssl: !!dbConn?.ssl, ...(ca ? { sslCa: ca } : {}), sslRejectUnauthorized: dbConn?.sslRejectUnauthorized !== false };
+}
 
 // Gate for the PRE-INSTALL endpoints (/install, /test-db). These run before the instance is
 // configured, so they are unauthenticated and exempt from CSRF — require the one-time install token
@@ -35,7 +47,7 @@ const NATIVE_SQLITE_UNAVAILABLE = 'The native SQLite driver (better-sqlite3) can
 
 function nativeSqliteUnavailable(): boolean {
     const error = require('../config/database').nativeSqliteLoadError();
-    if (error) console.error('❌ Setup: the native SQLite driver cannot load:', error.message);
+    if (error) log.error({ err: error }, '❌ Setup: the native SQLite driver cannot load');
     return !!error;
 }
 
@@ -135,6 +147,7 @@ function classifyInstallRequest(req: Request): SiteHost | 'unknown' | null {
         cls: verdict.cls,
         reason: verdict.reason,
         entry: verdict.entry,
+        siteId: hostPolicy.siteIdOf(verdict) ?? 1,
         hop: authority.hop,
         viaTrustedHop: authority.viaTrustedHop,
         scheme: hostPolicy.trustedScheme(req, policy),
@@ -306,6 +319,12 @@ router.get('/status', (_req: Request, res: Response) => {
  *                     type: string
  *                   ssl:
  *                     type: boolean
+ *                   sslCa:
+ *                     type: string
+ *                     description: PEM of the CA that signed the server certificate (verification is on by default).
+ *                   sslRejectUnauthorized:
+ *                     type: boolean
+ *                     description: Set to false to skip certificate verification (explicit opt-out).
  *     responses:
  *       200:
  *         description: The probe ran — read `ok` for the verdict
@@ -358,7 +377,7 @@ router.post('/test-db', async (req: Request, res: Response) => {
                 user: dbConn.user,
                 password: dbConn.password || '',
                 database: dbConn.database,
-                ssl: dbConn.ssl ? { rejectUnauthorized: false } : undefined,
+                ssl: dbTlsOptions(installerDbTls(dbConn)),
                 connectionTimeoutMillis: 4000
             });
             await client.connect();
@@ -377,7 +396,7 @@ router.post('/test-db', async (req: Request, res: Response) => {
                 user: dbConn.user,
                 password: dbConn.password || '',
                 database: dbConn.database,
-                ssl: dbConn.ssl ? { rejectUnauthorized: false } : undefined,
+                ssl: dbTlsOptions(installerDbTls(dbConn)),
                 connectTimeout: 4000
             });
             await conn.query('SELECT 1');
@@ -396,7 +415,8 @@ router.post('/test-db', async (req: Request, res: Response) => {
         }
         return res.json({ ok: false, error: 'Invalid database driver.' });
     } catch (e: any) {
-        return res.json({ ok: false, error: e && e.message ? e.message : 'Connection failed.' });
+        const message = e && e.message ? e.message : 'Connection failed.';
+        return res.json({ ok: false, error: isCertificateError(e) ? `${message}. ${DB_TLS_VERIFY_HINT}` : message });
     }
 });
 
@@ -469,6 +489,10 @@ router.post('/test-db', async (req: Request, res: Response) => {
  *                     type: string
  *                   ssl:
  *                     type: boolean
+ *                   sslCa:
+ *                     type: string
+ *                   sslRejectUnauthorized:
+ *                     type: boolean
  *               siteUrl:
  *                 type: string
  *                 description: >-
@@ -529,6 +553,9 @@ router.post('/test-db', async (req: Request, res: Response) => {
  *                     not work until one is loaded.
  *                 tests:
  *                   type: object
+ *                   description: >-
+ *                     Kept for compatibility. The installer does not run the CMS test suite (run
+ *                     npm test in backend/ for that), so this is always zero counts with skipped true.
  *                   properties:
  *                     total:
  *                       type: integer
@@ -536,6 +563,8 @@ router.post('/test-db', async (req: Request, res: Response) => {
  *                       type: integer
  *                     failed:
  *                       type: integer
+ *                     skipped:
+ *                       type: boolean
  *       400:
  *         description: >-
  *           Already installed, or a validation failure — missing site name, a bad admin username or
@@ -634,6 +663,10 @@ router.post('/install', async (req: Request, res: Response) => {
     // re-binding the listener to localhost where a remote gateway cannot reach it. Enrollment values are
     // authoritative here; the wizard only supplies what enrollment does not know (site identity, DB).
     const enrolledConfig = getConfig() || {};
+    const validPort = (v: unknown): number | null => {
+        const n = Number(v);
+        return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : null;
+    };
     // WHERE the certificate is, is NOT a question this call site may answer for itself.
     //
     // THE CLASS: "one declaration" of a path that is in fact two values computed differently. This line
@@ -655,7 +688,7 @@ router.post('/install', async (req: Request, res: Response) => {
         !!enrolledConfig.mtls?.cert && fs.existsSync(clusterCertPaths(enrolledConfig).cert)
     );
     if (isEnrolledNode) {
-        console.log(`🔗 Setup: cluster-enrolled node detected (advertiseHost=${enrolledConfig.advertiseHost}) — preserving enrollment identity and gateway wiring.`);
+        log.info(`🔗 Setup: cluster-enrolled node detected (advertiseHost=${enrolledConfig.advertiseHost}) — preserving enrollment identity and gateway wiring.`);
     }
 
     // Frontend URL — the origin visitors use, stored as the `home` option.
@@ -674,9 +707,12 @@ router.post('/install', async (req: Request, res: Response) => {
         installedAt: new Date().toISOString(),
         siteUrl,
         frontendUrl,
-        port: 4000,
-        frontendPort: 3001,
-        gatewayPort: 3000,
+        // The ports the config file already names survive the install; it used to write 4000/3001/3000
+        // back over them, so a backend set up on another port moved to 4000 at its next restart. A file
+        // without a backend port records the one this process listens on (config/app.ts: PORT, then 4000).
+        port: validPort(enrolledConfig.port) || config.port || 4000,
+        frontendPort: validPort(enrolledConfig.frontendPort) || 3001,
+        gatewayPort: validPort(enrolledConfig.gatewayPort) || 3000,
         gatewayInternalPort: enrolledConfig.gatewayInternalPort || 3100,
         // Host for the backend server listen binding (usually localhost or 0.0.0.0). An enrolled node
         // MUST keep the binding enrollment chose — the gateway lives on another machine.
@@ -711,7 +747,7 @@ router.post('/install', async (req: Request, res: Response) => {
                     user: dbConn.user,
                     password: dbConn.password || '',
                     database: dbConn.database,
-                    ssl: !!dbConn.ssl
+                    ...installerDbTls(dbConn)
                 }
             }
             : { dbPath: dbDriver === 'sqlite-native' ? './data/wordjs-native.db' : './data/wordjs.db' })
@@ -733,14 +769,14 @@ router.post('/install', async (req: Request, res: Response) => {
         let adminReady = false;
         const undoInstall = (): boolean => {
             const undone = restoreConfigText(written.previousText, { expectRev: siteAddressRev(written.config) });
-            if (!undone) console.error('❌ Setup: the configuration of the failed install could not be undone; remove backend/wordjs-config.json before running the wizard again.');
+            if (!undone) log.error('❌ Setup: the configuration of the failed install could not be undone; remove backend/wordjs-config.json before running the wizard again.');
             return undone;
         };
         const failedText = (e: any, fallback: string) => publicErrorText(e, fallback)
             + (!adminReady && undoInstall() ? ' Nothing was kept: fix the cause and run the wizard again.' : '');
         try {
             // Initialize DB connection dynamically
-            console.log(`📦 Setup: Initializing database (driver: ${dbDriver})...`);
+            log.info(`📦 Setup: Initializing database (driver: ${dbDriver})...`);
             // Reflect the just-saved config into the live config object so the driver layer reads the
             // chosen dbDriver / dbPath / Postgres connection (require('../config/app') was loaded with
             // the pre-install defaults).
@@ -767,10 +803,32 @@ router.post('/install', async (req: Request, res: Response) => {
             // and granted it back to plugins whose browser:script the administrator had revoked (core/plugins
             // migrateBrowserCapabilityGrants). Best-effort: the upgrade also never touches a plugin whose
             // grants an administrator decided, so a failure here does not reopen that.
+            // Same reasoning for the MFA policy: a site created HERE has no API token that predates it, so the
+            // first time its administrator requires 2FA for a role, API tokens are held to it too by default
+            // (core/mfa recordFreshInstall). An upgraded site never gets this mark and keeps the exemption.
+            try {
+                await require('../core/mfa').recordFreshInstall();
+            } catch (e: any) {
+                log.warn({ err: e }, '⚠️ Setup: could not record the MFA token-enforcement default');
+            }
+
             try {
                 await require('../core/plugins').recordFreshInstallBrowserCapability();
             } catch (e: any) {
-                console.warn('⚠️ Setup: could not record the browser:script upgrade as done:', e && e.message);
+                log.warn({ err: e }, '⚠️ Setup: could not record the browser:script upgrade as done');
+            }
+
+            // Load the plugin policy (grants + egress allowlists) NOW. This process booted in setup mode and
+            // skipped the boot block that loads it, so until the next restart the egress policy stayed "not
+            // loaded" — which fails CLOSED by design: every network-granted plugin got a deny-all, so
+            // wordjs.dns refused every name and a mail plugin could not resolve a single MX (found on a
+            // fresh production install). Best-effort: a failure here leaves exactly that fail-closed state.
+            try {
+                const perms = require('../core/plugin-permissions');
+                await perms.loadGrants();
+                await perms.loadEgressHosts();
+            } catch (e: any) {
+                log.warn({ err: e }, '⚠️ Setup: could not load the plugin policy (network plugins stay deny-all until a restart)');
             }
 
             // SECURITY: Generate mTLS Certificates — but NEVER on a cluster-enrolled node. There the
@@ -780,15 +838,15 @@ router.post('/install', async (req: Request, res: Response) => {
             // serving only until its next restart, then every mTLS handshake with the gateway fails and
             // the whole cluster goes dark. Keep the enrolled identity; enrollment is the source of truth.
             if (isEnrolledNode) {
-                console.log('🔐 Setup: cluster-enrolled node — keeping the gateway-issued mTLS identity (not re-minting a CA).');
+                log.info('🔐 Setup: cluster-enrolled node — keeping the gateway-issued mTLS identity (not re-minting a CA).');
                 newConfig.mtls = enrolledConfig.mtls;
             } else {
-                console.log('🔐 Setup: Generating mTLS certificates...');
+                log.info('🔐 Setup: Generating mTLS certificates...');
                 try {
                     issueLocalClusterIdentity(newConfig);
-                    console.log('✅ mTLS certificates generated for the local services (localhost, 127.0.0.1).');
+                    log.info('✅ mTLS certificates generated for the local services (localhost, 127.0.0.1).');
                 } catch (e) {
-                    console.error('❌ Setup failed during mTLS generation:', e);
+                    log.error({ err: e }, '❌ Setup failed during mTLS generation');
                     res.status(500).json({ error: failedText(e, 'Setup failed during mTLS generation.') });
                     return; // Exit if mTLS generation fails
                 }
@@ -799,24 +857,24 @@ router.post('/install', async (req: Request, res: Response) => {
             // certs/config to — so this cluster step is a no-op there. Skip it (this also avoids
             // needing the root setup/ package, which the compiled monolith release doesn't ship deps for).
             if (process.env.WORDJS_EMBEDDED === '1') {
-                console.log('ℹ️ Monolith (embedded) — skipping cluster artifact distribution (single process, not needed).');
+                log.info('ℹ️ Monolith (embedded) — skipping cluster artifact distribution (single process, not needed).');
             } else if (isEnrolledNode) {
                 // Separate mode: the gateway and frontend are on OTHER machines and were provisioned by
                 // their own join. There is nothing local to distribute to, and the distributor rewrites
                 // sibling gateway/frontend cert dirs that do not exist here.
-                console.log('ℹ️ Cluster-enrolled node — skipping local artifact distribution (peers provisioned by their own join).');
+                log.info('ℹ️ Cluster-enrolled node — skipping local artifact distribution (peers provisioned by their own join).');
             } else {
-                console.log('🏗️ Setup: Orchestrating cluster via standalone service...');
+                log.info('🏗️ Setup: Orchestrating cluster via standalone service...');
                 try {
                     // Three levels up from backend/{src,dist}/routes/ to reach the repo-root setup/ package
                     // (the previous two-level path resolved to backend/setup, which does not exist).
                     const WordJSSetup = require('../../../setup/index');
                     const orchestrator = new WordJSSetup(path.resolve(__dirname, '../../../'));
                     await orchestrator.distribute(newConfig);
-                    console.log('✅ Cluster artifacts distributed via autonomous Setup service');
+                    log.info('✅ Cluster artifacts distributed via autonomous Setup service');
                 } catch (err) {
-                    console.error('❌ Failed to trigger autonomous setup:', err.message);
-                    console.warn('⚠️ Manual distribution might be required: npm run setup');
+                    log.error({ err }, '❌ Failed to trigger autonomous setup');
+                    log.warn('⚠️ Manual distribution might be required: npm run setup');
                 }
             }
 
@@ -876,9 +934,9 @@ router.post('/install', async (req: Request, res: Response) => {
                     const seededAdmin = await User.findByLogin(adminUser) || await User.findByEmail(adminEmailDisplay);
                     const { seedStarterContent } = require('../core/starter-content');
                     const seeded = await seedStarterContent(seededAdmin ? seededAdmin.id : 1, String(siteName));
-                    console.log('🌱 Starter content:', JSON.stringify(seeded));
+                    log.info({ starterContent: seeded }, '🌱 Starter content');
                 } catch (e: any) {
-                    console.warn('⚠️ Starter content seeding failed (install continues):', e && e.message);
+                    log.warn({ err: e }, '⚠️ Starter content seeding failed (install continues)');
                 }
             }
 
@@ -891,13 +949,11 @@ router.post('/install', async (req: Request, res: Response) => {
                 );
             } catch { /* best-effort — ISR TTL covers it */ }
 
-            const { runCoreTests } = require('../core/plugin-test-runner');
-            const testResults = await runCoreTests();
-
-            if (!testResults.success) {
-                console.warn(`⚠️ CMS core tests had failures (${testResults.failed}/${testResults.tests})`);
-                // We don't block installation, just warn
-            }
+            // The CMS's own test suite is NOT run here. It used to be "run" (core/plugin-test-runner
+            // runCoreTests) with a filter that matched no file of the TypeScript suite, so every install
+            // reported "0 tests, OK". Running it for real takes minutes, needs the dev dependencies and
+            // proves nothing about this install; the response says it was skipped instead of passing.
+            const testResults = { tests: 0, passed: 0, failed: 0, skipped: true };
 
             // Auto-login: issue the admin's session cookie so the wizard lands straight in /admin — but
             // only where that session could be used and may be minted. The site exists now, so the
@@ -943,7 +999,7 @@ router.post('/install', async (req: Request, res: Response) => {
                     autoLoggedIn = true;
                 }
             } catch (e: any) {
-                console.warn('Auto-login after install failed (user can log in manually):', e && e.message);
+                log.warn({ err: e }, 'Auto-login after install failed (user can log in manually)');
             }
 
             // Install complete — remove the on-disk install-token mirror so the bootstrap secret does
@@ -954,20 +1010,33 @@ router.post('/install', async (req: Request, res: Response) => {
             // self-service password recovery. Report it so the wizard's final screen can warn the admin
             // instead of leaving them to discover a dead "Forgot password?" flow later. Same derived
             // signal as the admin `email_provider_available` settings flag and the boot-time warning.
+            // Password recovery depends on ACCOUNT mail (core/account-mail: the built-in transport, or a
+            // provider plugin allowed by name), so that is what the wizard reports.
             let emailProviderAvailable = false;
-            try { emailProviderAvailable = require('../core/mail-provider').isEmailProviderAvailable() === true; } catch { /* default false */ }
+            try { emailProviderAvailable = (await require('../core/account-mail').accountMailReady()) === true; } catch { /* default false */ }
 
             // The site exists now. A backend that booted uninstalled never ran the boot reconcile (it is
             // gated on isInstalled()), so run it in THIS process: it releases the gateway sync waiting on
             // whenReconciled(), arms the gateway's host edge (split / separate) and starts the CLI watcher.
             // Not awaited and never fatal — the install already succeeded.
-            require('../core/site-address').ensureStarted().catch((e: any) => console.warn('[site-address] post-install start failed:', e && e.message));
+            require('../core/site-address').ensureStarted().catch((e: any) => log.warn({ err: e }, '[site-address] post-install start failed'));
 
             // Same reason, for plugin routes: the boot releases the /api/v1/plugin/* guard (503
             // plugins_starting) only after loading the active plugins, and a boot in setup mode loads none.
             // Nothing is starting now, so release it here; otherwise every plugin activated after the
             // wizard answers 503 until a restart.
             require('../core/plugins-ready').markPluginsReady();
+
+            // And for the runtime services the boot starts only on an installed site: cron (scheduled
+            // publishing), the coherence and cluster buses, the webhook dispatcher and the content outbox.
+            // Without them a fresh site enqueued no webhook for any post, comment or settings change and
+            // never published a scheduled post until its first restart. Never fatal — the install already
+            // succeeded; a restart starts them through the boot.
+            try {
+                await require('../core/runtime-services').startRuntimeServices();
+            } catch (e: any) {
+                log.warn({ err: e }, '⚠️ Setup: could not start the runtime services (cron, webhooks); they start at the next restart');
+            }
 
             res.json({
                 success: true,
@@ -978,11 +1047,11 @@ router.post('/install', async (req: Request, res: Response) => {
                 acceptedAddress: currentAddress && 'alias' in currentAddress ? currentAddress.alias.url : null,
                 ...(currentAddress && 'skipped' in currentAddress ? { acceptedAddressSkipped: currentAddress.skipped } : {}),
                 emailProviderAvailable,
-                tests: { total: testResults.tests, passed: testResults.passed, failed: testResults.failed }
+                tests: { total: testResults.tests, passed: testResults.passed, failed: testResults.failed, skipped: testResults.skipped }
             });
 
         } catch (e) {
-            console.error('❌ Setup failed:', e);
+            log.error({ err: e }, '❌ Setup failed');
             res.status(500).json({ error: failedText(e, 'Setup failed during the install.') });
         }
     } else {

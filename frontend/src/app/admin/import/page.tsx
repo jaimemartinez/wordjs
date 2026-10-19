@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import Link from "next/link";
 import { useAuth } from "@/contexts/AuthContext";
 import { importApi, type WxrAnalysis, type ImportSummary, type ImportMediaMode } from "@/lib/api";
 
@@ -306,7 +307,7 @@ export default function ImportPage() {
                             {summary.menus.locations.unassigned > 0 && (
                                 <p className="text-sm text-gray-500 mt-4">
                                     {summary.menus.locations.reason || "No theme location was named by the export."} Assign
-                                    them under <span className="font-medium text-gray-700">Appearance → Menus</span>.
+                                    them under <Link href="/admin/menus" className="font-medium text-gray-700 underline">Menus</Link>.
                                 </p>
                             )}
                         </div>

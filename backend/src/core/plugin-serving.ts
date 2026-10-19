@@ -7,7 +7,7 @@
  *     dist/manifest.build.json.
  * core/io-guard decides which PATHS of a plugin may be published. This module decides which PLUGINS:
  * a path on the allowlist is still a 404 unless the plugin it belongs to is ACTIVE, and build output
- * (dist/) additionally needs the administrator's browser:script grant. Both sinks call these two
+ * (dist/) — and any JavaScript under public/ — additionally needs the administrator's browser:script grant. Both sinks call these two
  * predicates instead of each stating the rule, so they cannot disagree.
  *
  * WHY ACTIVE. Serving the files of every INSTALLED plugin made the install itself public: probing
@@ -66,4 +66,24 @@ async function browserCodeServable(folder: string): Promise<boolean> {
     return granted && active;
 }
 
-module.exports = { pluginFilesServable, browserCodeServable };
+// Script extensions a browser executes when the file is loaded as code (<script src>, import(), a worker).
+const BROWSER_SCRIPT_EXTS = new Set(['.js', '.mjs', '.cjs']);
+
+/**
+ * MAY THIS FILE OF A PLUGIN BE SERVED? The one rule for the static /plugins mount, path by path:
+ *   · dist/** — build output of the browser bundle: browserCodeServable;
+ *   · public/**.js|.mjs|.cjs — also code that runs in a browser on the site's origin (the assets bridge
+ *     emits it as <script src> on public pages): the same browserCodeServable, so a plugin's JavaScript
+ *     reaches a browser only with the administrator's browser:script grant, whichever folder it ships in;
+ *   · anything else under public/ (styles, images, fonts): pluginFilesServable (active only).
+ * `rel` is the path below the plugin folder, already proved by io-guard isPluginServedRelPath.
+ */
+async function pluginPathServable(folder: string, rel: string, bundleDir = 'dist'): Promise<boolean> {
+    const first = String(rel).split('/')[0];
+    const dot = String(rel).lastIndexOf('.');
+    const ext = dot === -1 ? '' : String(rel).slice(dot).toLowerCase();
+    if (first === bundleDir || BROWSER_SCRIPT_EXTS.has(ext)) return browserCodeServable(folder);
+    return pluginFilesServable(folder);
+}
+
+module.exports = { pluginFilesServable, browserCodeServable, pluginPathServable };

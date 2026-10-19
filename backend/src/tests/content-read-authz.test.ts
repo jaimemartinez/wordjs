@@ -330,3 +330,46 @@ describe('password-protected entries', () => {
         assert.strictEqual(w.status, 404);
     });
 });
+
+describe('GET /pages is GET /posts with the type forced to page', () => {
+    let pubPage: number, draftPage: number, pubPost: number;
+    before(async () => {
+        pubPage = await seedPost(U.editor, 'publish', { type: 'page' });
+        draftPage = await seedPost(U.editor, 'draft', { type: 'page' });
+        pubPost = await seedPost(U.editor, 'publish');
+    });
+    const ids = (res: any): number[] => (Array.isArray(res.body) ? res.body.map((p: any) => p.id) : []);
+
+    test('an anonymous caller gets the published pages, with the list headers', async () => {
+        const r = await anon('get', '/pages?per_page=100');
+        assert.strictEqual(r.status, 200, `the alias must reach the list route, got ${r.status} ${JSON.stringify(r.body)}`);
+        assert.ok(ids(r).includes(pubPage));
+        assert.ok(!ids(r).includes(draftPage), 'a draft page is not listed anonymously');
+        assert.ok(!ids(r).includes(pubPost), 'only pages are listed');
+        assert.ok(r.body.every((p: any) => p.type === 'page'));
+        assert.strictEqual(r.headers['x-wp-total'], String(r.body.length));
+        assert.ok(r.headers['x-wp-totalpages'] !== undefined);
+    });
+
+    test('a draft page is listed for an editor and refused to a caller who cannot read drafts', async () => {
+        const ed = await as('editor', 'get', '/pages?status=draft&per_page=100');
+        assert.strictEqual(ed.status, 200);
+        assert.ok(ids(ed).includes(draftPage));
+
+        const an = await anon('get', '/pages?status=draft&per_page=100');
+        assert.ok(!ids(an).includes(draftPage), `anonymous draft listing: ${an.status}`);
+        const co = await as('contrib', 'get', '/pages?status=draft&per_page=100');
+        assert.ok(!ids(co).includes(draftPage), `contributor draft listing: ${co.status}`);
+    });
+
+    test('a caller-supplied type is overwritten, repeated scalars are still refused', async () => {
+        const r = await anon('get', '/pages?type=post&per_page=100');
+        assert.strictEqual(r.status, 200);
+        assert.ok(ids(r).includes(pubPage));
+        assert.ok(!ids(r).includes(pubPost));
+
+        const rep = await anon('get', '/pages?status=publish&status=draft');
+        assert.strictEqual(rep.status, 400);
+        assert.strictEqual(rep.body.code, 'rest_invalid_param');
+    });
+});

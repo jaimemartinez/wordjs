@@ -4,7 +4,7 @@
  * Formerly the `db-migration` plugin. It is DB *infrastructure*, not a sandboxable feature plugin:
  * it runs schema migrations. That work must happen in the host process, around the DB lifecycle — it
  * cannot run in an isolated worker — so it lives in core and is wired in at boot instead of being loaded
- * through the plugin system. See documentation/plugin-isolation-proposal.md.
+ * through the plugin system. See documentation/archive/plugin-isolation-proposal.md.
  */
 
 const express = require('express');
@@ -19,6 +19,7 @@ const migration = require('./migration');
 // deleted the live one on request — so it takes the same gate: an interactive session at the main address.
 const { authenticate, accountAuthorityOnly } = require('../../middleware/auth');
 const { can } = require('../../middleware/permissions');
+const log = require('../module-logger').moduleLogger('core/db-admin/index');
 
 /**
  * Mount the DB-admin API on the given Express app. The admin menu item is a core entry in the
@@ -37,9 +38,15 @@ function register(app) {
     router.post('/migrate', accountAuthorityOnly, migration.runMigration);
     router.post('/cleanup', accountAuthorityOnly, migration.cleanup);
 
+    // Multisite: the database the tool migrates (and the config it rewrites) is the main site's — the
+    // whole network's, like backups — so on any other site the subtree does not exist (404), exactly as
+    // /backups answers there. A no-op on a single site and on the main site.
+    app.use('/api/v1/db-migration', require('../multisite-guards').mainSiteOnly);
+    // On the main site of a network: its network administrators only.
+    app.use('/api/v1/db-migration', require('../multisite-guards').networkAdminOnMainSite);
     app.use('/api/v1/db-migration', router);
 
-    console.log('✅ DB Admin (core) loaded.');
+    log.info('✅ DB Admin (core) loaded.');
 }
 
 module.exports = { register };

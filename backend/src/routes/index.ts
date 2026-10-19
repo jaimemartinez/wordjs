@@ -33,6 +33,59 @@ const seoRoutes = require('./seo');
 const healthRoutes = require('./health');
 const hooksRoutes = require('./hooks');
 
+// The API index's route map: area name -> path under the API prefix, for EVERY route group the server
+// mounts (this router's groups and the ones src/index.ts and core/db-admin mount on the app directly).
+// tests/route-modules-mounted.test.ts fails when a mounted group is missing here.
+const API_ROUTE_GROUPS: Readonly<Record<string, string>> = Object.freeze({
+    authentication: '/auth',
+    posts: '/posts',
+    pages: '/pages',
+    users: '/users',
+    categories: '/categories',
+    tags: '/tags',
+    comments: '/comments',
+    media: '/media',
+    mediaStorage: '/media-storage',
+    settings: '/settings',
+    siteAddress: '/site-address',
+    accountMail: '/account-mail',
+    network: '/network',
+    plugins: '/plugins',
+    pluginRoutes: '/plugin/{slug}',
+    marketplace: '/marketplace',
+    themes: '/themes',
+    chrome: '/chrome',
+    menus: '/menus',
+    widgets: '/widgets',
+    revisions: '/revisions',
+    types: '/types',
+    taxonomies: '/taxonomies',
+    setup: '/setup',
+    export: '/export',
+    import: '/import',
+    roles: '/roles',
+    notifications: '/notifications',
+    notices: '/notices',
+    fonts: '/fonts',
+    certificates: '/system/certs',
+    health: '/health',
+    seo: '/seo',
+    hooks: '/hooks',
+    webhooks: '/webhooks',
+    audit: '/audit',
+    agents: '/agents',
+    mcp: '/mcp',
+    ai: '/ai',
+    forms: '/forms',
+    presence: '/presence',
+    collab: '/collab',
+    graphql: '/graphql',
+    docs: '/docs',
+    analytics: '/analytics',
+    backups: '/backups',
+    dbMigration: '/db-migration',
+});
+
 // API Info endpoint
 /**
  * @swagger
@@ -63,37 +116,37 @@ const hooksRoutes = require('./hooks');
  *                     type: string
  */
 router.get('/', (req: Request, res: Response) => {
+    const prefix = require('../config/app').api.prefix;
+    const routes: Record<string, string> = {};
+    for (const [name, sub] of Object.entries(API_ROUTE_GROUPS)) routes[name] = `${prefix}${sub}`;
     res.json({
         name: 'WordJS REST API',
         description: 'WordPress-like CMS REST API',
-        version: '1.0.0',
-        routes: {
-            authentication: '/api/v1/auth',
-            posts: '/api/v1/posts',
-            users: '/api/v1/users',
-            categories: '/api/v1/categories',
-            tags: '/api/v1/tags',
-            comments: '/api/v1/comments',
-            media: '/api/v1/media',
-            settings: '/api/v1/settings',
-            plugins: '/api/v1/plugins',
-            themes: '/api/v1/themes',
-            menus: '/api/v1/menus',
-            widgets: '/api/v1/widgets',
-            revisions: '/api/v1/revisions',
-            types: '/api/v1/types',
-            taxonomies: '/api/v1/taxonomies',
-            export: '/api/v1/export',
-            import: '/api/v1/import',
-            roles: '/api/v1/roles',
-            notifications: '/api/v1/notifications',
-            notices: '/api/v1/notices',
-            hooks: '/api/v1/hooks',
-            forms: '/api/v1/forms',
-            chrome: '/api/v1/chrome'
-        }
+        version: require('../config/product-version').resolveProductVersion(),
+        routes
     });
 });
+
+// MULTISITE (phase 1): what is network-wide stays the main site's — see core/multisite-guards. Every
+// guard is a no-op on a single site and on the main site.
+const multisiteGuards = require('../core/multisite-guards');
+router.use('/site-address', multisiteGuards.mainSiteOnly);
+// Where EVERY site's public media is stored and served from (one block in wordjs-config.json).
+router.use('/media-storage', multisiteGuards.mainSiteOnly);
+router.use('/plugins', multisiteGuards.pluginsOnSecondarySite);
+router.use('/marketplace', multisiteGuards.mainSiteOnly);
+router.use('/themes', multisiteGuards.themeFilesOnSecondarySite);
+router.use('/setup', multisiteGuards.mainSiteWrites);
+router.use('/system/certs', multisiteGuards.mainSiteOnly);
+router.use('/health/details', multisiteGuards.mainSiteOnly);
+router.use('/hooks', multisiteGuards.mainSiteOnly);
+// On the main site of a network the same network-wide subtrees take a NETWORK administrator, not just an
+// administrator of the main site (the plugin and theme guards above apply the same rule to code changes).
+for (const subtree of ['/site-address', '/marketplace', '/system/certs', '/hooks']) {
+    router.use(subtree, multisiteGuards.networkAdminOnMainSite);
+}
+// The network itself: its sites and administrators (main site, network administrators only).
+router.use('/network', require('./network'));
 
 // Mount routes
 router.use('/auth', authRoutes);
@@ -111,6 +164,9 @@ router.use('/settings', settingsRoutes);
 // Where the site lives: its main address, the other addresses it answers and the IP policy. Its own
 // namespace, not a setting: every write re-authenticates and is audited (core/site-address).
 router.use('/site-address', require('./site-address'));
+// Where public media is stored and served from (local disk, or an S3-compatible bucket + CDN).
+// Administrator-only; the credentials it writes are never read back in full (core/media-storage).
+router.use('/media-storage', require('./media-storage'));
 router.use('/plugins', pluginsRoutes);
 router.use('/marketplace', require('./marketplace'));
 router.use('/themes', themesRoutes);
@@ -135,12 +191,24 @@ router.use('/seo', seoRoutes);
 router.use('/hooks', hooksRoutes);
 router.use('/webhooks', require('./webhooks'));
 router.use('/audit', require('./audit'));
+// AI agents: the connections an administrator grants (routes/agents.ts) and the MCP endpoint they use
+// (routes/mcp.ts). See core/agent-capabilities for the request/grant/narrow model.
+router.use('/agents', require('./agents'));
+router.use('/mcp', require('./mcp'));
+// The AI provider layer: admin-held provider settings and the editor's suggestions (core/ai-provider).
+router.use('/ai', require('./ai'));
+// How password-reset and verification email is delivered (core/account-mail): admin-only, every write
+// re-authenticated and audited.
+router.use('/account-mail', require('./account-mail'));
 router.use('/forms', require('./forms'));
 router.use('/presence', require('./presence'));
 // Colaboración en tiempo real de Verso (SSE de bajada + POST de subida). Distinta de `/presence`,
 // que es un aviso de "alguien más tiene esto abierto"; esta es la edición simultánea real.
 router.use('/collab', require('./collab'));
 router.use('/import', require('./import'));
+// Read-only GraphQL (phase 1). Every field resolves through the REST reads above for the same caller
+// (core/graphql/dispatch), so it adds a query language, not a second authorization model.
+router.use('/graphql', require('./graphql'));
 router.use('/', exportRoutes);
 
 // Pages endpoint (alias for posts with type=page)
@@ -200,7 +268,17 @@ router.use('/', exportRoutes);
  */
 router.get('/pages', (req: Request, res: Response, next: NextFunction) => {
     req.query.type = 'page';
-    postsRoutes.handle(req, res, next);
+    // The posts router matches on req.url, which is still '/pages' here: left as is it routed to
+    // `/:id` and answered 404 rest_post_invalid_id. Point it at the list route (the query string is
+    // kept for completeness; req.query is already parsed) and put the URL back if the posts router
+    // hands the request on.
+    const url = req.url;
+    const queryStart = url.indexOf('?');
+    req.url = queryStart === -1 ? '/' : `/${url.slice(queryStart)}`;
+    postsRoutes.handle(req, res, (err?: unknown) => {
+        req.url = url;
+        next(err);
+    });
 });
 
 const { authenticate, CSRF_COOKIE, CSRF_HEADER } = require('../middleware/auth');
@@ -283,3 +361,5 @@ router.use('/docs', authenticate, isAdmin, (req: Request, res: Response, next: N
 });
 
 module.exports = router;
+// Not a route: the index's route map, read by tests/route-modules-mounted.test.ts.
+Object.defineProperty(module.exports, 'API_ROUTE_GROUPS', { value: API_ROUTE_GROUPS, enumerable: false });

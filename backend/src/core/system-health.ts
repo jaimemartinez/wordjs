@@ -177,8 +177,18 @@ class SystemHealth {
         return out;
     }
 
-    static async checkDatabase() {
+    /**
+     * Is the database answering? With `timeoutMs` (the /readyz probe) the query carries a server-side
+     * statement timeout on the drivers that support one (Postgres, MySQL: getWithTimeout), so a stuck
+     * query is cancelled by the server instead of holding a pool connection; SQLite runs in-process.
+     */
+    static async checkDatabase(opts: { timeoutMs?: number } = {}) {
         try {
+            const timeoutMs = Number(opts && opts.timeoutMs);
+            if (timeoutMs > 0 && typeof dbAsync.getWithTimeout === 'function') {
+                await dbAsync.getWithTimeout('SELECT COUNT(*) AS count FROM users', [], timeoutMs);
+                return { status: 'OK', driver: config.dbDriver };
+            }
             // Check connection by getting user count
             const User = require('../models/User');
             await User.count();

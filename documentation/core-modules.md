@@ -61,6 +61,8 @@ Manages SSL/TLS certificates via Let's Encrypt (ACME) or manual uploads.
 *   **Custom Certs:** Supports uploading existing `.pem` files via the Admin UI.
 *   **Configuration:** Updates `wordjs-config.json` with paths to the active keys and certs.
 
+> **Not to be confused with `backend/src/core/certManager.ts`.** That module (camel-case, `node-forge`) generates the **internal** mTLS material, not public certificates: `generateClusterCA()` mints a self-signed cluster root CA and `generateServiceCert(name, caKey, caCert, altNames)` issues a service identity signed by it, writing private keys `0600` into `backend/certs/` (`0700`). Its caller is the install wizard (`issueLocalClusterIdentity()` in `routes/setup.ts`), which issues the single-host internal identities (`localhost` and `127.0.0.1` are always in their SANs). Separate-mode clusters use the gateway's own CA instead (§10).
+
 ---
 
 ## 4. Plugin Test Runner 🧪
@@ -70,7 +72,7 @@ Manages SSL/TLS certificates via Let's Encrypt (ACME) or manual uploads.
 ### Logic
 *   **Trigger:** `verifyPluginTests(slug)` is still called automatically when an admin attempts to **Activate** a plugin (in `plugins.ts`).
 *   **Plugin tests are NO LONGER executed.** A plugin's test files are arbitrary code, and running them with `node --test` would execute them on the **host**, OUTSIDE the sandbox — a host-RCE vector at activation time. Since there is no "trusted" tier anymore (every plugin is sandboxed at load time), `runPluginTests()` is now a deliberate **no-op**: it always returns `{ success: true, skipped: true }`, so activation is **never** blocked by plugin tests. The `verifyPluginTests` wiring remains as a vestigial seam (it only throws if a result is both `!success` and `!skipped`, which the current no-op never produces).
-*   **Core tests:** `runCoreTests()` is the one path that still spawns a child process with `node --test` (`NODE_ENV=test`, secret-free env allowlist). It runs the CMS's own `src/tests/` suite — it scans that directory for files ending in `.test.js`. **No matching files = pass** (returns `{ success: true, tests: 0, ... }`). It is invoked by the installer flow (`routes/setup.ts`), not by plugin activation.
+*   **Core tests:** `runCoreTests()` is the one path that still spawns a child process with `node --test` (`NODE_ENV=test`, secret-free env allowlist). It runs the CMS's own `src/tests/` suite — every `*.test.ts` (through ts-node, a dev dependency) or `*.test.js` file, one child per file — and adds up the counts. **No suite, or no ts-node, is `skipped: true` with a `reason`**, never a pass of 0 tests. Nothing calls it automatically: the installer used to, with a `.test.js`-only filter that matched no file of the TypeScript suite, so every install reported "0 tests, OK"; it now reports `tests.skipped: true` (run `npm test` in `backend/` to test a checkout). Plugin activation never runs tests.
 
 ---
 
@@ -131,7 +133,7 @@ Loads any plugin marked `"isolated": true` in its manifest into a **separate OS 
 
 *   **Require confinement:** patches `require`/`Module._load`; `guardPluginRequirePath()` blocks `require()` of paths under **writable data dirs** (a load-your-own-dropped-code primitive) and non-requirable dirs, and the ESM `import()` path is guarded too.
 *   **Raw-binding block:** `process.binding` is blocked for plugins, and `process.dlopen` is blocked for **all** plugins (a native `.node` addon would run outside every JS-level guard).
-*   **Scoped DB:** `guardPluginSql()` refuses queries that touch core credential/secret tables, so a plugin's DB handle can't read the host's users/options secrets.
+*   **Scoped DB:** a plugin that `require`s the core database module gets a proxied `dbAsync` whose every call first runs `guardPluginSql()`. It derives the plugin's `wjp_<slug>_` table prefix from the effective plugin context and delegates to the same `plugin-api.assertSqlAllowed()` the `wordjs.db` bridge uses (see [database.md](database.md#3-extending-the-schema-plugins)): every table the statement references must carry that prefix, and the structural denials (core tables, `ATTACH`/`PRAGMA`, schema catalogs, stacked statements, `RETURNING`, …) apply. With no plugin slug in context there is no prefix, and the structural and core-table denials still apply (fail-closed).
 
 ---
 
@@ -266,7 +268,7 @@ These WordPress-style core services back most CMS configuration.
 *   A wp-cron-style scheduler: `scheduleEvent / scheduleSingleEvent / unscheduleEvent / clearScheduledHook / nextScheduled`. Events are stored in the `cron` option keyed by timestamp; `startCron()` polls (default every 60s) and `runCron()` dispatches due events.
 *   **Concurrency-safe writes:** `runCron()` snapshots due events, then re-reads a **fresh** copy of the `cron` option before writing back, applying only its own deletes/reschedules — so a concurrent `scheduleEvent()` between read and write isn't clobbered.
 *   **Isolation-aware:** a plugin-scheduled event records its `pluginSlug` and is dispatched via `doActionForPlugin` (only that plugin's callbacks). Core-scheduled events (no slug) dispatch normally. Recurrence intervals are resolved at run time from the live `schedules` map, so custom schedules registered later still recur.
-*   Built-in jobs include `wordjs_version_check` (daily), `wordjs_db_maintenance` (weekly), `wordjs_scheduled_backup` (driven by the `backup_schedule` / `backup_time` / `backup_day` options) and `wordjs_cert_renewal` (twicedaily — the ACME/Let's Encrypt renewal check, which only renews when the cert is within its renewal window).
+*   Built-in jobs include `wordjs_version_check` (daily), `wordjs_db_maintenance` (weekly), `wordjs_scheduled_backup` (driven by the `backup_schedule` / `backup_time` / `backup_day` options), `wordjs_cert_renewal` (twicedaily — the ACME/Let's Encrypt renewal check, which only renews when the cert is within its renewal window), `wordjs_collab_sweep` (hourly — retires the orphaned real-time collaboration room state a node that died abruptly leaves behind), `wordjs_audit_prune` (daily — `core/audit.ts`, the `audit_retention_days` option) and `wordjs_analytics_prune` (daily, scheduled from `index.ts` — `core/analytics-retention.ts`, the `analytics_retention_days` option, default 90). Scheduled publishing uses one-off events: saving a post as published with a future date stores it as `future` and arms `publish_future_post` with `[postId]` for that timestamp (`core/scheduled-publish.ts`); editing the date re-arms it and moving the post off publish cancels it.
 *   **Multi-node safe:** `runCron()` executes inside `distLock.runAsLeader('wordjs:cron', …)` (see Distributed Lock) so only one node in a cluster fires due events per tick.
 
 ### Object Cache (`backend/src/core/cache.ts`)
@@ -288,7 +290,7 @@ Makes public-site changes instant instead of eventually-consistent. The Next.js 
 *   **Wiring:** `initFrontendPurge()` is called **once, first and unconditionally** from `initialize()` — a fresh boot installs in-process, so registering it inside the "installed" branch meant the very first install purged nothing.
 *   **Hooks:** `wp_insert_post` / `post_updated` purge `posts`, `post:<slug>`, `post:<id>`, `posts:<postType>` and `/`, `/<slug>`; `deleted_post` falls back to the broad `posts` tag (the row is gone, so the slug is unknown); `updated_option` purges `settings` only for an allowlist of chrome-affecting options (`blogname`, `siteurl`, `template`, `stylesheet`, `site_chrome_header`, …) so background jobs can't evict the cache constantly.
 *   **Debounced + fire-and-forget:** queued for `FLUSH_DELAY_MS` (**1.5 s**), so a WXR import touching 500 posts produces **one** coalesced purge; a frontend that is down just means TTL freshness, never an error in the write path.
-*   **Two transports (`purgeTransport()`):** **DIRECT** for a monolith (its own `PORT`) or a single-host split (`frontendUrl`) — shortest path, unchanged. **VIA THE GATEWAY** for a cluster-enrolled node (`advertiseHost` + an mTLS identity on disk): it POSTs `{ tags, paths }` to the gateway's internal `POST /purge` over the same mTLS channel it registers on, and the gateway fans the purge out to every frontend in its registry. A separate-mode backend cannot deliver it itself — its `frontendUrl` is the gateway's public origin, whose `/api` prefix routes straight back to the backend, and a cluster may run N frontend replicas. See **[separate-mode.md](separate-mode.md)**.
+*   **Two transports (`purgeTransport()`):** **DIRECT** for a monolith (its own `PORT`) or a single-host split — the frontend installed next to the backend, dialled on `127.0.0.1` at its own port (`frontendPort`, else the port of `frontendUrl`, else 3001) with `frontendUrl`'s scheme; `frontendUrl` itself is the site's address for the frontend and is used as the target only when no frontend is installed next to the backend. Right after an install the frontend still listens on the plain-HTTP socket it opened before the certificates existed, so a TLS purge that meets cleartext on that loopback target is retried in the clear (only there: an `https://` origin on another host never downgrades). **VIA THE GATEWAY** for a cluster-enrolled node (`advertiseHost` + an mTLS identity on disk): it POSTs `{ tags, paths }` to the gateway's internal `POST /purge` over the same mTLS channel it registers on, and the gateway fans the purge out to every frontend in its registry. A separate-mode backend cannot deliver it itself — its `frontendUrl` is the gateway's public origin, whose `/api` prefix routes straight back to the backend, and a cluster may run N frontend replicas. See **[separate-mode.md](separate-mode.md)**.
 *   **Auth:** a shared `revalidateSecret` in `wordjs-config.json`, sent as the `x-revalidate-secret` header. On a single host this module generates it on first use through `saveConfig()`; in a cluster the **gateway** owns it and enrollment writes the same value into every node's config, so a frontend on its own machine can verify a purge without reading a backend config file it has no access to. On the gateway leg no secret travels at all — the node's `CN=backend` certificate is the authorization. The endpoint can only **invalidate**, never inject — the blast radius of a leaked secret is extra renders, not integrity loss. An HTTPS frontend is verified against `certs/cluster-ca.crt` with a `['frontend','gateway']` CN allowlist (no `rejectUnauthorized: false` anywhere).
 *   **Fails towards TTL, out loud:** any undeliverable purge (gateway unreachable, frontend down, secret refused, no frontend registered) leaves the content fresh-by-TTL exactly as before the feature existed, never touches the write path, and is logged once an hour as `[Purge] …`. A `200` from the gateway is not assumed to be delivery: its `{ targets, delivered, failed }` report is inspected, so "accepted but reached 0 nodes" is reported rather than silently counted as success.
 
@@ -361,9 +363,9 @@ TOTP second factor. Enrolment and lifecycle live under `/api/v1/auth/mfa*`: `POS
 
 ## 9c. Outgoing Webhooks 🔔
 
-**Location:** `backend/src/core/webhooks.ts` + `backend/src/models/Webhook.ts`
+**Location:** `backend/src/core/webhooks.ts` + `backend/src/core/webhook-payloads.ts` + `backend/src/models/Webhook.ts`
 
-HMAC-signed outbound webhooks fired on content events. Subscriptions are managed via `/api/v1/webhooks` (admin UI at `/admin/webhooks`); each delivery is signed with the subscription's HMAC secret and is **SSRF-safe** — the destination IP is re-validated **at delivery time** (loopback/metadata/RFC1918 rejected), mirroring the egress posture in §4b. A delivery log and manual redeliver are exposed per subscription.
+HMAC-signed outbound webhooks fired across the site's lifecycle — posts and pages, comments, users (sign-ins opt-in), media, taxonomy terms, menus, plugins, themes and settings; the catalogue and every payload are documented in **[webhooks.md](./webhooks.md)**. The dispatcher derives events from two existing seams instead of emit calls of its own: the action hooks core already fires (`post_updated`, `wp_insert_comment`, `activated_plugin`, `switch_theme`, …) and `core/audit`'s in-process `onAuditRecorded()` observer, which sees every `recordAudit()` row after its transaction commits. Each payload is built by an allowlisted per-entity serializer, so no hash, secret, token, email address or option value can reach a body. Subscriptions are managed via `/api/v1/webhooks` (admin UI at `/admin/webhooks`); each delivery is signed with the subscription's HMAC secret and is **SSRF-safe** — the destination IP is re-validated **at delivery time** (loopback/metadata/RFC1918 rejected), mirroring the egress posture in §4b. A delivery log and manual redeliver are exposed per subscription.
 
 ---
 
@@ -402,3 +404,122 @@ Decides which addresses the site answers and is the one writer of "where does th
 **Location:** `backend/src/core/log-safe.ts`
 
 `logSafe(value)` turns a value that enters a log line — a request path, an `Origin`, a `Host`, a gateway's or a CA's error message — into one inert line: line breaks, other control characters, ANSI escapes, the Unicode line and paragraph separators and the bidirectional controls are removed. `logSafeError(e)` logs a caught value by its message and code, never its stack. Interpolate the result into **one** string and pass no further `console` argument (a template literal followed by more arguments becomes a format string). Used by the CSRF guard, the site-address module and the certificate manager and routes; see [observability.md](./observability.md).
+
+---
+
+## 13. Multisite 🏘️
+
+**Location:** `backend/src/core/network.ts`, `network-sites.ts`, `network-auth.ts`, `site-context.ts`, `site-resolver.ts`, `site-keys.ts`, `multisite-guards.ts`
+
+The modules that let one install serve a network of sites. The operator guide is **[multisite.md](./multisite.md)**; the design, the isolation guarantees and what phases 1 and 2 built are in **[multisite-design.md](./multisite-design.md)**.
+
+*   **`network.ts`** — the network store: a SQLite file of its own (`network.db`, next to the main database) holding the sites, the addresses each one answers, the network administrators, the per-plugin grant ceilings and the network audit log. It is the single writer of that file; reads come from an in-memory snapshot each write replaces.
+*   **`network-sites.ts`** — `createSite()` provisions a site all-or-nothing (registry record, data directory, database, default options, first administrator); `prepareSite(id)` opens a site's database and loads its per-site runtime once per process; `setSiteStatus()` suspends and resumes; `forEachSite` walks the sites for background work.
+*   **`network-auth.ts`** — a network administrator is an administrator **of the main site** whose user id is listed in the network store; the role alone or the listing alone is not enough.
+*   **`site-context.ts`** — which site the current work belongs to, carried through the async call chain by one `AsyncLocalStorage`. In multisite mode, code that reaches site data outside any site context fails (`site_context_missing`) instead of falling back to site 1.
+*   **`site-resolver.ts`** — mounted right after the host gate in `index.ts`, before CORS, cookies, rate limiters and every route, so all of them run inside the request's site context.
+*   **`site-keys.ts`** — each site's token signing key: site 1 keeps `config.jwt.secret`, every other site signs with a key derived from it (`HMAC-SHA256(secret, "wordjs-site:<id>")`), and its tokens also carry a `sid` claim that must match the site the request was addressed to.
+*   **`multisite-guards.ts`** — what only the main site may do (plugin and theme code on disk, backups of the main database, certificates, the main site's addresses, the installer). The guards are no-ops on a single site and on the main site.
+
+Per-site databases are opened by `openSiteDatabase()` in `config/database.ts` and require the `sqlite-native` driver; see [database.md §5](./database.md#5-multisite-storage).
+
+---
+
+## 14. AI Agents & the MCP Server 🤖
+
+**Location:** `backend/src/core/mcp-server.ts` + `backend/src/core/agent-capabilities.ts` + `backend/src/core/rest-dispatch.ts` + `backend/src/models/AgentConnection.ts` (routes: `routes/mcp.ts`, `routes/agents.ts`)
+
+*   **`mcp-server.ts`** builds one stateless MCP server per HTTP request (`POST /api/v1/mcp`) for the agent connection that authenticated it. The tool list is derived from the connection's grant, and every call re-checks the grant.
+*   **`agent-capabilities.ts`** is the vocabulary a connection requests and an administrator grants, plus `narrowUser()`: a call runs **as** the bound user, with `can(cap)` answering the user's capability **and** the grant's.
+*   **`rest-dispatch.ts`** runs each tool through the same REST router the HTTP API mounts, in-process, so every content rule (capabilities, publish gate, sanitizing, revisions, outbox, webhooks, audit) applies unchanged.
+*   **`AgentConnection`** stores connections in `agent_connections` (migration `0016`): the token hash, requested and granted capabilities, status and timestamps.
+
+Full reference: **[ai-agents.md](./ai-agents.md)**.
+
+---
+
+## 15. AI Provider 🧠
+
+**Location:** `backend/src/core/ai-provider.ts` + `backend/src/core/ai-suggest.ts` (route: `routes/ai.ts`; admin screen `/admin/settings/ai`)
+
+`ai-provider.ts` is the one place that holds the site's AI provider credentials and talks to the provider. The editor's suggestions and plugins granted `ai:use` (`wordjs.ai` on the bridge) get text back and never see the key, which is stored as the secret-named option `ai_provider_api_key` and is absent from every settings route. `ai-suggest.ts` turns material the user already has (a draft's title and body, a media item) into a one-line suggestion; it writes nothing, and the material is treated as data, not instructions. Full reference: **[ai-provider.md](./ai-provider.md)**.
+
+---
+
+## 16. GraphQL 🔷
+
+**Location:** `backend/src/core/graphql/` (`index.ts`, `schema.ts`, `dispatch.ts`, `extensions.ts`, `limits.ts`; route `routes/graphql.ts`)
+
+A read-only endpoint at `/api/v1/graphql`. Every data field resolves through `dispatch.ts`, which issues the REST read it mirrors as an internal sub-request, so a GraphQL read is authorized exactly like that REST read. `extensions.ts` is the seam host code extends the schema through (`registerGraphQLExtension()` and the `wordjs_graphql_register_types` hook); `limits.ts` holds the depth and cost validation rules, checked before any resolver runs; `index.ts` adds the parser token cap and the introspection switch (off in production unless the `graphql_introspection` setting turns it on). Full reference: **[graphql.md](./graphql.md)**.
+
+---
+
+## 17. Media Storage & Offload 🪣
+
+**Location:** `backend/src/core/media-storage.ts`, `media-storage-migrate.ts`, `private-media.ts`, `s3-offload.ts`
+
+*   **`media-storage.ts`** — the storage adapters: `local` (the default, unchanged behaviour) and `s3`, which writes public media and every derivative to an S3-compatible bucket served from a public base URL (the bucket or a CDN). Configured by the `mediaStorage` block of `wordjs-config.json` (route `routes/media-storage.ts`, screen `/admin/settings/media-storage`).
+*   **`media-storage-migrate.ts`** — moves an existing library into the bucket (offload) and back (restore), idempotently per attachment.
+*   **`private-media.ts`** — attachments that must not be public ([security.md §1.5](./security.md#15-private-media-files-that-must-not-be-public)).
+*   **`s3-offload.ts`** is a different feature: it copies **backups** off-host after each local backup ([database.md §1.5](./database.md#15-backups--retention)).
+
+Full reference: **[media-storage.md](./media-storage.md)**.
+
+---
+
+## 18. Structured Logging 📜
+
+**Location:** `backend/src/core/logger.ts` + `backend/src/core/module-logger.ts` + `backend/src/middleware/request-context.ts`
+
+`logger.ts` is the one pino logger: every line the backend emits — a route, a cron tick, a plugin isolate's forwarded output — is a JSON object on stdout with a level, a timestamp and, inside a request, the correlation id. A module logs through `moduleLogger('<module path>')` (`module-logger.ts`), which adds `mod` and the `requestId`. `request-context.ts` is the first middleware on the app: it mints or validates `X-Request-Id` and writes the access line. Levels, redaction and the console bridge: **[observability.md](./observability.md)**.
+
+---
+
+## 19. Content Pipeline 📝
+
+**Location:** `backend/src/core/content-schema.ts`, `content-outbox.ts`, `revisions.ts` + `revision-snapshots.ts`, `collab-ops.ts` + `collab-rooms.ts`
+
+*   **`content-schema.ts`** — the declarative content-type contract (F1, [ADR-0002](./adr/0002-f1-declarative-content-schema.md)): a pure validator that projects a serialisable contract onto `registerPostType()`.
+*   **`content-outbox.ts`** — the transactional content unit of work (F3, [ADR-0004](./adr/0004-f3-transactional-content-outbox.md)): every relational write of one logical change shares one pinned connection, and semantic events are inserted into `content_outbox` before `COMMIT` and dispatched after it, at least once.
+*   **`revisions.ts` / `revision-snapshots.ts`** — post revisions (F4, [ADR-0005](./adr/0005-f4-versioned-extensible-revisions.md)): a snapshot freezes the versioned meta keys and a manifest of the storage decision, so a restore never depends on today's plugin registry.
+*   **`collab-ops.ts` / `collab-rooms.ts`** — Verso's real-time collaboration (F8): `collab-ops` is the trust boundary that rebuilds every incoming operation field by field (and sanitizes through `sanitize-meta`, §8), and `collab-rooms` holds the rooms, the SSE + POST transport of `routes/collab.ts` and the fan-out. Session state lives in `collab_docs` / `collab_ops` / `collab_members`; the canonical content stays in `_puck_data`. A write of `_puck_data` that is not the room's own save (a revision restore, another editor, an import) resets a live room so its members reload the saved content; deleting a post closes its streams and removes its session rows; account and post changes that can revoke access (`User` security meta, roles, the MFA policy, `Post.update` status/author) re-check open streams immediately across the cluster. Spec: [verso/crdt-spec.md](./verso/crdt-spec.md).
+
+---
+
+## 20. Native Sandbox Modules 🧱
+
+**Location:** `backend/src/core/sandbox-linux.ts`, `sandbox-windows.ts`, `sandbox-macos.ts`, `sandbox-paths.ts`, `sandbox-refusal.ts`, `host-privilege.ts`
+
+The kernel layer under the isolated plugin host (§4c):
+
+*   **`sandbox-linux.ts`** — Landlock + seccomp-bpf confinement of each child, with nothing to configure on the host.
+*   **`sandbox-windows.ts`** — a zero-capability AppContainer with filesystem ACLs and Job Object limits.
+*   **`sandbox-macos.ts`** — Seatbelt (`sandbox-exec`).
+*   **`sandbox-paths.ts`** — the filesystem authority every layer reads (Node permissions, Landlock, Seatbelt, AppContainer ACLs and `io-guard`), declared once so they cannot disagree.
+*   **`sandbox-refusal.ts`** — the typed error a route answers with when `sandbox.requireHardening` (on by default) refuses to start a plugin whose native sandbox is not available.
+*   **`host-privilege.ts`** — on Linux, what privilege the backend process itself holds and what to do about it.
+
+Each mechanism is activated only after a probe has run a real confined child. Posture and host requirements: **[security.md §1](./security.md#1-the-pillars-of-defense)**.
+
+---
+
+## 21. Inbound SMTP & Professional Mailboxes 📮
+
+**Location:** `backend/src/core/inbound-smtp.ts` + `backend/src/core/mailbox.ts`
+
+*   **`inbound-smtp.ts`** — the sandbox gives no plugin an inbound socket, so the **host** opens the SMTP listener on behalf of the one plugin an administrator granted `smtp:inbound` (an exclusive grant), runs the protocol itself and asks the plugin over IPC for a verdict at each step (connect, `MAIL FROM`, `RCPT TO`, `DATA`). A plugin that throws or times out gets the sender a temporary `451`. If the declared port cannot be bound, the listener falls back to 2525 and reports why.
+*   **`mailbox.ts`** — whether an account has a mailbox on the site's mail domain is an explicit fact (`user_meta.professional_mailbox`, migration `0006`), not something derived from the account's own e-mail address.
+
+Used by the mail-server plugin: **[mail-server.md](./mail-server.md)**.
+
+---
+
+## 22. Theme Tooling 🎨
+
+**Location:** `backend/src/core/theme-compile.ts`, `theme-derive.ts`, `theme-doctor.ts`
+
+*   **`theme-compile.ts`** — compiles a theme's declarative `theme.json` contract (seeds, archetype, tokens, styles) into the marked `@wjs-generated` block of its `style.css`; values are parsed with css-tree and re-serialized from the AST, never concatenated.
+*   **`theme-derive.ts`** — the canonical palette derivation and archetype presets, pure and dependency-free.
+*   **`theme-doctor.ts`** — a read-only, fail-open lint of an installed theme against the `wordjs-ui.css` token contract (`backend/public/theme-tokens.json`).
+
+Full reference: **[theming.md](./theming.md)** and **[themes.md](./themes.md)**.

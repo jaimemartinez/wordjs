@@ -101,6 +101,7 @@ const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
 const { sandboxPaths } = require('./sandbox-paths');
+const log = require('./module-logger').moduleLogger('core/sandbox-windows');
 
 /** Strip line breaks before a value reaches a log line (same reason as plugin-isolate's logSafe). */
 function logSafe(v: any): string {
@@ -254,7 +255,7 @@ function ensureAppContainerProfile(name?: string): Promise<string | null> {
         // from config can never become PowerShell source.
         const r = await runPowerShellWithEnv(buildProfileScript(profile, 'ensure'), { WJS_AC_NAME: profile }, PROFILE_API_TIMEOUT_MS);
         const m = /OK (S-1-15-2-[0-9-]+)/.exec(r.out);
-        if (!m) { console.warn(`[Sandbox] AppContainer profile '${logSafe(profile)}' unavailable: ${logSafe(r.out.trim().slice(0, 200))}`); return null; }
+        if (!m) { log.warn({ profile: logSafe(profile) }, `[Sandbox] AppContainer profile '${logSafe(profile)}' unavailable: ${logSafe(r.out.trim().slice(0, 200))}`); return null; }
         return m[1];
     })();
     profileSidCache.set(profile, p);
@@ -525,7 +526,7 @@ async function grantAppContainerAccess(sid: string, dirs: string[], mode: AclMod
         // A cache failure must not become a sandbox bypass or an availability dependency. Run the original
         // idempotent icacls operation uncached; the real DACL result is still checked below.
         cacheAvailable = false;
-        console.warn(`[Sandbox] AppContainer ACL cache unavailable; provisioning directly: ${logSafe(e && e.message)}`);
+        log.warn({ err: e }, '[Sandbox] AppContainer ACL cache unavailable; provisioning directly');
     }
 
     try {
@@ -542,7 +543,7 @@ async function grantAppContainerAccess(sid: string, dirs: string[], mode: AclMod
             WJS_AC_DIRS_B64: Buffer.from(pending.join('\n'), 'utf8').toString('base64'),
         }, 120000); // icacls /T over a large node_modules tree is not fast
         const m = /ICACLS fail=(\d+) skip=(\d+) total=(\d+)/.exec(r.out);
-        if (!m) { console.warn(`[Sandbox] AppContainer ${logSafe(mode)} failed to run: ${logSafe(r.out.trim().slice(0, 200))}`); return false; }
+        if (!m) { log.warn({ mode: logSafe(mode) }, `[Sandbox] AppContainer ${logSafe(mode)} failed to run: ${logSafe(r.out.trim().slice(0, 200))}`); return false; }
         const failed = Number(m[1]);
         // A failure here is reported, never fatal by itself. MEASURED on this host: granting
         // C:\Program Files\nodejs is refused for a non-admin account (the directory is owned by
@@ -552,7 +553,7 @@ async function grantAppContainerAccess(sid: string, dirs: string[], mode: AclMod
         // not a precondition. The grants that genuinely matter are the narrow readable roots the operator owns.
         // What must never happen is claiming confinement on the strength of a grant that did not land —
         // which is why this returns false and probeAppContainer decides on evidence from a real child.
-        if (failed > 0) console.warn(`[Sandbox] AppContainer ${logSafe(mode)}: ${logSafe(failed)} of ${logSafe(m[3])} director${failed === 1 ? 'y' : 'ies'} could not be updated (an ACL change on a directory this account does not own — e.g. a Node runtime under Program Files — needs an elevated one-time icacls; the launch may still work, and the probe is what decides).`);
+        if (failed > 0) log.warn({ mode: logSafe(mode), failed: logSafe(failed) }, `[Sandbox] AppContainer ${logSafe(mode)}: ${logSafe(failed)} of ${logSafe(m[3])} director${failed === 1 ? 'y' : 'ies'} could not be updated (an ACL change on a directory this account does not own — e.g. a Node runtime under Program Files — needs an elevated one-time icacls; the launch may still work, and the probe is what decides).`);
         if (failed === 0 && mode !== 'revoke' && cacheAvailable) {
             for (const dir of pending) {
                 writeAclMarker(sid, dir, mode);
@@ -1107,8 +1108,8 @@ function probeWindowsJobCaps(): Promise<boolean> {
         if (!probe || !probe.pid) return false;
         try {
             const ok = await applyWindowsJobCaps(probe.pid, { memoryBytes: 256 * 1024 * 1024, activeProcessLimit: 64, cpuPercent: 50 });
-            if (ok) console.log('[Sandbox] extended Job Object caps ACTIVE on Windows (per-child ProcessMemoryLimit + ActiveProcessLimit fork-bomb cap + hard CPU rate cap).');
-            else console.warn('[Sandbox] extended Job Object caps unavailable here (PowerShell/Win32 probe failed) - the existing memory cap and the RSS poll are unaffected.');
+            if (ok) log.info('[Sandbox] extended Job Object caps ACTIVE on Windows (per-child ProcessMemoryLimit + ActiveProcessLimit fork-bomb cap + hard CPU rate cap).');
+            else log.warn('[Sandbox] extended Job Object caps unavailable here (PowerShell/Win32 probe failed) - the existing memory cap and the RSS poll are unaffected.');
             return ok;
         } finally { try { probe.kill(); } catch { /* */ } }
     })();
@@ -1198,7 +1199,7 @@ function probeAppContainer(): Promise<'active' | 'degraded' | 'unsupported' | 'd
             appContainerState = 'degraded';
             try { if (sid) await deleteAppContainerProfile(probeProfileA); } catch { /* */ }
             try { if (siblingSid) await deleteAppContainerProfile(probeProfileB); } catch { /* */ }
-            console.warn('[Sandbox] AppContainer requested but distinct per-plugin profiles could not be created or derived - isolated plugins keep the standard Windows launch.');
+            log.warn('[Sandbox] AppContainer requested but distinct per-plugin profiles could not be created or derived - isolated plugins keep the standard Windows launch.');
             return 'degraded';
         }
         appContainerSid = sid;
@@ -1221,7 +1222,7 @@ function probeAppContainer(): Promise<'active' | 'degraded' | 'unsupported' | 'd
             const control = await runProbeControl(zoneDir, outsideDir);
             if (!control || control.read !== 'OPEN' || control.write !== 'OK' || control.exec !== 'OK' || control.connect !== 'CONNECTED') {
                 appContainerState = 'degraded';
-                console.warn(`[Sandbox] AppContainer probe ABORTED: the uncontained control was not clean (read=${logSafe(control && control.read)}, write=${logSafe(control && control.write)}, connect=${logSafe(control && control.connect)}).`);
+                log.warn(`[Sandbox] AppContainer probe ABORTED: the uncontained control was not clean (read=${logSafe(control && control.read)}, write=${logSafe(control && control.write)}, connect=${logSafe(control && control.connect)}).`);
                 return 'degraded';
             }
 
@@ -1258,7 +1259,7 @@ function probeAppContainer(): Promise<'active' | 'degraded' | 'unsupported' | 'd
 
             if (!verdict || !verdict.ipc) {
                 appContainerState = 'degraded';
-                console.warn('[Sandbox] AppContainer probe FAILED: no fork-IPC round-trip from the contained child. A container the host cannot talk to is not a usable sandbox, so the layer stays OFF and the standard Windows launch is used.');
+                log.warn('[Sandbox] AppContainer probe FAILED: no fork-IPC round-trip from the contained child. A container the host cannot talk to is not a usable sandbox, so the layer stays OFF and the standard Windows launch is used.');
                 return 'degraded';
             }
             // BOTH refusals, or nothing. A network verdict that is merely "did not connect" is not proof of
@@ -1269,7 +1270,7 @@ function probeAppContainer(): Promise<'active' | 'degraded' | 'unsupported' | 'd
             const canWork = verdict.write === 'OK';
             if (!netDenied || !readDenied || !execDenied || !canWork) {
                 appContainerState = 'degraded';
-                console.warn(`[Sandbox] AppContainer probe FAILED (connect=${logSafe(verdict.connect)}, read=${logSafe(verdict.read)}, exec=${logSafe(verdict.exec)}, write=${logSafe(verdict.write)}).`);
+                log.warn(`[Sandbox] AppContainer probe FAILED (connect=${logSafe(verdict.connect)}, read=${logSafe(verdict.read)}, exec=${logSafe(verdict.exec)}, write=${logSafe(verdict.write)}).`);
                 return 'degraded';
             }
             // Certify the network-GRANTED shape independently. internetClient may enable sockets, but it
@@ -1295,15 +1296,15 @@ function probeAppContainer(): Promise<'active' | 'degraded' | 'unsupported' | 'd
                 && allowedVerdict.write === 'OK' && allowedVerdict.connect === 'CONNECTED';
             if (!allowedShape) {
                 appContainerState = 'degraded';
-                console.warn(`[Sandbox] AppContainer internetClient probe FAILED (connect=${logSafe(allowedVerdict && allowedVerdict.connect)}, read=${logSafe(allowedVerdict && allowedVerdict.read)}, write=${logSafe(allowedVerdict && allowedVerdict.write)}). The network grant must change only egress, not remove the container.`);
+                log.warn(`[Sandbox] AppContainer internetClient probe FAILED (connect=${logSafe(allowedVerdict && allowedVerdict.connect)}, read=${logSafe(allowedVerdict && allowedVerdict.read)}, write=${logSafe(allowedVerdict && allowedVerdict.write)}). The network grant must change only egress, not remove the container.`);
                 return 'degraded';
             }
             appContainerState = 'active';
-            console.log('[Sandbox] Windows AppContainer confinement ACTIVE for both network policies: package-SID filesystem isolation and the one-process Job Object always remain; internetClient is present only for network-granted plugins.');
+            log.info('[Sandbox] Windows AppContainer confinement ACTIVE for both network policies: package-SID filesystem isolation and the one-process Job Object always remain; internetClient is present only for network-granted plugins.');
             return 'active';
         } catch (e: any) {
             appContainerState = 'degraded';
-            console.warn(`[Sandbox] AppContainer probe errored: ${logSafe(e && e.message)} - the layer stays OFF.`);
+            log.warn({ err: e }, `[Sandbox] AppContainer probe errored: ${logSafe(e && e.message)} - the layer stays OFF.`);
             return 'degraded';
         } finally {
             try { if (launched && launched.child) launched.child.kill(); } catch { /* */ }

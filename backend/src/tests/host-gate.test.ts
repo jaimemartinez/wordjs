@@ -20,6 +20,7 @@
 
 const { describe, test, before, after, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert');
+const { captureLogLines } = require('./fixtures/log-capture');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -282,13 +283,12 @@ describe('review #6: a frontend replica pinned to this backend by IP needs trust
     test('not in trustProxy → 421, and the log names the peer and WORDJS_TRUST_PROXY', async () => {
         hostPolicy.refusedHosts.clear();
         const warned: string[] = [];
-        const realWarn = console.warn;
-        console.warn = (...args: unknown[]) => { warned.push(args.map(String).join(' ')); };
+        const capture = captureLogLines('warn');
         let res: any;
         try {
             res = await throughReplica();
         } finally {
-            console.warn = realWarn;
+            warned.push(...capture.stop());
         }
         assertRefused(res, 'replica without trustProxy');
         assert.ok(warned.some((line) => /421 for 10\.0\.1\.23:4000 \(proxied-ip\): 10\.0\.1\.30 forwards X-Forwarded-Host but is not in trustProxy; if it is your frontend replica or proxy, set WORDJS_TRUST_PROXY=10\.0\.1\.30/.test(line)),

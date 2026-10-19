@@ -81,9 +81,9 @@ Runs the idempotent import and returns a summary. Options are sent as multipart 
 | --- | --- | --- | --- |
 | `defaultAuthorId` | integer | the calling admin's id | Fallback author for items whose WordPress author couldn't be imported. |
 | `importComments` | `1` / `0` | `1` (any value other than `"0"`) | Import comments. |
-| `media` | `download` / `link` / `skip` | falls back to `importAttachments` | What to do with attachment items. See [Media](#media-attachments). |
+| `media` | `download` / `link` / `skip` | `download` (when `importAttachments` is absent too) | What to do with attachment items. A value that is not one of the three counts as absent. See [Media](#media-attachments). |
 | `allowHttp` | `1` / `0` | `0` | Allow `http://` attachment sources. Does not weaken the resolved-IP checks. |
-| `importAttachments` | `1` / `0` | `0` (only `"1"` enables it) | **Legacy**, and used only when `media` is absent: `1` means `media=download`, anything else `media=skip`. A caller that has always sent this field keeps exactly the behaviour it had. |
+| `importAttachments` | `1` / `0` | — | **Legacy**, and used only when `media` is absent: exactly `"0"` means `media=skip`; any other value, or the field omitted, means `media=download`. |
 
 ```bash
 curl -X POST https://localhost:3000/api/v1/import/wordpress \
@@ -93,7 +93,7 @@ curl -X POST https://localhost:3000/api/v1/import/wordpress \
   -F "media=download"
 ```
 
-> **Note the two different defaults, on purpose.** The admin wizard preselects **Download the files** and always sends an explicit `media`, because that is the migration most people want and the screen says in full what it will do. The raw endpoint keeps defaulting to `skip` when *neither* field is sent, so an existing script cannot start making host-side downloads because it was upgraded.
+> **One default everywhere.** With *neither* `media` nor `importAttachments` sent, the endpoint uses `download` — the same default as `importWxr()` itself and the option the admin wizard preselects. A script that must not make host-side downloads sends `media=skip` (or `media=link`), or the legacy `importAttachments=0`.
 
 The remaining media knobs (`maxFileBytes`, `maxTotalBytes`, `timeoutMs`, `rewriteUrls`) are options of `importWxr()` itself and are documented under [Media](#media-attachments); a caller that needs them calls `core/wxr-import`'s `importWxr()` directly (a CLI or a migration script).
 
@@ -126,7 +126,7 @@ Response (`summary`):
     "menus": {
       "created": 2,
       "matched": 0,
-      "items": { "created": 4, "skipped": 1 },
+      "items": { "created": 4, "skipped": 1, "relinked": 0 },
       "locations": { "assigned": 0, "unassigned": 2, "reason": "the WXR carried no readable nav_menu_locations option" }
     },
     "errors": []
@@ -134,7 +134,7 @@ Response (`summary`):
 }
 ```
 
-A malformed file (not a `<rss><channel>` WXR document) returns **HTTP 400** with `code: "invalid_wxr"`; a missing upload returns **400** with `code: "no_file"`, and an upload that cannot be read returns **400** with `code: "read_failed"`. Because the import creates user accounts, `POST /api/v1/import/wordpress` (not the analyze endpoint) refuses an API token with **403** `code: "rest_token_management_forbidden"` and a session started on a secondary site address with **403** `code: "rest_account_bound_session"` — run it from an interactive session started at the main address or on loopback. Up to the first 100 per-item problems are collected in `summary.errors` — the import continues past them rather than failing the whole run.
+A malformed file (not a `<rss><channel>` WXR document) returns **HTTP 400** with `code: "invalid_wxr"`; a missing upload returns **400** with `code: "no_file"`, and an upload that cannot be read returns **400** with `code: "read_failed"`. An upload that is neither an XML MIME type nor named `.xml` / `.wxr` is refused with **415** `code: "rest_upload_invalid_type"` (both endpoints). Because the import creates user accounts, `POST /api/v1/import/wordpress` (not the analyze endpoint) refuses an API token with **403** `code: "rest_token_management_forbidden"` and a session started on a secondary site address with **403** `code: "rest_account_bound_session"` — run it from an interactive session started at the main address or on loopback. Up to the first 100 per-item problems are collected in `summary.errors` — the import continues past them rather than failing the whole run.
 
 ## What gets mapped
 
@@ -148,7 +148,7 @@ WordJS maps WordPress entities onto its own models:
 | `wp:term` | **Terms** (custom taxonomies) | Best-effort; `category`/`post_tag` here are skipped because they're handled above. |
 | `item` (post/page) | **Posts / Pages** | Plus post meta, category/tag relationships and comments. `wp:status` is folded onto the statuses the site writes: case and surrounding space are ignored, so `Publish` is `publish`; `draft`, `pending`, `publish`, `future` and `private` keep their meaning, `trash` is skipped (below), and any other value — `inherit`, `auto-draft`, a status a WordPress plugin added such as `wc-completed`, a look-alike spelling — imports as `draft`. Stored verbatim, a `Publish` entry was unpublished to the site's read checks while MySQL's case-insensitive `post_status = 'publish'` listed it. |
 | `wp:postmeta` | **Post meta** | Custom fields are preserved, minus the server-owned keys the shared list in `core/protected-meta.ts` refuses (`_wp_attached_file`, `_wp_attachment_metadata`, `_wp_trash_meta_status`, `_wp_trash_meta_time`, `_edit_lock`, `_edit_last`, the importer's own `_wxr_source_url` / `_wxr_menu_item_id` / `_wxr_remote_url`, and the revision-snapshot envelope) and minus malformed keys (empty, over the column's bound, or a prototype name such as `__proto__`). One deliberate exception: on an **attachment** item the two path keys `_wp_attached_file` / `_wp_attachment_metadata` *are* written, validated by **shape** rather than refused by name — without them a migrated attachment would have no file path at all. |
-| `wp:comment` | **Comments** | Threading is preserved; comment author/email/body are required. |
+| `wp:comment` | **Comments** | Threading and the original `wp:comment_date` / `wp:comment_date_gmt` are preserved; comment author/email/body are required. |
 | `item` (attachment) | **Media library** | The file is downloaded and stored under `uploads/`, and the row is created by the same `Media.create()` the upload route uses. See [Media](#media-attachments). |
 | `wp:term` (`nav_menu`) | **Menus** | A menu is a `nav_menu` term, exactly as in WordPress. Counted under `menus`, not under `terms.custom`. |
 | `item` (nav_menu_item) | **Menu items** | Written through `models/Menu`'s `MenuItem.create()`, never through the generic item loop. See [Menus](#menus). |
@@ -156,6 +156,8 @@ WordJS maps WordPress entities onto its own models:
 Additional fidelity details:
 
 *   **Publish dates are preserved.** `Post.create` would otherwise stamp "now"; the importer backfills the real `post_date` / `post_modified` (and GMT variants) from the WXR.
+*   **Comment dates are preserved** the same way: `wp:comment_date` and `wp:comment_date_gmt` replace the import time (a missing GMT value falls back to the local one). A value that is not a `YYYY-MM-DD HH:MM:SS` timestamp is ignored and the comment keeps the import time.
+*   **Featured images are remapped.** `_thumbnail_id` is a reference to the attachment's id *on the old site*, so it is not copied verbatim: once every item is imported it is rewritten to the id of the attachment this run created or matched, wherever that attachment sits in the file. A reference that does not resolve to an imported attachment (the image was skipped, or the export did not include it) is dropped rather than left naming an unrelated row.
 *   **Hierarchies are reconstructed in a second pass.** Category parents, hierarchical page parents (`wp:post_parent`), and threaded comment parents (`wp:comment_parent`) are all wired up after every entity exists, so order in the file doesn't matter.
 *   **Classic content gets a light `wpautop`.** Classic-editor posts are stored as plain text with blank-line paragraph breaks; the importer wraps them in `<p>` tags. Gutenberg/block HTML is detected and left untouched.
 *   **Imported block-builder data is sanitized on the way in — same as on save.** The importer doesn't trust meta values from the WXR. The `_puck_data` postmeta (the visual editor’s block tree — the meta key keeps its historical name) is run through the exact same value-based sanitizer the editor's write path uses: the JSON string is parsed, every string leaf is sanitized (HTML-bearing fields through the post-body sanitizer; every other string leaf through a scheme allow-list that blanks `javascript:` / `data:` / `vbscript:` / `file:` URLs, including control-char-obfuscated variants), then re-stringified. So a crafted WXR can't smuggle stored XSS through the page builder. Other (non-`_puck_data`) custom fields are stored verbatim.
@@ -244,7 +246,7 @@ Menu items are deliberately **not** created by the generic item loop: `nav_menu_
 
 **Resolved URLs.** An object reference carries no URL in the export (WordPress resolves it at render time), so the importer resolves it against *this* install's public routes: `/{slug}` for a post or page, and `/category/{slug}`, `/tag/{slug}` or `/taxonomy/{taxonomy}/{term}` for a taxonomy archive. An object that could not be mapped keeps whatever `_menu_item_url` the export carried, and otherwise gets an empty url — which renders as `#`, i.e. visibly unresolved rather than silently wrong.
 
-**Theme locations.** WXR 1.2 has no options section, so a stock WordPress export carries no `nav_menu_locations` and every menu is imported **unassigned** — `summary.menus.locations.reason` says exactly that. Assign them under **Appearance → Menus**. If the export *was* widened with a `<wp:option>` named `nav_menu_locations` whose value is JSON, it is honoured (values may be the menu's WXR term id or its slug); a PHP-serialized value is deliberately not parsed.
+**Theme locations.** WXR 1.2 has no options section, so a stock WordPress export carries no `nav_menu_locations` and every menu is imported **unassigned** — `summary.menus.locations.reason` says exactly that. Assign them under **Menus** in the admin sidebar (`/admin/menus`). If the export *was* widened with a `<wp:option>` named `nav_menu_locations` whose value is JSON, it is honoured (values may be the menu's WXR term id or its slug); a PHP-serialized value is deliberately not parsed.
 
 ## What is *not* imported
 
@@ -262,9 +264,11 @@ The importer is **idempotent**. On a re-run:
 *   **Users** are matched by login, then email — not re-created.
 *   **Terms** are matched by slug + taxonomy.
 *   **Attachments** are matched by their **source URL** (stamped into `_wxr_source_url` on import), then by slug — checked *before* any network call, so a re-run does not re-download a single byte of what it already has. A file that **failed** records nothing, so the next run retries exactly those: that is what makes a 10,000-file migration resumable rather than all-or-nothing.
-*   **Menus** are matched by slug; **menu items** by the WXR's own item id, stamped into `_wxr_menu_item_id`.
+*   **Menus** are matched by slug; **menu items** by the WXR's own item id, stamped into `_wxr_menu_item_id`. A matched item is not created again, but its target is re-checked: if the post, page or term it points at no longer exists — the content was deleted and imported again, so it has a new id — the item is re-pointed at this run's copy (its `_menu_item_object_id` and url) and counted under `menus.items.relinked` (it is also counted as `skipped`, since nothing was created). An item whose target still exists is never touched, so a link edited by hand survives a re-run.
 *   **The dedupe keys are server-owned.** `_wxr_source_url`, `_wxr_menu_item_id` and `_wxr_remote_url` are in `core/protected-meta.ts`'s protected list, so neither the routes' generic meta bag nor a third party's `wp:postmeta` can author one, and both lookups are scoped to the right `post_type`. They are the keys the *next* run indexes: a writable one is a way to make the importer report a real attachment as already imported (pointing every `wp:post_parent` / `_thumbnail_id` reference at the row that claimed its URL) or to make real menu items vanish as `skipped`. Core still writes them directly — "protected" is a rule about the write *surface*, not about the bytes.
 *   **Posts/pages** are matched by slug + type, and an already-present post is skipped **along with its comments** — comments have no dedupe key, so the importer never re-attaches comments to a post it did not create in the same run (doing so would duplicate them). The post's id is still remembered so `wp:post_parent` references pointing at it (hierarchical pages) resolve correctly; threaded-comment parents are resolved only among comments created in the same run.
+
+    A matched post's **featured image** is the one exception to "skipped means untouched": if its `_thumbnail_id` still holds exactly the WXR's source id (what an import made before the remap existed left behind), the re-run rewrites it to the imported attachment. Any other value — a featured image chosen since — is left alone.
 
     One consequence for an interrupted run: a post whose row committed but whose comments had not all been attached yet keeps only the comments that made it in — the next run skips that post and does not retry its remaining comments.
 
@@ -274,5 +278,5 @@ This means you can analyze, do a partial import, fix something, and run again wi
 
 *   **Reset author passwords.** Tell imported authors to use the password-reset flow (their accounts exist but have unknown random passwords).
 *   **Check `summary.media.failures`** and re-run the import for anything that failed (a retry costs nothing for the files that already landed). If a handful of files are simply gone from the old host, copy them into `uploads/` at the path the summary names.
-*   **Assign your menus to theme locations** under **Appearance → Menus** — a stock WXR carries no `nav_menu_locations`, so the menus and their items are imported but not yet placed.
+*   **Assign your menus to theme locations** under **Menus** in the admin sidebar (`/admin/menus`) — a stock WXR carries no `nav_menu_locations`, so the menus and their items are imported but not yet placed.
 *   **Spot-check content**, especially classic-editor posts (paragraph wrapping) and any custom fields your theme/plugins rely on.

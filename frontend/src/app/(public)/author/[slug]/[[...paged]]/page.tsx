@@ -1,4 +1,4 @@
-import { notFound } from "next/navigation";
+import { contentNotFound } from "@/lib/server-api";
 import type { Metadata } from "next";
 import ArchivePage, { archiveMetadata, type ArchiveSpec } from "@/lib/public/archiveRoute";
 import {
@@ -12,7 +12,7 @@ import {
  * `/author/{nicename}` and `/author/{id}` (plus `/page/{n}` under either) — the author archive.
  *
  * IT TAKES EITHER SPELLING, BECAUSE THE API RESOLVES EITHER. `GET /posts?author=` accepts an id or a
- * slug and resolves the slug against `user_nicename`/`user_login` in a parameterised subquery
+ * slug and resolves the slug against `user_nicename` (never the login) in a parameterised subquery
  * (`Post._authorCondition`), and `Post.toJSON()` now serialises `author: { id, displayName, slug }`,
  * so a post payload hands this route the very value the filter takes. That closes what this file used
  * to describe as a gap in the API: an all-digit segment is read as an id (so a user whose LOGIN is
@@ -43,7 +43,7 @@ function parseAuthorId(raw: string): number | null {
 }
 
 /**
- * A user_nicename / user_login as a path segment.
+ * A user_nicename as a path segment.
  *
  * Positive allowlist, and no comma: the list grammar splits `?author=` on commas into an OR-list, so
  * a segment carrying one could never denote a single author. Bounded at the same 200 characters the
@@ -96,6 +96,6 @@ export async function generateMetadata({ params }: { params: Promise<RouteParams
 
 export default async function AuthorArchive({ params }: { params: Promise<RouteParams> }) {
     const spec = await resolveRoute(params);
-    if (!spec) notFound();
+    if (!spec) contentNotFound();
     return <ArchivePage {...spec} />;
 }

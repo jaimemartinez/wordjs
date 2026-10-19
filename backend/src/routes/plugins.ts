@@ -11,12 +11,55 @@ import type { Request, Response } from 'express';
 import type { FileFilterCallback } from 'multer';
 
 const express = require('express');
+const log = require('../core/module-logger').moduleLogger('routes/plugins');
 const router = express.Router();
+
+// ---- PLUGIN LIFECYCLE RATE LIMIT ----------------------------------------------------------------------
+// Activating, deactivating and reloading a plugin (and changing its grants, egress hosts, private
+// destinations or port, which reload it) each tear down and spawn a sandboxed child process
+// (and run the full load pipeline). They are administrator routes, but nothing bounded how often they
+// ran, so a script holding one admin session — on any site of a network — could keep the host busy
+// starting processes. One bucket per (site, account) for all of these routes together: generous for a
+// person (or a deploy script) working through a list of plugins, a ceiling for a loop.
+const PLUGIN_LIFECYCLE_WINDOW_MS = 10 * 60 * 1000;
+const PLUGIN_LIFECYCLE_MAX = 60;
+const rateLimit = require('express-rate-limit');
+
+/** The lifecycle limiter, built with `store` (the shared Redis store, or undefined for in-process). Exported for tests. */
+function createPluginLifecycleLimiter(store?: unknown) {
+    return rateLimit({
+        windowMs: PLUGIN_LIFECYCLE_WINDOW_MS,
+        max: PLUGIN_LIFECYCLE_MAX,
+        standardHeaders: true,
+        legacyHeaders: false,
+        // Runs after authenticate + isAdmin, so the caller is known. Keyed by site and account: one
+        // site's administrator cannot spend another site's budget.
+        keyGenerator: (req: Request) => {
+            const site = require('../core/site-context').currentSiteIdOrNull();
+            return `s${site === null ? 0 : site}:u:${req.user ? req.user.id : 'anon'}`;
+        },
+        store,
+        passOnStoreError: true,
+        message: {
+            code: 'rest_plugin_lifecycle_rate_limited',
+            message: 'Too many plugin activations, deactivations or reloads; wait a few minutes and try again.',
+            data: { status: 429 },
+        },
+    });
+}
+// Built at module scope (express-rate-limit flags a limiter constructed inside a handler); index.ts hands
+// over the shared store at boot, before any request (same contract as routes/comments).
+let pluginLifecycleLimiterImpl: any = createPluginLifecycleLimiter(undefined);
+function usePluginLifecycleLimiterStore(store: unknown) {
+    pluginLifecycleLimiterImpl = createPluginLifecycleLimiter(store);
+}
+function pluginLifecycleLimiter(req: Request, res: Response, next: any) {
+    return pluginLifecycleLimiterImpl(req, res, next);
+}
 const AdmZip = require('adm-zip');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 const { getAllPlugins, activatePlugin, deactivatePlugin, createSamplePlugin, isPluginActive, validatePluginPermissions, validateManifestPermissions, validateManifestRoles, syncPluginRoles, validateManifestDependencies, validateBrowserCapability, browserCodeSources, BROWSER_SCRIPT_TOKEN, listOrphanedPlugins, reclaimOrphanedPlugin, clearOrphanNotice, PLUGINS_DIR } = require('../core/plugins');
 const { assertZipWithinBudget } = require('../core/zip-guard');
 // refusePluginGrantByToken: an API token may revoke a plugin's grants or narrow its egress, never add to
@@ -24,7 +67,7 @@ const { assertZipWithinBudget } = require('../core/zip-guard');
 // token's grant / egress write in `narrowOnly` mode, judged against what is STORED (core/plugin-permissions).
 const { authenticate, authenticateAllowQuery, optionalAuth, refusePluginGrantByToken, isHeadless } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
-const { asyncHandler, publicErrorText } = require('../middleware/errorHandler');
+const { asyncHandler, publicErrorText, UploadRejectedError } = require('../middleware/errorHandler');
 const { recordAudit } = require('../core/audit');
 const { findSandboxUnavailable, sandboxRefusalBody } = require('../core/sandbox-refusal');
 const { execFile } = require('child_process');
@@ -64,7 +107,7 @@ const upload = multer({
         if (file.mimetype === 'application/zip' || file.mimetype === 'application/x-zip-compressed' || file.originalname.endsWith('.zip')) {
             cb(null, true);
         } else {
-            cb(new Error('Only .zip files are allowed'));
+            cb(new UploadRejectedError(415, 'rest_upload_invalid_type', 'Only .zip files are allowed'));
         }
     }
 });
@@ -111,14 +154,14 @@ function regenerateRegistry() {
             const scriptPath = path.join(scriptsDir, script);
 
             if (!fs.existsSync(scriptPath)) {
-                console.log('⚠️  Script not found: %s', script);
+                log.info({ script }, `⚠️  Script not found: ${script}`);
                 continue;
             }
 
             // SECURITY: Use execFile instead of exec to prevent command injection
             execFile('node', [scriptPath], { env }, (error: Error | null, stdout: string, stderr: string) => {
                 if (error) {
-                    console.error('❌ Failed to run %s:', script, error.message);
+                    log.error({ script, err: error }, `❌ Failed to run ${script}`);
                     return;
                 }
                 if (process.env.NODE_ENV !== 'production') {
@@ -128,7 +171,7 @@ function regenerateRegistry() {
                 }
             });
         }
-    }).catch((e: any) => console.error('regenerateRegistry: could not resolve active plugins:', e && e.message));
+    }).catch((e: any) => log.error({ err: e }, 'regenerateRegistry: could not resolve active plugins'));
 }
 
 /**
@@ -242,7 +285,7 @@ function logSafe(v: any): string {
  */
 async function awaitPolicyAnnounced(announced: Promise<void>, tag: string, slug: string): Promise<void> {
     try { await announced; }
-    catch (e: any) { console.warn("[%s] '%s': the change is in effect; an updated_option subscriber failed:", tag, logSafe(slug), e && e.message); }
+    catch (e: any) { log.warn({ tag, slug: logSafe(slug), err: e }, `[${tag}] '${logSafe(slug)}': the change is in effect; an updated_option subscriber failed`); }
 }
 
 // How long DELETE waits for the slug's child process to actually be gone before it refuses to remove
@@ -297,8 +340,114 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
         return res.status(400).json({ error: 'No file uploaded' });
     }
     const result = await installPluginFromZip(req.file.path, req.file.originalname, undefined, req.user && req.user.id);
+    // The marketplace path records its own `marketplace.install`; a direct zip upload is the same
+    // lifecycle mutation and is recorded too (only when it actually installed something).
+    if (result.ok && result.body && result.body.slug) {
+        await recordAudit(req.user && req.user.id, 'plugin.install', 'plugin', result.body.slug, { via: 'upload' });
+    }
     res.status(result.status).json(result.body);
 }));
+
+/**
+ * @swagger
+ * /plugins/{slug}/update:
+ *   post:
+ *     summary: Update an installed plugin from a new zip (in place)
+ *     description: >-
+ *       The zip's root folder must be the plugin's slug. The new code is extracted to a private staging
+ *       directory and validated there first, so a zip that fails validation leaves the installed plugin
+ *       untouched (and running). Only then is the plugin stopped, its code swapped, and the plugin restarted
+ *       if it was active. Its data/ directory, its database tables, its stored grants and its egress list
+ *       are kept. Permissions the new version declares that are not granted are reported in
+ *       `ungrantedPermissions` (and the ones the previous version did not declare in `newPermissions`) —
+ *       they stay off until an administrator grants them. A plugin installed from a catalog loses its
+ *       recorded catalog origin: its code now comes from this upload.
+ *     tags: [Plugins]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               plugin:
+ *                 type: string
+ *                 format: binary
+ *     responses:
+ *       200:
+ *         description: Updated ({ updated, fromVersion, toVersion, reactivated, newPermissions, ungrantedPermissions })
+ *       400:
+ *         description: Invalid zip, or its root folder names a different plugin (nothing was changed)
+ *       404:
+ *         description: The plugin is not installed
+ *       409:
+ *         description: Another operation on this plugin is in progress, or the sandbox refused to start the new version (rolled back)
+ */
+// Multisite: not in core/multisite-guards' SITE_PLUGIN_ROUTES, so another site gets the network's 403.
+router.post('/:slug/update', authenticate, isAdmin, upload.single('plugin'), asyncHandler(async (req: Request, res: Response) => {
+    const slug = safeSlugParam(req.params.slug);
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    if (!slug) {
+        try { fs.unlinkSync(path.resolve(OS_TMP_DIR, path.basename(req.file.path))); } catch { /* */ }
+        return res.status(400).json({ error: 'Invalid plugin slug' });
+    }
+    // Update only what is INSTALLED, and carry the directory's own name from here on — the value read
+    // off the disk, not the request's copy of it — into the stash, the swap and the reactivation.
+    let installed: string | undefined;
+    try { installed = fs.readdirSync(PLUGINS_DIR).find((d: string) => d === slug); } catch { /* no plugins dir */ }
+    if (!installed) {
+        try { fs.unlinkSync(path.resolve(OS_TMP_DIR, path.basename(req.file.path))); } catch { /* */ }
+        return res.status(404).json({ error: `Plugin '${slug}' is not installed.` });
+    }
+    const result = await runPluginUpdate(installed, req.file.path, null, { via: 'upload' });
+    if (result.ok) {
+        await recordAudit(req.user && req.user.id, 'plugin.update', 'plugin', slug, {
+            via: 'upload', fromVersion: result.body.fromVersion, toVersion: result.body.toVersion,
+            newPermissions: result.body.newPermissions,
+        });
+    }
+    res.status(result.status).json(result.body);
+}));
+
+/**
+ * The 409 for a zip whose plugin is already installed. It used to tell an admin with an ACTIVE plugin to
+ * "Deactivate it before re-uploading" — and then, once deactivated, refuse again with "Uninstall it",
+ * whose uninstall drops the plugin's grants. Neither was the way to update. Now it names the way that is:
+ * POST /plugins/:slug/update with the same zip (the Plugins screen offers it from this answer, keyed on
+ * `code`, with the two versions to show).
+ */
+function alreadyInstalled(slug: string, active: boolean, zip: any): { ok: boolean; status: number; body: any } {
+    let installedVersion: string | null = null;
+    let incomingVersion: string | null = null;
+    try {
+        const m = JSON.parse(fs.readFileSync(path.join(resolveSafePluginDir(slug), 'manifest.json'), 'utf8'));
+        if (m && m.version != null) installedVersion = String(m.version).slice(0, 64);
+    } catch { /* unreadable manifest — no version to show */ }
+    try {
+        const entry = zip.getEntry(`${slug}/manifest.json`) || zip.getEntry('manifest.json');
+        const m = entry && entry.header && entry.header.size <= 64 * 1024 ? JSON.parse(entry.getData().toString('utf8')) : null;
+        if (m && m.version != null) incomingVersion = String(m.version).slice(0, 64);
+    } catch { /* the update validates the manifest properly */ }
+    const v = installedVersion ? ` (v${installedVersion})` : '';
+    return {
+        ok: false,
+        status: 409,
+        body: {
+            error: `Plugin '${slug}'${v} is already installed${active ? ' and active' : ''}. To replace it with this zip, update it `
+                + `instead — its data, tables and permissions are kept (Plugins → Upload Plugin offers the update; API: POST /api/v1/plugins/${slug}/update).`,
+            code: 'plugin_exists',
+            // Under `data`, the member the admin's API client keeps on a thrown error (lib/api.ts).
+            data: { slug, active, installedVersion, incomingVersion },
+        },
+    };
+}
 
 /**
  * Shared plugin-zip install pipeline — the SINGLE implementation of every security check
@@ -322,7 +471,15 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
  *   pass `req.user.id`; the update path leaves it undefined — it cannot reach an orphan, because it
  *   refuses a slug with no manifest.json long before this.
  */
-async function installPluginFromZip(zipPathIn: string, originalName: string, expectedSlug?: string, actorId?: any): Promise<{ ok: boolean; status: number; body: any }> {
+/**
+ * @param opts.stageRoot STAGING mode (the update path). Extract into `<stageRoot>/<slug>/` — a private
+ *   directory under os-tmp that runPluginUpdate created — and run every validation THERE, so a zip that
+ *   fails validation never touches the installed plugin, which keeps running. The live-plugin checks
+ *   (orphan reclaim, "already active", "directory already exists") do not apply: replacing that plugin is
+ *   the point, and runPluginUpdate owns the swap. The case/Unicode squat check still runs against
+ *   PLUGINS_DIR. The zip is consumed either way; the staged files are what the caller moves into place.
+ */
+async function installPluginFromZip(zipPathIn: string, originalName: string, expectedSlug?: string, actorId?: any, opts: { stageRoot?: string } = {}): Promise<{ ok: boolean; status: number; body: any }> {
     // CONTENCION PRIMERO — INLINE, Y AQUI SE QUEDA.
     //
     // POR QUE AQUI Y NO EN UN HELPER (no lo refactorices a una utilidad). Esta funcion borra su zip
@@ -441,8 +598,21 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
         // PLUGINS_DIR; files-at-root extract into installedDir. Confinement is checked against installedDir
         // either way — so cross-plugin overwrite (my-plugin/../victim/evil.js) is blocked by CONTAINMENT,
         // not merely by a '..' substring heuristic.
-        const installedDir = resolveSafePluginDir(intendedSlug);
-        const targetDir = singleRoot ? PLUGINS_DIR : installedDir;
+        const staging = typeof opts.stageRoot === 'string' && opts.stageRoot.length > 0;
+        let installRoot = PLUGINS_DIR;
+        let installedDir: string;
+        if (staging) {
+            // The stage root is ours (makeStageDir), but prove it anyway: a child of os-tmp, and the
+            // plugin dir a proper child of it.
+            const stageRoot = path.resolve(String(opts.stageRoot));
+            const stagedDir = stageRoot.startsWith(OS_TMP_DIR + path.sep) ? resolveWithin(stageRoot, intendedSlug) : null;
+            if (!stagedDir) { discardZip(); return refuseUncontainedZip(); }
+            installRoot = stageRoot;
+            installedDir = stagedDir;
+        } else {
+            installedDir = resolveSafePluginDir(intendedSlug);
+        }
+        const targetDir = singleRoot ? installRoot : installedDir;
         const confineDir = path.resolve(installedDir);
 
         // SECURITY: Zip Slip — every content entry must resolve INSIDE the plugin's own dir. Segment-level
@@ -484,7 +654,7 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
         // show and therefore could not deactivate. So reconcile FIRST: reclaimOrphanedPlugin drops the
         // stale entry atomically and returns null for anything that is a real plugin, which is what
         // leaves the live-plugin refusal below exactly as strict as it was.
-        const orphan = await reclaimOrphanedPlugin(intendedSlug);
+        const orphan = staging ? null : await reclaimOrphanedPlugin(intendedSlug);
         if (orphan) {
             // Remove the RESIDUE — and only a residue. `residual` is core's proof that the directory
             // holds no manifest.json and no entry file; a merely unreadable manifest is a broken
@@ -494,36 +664,39 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
             let removedResidue = false;
             if (orphan.residual && fs.existsSync(installedDir)) {
                 try { removePluginDirPreservingData(installedDir); removedResidue = true; }
-                catch (e: any) { console.warn('[plugins] residue of orphaned %s could not be removed: %s', logSafe(intendedSlug), logSafe(e && e.message)); }
+                catch (e: any) { log.warn({ intendedSlug: logSafe(intendedSlug), err: e }, `[plugins] residue of orphaned ${logSafe(intendedSlug)} could not be removed`); }
             }
             await recordAudit(actorId, 'plugin.orphan_reclaim', 'plugin', intendedSlug, {
                 via: 'install', reason: orphan.reason,
                 droppedActiveEntry: orphan.droppedActiveEntry, removedResidue,
             });
             await clearOrphanNotice(intendedSlug);
-        } else if (await isPluginActive(intendedSlug)) {
+        } else if (!staging && await isPluginActive(intendedSlug)) {
+            const refusal = alreadyInstalled(intendedSlug, true, zip);
             discardZip();
-            return { ok: false, status: 409, body: { error: `Plugin '${intendedSlug}' is currently active. Deactivate it before re-uploading (this prevents corrupting a running plugin).` } };
+            return refusal;
         }
 
         // INTEGRITY: refuse to install over an EXISTING (even inactive) plugin directory. The extract
         // overwrites in place and, if post-extract validation fails, the catch below rmSync's the whole
         // dir — which would destroy a legitimate same-named plugin's files that were there first (audit
-        // LOW). To update a plugin, remove the old one first (uninstall), then install.
+        // LOW). To update a plugin, POST /plugins/:slug/update (runPluginUpdate stages the new code,
+        // validates it, then swaps it in) — the refusal below says so.
         //
         // EXCEPTION — residual runtime data: uninstall preserves plugins/<slug>/data/ (encryption keys,
         // attachments — see removePluginDirPreservingData). A dir containing NOTHING but data/ is not a
         // plugin (no manifest, no code); adopt it and extract around it so reinstall reconnects with the
         // preserved state instead of 409ing.
         let hadResidualData = false;
-        if (fs.existsSync(installedDir)) {
+        if (!staging && fs.existsSync(installedDir)) {
             let residualOnly = false;
             try {
                 residualOnly = fs.readdirSync(installedDir).every((e: string) => e === 'data');
             } catch { /* unreadable → treat as a real plugin and refuse */ }
             if (!residualOnly) {
+                const refusal = alreadyInstalled(intendedSlug, false, zip);
                 discardZip();
-                return { ok: false, status: 409, body: { error: `A plugin directory '${intendedSlug}' already exists. Uninstall it before installing this one (this prevents overwriting or deleting an existing plugin).` } };
+                return refusal;
             }
             hadResidualData = fs.existsSync(path.join(installedDir, 'data'));
         }
@@ -614,11 +787,12 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
         // Cleanup temp file
         discardZip();
 
+        if (staging) return { ok: true, status: 200, body: { success: true, staged: true, slug: pluginSlug } };
         return { ok: true, status: 200, body: { success: true, message: 'Plugin installed successfully', slug: pluginSlug } };
     } catch (error: any) {
         // Cleanup temp file on error
         discardZip();
-        console.error('[plugins] install failed:', error);
+        log.error({ err: error }, '[plugins] install failed');
         return { ok: false, status: 500, body: { error: publicErrorText(error, 'Failed to install plugin.') } };
     }
 }
@@ -633,25 +807,33 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
 
 // The stash of the old code lives in OS_TMP_DIR (a project dir backups exclude), not the OS temp — so a
 // crash mid-update leaves it where `recoverInterruptedPluginUpdates()` can find it at the next boot.
-// Stash dir name: `plugin-update-<slug>-<16 hex>`; slug is a validated single segment, the hex is random.
-const STASH_RE = /^plugin-update-([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})-[0-9a-f]{16}$/;
+// Stash dir name: `plugin-update-<random>` (mkdtemp), with the slug it belongs to in a marker file inside
+// (STASH_SLUG_FILE). The name carries no request value at all, so no path built under it depends on one.
+// STASH_RE_LEGACY is the earlier `plugin-update-<slug>-<16 hex>` form, still recovered at boot.
+const STASH_RE = /^plugin-update-[A-Za-z0-9]{6}$/;
+const STASH_RE_LEGACY = /^plugin-update-([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})-[0-9a-f]{16}$/;
+const STASH_SLUG_FILE = '.wordjs-stash-slug';
 
 // Single-node mutual exclusion: install / update / uninstall of ONE slug are mutually exclusive within a
 // process. (Cross-node exclusion is the dist-lock lease below; it is a no-op on single-host SQLite, so the
 // in-process guard is what actually serializes the common single-node case.)
 const pluginOpInProgress = new Set<string>();
 
-/** A CodeQL-clean stash path: fixed base (os-tmp) + validated slug + random hex, containment-checked. */
-function makeStashDir(slug: string): string {
-    fs.mkdirSync(OS_TMP_DIR, { recursive: true });
-    const base = path.resolve(OS_TMP_DIR);
-    const dir = path.resolve(base, `plugin-update-${slug}-${crypto.randomBytes(8).toString('hex')}`);
-    if (dir !== base && !dir.startsWith(base + path.sep)) {
-        throw new Error('stash path escaped os-tmp');
-    }
-    fs.mkdirSync(dir, { recursive: true });
+/**
+ * A private scratch dir under os-tmp for an update: `plugin-update-<random>` (the stash of the old code)
+ * or `plugin-stage-<random>` (where the new code is validated). Created exclusively by mkdtemp at 0700,
+ * from a fixed prefix only — the plugin's slug never becomes part of the path. The stash records its slug
+ * in STASH_SLUG_FILE (validated again when read back) so boot recovery knows where to restore it.
+ */
+function makeStashDir(slug: string, kind: 'update' | 'stage' = 'update'): string {
+    fs.mkdirSync(OS_TMP_DIR, { recursive: true, mode: 0o700 });
+    const dir = fs.mkdtempSync(path.join(OS_TMP_DIR, kind === 'stage' ? 'plugin-stage-' : 'plugin-update-'));
+    if (kind === 'update') fs.writeFileSync(path.join(dir, STASH_SLUG_FILE), slug, { flag: 'wx', mode: 0o600 });
     return dir;
 }
+// The STAGING dir an update extracts and validates the new code in, before the installed plugin is touched.
+// Never the only copy of anything: boot recovery just deletes a leftover one (new and legacy names).
+const STAGE_RE = /^plugin-stage-(?:[A-Za-z0-9]{6}|[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}-[0-9a-f]{16})$/;
 
 /**
  * A manifest declares permissions as {scope, access} objects; grants are "scope:access" tokens (or the
@@ -672,6 +854,7 @@ function manifestPermTokens(manifest: any): string[] {
 function moveEntriesInto(from: string, to: string): void {
     fs.mkdirSync(to, { recursive: true });
     for (const entry of fs.readdirSync(from)) {
+        if (entry === STASH_SLUG_FILE) continue; // the stash's own marker, not plugin code
         const dest = path.join(to, entry);
         try { fs.rmSync(dest, { recursive: true, force: true }); } catch { /* nothing there */ }
         fs.renameSync(path.join(from, entry), dest);
@@ -682,11 +865,22 @@ function moveEntriesInto(from: string, to: string): void {
  * In-place update of an installed plugin from a new zip. `origin` is the catalog provenance that gates
  * the update (must match what the plugin was installed from). Returns the same {ok,status,body} contract
  * as installPluginFromZip. Always consumes `newZipPath`.
+ *
+ * `opts.via === 'upload'`: an administrator uploaded the zip by hand (POST /plugins/:slug/update). There
+ * is no catalog to match, so the origin gate does not apply — the admin choosing the file IS the
+ * provenance, exactly as for a fresh upload — and a recorded catalog origin is DROPPED afterwards: the code
+ * no longer comes from that catalog, so a later one-click update must not present itself as one.
+ *
+ * Order: the new code is extracted and VALIDATED in a private staging dir first (installPluginFromZip in
+ * staging mode). A zip that fails there changes nothing — the installed plugin keeps running. Only then
+ * is the plugin stopped and its code swapped (old code to a stash, staged code in, manifest.json LAST so
+ * boot recovery reads "no manifest" as "the swap did not finish" and restores the stash).
  */
 async function runPluginUpdate(
     slug: string,
     newZipPath: string,
-    origin: { source: string; catalogId: string; version?: any } | null
+    origin: { source: string; catalogId: string; version?: any } | null,
+    opts: { via?: 'upload' } = {}
 ): Promise<{ ok: boolean; status: number; body: any }> {
     const perms = require('../core/plugin-permissions');
     const core = require('../core/plugins');
@@ -694,7 +888,16 @@ async function runPluginUpdate(
     const distLock = require('../core/dist-lock');
 
     let zipConsumed = false;
-    const cleanupZip = () => { if (!zipConsumed) { try { fs.unlinkSync(newZipPath); } catch { /* */ } zipConsumed = true; } };
+    // The zip comes from the caller (multer's temp file for POST /:slug/update, the marketplace
+    // download): only a file PROVED to sit inside os-tmp is ever unlinked here — the same inline
+    // form / canonical-resolve / containment check installPluginFromZip makes before its own unlink.
+    const ownZip = typeof newZipPath === 'string' && newZipPath.length > 0 && !newZipPath.includes('\0')
+        ? path.resolve(newZipPath) : '';
+    const cleanupZip = () => {
+        if (zipConsumed) return;
+        zipConsumed = true;
+        if (ownZip.startsWith(OS_TMP_DIR + path.sep)) { try { fs.unlinkSync(ownZip); } catch { /* */ } }
+    };
 
     // Resolve + validate the slug BEFORE anything (CodeQL-clean; guarantees a proper child of PLUGINS_DIR).
     let installedDir: string;
@@ -741,7 +944,7 @@ async function runPluginUpdate(
     // stored record is adopted into it before every (re)activation here.
     const adoptStoredPolicy = async (): Promise<boolean> => {
         try { await perms.adoptStoredPolicy(slug); return true; }
-        catch (e: any) { console.warn('[plugin-update %s] the stored grants could not be read: %s', logSafe(slug), logSafe(e && e.message)); return false; }
+        catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[plugin-update ${logSafe(slug)}] the stored grants could not be read`); return false; }
     };
     // Put the previous version back exactly: partial new code out (data/ kept), stashed code in,
     // reactivated if it had been running — with the stored grants, and not at all when they cannot be
@@ -755,12 +958,14 @@ async function runPluginUpdate(
         if (stashDir) { try { moveEntriesInto(stashDir, installedDir); fs.rmSync(stashDir, { recursive: true, force: true }); } catch { /* */ } stashDir = null; }
         if (!wasActive) return true;
         if (!(await adoptStoredPolicy())) return false;
-        try { await core.activatePlugin(slug); return true; } catch (e: any) { console.warn('[plugin-update %s] rollback reactivate failed: %s', logSafe(slug), logSafe(e && e.message)); return false; }
+        try { await core.activatePlugin(slug); return true; } catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[plugin-update ${logSafe(slug)}] rollback reactivate failed`); return false; }
     };
 
+    let stageDir: string | null = null;
     try {
-        // ORIGIN GATE — before any destructive action (no rollback needed if this throws).
-        await origins.assertUpdatableFrom(slug, origin);
+        // ORIGIN GATE — before any destructive action (no rollback needed if this throws). A hand upload
+        // has no catalog to match (see the doc comment).
+        if (opts.via !== 'upload') await origins.assertUpdatableFrom(slug, origin);
 
         // A GRANT RECORD BEFORE ANYTHING MOVES, so neither the new version nor a crash half-way through
         // the update finds the plugin without one. An ACTIVE plugin with no record is granted, at the next
@@ -773,14 +978,28 @@ async function runPluginUpdate(
         // here fails the update before anything has moved.
         await perms.ensureGrantRecord(slug);
 
+        // 0. STAGE + VALIDATE the new version while the installed one keeps running. Every check of a
+        //    fresh install runs here (zip bomb, Zip Slip, manifest, permissions, AST scan, page
+        //    conflicts), and the destination is pinned to THIS plugin: a zip whose root folder names
+        //    another plugin is refused before anything moves. installPluginFromZip consumes the zip.
+        stageDir = makeStashDir(slug, 'stage');
+        zipConsumed = true;
+        const staged = await installPluginFromZip(newZipPath, `${slug}.zip`, slug, undefined, { stageRoot: stageDir });
+        if (!staged.ok) {
+            // Nothing was touched; `rolledBack`/`restoredVersion` keep their meaning for callers: the
+            // previous version is what is installed.
+            return { ok: false, status: staged.status, body: { ...staged.body, unchanged: true, rolledBack: true, restoredVersion: fromVersion } };
+        }
+        const stagedPluginDir = resolveWithin(stageDir, slug);
+        if (!stagedPluginDir) throw new Error('staging path escaped os-tmp');
+
         // SNAPSHOT the state we must replay.
         wasActive = await core.isPluginActive(slug);
 
         // 1. Nothing runs while the files move (don't prune deps — the new version reinstalls them).
         if (wasActive) await core.deactivatePlugin(slug, { prune: false });
 
-        // 2. Stash the old CODE aside, keeping plugins/<slug>/data/ (mail keys, DKIM, attachments) so the
-        //    installer sees a residual-data-only dir and ADOPTS it.
+        // 2. Stash the old CODE aside, keeping plugins/<slug>/data/ (mail keys, DKIM, attachments).
         stashDir = makeStashDir(slug);
         for (const entry of fs.readdirSync(installedDir)) {
             if (entry === 'data') continue;
@@ -791,23 +1010,29 @@ async function runPluginUpdate(
         //    stored grants and egress allowlist.
         await core.uninstallPluginData(slug, { dropTables: false, keepGrants: true });
 
-        // 4. Install the new version (adopts the preserved data/). installPluginFromZip consumes the zip.
-        zipConsumed = true;
-        // Pin the destination to THIS plugin: the target is otherwise taken from the zip's own root
-        // folder, and a mismatch here lands the new code in a different directory while the real one
-        // sits stashed and about to be deleted.
-        const installRes = await installPluginFromZip(newZipPath, `${slug}.zip`, slug);
-        if (!installRes.ok) {
-            await rollback();
-            return { ok: false, status: installRes.status, body: { ...installRes.body, rolledBack: true, restoredVersion: fromVersion } };
+        // 4. SWAP the validated staged code in. The preserved data/ always wins over a data/ the zip
+        //    ships (only a plugin that had none receives the zip's). manifest.json goes LAST: until it
+        //    lands, boot recovery sees an unfinished swap and restores the stash.
+        const hasData = fs.existsSync(path.join(installedDir, 'data'));
+        const stagedEntries = fs.readdirSync(stagedPluginDir)
+            .filter((e: string) => !(e === 'data' && hasData))
+            .sort((a: string, b: string) => (a === 'manifest.json' ? 1 : 0) - (b === 'manifest.json' ? 1 : 0));
+        for (const entry of stagedEntries) {
+            fs.renameSync(path.join(stagedPluginDir, entry), path.join(installedDir, entry));
         }
+        // The swap rewrote the manifest from outside the sandbox — drop io-guard's cached declaration.
+        try { require('../core/io-guard').forgetDeclaredPermissions(slug); } catch { /* io-guard optional */ }
 
         // 5. Adopt the STORED grants + egress BEFORE reactivating — they are baked into the isolate at
         //    spawn time. A database error here is thrown (and rolls back): nothing starts on a guess.
         await perms.adoptStoredPolicy(slug);
 
         // 6. Re-record the origin under the lease (so it can't land on a slug a concurrent op just removed).
+        //    A hand upload drops it instead: the code on disk is no longer that catalog's.
         if (origin) { try { await origins.setPluginOrigin(slug, origin); } catch { /* */ } }
+        else if (opts.via === 'upload') {
+            try { await origins.removePluginOrigin(slug); } catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[plugin-update ${logSafe(slug)}] the catalog origin could not be cleared`); }
+        }
 
         // 7. Reactivate if it was running. activatePlugin can throw AFTER loadIsolatedPlugin registered the
         //    child — that orphan must be torn down BEFORE rolling back, or its hooks/routes/providers stay
@@ -836,6 +1061,9 @@ async function runPluginUpdate(
 
         // Success — the old code is no longer needed.
         if (stashDir) { try { fs.rmSync(stashDir, { recursive: true, force: true }); } catch { /* */ } stashDir = null; }
+        // Multisite: the other sites' workers of this plugin still run the previous code — restart them on
+        // the new one (each in its own site, with its own grants). No-op on a single site.
+        try { await core.respawnOnSecondarySites(slug); } catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[plugin-update ${logSafe(slug)}] restart on the other sites failed: ${logSafe(e && e.message)}`); }
 
         const newManifest = readManifest(installedDir);
         const toVersion = newManifest && newManifest.version != null ? String(newManifest.version) : null;
@@ -855,9 +1083,10 @@ async function runPluginUpdate(
     } catch (e: any) {
         if (stashDir) { try { await rollback(); } catch { /* */ } }
         cleanupZip();
-        console.error("[plugins] update of '%s' failed:", logSafe(slug), e);
+        log.error({ slug: logSafe(slug), err: e }, `[plugins] update of '${logSafe(slug)}' failed`);
         return { ok: false, status: e.status || 500, body: e.body || { error: publicErrorText(e, `Failed to update plugin '${slug}'.`) } };
     } finally {
+        if (stageDir) { try { fs.rmSync(stageDir, { recursive: true, force: true }); } catch { /* */ } }
         try { await lease.release(); } catch { /* */ }
         pluginOpInProgress.delete(slug);
     }
@@ -876,26 +1105,44 @@ async function recoverInterruptedPluginUpdates(): Promise<void> {
     const distLock = require('../core/dist-lock');
     const base = path.resolve(OS_TMP_DIR);
     for (const name of names) {
-        const m = STASH_RE.exec(name);
-        if (!m) continue;
-        const slug = m[1];
+        // A leftover STAGING dir is never the only copy of anything (the swap moves out of it). Remove it
+        // once it is clearly abandoned — an hour old, so a replica's in-flight update keeps its own.
+        if (STAGE_RE.test(name)) {
+            const stage = path.resolve(base, name);
+            try {
+                if (stage.startsWith(base + path.sep) && Date.now() - fs.statSync(stage).mtimeMs > 3600_000) {
+                    fs.rmSync(stage, { recursive: true, force: true });
+                }
+            } catch { /* best-effort */ }
+            continue;
+        }
+        const legacy = STASH_RE_LEGACY.exec(name);
+        if (!legacy && !STASH_RE.test(name)) continue;
         const stashDir = path.resolve(base, name);
         if (stashDir !== base && !stashDir.startsWith(base + path.sep)) continue; // containment
+        let slug = legacy ? legacy[1] : '';
+        if (!legacy) {
+            try { slug = fs.readFileSync(path.join(stashDir, STASH_SLUG_FILE), 'utf8').trim(); } catch { /* no marker */ }
+            if (!isValidSlug(slug)) { log.warn({ name: logSafe(name) }, `[plugin-update] stash '${logSafe(name)}' names no valid plugin — left in place.`); continue; }
+        }
         let installedDir: string;
         try { installedDir = resolveSafePluginDir(slug); } catch { continue; }
         const lease = await distLock.acquireBlocking(`wordjs:plugin-op:${slug}`, { ttlMs: 60000, renewMs: 20000, timeoutMs: 1500 });
-        if (!lease.held) { console.warn("[plugin-update] '%s' stash owned by another node — skipping recovery here.", logSafe(slug)); continue; }
+        if (!lease.held) { log.warn({ slug: logSafe(slug) }, `[plugin-update] '${logSafe(slug)}' stash owned by another node — skipping recovery here.`); continue; }
         try {
             if (fs.existsSync(path.join(installedDir, 'manifest.json'))) {
                 fs.rmSync(stashDir, { recursive: true, force: true });
-                console.log("[plugin-update] discarded a completed update's stash for '%s'.", logSafe(slug));
+                log.info({ slug: logSafe(slug) }, `[plugin-update] discarded a completed update's stash for '${logSafe(slug)}'.`);
             } else {
+                // No manifest: the swap did not finish (it moves manifest.json last). Clear whatever part
+                // of the new code landed — data/ stays — then put the previous version back.
+                if (fs.existsSync(installedDir)) removePluginDirPreservingData(installedDir);
                 moveEntriesInto(stashDir, installedDir);
                 fs.rmSync(stashDir, { recursive: true, force: true });
-                console.log("[plugin-update] recovered an interrupted update for '%s' — restored the previous version.", logSafe(slug));
+                log.info({ slug: logSafe(slug) }, `[plugin-update] recovered an interrupted update for '${logSafe(slug)}' — restored the previous version.`);
             }
         } catch (e: any) {
-            console.warn("[plugin-update] recovery failed for '%s': %s", logSafe(slug), logSafe(e && e.message));
+            log.warn({ slug: logSafe(slug), err: e }, `[plugin-update] recovery failed for '${logSafe(slug)}'`);
         } finally {
             try { await lease.release(); } catch { /* */ }
         }
@@ -1054,7 +1301,7 @@ router.get('/registry', optionalAuth, asyncHandler(async (req: Request, res: Res
             try {
                 manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
             } catch (err) {
-                console.warn('Failed to read manifest for %s:', logSafe(plugin.slug), err.message);
+                log.warn({ slug: logSafe(plugin.slug), err }, `Failed to read manifest for ${logSafe(plugin.slug)}`);
             }
         }
         if (!manifest || typeof manifest !== 'object') {
@@ -1118,7 +1365,7 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
     // Annotate each with its requested/granted permissions so the admin UI can render the per-permission
     // switches. `requestedPermissions` = what the manifest asks for ("scope:access"), the set of switches
     // to show; `grantedPermissions` = what the admin has granted (+ "network"). No trust tier exists.
-    const { getGrants, activationSeedsDeclaredGrants } = require('../core/plugin-permissions');
+    const { getGrants, activationSeedsDeclaredGrants, ceilingFor, isOfferedHere } = require('../core/plugin-permissions');
     // Live runtime health per isolate (running/crashed/crash-looping/restarting + rss/restarts) so the
     // admin sees the TRUE state, not just the persisted 'active' flag which can lie after a crash.
     const { getIsolateStatus } = require('../core/plugin-isolate');
@@ -1170,7 +1417,7 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
     // the activation decides it. A read failure leaves the flag out (the dialog then reads the grants).
     let seedsOnActivation: Record<string, boolean> = {};
     try { seedsOnActivation = await activationSeedsDeclaredGrants(plugins.map((p: any) => p.slug)); }
-    catch (e: any) { console.warn('[plugins] could not read the stored grants for the activation dialog:', logSafe(e && e.message)); }
+    catch (e: any) { log.warn({ err: e }, '[plugins] could not read the stored grants for the activation dialog'); }
     res.json(orphanRows.concat(plugins.map((raw: any) => {
         // browser:script for a plugin that ships browser code WITHOUT declaring it — one installed before
         // the capability existed. Its manifest cannot be rewritten from here, but the administrator must
@@ -1204,11 +1451,15 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
         let hasTheme = false;
         const themeProbe = pluginFile(p.slug, 'theme');
         try { hasTheme = !!themeProbe && fs.lstatSync(themeProbe).isDirectory(); } catch { /* none */ }
+        const ceiling = ceilingFor(p.slug);
         return {
             ...p,
             roles,
             requestedPermissions: requested,
             grantedPermissions: getGrants(p.slug),
+            // Multisite: on a site other than the main one, whether the network offers this plugin here and
+            // the most this site may grant it (absent on the main site and on a single site).
+            ...(ceiling ? { offered: isOfferedHere(p.slug), grantCeiling: Array.from(ceiling) } : {}),
             ...(typeof seedsOnActivation[p.slug] === 'boolean' ? { activationSeedsGrants: seedsOnActivation[p.slug] } : {}),
             runtime: p.active ? (getIsolateStatus(p.slug) || null) : null,
             hasTheme,
@@ -1372,7 +1623,16 @@ router.get('/:slug/status', authenticate, isAdmin, asyncHandler(async (req: Requ
  *                         action:
  *                           type: string
  */
-router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+/** Multisite: the answer for a plugin the network has not offered to this site. */
+function refuseNotOffered(res: Response, slug: string) {
+    return res.status(403).json({
+        code: 'plugin_not_offered',
+        message: `Plugin '${slug}' is not available on this site: the network administrator has not offered it to the sites of the network.`,
+        data: { status: 403 },
+    });
+}
+
+router.post('/:slug/activate', authenticate, isAdmin, pluginLifecycleLimiter, asyncHandler(async (req: Request, res: Response) => {
     // SECURITY: Validate slug to prevent path traversal
     const slug = safeSlugParam(req.params.slug);
     if (!slug) {
@@ -1426,7 +1686,9 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
     // (adoptStoredPolicy): an administrator's revoke or narrowed allowlist made on another node may not
     // have reached this node's memory yet, and the token must not start the plugin with the stale copy
     // (core/plugin-permissions "against what is stored").
-    const { seedGrants, clearGrants, adoptStoredPolicy } = require('../core/plugin-permissions');
+    const { seedGrants, clearGrants, adoptStoredPolicy, isOfferedHere } = require('../core/plugin-permissions');
+    // Multisite: another site activates only what the network offers it (and nothing is seeded otherwise).
+    if (!isOfferedHere(slug)) return refuseNotOffered(res, slug);
     let declared: string[] = [];
     try {
         const all = await getAllPlugins();
@@ -1434,14 +1696,14 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
         declared = Array.from(new Set(((p && p.permissions) || [])
             .map((perm: any) => (perm && perm.scope) ? (perm.scope === 'network' ? 'network' : `${perm.scope}:${perm.access || 'read'}`) : null)
             .filter(Boolean))) as string[];
-    } catch (e: any) { console.warn("[Permissions] grant-on-activate (seed) for '%s' failed:", logSafe(slug), e && e.message); }
+    } catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[Permissions] grant-on-activate (seed) for '${logSafe(slug)}' failed`); }
     let seededDeclared: string[] | null = null;
     if (isHeadless(req)) {
         const stored = await adoptStoredPolicy(slug);
         if (declared.length && stored.seedsDeclaredGrants && refusePluginGrantByToken(req, res, declared)) return;
     } else if (declared.length) {
         try { if (await seedGrants(slug, declared, { adminDecision: true })) seededDeclared = declared; }
-        catch (e: any) { console.warn("[Permissions] grant-on-activate (seed) for '%s' failed:", logSafe(slug), e && e.message); }
+        catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[Permissions] grant-on-activate (seed) for '${logSafe(slug)}' failed`); }
     }
 
     let result;
@@ -1450,7 +1712,7 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
     } catch (e: any) {
         // Activation failed (scan/test/init) — drop the grant record seeded above, so a failed-activation
         // plugin holds no grants (in memory or in the database).
-        if (seededDeclared) { try { await clearGrants(slug); } catch (ce: any) { console.warn("[Permissions] grant-on-activate (rollback) for '%s' failed:", logSafe(slug), ce && ce.message); } }
+        if (seededDeclared) { try { await clearGrants(slug); } catch (ce: any) { log.warn({ slug: logSafe(slug), err: ce }, `[Permissions] grant-on-activate (rollback) for '${logSafe(slug)}' failed`); } }
         // A STRUCTURED validation failure (AST scan) carries a fixable-vs-blocked split. Surface it as a
         // 400 with `details` so the admin UI can show a rejection panel instead of one mangled string.
         if (e && e.code === 'PLUGIN_VALIDATION_FAILED') {
@@ -1571,12 +1833,13 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
  *       429:
  *         description: Global per-IP API rate limit exceeded.
  */
-router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.post('/:slug/permissions', authenticate, isAdmin, pluginLifecycleLimiter, asyncHandler(async (req: Request, res: Response) => {
     const slug = safeSlugParam(req.params.slug);
     if (!slug) {
         return res.status(400).json({ error: 'Invalid plugin slug' });
     }
-    const { applyGrants, getGrants } = require('../core/plugin-permissions');
+    const { applyGrants, getGrants, isOfferedHere } = require('../core/plugin-permissions');
+    if (!isOfferedHere(slug)) return refuseNotOffered(res, slug);
 
     // Body: { granted: ["scope:access", ...], network: boolean }. The admin's granted set is the source
     // of truth (default-deny). We don't constrain to the manifest here — hasPermission already requires
@@ -1607,6 +1870,10 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
         if (e && e.code === 'plugin_grant_exclusive') {
             return res.status(409).json({ code: e.code, error: e.message, conflicts: e.conflicts });
         }
+        // Multisite (isolation guarantee I8): a site administrator cannot grant beyond the network's ceiling.
+        if (e && e.code === 'plugin_grant_beyond_ceiling') {
+            return res.status(403).json({ code: e.code, message: e.message, data: { status: 403, beyond: e.beyond || [] } });
+        }
         throw e;
     }
     const { announced, refused } = applied;
@@ -1630,10 +1897,10 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
             if (valErr && valErr.code === 'PLUGIN_VALIDATION_FAILED') {
                 deactivationReason = (valErr.missingPermissions || []).join('; ') || valErr.message;
                 try { await deactivatePlugin(slug); deactivated = true; }
-                catch (e: any) { console.warn("[Permissions] deactivation of '%s' after revoke failed:", logSafe(slug), e && e.message); }
+                catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[Permissions] deactivation of '${logSafe(slug)}' after revoke failed`); }
             } else {
                 // A read/parse problem is not evidence of a violation — leave the plugin running and log.
-                console.warn("[Permissions] post-grant re-validation of '%s' could not run:", logSafe(slug), valErr && valErr.message);
+                log.warn({ slug: logSafe(slug), err: valErr }, `[Permissions] post-grant re-validation of '${logSafe(slug)}' could not run`);
             }
         }
     }
@@ -1650,7 +1917,7 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
             const { reloadIsolatedPlugin, isIsolated } = require('../core/plugin-isolate');
             if (isIsolated(slug)) { await reloadIsolatedPlugin(slug); reloaded = true; }
         } catch (e: any) {
-            console.warn("[Permissions] reload of '%s' after grant change failed:", logSafe(slug), e && e.message);
+            log.warn({ slug: logSafe(slug), err: e }, `[Permissions] reload of '${logSafe(slug)}' after grant change failed`);
             reloadRefusal = findSandboxUnavailable(e);
         }
     }
@@ -1674,7 +1941,7 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
             if (manifestPath) await syncPluginRoles(slug, JSON.parse(fs.readFileSync(manifestPath, 'utf8')));
         } catch (e: any) {
             rolesError = String((e && e.message) || e);
-            console.warn("[Permissions] roles of '%s' not registered: %s", logSafe(slug), logSafe(rolesError));
+            log.warn({ slug: logSafe(slug), err: rolesError }, `[Permissions] roles of '${logSafe(slug)}' not registered`);
         }
     }
 
@@ -1824,7 +2091,7 @@ router.get('/:slug/egress-hosts', authenticate, isAdmin, asyncHandler(async (req
     res.json({ slug, hosts: getEgressAllowlist(slug), network: getGrants(slug).includes('network') });
 }));
 
-router.post('/:slug/egress-hosts', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.post('/:slug/egress-hosts', authenticate, isAdmin, pluginLifecycleLimiter, asyncHandler(async (req: Request, res: Response) => {
     const slug = safeSlugParam(req.params.slug);
     if (!slug) return res.status(400).json({ error: 'Invalid plugin slug' });
     const { applyEgressAllowlist, getEgressAllowlist } = require('../core/plugin-permissions');
@@ -1848,7 +2115,7 @@ router.post('/:slug/egress-hosts', authenticate, isAdmin, asyncHandler(async (re
         const { reloadIsolatedPlugin, isIsolated } = require('../core/plugin-isolate');
         if (isIsolated(slug)) { await reloadIsolatedPlugin(slug); reloaded = true; }
     } catch (e: any) {
-        console.warn("[EgressHosts] reload of '%s' after egress change failed:", logSafe(slug), e && e.message);
+        log.warn({ slug: logSafe(slug), err: e }, `[EgressHosts] reload of '${logSafe(slug)}' after egress change failed`);
         reloadRefusal = findSandboxUnavailable(e);
     }
     // Multi-node: propagate so every OTHER node reloads its egress-allowlist map and respawns its isolate.
@@ -1880,6 +2147,158 @@ router.post('/:slug/egress-hosts', authenticate, isAdmin, asyncHandler(async (re
 
 /**
  * @swagger
+ * /plugins/{slug}/private-egress:
+ *   parameters:
+ *     - in: path
+ *       name: slug
+ *       required: true
+ *       schema:
+ *         type: string
+ *   get:
+ *     summary: List the private destinations (exact host:port) an administrator approved for a plugin.
+ *     description: >-
+ *       Plugins may reach public addresses only. An approved destination is the one exception: exactly that
+ *       host on exactly that port (for example a LAN SMTP relay), and only while the plugin holds the
+ *       network grant. Link-local (cloud metadata), unspecified and multicast addresses cannot be approved.
+ *     tags: [Plugins]
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: The approved destinations and whether the plugin holds the network grant.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               required: [slug, destinations, network]
+ *               properties:
+ *                 slug:
+ *                   type: string
+ *                 destinations:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                     example: 192.168.1.20:587
+ *                 network:
+ *                   type: boolean
+ *       400:
+ *         description: The slug is not a well-formed plugin slug.
+ *       401:
+ *         description: Not authenticated.
+ *       403:
+ *         description: Authenticated but not an administrator (rest_forbidden), or an API token whose scope does not reach this resource.
+ *       429:
+ *         description: Global per-IP API rate limit exceeded.
+ *   post:
+ *     summary: Replace the private destinations approved for a plugin (admin). The egress allowlist is not changed.
+ *     tags: [Plugins]
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               destinations:
+ *                 type: array
+ *                 description: >-
+ *                   `host:port` or `[ipv6]:port` entries (at most 4). Invalid entries are dropped. An empty array
+ *                   withdraws every approval.
+ *                 items:
+ *                   type: string
+ *     responses:
+ *       200:
+ *         description: Saved (destinations echoes what survived validation); the running plugin is restarted so it applies.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               required: [success, slug, destinations, reloaded]
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 slug:
+ *                   type: string
+ *                 destinations:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                 reloaded:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *       400:
+ *         description: The slug is not a well-formed plugin slug.
+ *       404:
+ *         description: No plugin with this slug is installed.
+ *       401:
+ *         description: Not authenticated.
+ *       403:
+ *         description: >-
+ *           Not an administrator (rest_forbidden); a failed CSRF check (rest_csrf_invalid, rest_csrf_token); or an
+ *           API token whose list would approve a destination not approved now (rest_token_management_forbidden —
+ *           a token may withdraw an approval, never make one; nothing is written).
+ *       409:
+ *         description: >-
+ *           `sandbox_unavailable` — the list WAS saved (`saved: true`), but the plugin sandbox refused to restart
+ *           the plugin, which is now stopped (`stopped: true`).
+ *       429:
+ *         description: Global per-IP API rate limit exceeded.
+ */
+router.get('/:slug/private-egress', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    const slug = safeSlugParam(req.params.slug);
+    if (!slug) return res.status(400).json({ error: 'Invalid plugin slug' });
+    const { getPrivateDestinations, getGrants } = require('../core/plugin-permissions');
+    res.json({ slug, destinations: getPrivateDestinations(slug), network: getGrants(slug).includes('network') });
+}));
+
+router.post('/:slug/private-egress', authenticate, isAdmin, pluginLifecycleLimiter, asyncHandler(async (req: Request, res: Response) => {
+    const requested = safeSlugParam(req.params.slug);
+    if (!requested) return res.status(400).json({ error: 'Invalid plugin slug' });
+    // Approvals are for an INSTALLED plugin, and the slug used below (store key, reload) is the one read from
+    // the installed list — never the request's own string.
+    const slug = (await getAllPlugins()).map((p: any) => String(p.slug)).find((s: string) => s === requested);
+    if (!slug) return res.status(404).json({ error: 'Plugin not installed' });
+    const { applyPrivateDestinations, getPrivateDestinations } = require('../core/plugin-permissions');
+    const body = req.body || {};
+    const entries: string[] = Array.isArray(body.destinations) ? body.destinations.slice(0, 32).map((h: any) => String(h)) : [];
+    // Same rule as the egress allowlist: an API token may narrow, never widen (judged on the stored list).
+    const { announced, refused } = await applyPrivateDestinations(slug, entries, { narrowOnly: isHeadless(req) });
+    if (refused.length && refusePluginGrantByToken(req, res, refused)) return;
+
+    // The running child enforces the list it was spawned with: respawn it, then propagate to other nodes.
+    let reloaded = false;
+    let reloadRefusal: any = null;
+    try {
+        const { reloadIsolatedPlugin, isIsolated } = require('../core/plugin-isolate');
+        if (isIsolated(slug)) { await reloadIsolatedPlugin(slug); reloaded = true; }
+    } catch (e: any) {
+        log.warn({ slug: logSafe(slug), err: e }, `[PrivateEgress] reload of '${logSafe(slug)}' after the change failed`);
+        reloadRefusal = findSandboxUnavailable(e);
+    }
+    try { require('../core/plugins').publishPluginChange(slug, 'reload'); } catch { /* best-effort */ }
+    await awaitPolicyAnnounced(announced, 'PrivateEgress', slug);
+
+    const saved = getPrivateDestinations(slug);
+    await recordAudit(req.user && req.user.id, 'plugin.private_egress', 'plugin', slug, { destinations: saved });
+    if (reloadRefusal) {
+        return res.status(409).json(sandboxRefusalBody(reloadRefusal, {
+            message: `The private destinations for '${slug}' were saved, but the plugin is now STOPPED: the plugin sandbox refused to restart it. ${reloadRefusal.message}`,
+            slug, destinations: saved, saved: true, reloaded: false, stopped: true,
+        }));
+    }
+    res.json({
+        success: true,
+        slug,
+        destinations: saved,
+        reloaded,
+        message: saved.length
+            ? `'${slug}' may now reach ${saved.join(', ')} (and no other private address).${reloaded ? ' Plugin reloaded — in effect.' : ' Reactivate the plugin to apply.'}`
+            : `'${slug}' may no longer reach any private address.${reloaded ? ' Plugin reloaded — in effect.' : ''}`,
+    });
+}));
+
+/**
+ * @swagger
  * /plugins/{slug}/reload:
  *   post:
  *     summary: Hot-reload an isolated plugin's child process (e.g. after editing its files)
@@ -1902,7 +2321,7 @@ router.post('/:slug/egress-hosts', authenticate, isAdmin, asyncHandler(async (re
  *           already stopped, so the plugin is now stopped (`stopped: true`). Same body as POST
  *           /plugins/{slug}/activate's 409.
  */
-router.post('/:slug/reload', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.post('/:slug/reload', authenticate, isAdmin, pluginLifecycleLimiter, asyncHandler(async (req: Request, res: Response) => {
     // SECURITY: Validate slug to prevent path traversal
     const slug = safeSlugParam(req.params.slug);
     if (!slug) {
@@ -2308,7 +2727,7 @@ router.get('/:slug/port-conflicts', authenticate, isAdmin, asyncHandler(async (r
  *           The disable ran but the port did not come free (PORT_STILL_IN_USE), or the disable command
  *           itself failed (DISABLE_FAILED).
  */
-router.post('/:slug/free-port', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.post('/:slug/free-port', authenticate, isAdmin, pluginLifecycleLimiter, asyncHandler(async (req: Request, res: Response) => {
     const slug = safeSlugParam(req.params.slug);
     if (!slug) {
         return res.status(400).json({ error: 'Invalid plugin slug' });
@@ -2379,7 +2798,7 @@ router.post('/:slug/free-port', authenticate, isAdmin, asyncHandler(async (req: 
  *           active_plugins entry is always cleared, and the leftover directory is removed only when it
  *           holds no manifest.json and no entry file (its data/ subdir is preserved either way).
  */
-router.post('/:slug/deactivate', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.post('/:slug/deactivate', authenticate, isAdmin, pluginLifecycleLimiter, asyncHandler(async (req: Request, res: Response) => {
     // SECURITY: Validate slug — and use the VALIDATED value below, never req.params.slug again.
     const slug = safeSlugParam(req.params.slug);
     if (!slug) {
@@ -2403,7 +2822,7 @@ router.post('/:slug/deactivate', authenticate, isAdmin, asyncHandler(async (req:
                 const dir = resolveSafePluginDir(slug);
                 if (fs.existsSync(dir)) { removePluginDirPreservingData(dir); residueRemoved = true; }
             } catch (e: any) {
-                console.warn('[plugins] residue of orphaned %s could not be removed: %s', logSafe(slug), logSafe(e && e.message));
+                log.warn({ slug: logSafe(slug), err: e }, `[plugins] residue of orphaned ${logSafe(slug)} could not be removed`);
             }
         }
         await clearOrphanNotice(slug);
@@ -2542,11 +2961,20 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request,
     // conditions — nothing registered AND every pid we spawned for this slug observed to exit — so the
     // 409 below means a process really is still alive, not that a Map entry lingered.
     const isolate = require('../core/plugin-isolate');
+    // Multisite: the code is leaving the NETWORK — stop it on every other site (each site's own
+    // deactivation record) and stop offering it, before any of its files go away.
+    try {
+        await require('../core/plugins').deactivatePluginOnSecondarySites(slug);
+        if (require('../core/site-context').multisiteEnabled()) require('../core/network').clearPluginCeiling(slug);
+    } catch (e: any) { log.error({ slug: logSafe(slug), err: e }, `[plugin ${logSafe(slug)}] delete: could not stop it on the other sites: ${logSafe(e && e.message)}`); }
+    if (!(await isolate.awaitOtherSitesStopped(slug, DELETE_STOP_TIMEOUT_MS))) {
+        return res.status(409).json({ message: `Plugin '${slug}' still runs on another site of the network; nothing was deleted. Try again in a moment.` });
+    }
     if (isolate.isIsolated(slug)) {
-        console.warn('[plugin %s] delete: a child process is still registered although the plugin is not listed active (orphaned isolate) — stopping it before removing the directory.', logSafe(slug));
+        log.warn({ slug: logSafe(slug) }, `[plugin ${logSafe(slug)}] delete: a child process is still registered although the plugin is not listed active (orphaned isolate) — stopping it before removing the directory.`);
     }
     try { isolate.unloadIsolatedPlugin(slug); }
-    catch (e: any) { console.error('[plugin %s] delete: could not stop the isolate / cancel its pending restart: %s', logSafe(slug), logSafe(e && e.message)); }
+    catch (e: any) { log.error({ slug: logSafe(slug), err: e }, `[plugin ${logSafe(slug)}] delete: could not stop the isolate / cancel its pending restart`); }
     //
     // THE WAIT IS BOUNDED, AND THE REFUSAL CAN BE PERMANENT — an accepted trade, new here (main deleted
     // unconditionally). A pid enters the live set at spawn and leaves it in the child's OWN 'exit'
@@ -2569,7 +2997,7 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request,
     // directly, and gives the restart as the guaranteed way out.
     if (!(await isolate.awaitIsolateStopped(slug, DELETE_STOP_TIMEOUT_MS))) {
         const stuckPids: number[] = (typeof isolate.getLivePids === 'function' && isolate.getLivePids(slug)) || [];
-        console.error('[plugin %s] delete REFUSED: a child process was still alive %sms after it was told to stop (pid %s) — the plugin directory was left untouched.', logSafe(slug), logSafe(DELETE_STOP_TIMEOUT_MS), logSafe(stuckPids.join(', ') || 'unknown'));
+        log.error({ slug: logSafe(slug), stopTimeoutMs: logSafe(DELETE_STOP_TIMEOUT_MS) }, `[plugin ${logSafe(slug)}] delete REFUSED: a child process was still alive ${logSafe(DELETE_STOP_TIMEOUT_MS)}ms after it was told to stop (pid ${logSafe(stuckPids.join(', ') || 'unknown')}) — the plugin directory was left untouched.`);
         return res.status(409).json({
             message: `'${slug}' still has a running process${stuckPids.length ? ` (pid ${stuckPids.join(', ')})` : ''} that did not stop within ${DELETE_STOP_TIMEOUT_MS}ms. Nothing was deleted. End that process, or restart the server, then delete the plugin again.`,
             stillRunning: true,
@@ -2606,7 +3034,7 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request,
         try {
             cleanup.roles = await require('../core/roles').releasePluginRoles(slug);
         } catch (e: any) {
-            console.warn('[plugin-delete %s] could not release its roles: %s', logSafe(slug), logSafe(e && e.message));
+            log.warn({ slug: logSafe(slug), err: e }, `[plugin-delete ${logSafe(slug)}] could not release its roles`);
         }
 
         // Drop the origin binding too. Leaving it behind is not cosmetic: the record says "this slug may
@@ -2616,12 +3044,13 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request,
         try {
             await require('../core/plugin-origins').removePluginOrigin(slug);
         } catch (e: any) {
-            console.warn('[plugin-delete %s] could not clear origin binding: %s', logSafe(slug), logSafe(e && e.message));
+            log.warn({ slug: logSafe(slug), err: e }, `[plugin-delete ${logSafe(slug)}] could not clear origin binding`);
         }
 
         // Regenerate registry to remove traces
         regenerateRegistry();
 
+        await recordAudit(req.user && req.user.id, 'plugin.uninstall', 'plugin', slug, { dropData: !!dropData });
         res.json({ success: true, message: `Plugin ${slug} deleted successfully`, cleanup });
     } catch (err) {
         throw new Error(`Failed to delete plugin: ${err.message}`, { cause: err });
@@ -2650,7 +3079,7 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request,
  *         name: token
  *         schema:
  *           type: string
- *         description: Bearer token for download authentication
+ *         description: A query ticket for this path (POST /auth/query-ticket), for a download opened without the session cookie. A session token is not accepted here.
  *     responses:
  *       200:
  *         description: Plugin ZIP file
@@ -2753,7 +3182,9 @@ router.get('/menus', authenticate, asyncHandler(async (req: Request, res: Respon
 
     // 3. Per-capability visibility. req.user is the host User model (has .can()); unspecified caps
     //    default to manage_options (admin-only) to preserve the prior admin-only behavior.
+    const networkAdmin = activeMenus.some((menu: any) => menu.networkAdmin) && require('../core/network-auth').isNetworkAdminRequest(req);
     const visibleMenus = activeMenus.filter((menu: any) => {
+        if (menu.networkAdmin && !networkAdmin) return false;
         const requiredCap = menu.cap || menu.capability || 'manage_options';
         return typeof req.user.can === 'function' && req.user.can(requiredCap);
     });
@@ -2787,6 +3218,9 @@ router.use('/', bundleRoutes);
 module.exports = router;
 // Exposed for unit tests of the path-traversal guards (the router remains the default export).
 module.exports.isValidSlug = isValidSlug;
+module.exports.usePluginLifecycleLimiterStore = usePluginLifecycleLimiterStore;
+module.exports.createPluginLifecycleLimiter = createPluginLifecycleLimiter;
+module.exports.PLUGIN_LIFECYCLE_MAX = PLUGIN_LIFECYCLE_MAX;
 module.exports.resolveSafePluginDir = resolveSafePluginDir;
 module.exports.safeSlugParam = safeSlugParam;
 module.exports.pluginFile = pluginFile;

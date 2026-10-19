@@ -1,4 +1,5 @@
 const acme = require('acme-client');
+const log = require('./module-logger').moduleLogger('core/cert-manager');
 // Bound every outbound ACME HTTP attempt (directory/order/finalize AND the http-01 local pre-verify
 // fetch). Without this, an unreachable port 80 left each verify attempt hanging on the OS TCP
 // timeout and the admin request froze for minutes.
@@ -192,7 +193,7 @@ class CertManager {
         if (fs.existsSync(this.accountKeyPath)) {
             accountKey = fs.readFileSync(this.accountKeyPath);
         } else {
-            console.log('[CertManager] Generatng new Account Key...');
+            log.info('[CertManager] Generatng new Account Key...');
             accountKey = await acme.forge.createPrivateKey(); // ECDSA by default in newer lib or RSA
             writePrivateKey(this.accountKeyPath, accountKey);
         }
@@ -216,9 +217,9 @@ class CertManager {
                 termsOfServiceAgreed: true,
                 contact: [`mailto:${email}`]
             });
-            console.log('[CertManager] Account registered/found.');
+            log.info('[CertManager] Account registered/found.');
         } catch (e) {
-            console.error(`[CertManager] Account Registration Error: ${logSafeError(e)}`);
+            log.error({ err: e }, '[CertManager] Account Registration Error');
             throw e;
         }
     }
@@ -302,7 +303,7 @@ class CertManager {
             const domains = certificateNames(domainOrDomains);
             const domain = domains[0];
             const domainDir = resolveCertDir(LIVE_DIR, domain) as string;
-            console.log(`[CertManager] Starting HTTP-01 provisioning for ${domains.join(', ')}...`);
+            log.info(`[CertManager] Starting HTTP-01 provisioning for ${domains.join(', ')}...`);
             await this.initClient(email, useStaging);
 
             // 1. Create the order
@@ -312,9 +313,9 @@ class CertManager {
             // month). Then there is no challenge to serve and port 80 is not needed for it — only the
             // pending ones are proved, and an order whose names are all valid goes straight to step 4.
             const pending = orderData.authorizations.filter((a: any) => !a.alreadyValid);
-            if (pending.length === 0) console.log('[CertManager] Every authorization is already valid at the CA — finalizing.');
+            if (pending.length === 0) log.info('[CertManager] Every authorization is already valid at the CA — finalizing.');
             for (const authz of pending) {
-                console.log(`[CertManager] Challenge for ${authz.domain}: token ${authz.challenge.token}`);
+                log.info(`[CertManager] Challenge for ${authz.domain}: token ${authz.challenge.token}`);
 
                 // 2. Write the challenge file
                 await this.writeChallengeFile(authz.challenge.token, authz.keyAuthorization);
@@ -329,13 +330,13 @@ class CertManager {
                         authz.challenge
                     );
                 } catch (preErr: any) {
-                    console.warn(`[CertManager] Local http-01 pre-verify for ${authz.domain} inconclusive (continuing — the CA decides):`, preErr && preErr.message);
+                    log.warn({ err: preErr }, `[CertManager] Local http-01 pre-verify for ${authz.domain} inconclusive (continuing — the CA decides)`);
                 }
                 await this.client.completeChallenge(authz.challenge);
             }
             for (const authz of pending) {
                 await this.client.waitForValidStatus(authz.challenge);
-                console.log(`[CertManager] Challenge for ${authz.domain} validated.`);
+                log.info(`[CertManager] Challenge for ${authz.domain} validated.`);
             }
 
             // 4. Finalize — every name in the CSR, or the CA refuses an order whose identifiers differ.
@@ -347,7 +348,7 @@ class CertManager {
             const finalized = await this.finalizeOrderByUrl(orderData.orderUrl, csr);
 
             const cert = await this.client.getCertificate(finalized);
-            console.log('[CertManager] Certificate downloaded.');
+            log.info('[CertManager] Certificate downloaded.');
 
             // 5. Save locally (backup/reference) — into the directory resolved and proved contained
             // at the top of this method.
@@ -359,12 +360,12 @@ class CertManager {
             // 6. Push to Gateway
             // Ensure key is string
             await this.pushCertToGateway(key.toString(), cert.toString());
-            console.log('[CertManager] Certificate pushed to Gateway.');
+            log.info('[CertManager] Certificate pushed to Gateway.');
 
             return { success: true, message: 'Certificate provisioned and installed.', domains };
 
         } catch (e) {
-            console.error(`[CertManager] Auto HTTP Provision Error: ${logSafeError(e)}`);
+            log.error({ err: e }, '[CertManager] Auto HTTP Provision Error');
             throw new Error(`Provisioning failed: ${e.message}`, { cause: e });
         }
     }
@@ -422,7 +423,7 @@ class CertManager {
                 directoryUrl: this.directoryUrl
             };
         } catch (e) {
-            console.error(`[CertManager] DNS Start Error: ${logSafeError(e)}`);
+            log.error({ err: e }, '[CertManager] DNS Start Error');
             throw new Error(`DNS challenge start failed: ${e.message}`, { cause: e });
         }
     }
@@ -460,7 +461,7 @@ class CertManager {
                     step1Data.challenge
                 );
             } catch (preErr: any) {
-                console.warn('[CertManager] Local dns-01 pre-verify inconclusive (continuing — the CA decides):', preErr && preErr.message);
+                log.warn({ err: preErr }, '[CertManager] Local dns-01 pre-verify inconclusive (continuing — the CA decides)');
             }
 
             // Complete and wait — unless the CA already holds a valid authorization, in which case
@@ -500,7 +501,7 @@ class CertManager {
                 message: 'Certificate provisioned successfully!'
             };
         } catch (e) {
-            console.error(`[CertManager] DNS Finish Error: ${logSafeError(e)}`);
+            log.error({ err: e }, '[CertManager] DNS Finish Error');
             // "No such challenge" means the CA does not recognise the challenge URL we posted to — the
             // order is gone (expired / already finalized) or it belongs to the OTHER ACME endpoint.
             // Raw, that message sends the operator to re-check a TXT record that is perfectly correct.
@@ -543,21 +544,22 @@ class CertManager {
             const gwCfgPath = path.join(gwDir, 'gateway-config.json');
             const gwCfg = fs.existsSync(gwCfgPath) ? JSON.parse(fs.readFileSync(gwCfgPath, 'utf8')) : {};
             gwCfg.ssl = { ...(gwCfg.ssl || {}), key: './ssl/live/imported/privkey.pem', cert: './ssl/live/imported/fullchain.pem', enabled: true };
-            fs.writeFileSync(gwCfgPath, JSON.stringify(gwCfg, null, 2));
+            // gateway-config.json holds gatewaySecret: owner-only, like the gateway's own writes.
+            writePrivateKey(gwCfgPath, JSON.stringify(gwCfg, null, 2));
         } catch (e: any) {
-            console.warn(`[CertManager] embedded: could not update gateway-config.json: ${logSafeError(e)}`);
+            log.warn({ err: e }, '[CertManager] embedded: could not update gateway-config.json');
         }
 
         // Live hot-reload of the running monolith HTTPS server (no restart) if it exposed the hook.
         try {
             if (typeof (global as any).__WORDJS_RELOAD_TLS__ === 'function') {
                 (global as any).__WORDJS_RELOAD_TLS__(keyContent, certContent);
-                console.log('[CertManager] embedded: hot-reloaded monolith TLS in-process (setSecureContext).');
+                log.info('[CertManager] embedded: hot-reloaded monolith TLS in-process (setSecureContext).');
             } else {
-                console.log('[CertManager] embedded: cert written — restart the monolith to serve it (no live-reload hook present).');
+                log.info('[CertManager] embedded: cert written — restart the monolith to serve it (no live-reload hook present).');
             }
         } catch (e: any) {
-            console.warn(`[CertManager] embedded TLS reload failed: ${logSafeError(e)}`);
+            log.warn({ err: e }, '[CertManager] embedded TLS reload failed');
         }
         return { success: true, embedded: true };
     }
@@ -575,7 +577,7 @@ class CertManager {
             if (status !== 200) throw gatewayError(status, text);
             return JSON.parse(text);
         } catch (e) {
-            console.error(`[CertManager] Push Error: ${logSafeError(e)}`);
+            log.error({ err: e }, '[CertManager] Push Error');
             throw e;
         }
     }
@@ -614,9 +616,9 @@ class CertManager {
             const keyContent = fs.readFileSync(keyPath, 'utf8');
             const certContent = fs.readFileSync(certPath, 'utf8');
             await this.pushCertToGateway(keyContent, certContent);
-            console.log('[CertManager] Certificate pushed to Gateway.');
+            log.info('[CertManager] Certificate pushed to Gateway.');
         } catch (e) {
-            console.error(`[CertManager] Failed to push cert to gateway: ${logSafeError(e)}`);
+            log.error({ err: e }, '[CertManager] Failed to push cert to gateway');
             throw e;
         }
     }
@@ -721,7 +723,7 @@ class CertManager {
 
             return { success: true, path: customDir };
         } catch (e) {
-            console.error(`[CertManager] Custom Install Error: ${logSafeError(e)}`);
+            log.error({ err: e }, '[CertManager] Custom Install Error');
             throw new Error(`Failed to install custom cert: ${e.message}`, { cause: e });
         }
     }
@@ -820,10 +822,10 @@ class CertManager {
             }
         } catch (e) {
             if (e && e.code === NO_CLUSTER_IDENTITY) {
-                console.error(`[CertManager] getConfig Error: ${logSafeError(e)}`);
+                log.error({ err: e }, '[CertManager] getConfig Error');
                 return { ...defaultResult, error: e.message };
             }
-            console.error(`[CertManager] Gateway connection failed: ${logSafeError(e)}`);
+            log.error({ err: e }, '[CertManager] Gateway connection failed');
             return { ...defaultResult, error: 'Gateway Unreachable' };
         }
     }
@@ -970,11 +972,11 @@ class CertManager {
 
         // Due (or forced, or no cert yet) → provision (provisionAutoHTTP saves locally + pushes to gateway).
         try {
-            console.log(`[CertManager] Auto-renewal: provisioning ${domains.join(', ')} (staging=${!!acme.staging}, force=${force}, daysRemaining=${Number.isFinite(days) ? Math.round(days) : 'n/a'}${uncovered.length ? `, not yet covered: ${uncovered.join(', ')}` : ''})`);
+            log.info({ force }, `[CertManager] Auto-renewal: provisioning ${domains.join(', ')} (staging=${!!acme.staging}, force=${force}, daysRemaining=${Number.isFinite(days) ? Math.round(days) : 'n/a'}${uncovered.length ? `, not yet covered: ${uncovered.join(', ')}` : ''})`);
             await this.provisionAutoHTTP(domains, acme.email, !!acme.staging);
             return record({ ok: true, domain, domains, validTo: this.readLocalCertValidTo(domain) });
         } catch (e) {
-            console.error(`[CertManager] Auto-renewal failed: ${logSafeError(e)}`);
+            log.error({ err: e }, '[CertManager] Auto-renewal failed');
             return record({ ok: false, domain, error: e.message });
         }
     }
@@ -988,7 +990,7 @@ class CertManager {
             const hasCert = config.certInfo && config.certInfo.type !== 'none' && config.certInfo.type !== 'error';
 
             if (!hasCert) {
-                console.log('[CertManager] No certificate found on Gateway. Generating self-signed...');
+                log.info('[CertManager] No certificate found on Gateway. Generating self-signed...');
 
                 const selfsigned = require('selfsigned');
                 const attrs = [{ name: 'commonName', value: 'localhost' }];
@@ -996,15 +998,15 @@ class CertManager {
                 // CRITICAL: selfsigned.generate returns a Promise (async)
                 const pems = await selfsigned.generate(attrs, { days: 365 });
 
-                console.log('[CertManager] Self-signed certificate generated.');
+                log.info('[CertManager] Self-signed certificate generated.');
 
                 await this.pushCertToGateway(pems.private, pems.cert);
-                console.log('[CertManager] Self-signed certificate pushed to Gateway.');
+                log.info('[CertManager] Self-signed certificate pushed to Gateway.');
                 return { success: true, message: 'Self-signed certificate generated' };
             }
             return { success: true, message: 'Certificate already exists' };
         } catch (e) {
-            console.error(`[CertManager] Ensure Cert Error: ${logSafeError(e)}`);
+            log.error({ err: e }, '[CertManager] Ensure Cert Error');
             return { success: false, error: e.message };
         }
     }
@@ -1021,10 +1023,10 @@ class CertManager {
                 // with the main address (core/site-address noteGatewaySiteUrl, REDTEAM R1).
             }, 5000);
             if (status !== 200) throw new Error(`Gateway returned ${status}`);
-            console.log('[CertManager] Gateway configuration pushed successfully.');
+            log.info('[CertManager] Gateway configuration pushed successfully.');
             return JSON.parse(text);
         } catch (e) {
-            console.error(`[CertManager] Config Push Error: ${logSafeError(e)}`);
+            log.error({ err: e }, '[CertManager] Config Push Error');
             throw e;
         }
     }

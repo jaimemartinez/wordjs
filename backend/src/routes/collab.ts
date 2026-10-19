@@ -30,13 +30,21 @@
  *     `sanitizePuckTree` de la ruta de escritura antes de persistirse y difundirse.
  */
 
-import type { Request, Response } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 
 const express = require('express');
+const log = require('../core/module-logger').moduleLogger('routes/collab');
 const router = express.Router();
 
-const jwt = require('jsonwebtoken');
-const { authenticate, trustedHost, originMatchesHost, sameOriginAllowList, hostlessAmbientRequest, sessionAddressStillAccepted } = require('../middleware/auth');
+// Real-time collaboration keeps its rooms, replica ids and streams per process, keyed by post id. In a
+// multisite network those ids repeat across sites, so phase 1 serves collaboration on the main site
+// only: on any other site every collab route answers 404, and the editor falls back to plain saving.
+router.use((req: Request, res: Response, next: NextFunction) => {
+    if (require('../core/site-context').isPrimarySite()) return next();
+    return res.status(404).json({ code: 'rest_no_route', message: 'Real-time collaboration is not available on this site.', data: { status: 404 } });
+});
+
+const { authenticate: authenticateAny, isHeadless, trustedHost, trustedScheme, originMatchesHost, sameOriginAllowList, hostlessAmbientRequest, sessionAddressStillAccepted } = require('../middleware/auth');
 const { asyncHandler, offStack } = require('../middleware/errorHandler');
 const { canEditPostRecord, isRestExposedPostType } = require('../core/post-capabilities');
 // An attachment's entry decides too (core/attachment-visibility) — the same gate every attachment write takes.
@@ -49,12 +57,34 @@ const { routeIdOrNull } = require('../core/query-params');
  * @swagger
  * tags:
  *   name: Collaboration
- *   description: Real-time collaborative editing for the Verso editor - a Server-Sent Events downstream channel plus small JSON uploads for CRDT operations, presence, resynchronisation and leaving. These routes are always mounted by the backend; the switch is CLIENT side and defaults to ON - a deployment turns it off with NEXT_PUBLIC_WORDJS_COLLAB=off, and a single browser with localStorage.wordjs_collab set to off, in which case the editor opens no connection at all. Authentication is the ordinary session cookie or bearer token; a token is never accepted from the query string. Authorization is per post and identical to PUT /posts/{id}. The replica identity is the siteId nonce bound to the SSE connection at join time, and every upload must present a siteId that belongs to a live connection of the calling user; the server derives the authoritative replica id itself and never trusts a user id sent by a client. Every operation is re-parsed and sanitised with the same sanitizer the ordinary write path uses before it is stored or broadcast.
+ *   description: Real-time collaborative editing for the Verso editor - a Server-Sent Events downstream channel plus small JSON uploads for CRDT operations, presence, resynchronisation and leaving. These routes are always mounted by the backend; the switch is CLIENT side and defaults to ON - a deployment turns it off with NEXT_PUBLIC_WORDJS_COLLAB=off, and a single browser with localStorage.wordjs_collab set to off, in which case the editor opens no connection at all. Authentication is an interactive session - the session cookie, or the session token as a bearer header; API tokens and agent connections are refused with 403 rest_session_required, and a credential is never accepted from the query string. Authorization is per post and identical to PUT /posts/{id}, and it is re-checked while the stream is open. The client opens the stream with a siteId NONCE of its choice; the server derives the authoritative replica id from that nonce and the authenticated user id and returns it as welcome.self.siteId, and every upload must present that DERIVED siteId, which has to belong to a live connection of the calling user. The server never trusts a user id sent by a client. Presence entries carry the member's userId next to the display name - the name is chosen by its owner, the userId is the stable identity. Every operation is re-parsed and sanitised with the same sanitizer the ordinary write path uses before it is stored or broadcast.
  */
 
 /* ------------------------------------------------------------------------------------------- */
 /* Gates                                                                                         */
 /* ------------------------------------------------------------------------------------------- */
+
+/**
+ * SOLO SESIÓN INTERACTIVA. La colaboración es el editor de un humano en un navegador; ningún cliente
+ * sin cabeza la usa. Y una credencial de máquina no encaja en su modelo: el ámbito de un token de API
+ * se decide por el RECURSO de la URL, que aquí es `collab` y no el tipo del post, así que `collab:read`
+ * habría abierto la lectura en vivo de los borradores de CUALQUIER tipo que su dueño pudiera editar —
+ * más de lo que ese mismo token puede leer por `GET /posts`. Un token de API o una conexión de agente
+ * se rechazan aquí, antes de tocar nada.
+ */
+function refuseHeadless(req: Request, res: Response, next: NextFunction) {
+    if (isHeadless(req)) {
+        return res.status(403).json({
+            code: 'rest_session_required',
+            message: 'Real-time collaboration requires an interactive sign-in; API tokens and agent connections cannot use it.',
+            data: { status: 403 },
+        });
+    }
+    next();
+}
+
+/** `authenticate` + la exigencia de sesión interactiva: la ÚNICA autenticación de este router. */
+const authenticate = [authenticateAny, refuseHeadless];
 
 /**
  * El id de post que `raw` denota, o null si no denota ninguno (⇒ 400 en todas las rutas de aquí).
@@ -111,9 +141,10 @@ function sameOrigin(req: Request): boolean {
     // No host of its own: the configured origins below do not stand in for one (lab finding N2) — the
     // same predicate csrfProtection applies.
     if (hostlessAmbientRequest(req, host)) return false;
-    if (originMatchesHost(requestOrigin, host)) return true;
+    const scheme = trustedScheme(req);
+    if (originMatchesHost(requestOrigin, host, scheme)) return true;
 
-    const allowed: string[] = sameOriginAllowList(host);
+    const allowed: string[] = sameOriginAllowList(host, scheme);
     return allowed.some((a: string) => { try { return new URL(a).origin === requestOrigin; } catch { return false; } });
 }
 
@@ -226,39 +257,42 @@ function sessionToken(req: Request): string {
  */
 function makeRevalidate(req: Request, postId: number): () => Promise<boolean> {
     const rawToken = sessionToken(req);
-    // La clase de credencial la fijó `authenticate` al autenticar; aquí no se vuelve a inferir.
-    const apiTokenSession = !!req.apiToken;
+    // La clase de credencial la fijó `authenticate` al autenticar; aquí no se vuelve a inferir. Una
+    // credencial sin cabeza no llega hasta aquí (`refuseHeadless`), y si llegara se deniega: este
+    // canal no tiene rama para ella.
+    const headless = isHeadless(req);
     const userId = req.user.id;
     const User = require('../models/User');
-    const ApiToken = require('../models/ApiToken');
+    const mfa = require('../core/mfa');
 
     return async (): Promise<boolean> => {
-        let user: any;
-        if (apiTokenSession) {
-            // Token de API (`wjt_`): no hay JWT, pero SÍ hay revocación y caducidad que comprobar —
-            // `findByRawToken` devuelve `null` para un token revocado o vencido. No re-verificar nada
-            // aquí dejaba vivo el stream de un token ya revocado.
-            const record = await ApiToken.findByRawToken(rawToken);
-            if (!record || Number(record.userId) !== Number(userId)) return false;
-            user = await User.findById(userId);
-            if (!user) return false;
-        } else {
-            let decoded: any;
-            try {
-                decoded = jwt.verify(rawToken, config.jwt.secret, { algorithms: ['HS256'] });
-            } catch {
-                return false; // caducado, revocado por firma, manipulado… o simplemente no es un JWT
-            }
-            if (decoded.purpose) return false;
-            // The same address binding authenticate() applies: a live stream opened by a session minted
-            // on an alias closes once that alias is removed or expires (REDTEAM R2).
-            if (!sessionAddressStillAccepted(decoded)) return false;
-            if (Number(decoded.userId) !== Number(userId)) return false;
-            user = await User.findById(userId);
-            if (!user) return false;
-            const validAfter = parseInt(user.meta && user.meta.token_valid_after, 10);
-            if (validAfter && decoded.iat && decoded.iat <= validAfter) return false;
+        if (headless) return false;
+        let decoded: any;
+        try {
+            decoded = require('../core/site-keys').verifyForSite(rawToken);
+        } catch {
+            return false; // caducado, revocado por firma, manipulado… o simplemente no es un JWT
         }
+        if (decoded.purpose) return false;
+        // The same address binding authenticate() applies: a live stream opened by a session minted
+        // on an alias closes once that alias is removed or expires (REDTEAM R2).
+        if (!sessionAddressStillAccepted(decoded)) return false;
+        if (Number(decoded.userId) !== Number(userId)) return false;
+        const user = await User.findById(userId);
+        if (!user) return false;
+        const validAfter = parseInt(user.meta && user.meta.token_valid_after, 10);
+        if (validAfter && decoded.iat && decoded.iat <= validAfter) return false;
+
+        // LA MISMA PREGUNTA QUE `mfaComplianceGate` le hace a CADA petición: un usuario cuyo rol exige
+        // 2FA y que ya agotó su gracia sin activarlo no pasa de la puerta global — y un stream es UNA
+        // petición, abierta antes de que la política o su gracia cambiaran. Si la política o el estado no
+        // se pueden leer, se LANZA: no concluyente, que la sala tolera poco tiempo y luego cierra.
+        const policy = await mfa.getPolicy();
+        if (policy && Array.isArray(policy.requiredRoles) && policy.requiredRoles.length) {
+            const status = await mfa.evaluate(user);
+            if (status.enforced) return false;
+        }
+
         const g = await gate({ user }, postId);
         return g.ok;
     };
@@ -323,7 +357,7 @@ async function connGate(req: Request, res: Response): Promise<any | null> {
  * /collab/{postId}/stream:
  *   get:
  *     summary: Open the collaborative session for one post (Server-Sent Events)
- *     description: Long-lived text/event-stream response and the only way to join a room. The global CSRF middleware does not cover GET, so this route checks Origin/Referer itself and answers 403 rest_csrf_invalid for a cross-site request; a non-browser client with a bearer token and no Origin or Referer is allowed. The first frame is welcome, carrying the epoch, the base snapshot, the operations recorded after it, the current members, the server-derived self identity and the limits block (maxOpsPerSec, maxBytesPerSec, maxFrameBytes, rateRetryMs) that the client must obey. Later frames are ops, presence, members, warning and error. The session is re-authorised while it is open, so signing out, a password change, an expired or revoked token, or losing the capability closes the stream with an error frame carrying unauthorized. A refusal to join is also delivered inside the stream (the headers are already sent) as an error frame with a code, a retryable flag and retryAfterMs.
+ *     description: Long-lived text/event-stream response and the only way to join a room. The global CSRF middleware does not cover GET, so this route checks Origin/Referer itself and answers 403 rest_csrf_invalid for a cross-site request; a non-browser client with a bearer token and no Origin or Referer is allowed. The first frame is welcome, carrying the epoch, the base snapshot, the operations recorded after it, the current members, the server-derived self identity and the limits block (maxOpsPerSec, maxBytesPerSec, maxFrameBytes, rateRetryMs) that the client must obey. Later frames are ops, presence, members, warning and error. The session is re-authorised while it is open - signing out, a password change, signing out everywhere, a role or capability change, a two-factor requirement the user no longer meets, or a change of the post's status or author re-checks it at once on every node, and an expired session or a lost capability closes the stream with an error frame carrying unauthorized. If the check itself cannot be completed it is retried for a short grace period and then the stream is closed. Deleting the post closes its streams. When the post's content is written outside the session (a revision restore, a save from another editor), the stream receives a warning frame with code room_reset and the client reloads from the saved content. A refusal to join is also delivered inside the stream (the headers are already sent) as an error frame with a code, a retryable flag and retryAfterMs.
  *     tags: [Collaboration]
  *     security:
  *       - bearerAuth: []
@@ -352,7 +386,7 @@ async function connGate(req: Request, res: Response): Promise<any | null> {
  *       401:
  *         description: Not logged in (rest_not_logged_in)
  *       403:
- *         description: Cross-site request blocked (rest_csrf_invalid), or you cannot edit this post (rest_forbidden)
+ *         description: Cross-site request blocked (rest_csrf_invalid), an API token or agent connection (rest_session_required), or you cannot edit this post (rest_forbidden)
  *       404:
  *         description: Post not found, or an attachment this caller may not see (rest_post_invalid) - the same answer for both
  */
@@ -402,7 +436,7 @@ router.get('/:postId/stream', authenticate, asyncHandler(async (req: Request, re
     // manejador sobre la `ServerResponse` ⇒ `uncaughtException` ⇒ `process.exit(1)`. Con él, lo peor
     // que puede pasar es que se caiga ESTA sesión colaborativa.
     res.on('error', (e: any) => offStack(res, null, () => {
-        console.warn('[collab] stream roto:', e && e.message);
+        log.warn({ err: e }, '[collab] stream roto');
         if (conn) return collab.leave(conn); // mismo rechazo descartado que en `onClose`
     }));
     req.on('error', () => { /* aborto del cliente: lo recoge `onClose` */ });
@@ -519,7 +553,7 @@ router.get('/:postId/stream', authenticate, asyncHandler(async (req: Request, re
  *             properties:
  *               siteId:
  *                 type: string
- *                 description: The replica nonce this caller presented on its live SSE stream. It must belong to a live connection of the calling user.
+ *                 description: The replica id the server assigned to this caller's live SSE stream (welcome.self.siteId) - NOT the nonce sent when opening the stream. It must belong to a live connection of the calling user.
  *               rateAck:
  *                 type: integer
  *                 description: Serial number of the last rate notice received, echoed back to acknowledge the wait.
@@ -569,7 +603,7 @@ router.get('/:postId/stream', authenticate, asyncHandler(async (req: Request, re
  *       401:
  *         description: Not logged in (rest_not_logged_in)
  *       403:
- *         description: You cannot edit this post (rest_forbidden). Authorization is the same gate PUT /posts/{id} applies - there is no reader mode.
+ *         description: You cannot edit this post (rest_forbidden) - authorization is the same gate PUT /posts/{id} applies and there is no reader mode - or the caller is an API token or agent connection (rest_session_required).
  *       404:
  *         description: Post not found, or an attachment this caller may not see (rest_post_invalid) - the same answer for both
  *       409:
@@ -639,7 +673,7 @@ router.post('/:postId/ops', authenticate, asyncHandler(async (req: Request, res:
  *             properties:
  *               siteId:
  *                 type: string
- *                 description: The replica nonce this caller presented on its live SSE stream. It must belong to a live connection of the calling user.
+ *                 description: The replica id the server assigned to this caller's live SSE stream (welcome.self.siteId) - NOT the nonce sent when opening the stream. It must belong to a live connection of the calling user.
  *               rateAck:
  *                 type: integer
  *                 description: Serial number of the last rate notice received, echoed back to acknowledge the wait.
@@ -665,7 +699,7 @@ router.post('/:postId/ops', authenticate, asyncHandler(async (req: Request, res:
  *       401:
  *         description: Not logged in (rest_not_logged_in)
  *       403:
- *         description: You cannot edit this post (rest_forbidden). Authorization is the same gate PUT /posts/{id} applies - there is no reader mode.
+ *         description: You cannot edit this post (rest_forbidden) - authorization is the same gate PUT /posts/{id} applies and there is no reader mode - or the caller is an API token or agent connection (rest_session_required).
  *       404:
  *         description: Post not found, or an attachment this caller may not see (rest_post_invalid) - the same answer for both
  *       409:
@@ -719,7 +753,7 @@ router.post('/:postId/presence', authenticate, asyncHandler(async (req: Request,
  *             properties:
  *               siteId:
  *                 type: string
- *                 description: The replica nonce this caller presented on its live SSE stream. It must belong to a live connection of the calling user.
+ *                 description: The replica id the server assigned to this caller's live SSE stream (welcome.self.siteId) - NOT the nonce sent when opening the stream. It must belong to a live connection of the calling user.
  *               rateAck:
  *                 type: integer
  *                 description: Serial number of the last rate notice received, echoed back to acknowledge the wait.
@@ -757,7 +791,7 @@ router.post('/:postId/presence', authenticate, asyncHandler(async (req: Request,
  *       401:
  *         description: Not logged in (rest_not_logged_in)
  *       403:
- *         description: You cannot edit this post (rest_forbidden). Authorization is the same gate PUT /posts/{id} applies - there is no reader mode.
+ *         description: You cannot edit this post (rest_forbidden) - authorization is the same gate PUT /posts/{id} applies and there is no reader mode - or the caller is an API token or agent connection (rest_session_required).
  *       404:
  *         description: Post not found, or an attachment this caller may not see (rest_post_invalid) - the same answer for both
  *       409:
@@ -814,7 +848,7 @@ router.post('/:postId/resync', authenticate, asyncHandler(async (req: Request, r
  *             properties:
  *               siteId:
  *                 type: string
- *                 description: The replica nonce this caller presented on its live SSE stream. It must belong to a live connection of the calling user.
+ *                 description: The replica id the server assigned to this caller's live SSE stream (welcome.self.siteId) - NOT the nonce sent when opening the stream. It must belong to a live connection of the calling user.
  *               rateAck:
  *                 type: integer
  *                 description: Serial number of the last rate notice received, echoed back to acknowledge the wait.
@@ -836,7 +870,7 @@ router.post('/:postId/resync', authenticate, asyncHandler(async (req: Request, r
  *       401:
  *         description: Not logged in (rest_not_logged_in)
  *       403:
- *         description: You cannot edit this post (rest_forbidden). Authorization is the same gate PUT /posts/{id} applies - there is no reader mode.
+ *         description: You cannot edit this post (rest_forbidden) - authorization is the same gate PUT /posts/{id} applies and there is no reader mode - or the caller is an API token or agent connection (rest_session_required).
  *       404:
  *         description: Post not found, or an attachment this caller may not see (rest_post_invalid) - the same answer for both
  *       409:

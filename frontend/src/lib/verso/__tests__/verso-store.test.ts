@@ -12,6 +12,7 @@ import {
   type CreateEditorOptions,
 } from "../store";
 import { VersoCommandError } from "../commands";
+import { toNormalized } from "../normalize";
 import { ROOT_ID, ROOT_SLOT, type VersoData } from "../types";
 import { item } from "./helpers";
 
@@ -99,6 +100,56 @@ describe("verso store — onChange contenido (fix 5)", () => {
     } finally {
       errorSpy.mockRestore();
     }
+  });
+});
+
+describe("verso store — embudo de publicación: `content` es SIEMPRE un array", () => {
+  // Un documento cuya clave `content` venía AUSENTE: es lo que llega con el `welcome` de una sala
+  // cuyo snapshot es `{}` (un registro sin `_puck_data`), y lo que guardan algunas revisiones.
+  const absent = (): VersoData => ({ root: { props: { title: "Sin cuerpo" } } }) as unknown as VersoData;
+
+  it("getData() de un documento sin clave `content` entrega content: []", () => {
+    const ed = createEditor({ initialData: absent() });
+    expect(ed.getData().content).toEqual([]);
+  });
+
+  it("el onChange de una transacción sobre un documento ausente recibe content como array", () => {
+    const onChange = vi.fn((data: VersoData) => data.content.length);
+    const ed = createEditor({ initialData: absent(), onChange });
+    ed.transact((tx) => tx.setRootProps({ title: "X" }));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange.mock.results[0]).toEqual({ type: "return", value: 0 });
+  });
+
+  it("applyRemoteDoc con un documento ausente: el onChange y TODOS los suscriptores lo ven sin lanzar", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const onChange = vi.fn((data: VersoData) => data.content.length);
+      const ed = makeEditor({ onChange });
+      // Un consumidor como el `onChange` de la página: lee `data.content.length` desde un
+      // suscriptor. Si lanzara, `notify()` cortaría y el siguiente suscriptor no se enteraría.
+      const seen: number[] = [];
+      ed.subscribe(() => seen.push(ed.getData().content.length), (st) => st.doc);
+      const after = vi.fn();
+      ed.subscribe(after, (st) => st.doc);
+      expect(ed.applyRemoteDoc(toNormalized({} as VersoData), { resetHistory: true })).toBe(true);
+      expect(seen).toEqual([0]);
+      expect(after).toHaveBeenCalledTimes(1);
+      expect(onChange.mock.results[0]).toEqual({ type: "return", value: 0 });
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("un `content` presente pero corrupto (verbatim) se entrega TAL CUAL: es dato del autor", () => {
+    const ed = createEditor({ initialData: { content: "corrupto", root: {} } as unknown as VersoData });
+    expect(ed.getData().content as unknown).toBe("corrupto");
+  });
+
+  it("un documento con `content` real no cambia de forma (round-trip intacto)", () => {
+    const ed = makeEditor();
+    expect(JSON.stringify(ed.getData())).toBe(JSON.stringify(baseData()));
   });
 });
 

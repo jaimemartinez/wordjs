@@ -76,6 +76,8 @@ const BACKEND_PREFIXES = ['/api', '/public', '/uploads', '/themes', '/plugins', 
 // on-demand purge worked in monolith mode and silently 404'd in the other two. One list, three
 // dispatchers — gateway/test/dispatcher-parity.test.js walks all three and demands one verdict.
 const { isNextOwnedApiPath } = require('./frontend/backend-proxy-target.js');
+// The configured media/CDN origin joins the page CSP's img-src/media-src at response time.
+const { installMediaCsp } = require('./frontend/media-csp.js');
 const isBackendPath = (url) => {
     const u = (url || '/').split('?')[0];
     if (isNextOwnedApiPath(u)) return false;
@@ -244,12 +246,15 @@ function createDispatch({ backendApp, handle, proto, edge }) {
         const scheme = (edge && typeof edge.scheme === 'function' && edge.scheme(req)) || proto;
         // Pin forwarded headers so backend CSRF/origin sees the address the edge judged (gateway parity).
         pinForwardedHost(req);
+        // Multisite: the site the edge judged, for Next to render (never a client's own value).
+        hostEdge.pinSiteHeader(req);
         req.headers['x-forwarded-proto'] = scheme;
         // SEO rewrites (gateway parity).
         if (req.url === '/sitemap.xml') req.url = '/api/v1/seo/sitemap.xml';
         else if (req.url === '/robots.txt') req.url = '/api/v1/seo/robots.txt';
         else if (req.url === '/feed' || req.url === '/feed.xml' || req.url === '/rss.xml') req.url = '/api/v1/seo/feed.xml';
         if (isBackendPath(req.url)) return backendApp(req, res);
+        installMediaCsp(res);
         return handle(req, res);
     };
 }
@@ -466,7 +471,10 @@ async function main() {
         console.log('');
         console.log(`✅ WordJS MONOLITH (${dev ? 'dev' : 'prod'}) — one process on ${proto}://localhost:${PUBLIC_PORT}`);
         console.log('   backend + frontend + isolated plugins in-process · no gateway, no extra ports');
-        console.log('   switch to split anytime: npm run dev   (or npm start)');
+        // The split commands for the mode this process runs in: `npm run dev` is the development stack.
+        console.log(dev
+            ? '   switch to split anytime: npm run dev'
+            : '   switch to split anytime: npm start   (production: gateway + backend + frontend)');
     });
 
     // 5) Loopback-only HTTP listener for the frontend's server-side (SSR) API calls — keeps SSR on

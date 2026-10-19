@@ -27,6 +27,8 @@ interface User {
     capabilities: string[];
     personalEmail?: string | null;
     mfa?: MfaStatus;
+    /** Multisite only (GET /auth/me): is this the network's main site, and is the user a network administrator. */
+    network?: { mainSite: boolean; networkAdmin: boolean };
 }
 
 interface LoginResult {

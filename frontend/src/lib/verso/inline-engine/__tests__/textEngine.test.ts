@@ -31,6 +31,7 @@ import {
     insertParagraphBreak,
     insertText,
     isCollapsed,
+    isSafeLinkHref,
     listParas,
     paraLength,
     paraToAtoms,
@@ -419,5 +420,68 @@ describe("inline-engine — caretMarks y activeStates", () => {
         const st = activeStates(list.doc, list.sel);
         expect(st.bulletList).toBe(true);
         expect(st.orderedList).toBe(false);
+    });
+});
+
+/* ------------------------------------------------------------------ */
+/* Gate: esquema del href de un enlace                                  */
+/* ------------------------------------------------------------------ */
+
+// El lienzo del admin pinta la forma canónica del motor SIN pasar por sanitizeHTML (parseRichHtml
+// recibe el HTML guardado tal cual). Así que la propia proyección decide qué href sobrevive: un
+// esquema fuera de contentSchemes pierde el enlace (el texto se queda), entre por donde entre.
+describe("inline-engine — href con esquema no permitido", () => {
+    const UNSAFE = [
+        "javascript:alert(1)",
+        "JaVaScRiPt:alert(1)",
+        "  javascript:alert(1)",
+        "java\tscript:alert(1)",
+        "java\nscript:alert(1)",
+        "\u0001javascript:alert(1)",
+        "vbscript:msgbox(1)",
+        "data:text/html,<script>alert(1)</script>",
+        "file:///etc/passwd",
+    ];
+    const SAFE = ["https://example.test/a", "http://example.test", "mailto:a@example.test", "tel:+34600000000", "/ruta", "#ancla", "?q=1", "pagina.html", "//cdn.example.test/x"];
+
+    it("isSafeLinkHref: rechaza los esquemas peligrosos y acepta relativos + contentSchemes", () => {
+        for (const href of UNSAFE) expect(isSafeLinkHref(href), JSON.stringify(href)).toBe(false);
+        for (const href of SAFE) expect(isSafeLinkHref(href), JSON.stringify(href)).toBe(true);
+        for (const bad of ["", " ", "\t", null, undefined, 42]) expect(isSafeLinkHref(bad), JSON.stringify(bad)).toBe(false);
+    });
+
+    it("parseRichHtml desenvuelve el <a> inseguro (también con entidades) y conserva su texto", () => {
+        const attrs = UNSAFE.map((h) => h.replace(/&/g, "&amp;").replace(/"/g, "&quot;"));
+        attrs.push("&#106;avascript:alert(1)", "&#x6A;avascript:alert(1)", "java&#9;script:alert(1)");
+        for (const attr of attrs) {
+            const out = serializeDoc(parseRichHtml(`<p>a <a href="${attr}">clic</a> b</p>`));
+            expect(out, attr).toBe("<p>a clic b</p>");
+        }
+    });
+
+    it("parseRichHtml conserva verbatim los href seguros (D8)", () => {
+        for (const href of SAFE) {
+            const out = serializeDoc(parseRichHtml(`<p><a href="${href}">x</a></p>`));
+            expect(out).toBe(`<p><a href="${href.replace(/&/g, "&amp;")}">x</a></p>`);
+        }
+    });
+
+    it("applyLink con un esquema no permitido no cambia el documento", () => {
+        const doc = parseRichHtml("<p>hola</p>");
+        const sel: DocSelection = {
+            anchor: { block: 0, item: null, offset: 0 },
+            focus: { block: 0, item: null, offset: 4 },
+        };
+        for (const href of UNSAFE) {
+            expect(serializeDoc(applyLink(doc, sel, { href }).doc), href).toBe("<p>hola</p>");
+        }
+        expect(serializeDoc(applyLink(doc, sel, { href: "/ok" }).doc)).toBe('<p><a href="/ok">hola</a></p>');
+    });
+
+    it("serializeDoc no emite <a> para un modelo construido a mano con href inseguro", () => {
+        const doc: RichDoc = {
+            blocks: [{ kind: "p", para: { units: [{ kind: "text", text: "x", marks: { bold: false, italic: false, link: { href: "javascript:alert(1)", newTab: false } } }] } }],
+        };
+        expect(serializeDoc(doc)).toBe("<p>x</p>");
     });
 });

@@ -41,6 +41,768 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   as unprefixed post meta (`GET /api/v1/editor/fields`).
 - **`wordjs.posts.get(id)`** (grant `posts:read`) reads a published, public entry with its access level;
   **`wordjs.users.search()`** takes an `offset` to page through every account.
+- **Per-site media storage quotas (multisite).** **Admin → Network** shows how much media each site stores
+  and takes a quota per site and a network default (`GET /network/quotas`, `PUT /network/quotas/default`,
+  `PUT /network/sites/:id/quota`). An upload or a WXR import download over a site's quota answers
+  `413 rest_upload_quota_exceeded`. No quota is set by default, and the main site never has one — see
+  [multisite.md](documentation/multisite.md#media-storage-quotas).
+- **`npm run media` takes `--site <id>` and `--all-sites`** on a network of sites, and **Settings → Media
+  storage** lists each site's library state.
+
+### ⚠️ Upgrade note — database TLS is now verified
+
+Sites with `dbSsl: true` on a **managed database whose CA is not in Node.js's trust store** — Amazon RDS /
+Aurora, DigitalOcean Managed Databases, Azure Database for PostgreSQL / MySQL and any private CA — stop at
+boot after this upgrade until the CA is configured. **Before upgrading**, download your provider's CA
+bundle and set it, e.g. for RDS:
+
+```json
+{ "dbSsl": true, "dbSslCa": "./certs/rds-global-bundle.pem" }
+```
+
+(`https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem`; Docker/Helm: `WORDJS_DB_SSL_CA`).
+Per-provider downloads and the last-resort opt-out are in
+[database.md — Upgrade note](documentation/database.md#upgrade-note-database-tls-is-verified-by-default);
+the boot error links there too.
+
+### Changed
+
+- **Password-reset and verification email has its own transport.** WordJS now sends these links itself
+  through an SMTP relay you configure in **Settings → Account email** (host, port, TLS mode, credentials,
+  test message). A mail provider plugin carries them only if an administrator allows that plugin by name
+  there, with the warning that it can then take over any account. **Upgrading:** a site whose provider
+  plugin held `email:provider` keeps that plugin allowed (migration `0018`), so recovery keeps working;
+  Settings shows a banner until you configure the built-in transport or confirm the plugin. A new site
+  needs the built-in transport (or an explicit allowance) before "Forgot password?" is offered.
+- **Old author URLs from before the public-identity change are opt-in.** The author slugs that used to be
+  derived from sign-in names resolve on the archive, `?author=` and the author feed only when
+  **Settings → Keep old author URLs working** is on (off by default, with a warning); otherwise they are
+  answered like any unknown slug.
+
+- **Database TLS verifies the server certificate.** With `dbSsl: true`, Postgres and MySQL connections
+  (including the per-plugin MySQL pools and the installer's connection test) now check the server
+  certificate chain and host name instead of accepting any certificate. New settings: `dbSslCa` (the CA
+  that signed the server certificate, as a PEM file path or PEM text) and `dbSslRejectUnauthorized: false`
+  as an explicit, logged opt-out. A site whose database presents a certificate Node cannot verify stops at
+  boot with a message explaining both options — see [database.md](documentation/database.md). The install
+  wizard and **Admin → Database migration** offer both settings when *Use SSL* is ticked (the opt-out with
+  a warning), and the Docker/Helm entrypoint reads `WORDJS_DB_SSL`, `WORDJS_DB_SSL_CA` and
+  `WORDJS_DB_SSL_REJECT_UNAUTHORIZED`.
+
+### Fixed
+
+- **Uploads on a network of sites.** A file upload larger than the first network packet (most real photos)
+  could fail with "No site context" on a multisite install, because the body was read outside the
+  request's site. Every middleware that reads a request body now runs as the request's site.
+
+- **Multisite: network-wide actions on the main site take a network administrator.** Installing, updating,
+  packing, downloading or deleting plugins, writing theme files, the marketplace, backups, the database
+  migration tool, the site's addresses, certificates, the hooks registry and the Redis object-cache switch
+  now answer `403 rest_forbidden_network` (`rest_network_only` for the cache switch) to an administrator of
+  the main site who is not a network administrator. Activating plugins, granting their permissions and
+  everything else the main site owns stay with its administrators, and the admin screens hide what they
+  cannot use. A single site behaves exactly as before.
+- **Query-string credentials are short-lived tickets.** The two routes that accept `?token=` (the
+  notifications stream and the plugin package download) take only a 60-second ticket for that path, from
+  the new `POST /api/v1/auth/query-ticket`; a session token or an API token in the query string is no
+  longer accepted. The admin uses the session cookie for both and is unaffected.
+
+### Fixed
+
+- **`/readyz` no longer hangs when the database stops answering.** The readiness check now has a deadline
+  (3 s, `WORDJS_READINESS_TIMEOUT_MS`): past it the probe answers `503 not_ready` (`db: "timeout"`)
+  instead of leaving every later probe waiting on the stuck one, and no second query is started while
+  the first is still pending. On Postgres and MySQL the check also runs with a server-side statement
+  timeout.
+- **WebSocket upgrades behind an untrusted CDN or reverse proxy.** Without `trustProxy` every visitor
+  behind such a proxy shared one upgrade budget, so collaboration, presence and HMR sockets could be
+  refused for the whole site. The gateway now gives each forwarded client behind a shared address its own
+  per-client budget and raises that address's total with the number of distinct clients behind it (up to
+  `rateLimit.upgradeSharedMultiplier`, default 20×). It also logs its trust posture at boot and warns once
+  when one address carries many forwarded clients, naming `trustProxy` / `WORDJS_TRUST_PROXY`.
+
+### Security
+
+- **Provider grants are labelled administrator-level.** `email:provider` and `notifications:provider` are
+  shown with an "administrator-level" badge and plain wording on every grant screen, and every other
+  administrator gets an in-app notice when a password is reset through an emailed link.
+- **A plugin's admin stylesheet needs `browser:script` and is confined.** `GET /plugins/:slug/admin-style/css`
+  is served under the same gate as `dist/`, with `@import` and any resource-loading value (other than
+  `data:` URLs) removed and every rule scoped so it cannot restyle the admin's own interface.
+- **AI agents:** the Agents screen warns about the `content:others` + `content:publish` combination, an
+  optional site-wide setting makes a person confirm everything agents publish (with a queue on the Agents
+  screen), and revisions created by an agent's write are labelled so the change can be undone in one restore.
+- **Content types cannot borrow core capability names.** A content type whose operations (or capability
+  family) name a core non-content capability such as `edit_users` or `manage_options` is refused, and the
+  agent capability mapping never grants those names.
+
+- **Each site of a network has its own space in the media bucket.** With S3 media storage, every site other
+  than the main one now stores and serves its objects under `<prefix>/sites/<id>/`, so sites no longer
+  share object keys; the main site's keys and URLs are unchanged. Objects stored before this release move
+  into their site's space once, at startup (verified by size, idempotent) — see
+  [media-storage.md](documentation/media-storage.md).
+- **Moving media to the bucket and back covers every site of a network.** `POST /media-storage/migrate`
+  (and the screen's buttons) now offloads or restores each site's library in turn, so a network can
+  switch back to local storage.
+- **Plugin activation, deactivation and reload are rate-limited** per site and account, together with the
+  routes that restart a plugin's worker (grants, egress hosts, private destinations, port):
+  `429 rest_plugin_lifecycle_rate_limited` beyond 60 in 10 minutes.
+- **Private destinations can never be approved in their IPv6 spellings either.** The metadata, link-local
+  and multicast addresses that NAT64, 6to4, ISATAP or Teredo addresses embed, and `fd00:ec2::254`, are
+  refused like their plain form.
+- **Network administrator accounts are managed by network administrators.** With multisite on, a network
+  administrator's email, password, role, two-factor reset, AI agent connections and the account itself can
+  be changed only by a network administrator (or by its owner), and a site import leaves those accounts and
+  the network-wide settings untouched. Deleting an account removes it from the network administrators, and
+  each network-administrator entry is bound to its account's login and re-checked at boot and after a
+  backup restore.
+- **The two-factor code ceiling on the account security doors lasts a day.** Past ten wrong codes on
+  `/auth/mfa/disable`, `/auth/mfa/backup-codes` or a token step-up, the account password stays required
+  for 24 hours (or until a correct code or a password sign-in), on the Redis and in-memory stores alike,
+  and concurrent attempts are counted one by one.
+- **The gateway's debug "Proxying" line redacts query values,** like the access log, so one-time tokens
+  in reset, verification and invitation links are not written to debug logs.
+- **A plugin's JavaScript under `public/` now needs `browser:script`, like its `dist/` bundles.** The static
+  `/plugins/<slug>/public/*.js|.mjs|.cjs` files are served only while the plugin is active and granted
+  `browser:script`; styles, images and fonts keep the active-only rule. Every marketplace plugin that
+  enqueues a public script already declares it.
+- **mail-server 3.0.4: inbound sender authentication.** A `From` that names several domains is now
+  evaluated against the DMARC policy of each of them and gets the strictest outcome (RFC 7489 §6.6.1);
+  such mail is never shown as a verified sender, the stored verdict lists every From domain and the
+  reading pane shows **Several senders**. A message with several `From` header fields is refused.
+  Relaxed DMARC alignment now finds organizational domains with the **Public Suffix List**, vendored as
+  data in the plugin (`lib/public-suffix-list.js`, regenerated by
+  `backend/scripts/update-public-suffix-list.js`); a domain whose suffix the list does not know aligns
+  only on an exact match. A DKIM signature whose `l=` leaves part of the body unsigned is a *pass with
+  unsigned content*: it no longer counts for DMARC alignment or for the local-domain check, and the
+  webmail shows **Partly signed by …** with a notice instead of a verified badge.
+- **mail-server 3.0.4: the outbound retry queue charges a message once.** Automatic retries no longer
+  count against the sender's hourly limit again on every pass, and site/provider mail (`user_id = 0`)
+  retries on its own budget (1000 messages / 5000 recipients per hour) instead of a shared 100-message
+  bucket.
+- **A plugin route's `req.user` carries the caller's email and login only with `users:read`.** Without the
+  grant a route still receives `id`, `role`, `hasProfessionalMailbox` and `pluginCapabilities`.
+- **Real-time collaboration hardening.** The `/collab` routes now require an interactive sign-in; API
+  tokens and agent connections get `403 rest_session_required`. An open editing stream is re-checked at
+  once, on every node, when the user signs out, changes password, signs out everywhere, changes role,
+  falls under a two-factor requirement, or when the post's status or author changes; a check that cannot
+  complete closes the stream after a short grace, and deleting a post closes its streams and removes its
+  session rows. Messages on the `wordjs:collab` cluster bus are signed with a key derived from the site
+  secret, limited to the events the nodes publish, and their operations are validated like an upload.
+  Writing a page's content outside a live session (restoring a revision, saving from another editor)
+  resets that session so its members reload the saved content, and the collaborative editor's saves carry
+  `X-Collab-Epoch` so a save from a replaced session answers `409 collab_epoch_stale` instead of
+  overwriting it. New caps: connections per room and per user across the cluster, a per-user write budget
+  shared by all of the user's tabs, and a per-user share of a session's operation log. Structural edits
+  are sanitized with the same key-aware rules as `PUT /posts/:id`, and presence shows each member's
+  account number next to their display name.
+
+### Fixed
+
+- **`auctions` 1.1.1: signed-in bidding works again.** The plugin now requests `users:read`, so a signed-in
+  bidder bids as the address of their own account (the host shares a caller's email with a plugin route only
+  under that permission). Until an administrator approves it on an updated site, a signed-in bidder types an
+  address and confirms it with a mailed code, in `login` mode too. Every bid is now held to the per-auction and
+  site-wide bid windows, a mailed verification code stays charged to the requesting client's window, and
+  verification codes are bounded per client and site-wide (200 an hour) as well as per address.
+- **`vendor-marketplace` 1.0.3 and `conference-manager` 2.17.2: a right portal code is never refused for other
+  callers' wrong ones.** The per-client budget is the only one that refuses a portal sign-in; past the
+  per-portal and site-wide budgets every attempt waits a little longer instead, and only wrong codes for a
+  store or location that exists count toward them. The `vendor-marketplace` block now sends the CSRF header
+  with its sign-in, portal, application and inquiry requests, so a visitor who is signed in to the site can
+  use them.
+- **`event-tickets` 1.1.1: unpaid holds.** Unpaid orders of a ticket type together hold at most
+  `pendingHoldPercent` of its capacity (never less than one seat), the first order included. On a site without
+  a mail transport an order is held to the same per-address unpaid-seat window as a confirmed one, and the
+  confirmation codes the site mails are bounded site-wide (200 an hour).
+- **`digital-downloads` 1.1.1: the download and order-received mails carry only the site's own text** (no
+  longer the name typed in the order form), like the other public-form plugins' mails. Its block now sends
+  the CSRF header with the order request, so a visitor who is signed in to the site can order.
+
+## [2.7.0] - 2026-10-17
+
+### Added
+
+- **Update a plugin or a theme by uploading a newer zip.** Uploading a zip whose plugin is already
+  installed used to fail twice — "deactivate it", then "uninstall it" — and uninstalling dropped the
+  plugin's grants. Now **Plugins → Upload Plugin** answers `409 plugin_exists` with both versions and the
+  screen offers **Update** (`POST /api/v1/plugins/:slug/update`): the new code is extracted to a staging
+  directory and validated there first (a bad zip leaves the installed plugin running, untouched), then
+  swapped in and restarted if it was active. `data/`, the plugin's tables, its grants and its egress list
+  are kept; permissions the new version adds are reported and stay off, and the permissions dialog opens
+  on them. Themes get the same: **Install Theme** with an installed theme's zip offers **Update**
+  (`POST /api/v1/themes/:slug/update`, staged and compiled first, then swapped; an active theme stays
+  active and keeps its customizer settings). See `documentation/plugins.md` and `documentation/themes.md`.
+
+- **`wordjs.js pack theme <slug>`** zips a theme with the single `<slug>/` root folder the upload and the
+  update expect. The admin's theme download now has the same layout, so it can be uploaded back.
+
+- **A plugin can reach an administrator-approved private address — one host, one port.** Plugins still
+  reach public addresses only, but an administrator can now approve an exact `host:port` for a plugin
+  (`GET`/`POST /api/v1/plugins/:slug/private-egress`, at most 4 entries). The case it exists for is an
+  SMTP smarthost on the LAN, which the Mail Server could not use at all. An approval opens that host on
+  that port and nothing else; link-local addresses (including `169.254.169.254`), unspecified and
+  multicast addresses cannot be approved; it lives beside the egress allowlist without changing it; saving
+  restarts the plugin and is recorded in the audit log (`plugin.private_egress`); and an API token may
+  withdraw an approval but never make one. See `documentation/plugins.md` and `documentation/api.md`.
+
+### Changed
+
+- **The release smoke gate deploys split mode with the default HTTPS too**, installing, restarting and
+  requesting a content page, and checks that the frontend listens on loopback only. The release
+  workflow's jobs run on `ubuntu-24.04` instead of `ubuntu-latest`, which moves to Ubuntu 26.04 on
+  2026-10-19; pull-request CI keeps `ubuntu-latest`, so the new image is met there first.
+
+- **AI provider: a longer, configurable timeout for local models.** A loopback OpenAI-compatible
+  provider (Ollama, LM Studio…) now gets 300 s per request instead of 60 s, enough for a CPU model's first
+  load, a queue or an image; `WORDJS_AI_TIMEOUT_MS` overrides it for every provider.
+
+- **AI provider failures say what went wrong.** A timeout (`ai_provider_timeout`, 504), a model that does
+  not accept images asked for alt text (`ai_provider_no_vision`, 422), an unknown model, an unreachable or
+  unavailable server and a refused request now have their own codes and messages, and the editor shows a
+  translated message for each instead of one generic "did not answer correctly".
+
+- **Post and page `link` is the canonical URL.** REST and GraphQL answer `<siteUrl>/<slug>` — what the
+  page declares in `rel=canonical` and the sitemap and feeds publish — instead of `/post/<slug>/`, which
+  answered with a 308 redirect. Other content types keep `/<type>/<slug>`, without the trailing slash.
+
+- **Anonymous `status=draft` (pending, private, future) lists are empty.** `GET /posts` and GraphQL
+  `posts(status:)` used to answer an anonymous request for unpublished entries with the published ones;
+  they now answer an empty list. `status=any` still lists the published entries.
+
+- **The installer no longer reports a fake test run.** It used to "run" the core test suite with a filter
+  that matched none of its TypeScript files and report "0 tests, OK"; the install response now says
+  `tests.skipped: true`. `runCoreTests()` finds `*.test.ts` files, runs them with the secret-free env, and
+  reports `skipped` when there is no suite or no dev dependencies.
+
+- **The admin follows the site's language until you pick one.** With no choice saved in the sidebar's
+  language menu, the admin now speaks the site's own language (`<html lang>`, from the site locale) when it
+  is English, Spanish or Portuguese, instead of always starting in Spanish. An English site no longer
+  shows Spanish Backups or Marketplace screens next to English ones. A language picked in the sidebar still
+  wins, on every site.
+
+- **Bundled theme descriptions are translatable.** `theme.json` accepts
+  `"translations": { "<lang>": { "description": "…" } }`; the admin shows the description for its own
+  language and falls back to `description`. The four bundled themes ship English descriptions with Spanish
+  and Portuguese translations (Circuito's was Spanish only).
+
+- **Mail Server 3.0.2: a relay that does not answer is reported, not bypassed.** When the configured
+  relay failed its check, outgoing mail silently went direct-to-MX instead. Now it waits in the retry
+  queue and the console says **Relay unavailable: <reason>** (server health, the Configuration tab and
+  the Test tab; `relay_status` in `GET /settings`); a failed relay is re-checked at most once a minute.
+  The Configuration tab has a **Sandbox access** section to approve a private relay's exact address. A
+  relay given by name now works inside the sandbox (the plugin resolves it and keeps the name for TLS),
+  and relay credentials are optional, for a smarthost that relays for its network by address. With
+  **Require STARTTLS** off, a relay that advertises STARTTLS and then refuses it with an SMTP reply gets
+  the mail without TLS, as direct-to-MX delivery already does.
+
+- **Mail Server: password recovery works with a relay.** Recovery (and e-mail verification) waited for
+  the DNS check to find MX, A, SPF, DKIM and DMARC on the site's own domain, which a site that sends
+  through a relay never passes. Now a relay that answers its check is what makes mail ready, and one
+  that does not turns recovery off again.
+
+- **Mail Server: switched-off settings stay off.** A setting saved as `0` came back from the host as a
+  number and was read as on, so **Require STARTTLS: No** (and other switches turned off in the console)
+  had no effect and showed as **Yes** again after saving.
+
+- **Mail Server: a non-standard `smtp_listen_port` works with "Receive internet email".** WordJS now
+  opens any unprivileged port (1024 and up) for the plugin, besides the ones its manifest declares. A port
+  it refuses no longer leaves the server without a listener: the plugin listens on 25 and the console
+  says which port was refused and why.
+
+- **Mail Server: the console warns when the mail domain is not a public domain.** On a site reached by
+  IP, `localhost` or a LAN name, mailboxes become `@localhost` (or similar) and no other server can
+  deliver to them. Server health, the Configuration tab and the startup log now say so and how to fix it
+  (`mail_domain` / `mail_domain_public` in `GET /settings`).
+
+- **Multisite: the database migration tool, like backups, is now available on the main site only in a
+  multisite network.** `/api/v1/db-migration/*` answers 404 on every other site, exactly as `/backups`
+  does there (the admin screen already hid it). Single-site installs and the main site are unchanged.
+
+- **`GET /api/v1/` reports the product version and the full route map.** `version` now comes from the
+  release manifest (the same value `/api-docs` publishes) instead of a fixed `1.0.0`, and `routes` lists
+  every mounted route group, including the ones added since the map was written (AI, MCP, agents,
+  webhooks, audit, forms, collab, presence, media storage, site address, network, backups,
+  db-migration, ...). A test fails when a mounted group is missing from the map. Compatibility: the
+  API index now reports the product version and every mounted route group; every key it published
+  before is still there with the same path, so clients that read it only see additional keys and a
+  real version number.
+
+- **Theme logic: the default permission declaration uses the real vocabulary.** A theme without a
+  `manifest.json` declared a `content:read` scope that no permission gate knows; it now declares only
+  `settings:read`, from one shared definition used by both the runtime gate and the static scan. No
+  effective behaviour changes: a theme's `functions.js` still holds no permission grant.
+
+### Fixed
+
+- **A page rendered while the backend was down is no longer cached.** Public pages rendered with the
+  defaults (title "WordJS", no menus) or as a 404 when the backend did not answer, and the page cache kept
+  serving that copy after the backend was back; a site created a moment earlier could answer its own
+  address with it. A render that gets no answer (a failed connection, or the gateway's 502/504) now
+  fails instead: the last good copy keeps being served, or an error that is not cached, and the next
+  request renders the page again.
+
+- **The share image of a post follows the media library to the CDN.** With the library in an
+  S3-compatible bucket, the page body already loaded images from the CDN, but `og:image`,
+  `twitter:image` and the JSON-LD image still named `<site>/uploads/…`, which only answers with a
+  redirect to the bucket. They now use the same CDN URL as the body.
+
+- **The admin's media CSP no longer slips back to the old origin after a storage change.** The settings
+  purge re-read the media origin at once, but the next page render put the stale cached value back, so a
+  reload within about 20 seconds of saving could still refuse the new bucket. The fresh value now holds
+  until the cache has caught up.
+
+- **The Verso canvas links the theme stylesheet once.** The site chrome drawn inside the canvas added its
+  own copy of the theme and framework stylesheets, and the canvas's theme check then compared against the
+  wrong one and added a third.
+
+- **The WordPress import summary points at Menus.** It said "Appearance → Menus" (WordPress's name); it
+  now links to **Menus** in the admin sidebar.
+
+- **`npm run media -- …` works on a network of sites.** With multisite on, every command failed with
+  "No site context: this work did not say which site it belongs to.", because the CLI process never said
+  which site it was working for. It now works on the main site's media library, as its help text says.
+
+- **`npm run media -- status` prints only JSON on stdout.** The config boot notes ("Config loaded from
+  wordjs-config.json", the secret auto-generation lines) still went to stdout ahead of the command's
+  output, so piping it to `jq` failed. With `WORDJS_LOG_TO_STDERR=1`, which the CLI sets, they go to
+  stderr like every other log line.
+
+- **Edits show on a split site right after an HTTPS install, and on any single-host split site behind
+  a public name.** The backend sent its on-demand cache purges to `frontendUrl`, which the installer
+  derives from the site address (`https://example.com`, or `https://example.com:3001`): not this
+  machine's frontend, which listens on loopback when the gateway is local. And right after an install
+  with the default HTTPS the frontend still listens on the plain-HTTP socket it opened before the
+  certificates existed, while an `https://` purge target never falls back to plain HTTP, so every purge
+  failed and pages changed only when their cache window ran out (60 s for the home page) or after a
+  restart. A single-host split now purges the frontend installed next to the backend on `127.0.0.1`
+  at its own port, and for that loopback target the purge follows the listener the frontend really
+  opened.
+
+- **A split install keeps serving HTTPS after its first restart, and its content pages render.** Two
+  problems hit a split-mode site installed from the release bundle with the default self-signed HTTPS
+  (no `WORDJS_HTTP=1`). First, the installer rewrote `gateway/gateway-config.json` with `ssl` taken
+  from the backend's config, which has none, so the key was dropped and the gateway came back from its
+  next restart serving plain HTTP on a site whose address is `https://`. The installer now only replaces
+  gateway keys the backend config actually sets. Second, once the cluster certificates exist the
+  frontend's server-side reads go through the gateway's public origin, but the frontend trusted only the
+  cluster CA, not the gateway's own self-signed certificate, so every read failed and pages such as
+  `/about` or a post answered 404 while the home page fell back to defaults. The frontend now also
+  trusts the certificate the gateway on the same machine serves (`gateway/ssl-auto.crt`, or the one set
+  in `gateway-config.json`), and nothing wider. Sites behind a TLS-terminating proxy with
+  `WORDJS_HTTP=1`, monolith installs and separate mode were not affected.
+
+- **Behind a reverse proxy on the same machine, visitors keep their own address.** The gateway's public
+  rate limit counted per connection address and the gateway never trusted a fronting proxy, so behind
+  nginx every visitor was `127.0.0.1`: the whole site shared one 1000-requests-a-minute bucket, and the
+  backend was told the proxy's address for everyone. `trustProxy` in `gateway/gateway-config.json` (or
+  `WORDJS_TRUST_PROXY` for the gateway; same syntax as the backend's, e.g. `"loopback"`) now sets which
+  proxy the gateway believes, and the gateway then forwards the client it resolved to the backend.
+  Unset, nothing changes. Both the gateway and the backend now log one warning the first time a request
+  arrives from a local proxy that nothing trusts, naming the setting to add.
+
+- **The gateway honours `LOG_LEVEL` and `logging.level`.** Its logger was fixed at `info`; it now follows
+  the backend's order (`LOG_LEVEL`, then the config, then `info`) and understands the backend's level
+  names too.
+
+- **AI requests are no longer cut at 60 s in split mode.** The gateway gave every proxied request 60 s;
+  `/api/v1/ai/…` now waits the AI provider timeout plus 30 s (`WORDJS_AI_TIMEOUT_MS`, default 300 s), so
+  a slow local model answers, or the backend reports its own timeout.
+
+- **Split mode on one machine stays on the machine.** The frontend's server-side reads went to the
+  gateway's public address, so behind a proxy they left the server and came back through it; they now go
+  to the gateway next to it over loopback (when its certificate covers a loopback name, which the
+  auto-generated one does). The frontend also listened on every interface and registered the site's
+  public name with the gateway; it now listens on `127.0.0.1` and registers that, unless its config sets
+  a routable `advertiseHost` (or `WORDJS_FRONTEND_BIND` names the address). And a split site installed
+  with the default HTTPS no longer renders default content until its first restart: the frontend trusts
+  the local gateway's own certificate from its first boot, not only once the install has issued the
+  cluster certificates.
+
+- **The backend honours `PORT`, and the install keeps the configured ports.** In split and development
+  mode the backend ignored `PORT`, and `POST /setup/install` wrote `port: 4000` (and the default
+  frontend and gateway ports) over the values the config already had. `PORT` now wins over `port` in
+  `wordjs-config.json` (not in the monolith, where `PORT` is the public port), and the install keeps the
+  ports it finds.
+
+- **Command-line tools no longer lock the service out of its own files.** Run as root in an install that
+  belongs to another account, `npm run network`, `npm run site`, `npm run media` and `npm run migrate`
+  left `wordjs-config.json` and new database files owned by root, and the service could no longer write
+  them (creating a site failed with "attempt to write a readonly database"). They now refuse and print
+  the command to run as the owner (`WORDJS_ALLOW_ROOT=1` overrides). `npx create-wordjs upgrade` run as
+  root now gives the files it wrote back to the owner of the site directory, so `frontend/.next/cache`
+  can be created again.
+
+- **Small output fixes.** The install banner printed its hint as `WORDJS_PRINT_INSTALL_TOKEN=[redacted]`
+  (the log scrubber took the `=1` for a credential); the production monolith suggested `npm run dev` to
+  switch to split mode instead of `npm start`; `create-wordjs` printed npm's own "new major version"
+  notice in the middle of its output.
+
+- **MCP: a call to a tool the agent connection was not granted** is answered with a tool error that names
+  the missing grant and is recorded as `agent.denied` in the audit trail, as documented.
+
+- **MCP `get_site_info`** answers the effective language tag and time zone (`en`/`UTC` on a site that never
+  saved them) instead of empty strings.
+
+- **Media storage: the public URL is checked for the mistakes the server can see.** The settings and the
+  connection test answer `warnings` for a public URL that already ends with the key prefix (media URLs
+  would read `…/uploads/uploads/…`), a path-style endpoint without the bucket, and plain http on an https
+  site.
+
+- **Media storage on a multisite network:** a file another site does not hold on disk is redirected to the
+  bucket, like on the main site, instead of a 404.
+
+- **Media storage: "a migration is already running" is cluster-wide.** A node that is not running the
+  migration itself now refuses a second start (409) and reports it as running, from a progress record the
+  running node refreshes at least every 30 s.
+
+- **Media storage: a saved public URL reaches the admin page's CSP at once.** The frontend re-reads the
+  media origin when the backend purges its settings cache, so **Test connection** works right after a save
+  instead of failing for up to a minute.
+
+- **`npm run media -- status` prints only its JSON on stdout**; backend log lines go to stderr
+  (`WORDJS_LOG_TO_STDERR=1`), so it can be piped to `jq`.
+
+- **Backup archives are now created owner-only** (0600, in a 0700 directory), and archives already on disk
+  are tightened at boot.
+
+- **Docs:** `gateway.md` documents `GET /revalidate-secret`, and its endpoint test reads the routes
+  mounted from `gateway/src/purge.js`; `media-storage.md` names Garage and SeaweedFS next to MinIO for a
+  self-hosted bucket; `ai-agents.md` notes that **Last used** is written at most once a minute.
+
+- **Plugins → Marketplace speaks the admin's language.** The catalog tab, its source settings and the
+  install dialog were hard-coded Spanish ("Cargando el catálogo…", "Instalar", "Bloque …", "Permisos que
+  solicitará", "Cancelar", the source line and the toasts); they are translated now, including the
+  catalog's categories and the review badges. The broken-plugin card and its cleanup messages too.
+
+- **The delete-plugin dialog is one sentence.** It read "…This action cannot be undone. Reading List?";
+  the plugin's name now sits inside the question.
+
+- **Restoring a backup says it worked and what to do next.** The page reloaded a second after the restore,
+  throwing away the only feedback; it now stays on a success notice that tells the admin to restart the
+  WordJS service, with a reload button.
+
+- **Webhook delivery times are local.** The delivery log showed UTC database timestamps as if they were
+  local, next to a "Last delivery" in local time.
+
+- **Network → Create site shows why it failed.** A failed create (a server error included) now leaves an
+  error on the form as well as a toast.
+
+- **Media storage shows the server's advice about the public URL.** Non-blocking `warnings` from the media
+  storage API (a URL that repeats the key prefix, misses the bucket, or would be mixed content) are listed
+  under the fields, a failed public check in "Test connection" explains what to try, and the endpoint
+  hints name Garage and SeaweedFS next to MinIO.
+
+- **AI agents → New connection is no longer cramped.** Below 1536 px the form sits above the connection
+  list instead of in a narrow column that cut its labels at 1280 px.
+
+- **The Verso editor speaks the admin language everywhere.** With the admin in English the editor still
+  showed Spanish in many places: the mobile header ("Editando · …"), the canvas and navigation labels,
+  the entrance-animation effects, speeds and delays, the device tabs and every section of the
+  appearance panel (background, border and shadow, spacing and size, typography, hover motion), the
+  image and link fields, the list, menu, symbol and featured-image pickers, the interactions panel and
+  its timeline, collaboration status texts and the block palette's catalogue. All of them now go through
+  the editor dictionary in English, Spanish and Portuguese; a new test parses the editor sources and
+  fails on any visible string without a translation.
+
+- **New blocks start with text in the admin language.** A freshly inserted Hero, Button, Text, Form,
+  pricing table and the other core blocks — and the built-in patterns — used to start with the same
+  starter text whatever the language ("Un titular que atrapa" in an English admin). The starter text
+  now follows the admin language; blocks already on a page keep their text.
+
+- **The main editor button shows the published state.** After publishing, with nothing pending, the
+  button reads "Published" (or "Scheduled") with a check mark instead of offering the "Publish" action
+  again.
+
+- **Plugin blocks have readable names.** A plugin's Verso block can declare an optional `label` in
+  `versoComponentDef` / each `versoComponents` entry; without one the editor splits the block id into
+  words ("ReadingList" → "Reading List") instead of showing the raw id. See `documentation/plugins.md`.
+
+- **WordPress import keeps featured images.** `_thumbnail_id` names the attachment's id on the old site;
+  it is now remapped to the imported attachment, also when the attachment is listed after the post or was
+  matched on a re-run, and a re-run repairs posts an earlier import left pointing at the source id. A
+  reference that resolves to no imported attachment is dropped instead of naming an unrelated row.
+
+- **Imported comments keep their dates.** `wp:comment_date` / `wp:comment_date_gmt` are restored instead of
+  the import time.
+
+- **Re-importing content re-links menus.** When a menu is matched on a re-run, an item whose page, post or
+  term no longer exists (deleted and imported again under a new id) is re-pointed at the re-imported copy;
+  items whose target still exists, including ones edited by hand, are left alone. The summary reports them
+  as `menus.items.relinked`.
+
+- **Public dates follow the site language.** Post dates on single posts, the home page and search results,
+  and comment dates, are formatted in the site's language (`WPLANG`, the same value as `<html lang>`)
+  instead of the visitor's browser or the server's locale, so an English site no longer shows `2/3/2024`
+  for 2 March to a Spanish reader.
+
+- **A freshly installed site runs cron and outgoing webhooks without a restart.** The process that
+  finished the install wizard (or `POST /api/v1/setup/install`) had booted in setup mode, and the boot
+  starts cron, the coherence and cluster buses, the webhook dispatcher and the content outbox only on an
+  installed site. Until the first restart, webhooks delivered only the manual test ping (no post,
+  comment, term or settings event was ever queued) and scheduled posts were not published. The install
+  now starts these services in the running process, as the boot does (`core/runtime-services`).
+
+- **Release bundles no longer include a stray test backup in `backend/backups/`.** The 2.6.0 bundle
+  carried a backup left over from a local test run (a throwaway test database, no site data), and
+  `npx create-wordjs upgrade` copied it into the upgraded site, where it listed under Admin → Settings →
+  Backups. If a site upgraded to 2.6.0 shows a backup dated 2026-10-15 that it did not create, delete it
+  from that page; do not restore it. The packager now excludes `backend/backups/` by name,
+  `.gitignore` covers it, and CI fails if the repository tracks a backup or a database file outside test
+  fixtures or if a built bundle contains one. `create-wordjs upgrade` also treats `backend/backups/`
+  as site state, like `backend/data/` and `backend/uploads/`: it never adds to or replaces the site's
+  own backups.
+
+- `wordjs.js pack <slug> --build` on a production install stopped with a raw `Cannot find module
+  'esbuild'`; it now says the backend's development dependencies are missing and how to build instead.
+  Its closing hint names the real button (**Upload Plugin**, not "Add New").
+
+- A theme generated from valid seeds could get a `--wjs-color-text-muted` under AA (4.42:1 for
+  `#2b211c` on `#fbf7f2`), which the doctor then flagged. The derivation now washes the text less when
+  needed and always reaches 4.5:1; palettes that already passed are unchanged.
+
+- A theme's `styles.hero.bg` / `--wjs-hero-bg` never showed: the framework's default hero gradient was
+  painted over it. Both ends of that default gradient now fall back to `--wjs-hero-bg`; an explicit
+  gradient or image still wins. A bundled theme that set only `--wjs-hero-bg` now shows that colour.
+
+- After activating a theme, the first visit to each cached page still got the previous theme
+  (stale-while-revalidate). Activation, and updating the active theme, now expire those pages at once.
+
+- An isolated plugin's `comments:pre_insert` filter that threw or timed out was skipped and the comment
+  accepted, against the hook's contract. That hook now fails closed: the comment is refused with the
+  plugin's own 4xx status and `rest_*` code when it gave one, `503 rest_plugin_check_failed` otherwise.
+  Other filters keep falling back to the unchanged value.
+
+- `backend/types/wordjs-bridge.d.ts` declares `WordJSRouteUser.pluginCapabilities`,
+  `res.sendPrivateMedia()` and `wordjs.media.getPrivate()`.
+
+- The `hello-world` sample filtered `the_content`, a hook core never applies, and its test claimed to
+  run before activation; it now registers a `[hello]` shortcode and says its tests are the author's to
+  run. `POST /plugins/sample` writes the same isolated sample (it wrote an in-process one without a
+  manifest). The `test-schema` fixture declares `database:write` instead of an access level the upload
+  refuses, and drops its unused `main` / `active` keys.
+
+- **Diagnostic scripts in `backend/cli` run again.** `inspect-roles.js`, `inspect-user.js`,
+  `verify-roles.js` and `force-sync-roles.js` use the backend's current database initialization (the same
+  driver and `dbPath` as the server) and are run from `backend/` as
+  `node -r ts-node/register cli/<name>.js`. `force-sync-roles.js` resets the built-in roles to the
+  server's defaults (plus any `roles` override in the config) and keeps plugin and custom roles;
+  `inspect-user.js` takes the login as an argument and never prints credential columns.
+  `check_plugins.js` reads `dbPath` (or the `dbDriver` default file) from `backend/wordjs-config.json`.
+  `backend/scripts/migrate-media-urls.js` loads the TypeScript sources by itself (compiled `dist/` when
+  present), so a plain `node scripts/migrate-media-urls.js` works.
+
+- **Plugin bridge typings.** `backend/types/wordjs-bridge.d.ts` now describes `wordjs.paths`
+  (`data`, `logs`, `tmp`) and the `wordjs.smtp` namespace (`listen`, `status`) used with the
+  `smtp:inbound` permission, with its session, handler, option and status types.
+
+
+## [2.6.0] - 2026-10-16
+
+### Added
+
+- **Strict database driver mode.** `"dbStrictDriver": true` in `backend/wordjs-config.json`, or
+  `WORDJS_DB_STRICT=1` in the backend's environment (the variable wins, in both directions), turns the
+  fallback to the pure-JS `sqlite-legacy` driver into a boot error. The error names the driver that failed,
+  its load error, what the fallback would have cost (no FTS5, so site search on `LIKE` instead of ranked
+  results) and the fix (`npm rebuild better-sqlite3` in `backend/` for the native driver). In strict mode
+  migration `0008_posts_fts5` also fails, rather than skipping, on a SQLite build without FTS5; an
+  explicitly configured `sqlite-legacy` still boots. Off by default, so nothing changes for existing
+  installs: the fallback, its admin notice and `/health/details` report work as before. See
+  `documentation/database.md`.
+- **Webhooks cover the whole site lifecycle, not just six content events.** The catalogue grows from 6 to
+  31 events, grouped by entity: posts and pages (`post.scheduled`, `post.unpublished`, `post.trashed`,
+  `post.restored` next to the existing four), comments (`comment.updated`, `comment.approved`,
+  `comment.spam`, `comment.trashed`), users (`user.created`, `user.updated`, `user.deleted`, and
+  `user.login`, which is opt-in: no wildcard includes it), media (`media.uploaded/updated/deleted`),
+  categories and tags (`term.created/updated/deleted`), menus (`menu.updated`, naming what changed),
+  plugins (`plugin.installed/activated/deactivated/uninstalled`), themes (`theme.activated`) and settings
+  (`settings.updated`, key names only). The events come from the hooks core already fires and from a new
+  host-only observer of the audit trail (`onAuditRecorded`), so there are no emit calls scattered through
+  the routes; signing, retries, the SSRF guard and the delivery log are unchanged, and existing
+  subscriptions (`*`, `post.*`, …) keep their format and simply receive the new events in their scope.
+  Every payload is built by an allowlisted per-entity serializer, so no password hash, MFA secret, token,
+  email address, option value or private-media URL can reach a receiver. `POST /webhooks/:id/ping` sends a
+  signed test delivery to one endpoint, and the admin page gets an event picker grouped by entity (with a
+  per-entity "All") and a **Send test** button. Every event and its payload is documented in
+  `documentation/webhooks.md`.
+
+- **The audit trail records media, taxonomy, menu, comment-moderation and plugin install/uninstall
+  changes, profile saves and self-registrations.** New actions: `media.upload/update/delete`,
+  `term.create/update/delete`, `menu.create/update/delete`, `comment.approve/spam/trash/update/delete`,
+  `plugin.install` (zip upload), `plugin.uninstall`, `user.update` (field names only) and
+  `auth.password.change`; a self-registration now records `user.create`. This closes the two call sites
+  `documentation/security.md` listed as missing (the media routes and the profile password change).
+- **A read-only GraphQL API at `/api/v1/graphql`.** Posts, pages, custom post types, categories and tags,
+  taxonomies and content types, media, menus, approved comments, the public settings and the current
+  viewer, with cursor pagination (`first`/`after`, `pageInfo`, `totalCount`), filtering and the same
+  full-text search as REST. Every field resolves through the matching REST read, in process and as the
+  same caller, so drafts, private and password-protected entries, non-public types, hidden attachments and
+  scoped API tokens behave exactly as they do on REST; a parity suite compares the two for anonymous
+  callers, owners, other authors and editors. The server is protected by a depth limit (10), a query-cost
+  limit (1000), a parser token cap, a 100-item page cap and the existing API rate limiter; introspection
+  is off in production unless the new admin-only `graphql_introspection` setting turns it on. Host code
+  can extend the schema with `registerGraphQLExtension()` or the `wordjs_graphql_register_types` hook.
+  Mutations are not part of this release. Built on `graphql` 16 and `graphql-http` (both MIT, no
+  transitive dependencies). See `documentation/graphql.md`.
+- **Optional media offload to an S3-compatible bucket and CDN.** Media could only live on the backend's
+  local disk. Settings → Media storage (or a `mediaStorage` block in `wordjs-config.json` / the
+  `WORDJS_MEDIA_*` env vars) now sends public uploads — the original and every stored derivative, the size
+  ladder and its WebP/AVIF siblings included — to AWS S3, Cloudflare R2, MinIO, Backblaze B2 or any
+  S3-compatible store, reusing the dependency-free SigV4 signer of the backup offload. The database keeps
+  the same relative `/uploads/...` paths: `/uploads` redirects to the CDN for files a node does not hold,
+  the API adds a `deliveryUrl`, and once the whole library is offloaded the public SSR emits CDN URLs
+  directly. The page CSP gains exactly the configured media origin in `img-src` and `media-src`, at
+  response time. `npm run media -- offload | restore | status | test` (and buttons on the screen) move an
+  existing library to the bucket and back, idempotent and resumable, one run at a time across the
+  cluster. The screen has a "Test connection" button: the server writes and reads a probe object, the
+  admin's browser loads it from the public URL, and the server deletes it; credentials are write-only (only a four-character hint is ever returned). With offload
+  on, backend nodes no longer need a shared uploads directory for media. Private media stays on local
+  disk. See `documentation/media-storage.md`.
+- **AI agents can work on a site through a built-in MCP server, with the plugin permission model.**
+  `POST /api/v1/mcp` speaks the Model Context Protocol (Streamable HTTP, stateless, JSON responses, via the
+  official `@modelcontextprotocol/sdk`), so Claude Code, Claude Desktop and other MCP clients can list,
+  search and read content, create and edit drafts, submit them for review, publish, upload media, create
+  categories and tags, moderate comments and read the site's public identity. Each client authenticates
+  with a dedicated **agent connection** token (`Bearer wja_…`) bound to one user. The connection
+  **requests** capabilities (`content:read`, `content:draft`, `content:publish`, `media:upload`,
+  `taxonomy:write`, `comments:moderate`, `settings:read`) and an **administrator grants** a subset; every
+  call then runs as the bound user with its capabilities narrowed to the grant, so an agent can never do
+  more than its user (a contributor's agent granted `content:publish` still cannot publish) and no grant
+  reaches deletion, users, roles, plugins, themes, settings writes, tokens or backups. Tools run through
+  the REST router in-process, so every REST rule, hook and audit row applies; new content is always a
+  draft; site content returned to the model is labelled untrusted data. Agent tokens are refused by the
+  REST API and `/mcp` refuses API tokens and session cookies. A new admin screen, **AI agents**
+  (`/admin/agents`), creates connections, reviews and grants requested capabilities (showing grants the
+  user cannot exercise as inert), revokes them, shows each agent's audit trail and copies ready-made
+  client configuration. New audit actions: `agent.create`, `agent.grant`, `agent.revoke`, `agent.write`
+  (every agent write, success or refusal) and `agent.denied`. Rate limits: 240 requests/min per agent
+  token, plus 120 tool calls and 30 writes per minute per agent. New routes `GET/POST /api/v1/agents`,
+  `PUT /api/v1/agents/:id/grant`, `DELETE /api/v1/agents/:id`, `GET /api/v1/agents/:id/audit`; migration
+  `0016_create_agent_connections`. A password change/reset or account deletion revokes the user's agent
+  connections, and agent tokens follow the MFA policy's `enforceForApiTokens` like API tokens. See
+  `documentation/ai-agents.md`.
+- **An AI provider layer, with editor suggestions and an `ai:use` plugin permission.** Administrators
+  connect a provider under **Settings → AI** (`/admin/settings/ai`): **Anthropic** (Claude — default model
+  `claude-sonnet-5-5`, also `claude-haiku-5-5` and `claude-opus-5-5`, through the official
+  `@anthropic-ai/sdk`) or any **OpenAI-compatible** server (OpenAI, Ollama, LM Studio, vLLM…; https unless
+  loopback), with a connection test. The API key is write-only: no route returns it (the screen shows
+  only that one is stored and its last four characters), it is never logged or audited, and plugins can
+  neither read it nor redirect the provider (`ai_provider` and `ai_provider_api_key` are protected
+  options). The editor gets **Suggest with AI** under a post's or page's excerpt and meta description
+  (it reads the live canvas, unsaved edits included) and under an image's alt text in the media library
+  (the image is read server-side behind the same rule as editing it and downscaled before it leaves the
+  site). A suggestion is only ever shown — Use / Try again / Dismiss — and nothing is saved until the user
+  accepts it; the material is sent as data the model is told not to obey, and the answer is reduced to a
+  single line of plain text with a length cap. Plugins get `wordjs.ai.complete({ prompt, system?,
+  maxTokens? })` → `{ text, model }`, gated on the new `ai:use` permission that a manifest requests and
+  an administrator grants (30 calls/minute per plugin). New routes `GET /api/v1/ai/status`,
+  `GET`/`PUT /api/v1/ai/settings`, `POST /api/v1/ai/test` and `POST /api/v1/ai/suggest` (20/minute per
+  user); new audit action `ai.settings.update`. See `documentation/ai-provider.md`.
+- **Multisite, phase 1: one install can serve a network of sites.** Off unless turned on with
+  `npm run network -- enable --admin <login>`; a single-site install keeps the same database, files,
+  URLs, cache keys and tokens. Once on, the existing install is site 1, the main site, and network
+  administrators (listed administrators of the main site) create, suspend and resume sites from
+  **Admin → Network**. Each site has its own main address, its own SQLite database and its own uploads
+  under `<data dir>/sites/<id>/`, and its own users, roles, sessions, settings, menus and theme choice.
+  A request belongs to the site whose address it was sent to (an unknown address is still a 421); one
+  site's sessions and API tokens are refused on every other (a per-site signing key and a site claim),
+  in-process caches, cache keys, purge tags and the frontend's Data Cache and Full Route Cache are kept
+  per site, and work that loses track of its site fails instead of touching the main site. Phase 1 needs
+  the `sqlite-native` driver and one backend host; plugins, theme server code, backups, certificates and
+  real-time collaboration stay on the main site. The design, the isolation guarantees and the next
+  phases are in `documentation/multisite-design.md`; running a network is in
+  `documentation/multisite.md`.
+- **Multisite, phase 2: plugins and theme code run per site.** Plugin code stays network-wide (installed,
+  updated and deleted on the main site), but every site can now activate plugins and grant them
+  permissions on its own. A network administrator first **offers** a plugin to the sites from
+  **Admin → Network → Plugins for the sites**, choosing a grant ceiling; a site administrator can never
+  grant beyond it (`403 plugin_grant_beyond_ceiling`), and lowering it takes effect at once. Each site
+  runs its **own sandboxed worker** of each plugin it activates, keyed by site: its routes, hooks,
+  shortcodes, scheduled events, notification transports and mail provider answer only for that site, its
+  bridge calls read and write only that site's database, and its private storage is that site's. On
+  Postgres and MySQL the per-plugin database principal is per site too. Each site also runs its own
+  theme server code (`functions.js`). New isolation tests prove guarantees I5 (a plugin active on one site
+  cannot act on another) and I8 (the ceiling). See `documentation/multisite.md`.
+
+### Changed
+
+- **The WordPress import API downloads attachments by default, like the importer and the admin screen.**
+  A `POST /api/v1/import/wordpress` that sent neither `media` nor the legacy `importAttachments` switch
+  used to skip every attachment, while the core importer and the admin screen both default to
+  `download`. The route now uses `download` too; `media=skip` and `importAttachments=0` still opt out, and
+  `importAttachments=1` still means `download`. The OpenAPI description documents the default.
+- **Backend log lines go through per-module structured loggers instead of `console`.** A new
+  `core/module-logger` gives each backend module `moduleLogger('<dir>/<file>')`: every line carries a
+  `mod` field and, inside a request, the request's `requestId`; errors are logged as `{ err }` instead
+  of being pasted into the message; values such as a slug, a table or a path travel as fields; and the
+  message keeps its wording, so existing greps still match. Message text still goes through the same
+  credential scrub the console bridge applies, and `err` is now serialized by allow-list (type, message,
+  stack, `code`/`errno`/`syscall`/`status`/`statusCode`, `cause`), so an HTTP-client error can no
+  longer carry its request headers into the log. All of `backend/src` is migrated except an explicit
+  allowlist — the modules loaded inside the isolated plugin child (their output is still captured and
+  slug-tagged by the host), `config/app` and the two first-boot banners — and
+  `src/tests/no-console-in-backend.test.ts` fails on any new `console.*` call outside it. The
+  development-only per-request line (`NODE_ENV=development`) is now `debug`: the access log already
+  records every request at `info`. See `documentation/observability.md`.
+
+### Fixed
+
+- **mail-server 3.0.1: findings from a production-like lab.** A fresh install now loads the plugin
+  grants and egress policy right after setup, so a network-granted plugin is not deny-all until the next
+  restart. Unknown recipients are refused at `RCPT TO` (`550 5.1.1` / `5.7.1`) instead of being accepted
+  and dropped. Quota usage between refreshes counts attachment bytes. An MX that refuses STARTTLS with a
+  reply (e.g. `454`) gets one plaintext retry, as opportunistic TLS does everywhere; a failed handshake
+  still never downgrades. Forwarding keeps the original attachments (only those of a message the user may
+  read). Received HTML keeps an allowlist of safe inline styles. The DNSBL check works inside the sandbox
+  through the host DNS bridge. The Bayesian filter needs real evidence before it files mail as spam. Plus
+  webmail and server-console polish: scrolling tab bars, address entry, translations.
+- **mail-server: vacation auto-replies go out with a null return path (RFC 3834).** The envelope sender
+  is `MAIL FROM:<>` on the direct and relay paths, and the retry queue keeps it, so an auto-reply that
+  cannot be delivered is dropped by the remote MTA instead of bouncing back into the user's inbox. The
+  header From, DKIM and `Auto-Submitted` are unchanged; normal sends and forwards keep their sender.
+
+- **`GET /api/v1/pages` answered `404 rest_post_invalid_id`.** The alias forced `type=page` but handed the request to the posts router with its URL still `/pages`, so it matched the single-post route instead of the list. It now reaches the list route and behaves as documented: the same filters, authorization, `X-WP-Total`/`X-WP-TotalPages` headers and refusal of repeated scalars as `GET /posts`, with any caller-supplied `type` overwritten.
+- **Opening a post or page in the editor no longer crashes or blanks the canvas when live collaboration
+  is on.** A record with no saved editor document (an imported or legacy post, one created through the
+  API, or the demo posts of a fresh install) joined the collaboration room, whose snapshot for it is
+  `{}`. The room's welcome then replaced the locally seeded document: the canvas, title, slug and
+  excerpt opened empty, and every field edit threw `Cannot read properties of undefined (reading
+  'length')`. The Verso store now always publishes `content` as an array (a document whose `content`
+  key is absent is published as `[]`; a corrupt one is still passed through untouched), and an editor
+  whose record has no saved document stays out of the room until it has been saved once. Records that
+  already have a saved document collaborate as before.
+- **A refused upload answers with a 4xx and its reason instead of a 500.** An SVG uploaded by a
+  non-administrator, a file type or extension the media library does not take, a non-zip plugin or theme
+  package, a WordPress import that is not a WXR file, and a file over the upload size limit all reached the
+  error handler without a status and were answered `500 rest_internal_error` with the reason discarded.
+  They now answer `403 rest_upload_svg_forbidden`, `415 rest_upload_invalid_type` and
+  `413 rest_upload_too_large` (multer's other limits: `400 rest_upload_invalid`), with the message.
+- **`comment.created` webhook payloads now carry the comment's id.** The serializer read a field the
+  comment model does not have, so `data.id` was always missing.
+
+### Security
+
+- **API tokens and the MFA-by-role policy: a deliberate, visible choice.** Personal API tokens (`wjt_…`)
+  stay exempt from the two-factor compliance gate by default, so existing integrations keep working, but
+  the trade-off is no longer silent. A user whose role requires 2FA can now create a token only from a
+  session that signed in with the second factor, or by confirming a current authenticator or backup
+  code when creating it (`mfaCode` on `POST /auth/tokens`; otherwise `403 rest_mfa_step_up_required`, and
+  a wrong code is `400 rest_mfa_invalid`). Sessions issued by a two-factor sign-in carry an `amr: ["mfa"]`
+  claim, which `/auth/refresh` keeps. Roles outside the policy create tokens exactly as before. The
+  `auth.token.create` audit row now records how the second factor was proven (`mfa`: `session`,
+  `step_up` or `not_required`), a failed step-up writes `auth.token.create_refused`, and policy changes
+  write `auth.mfa.policy_update`. `GET /auth/mfa/policy` also returns `tokenExposure`: how many active
+  tokens belong to users in a required role, and how many of their owners have not enrolled. The
+  Security screen shows a notice with those numbers while the policy requires 2FA and tokens are
+  exempt, and explains the "Also enforce for personal API tokens" switch. The API tokens screen asks for
+  the code when it is needed.
+- **New installs hold API tokens to the MFA policy by default; upgraded sites keep them exempt.** On a site
+  created by the install wizard, the first time an administrator requires 2FA for a role the "Also enforce
+  for personal API tokens" switch is on (pre-checked on the Security screen, and the default when
+  `PUT /auth/mfa/policy` omits the field); the administrator can still turn it off. A site upgraded from an
+  earlier version keeps it off, even on its first policy save after the upgrade, so no existing token
+  starts failing. `GET /auth/mfa/policy` reports this as `enforceForApiTokensDefault`.
 
 ## [2.5.0] - 2026-10-15
 

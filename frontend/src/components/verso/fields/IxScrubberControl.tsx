@@ -29,6 +29,7 @@
  */
 import React, { useCallback, useEffect, useId, useState } from "react";
 import MSym from "@/components/editor/MSym";
+import { useEditorTr } from "@/lib/verso/useEditorTr";
 
 const LABEL_CLS = "block text-xs font-medium text-[var(--ed-on-surface-variant)] mb-1";
 const BTN =
@@ -55,6 +56,7 @@ export interface IxScrubberControlProps {
 }
 
 export default function IxScrubberControl({ enabled, scrollDriven, onScrub, variant }: IxScrubberControlProps) {
+  const { tr, trf } = useEditorTr();
   const id = useId();
   const [armed, setArmed] = useState(false);
   const [pct, setPct] = useState(0);
@@ -101,16 +103,16 @@ export default function IxScrubberControl({ enabled, scrollDriven, onScrub, vari
           className="shrink-0 text-[11px] text-[var(--ed-on-surface-variant)] hover:text-[var(--ed-primary)] disabled:opacity-40 disabled:pointer-events-none transition-colors"
           disabled={!enabled}
           aria-pressed={armed}
-          title={
+          title={tr(
             armed
               ? "Soltar el recorrido y devolver el lienzo"
               : scrollDriven
                 ? "Recorrer a mano una interacción que avanza con el scroll"
-                : "Recorrer la animación a mano y pararse en cualquier punto"
-          }
+                : "Recorrer la animación a mano y pararse en cualquier punto",
+          )}
           onClick={() => (armed ? release() : arm())}
         >
-          {armed ? "Soltar" : "Recorrer"}
+          {tr(armed ? "Soltar" : "Recorrer")}
         </button>
         <input
           id={id}
@@ -120,7 +122,7 @@ export default function IxScrubberControl({ enabled, scrollDriven, onScrub, vari
           step={1}
           value={pct}
           disabled={!enabled || !armed}
-          aria-label="Recorrer a mano"
+          aria-label={tr("Recorrer a mano")}
           aria-valuetext={`${pct} %`}
           className="min-w-0 flex-1 accent-[var(--ed-primary)]"
           onChange={(e) => move(Number(e.target.value))}
@@ -132,17 +134,19 @@ export default function IxScrubberControl({ enabled, scrollDriven, onScrub, vari
           step={1}
           value={pct}
           disabled={!enabled || !armed}
-          aria-label="Recorrido a mano (%)"
+          aria-label={tr("Recorrido a mano (%)")}
           className="h-6 w-12 shrink-0 rounded-[2px] border border-[var(--ed-outline-variant)] bg-[var(--ed-surface)] px-1.5 text-right text-[11px] text-[var(--ed-on-surface)] disabled:opacity-40"
           onChange={(e) => e.target.value !== "" && move(Number(e.target.value))}
         />
         {/* El cambio de MODO se anuncia igual; el transporte no lleva texto de ayuda visible. */}
         <p role="status" className="sr-only">
-          {!enabled
-            ? "Sin interacción que recorrer."
-            : armed
-              ? "Recorriendo a mano: el lienzo muestra el estado intermedio."
-              : "Recorrido a mano disponible."}
+          {tr(
+            !enabled
+              ? "Sin interacción que recorrer."
+              : armed
+                ? "Recorriendo a mano: el lienzo muestra el estado intermedio."
+                : "Recorrido a mano disponible.",
+          )}
         </p>
       </div>
     );
@@ -152,7 +156,7 @@ export default function IxScrubberControl({ enabled, scrollDriven, onScrub, vari
     <div className="mb-3">
       <div className="mb-1 flex items-center justify-between gap-2">
         <label htmlFor={id} className={`${LABEL_CLS} mb-0`}>
-          Recorrer a mano ({pct} %)
+          {trf("Recorrer a mano ({pct} %)", { pct })}
         </label>
         <button
           type="button"
@@ -165,7 +169,7 @@ export default function IxScrubberControl({ enabled, scrollDriven, onScrub, vari
               en él se pinta como su texto de ligadura ("stop_circle" en crudo, visto en el
               navegador). Estos dos ya se usan en el chrome, así que están dentro. */}
           <MSym name={armed ? "close" : "tune"} size={12} className="align-[-2px]" />{" "}
-          {armed ? "Soltar" : "Recorrer"}
+          {tr(armed ? "Soltar" : "Recorrer")}
         </button>
       </div>
       <div className="flex items-center gap-2">
@@ -194,7 +198,7 @@ export default function IxScrubberControl({ enabled, scrollDriven, onScrub, vari
           step={1}
           value={pct}
           disabled={!enabled || !armed}
-          aria-label="Recorrido a mano (%)"
+          aria-label={tr("Recorrido a mano (%)")}
           className="w-14 shrink-0 rounded border border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-high)] px-1.5 py-0.5 text-right text-[11px] text-[var(--ed-on-surface)] disabled:opacity-40"
           // Vaciar el campo a medio teclear NO es pedir el 0 (`Number("")` lo es): se ignora.
           onChange={(e) => e.target.value !== "" && move(Number(e.target.value))}
@@ -203,13 +207,15 @@ export default function IxScrubberControl({ enabled, scrollDriven, onScrub, vari
       {/* El cambio de MODO sí necesita anunciarse: el botón cambia de nombre, pero lo que cambia de
           verdad es quién manda sobre el lienzo. */}
       <p role="status" className="text-[10px] text-[var(--ed-outline)] mt-1">
-        {!enabled
-          ? "Sin interacción que recorrer."
-          : armed
-            ? "Recorriendo a mano: el lienzo muestra el estado intermedio."
-            : scrollDriven
-              ? "Esta interacción avanza con el scroll: recórrela a mano para ver los pasos intermedios."
-              : "Recórrela a mano para pararte en cualquier punto de la animación."}
+        {tr(
+          !enabled
+            ? "Sin interacción que recorrer."
+            : armed
+              ? "Recorriendo a mano: el lienzo muestra el estado intermedio."
+              : scrollDriven
+                ? "Esta interacción avanza con el scroll: recórrela a mano para ver los pasos intermedios."
+                : "Recórrela a mano para pararte en cualquier punto de la animación.",
+        )}
       </p>
     </div>
   );

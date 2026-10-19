@@ -130,6 +130,20 @@ describe('POST /setup/install and the browser:script upgrade', () => {
         assert.ok(typeof marker === 'string' && marker.startsWith('install:'), `marker: ${JSON.stringify(marker)}`);
     });
 
+    // Same call site, the MFA policy's fresh-install default: the site the wizard created is marked, so its
+    // first policy that requires a role holds API tokens to it (core/mfa tokenEnforcementDefault). Delete the
+    // recordFreshInstall call from routes/setup.ts and this is false.
+    it("the site the wizard created is marked for the MFA policy's API-token default", async () => {
+        assert.strictEqual(await require('../core/mfa').tokenEnforcementDefault(), true);
+    });
+
+    it('the wizard loads the plugin policy: a network plugin is not left deny-all until a restart', async () => {
+        // The installing process booted in setup mode and skipped the boot block that loads it; before
+        // routes/setup.ts loaded it, isEgressPolicyLoaded() stayed false and every network-granted plugin
+        // was refused every DNS name (wordjs.dns) and every host until the next restart.
+        assert.strictEqual(perms.isEgressPolicyLoaded(), true, 'the egress policy must be loaded once the site exists');
+    });
+
     it('the first restart after real use grants browser:script to nothing', async () => {
         await updateOption('active_plugins', [LEGACY]);
         await perms.setGrants(LEGACY, []); // written by no administrator: no decision mark

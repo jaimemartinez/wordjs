@@ -68,6 +68,10 @@ const IGNORE_PATTERNS = [
     'ssl-auto.key',
     'backend/cli',     // Exclude test/debug scripts (see CLI_SHIPPED for the product CLI carve-out)
     'backend/uploads', // Exclude local uploads
+    // Site backups (core/backup.ts writes them here). Each one is a whole database plus media, and a
+    // bundle that carries one hands it to every site `create-wordjs upgrade` touches, where it lists
+    // under Admin → Settings → Backups and can be restored over the site's own data.
+    'backend/backups',
     'backend/check_plugins.js', // Legacy debug
     'check_plugins.js',
     'debug-inbox.js',

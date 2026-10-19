@@ -23,9 +23,18 @@ Multi-stage:
    `unhealthy` forever and any `depends_on: condition: service_healthy` would never fire. It is used as
    the Kubernetes `readinessProbe` in `deploy/helm/wordjs` instead.
 
-Because the app reads its **database** settings from `backend/wordjs-config.json` (only Redis + a few
-flags are environment-read), `entrypoint.sh` can materialize that file from environment variables — but
-it does so **only when `WORDJS_PRESEED_CONFIG=1`**, and never over an existing config.
+The app reads its **database** settings, secrets and site address only from `backend/wordjs-config.json`,
+so `entrypoint.sh` can materialize that file from environment variables — but it does so **only when
+`WORDJS_PRESEED_CONFIG=1`**, and never over an existing config. Many other settings are read from the
+environment by the app itself, on every boot and with or without a pre-seed: Redis (`REDIS_ENABLED`,
+`REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_DB` — note these are the app's names, not the
+entrypoint's `WORDJS_REDIS_*` below), media offload (`WORDJS_MEDIA_*`), `METRICS_TOKEN`, `LOG_LEVEL`,
+`WORDJS_DB_STRICT`, `WORDJS_TRUST_PROXY`, the API rate limit (`WORDJS_API_RATELIMIT_MAX` /
+`_WINDOW_MS`), the GraphQL limits (`WORDJS_GRAPHQL_MAX_DEPTH` / `_COST` / `_TOKENS`), the install token
+(`WORDJS_INSTALL_TOKEN`, `WORDJS_PRINT_INSTALL_TOKEN`), `WORDJS_HTTP`, `PORT` and the host-policy
+variables (`WORDJS_ALLOWED_HOSTS`, `WORDJS_IP_HOSTS`). A value in the config file wins over the variable
+for Redis, `METRICS_TOKEN` and `WORDJS_TRUST_PROXY`; the variable wins for the others. The full table,
+with defaults, is in [`documentation/deployment.md`](../documentation/deployment.md#-configuration-reference-environment-variables--config-keys).
 
 > **Why that is opt-in.** `core/configManager.isInstalled()` keys off `installedAt || dbDriver`, so any
 > config written before first boot marks the instance **installed** — and `POST /api/v1/setup/install`
@@ -72,6 +81,9 @@ container (`docker compose exec wordjs npm run site -- list`). A **regular** fil
 | `WORDJS_DB_HOST` / `WORDJS_DB_PORT` | `localhost` / `5432` | shared Postgres address |
 | `WORDJS_DB_USER` / `WORDJS_DB_NAME` | `postgres` / `wordjs` | Postgres role + database |
 | `WORDJS_DB_PASSWORD` | `wordjs` | **must not be `password`** (see gotcha) |
+| `WORDJS_DB_SSL` | `false` | `true` connects to the database over TLS and **verifies its certificate** (chain and host name) |
+| `WORDJS_DB_SSL_CA` | *(unset)* | path inside the container to the CA certificate (PEM) that signed the database server's certificate — mount it as a secret. Needed for a private CA, a managed database's own CA or a self-signed server |
+| `WORDJS_DB_SSL_REJECT_UNAUTHORIZED` | `true` | `false` skips certificate verification: encrypted but **unauthenticated**. The entrypoint and the backend both log a warning. Prefer `WORDJS_DB_SSL_CA` |
 | `WORDJS_JWT_SECRET` | *(none — required)* | session signing key, ≥ 64 characters (`openssl rand -hex 64`); **share across replicas** |
 | `WORDJS_REDIS_ENABLED` | `false` | `true` turns on cross-node coherence |
 | `WORDJS_REDIS_HOST` / `WORDJS_REDIS_PORT` | `127.0.0.1` / `6379` | shared Redis |

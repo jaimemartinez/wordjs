@@ -20,7 +20,7 @@
  */
 
 import type { InlineUnit, LinkAttrs, Para, RichDoc } from "./model";
-import { docIsEmpty, sameLink } from "./model";
+import { docIsEmpty, isSafeLinkHref, sameLink } from "./model";
 
 /** Atributo del `<br>` de relleno del editor (jamás llega a la emisión canónica). */
 export const FILLER_BR_ATTR = "data-wjs-filler";
@@ -44,7 +44,8 @@ type MarkLevel = 0 | 1 | 2 | 3;
 function levelKey(u: InlineUnit, level: MarkLevel): string | null {
     if (level === 0) return u.marks.bold ? "b" : null;
     if (level === 1) return u.marks.italic ? "i" : null;
-    if (level === 2 && u.marks.link) {
+    // Defensa en la emisión: un modelo construido a mano con un href inseguro no emite <a>.
+    if (level === 2 && u.marks.link && isSafeLinkHref(u.marks.link.href)) {
         return `${u.marks.link.newTab ? "1" : "0"}|${u.marks.link.href}`;
     }
     return null;

@@ -110,6 +110,30 @@ if [ "${WORDJS_PRESEED_CONFIG:-0}" = "1" ] && [ ! -e "$PERSISTED_CONFIG" ] && [ 
     DB_USER="${WORDJS_DB_USER:-postgres}"
     DB_NAME="${WORDJS_DB_NAME:-wordjs}"
     DB_PASSWORD="${WORDJS_DB_PASSWORD:-wordjs}"
+    # TLS to the database. With WORDJS_DB_SSL=true the server certificate is VERIFIED; point
+    # WORDJS_DB_SSL_CA at the CA file (e.g. a mounted secret) for a private CA, or — only if an
+    # unauthenticated connection is acceptable — set WORDJS_DB_SSL_REJECT_UNAUTHORIZED=false.
+    DB_SSL="${WORDJS_DB_SSL:-false}"
+    DB_SSL_CA="${WORDJS_DB_SSL_CA:-}"
+    DB_SSL_REJECT="${WORDJS_DB_SSL_REJECT_UNAUTHORIZED:-true}"
+    for pair in "WORDJS_DB_SSL=$DB_SSL" "WORDJS_DB_SSL_REJECT_UNAUTHORIZED=$DB_SSL_REJECT"; do
+        case "${pair#*=}" in
+            true|false) ;;
+            *) echo "[entrypoint] FATAL: ${pair%%=*} must be true or false (got '${pair#*=}')." >&2; exit 1 ;;
+        esac
+    done
+    case "$DB_SSL_CA" in
+        *[!A-Za-z0-9._/-]*) echo "[entrypoint] FATAL: WORDJS_DB_SSL_CA must be a file path (letters, digits, . _ / -)." >&2; exit 1 ;;
+    esac
+    if [ -n "$DB_SSL_CA" ] && [ ! -r "$DB_SSL_CA" ]; then
+        echo "[entrypoint] FATAL: WORDJS_DB_SSL_CA=${DB_SSL_CA} is not a readable file." >&2; exit 1
+    fi
+    if [ "$DB_SSL" = "true" ] && [ "$DB_SSL_REJECT" = "false" ]; then
+        echo "[entrypoint] WARNING: database TLS certificate verification is DISABLED (WORDJS_DB_SSL_REJECT_UNAUTHORIZED=false): encrypted, but the server is not authenticated." >&2
+    fi
+    DB_SSL_CA_JSON=""
+    if [ -n "$DB_SSL_CA" ]; then DB_SSL_CA_JSON="  \"dbSslCa\": \"${DB_SSL_CA}\",
+"; fi
     SITE_URL="${WORDJS_SITE_URL:-http://localhost:3000}"
     BACKEND_PORT="${WORDJS_BACKEND_PORT:-4000}"
     PUBLIC_PORT="${PORT:-3000}"
@@ -117,6 +141,9 @@ if [ "${WORDJS_PRESEED_CONFIG:-0}" = "1" ] && [ ! -e "$PERSISTED_CONFIG" ] && [ 
     REDIS_HOST="${WORDJS_REDIS_HOST:-127.0.0.1}"
     REDIS_PORT="${WORDJS_REDIS_PORT:-6379}"
 
+    # The config holds jwtSecret and dbPassword: create it owner-only (the umask applies to the redirect).
+    ( umask 077; : > "$CONFIG" )
+    chmod 600 "$CONFIG" 2>/dev/null || true
     cat > "$CONFIG" <<EOF
 {
   "installedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -129,6 +156,8 @@ if [ "${WORDJS_PRESEED_CONFIG:-0}" = "1" ] && [ ! -e "$PERSISTED_CONFIG" ] && [ 
   "dbUser": "${DB_USER}",
   "dbName": "${DB_NAME}",
   "dbPassword": "${DB_PASSWORD}",
+  "dbSsl": ${DB_SSL},
+${DB_SSL_CA_JSON}  "dbSslRejectUnauthorized": ${DB_SSL_REJECT},
   "db": {
     "host": "${DB_HOST}",
     "port": ${DB_PORT},

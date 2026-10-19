@@ -24,6 +24,8 @@
  * (copiar el cuerpo del preset a `tracks`). Una bifurcación silenciosa rompería la propagación —
  * que es el motivo entero de que los presets se guarden por referencia.
  */
+import { trFmt, trStr } from "@/lib/editorI18n";
+import type { Language } from "@/lib/i18n";
 import {
   IX_BREAKPOINTS,
   IX_COLOR_PROP_KEYS,
@@ -376,22 +378,23 @@ export function ixSummary(
   trigger: IxTrigger,
   tracks: readonly IxTrack[],
   ctx?: IxCompileCtx,
+  lang: Language = "es",
 ): string {
   if (tracks.length === 0) {
-    if (presetId !== null && !presetOk) return `Preajuste «${presetId}» no encontrado: sin movimiento.`;
-    return "Sin interacción.";
+    if (presetId !== null && !presetOk) return trFmt("Preajuste «{id}» no encontrado: sin movimiento.", lang, { id: presetId });
+    return trStr("Sin interacción.", lang);
   }
   const target = tracks[0].target.kind;
   const targetLabel =
     target === "block"
-      ? "otro bloque"
-      : IX_TARGET_LABELS[target as IxPanelTargetKind].toLowerCase();
+      ? trStr("otro bloque", lang)
+      : trStr(IX_TARGET_LABELS[target as IxPanelTargetKind], lang).toLowerCase();
   const steps = tracks[0].steps.length;
   const parts = [
-    `Interacción: ${presetName(presetId, ctx)}`,
-    IX_TRIGGER_LABELS[trigger.on].toLowerCase(),
+    trFmt("Interacción: {name}", lang, { name: trStr(presetName(presetId, ctx), lang) }),
+    trStr(IX_TRIGGER_LABELS[trigger.on], lang).toLowerCase(),
     targetLabel,
-    `${steps} ${steps === 1 ? "paso" : "pasos"}`,
+    trFmt(steps === 1 ? "{n} paso" : "{n} pasos", lang, { n: steps }),
   ];
   return `${parts.join(" · ")}.`;
 }

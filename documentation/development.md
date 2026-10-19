@@ -1,6 +1,6 @@
 # Development & Build Guide 🛠️
 
-This guide covers installing dependencies, the **compiled production build**, the strict TypeScript typecheck, and how to run the services in development versus production — in either the default **split** (gateway + backend + frontend) or the single-process **monolith** mode.
+This guide covers installing dependencies, the **compiled production build**, the strict TypeScript typecheck, and how to run the services in development versus production — in either the three-process **split** (gateway + backend + frontend, what the root `npm run dev` / `npm start` run) or the single-process **monolith** mode (what `npx create-wordjs` starts).
 
 For the production server/firewall/SSL story see **[deployment.md](deployment.md)**; for the gateway internals see **[gateway.md](gateway.md)**; for the high-level picture see **[architecture.md](architecture.md)**.
 
@@ -106,7 +106,7 @@ npm run format
 
 Both test scripts run `node --test …` through `scripts/test-with-flake-retry.mjs` (repo root), a wrapper that re-runs the suite up to twice (three runs in all), and only when every failure in the run is node:test's known `--test-force-exit` deserialize flake ("Unable to deserialize cloned data …" reported against a file whose own suite passed). A run containing any real assertion failure is never retried.
 
-`npm test` runs the backend unit suite across every `src/tests/*.test.ts` file (242 at the time of writing; node:test + supertest). `npm run lint` **is** a CI gate (the backend job runs it between the typecheck and the build; ESLint exits non-zero on errors only, so warnings are surfaced but tolerated). `npm run format` stays a local command.
+`npm test` runs the backend unit suite across every `src/tests/*.test.ts` file (over 300 — 324 in v2.6.0; node:test + supertest). `npm run lint` **is** a CI gate (the backend job runs it between the typecheck and the build; ESLint exits non-zero on errors only, so warnings are surfaced but tolerated). `npm run format` stays a local command.
 
 The DB driver conformance suite (`src/tests/driver-conformance.test.ts`) runs the **async** drivers it has a dialect-descriptor block for (`sqlite-native`, `postgres`, and `mysql`, each skipped gracefully when its backend isn't reachable — and hard-failed in CI via `WORDJS_CI_DB=1`) against the shared interface (`src/drivers/interface.ts`: `connect/get/all/run/exec/transaction/close`). The `mysql` (`mysql2`) block feeds the same SQLite-dialect SQL and asserts the driver's translation layer. The legacy `sqlite-legacy` (sql.js) driver uses the older **sync** shape and is intentionally out of scope here. The 6th interface method, `transaction(fn)`, is an atomic `BEGIN`/`COMMIT`/`ROLLBACK` wrapper that passes a `tx` bound to a single connection (the basis of the atomic-transaction guarantee). **Adding a new database** = implement that interface (including `transaction()`) and add a conformance block.
 
@@ -200,7 +200,7 @@ cd gateway && npm test      # node --test test/*.test.js: proxy/mTLS integration
                             # forwarded proto, monolith edge, dispatcher parity
 ```
 
-Config lives in `gateway/gateway-config.json` (`gatewaySecret`, `gatewayPort`, `gatewayInternalPort`, `ssl`, `mtls`). See **[gateway.md](gateway.md)**.
+Config lives in `gateway/gateway-config.json`: `gatewaySecret`, `gatewayPort`, `gatewayInternalPort`, `gatewayInternalBind` (default `127.0.0.1`), `gatewayEnrollPort` (separate mode), `ssl`, `acme` (`http01Port` for the HTTP-01 listener), and `rateLimit` / `redis` for the public-listener limiter. The cluster certificates are **not** configured there: the gateway reads `cluster-ca.crt`, `gateway-internal.key` and `gateway-internal.crt` from fixed filenames in `gateway/certs/`, falling back to `backend/certs/`, and the `mtls` block the setup orchestrator writes is informational only. See **[gateway.md](gateway.md#configuration)**.
 
 ---
 
@@ -222,20 +222,20 @@ For a production-style local run, `npm start` likewise uses `concurrently` to br
 
 ## 🪺 Run modes: split vs monolith
 
-The **same codebase** runs two ways. The modes are **switchable at any time** — both share the same `backend/wordjs-config.json`, the same database, `uploads`/`themes`/`plugins`, secrets, and the same public origin (`https://localhost:3000`), so **there is no migration to switch**. They are **mutually exclusive** (both bind the public port, default 3000) — run one or the other, not both. **Plugins stay isolated (each `"isolated": true` plugin runs in a separate OS process via `child_process.fork`) in both modes.**
+The **same codebase** runs two ways. The modes are **switchable at any time** — both share the same `backend/wordjs-config.json`, the same database, `uploads`/`themes`/`plugins`, secrets, and the same public origin (`http://localhost:3000`, `https://` once TLS is enabled), so **there is no migration to switch**. They are **mutually exclusive** (both bind the public port, default 3000) — run one or the other, not both. **Plugins stay isolated (each `"isolated": true` plugin runs in a separate OS process via `child_process.fork`) in both modes.**
 
 | Mode         | Processes / ports                              | Dev               | Build             | Prod               |
 | ------------ | ---------------------------------------------- | ----------------- | ----------------- | ------------------ |
-| **Split** (default) | gateway `:3000` + backend `:4000` + frontend `:3001` | `npm run dev`     | per-service build | `npm start`        |
+| **Split** | gateway `:3000` + backend `:4000` + frontend `:3001` | `npm run dev`     | per-service build | `npm start`        |
 | **Monolith** | one process, one port `:3000` (`monolith.js`)  | `npm run dev:mono`| `npm run build:mono` | `npm run start:mono` |
 
-### Split (default, 3 processes)
+### Split (3 processes)
 
-The default. The **gateway** (`:3000` public, a Node `cluster` reverse-proxy) sits in front of the **backend** (`:4000`) and **frontend** (`:3001`), and provides clustering, health-checks, load-balancing, an mTLS internal channel, and SSE-aware proxying. Run it with `npm run dev` (dev) / `npm start` (prod) as covered above.
+What the root `npm run dev` / `npm start` run. The **gateway** (`:3000` public, a Node `cluster` reverse-proxy) sits in front of the **backend** (`:4000`) and **frontend** (`:3001`), and provides clustering, health-checks, load-balancing, an mTLS internal channel, and SSE-aware proxying. Run it with `npm run dev` (dev) / `npm start` (prod) as covered above.
 
 ### Monolith (1 process, 1 port)
 
-The repo-root entrypoint **`monolith.js`** mounts the backend Express app (**with** its isolated plugins — each runs in its own forked OS process, never in-process) **and** the Next.js request handler **in-process** — no loopback proxy, no Node `cluster`, and no gateway `/register`. The gateway's still-needed cross-cutting concerns are re-implemented as **local middleware**: `helmet`, `compression` (skipping SSE), SEO rewrites (`/sitemap.xml` → `/api/v1/seo/sitemap.xml`, `/robots.txt` → `…/robots.txt`), and `X-Forwarded-Host` pinning for CSRF. It serves **one HTTPS port reusing the gateway's certificate** (HTTP fallback; set **`WORDJS_HTTP=1`** to force the public port to plain HTTP — `resolveSSL()` returns no cert), plus a **loopback-only HTTP listener** for the frontend's server-side (SSR) API calls.
+The repo-root entrypoint **`monolith.js`** mounts the backend Express app (**with** its isolated plugins — each runs in its own forked OS process, never in-process) **and** the Next.js request handler **in-process** — no loopback proxy, no Node `cluster`, and no gateway `/register`. The gateway's still-needed cross-cutting concerns are re-implemented as **local middleware**: `helmet`, `compression` (skipping SSE), a `405` answer for `TRACE`/`TRACK`, SEO rewrites (`/sitemap.xml` → `/api/v1/seo/sitemap.xml`, `/robots.txt` → `…/robots.txt`, `/feed` | `/feed.xml` | `/rss.xml` → `…/feed.xml`), the site-address edge check (`gateway/src/host-edge.js`), and `X-Forwarded-Host` pinning for CSRF. It serves **one HTTPS port reusing the gateway's certificate** (HTTP fallback; set **`WORDJS_HTTP=1`** to force the public port to plain HTTP — `resolveSSL()` returns no cert), plus a **loopback-only HTTP listener** for the frontend's server-side (SSR) API calls.
 
 ```bash
 npm run dev:mono     # dev: Next dev HMR + ts-node backend
@@ -267,6 +267,21 @@ npm run migrate   # node setup/index.js --migrate
 ```
 
 `npm run migrate` delegates to `backend/scripts/migrate.js`: it applies any pending DB **schema** migrations to the configured database without booting the server (compiled `dist/` if present, else ts-node on `src/`). It is **idempotent** — the same migrations also run automatically at boot — so it's safe to run ahead of a rollout in a deploy pipeline. It does **not** switch DB *drivers* (the SQLite ↔ PostgreSQL data copy); that is a separate runtime operation in the admin **DB Migration** route (`/api/v1/db-migration/*`).
+
+---
+
+## 🧭 Feature areas: where to start
+
+Short pointers for the newer subsystems. Each has its own guide; the code paths are where to begin reading.
+
+| Area | Entry points | Try it locally | Guide |
+| --- | --- | --- | --- |
+| **GraphQL** (read-only) | `backend/src/routes/graphql.ts`, `backend/src/core/graphql/` (schema, REST dispatch, depth/cost limits) | `POST /api/v1/graphql` with `{ "query": "…" }`; limits via `WORDJS_GRAPHQL_MAX_DEPTH` / `_COST` / `_TOKENS`. Parity with REST is pinned by `src/tests/graphql-api.test.ts` | [graphql.md](graphql.md) |
+| **MCP server** (AI agents) | `backend/src/routes/mcp.ts`, `backend/src/core/mcp-server.ts`, `backend/src/core/agent-capabilities.ts` | Create a connection in **Admin → AI agents** (`/admin/agents`) to get a `wja_…` token, then point an MCP client at `POST /api/v1/mcp`. Tests: `src/tests/agents-mcp.test.ts` | [ai-agents.md](ai-agents.md) |
+| **AI provider** + editor suggestions | `backend/src/core/ai-provider.ts`, `backend/src/core/ai-suggest.ts`, `backend/src/routes/ai.ts` | Configure a provider in **Settings → AI** (`/admin/settings/ai`, i.e. `PUT /api/v1/ai/settings`), then use "Suggest with AI" in the editor (`POST /api/v1/ai/suggest`); plugins reach it through `wordjs.ai.complete(...)` with the `ai:use` grant. Tests: `src/tests/ai-provider.test.ts` | [ai-provider.md](ai-provider.md) |
+| **Webhooks** | `backend/src/models/Webhook.ts` (`WEBHOOK_EVENT_GROUPS`, 31 events), `backend/src/core/webhook-payloads.ts`, `backend/src/routes/webhooks.ts` | **Admin → Webhooks**, or `GET /api/v1/webhooks/events` for the catalogue; **Send test** (`POST /api/v1/webhooks/:id/ping`) delivers a `ping`. Tests: `src/tests/webhooks.test.ts`, `webhook-events.test.ts` | [webhooks.md](webhooks.md) |
+| **Multisite** | `backend/src/core/network.ts`, `network-sites.ts`, `site-context.ts`, `site-resolver.ts` | `npm run network -- enable --admin <login>` on a `sqlite-native` install, restart, then **Admin → Network**. Tests: `src/tests/multisite-isolation.test.ts`, `multisite-plugins.test.ts` | [multisite.md](multisite.md) |
+| **Media offload** (S3 / CDN) | `backend/src/core/media-storage.ts`, `media-storage-migrate.ts`, `backend/src/routes/media-storage.ts` | Point `WORDJS_MEDIA_*` at a local MinIO bucket, then `npm run media -- test` and `npm run media -- offload` | [media-storage.md](media-storage.md) |
 
 ---
 
@@ -399,7 +414,7 @@ The frontend build does not depend on what runs on your machine. It is **hermeti
 
 Marketplace plugins (sources under `marketplace/plugins/`) are packaged separately by `npm run build:marketplace` (= `node backend/scripts/build-marketplace.js`), which emits **deterministic** per-plugin zips plus `marketplace-index.json` (sha256 per entry, fixed zip timestamps, no generated-at field) into `marketplace/dist/` — a **gitignored build artifact**, not committed. The release workflow publishes it as **GitHub Release assets**, and the backend's default marketplace source is `releases/latest/download/` (admin-overridable via the `marketplace_sources` option); the admin **Marketplace** tab consumes that catalog (see `documentation/deployment.md`). CI re-runs the builder to confirm it still builds deterministically (see § CI above).
 
-The recipient unzips, then — **no build step** — runs `npm run release:install` (installs runtime deps only, `--omit=dev`), starts with `npm run start:mono` (single process, default `https://localhost:3000`) or `npm start` (3-service split), and finishes in the browser install wizard (pick a database — SQLite, PostgreSQL, or MySQL/MariaDB — and create the admin). No secrets ship; they're generated locally at install.
+The recipient unzips, then — **no build step** — runs `npm run release:install` (installs runtime deps only, `--omit=dev`), starts with `npm run start:mono` (single process on `:3000` — plain HTTP unless `gateway/gateway-config.json` enables TLS) or `npm start` (3-service split), and finishes in the browser install wizard (pick a database — SQLite, PostgreSQL, or MySQL/MariaDB — and create the admin). No secrets ship; they're generated locally at install.
 
 In CI, pushing a `v*` tag triggers `.github/workflows/release.yml`. Its `verify` job repeats CI's audits, typechecks and unit tests first, and nothing is built or published unless it is green; the build job then runs `npm run ci:all` (the CI counterpart of `install:all` — `node scripts/ci-install.mjs`, a parallel `npm ci` across the five workspaces) + `bundle-release`, then `npm run build:marketplace`, and publishes a GitHub Release with `wordjs-<tag>.zip` **plus the marketplace assets** (`marketplace/dist/*` — one zip per plugin + `marketplace-index.json`) and a **CycloneDX SBOM** (`wordjs-sbom.cdx.json`, generated by a SHA-pinned `anchore/sbom-action` step) attached; `workflow_dispatch` builds the same bundles as workflow artifacts only (`wordjs-compiled-release` + `wordjs-marketplace`, no Release). On version tags a final `npm-publish` job publishes `create-wordjs` to npm (version synced to the tag) with **npm trusted publishing**: the job's short-lived GitHub OIDC token is exchanged for a one-time publish credential (`id-token: write`, npm ≥ 11.5.1), so no npm token is stored in the repository, and provenance is attached. It needs a trusted publisher configured once on npmjs.com (package `create-wordjs` → Settings → Trusted publishing → GitHub Actions: `jaimemartinez` / `wordjs` / `release.yml`). A failed publish fails the job, so a release can never go green while the install channel stays on the previous version. If a tag's GitHub Release went out but its npm publish did not, run the workflow manually from `main` with the `publish_tag` input (e.g. `v2.3.0`): that run skips verify and build and only publishes `create-wordjs` for the existing tag.
 

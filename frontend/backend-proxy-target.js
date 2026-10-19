@@ -196,6 +196,9 @@ const FORWARDING_HEADERS = Object.freeze([
     'x-forwarded-server',
     'x-real-ip',
     'forwarded',
+    // Multisite: which site of the network the gateway judged this request to be for (gateway/src/
+    // host-edge.js pinSiteHeader). Only the gateway may say it; from anyone else it is dropped.
+    'x-wordjs-site-host',
 ]);
 
 /**

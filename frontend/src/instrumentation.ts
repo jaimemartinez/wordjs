@@ -57,6 +57,12 @@ export function advertisedPort(listenPort: string | undefined, frontendPort: unk
     return Number.isInteger(configured) && configured > 0 ? String(configured) : '3001';
 }
 
+/** Is the address server.js listens on a loopback one (WORDJS_FRONTEND_LISTEN_HOST)? */
+export function isLoopbackListen(host: string | undefined): boolean {
+    const h = String(host || '').trim().toLowerCase();
+    return h === '127.0.0.1' || h === 'localhost' || h === '::1';
+}
+
 /**
  * The URL this node tells the gateway to proxy to, in the scheme its server ACTUALLY speaks.
  *
@@ -163,6 +169,10 @@ export async function register() {
                     // address the gateway on another machine uses to reach this frontend.
                     if (config.advertiseHost) hostname = config.advertiseHost;
                 }
+                // server.js listens on loopback when the gateway runs on this machine (local-gateway.js), and
+                // then loopback is the only address that reaches it: the site's public name would send the
+                // gateway's hop out of the box and back, onto an interface nothing listens on any more.
+                if (isLoopbackListen(process.env.WORDJS_FRONTEND_LISTEN_HOST)) hostname = '127.0.0.1';
             } catch (e: any) {
                 console.warn('[Frontend Instrumentation] Failed to load/parse wordjs-config.json:', e.message);
             }

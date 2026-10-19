@@ -220,6 +220,16 @@ async function run(argv, io = {}) {
         err(`No such directory: ${dir}`);
         return 1;
     }
+    // Commands that rewrite wordjs-config.json refuse to do it as root in an install another account
+    // owns (scripts/install-owner.js): the service could no longer write its own config afterwards.
+    if (!['list', 'check'].includes(command) && !io.modules) {
+        const owner = require('./install-owner');
+        const problem = owner.rootWriteProblem(dir, owner.scriptHint(__filename, argv));
+        if (problem) {
+            err(`Error: ${problem}`);
+            return 1;
+        }
+    }
     const { siteAddress, configManager, hostPolicy } = io.modules || loadModules();
     if (path.resolve(configManager.CONFIG_FILE) !== path.join(dir, 'wordjs-config.json')) {
         err(`This process already reads ${configManager.CONFIG_FILE}; run the command again with that installation's directory.`);

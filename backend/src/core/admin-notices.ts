@@ -40,6 +40,7 @@
  */
 
 const { getOption, updateOption } = require('./options');
+const log = require('./module-logger').moduleLogger('core/admin-notices');
 
 const OPTION_NAME = 'admin_notices';
 // The SAME lock core/plugins.ts takes. This is a read-modify-write of the WHOLE array, so two nodes
@@ -166,7 +167,7 @@ async function mutate(apply: (notices: any[]) => any[] | null): Promise<boolean>
         await updateOption(OPTION_NAME, next);
         return true;
     } catch (e: any) {
-        console.warn(`[admin-notices] '${OPTION_NAME}' could not be updated (queued for retry): ${e && e.message}`);
+        log.warn({ err: e }, `[admin-notices] '${OPTION_NAME}' could not be updated (queued for retry)`);
         return false;
     } finally {
         if (lock && lock.held) {

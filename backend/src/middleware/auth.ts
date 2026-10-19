@@ -16,12 +16,17 @@ import type { SiteHost, PolicyProvider } from '../core/host-policy';
 
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
+const { signForSite, verifyForSite } = require('../core/site-keys');
+const siteContext = require('../core/site-context');
 const config = require('../config/app');
 const User = require('../models/User');
 const ApiToken = require('../models/ApiToken');
+const AgentConnection = require('../models/AgentConnection');
+const { dispatchContextOf } = require('../core/rest-dispatch');
 const mfa = require('../core/mfa');
 const hostPolicy: typeof import('../core/host-policy') = require('../core/host-policy');
 const { logSafe } = require('../core/log-safe');
+const log = require('../core/module-logger').moduleLogger('middleware/auth');
 
 /**
  * THE SITE'S ADDRESS POLICY — one memoised provider for the whole backend process.
@@ -43,11 +48,32 @@ const { logSafe } = require('../core/log-safe');
  * for the same reason as sessionAddressStillAccepted below.
  */
 const siteHostPolicy: PolicyProvider = hostPolicy.createPolicyProvider({
-    getConfig: () => require('../core/configManager').getConfig(),
+    getConfig: () => withNetworkSites(require('../core/configManager').getConfig()),
     nodeEnv: () => config.nodeEnv,
     ownAddresses: () => require('../core/site-address').publicOwnAddresses(),
+    logger: require('../core/module-logger').moduleLogger('core/host-policy'),
 });
 
+
+/**
+ * Multisite: the config the policy is built from, plus the network's other sites (`networkSites`, from
+ * the network store). The provider memoizes on the identity of what getConfig returns, so the derived
+ * object is memoized on BOTH inputs: a new object only when the file or the registry changed. A single
+ * site (multisite off) gets the file's own object, exactly as before.
+ */
+let networkConfigMemo: { file: any; sites: unknown; value: any } | null = null;
+function withNetworkSites(file: any): any {
+    if (!file || !siteContext.multisiteEnabled()) return file;
+    let sites: unknown;
+    try { sites = require('../core/network').policySites(); } catch (e: any) {
+        log.error(`[multisite] the network store could not be read (${e && e.message}); other sites are not answered until it can.`);
+        return file;
+    }
+    if (networkConfigMemo && networkConfigMemo.file === file && networkConfigMemo.sites === sites) return networkConfigMemo.value;
+    const value = Object.assign({}, file, { networkSites: sites });
+    networkConfigMemo = { file, sites, value };
+    return value;
+}
 
 /**
  * What the host gate (core/host-policy hostGateFactory) attached to this request, or null when it did
@@ -77,6 +103,20 @@ function noteAuthenticatedUse(req: Request): void {
  * on the request (a route, a plugin, a body parser) can set or clear it.
  */
 const SESSION_MINTED_ON = new WeakMap<object, string | null>();
+
+/**
+ * Whether the session JWT that authenticated this request was issued by a sign-in that completed a
+ * second factor (`amr` contains 'mfa' — RFC 8176 authentication-method reference). Set by
+ * verifyAndAttachUser only, same WeakMap discipline as SESSION_MINTED_ON. POST /auth/tokens reads it to
+ * decide whether a user whose role requires 2FA may mint an API token without a fresh code (step-up).
+ */
+const SESSION_MFA = new WeakMap<object, boolean>();
+const MFA_AMR = 'mfa';
+
+/** Was this request authenticated by a session that was signed in WITH a second factor? */
+function sessionMfaVerified(req: Request): boolean {
+    return SESSION_MFA.get(req) === true;
+}
 
 /**
  * THE ADDRESS A SESSION WAS MINTED ON (REDTEAM R2) — so that retiring an address retires its sessions.
@@ -390,7 +430,7 @@ async function mfaComplianceGate(req: Request, res: Response, next: NextFunction
     // (blocking everyone on a transient option-store blip would be worse than skipping enforcement once).
     let policy: any;
     try { policy = await mfa.getPolicy(); }
-    catch (e: any) { console.warn('[mfa] gate: policy read failed, skipping:', e && e.message); return next(); }
+    catch (e: any) { log.warn({ err: e }, '[mfa] gate: policy read failed, skipping'); return next(); }
     if (!policy.requiredRoles.length) return next();
 
     // Resolve the interactive session token from EITHER transport, mirroring authenticate()'s priority
@@ -407,27 +447,30 @@ async function mfaComplianceGate(req: Request, res: Response, next: NextFunction
         if (bearer.startsWith(ApiToken.PREFIX)) {
             return policy.enforceForApiTokens ? enforceApiTokenMfa(bearer, req, res, next) : next();
         }
+        // An AI agent connection is the same kind of credential — headless, unable to answer a challenge,
+        // acting as its owner — so it follows the same opt-in rule as a `wjt_` token.
+        if (bearer.startsWith(AgentConnection.PREFIX)) {
+            return policy.enforceForApiTokens ? enforceApiTokenMfa(bearer, req, res, next) : next();
+        }
         token = bearer; // a session JWT over the Bearer transport — subject to enforcement
     }
     if (!token) token = sessionCookie(req);
     // Also cover the `?token=` transport that authenticateAllowQuery honors (e.g. the plugin-bundle download),
     // so an enforced user can't slip a session JWT past the gate via the query string. A wjt_ token there is
     // exempt exactly like on the Bearer path.
+    // Only a query ticket authenticates from there now (authenticateAllowQuery); it is judged exactly like
+    // the session it was issued from.
     const qToken = token ? null : queryToken(req);
-    if (qToken) {
-        if (qToken.startsWith(ApiToken.PREFIX)) {
-            return policy.enforceForApiTokens ? enforceApiTokenMfa(qToken, req, res, next) : next();
-        }
-        token = qToken;
-    }
+    if (qToken) token = qToken;
     if (!token) return next(); // no session — nothing to enforce (the route's own auth still applies)
 
     if (isMfaEnforceExempt(req)) return next();
 
     let decoded: any;
-    try { decoded = jwt.verify(token, config.jwt.secret, { algorithms: ['HS256'] }); }
+    try { decoded = verifyForSite(token); }
     catch { return next(); } // invalid/expired — the route's authenticate will 401 it
-    if (!decoded || decoded.purpose) return next(); // challenge/special-purpose tokens are not sessions
+    // Challenge/special-purpose tokens are not sessions — except a query ticket, which acts as one.
+    if (!decoded || (decoded.purpose && !(qToken && decoded.purpose === QUERY_TICKET_PURPOSE))) return next();
     // A session minted on an address the site no longer answers is no session: the route's own
     // authenticate refuses it, and asking it to enrol in 2FA first would be the wrong answer.
     if (!sessionAddressStillAccepted(decoded)) return next();
@@ -448,7 +491,7 @@ async function mfaComplianceGate(req: Request, res: Response, next: NextFunction
         }
         return next();
     } catch (e: any) {
-        console.warn('[mfa] gate: compliance check failed, failing closed:', e && e.message);
+        log.warn({ err: e }, '[mfa] gate: compliance check failed, failing closed');
         return res.status(503).json({
             code: 'mfa_check_failed',
             message: 'Could not verify two-factor compliance. Please try again.',
@@ -483,7 +526,9 @@ async function enforceApiTokenMfa(raw: string, req: Request, res: Response, next
         // A second lookup on top of verifyApiTokenAndAttachUser's, and deliberately so: the gate runs BEFORE
         // any route's auth, so it has only the raw string. It costs one hash lookup and only on requests
         // that both present a wjt_ token AND run under an opted-in policy.
-        const record = await ApiToken.findByRawToken(raw);
+        const record = raw.startsWith(AgentConnection.PREFIX)
+            ? await AgentConnection.findByRawToken(raw)
+            : await ApiToken.findByRawToken(raw);
         if (!record) return next();
         const user = await User.findById(record.userId);
         if (!user) return next();
@@ -495,7 +540,7 @@ async function enforceApiTokenMfa(raw: string, req: Request, res: Response, next
             data: { status: 403, graceDeadline: status.graceDeadline }
         });
     } catch (e: any) {
-        console.warn('[mfa] gate: token compliance check failed, failing closed:', e && e.message);
+        log.warn({ err: e }, '[mfa] gate: token compliance check failed, failing closed');
         return res.status(503).json({
             code: 'mfa_check_failed',
             message: 'Could not verify two-factor compliance. Please try again.',
@@ -508,14 +553,22 @@ async function enforceApiTokenMfa(raw: string, req: Request, res: Response, next
  * Authenticate request with JWT token (Strict: Headers Only)
  */
 // Helper to avoid duplication
-async function verifyAndAttachUser(token: string, req: Request, res: Response, next: NextFunction) {
+async function verifyAndAttachUser(token: string, req: Request, res: Response, next: NextFunction, ticketPath?: string) {
     try {
-        const decoded = jwt.verify(token, config.jwt.secret, { algorithms: ['HS256'] });
+        const decoded = verifyForSite(token);
 
         // A session token (generateToken) carries NO `purpose`. Special-purpose tokens signed with the
         // same secret — notably the MFA `mfa_challenge` token — must NEVER authenticate a request, or the
         // second factor could be skipped by presenting the challenge token as a session credential.
-        if (decoded.purpose) {
+        // The one exception is a query ticket (issueQueryTicket), and only from the query string of the
+        // one route it was issued for (`ticketPath`, from authenticateAllowQuery); from the query string
+        // NOTHING else is accepted — a session JWT there would leak through logs, Referer and history.
+        if (ticketPath !== undefined) {
+            if (decoded.purpose !== QUERY_TICKET_PURPOSE || typeof decoded.path !== 'string'
+                || normalizedTicketPath(decoded.path) !== normalizedTicketPath(ticketPath)) {
+                return res.status(401).json({ code: 'rest_token_invalid', message: 'Invalid token.', data: { status: 401 } });
+            }
+        } else if (decoded.purpose) {
             return res.status(401).json({ code: 'rest_token_invalid', message: 'Invalid token.', data: { status: 401 } });
         }
 
@@ -556,6 +609,9 @@ async function verifyAndAttachUser(token: string, req: Request, res: Response, n
         // Remember which address this session is bound to, so a credential minted from it (refresh) keeps
         // the binding and POST /auth/tokens can refuse a session from a secondary address.
         SESSION_MINTED_ON.set(req, typeof decoded.mh === 'string' ? decoded.mh : null);
+        // ...and whether it was signed in with a second factor, so a refresh keeps that assurance and
+        // POST /auth/tokens can tell an MFA-verified session from one that never answered a code.
+        SESSION_MFA.set(req, Array.isArray(decoded.amr) && decoded.amr.includes(MFA_AMR));
         req.user = user;
         noteAuthenticatedUse(req);
         next();
@@ -645,6 +701,33 @@ function isHeadless(req: Request): boolean {
     return !!(req && (req.isHeadless || req.apiToken));
 }
 
+/**
+ * An AI agent's call, dispatched in-process by core/rest-dispatch on behalf of the MCP server. Such a
+ * request carries NO credential: its identity is the WeakMap entry rest-dispatch wrote for that exact
+ * request object, which no client can forge. When present it is the ONLY identity the request may have:
+ * the narrowed user (grant ∩ the bound user's capabilities), stamped headless — so every session-only gate
+ * refuses it, exactly like an API token — and held to the grant's coarse REST scopes as a second fence.
+ *
+ * Returns true when it fully handled the request (attached + next(), or answered 403).
+ */
+function handleDispatchedAgent(req: Request, res: Response, next: NextFunction): boolean {
+    const ctx = dispatchContextOf(req);
+    if (!ctx) return false;
+    const resource = apiResourceOf(req);
+    if (!ApiToken.scopeAllows(ctx.scopes, req.method, resource)) {
+        res.status(403).json({
+            code: 'rest_agent_scope_insufficient',
+            message: `This agent's grant does not cover ${req.method} on the "${resource || 'unknown'}" resource.`,
+            data: { status: 403 }
+        });
+        return true;
+    }
+    req.user = ctx.user;
+    markHeadless(req, { id: ctx.agent.id, scopes: ctx.scopes, name: ctx.agent.name });
+    next();
+    return true;
+}
+
 const SESSION_COOKIE = 'wordjs_token';
 
 // ─── COOKIES ARE AN UNTRUSTED CHANNEL THAT ALSO HAS A TYPE ────────────────────────────────────────
@@ -679,10 +762,20 @@ function sanitizeCookies(req: Request, _res: Response, next: NextFunction): void
     next();
 }
 
-/** The session cookie as a STRING, or null. The only place this file reads `req.cookies`. */
+/**
+ * The session cookie as a STRING, or null. The only place this file reads `req.cookies`.
+ *
+ * A machine credential (`wjt_` API token, `wja_` agent connection) is NEVER a session cookie: those are
+ * Bearer-only. Accepting one here made it ambient — the browser re-attaches it on every request — while
+ * every control built for machine credentials keys on the Bearer header (the opt-in MFA gate for API
+ * tokens, the CSRF token gate's Bearer exemption). Treating it as "no cookie" means every reader in this
+ * file and in routes/auth.ts sees an anonymous request, by construction.
+ */
 function sessionCookie(req: Request): string | null {
     const v = req && req.cookies ? req.cookies[SESSION_COOKIE] : undefined;
-    return typeof v === 'string' && v ? v : null;
+    if (typeof v !== 'string' || !v) return null;
+    if (v.startsWith(ApiToken.PREFIX) || v.startsWith(AgentConnection.PREFIX)) return null;
+    return v;
 }
 
 /**
@@ -781,6 +874,10 @@ function sessionCookieOptions(req?: Request): CookieOptions {
 function sessionCookieSecure(req?: Request): boolean | undefined {
     const legacy = config.siteUrl?.startsWith('https://') || config.ssl?.enabled;
     const siteHost = req ? siteHostOf(req) : null;
+    // Multisite: another site's main address is canonical for THAT site, whose own scheme decides.
+    if (siteHost && siteHost.cls === 'canonical' && typeof siteHost.siteId === 'number' && siteHost.siteId > 1) {
+        return (!!siteHost.entry && siteHost.entry.scheme === 'https') || siteHost.scheme === 'https';
+    }
     if (!siteHost || siteHost.cls === 'canonical' || siteHost.cls === 'loopback') return legacy;
     const declaredHttps = !!siteHost.entry && siteHost.entry.scheme === 'https';
     return declaredHttps || siteHost.scheme === 'https';
@@ -917,7 +1014,7 @@ function csrfTokenGate(req: Request, res: Response, next: NextFunction) {
     const cookieToken = csrfCookie(req);
     const headerToken = req.get(CSRF_HEADER);
     if (!cookieToken || !headerToken || !timingSafeStringEqual(cookieToken, headerToken)) {
-        console.warn(`[CSRF] Missing or mismatched ${CSRF_HEADER} on ${logSafe(req.method)} ${logSafe(req.path)}`);
+        log.warn({ method: logSafe(req.method), path: logSafe(req.path) }, `[CSRF] Missing or mismatched ${CSRF_HEADER} on ${logSafe(req.method)} ${logSafe(req.path)}`);
         return res.status(403).json({
             code: 'rest_csrf_token',
             message: 'Missing or invalid CSRF token. Reload the page and try again.',
@@ -1145,6 +1242,7 @@ function sessionOnly(req: Request, res: Response, next: NextFunction) {
  * Authenticate request with JWT token (Strict: Headers Only, with Cookie fallback)
  */
 async function authenticate(req: Request, res: Response, next: NextFunction) {
+    if (handleDispatchedAgent(req, res, next)) return;
     const authHeader = req.headers.authorization;
     let token;
 
@@ -1181,18 +1279,69 @@ async function authenticate(req: Request, res: Response, next: NextFunction) {
 }
 
 /**
- * Authenticate request (Loose: Headers OR Cookie OR Query Param)
- * Use ONLY for read-only endpoints that require direct browser navigation where the client cannot set
- * an Authorization header (EventSource/SSE, <a href> downloads).
+ * QUERY TICKETS — the only credential the query string carries.
  *
- * SECURITY: a JWT placed in ?token= leaks via access logs, the Referer header, and browser history.
- * Prefer the HttpOnly cookie (EventSource/navigations send it same-origin) and the Authorization
- * header; only fall back to the query token when neither is present. This route MUST stay read-only —
- * never authorize a state-changing request off a query-string token.
+ * A few GET routes are opened by direct browser navigation or EventSource, where a client that has
+ * neither the session cookie nor a way to set a header has nothing else to send. They used to accept the
+ * SESSION JWT itself in `?token=`, which leaks a long-lived credential through access logs, the Referer
+ * header and browser history. Now such a client asks for a ticket first (POST /auth/query-ticket, with its
+ * session): a JWT with purpose `query_ticket`, valid for QUERY_TICKET_TTL_SECONDS, naming the ONE path it
+ * opens. It authenticates only that path, only from the query string, and every session check still
+ * applies (the user exists, the account's sessions were not revoked after it was issued, the address
+ * binding). Every other route refuses it like any other special-purpose token.
+ */
+const QUERY_TICKET_PURPOSE = 'query_ticket';
+const QUERY_TICKET_TTL_SECONDS = 60;
+/** The paths a ticket may be issued for (under the API prefix): exactly the routes mounted with authenticateAllowQuery. */
+const QUERY_TICKET_ROUTES: readonly RegExp[] = [
+    /^\/notifications\/stream$/,
+    /^\/plugins\/[a-z0-9][a-z0-9_-]{0,63}\/download$/,
+];
+
+/** One spelling per path, as Express routes it: case-insensitive, with or without one trailing slash. */
+function normalizedTicketPath(p: string): string {
+    const s = String(p || '').toLowerCase();
+    return s.length > 1 && s.endsWith('/') ? s.slice(0, -1) : s;
+}
+
+/** May a ticket be issued for this path (pathname only, no query)? */
+function isQueryTicketPath(p: unknown): boolean {
+    if (typeof p !== 'string' || p.length > 256 || /[?#%]/.test(p)) return false;
+    const n = normalizedTicketPath(p);
+    const prefix = normalizedTicketPath(String(config.api.prefix || ''));
+    if (!prefix || !n.startsWith(prefix + '/')) return false;
+    const rest = n.slice(prefix.length);
+    return QUERY_TICKET_ROUTES.some((re) => re.test(rest));
+}
+
+/**
+ * Sign a ticket for `path` on behalf of the session on `req` (callers check isQueryTicketPath and that
+ * the request is a session, not an API token). The ticket keeps the session's address binding and its
+ * second-factor marker, so it never opens more than the session would.
+ */
+function issueQueryTicket(req: Request, path: string): string {
+    const claims: Record<string, unknown> = { userId: req.user.id, purpose: QUERY_TICKET_PURPOSE, path: normalizedTicketPath(path) };
+    const mh = SESSION_MINTED_ON.get(req);
+    if (typeof mh === 'string') claims.mh = mh;
+    if (sessionMfaVerified(req)) claims.amr = [MFA_AMR];
+    return signForSite(claims, { expiresIn: QUERY_TICKET_TTL_SECONDS });
+}
+
+/**
+ * Authenticate request (Loose: Headers OR Cookie OR a query ticket)
+ * Use ONLY for read-only endpoints that require direct browser navigation where the client cannot set
+ * an Authorization header (EventSource/SSE, <a href> downloads), and list the route in QUERY_TICKET_ROUTES.
+ *
+ * The header and the HttpOnly cookie come first, as everywhere. `?token=` is the last resort and takes
+ * ONLY a query ticket for this very path: never a session JWT, never an API token. This route MUST stay
+ * read-only — never authorize a state-changing request off the query string.
  */
 async function authenticateAllowQuery(req: Request, res: Response, next: NextFunction) {
+    if (handleDispatchedAgent(req, res, next)) return;
     const authHeader = req.headers.authorization;
     let token;
+    // Which transport carried the credential — decided by where it was found, never by its content.
+    let fromQueryString = false;
 
     if (authHeader && authHeader.startsWith('Bearer ')) {
         token = authHeader.substring(7);
@@ -1200,9 +1349,8 @@ async function authenticateAllowQuery(req: Request, res: Response, next: NextFun
         token = sessionCookie(req);
         ensureCsrfCookie(req, res); // same backfill as authenticate() — see there
     } else if (queryToken(req)) {
-        // Last-resort fallback (documented leak above). Kept for legacy EventSource/download clients
-        // that can supply neither header nor cookie.
         token = queryToken(req);
+        fromQueryString = true;
     }
 
     if (!token) {
@@ -1213,6 +1361,8 @@ async function authenticateAllowQuery(req: Request, res: Response, next: NextFun
         });
     }
 
+    // From the query string only a ticket for this very path is accepted (see verifyAndAttachUser).
+    if (fromQueryString) return await verifyAndAttachUser(token, req, res, next, `${req.baseUrl || ''}${req.path || ''}`);
     if (token.startsWith(ApiToken.PREFIX)) {
         return await verifyApiTokenAndAttachUser(token, req, res, next);
     }
@@ -1223,6 +1373,7 @@ async function authenticateAllowQuery(req: Request, res: Response, next: NextFun
  * Optional authentication (doesn't fail if no token)
  */
 async function optionalAuth(req: Request, res: Response, next: NextFunction) {
+    if (handleDispatchedAgent(req, res, next)) return;
     const authHeader = req.headers.authorization;
     let token;
 
@@ -1259,7 +1410,7 @@ async function optionalAuth(req: Request, res: Response, next: NextFunction) {
     }
 
     try {
-        const decoded = jwt.verify(token, config.jwt.secret, { algorithms: ['HS256'] });
+        const decoded = verifyForSite(token);
         // Special-purpose tokens (e.g. the MFA challenge) are never a session — treat as anonymous, and so
         // is a session minted on an address the site no longer answers (see sessionAddressStillAccepted).
         if (decoded.purpose || !sessionAddressStillAccepted(decoded)) { req.user = null; return next(); }
@@ -1286,23 +1437,29 @@ async function optionalAuth(req: Request, res: Response, next: NextFunction) {
  * (`mh`) and capped at that alias's expiry, and one minted from an authenticated session keeps that
  * session's binding — see sessionAddressClaims.
  */
-function generateToken(user: any, req?: Request) {
+/**
+ * Sign a session JWT. `opts.mfa` marks a session issued by a sign-in that completed a second factor
+ * (POST /auth/mfa); a session minted FROM an authenticated one (POST /auth/refresh) inherits the marker of
+ * the session presented, so refreshing never upgrades — nor silently drops — that assurance.
+ */
+function generateToken(user: any, req?: Request, opts?: { mfa?: boolean }) {
     const claims: Record<string, unknown> = { userId: user.id, username: user.userLogin };
+    if ((opts && opts.mfa === true) || (req && sessionMfaVerified(req))) claims.amr = [MFA_AMR];
     const address = sessionAddressClaims(req);
     if (address) claims.mh = address.mh;
-    const token = jwt.sign(claims, config.jwt.secret, { expiresIn: config.jwt.expiresIn });
+    const token = signForSite(claims, { expiresIn: config.jwt.expiresIn });
     if (!address || address.notAfterSeconds === null) return token;
     // The configured lifetime is a duration string the signer interprets; compare its result with the
     // alias's own end and re-sign with the earlier one, so the session never outlives the address.
     const { exp } = jwt.decode(token) as { exp: number };
-    return exp <= address.notAfterSeconds ? token : jwt.sign({ ...claims, exp: address.notAfterSeconds }, config.jwt.secret);
+    return exp <= address.notAfterSeconds ? token : signForSite({ ...claims, exp: address.notAfterSeconds });
 }
 
 /**
  * Verify token and return decoded payload
  */
 function verifyToken(token: string) {
-    return jwt.verify(token, config.jwt.secret, { algorithms: ['HS256'] });
+    return verifyForSite(token);
 }
 
 /**
@@ -1339,9 +1496,31 @@ function originAuthority(origin: string): string | undefined {
     }
 }
 
-/** Does this Origin name exactly the host the request was sent to? Fails closed on an absent host. */
-function originMatchesHost(origin: string, host: string | undefined): boolean {
-    return host !== undefined && originAuthority(origin) === host;
+/** The scheme the request was sent over: TLS on the socket, or X-Forwarded-Proto from a trusted hop only. */
+function trustedScheme(req: Request): 'http' | 'https' {
+    return hostPolicy.trustedScheme(req, siteHostPolicy.get());
+}
+
+/**
+ * Does this Origin name the origin the request was sent to — host:port, and a scheme that may vouch for
+ * it? Fails closed on an absent host. Same derivation (core/host-policy trustedScheme) as the CORS gate in
+ * index.ts.
+ *
+ * The scheme is part of the origin, and the direction that matters is DOWNGRADE: a plain-http page —
+ * which anyone on the network path can inject into — must never count as the own page of a request that
+ * arrived over https. The other direction is accepted: an https page on this very host:port while the
+ * request looks like plain http is the site's own page behind a TLS-terminating hop whose
+ * X-Forwarded-Proto is not trusted (index.ts warns about such a proxy at boot). Refusing it would cut off
+ * every write on such an install and protect nothing — that page is not one a network attacker controls.
+ */
+function originMatchesHost(origin: string, host: string | undefined, scheme: 'http' | 'https'): boolean {
+    if (host === undefined || originAuthority(origin) !== host) return false;
+    try { return originSchemeVouches(new URL(origin).protocol, scheme); } catch { return false; }
+}
+
+/** May a page served over `protocol` ('http:' / 'https:') vouch for a request whose trusted scheme is `scheme`? */
+function originSchemeVouches(protocol: string, scheme: 'http' | 'https'): boolean {
+    return protocol === 'https:' || (protocol === 'http:' && scheme === 'http');
 }
 
 /**
@@ -1363,11 +1542,16 @@ function originMatchesHost(origin: string, host: string | undefined): boolean {
  * by the raw-socket tests in tests/absent-host-origin-allowlist.test.ts. No Host means no derivable
  * same-origin, so it must contribute NO entry at all.
  */
-function sameOriginAllowList(host: string | undefined): string[] {
+function sameOriginAllowList(host: string | undefined, scheme: 'http' | 'https'): string[] {
+    // Multisite: the configured public origins are the MAIN site's. On another site of the network they
+    // vouch for nothing — a page on the main site's address is a different site's page there.
+    const onSecondarySite = siteContext.multisiteEnabled() && siteContext.currentSiteId() !== siteContext.PRIMARY_SITE_ID;
+    const configured = onSecondarySite ? [] : [config.site?.url, config.site?.frontendUrl];
     return [
-        config.site?.url,
-        config.site?.frontendUrl,
-        ...(host ? [`http://${host}`, `https://${host}`] : [])
+        ...configured,
+        // The request's own origin under a scheme that may vouch for it (see originMatchesHost): over https,
+        // never the plain-http spelling. The configured public origins above carry their own scheme.
+        ...(host ? [`http://${host}`, `https://${host}`] : []).filter((o: string) => originSchemeVouches(o.startsWith('https://') ? 'https:' : 'http:', scheme))
     ].filter(Boolean);
 }
 
@@ -1451,7 +1635,7 @@ function csrfProtection(req: Request, res: Response, next: NextFunction) {
     // No host of its own (an HTTP/1.0 request without Host): fails whatever its Origin says — see
     // hostlessAmbientRequest. A Bearer caller keeps the rules below, unchanged.
     if (hostlessAmbientRequest(req, host)) {
-        console.warn(`[CSRF] Blocked host-less request to ${logSafe(req.path)}`);
+        log.warn({ path: logSafe(req.path) }, `[CSRF] Blocked host-less request to ${logSafe(req.path)}`);
         return res.status(403).json({
             code: 'rest_csrf_invalid',
             message: 'Cross-site request blocked.',
@@ -1472,7 +1656,8 @@ function csrfProtection(req: Request, res: Response, next: NextFunction) {
     }
 
     // Allow requests from same host (host:port, both sides normalised by the one parser).
-    if (requestOrigin && originMatchesHost(requestOrigin, host)) {
+    const scheme = trustedScheme(req);
+    if (requestOrigin && originMatchesHost(requestOrigin, host, scheme)) {
         return csrfTokenGate(req, res, next);
     }
 
@@ -1490,7 +1675,7 @@ function csrfProtection(req: Request, res: Response, next: NextFunction) {
             // future change to the gate's exemptions cannot silently miss this branch.
             return csrfTokenGate(req, res, next);
         }
-        console.warn(`[CSRF] Blocked header-less cookie request to ${logSafe(req.path)}`);
+        log.warn({ path: logSafe(req.path) }, `[CSRF] Blocked header-less cookie request to ${logSafe(req.path)}`);
         return res.status(403).json({
             code: 'rest_csrf_invalid',
             message: 'Cross-site request blocked.',
@@ -1500,7 +1685,7 @@ function csrfProtection(req: Request, res: Response, next: NextFunction) {
 
     // The configured public origins plus this request's own — see sameOriginAllowList() above for why an
     // absent Host contributes NOTHING here rather than the word "undefined".
-    const allowedOrigins = sameOriginAllowList(host);
+    const allowedOrigins = sameOriginAllowList(host, scheme);
 
     // EXACT origin match — never startsWith (a prefix match lets `https://victim.com.evil.com`
     // satisfy an allowed `https://victim.com`). Compare normalized origins via URL parsing.
@@ -1511,7 +1696,7 @@ function csrfProtection(req: Request, res: Response, next: NextFunction) {
         return csrfTokenGate(req, res, next);
     }
 
-    console.warn(`[CSRF] Blocked request from ${logSafe(requestOrigin || 'unknown')} to ${logSafe(req.path)}`);
+    log.warn({ path: logSafe(req.path) }, `[CSRF] Blocked request from ${logSafe(requestOrigin || 'unknown')} to ${logSafe(req.path)}`);
     return res.status(403).json({
         code: 'rest_csrf_invalid',
         message: 'Cross-site request blocked.',
@@ -1522,6 +1707,9 @@ function csrfProtection(req: Request, res: Response, next: NextFunction) {
 module.exports = {
     authenticate,
     authenticateAllowQuery,
+    isQueryTicketPath,
+    issueQueryTicket,
+    QUERY_TICKET_TTL_SECONDS,
     optionalAuth,
     generateToken,
     verifyToken,
@@ -1530,6 +1718,7 @@ module.exports = {
     // asks the question (csrfProtection here, sameOrigin() in routes/collab.ts). Exported so there is
     // nothing left to copy.
     trustedHost,
+    trustedScheme,
     originMatchesHost,
     sameOriginAllowList,
     hostlessAmbientRequest,
@@ -1555,6 +1744,9 @@ module.exports = {
     // and the question POST /auth/tokens asks before minting an unbound credential from a session.
     sessionAddressStillAccepted,
     sessionBoundToSecondaryAddress,
+    // Whether the presenting session signed in with a second factor (`amr`) — the step-up question
+    // POST /auth/tokens asks of a user whose role requires 2FA.
+    sessionMfaVerified,
     // ...and what such a session may not do to accounts, roles and registration (rest_account_bound_session).
     refuseBoundSession,
     unboundSessionOnly,

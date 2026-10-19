@@ -181,9 +181,11 @@ function copyDir(from, to) {
  *   cluster        a CA from makeCa(): installs gateway-internal certs so the internal mTLS listener starts
  *   registered     false = an empty registry, as on a box the install wizard has not run on yet: the
  *                  upstreams are then reachable only through the pre-install bootstrap (their ports)
+ *   extraConfig    more keys for gateway-config.json (trustProxy, logging, …)
+ *   env            more environment variables for the gateway process
  * Returns { dir, port, internalPort, acmePort, output(), stop() }.
  */
-async function bootGateway({ secure = false, acme = false, upstreams, cluster, registered = true }) {
+async function bootGateway({ secure = false, acme = false, upstreams, cluster, registered = true, extraConfig = {}, env = {} }) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wordjs-gw-'));
     const dir = path.join(root, 'gateway');
     copyDir(path.join(GATEWAY_ROOT, 'src'), path.join(dir, 'src'));
@@ -199,6 +201,7 @@ async function bootGateway({ secure = false, acme = false, upstreams, cluster, r
         // Development keeps the worker count at min(cpus, 4).
         nodeEnv: 'development',
     };
+    Object.assign(config, extraConfig);
     if (acme) config.acme = { http01Port: acmePort };
     if (secure) {
         const leaf = makeLeaf(null, 'localhost');
@@ -224,7 +227,7 @@ async function bootGateway({ secure = false, acme = false, upstreams, cluster, r
     let out = '';
     const child = spawn(process.execPath, [path.join(dir, 'src', 'index.js')], {
         cwd: dir,
-        env: Object.assign({}, process.env, { NODE_PATH: path.join(GATEWAY_ROOT, 'node_modules'), NODE_ENV: 'test' }),
+        env: Object.assign({}, process.env, { NODE_PATH: path.join(GATEWAY_ROOT, 'node_modules'), NODE_ENV: 'test' }, env),
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: process.platform !== 'win32',
     });

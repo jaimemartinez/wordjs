@@ -24,6 +24,8 @@ Isolated plugins send notifications through the capability bridge (`wordjs.notif
 
 **Registering a transport is different.** `wordjs.notify.registerTransport(name, handler)` is **not** a generic bridge call — it flows over its own dedicated IPC kind (`register-notify-transport`), and the host **only honors it when the plugin has been admin-granted the `notifications: provider` capability** (`isGrantedFor(slug, 'notifications', 'provider')`, default-deny). Registering a transport is privileged because the handler is invoked for **every** dispatched notification — it can read all notification content — so it requires the admin to grant `notifications: provider` in `/admin/plugins`. When the grant is absent the request is denied (logged: `notify.registerTransport denied: the notifications:provider permission is not granted (grant it in /admin/plugins)`, no transport registered). First-party plugins (e.g. the Mail Server) **declare** the capability in their manifest, but declaring is not granting — the grant is an admin act: activating a plugin (`POST /plugins/:slug/activate`) shows the requested capabilities and grants exactly that declared set, and only while the plugin holds no grants an administrator decided (no record, or an empty one no administrator decided), so a revoke of `notifications: provider` in `/admin/plugins` survives a re-activation, a revoke of every grant included. (Plugins *already active* when the default-deny model was introduced were grandfathered by the boot backfill.) They are **not** privileged/trusted — they are still sandboxed, and the handler still runs in the child via `runWithContext`. The handler stays in the plugin's process; the host RPCs each notification back to it (`invoke-notify-transport`) under the plugin's context.
 
+The grant screens mark `notifications:provider` as **administrator-level**: a transport receives every notification it delivers in full, unredacted — the sign-in codes and links other plugins send included — so grant it only to a plugin you would trust as an administrator.
+
 ```javascript
 // Isolated plugin (via the capability bridge)
 await wordjs.notify({
@@ -44,7 +46,7 @@ Every `send()` is gated by `verifyPermission('notifications', 'send')`, so a plu
 
 Notifications are stored in the `notifications` table (UUID, `user_id`, `type`, `title`, `message`, `data`, `is_read`, `created_at`, `read_at`, `icon`, `color`, `action_url`).
 
-*   **Bounded listing:** `getNotifications(userId, limit = 50)` returns **unread first (capped at `limit`)** plus the **5 most recent read** items, both `ORDER BY created_at DESC`. The query is backed by a composite index `idx_notifications_user_read_created (user_id, is_read, created_at)`, so the per-user listing stays cheap as history grows.
+*   **Bounded listing:** `getNotifications(userId, limit = 50)` returns **unread first (capped at `limit`)** plus the **5 most recent read** items, both `ORDER BY created_at DESC`. It selects `user_id = ?` only, so a **broadcast** (`user_id = 0`) is stored and pushed live to every connected SSE client, but `GET /notifications` never returns it: a user who was not connected when it was sent does not see it later. `markAllAsRead` is likewise scoped to the caller's own rows. The query is backed by a composite index `idx_notifications_user_read_created (user_id, is_read, created_at)`, so the per-user listing stays cheap as history grows.
 *   `markAsRead(uuid, userId)`, `markAllAsRead(userId)`, and `deleteNotification(uuid, userId)` manage state. The single-item mutators are **owner-scoped** (`WHERE uuid = ? AND (user_id = ? OR user_id = 0)`): a uuid is not a capability, so a caller can only act on their own notification — except a broadcast (`user_id = 0`) which any user may dismiss. They return `true` only when a row the user owns was actually changed (the routes 404 otherwise).
 
 ### REST endpoints (`backend/src/routes/notifications.ts`)
@@ -58,7 +60,7 @@ The three mutating routes sit behind the double-submit CSRF gate like every othe
 
 ## Frontend Integration
 
-The frontend connects to the SSE stream at `/api/v1/notifications/stream`. Broadcasts are addressed: a notification with `user_id == 0` goes to all connected clients, otherwise only to clients whose authenticated user matches.
+The frontend connects to the SSE stream at `/api/v1/notifications/stream`. Broadcasts are addressed: a notification with `user_id == 0` goes to all connected clients, otherwise only to clients whose authenticated user matches. A broadcast reaches only the clients connected when it is sent; the list endpoint does not return it (see [Persistence & retrieval](#persistence--retrieval)).
 
 ### Components
 *   **`NotificationCenter.tsx`**: The main UI component. It handles receiving events, triggering haptic feedback (`navigator.vibrate`), and managing unread counts.

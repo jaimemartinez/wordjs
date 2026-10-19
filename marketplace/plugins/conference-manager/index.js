@@ -22,7 +22,7 @@
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.17.0',
+    version: '2.17.2',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -56,6 +56,8 @@ exports.init = async function (wordjs) {
         // Team & permissions (2.15.0)
         staffRoles: `${P}staff_roles`,
         staffMembers: `${P}staff_members`,
+        // Portal sessions (2.17.1)
+        portalSessions: `${P}portal_sessions`,
     };
 
     // Schema-follows-form: the registration FORM is the source of truth. Every form field owns a real
@@ -623,13 +625,34 @@ exports.init = async function (wordjs) {
     }
 
     // Throws 409 when `loc` ({ id, name, capacity }) has no free seat. A NULL capacity (a location created
-    // before 2.3.0 whose limit was never set) is unlimited. Check-then-insert, like assertUnique: the
-    // bridge has no transactions, so two simultaneous registrations for the LAST seat of a location can
-    // both pass — the same window every other guard in this file accepts.
+    // before 2.3.0 whose limit was never set) is unlimited. A check alone is an early answer: the write that
+    // takes the seat goes through takeSeat, which repeats it under the location's seat lock.
     async function assertLocationHasRoom(loc) {
         if (!loc || loc.capacity == null) return;
         const taken = await locationOccupancy(loc.id);
         if (taken >= loc.capacity) throw httpError(409, `La localidad «${loc.name}» ha alcanzado su cupo máximo de ${loc.capacity} inscritos.`);
+    }
+    // Seats (2.17.1): the count and the write that takes a seat run under ONE lock per location, so two
+    // simultaneous registrations for the LAST seat cannot both pass (the bridge has no transactions; a
+    // single child process makes an in-memory chain the whole picture). The capacity is re-read inside the
+    // lock. Every write that takes a seat — the admin's and the portal's registrations, an edit that moves
+    // or un-cancels an attendee into a location — goes through here. Map entries go once their chain drains.
+    const seatLocks = new Map(); // location_id -> tail of its chain
+    const withSeatLock = (locationId, fn) => {
+        const key = String(locationId);
+        const run = (seatLocks.get(key) || Promise.resolve()).then(fn, fn);
+        const tail = run.then(() => {}, () => {});
+        seatLocks.set(key, tail);
+        tail.then(() => { if (seatLocks.get(key) === tail) seatLocks.delete(key); });
+        return run;
+    };
+    function takeSeat(loc, write) {
+        return withSeatLock(loc.id, async () => {
+            const cur = await db.get(`SELECT id, name, capacity FROM ${T.locations} WHERE id = ?`, [loc.id]);
+            if (!cur) throw httpError(409, `La localidad «${loc.name}» ya no existe.`);
+            await assertLocationHasRoom(cur);
+            return write();
+        });
     }
 
     /**
@@ -891,39 +914,80 @@ exports.init = async function (wordjs) {
         return rows.length;
     }
 
-    // In-process portal-login throttle (single child process → in-memory is sufficient). Per
-    // location: at most LOGIN_MAX wrong codes per rolling window, then locked out until it rolls.
-    const LOGIN_MAX = 6, LOGIN_WINDOW_MS = 10 * 60 * 1000;
-    const loginAttempts = new Map(); // location_id -> { count, first }
-    const loginThrottled = (locationId) => {
-        const rec = loginAttempts.get(String(locationId));
-        return !!(rec && Date.now() - rec.first < LOGIN_WINDOW_MS && rec.count >= LOGIN_MAX);
+    // In-process portal-login throttle (2.17.2; single child process → in-memory maps are the whole
+    // picture, and every map is bounded). Only WRONG codes are counted, against three fixed-window budgets:
+    //   - per client + location (req.clientKey = the host's HMAC of the caller's address): the ONLY
+    //     budget that refuses. Another client's mistakes never lock this one out, and a right code
+    //     clears only the caller's own count. It is charged synchronously BEFORE the code check is
+    //     awaited (so a parallel burst cannot outrun it) and refunded when the code is right;
+    //   - per location, all clients together, and site-wide (location ids are public): bound guessing
+    //     spread over many addresses and many locations by slowing every attempt down once spent
+    //     (escalating delay), never by refusing — a right code is never turned away for other callers'
+    //     wrong ones. Only wrong codes for a location that exists are charged to them.
+    // A signed-in coordinator never meets this: the portal session is an opaque server-side id (see
+    // PORTAL AUTH HELPER), not something carrying the code.
+    const LOGIN_LIMITS = {
+        perClient: 6, clientWindowMs: 10 * 60 * 1000,
+        perLocation: 20, perSite: 100, sharedWindowMs: 60 * 60 * 1000,
+        // Past a shared budget every attempt waits before its code is checked: delayBaseMs, doubling
+        // every delayDoubleEvery further wrong codes, up to delayMaxMs.
+        delayBaseMs: 250, delayDoubleEvery: 10, delayMaxMs: 8000,
     };
-    const noteLoginFailure = (locationId) => {
-        const now = Date.now(), key = String(locationId);
-        const rec = loginAttempts.get(key);
-        if (!rec || now - rec.first >= LOGIN_WINDOW_MS) loginAttempts.set(key, { count: 1, first: now });
-        else rec.count++;
+    const LOGIN_MAP_CAP = 5000;
+    const loginBuckets = { client: new Map(), location: new Map(), site: new Map() };
+    const loginBucket = (map, key, windowMs, now) => {
+        let b = map.get(key);
+        if (!b || now - b.first >= windowMs) {
+            if (!b && map.size >= LOGIN_MAP_CAP) {
+                for (const [k, v] of map) if (now - v.first >= windowMs) map.delete(k);
+                while (map.size >= LOGIN_MAP_CAP) map.delete(map.keys().next().value);
+            }
+            b = { count: 0, first: now };
+            map.set(key, b);
+        }
+        return b;
     };
-    const clearLoginFailures = (locationId) => loginAttempts.delete(String(locationId));
-
-    // Concurrency backstop (audit AUTH-A3 class): loginThrottled above is check-then-arm and the code
-    // check straddles awaited db.get calls (event-loop yields), so a BURST of parallel guesses for one
-    // location would all clear loginThrottled before noteLoginFailure arms the counter — evaluating far
-    // more than LOGIN_MAX guesses per window. Cap the number of CONCURRENT in-flight code verifications
-    // per location; the counter is per single child process so an in-memory Map is the whole cluster view.
-    const LOGIN_MAX_INFLIGHT = 3;
-    const loginInflight = new Map(); // location_id -> count
-    const beginLoginAttempt = (locationId) => {
-        const k = String(locationId), n = loginInflight.get(k) || 0;
-        if (n >= LOGIN_MAX_INFLIGHT) return false;
-        loginInflight.set(k, n + 1);
-        return true;
+    /** A bucket's live count, without creating one (an unknown id never becomes a map key). */
+    const loginCount = (map, key, windowMs, now) => {
+        const b = map.get(key);
+        return b && now - b.first < windowMs ? b.count : 0;
     };
-    const endLoginAttempt = (locationId) => {
-        const k = String(locationId), n = (loginInflight.get(k) || 0) - 1;
-        if (n <= 0) loginInflight.delete(k); else loginInflight.set(k, n);
+    /**
+     * Charge one attempt for `locationId` to the caller's own budget: null when it is spent (the only
+     * refusal), else { delayMs, failed(), succeeded() }. `delayMs` is how long the attempt waits before
+     * its code is checked, from the shared budgets; failed() charges them (call it only for a wrong
+     * code on a location that exists); succeeded() refunds the caller's own attempt.
+     */
+    const beginLoginAttempt = (req, locationId) => {
+        const now = Date.now(), L = LOGIN_LIMITS;
+        const clientKey = `${String((req && req.clientKey) || 'anon').slice(0, 64)}|${locationId}`;
+        const own = loginBucket(loginBuckets.client, clientKey, L.clientWindowMs, now);
+        if (own.count >= L.perClient) return null;
+        own.count++;
+        const excess = Math.max(
+            loginCount(loginBuckets.location, String(locationId), L.sharedWindowMs, now) - L.perLocation,
+            loginCount(loginBuckets.site, '*', L.sharedWindowMs, now) - L.perSite
+        );
+        const delayMs = excess < 0 ? 0
+            : Math.min(L.delayMaxMs, L.delayBaseMs * 2 ** Math.floor(excess / L.delayDoubleEvery));
+        let settled = false;
+        return {
+            delayMs,
+            failed() {
+                if (settled) return;
+                settled = true;
+                const at = Date.now();
+                loginBucket(loginBuckets.location, String(locationId), L.sharedWindowMs, at).count++;
+                loginBucket(loginBuckets.site, '*', L.sharedWindowMs, at).count++;
+            },
+            succeeded() {
+                if (settled) return;
+                settled = true;
+                loginBuckets.client.delete(clientKey); // the caller's own record only
+            },
+        };
     };
+    const loginPause = (ms) => (ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : null);
 
     // Serialize the auto-assigner: it loads occupancy into memory then writes in a loop, so two
     // concurrent runs (or a run racing a manual assign) would double-book. Chain them instead.
@@ -1201,7 +1265,7 @@ exports.init = async function (wordjs) {
     //   GET    /locations                              staff (context: names, capacity, the conference row);
     //                                                  the access `code` only with locations:manage (else null)
     //   POST   /locations, PUT/DELETE /locations/:id   locations:manage (codes = who can log in to the portal)
-    //   GET    /locations/:id/lodging                  locations:view
+    //   GET    /locations/:id/lodging                  locations:view (the ID document only with inscriptions:view)
     //   POST   /locations/:id/lodging/validate|return|reopen   locations:manage
     //   GET    /hotels                                 lodging:view | inscriptions:view | dashboard:view | reports:view
     //   POST   /hotels, PUT/DELETE /hotels/:id         lodging:manage
@@ -1213,11 +1277,11 @@ exports.init = async function (wordjs) {
     //   POST   /inscriptions/:id/assign                lodging:manage
     //   GET    /inscriptions                           inscriptions:view | payments:view | lodging:view |
     //                                                  transport:view | accounting:view | dashboard:view | reports:view
-    //                                                  (the roster those pages name people from); `reg_code` only
-    //                                                  with inscriptions:view (else null)
+    //                                                  (the roster those pages name people from); `reg_code` and
+    //                                                  `document_number` only with inscriptions:view (else null)
     //   POST   /inscriptions, PUT/DELETE /inscriptions/:id   inscriptions:manage
-    //   GET    /inscriptions/export                    reports:view | inscriptions:view (the Código column only
-    //                                                  with inscriptions:view)
+    //   GET    /inscriptions/export                    reports:view | inscriptions:view (the Código column and the
+    //                                                  ID document's only with inscriptions:view)
     //   GET    /inscriptions/:id/payments              payments:view | inscriptions:view
     //   POST   /inscriptions/:id/payments              payments:manage
     //   DELETE /payments/:id                           payments:manage
@@ -1244,7 +1308,7 @@ exports.init = async function (wordjs) {
     //   GET    /meals/services/:id/stats               meals:view | meals_delivery:manage
     //   GET    /meals/services/:id/deliveries          meals:view | meals_delivery:manage (recent deliveries)
     //   GET    /meals/services/:id/report              meals:view
-    //   (every meals answer carries reg_code — and GET /meals/people the ID document, document_number — only
+    //   (every meals answer carries reg_code — and GET /meals/people and the card the ID document, document_number — only
     //   with inscriptions:view, else null; without it the people search matches a document only whole)
     //   GET    /staff/me                               any authenticated user (all `none` when not on the team)
     //   GET|POST /staff/roles, PUT|DELETE /staff/roles/:id       admin
@@ -1364,6 +1428,11 @@ exports.init = async function (wordjs) {
     // So does the attendee's ID document (inscriptions.document_number): it is roster data, and the meals
     // screens never show it — a kitchen role (meals_delivery:manage) cannot read the roster.
     const canSeeDocuments = (perms) => hasLevel(perms, 'inscriptions', 'view');
+    // ONE projection for every answer that carries inscription rows (2.17.1): the roster, its CSV export,
+    // the lodging review, the meals card. GET /inscriptions is open to payments/lodging/transport/…:view
+    // to NAME people; the ID document stays with inscriptions:view.
+    const DOCUMENT_COLUMN = 'document_number';
+    const maskDocument = (obj, perms) => (obj && !canSeeDocuments(perms) && DOCUMENT_COLUMN in obj ? { ...obj, [DOCUMENT_COLUMN]: null } : obj);
 
     const denyAccess = (res) => { res.status(403).json({ error: NO_ACCESS }); return false; };
     async function gatePerms(req, res) {
@@ -1446,6 +1515,19 @@ exports.init = async function (wordjs) {
         }
     }
     await initStaffSchema();
+
+    // Portal sessions (2.17.1): see PORTAL AUTH HELPER. VARCHAR, not TEXT: MySQL cannot index TEXT. No
+    // FK — the lookup joins the location, so a session of a deleted location resolves to none.
+    await db.createTable(T.portalSessions, [
+        'id INT_PK',
+        'token VARCHAR(64) NOT NULL',
+        'location_id INT NOT NULL',
+        'code VARCHAR(32) NOT NULL',
+        'expires_at VARCHAR(16) NOT NULL',
+        'created_at DATETIME DEFAULT CURRENT_TIMESTAMP'
+    ]);
+    await createUniqueIndex(`${P}uidx_portal_sessions_token`, T.portalSessions, 'token');
+    await createIndex(`${P}idx_portal_sessions_expires`, T.portalSessions, 'expires_at');
 
     // ── WordJS users (grant users:read) ──
     const USERS_GRANT_MESSAGE = 'Para buscar usuarios, concede al plugin el permiso «users:read» en Plugins.';
@@ -1913,14 +1995,16 @@ exports.init = async function (wordjs) {
 
     // Shared filter builder for GET /inscriptions and /inscriptions/export (same query params).
     // `search` matches every DEFINED field column + the location label with LIKE, wildcards escaped.
-    // `withCodes`: also match the search term against reg_code. Only for callers who may SEE the codes —
-    // otherwise the filter is an oracle that rebuilds a hidden code one character at a time.
-    async function inscriptionFilters(q, params, withCodes) {
+    // `perms`: reg_code and the ID document are matched only for callers who may SEE them — otherwise the
+    // filter is an oracle that rebuilds a hidden value one character at a time.
+    async function inscriptionFilters(q, params, perms) {
         let where = '';
         const search = q.search ? String(q.search).slice(0, 200) : '';
         if (search) {
             const flds = await db.all(`SELECT name FROM ${T.fields} WHERE conference_id = ?`, [q.conference_id]);
-            const cols = [...new Set([...flds.map(f => f.name).filter(isFieldColumn), 'location', ...(withCodes ? ['reg_code'] : [])])];
+            // The ID document is searched only by whoever may read it (a substring search answers for it).
+            const docsOk = canSeeDocuments(perms);
+            const cols = [...new Set([...flds.map(f => f.name).filter(isFieldColumn).filter(c => docsOk || c !== DOCUMENT_COLUMN), 'location', ...(canSeeRegCodes(perms) ? ['reg_code'] : [])])];
             const term = `%${likeEscape(search)}%`;
             where += ` AND (` + cols.map(c => `i.${c} LIKE ?${LIKE_ESCAPE}`).join(' OR ') + `)`;
             cols.forEach(() => params.push(term));
@@ -1956,7 +2040,7 @@ exports.init = async function (wordjs) {
                 WHERE i.conference_id = ?
             `;
             const params = [conference_id];
-            query += await inscriptionFilters(req.query, params, canSeeRegCodes(perms));
+            query += await inscriptionFilters(req.query, params, perms);
             query += ` ORDER BY i.last_name, i.first_name`;
 
             // Optional pagination — only kicks in when the caller passes `limit` (keeps the existing
@@ -1974,7 +2058,7 @@ exports.init = async function (wordjs) {
             // Parse custom_data (guarded — one malformed legacy row must not 500 the whole roster). The
             // registration code (barcode payload) only reaches inscriptions:view.
             const showCodes = canSeeRegCodes(perms);
-            const parsedList = list.map(item => ({ ...item, custom_data: parseCd(item.custom_data), reg_code: showCodes ? item.reg_code : null }));
+            const parsedList = list.map(item => maskDocument({ ...item, custom_data: parseCd(item.custom_data), reg_code: showCodes ? item.reg_code : null }, perms));
 
             res.json(parsedList);
         } catch (e) { sendError(res, e); }
@@ -2281,10 +2365,11 @@ exports.init = async function (wordjs) {
             await assertUnique(confFields, values, { conference_id: confId });
 
             const keys = Object.keys(values);
-            const result = await db.run(
+            const insert = () => db.run(
                 `INSERT INTO ${T.inscriptions} (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`,
                 Object.values(values)
             );
+            const result = loc ? await takeSeat(loc, insert) : await insert();
             res.json({ success: true, id: result.lastID });
         } catch (e) { sendError(res, e); }
     });
@@ -2446,12 +2531,13 @@ exports.init = async function (wordjs) {
     // The arrangement of a location: its allotted rooms with L's occupants, L's attendees without a
     // room, those the admin placed elsewhere, the rules in force and the audit of the current state.
     http.route('get', '/locations/:id/lodging', { auth: true }, async (req, res) => {
-        if (!await allow(req, res, 'locations', 'view')) return;
+        const perms = await allow(req, res, 'locations', 'view');
+        if (!perms) return;
         try {
             const id = positiveInt(req.params.id);
             const loc = id ? await db.get(`SELECT * FROM ${T.locations} WHERE id = ?`, [id]) : null;
             if (!loc) return res.status(404).json({ error: 'Localidad no encontrada.' });
-            res.json(await loadLodging(loc, { forAdmin: true }));
+            res.json(await loadLodging(loc, { forAdmin: true, perms }));
         } catch (e) { sendError(res, e); }
     });
     // State transitions are compare-and-set: ONE conditional UPDATE under the assignment lock; a 409 is
@@ -3796,6 +3882,7 @@ exports.init = async function (wordjs) {
             room = await db.get(`SELECT r.room_number, h.name AS hotel_name FROM ${T.rooms} r LEFT JOIN ${T.hotels} h ON h.id = r.hotel_id WHERE r.id = ?`, [row.room_id]);
         }
         const showCodes = canSeeRegCodes(perms);
+        const showDocuments = canSeeDocuments(perms);
         // The name follows the same rule as everywhere else (personWithName: the form's name fields, else its
         // name-fallback columns), so a form without first/last name still names the person on the card.
         const fullName = display.keys.includes('@name') ? (await personWithName(ins)).name : null;
@@ -3807,6 +3894,8 @@ exports.init = async function (wordjs) {
                 case '@reg_code': return showCodes ? { key, label, value: ins.reg_code || null } : { key, label, value: null, hidden: true };
                 case '@payment_status': return { key, label, value: displayText(row.payment_status) };
                 case '@room': return { key, label, value: room ? displayText([room.hotel_name, room.room_number].filter(Boolean).join(' · ')) : null };
+                // The ID document, like '@reg_code': only with inscriptions:view (maskDocument).
+                case DOCUMENT_COLUMN: return showDocuments ? { key, label, value: displayText(row[key]) } : { key, label, value: null, hidden: true };
                 default: return { key, label, value: displayText(row[key]) };
             }
         });
@@ -4147,11 +4236,10 @@ exports.init = async function (wordjs) {
                     : (existing.location_id != null ? await db.get(`SELECT id, name, capacity FROM ${T.locations} WHERE id = ?`, [existing.location_id]) : null);
                 const willCount = !!target && newStatus !== 'cancelled';
                 const wasCountedThere = !!target && existing.location_id === target.id && existing.status !== 'cancelled';
-                if (willCount && !wasCountedThere) await assertLocationHasRoom(target);
-                if (sets.length) {
-                    params.push(id);
-                    await db.run(`UPDATE ${T.inscriptions} SET ${sets.join(', ')} WHERE id = ?`, params);
-                }
+                params.push(id);
+                const write = () => (sets.length ? db.run(`UPDATE ${T.inscriptions} SET ${sets.join(', ')} WHERE id = ?`, params) : null);
+                if (willCount && !wasCountedThere) await takeSeat(target, write);
+                else await write();
                 return existing;
             });
             const id = existing.id;
@@ -4361,7 +4449,8 @@ exports.init = async function (wordjs) {
         try {
             // Columns follow the form: one per defined field (its label), then payment + lodging.
             const flds = await db.all(`SELECT name, label FROM ${T.fields} WHERE conference_id = ? ORDER BY sort_order ASC`, [conference_id]);
-            const safeFlds = flds.filter(f => isFieldColumn(f.name));
+            // The ID document's column only for inscriptions:view (maskDocument).
+            const safeFlds = flds.filter(f => isFieldColumn(f.name) && (canSeeDocuments(perms) || f.name !== DOCUMENT_COLUMN));
 
             let query = `
                 SELECT i.*, r.room_number, h.name as hotel_name
@@ -4370,7 +4459,7 @@ exports.init = async function (wordjs) {
                 LEFT JOIN ${T.hotels} h ON r.hotel_id = h.id
                 WHERE i.conference_id = ?`;
             const params = [conference_id];
-            query += await inscriptionFilters(req.query, params, canSeeRegCodes(perms));
+            query += await inscriptionFilters(req.query, params, perms);
             query += ` ORDER BY i.last_name, i.first_name`;
             const rows = await db.all(query, params);
 
@@ -4941,7 +5030,9 @@ exports.init = async function (wordjs) {
     // notes) and lists only non-cancelled attendees. Either way `occupants` / `unassigned` /
     // `placed_elsewhere` are L's OWN attendees: a foreign stray in one of L's rooms counts in `occupied`
     // but is never listed. `lodging_reviewed_by` is never part of the result.
-    async function loadLodging(location, { forAdmin = false } = {}) {
+    // `perms` (admin review): the attendees' ID document follows maskDocument. The coordinators' portal
+    // (no perms) sees its own attendees' form answers, as on its roster.
+    async function loadLodging(location, { forAdmin = false, perms = null } = {}) {
         const L = location, cid = L.conference_id;
         const fieldRows = await db.all(`SELECT name, label, type, role, is_unique FROM ${T.fields} WHERE conference_id = ? ORDER BY sort_order ASC, id ASC`, [cid]);
         // `role` names the display-name fields (first_name / last_name) wherever they sit in the form.
@@ -4965,7 +5056,7 @@ exports.init = async function (wordjs) {
             for (const c of attendeeCols) o[c] = p[c] === undefined ? null : p[c];
             if (!hasGender) o.gender = null;
             o.display_name = displayNameOf(p);
-            return o;
+            return perms ? maskDocument(o, perms) : o;
         };
         const roomRows = await db.all(
             `SELECT r.*, h.name AS hotel_name, (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.room_id = r.id) AS occupied
@@ -5030,52 +5121,50 @@ exports.init = async function (wordjs) {
 
 
     // === PORTAL AUTH HELPER ===
-    // The portal session is a base64 `id:code:expiry` token. Under the sandbox the host NAMESPACES any
-    // cookie the plugin sets — `wordjs_portal_token` is stored/returned as the namespaced cookie name
-    // below — and forwards the `x-portal-token` header verbatim. Accept either. Returns the resolved
-    // location row on success, or null on any failure (caller responds 401).
-    //
-    // The bearer token EMBEDS the location's access code (the shared secret). Mitigations: the HttpOnly
-    // namespaced cookie is the primary carrier, 7-day expiry inside the token, the code is re-checked
-    // against the DB on every request (rotate_code invalidates every outstanding token), and the
-    // throttle applies to forged tokens. A future version should mint an opaque random session id
-    // stored server-side instead of carrying the code; that needs a sessions table and is out of scope
-    // for 2.2.0.
+    // A login mints an opaque random session id (host CSPRNG, 256 bits) stored server-side with the
+    // location and the access code it was opened with (2.17.1 — it used to be a base64 `id:code:expiry`
+    // token that carried the code). Under the sandbox the host NAMESPACES any cookie the plugin sets —
+    // `wordjs_portal_token` is stored/returned as the namespaced cookie name below — and forwards the
+    // `x-portal-token` header verbatim. Accept either. Every request re-reads the location and its
+    // conference: rotate_code, deleting the location, or unpublishing the conference's form (the login
+    // refuses an unpublished one too) ends every session at once. Returns the location row, or null
+    // (caller responds 401). The id carries nothing guessable, so this path needs no throttle.
     const PORTAL_COOKIE = `${db.tablePrefix}wordjs_portal_token`; // host-namespaced cookie name
     const PORTAL_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
-    const makePortalToken = (id, code) => btoa(`${id}:${code}:${Date.now() + PORTAL_TOKEN_TTL_MS}`);
-    async function resolvePortalLocation(req) {
+    const PORTAL_TOKEN_RE = /^[0-9a-f]{64}$/;
+    // Expiry as a fixed-width ms string: compares correctly as text on every engine.
+    const expiryText = (ms) => String(Math.floor(ms)).padStart(15, '0');
+    async function createPortalSession(location) {
+        const token = String(await wordjs.crypto.randomToken(32));
+        const now = Date.now();
+        await db.run(`DELETE FROM ${T.portalSessions} WHERE expires_at < ?`, [expiryText(now)]);
+        await db.run(
+            `INSERT INTO ${T.portalSessions} (token, location_id, code, expires_at) VALUES (?, ?, ?, ?)`,
+            [token, location.id, String(location.code), expiryText(now + PORTAL_TOKEN_TTL_MS)]
+        );
+        return token;
+    }
+    const portalTokenOf = (req) => {
         const cookies = req.cookies || {};
-        let token = cookies[PORTAL_COOKIE] || cookies.wordjs_portal_token || (req.headers && req.headers['x-portal-token']);
+        const token = cookies[PORTAL_COOKIE] || cookies.wordjs_portal_token || (req.headers && req.headers['x-portal-token']);
+        return typeof token === 'string' && PORTAL_TOKEN_RE.test(token) ? token : null;
+    };
+    async function resolvePortalLocation(req) {
+        const token = portalTokenOf(req);
         if (!token) return null;
         try {
-            const decoded = atob(token);
-            const [rawId, code, exp] = decoded.split(':');
-            // Canonicalize the id to an integer so "5"/"05"/"005"/" 5" can't each get a fresh throttle
-            // budget (they all resolve to the same DB row via INTEGER affinity) — see /portal/login.
-            const id = Number(rawId);
-            if (!Number.isInteger(id) || id <= 0) return null;
-            // Token must carry an expiry and not be past it. The access code is still verified against
-            // the DB on every request, so rotating a code also invalidates any outstanding token.
-            if (!exp || Date.now() > Number(exp)) return null;
-            // SECURITY (audit HIGH): the token path was an unthrottled brute-force oracle for the 6-digit
-            // code (attacker forges base64(id:guess:far-future) and reads the 200-vs-401). Apply the SAME
-            // per-location throttle as /portal/login; a wrong code here counts as a failed attempt.
-            if (loginThrottled(id)) return null;
-            // Concurrency backstop (AUTH-A3 class): cap concurrent in-flight guesses per location so a
-            // burst of forged tokens can't clear the throttle before noteLoginFailure arms it.
-            if (!beginLoginAttempt(id)) return null;
-            try {
-                const location = await db.get(`SELECT * FROM ${T.locations} WHERE id = ? AND code = ?`, [id, code]);
-                if (!location) { noteLoginFailure(id); return null; }
-                clearLoginFailures(id); // a valid token resets this location's failure counter
-                return location;
-            } finally { endLoginAttempt(id); }
+            const location = await db.get(
+                `SELECT l.* FROM ${T.portalSessions} s
+                 JOIN ${T.locations} l ON l.id = s.location_id
+                 JOIN ${T.conferences} c ON c.id = l.conference_id
+                 WHERE s.token = ? AND s.expires_at > ? AND l.code = s.code AND c.is_form_published = 1`,
+                [token, expiryText(Date.now())]
+            );
+            return location || null;
         } catch (e) {
             return null;
         }
     }
-
 
     // === PUBLIC PORTAL API ===
 
@@ -5128,35 +5217,32 @@ exports.init = async function (wordjs) {
         if (!Number.isInteger(location_id) || location_id <= 0) {
             return res.status(400).json({ error: 'Localidad inválida.' });
         }
-        let acquired = false;
         try {
-            // Rate limit before touching the DB — bounds brute force of the 6-digit code per location.
-            if (loginThrottled(location_id)) {
+            // Charged to the caller's budget before touching the DB, refunded only when the code is right
+            // (or the form is closed — that refusal is not a guess). Bounds brute force of the 6-digit code.
+            const attempt = beginLoginAttempt(req, location_id);
+            if (!attempt) {
                 return res.status(429).json({ error: 'Demasiados intentos. Espera unos minutos e inténtalo de nuevo.' });
             }
-            // Concurrency backstop (audit AUTH-A3 class): cap concurrent in-flight guesses per location so a
-            // parallel burst can't clear the throttle before noteLoginFailure arms it. Released in finally.
-            if (!(acquired = beginLoginAttempt(location_id))) {
-                return res.status(429).json({ error: 'Demasiados intentos simultáneos. Inténtalo de nuevo en un momento.' });
-            }
+            await loginPause(attempt.delayMs);
             const location = await db.get(`SELECT * FROM ${T.locations} WHERE id = ?`, [location_id]);
-            if (!location) { noteLoginFailure(location_id); return res.status(404).json({ error: 'Location not found' }); }
+            if (!location) return res.status(404).json({ error: 'Location not found' });
 
             const conf = await db.get(`SELECT is_form_published FROM ${T.conferences} WHERE id = ?`, [location.conference_id]);
             if (!conf || !conf.is_form_published) {
+                attempt.succeeded();
                 return res.status(403).json({ error: 'El formulario de esta conferencia no está publicado.' });
             }
 
             // Simple code check
-            if (String(location.code) !== String(code)) {
-                noteLoginFailure(location_id);
+            if (!location.code || String(location.code) !== String(code)) {
+                attempt.failed();
                 return res.status(401).json({ error: 'Invalid code' });
             }
-            clearLoginFailures(location_id);
+            attempt.succeeded();
 
-            // Stateless session token: base64(id:code:expiry). The code is the shared secret and is
-            // re-checked against the DB on every request (resolvePortalLocation).
-            const token = makePortalToken(location.id, location.code);
+            // Opaque server-side session (createPortalSession): the token carries no code.
+            const token = await createPortalSession(location);
 
             // Set the portal cookie. The host namespaces it to `${tablePrefix}wordjs_portal_token`,
             // clamps it to this plugin's route path, and strips `secure` handling itself; we still pass
@@ -5170,7 +5256,6 @@ exports.init = async function (wordjs) {
 
             res.json({ success: true, token, location: { id: location.id, name: location.name, responsible_name: location.responsible_name, conference_id: location.conference_id, capacity: location.capacity, inscribed: await locationOccupancy(location.id), payment_methods: enabledPaymentMethods(location), ...(await portalLodgingSummary(location)) } });
         } catch (e) { sendError(res, e); }
-        finally { if (acquired) endLoginAttempt(location_id); }
     });
 
     // 4. Get Current Location Info
@@ -5192,7 +5277,13 @@ exports.init = async function (wordjs) {
 
     // 4b. Logout — clear the namespaced session cookie so a refresh on a shared device does not
     // silently re-authenticate the previous coordinator.
+    // The session row goes too, so the token is dead everywhere, not just in this browser.
     http.route('post', '/portal/logout', async (req, res) => {
+        const token = portalTokenOf(req);
+        if (token) {
+            try { await db.run(`DELETE FROM ${T.portalSessions} WHERE token = ?`, [token]); }
+            catch (e) { console.warn('[conference-manager] portal logout: session not removed:', e.message); }
+        }
         res.clearCookie('wordjs_portal_token', { path: '/' });
         res.json({ success: true });
     });
@@ -5305,11 +5396,12 @@ exports.init = async function (wordjs) {
             values.total_due = await computeFee(conference_id, values, conf.fee_default);
             values.reg_code = await newRegCode();
 
+            // The seat is taken under the location's seat lock (takeSeat re-counts there).
             const keys = Object.keys(values);
-            const result = await db.run(
+            const result = await takeSeat(location, () => db.run(
                 `INSERT INTO ${T.inscriptions} (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`,
                 Object.values(values)
-            );
+            ));
             res.json({ success: true, id: result.lastID });
         } catch (e) { sendError(res, e); }
     });

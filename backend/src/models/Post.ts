@@ -4,11 +4,14 @@
  */
 
 const database = require('../config/database');
+const { clampLimit, clampOffset } = require('../core/pagination');
 const { db, dbAsync, getDbType } = database;
 const { doShortcode, doShortcodeAsync, stripShortcodes } = require('../core/shortcodes');
 const { sanitizeTitle, sanitizeContent, generateExcerpt, currentTimeGMT, currentTime, formatDate, boundSlug } = require('../core/formatting');
 const config = require('../config/app');
 const cache = require('../core/cache');
+// Multisite: the current site's main address, the base of the absolute URLs below (site 1: config.site.url).
+const network = require('../core/network');
 const { saveRevision } = require('../core/revisions');
 const { randomUUID } = require('crypto');
 // parseLanguageTag validates + canonicalizes a BCP-47 tag, returning null for anything that is not a
@@ -25,6 +28,9 @@ const privateMedia = require('../core/private-media');
 const { canViewAttachment, attachmentVisibilityCondition } = require('../core/attachment-visibility');
 const { canReadPostContent, isPasswordProtected } = require('../core/post-capabilities');
 const contentAccess = require('../core/content-access');
+const { publicDisplayName } = require('../core/public-identity');
+const { legacyAuthorSlugsEnabled } = require('../core/author-aliases');
+const { canonicalMetaKey } = require('../core/protected-meta');
 
 /**
  * Marks a post whose stored post_date is a leftover from a schedule that was CANCELLED — i.e. a
@@ -320,6 +326,11 @@ class Post {
      * and backfilled for existing rows (migration 0015), and where it is still empty the fallback is
      * the user ID — an identity `?author=` already resolves and `/author/<id>` is already addressed
      * by. Not selecting the column at all is what keeps a future edit from reintroducing the leak.
+     *
+     * The DISPLAY NAME gets the same treatment one level down: a stored name that IS the login (the
+     * old default, or one typed in later) is compared against `user_login` INSIDE the query and comes
+     * back NULL, so the login still never reaches this process, and the byline prints the
+     * core/public-identity placeholder instead — the rule User.create and migration 0017 write.
      */
     static async getAuthorsForIds(ids: any[]): Promise<Record<string, PostAuthorRef>> {
         const result: Record<string, PostAuthorRef> = {};
@@ -328,14 +339,17 @@ class Post {
 
         const placeholders = wanted.map(() => '?').join(',');
         const rows = await dbAsync.all(
-            `SELECT id, display_name, user_nicename FROM users WHERE id IN (${placeholders})`,
+            'SELECT id, user_nicename, CASE WHEN LOWER(TRIM(display_name)) = LOWER(TRIM(user_login)) '
+            + `THEN NULL ELSE display_name END AS display_name FROM users WHERE id IN (${placeholders})`,
             wanted
         );
         for (const row of rows) {
             const nicename = row.user_nicename == null ? '' : String(row.user_nicename).trim();
             result[row.id] = {
                 id: row.id,
-                displayName: String(row.display_name || row.id),
+                // `null` for the login (see above) — publicDisplayName turns it, and an empty name, into
+                // the placeholder; it is never handed the login to compare.
+                displayName: publicDisplayName(row.id, row.display_name, null),
                 slug: nicename || String(row.id),
             };
         }
@@ -371,11 +385,19 @@ class Post {
      * Get permalink
      * Equivalent to get_permalink()
      */
+    /**
+     * The public URL, exactly as the live page declares it in rel=canonical (and as the sitemap and the
+     * feeds publish it): `/<slug>` for posts AND pages, no trailing slash. The old `/post/<slug>/` form
+     * answered 308 to `/post/<slug>` — itself a second, non-canonical address of the same post.
+     * Another content type keeps its `/<type>/<slug>` address. No slug yet (an untitled draft): the id.
+     */
     getPermalink() {
-        if (this.postType === 'page') {
-            return `${config.site.url}/${this.postName}/`;
+        const siteUrl = network.currentSiteUrl();
+        const slug = this.postName || String(this.id);
+        if (this.postType === 'page' || this.postType === 'post') {
+            return `${siteUrl}/${slug}`;
         }
-        return `${config.site.url}/${this.postType}/${this.postName}/`;
+        return `${siteUrl}/${this.postType}/${slug}`;
     }
 
     /**
@@ -530,10 +552,10 @@ class Post {
 
             if (featuredImage.postStatus === privateMedia.PRIVATE_ATTACHMENT_STATUS) {
                 sitePath = privateMedia.privateFileUrl(featuredImage.id);
-                dynamicUrl = `${config.site.url}${sitePath}`;
+                dynamicUrl = `${network.currentSiteUrl()}${sitePath}`;
             } else if (attachedFile) {
                 const safePath = attachedFile.replace(/\\/g, '/');
-                dynamicUrl = `${config.site.url}/uploads/${safePath}`;
+                dynamicUrl = `${network.currentSiteUrl()}/uploads/${safePath}`;
                 // The same file as a SAME-ORIGIN path. `url` stays absolute on the main address (og:image
                 // and API consumers need that), but a page opened through another accepted address (an
                 // alias, the server's LAN IP) must not load every thumbnail from a host the visitor may
@@ -649,7 +671,7 @@ class Post {
         }
 
         // Generate GUID
-        const guid = `${config.site.url}/?p=${Date.now()}`;
+        const guid = `${network.currentSiteUrl()}/?p=${Date.now()}`;
 
         // Postgres requires RETURNING id to get the inserted ID
         const result = await dbAsync.run(`
@@ -686,7 +708,7 @@ class Post {
         const postId = result.lastID;
 
         // Update GUID with actual post ID
-        await dbAsync.run('UPDATE posts SET guid = ? WHERE id = ?', [`${config.site.url}/?p=${postId}`, postId]);
+        await dbAsync.run('UPDATE posts SET guid = ? WHERE id = ?', [`${network.currentSiteUrl()}/?p=${postId}`, postId]);
 
         // Arm the flip event for a scheduled post (only once we know its id).
         if (scheduledWhenMs !== null) {
@@ -993,7 +1015,7 @@ class Post {
      * can narrow by nicename without a users endpoint to enumerate — and, as the slug branch spells
      * out, without the subquery itself becoming the enumeration.
      */
-    static _authorCondition(author: any, col: string): { sql: string; params: any[] } | null {
+    static _authorCondition(author: any, col: string, legacyAliases = false): { sql: string; params: any[] } | null {
         if (author === undefined || author === null || author === '') return null;
         if (typeof author === 'number') {
             if (!Number.isFinite(author) || author === 0) return null;
@@ -1010,9 +1032,7 @@ class Post {
         }
         if (selector.slugs.length) {
             const ph = selector.slugs.map(() => '?').join(',');
-            // THE SLUG IS `user_nicename`. `user_login` is accepted only for an account that has no
-            // nicename — the pre-0015 rows the backfill could not name — and NEVER as an alias for
-            // one that does.
+            // THE SLUG IS `user_nicename`. `user_login` is NEVER accepted as an alias for it.
             //
             // The unconditional `OR user_login IN (…)` this replaces was a login-existence ORACLE on
             // an anonymous endpoint: `?author=<guess>` returned that account's posts on a hit and an
@@ -1022,15 +1042,28 @@ class Post {
             // leak rather than closed it. An input may accept an identifier the caller already holds
             // — it may not become a way to discover one.
             //
-            // `user_nicename <> ''` on the first branch because this schema defaults that column to
-            // the empty string: without it a slug that normalised to '' would match every account at
-            // once. The `IS NULL` on the second is defensive — the column is NOT NULL on all three
-            // drivers, and a future one that isn't must not silently turn the login back into a
-            // universal alias.
-            parts.push(`${col}author_id IN (SELECT id FROM users `
-                + `WHERE (user_nicename IN (${ph}) AND user_nicename <> '') `
-                + `OR (user_login IN (${ph}) AND (user_nicename IS NULL OR user_nicename = '')))`);
-            params.push(...selector.slugs, ...selector.slugs);
+            // `user_nicename <> ''` because this schema defaults that column to the empty string:
+            // without it a slug that normalised to '' would match every account at once.
+            //
+            // NOR FOR AN ACCOUNT WITHOUT ONE. The login-for-an-empty-nicename branch that used to follow
+            // was the same oracle, narrowed: every account migration 0015 could not name (and every
+            // account whose display name slugified to nothing) still answered `?author=<login>`. An
+            // account without a slug is addressed by its id, which is what its byline serialises.
+            //
+            // The slug an author was moved OFF by migration 0017 is resolved ONLY when the administrator
+            // opted in (core/author-aliases): that slug was derived from the login, so resolving it
+            // confirms the login to anyone who guesses it. Off — the default — an old slug matches
+            // nothing, exactly like a slug that never existed. It is a protected meta key, so no account
+            // can write itself one.
+            if (legacyAliases) {
+                parts.push(`${col}author_id IN (SELECT id FROM users `
+                    + `WHERE user_nicename IN (${ph}) AND user_nicename <> '' `
+                    + `UNION SELECT user_id FROM user_meta WHERE meta_key = 'previous_nicename' AND meta_value IN (${ph}))`);
+                params.push(...selector.slugs, ...selector.slugs);
+            } else {
+                parts.push(`${col}author_id IN (SELECT id FROM users WHERE user_nicename IN (${ph}) AND user_nicename <> '')`);
+                params.push(...selector.slugs);
+            }
         }
         if (parts.length === 0) return { sql: '1 = 0', params: [] };
         return { sql: parts.length === 1 ? parts[0] : `(${parts.join(' OR ')})`, params };
@@ -1120,7 +1153,7 @@ class Post {
         }
 
         // Author — a bare id (every existing caller), or the ids/slugs selector the list route parses.
-        const authorClause = Post._authorCondition(author, col);
+        const authorClause = Post._authorCondition(author, col, options._authorLegacyAliases === true);
         if (authorClause) {
             conditions.push(authorClause.sql);
             params.push(...authorClause.params);
@@ -1397,6 +1430,17 @@ class Post {
     }
 
     /**
+     * The author filter resolves migration 0017's retired slugs only on an explicit opt-in
+     * (core/author-aliases), and that is an option read — so it is resolved here, before the synchronous
+     * buildWhere, and only when the filter can name a slug at all (a numeric author never pays it).
+     */
+    static async _withAuthorAliasFlag(options: any): Promise<any> {
+        const author = options && options.author;
+        if (author === undefined || author === null || author === '' || typeof author === 'number') return options;
+        return { ...options, _authorLegacyAliases: await legacyAuthorSlugsEnabled() };
+    }
+
+    /**
      * Query posts
      * Equivalent to WP_Query
      */
@@ -1413,7 +1457,7 @@ class Post {
         // Resolve the full-text engine ONCE per search so the WHERE filter (here and in COUNT) and the
         // relevance ORDER BY below agree on the same backend. Non-search queries never pay the probe.
         const searchEngine = options.search ? await Post._resolveSearchEngine() : null;
-        const whereOptions = options.search ? { ...options, _searchEngine: searchEngine } : options;
+        const whereOptions = await Post._withAuthorAliasFlag(options.search ? { ...options, _searchEngine: searchEngine } : options);
 
         const { joins, conditions, params } = Post.buildWhere(whereOptions, 'p');
 
@@ -1445,7 +1489,7 @@ class Post {
         // Pagination
         // Use params for limit/offset
         sql += ' LIMIT ? OFFSET ?';
-        params.push(limit, offset);
+        params.push(clampLimit(limit, 10), clampOffset(offset));
 
         const rows = await dbAsync.all(sql, params);
 
@@ -1488,7 +1532,7 @@ class Post {
         // Same engine resolution as findAll so the COUNT filter matches the rows filter exactly — a
         // drift here would report a total that disagrees with the page it accompanies.
         const searchEngine = options.search ? await Post._resolveSearchEngine() : null;
-        const whereOptions = options.search ? { ...options, _searchEngine: searchEngine } : options;
+        const whereOptions = await Post._withAuthorAliasFlag(options.search ? { ...options, _searchEngine: searchEngine } : options);
 
         const { conditions, params } = Post.buildWhere(whereOptions, '');
 
@@ -1738,6 +1782,12 @@ class Post {
             await cache.del(`post:slug:any:${data.slug}`);
         }
 
+        // Status and author decide who may edit the post, so a live collaboration stream must be
+        // re-authorized NOW rather than at its next periodic check (core/collab-rooms recheckPost).
+        if (data.status !== undefined || data.authorId !== undefined) {
+            require('../core/collab-rooms').recheckPost(Number(id));
+        }
+
         // Durable semantic event. Pass the PRIOR status so listeners can detect a real transition
         // (draft→publish, →trash) rather than re-firing on every re-save.
         Post._invalidateCounts();
@@ -1953,6 +2003,10 @@ class Post {
                 await cache.del(`post:slug:any:${post.postName}`);
             }
 
+            // Its collaboration room goes with it: streams closed cluster-wide and the session rows
+            // removed (they describe a post that no longer exists and nothing else would retire them).
+            require('../core/collab-rooms').forgetPost(Number(id));
+
             // Pass the prior status so a listener can avoid re-emitting "deleted" when the post was
             // already trashed (the trash transition already signaled it).
             Post._invalidateCounts();
@@ -2022,6 +2076,10 @@ class Post {
             await dbAsync.run('INSERT INTO post_meta (post_id, meta_key, meta_value) VALUES (?, ?, ?)', [postId, key, serialized]);
         }
 
+        // A live collaboration room on this post holds a base and a log of its own: a page tree written
+        // by anything other than the room's own save resets it (core/collab-rooms noteContentWrite).
+        if (canonicalMetaKey(key) === '_puck_data') require('../core/collab-rooms').noteContentWrite(Number(postId));
+
         // Invalidate Post Cache because meta impacts toJSON/frontend view
         await cache.del(`post:id:${postId}`);
         // We don't necessarily know the slug here easily without fetch, but usually invalidating by ID is enough 
@@ -2067,6 +2125,7 @@ class Post {
     static async deleteMeta(postId: any, key: string) {
         const result = await dbAsync.run('DELETE FROM post_meta WHERE post_id = ? AND meta_key = ?', [postId, key]);
         const success = result.changes > 0;
+        if (success && canonicalMetaKey(key) === '_puck_data') require('../core/collab-rooms').noteContentWrite(Number(postId));
         if (success) {
             await cache.del(`post:id:${postId}`);
             const post = await dbAsync.get('SELECT post_name, post_type FROM posts WHERE id = ?', [postId]);

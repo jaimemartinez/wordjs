@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 const express = require('express');
+const log = require('../core/module-logger').moduleLogger('routes/certs');
 const router = express.Router();
 const certManager = require('../core/cert-manager');
 const { authenticate } = require('../middleware/auth');
@@ -115,7 +116,7 @@ router.post('/auto-provision', async (req: Request, res: Response) => {
         const result = await certManager.provisionAutoHTTP(names, email, !!staging);
         res.json(result);
     } catch (e) {
-        console.error(`[Certs] Provision Error: ${logSafeError(e)}`);
+        log.error({ err: e }, '[Certs] Provision Error');
         res.status(500).json({ error: publicErrorText(e, 'Certificate provisioning failed.') });
     }
 });
@@ -229,7 +230,7 @@ router.post('/dns-start', async (req: Request, res: Response) => {
         const data = await certManager.startDNSChallenge(domain, email, !!staging);
         res.json(data);
     } catch (e) {
-        console.error(`[Certs] DNS Start Error: ${logSafeError(e)}`);
+        log.error({ err: e }, '[Certs] DNS Start Error');
         res.status(500).json({ error: publicErrorText(e, 'The DNS challenge could not be started.') });
     }
 });
@@ -382,7 +383,7 @@ router.post('/dns-finish', async (req: Request, res: Response) => {
         await certManager.finishDNSChallenge(step1Data, email, !!staging);
         res.json({ success: true });
     } catch (e) {
-        console.error(`[Certs] DNS Finish Error: ${logSafeError(e)}`);
+        log.error({ err: e }, '[Certs] DNS Finish Error');
         res.status(500).json({ error: publicErrorText(e, 'The DNS challenge could not be completed.') });
     }
 });
@@ -469,7 +470,7 @@ router.post('/upload-custom', async (req: Request, res: Response) => {
         const result = await certManager.installCustomCert(key, cert);
         res.json(result);
     } catch (e) {
-        console.error(`[Certs] Custom Upload Error: ${logSafeError(e)}`);
+        log.error({ err: e }, '[Certs] Custom Upload Error');
         res.status(500).json({ error: publicErrorText(e, 'The certificate could not be installed.') });
     }
 });
@@ -533,7 +534,7 @@ router.get('/config', async (req: Request, res: Response) => {
         const config = await certManager.getConfig();
         res.json(config);
     } catch (e) {
-        console.error(`[Certs] Gateway Config Read Error: ${logSafeError(e)}`);
+        log.error({ err: e }, '[Certs] Gateway Config Read Error');
         res.status(500).json({ error: publicErrorText(e, 'The gateway configuration could not be read.') });
     }
 });
@@ -603,7 +604,7 @@ router.post('/check', async (req: Request, res: Response) => {
         const result = await certManager.ensureGatewayCert();
         res.json(result);
     } catch (e) {
-        console.error(`[Certs] Gateway Cert Check Error: ${logSafeError(e)}`);
+        log.error({ err: e }, '[Certs] Gateway Cert Check Error');
         res.status(500).json({ error: publicErrorText(e, 'The gateway certificate could not be ensured.') });
     }
 });
@@ -710,12 +711,12 @@ router.post('/config', async (req: Request, res: Response) => {
                 addressUpdate.suggestCanonical = outcome.gateway;
             }
         } catch (e: any) {
-            console.warn(`[Certs] Site address check after the gateway change failed: ${logSafeError(e)}`);
+            log.warn({ err: e }, '[Certs] Site address check after the gateway change failed');
         }
 
         res.json({ ...result, ...addressUpdate });
     } catch (e) {
-        console.error(`[Certs] Gateway Config Write Error: ${logSafeError(e)}`);
+        log.error({ err: e }, '[Certs] Gateway Config Write Error');
         res.status(500).json({ error: publicErrorText(e, 'The gateway configuration could not be updated.') });
     }
 });
@@ -809,7 +810,7 @@ router.get('/acme-config', async (req: Request, res: Response) => {
             nextRun
         });
     } catch (e) {
-        console.error(`[Certs] ACME Config Read Error: ${logSafeError(e)}`);
+        log.error({ err: e }, '[Certs] ACME Config Read Error');
         res.status(500).json({ error: publicErrorText(e, 'The auto-renewal settings could not be read.') });
     }
 });
@@ -953,7 +954,7 @@ router.post('/acme-config', async (req: Request, res: Response) => {
 
         res.json({ success: true, acme: newAcme });
     } catch (e) {
-        console.error(`[Certs] ACME Config Write Error: ${logSafeError(e)}`);
+        log.error({ err: e }, '[Certs] ACME Config Write Error');
         res.status(500).json({ error: publicErrorText(e, 'The auto-renewal settings could not be saved.') });
     }
 });
@@ -1030,7 +1031,7 @@ router.post('/renew-now', async (req: Request, res: Response) => {
         const result = await certManager.renewIfDue({ force: true });
         res.json(result);
     } catch (e) {
-        console.error(`[Certs] Renew Now Error: ${logSafeError(e)}`);
+        log.error({ err: e }, '[Certs] Renew Now Error');
         res.status(500).json({ error: publicErrorText(e, 'The renewal attempt failed.') });
     }
 });
