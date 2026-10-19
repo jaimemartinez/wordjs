@@ -30,6 +30,8 @@ const TR = 'wjp_conference_manager_payment_transfers';
 const EV = 'wjp_conference_manager_payment_transfer_events';
 const TICKETS = 'wjp_conference_manager_transport_tickets';
 const TPAY = 'wjp_conference_manager_transport_payments';
+const PSALES = 'wjp_conference_manager_transport_package_sales';
+const PPAY = 'wjp_conference_manager_transport_package_payments';
 
 const split = require(path.join(PLUGIN_DIR, 'server', 'fee-split.js'));
 
@@ -566,11 +568,14 @@ test('accounting: ONE line per validated payment (D-P15), dated by the payment d
 test('transport stays apart: fee payments never touch tickets or transport payments, and the reverse', async () => {
     const p = await bootPlugin();
     const w = await world(p);
-    const bus = ok(await p.call('post', '/buses', { body: { conference_id: w.cid, name: 'Bus 1', capacity: 10, price: 30 } })).id;
-    ok(await p.call('post', `/buses/${bus}/passengers`, { body: { inscription_ids: [w.a1] } }));
-    const ticket = p.one(`SELECT id FROM ${TICKETS} WHERE inscription_id = ?`, w.a1).id;
-    ok(await p.call('post', `/tickets/${ticket}/payments`, { body: { amount: 30, method: 'Efectivo' } }));
+    // 2.26.0: transport is sold as packages of buses, paid per package.
+    const bus = ok(await p.call('post', '/buses', { body: { conference_id: w.cid, name: 'Bus 1', capacity: 10 } })).id;
+    const pkg = ok(await p.call('post', '/transport/packages', { body: { conference_id: w.cid, name: 'Ida', price: 30, bus_ids: [bus] } })).id;
+    ok(await p.call('post', `/transport/packages/${pkg}/sales`, { body: { inscription_ids: [w.a1] } }));
+    const sale = p.one(`SELECT id FROM ${PSALES} WHERE inscription_id = ?`, w.a1).id;
+    ok(await p.call('post', `/transport/package-sales/${sale}/payments`, { body: { amount: 30, method: 'Efectivo' } }));
     const tickets0 = p.q(`SELECT * FROM ${TICKETS} ORDER BY id`), tpay0 = p.q(`SELECT * FROM ${TPAY} ORDER BY id`);
+    const sales0 = p.q(`SELECT * FROM ${PSALES} ORDER BY id`), ppay0 = p.q(`SELECT * FROM ${PPAY} ORDER BY id`);
     assert.deepStrictEqual(row(p, w.a1), { amount_paid: 0, payment_status: 'unpaid' }, 'the ticket payment is not fee money');
     const t = ok(await pay(p, { conference_id: w.cid, amount: 100, method: 'Efectivo', leave_pending: true, allocations: [{ inscription_id: w.a1, amount: 100 }] })).transfer;
     ok(await p.call('post', `/fee-payments/${t.id}/validate`, { body: { expected: expectOf(t) } }));
@@ -578,13 +583,15 @@ test('transport stays apart: fee payments never touch tickets or transport payme
     ok(await p.call('post', `/fee-payments/${t.id}/reject`, { body: { note: 'x', expected: expectOf(v) } }));
     assert.deepStrictEqual(p.q(`SELECT * FROM ${TICKETS} ORDER BY id`), tickets0);
     assert.deepStrictEqual(p.q(`SELECT * FROM ${TPAY} ORDER BY id`), tpay0);
+    assert.deepStrictEqual(p.q(`SELECT * FROM ${PSALES} ORDER BY id`), sales0);
+    assert.deepStrictEqual(p.q(`SELECT * FROM ${PPAY} ORDER BY id`), ppay0);
     const led = ok(await p.call('get', `/accounting?conference_id=${w.cid}`));
     assert.deepStrictEqual(led.entries.filter((e: any) => e.source === 'transport').map((e: any) => [e.amount, e.location_id]), [[30, w.A]]);
     // The fee validate / recompute paths never read the transport tables.
     const from = p.sqlLog.length;
     const t2 = ok(await pay(p, { conference_id: w.cid, amount: 20, method: 'Efectivo', leave_pending: true, allocations: [{ inscription_id: w.a2, amount: 20 }] })).transfer;
     ok(await p.call('post', `/fee-payments/${t2.id}/validate`, { body: { expected: expectOf(t2) } }));
-    assert.ok(!p.sqlLog.slice(from).some(s => s.includes(TICKETS) || s.includes(TPAY)), 'no transport table in the fee write path');
+    assert.ok(!p.sqlLog.slice(from).some(s => s.includes(TICKETS) || s.includes(TPAY) || s.includes(PSALES) || s.includes(PPAY)), 'no transport table in the fee write path');
 });
 
 // ── the coordinator portal ─────────────────────────────────────────────────────────────────────────────

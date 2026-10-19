@@ -1,7 +1,7 @@
 /**
  * «Mi inscripción» (conference-manager 2.23.0): the page a registrant reaches by scanning the QR on their own
  * badge — /portal/conference/yo#c=<registration code> — where, after confirming their identity document, they
- * see their own registration: the virtual badge, their answers, their payment, the meals already delivered (and
+ * see their own registration: the virtual badge, their answers, the meals already delivered (and
  * when) and those still to come, and their hotel, room and a map of the hotel.
  *
  * WHO. The registration code is printed on the badge, so it is NOT enough on its own: the page also asks the
@@ -138,7 +138,6 @@ function createSelfPage(base) {
     }
 
     // ── the view ──
-    const money = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.round(n * 100) / 100 : 0; };
     async function viewOf(st) {
         const { ins, conf, cfg } = st;
         const person = await D.personWithName(ins);
@@ -163,16 +162,20 @@ function createSelfPage(base) {
         }
         const meals = await D.mealsOf(ins);
         const badge = await D.badges.selfBadge(ins, conf, cfg);
+        // 2.27.0: their buses, each with its boarding state and last notices, and the key to turn notices on.
+        const transport = D.transportOf ? await D.transportOf(ins) : [];
+        const pushKey = transport.length && D.pushKey ? await D.pushKey() : null;
         return {
             name: person.name || '',
             conference: conf.name,
             location: loc ? loc.name : null,
             code: ins.reg_code || '',
             answers,
-            payment: { status: ins.payment_status || 'pending', total_due: money(ins.total_due), amount_paid: money(ins.amount_paid) },
             meals,
             lodging,
             badge,
+            transport,
+            push_key: pushKey,
             expires_on: cfg.policy.expires_on,
         };
     }
@@ -280,13 +283,18 @@ function createSelfPage(base) {
         http.route('post', '/public/me/logout', async (req, res) => {
             try {
                 const token = (req.body || {}).session;
-                if (typeof token === 'string' && SESSION_RE.test(token) && await ensureReady()) await db.run(`DELETE FROM ${T.selfSessions} WHERE token_hash = ?`, [sha256(token)]);
+                if (typeof token === 'string' && SESSION_RE.test(token) && await ensureReady()) {
+                    // 2.27.0: the phone's bus notices end with the session.
+                    const row = await db.get(`SELECT id FROM ${T.selfSessions} WHERE token_hash = ?`, [sha256(token)]);
+                    if (row && D.onSessionEnd) { try { await D.onSessionEnd(row.id); } catch (e) { /* the session still goes */ } }
+                    await db.run(`DELETE FROM ${T.selfSessions} WHERE token_hash = ?`, [sha256(token)]);
+                }
             } catch (e) { /* leaving still works on the phone */ }
             res.json({ success: true });
         });
     }
 
-    return { migrate, ensureReady, install, docFieldsOf: (fields, chosen) => docFieldsOf(fields, chosen, D ? D.isFieldColumn : () => true), MSG };
+    return { migrate, ensureReady, install, sessionOf: sessionState, docFieldsOf: (fields, chosen) => docFieldsOf(fields, chosen, D ? D.isFieldColumn : () => true), MSG };
 }
 
 module.exports = { createSelfPage, docFieldsOf, normDoc, normChoice };

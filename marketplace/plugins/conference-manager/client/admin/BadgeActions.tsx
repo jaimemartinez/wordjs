@@ -13,7 +13,7 @@ import React, { useEffect, useState } from "react";
 import { useToast } from "../../../../../frontend/src/contexts/ToastContext";
 import { useModal } from "@/contexts/ModalContext";
 import { LAYER } from "../lib/overlay";
-import { badgesApi, badgeUrl, copyText, nativeShare, openBadgeFileFrom, publicBase, waNumber, whatsappUrl } from "../lib/badges";
+import { badgesApi, linkUrl, copyText, nativeShare, openBadgeFileFrom, publicBase, waNumber, whatsappUrl } from "../lib/badges";
 import { Overlay } from "./Overlay";
 import { useTx } from "./MealScanner";
 import { BadgeSvg } from "./BadgeSvg";
@@ -39,6 +39,7 @@ export function BadgeActions({ person, name, fields, conferenceId, conferenceNam
     const [base, setBase] = useState('');
     const [badge, setBadge] = useState<any>(null);
     const [plate, setPlate] = useState<string | null>(null);
+    const [images, setImages] = useState<Record<string, string> | null>(null);
     const [error, setError] = useState('');
     const [busy, setBusy] = useState('');
     useEffect(() => {
@@ -56,13 +57,14 @@ export function BadgeActions({ person, name, fields, conferenceId, conferenceNam
             setCc(l.country_code || '57');
             setBase(b);
             setBadge(p.badge);
+            setImages(p.images || null);
             setPlate(pl ? pl.data_url : null);
             if (!l.links[0]) setError(tx('badges.person.cancelled', 'Una inscripción cancelada no tiene escarapela.'));
         }).catch((e) => { if (alive) setError(e?.message || 'Error'); });
         return () => { alive = false; };
     }, [person.id, conferenceId]);
 
-    const url = link ? badgeUrl(link.token, base) : '';
+    const url = link ? linkUrl(link, base) : '';
     const intro = tx('badges.share.intro', 'Tu escarapela de {conference}').replace('{conference}', conferenceName || '');
     const message = `${intro}: ${url}`;
     const phone = phoneOfRow(person, fields);
@@ -98,7 +100,7 @@ export function BadgeActions({ person, name, fields, conferenceId, conferenceNam
                     )}
                     {badge ? (
                         <div className={`mx-auto ${badge.layout === 'vertical' ? 'max-w-[220px]' : 'max-w-[400px]'} rounded-2xl overflow-hidden shadow-lg ring-1 ring-black/5`}>
-                            <BadgeSvg badge={badge} plate={plate} title={name} />
+                            <BadgeSvg badge={badge} plate={badge && badge.version === 2 ? null : plate} images={images} title={name} />
                         </div>
                     ) : !error && <div className="h-40 rounded-2xl bg-gray-100 animate-pulse" />}
                     {link && (

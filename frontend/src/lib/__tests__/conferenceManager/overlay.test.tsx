@@ -224,7 +224,9 @@ describe('the plugin\'s sources: every modal goes through Overlay', () => {
         // entregas» (no backdrop, never takes the scan input's focus) — and it renders no modal at all.
         const INLINE_ONLY = 'RecentDeliveries.tsx';
         for (const { f, src } of files) {
-            if (!/role="(alert)?dialog"/.test(src) || f === 'MealScanner.tsx' || f === 'Overlay.tsx' || f === INLINE_ONLY) continue;
+            // BoardingScanner.tsx (2.25.0) is the meal scanner's twin: a full-screen camera screen portalled to <body>
+            // above the admin chrome (z 6000), not a modal sheet.
+            if (!/role="(alert)?dialog"/.test(src) || f === 'MealScanner.tsx' || f === 'BoardingScanner.tsx' || f === 'Overlay.tsx' || f === INLINE_ONLY) continue;
             expect(src, f).toMatch(/<Overlay[\s>]/);
         }
         const inline = files.find((x) => x.f === INLINE_ONLY)!.src;

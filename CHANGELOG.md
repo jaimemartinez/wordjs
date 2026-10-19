@@ -1760,6 +1760,80 @@ the boot error links there too.
 
 ### Added
 
+- **conference-manager 2.29.0: a free-form badge designer, in the manner of Canva.** The site owner: the badge
+  design should work like Canva, professional. «Escarapelas › Diseño» is now a canvas: start from one of six
+  templates (horizontal and vertical); add texts in 14 typefaces (Montserrat, Poppins, Lato, Raleway, Open Sans,
+  Roboto, Nunito, Oswald, Bebas Neue, Playfair Display, Merriweather, Lora, Dancing Script, Helvetica) whose content
+  may carry the registrant's data as tokens (name, code, location, room, dates, conference, any form field — a
+  text whose data is empty is not drawn), shapes (rectangles with rounded corners, circles, tags, bands, frames),
+  lines, images (uploaded once to the conference's gallery; JPEG, or PNG keeping its transparency; any one can be
+  the background) and the QR. Every element can be dragged, resized and rotated on the card with magnetic guides
+  (the card's edges and centre, the other elements), aligned, ordered in layers, locked, duplicated, made
+  translucent; undo / redo and keyboard shortcuts. Texts shrink to fit their box. The canvas draws the display list
+  of the same layout code the server runs, measured with the same font files, so the designer, the badge on
+  «Mi inscripción», the person sheet and the PDF match; the PDF embeds the typefaces it uses (TrueType, once
+  each), the images (PNG transparency as a soft mask), rotation and opacity. A pre-2.29 design opens converted
+  (its background and logo join the gallery) and keeps printing as it was until it is saved. The policy and
+  «Mi inscripción» settings move to an «Ajustes» tab. The typefaces ship with the plugin (SIL Open Font License,
+  `fonts/OFL.txt`) as modules, so the plugin reads no file and needs no new permission; they are served at
+  `GET /public/badge/font`.
+- **conference-manager 2.28.0: a badge link no longer shows the badge.** The site owner: the link the
+  administration or a coordinator shares must not show the badge at once (it carried no check of any kind), but
+  lead to «Mi inscripción». Opening a badge link (`/portal/conference/badge#t=…`, including every link sent
+  before this version) now only goes to `/portal/conference/yo#c=<code>`, where the person confirms their
+  identity document before seeing the badge; the plugin answers such a link with that address alone (no badge,
+  no name), and the link's PDF route is gone (410). With «Mi inscripción» off, or no document field to ask, a
+  link shows nothing. The badge stays available to staff (preview, PDFs) and, after the document, on «Mi
+  inscripción». What the admin's person sheet and «Escarapelas › Personas», and the coordinators' portal, open,
+  copy, export and send by WhatsApp is now that page's own address (each link carries `self`), not the old link.
+- **conference-manager 2.27.0: boarding notices on the passengers' phones.** The site owner: tell a bus's
+  passengers that it is boarding, by browser notification, from a boarding section in Transporte. Each bus card
+  now shows its state (Programado / Embarcando / Salió) and how many of its passengers have the notices on, with
+  «Iniciar embarque», «Marcar salida», «Mensaje» (free text, up to 240 characters, with the bus's notice history)
+  and a reset. On «Mi inscripción» a new «Mi transporte» section lists the person's buses with that state and the
+  team's messages (refreshed every 30 s while the page is open), and offers «Activar avisos del bus»: the page
+  registers its own service worker (`/portal/conference/yo-sw.js`, scoped to the page) and the plugin sends real
+  Web Push notifications, which arrive with the page closed. The payload is encrypted per RFC 8291 (checked
+  against the RFC's own test vector) and signed per RFC 8292 (VAPID; the site's key pair is generated once), with
+  no new dependency. A subscription belongs to the page's session and goes when the person leaves, when the
+  session expires, or when the push service reports it gone; only push services' hosts are accepted as endpoints.
+  Sending needs the new optional «network» permission; without it the notices still show on the open page and
+  the admin is told. On iPhone, Safari delivers web notifications only to a page added to the home screen (iOS
+  16.4+); the page is installable for that (web app manifest) and explains the steps there.
+- **conference-manager 2.26.0: transport is sold as packages of buses.** The site owner: create packages of buses
+  and sell the packages. A package (Transporte › Paquetes) is a fixed list of buses (e.g. «Ida y regreso» = Bus 1
+  + Bus 4) with one price; selling it to a person creates the sale (its own price, payments and status) and a
+  seat on every bus of the list — all-or-nothing, never beyond a bus's free seats, never for someone who already
+  sits on one of those buses. The list of a sold package is locked; its price changes for new sales, and with
+  «aplicar a los ya vendidos» for the sold ones, never below what a sale has been paid. Payments are recorded per
+  sale (never beyond its balance) and are the transport income of Contabilidad; a sale or a package with
+  payments, or a bus in a sold package, cannot be removed until those payments are. Single bus tickets are no
+  longer sold (`POST /buses/:id/passengers` and ticket payments answer 410); the bus keeps its seats, its
+  passenger list (now showing each person's package and its payment status), the Excel manifests and the
+  boarding check. On upgrade every ticket sold the old way becomes a sale of a one-bus package named after its
+  bus, with its price and its payments moved over (once; nothing counted twice). The transport workbook gains a
+  «Paquetes» sheet with the money, the per-bus sheets show the package, and the custom roster's transport columns
+  count each package once. Server in `server/transport-packages.js`; routes under `/transport/packages` and
+  `/transport/package-sales`.
+- **conference-manager 2.25.0: «Verificar abordaje» — scan a badge to know whether the person travels on the bus
+  being boarded.** The site owner: in Transporte, choose the bus, scan each person's QR and see whether they belong
+  to that bus. A full-screen scanner (from the page header, or the QR button of a bus card, which opens on that
+  bus) reuses the meal scanner's camera, readers (BarcodeDetector where it reads QR, else jsQR and the built-in
+  barcode reader), aiming frame and beeps; a USB / Bluetooth reader or a typed code works too (keys typed while
+  nothing has the focus go to the code box). New read-only `POST /transport/check { bus_id, code }` (transport
+  view or manage) reads the code, the «Mi inscripción» link of the QR or an older Code 128 badge
+  (findByScanCode) and answers `ok` (with what the ticket still owes, shown as information), `other_bus` (naming
+  the person's bus), `no_ticket`, `cancelled` or `unknown` (also for a code of another conference). Nothing is
+  recorded.
+- **conference-manager 2.24.0: the hotel form finds the hotel and pins it on a map; «Mi inscripción» no longer
+  shows the payment.** The site owner wanted to search the place and see it on a map instead of pasting a link.
+  The hotel form now has a search box (OpenStreetMap's Nominatim, called from the admin's browser on an explicit
+  «Buscar» only and at most once per second, as its usage policy asks; results in Spanish, limited to the
+  browser's country) whose results put the pin on the map, and a map of OpenStreetMap tiles drawn as images
+  (drag to move, buttons or a double click to zoom, a click to put or move the pin, «Centrar» / «Quitar punto»).
+  Picking a result fills an empty address. Pasting a Google Maps link or coordinates is still there, as an
+  option. No map library and no CSP change. The participant page and its server answer drop «Mi pago» (the
+  owner: not to be shown there).
 - **conference-manager 2.23.0: «Mi inscripción», the registrant's own page behind their badge's QR.** The site
   owner: scanning their own QR, each person confirms their document type and number and sees all their
   registration — the virtual badge (and its PDF), their answers, their payment, the meals already delivered and

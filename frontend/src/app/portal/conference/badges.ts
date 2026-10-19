@@ -30,6 +30,11 @@ export function publicBase(): Promise<string> {
 /** The credential page of a token — in the URL fragment, so it never reaches a log or a link preview. */
 export const badgePageUrl = (token: string, base?: string): string =>
     `${base || (typeof window !== "undefined" ? window.location.origin : "")}/portal/conference/badge#t=${token}`;
+/** What is opened, copied and sent (2.28.0): the person's «Mi inscripción» page when the plugin gives it. */
+export const portalLinkUrl = (l: { token: string; self?: string | null }, base?: string): string =>
+    l.self && /^\/portal\/conference\/yo#c=[A-Z0-9]{10}$/.test(l.self)
+        ? `${base || (typeof window !== "undefined" ? window.location.origin : "")}${l.self}`
+        : badgePageUrl(l.token, base);
 
 /**
  * The WhatsApp number of a phone as typed in the form (the plugin admin keeps the same rule, client/lib/badges.ts
@@ -61,7 +66,7 @@ async function post<T>(headers: Headers, path: string, body: unknown): Promise<T
     if (!res.ok) throw new Error((data && data.error) || "No se pudo completar la acción.");
     return data as T;
 }
-export type PortalBadgeLink = { inscription_id: number; token: string; view_count: number };
+export type PortalBadgeLink = { inscription_id: number; token: string; view_count: number; self?: string | null };
 export const portalBadgeLink = async (headers: Headers, inscriptionId: number): Promise<{ link: PortalBadgeLink; countryCode: string; conference: string }> => {
     const r = await post<{ link: PortalBadgeLink | null; country_code?: string; conference?: string }>(headers, "/link", { inscription_id: inscriptionId });
     if (!r.link) throw new Error("Esta inscripción no tiene escarapela.");

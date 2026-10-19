@@ -30,6 +30,7 @@ import ParticipantSheet from "../ParticipantSheet";
 import { parseGeo } from "../../../../../../marketplace/plugins/conference-manager/client/lib/geo";
 import { classifyRead, codeFromLink, normalizeCode } from "../../../../../../marketplace/plugins/conference-manager/client/lib/meals";
 import { OsmMap, tilesAround } from "../yo/OsmMap";
+import * as places from "../../../../../../marketplace/plugins/conference-manager/client/lib/places";
 
 const require = createRequire(import.meta.url);
 const SERVER = path.resolve(__dirname, "../../../../../../marketplace/plugins/conference-manager/server");
@@ -187,13 +188,14 @@ describe("the review fixes, in the sources", () => {
         expect(portal).not.toContain("window.open(");
         expect(portal).toContain('data-action="badge-open"');
     });
-    it("the designer saves the images and plates first and the design last, and locks the form meanwhile", () => {
+    it("the designer (2.29.0) saves the design with the policy, its images already uploaded, and locks the form meanwhile", () => {
         const page = read(`${PLUGIN}/admin/BadgesPage.tsx`);
-        const save = page.slice(page.indexOf("const save = async"), page.indexOf("// Text contrast"));
-        expect(save.indexOf("putAsset(conferenceId, 'plate_print'")).toBeGreaterThan(0);
-        expect(save.indexOf("saveConfig(conferenceId, design, policy)")).toBeGreaterThan(save.indexOf("putAsset(conferenceId, 'plate_screen'"));
+        const save = page.slice(page.indexOf("const save = async"), page.indexOf("if (loading) return"));
+        expect(save).toContain("saveConfig(conferenceId, design, policy)");
         expect(page).toContain("const locked = !canManage || saving;");
         expect(page).not.toContain("disabled={!canManage}");
+        // An image goes to the gallery when it is picked (badgesApi.putImage), so a saved design never points at a missing one.
+        expect(read(`${PLUGIN}/admin/BadgeEditor.tsx`)).toContain("badgesApi.putImage(conferenceId, img.url, img.w, img.h)");
     });
 });
 
@@ -209,8 +211,8 @@ describe("each person's badge, in the admin and the portal", () => {
         expect(page).toContain("copyLater(url)");
         expect(page).toContain("badgesApi.existingLinks(conferenceId)");
         expect(page).toContain("tx('badges.bulk.copy', 'Copiar todos los enlaces')");
-        // The designer is hidden, not unmounted, behind «Personas» (an unsaved edit stays).
-        expect(page).toContain("style={canLinks && tab === 'people' ? { display: 'none' } : undefined}");
+        // The designer is hidden, not unmounted, behind the other tabs (an unsaved edit and its undo history stay).
+        expect(page).toContain("style={tab === 'design' ? undefined : { display: 'none' }}");
         // A never-saved design can be saved as it is (coordinators only see a saved one).
         expect(page).toContain("disabled={saving || (cfg.configured && !dirty)}");
         // The list's location filter is the bulk tools' (the location column), and the bulk names are read when clicked.
@@ -298,5 +300,158 @@ describe("«Mi inscripción»: the QR link, the hotel position, the map", () => 
         const html = renderToStaticMarkup(<OsmMap lat={10.9878} lng={-74.7889} label="Mapa" />);
         expect(html).toContain("© OpenStreetMap");
         expect(html.toLowerCase()).toContain('referrerpolicy="strict-origin-when-cross-origin"');
+    });
+});
+
+describe("the hotel's place picker (2.24.0): search results and map arithmetic", () => {
+    it("reads Nominatim's answer and asks it politely", () => {
+        const url = new URL(places.nominatimUrl("Hotel El Prado Barranquilla", "co"));
+        expect(url.origin + url.pathname).toBe("https://nominatim.openstreetmap.org/search");
+        expect(Object.fromEntries(url.searchParams)).toMatchObject({ format: "jsonv2", q: "Hotel El Prado Barranquilla", countrycodes: "co", "accept-language": "es" });
+        expect(places.countryFromLocale("es-CO")).toBe("co");
+        expect(places.countryFromLocale("es")).toBe("");
+        const rows = places.parseNominatim([
+            { place_id: 1, name: "Hotel El Prado", display_name: "Hotel El Prado, Carrera 54, El Prado, Barranquilla, Atlántico, 080001, Colombia", lat: "11.0045821", lon: "-74.8072334" },
+            { place_id: 2, display_name: "nowhere", lat: "x", lon: "1" },
+            null,
+        ], "co");
+        expect(rows).toEqual([{ id: "1", title: "Hotel El Prado", subtitle: "Carrera 54, El Prado, Barranquilla, Atlántico", label: expect.any(String), lat: 11.0045821, lng: -74.8072334 }]);
+        expect(places.parseNominatim({ error: "x" })).toEqual([]);
+    });
+
+    it("a click lands where it was made, and the pin is drawn where it is", () => {
+        const center = { lat: 11.0045, lng: -74.8072 };
+        for (const zoom of [5, 12, 17]) {
+            const p = places.pointAtPixel(310, 40, center, zoom, 400, 260);
+            const px = places.pixelOf(p, center, zoom, 400, 260);
+            expect(px.x).toBeCloseTo(310, 6);
+            expect(px.y).toBeCloseTo(40, 6);
+            const back = places.pointOf(places.tileOf(center, zoom), zoom);
+            expect(back.lat).toBeCloseTo(center.lat, 9);
+            expect(back.lng).toBeCloseTo(center.lng, 9);
+        }
+        // The centre pixel is the centre, and the tiles cover the whole view.
+        const c = places.pixelOf(center, center, 16, 400, 260);
+        expect([c.x, c.y]).toEqual([200, 130]);
+        const tiles = places.tilesFor(center, 16, 400, 260);
+        expect(Math.min(...tiles.map((t) => t.left))).toBeLessThanOrEqual(0);
+        expect(Math.max(...tiles.map((t) => t.left + 256))).toBeGreaterThanOrEqual(400);
+        expect(Math.min(...tiles.map((t) => t.top))).toBeLessThanOrEqual(0);
+        expect(Math.max(...tiles.map((t) => t.top + 256))).toBeGreaterThanOrEqual(260);
+        expect(tiles.every((t) => /^https:\/\/tile\.openstreetmap\.org\/16\/\d+\/\d+\.png$/.test(t.src))).toBe(true);
+    });
+});
+
+// ── Bus notices (2.27.0) ──
+describe("«Mi inscripción»: the bus, its boarding state and the notices", () => {
+    const bus = (status: "scheduled" | "boarding" | "departed", notices: any[] = []) => ({
+        id: 7, name: "Bus Norte", origin: "Medellín", destination: "Cartagena", departure: "2026-11-02T05:30", status,
+        boarding_at: status !== "scheduled" ? "2026-11-02T10:05:00.000Z" : null, departed_at: status === "departed" ? "2026-11-02T10:40:00.000Z" : null, notices,
+    });
+    const post = async () => ({ status: 200, body: {} });
+    it("shows each state, the team's messages, and the switch (server render: before the browser is asked)", async () => {
+        const { BusAlerts } = await import("../yo/BusAlerts");
+        const scheduled = renderToStaticMarkup(<BusAlerts session={"a".repeat(32)} initial={[bus("scheduled")]} pushKey="BKEY" post={post} />);
+        expect(scheduled).toContain('data-bus-status="scheduled"');
+        expect(scheduled).toContain("Programado");
+        expect(scheduled).toContain("Medellín → Cartagena");
+        const boarding = renderToStaticMarkup(<BusAlerts session={"a".repeat(32)} initial={[bus("boarding", [{ kind: "message", text: "Puerta 3", at: "2026-11-02T10:06:00.000Z" }, { kind: "boarding", text: null, at: null }])]} pushKey="BKEY" post={post} />);
+        expect(boarding).toContain('data-bus-status="boarding"');
+        expect(boarding).toContain("Tu bus está embarcando");
+        expect(boarding).toContain("Puerta 3");
+        expect(boarding.match(/data-bus-message=/g)?.length).toBe(1);
+        const departed = renderToStaticMarkup(<BusAlerts session={"a".repeat(32)} initial={[bus("departed")]} pushKey="BKEY" post={post} />);
+        expect(departed).toContain("El bus salió");
+        expect(renderToStaticMarkup(<BusAlerts session={"a".repeat(32)} initial={[]} pushKey="BKEY" post={post} />)).toBe("");
+    });
+    it("the service worker shows the notice and opens the page; the page is installable for iPhone", () => {
+        const root = path.resolve(__dirname, "../../../../../public/portal/conference");
+        const sw = fs.readFileSync(path.join(root, "yo-sw.js"), "utf8");
+        expect(sw).toContain("showNotification");
+        expect(sw).toContain("notificationclick");
+        expect(sw).toMatch(/openWindow\(PAGE\)/);
+        const manifest = JSON.parse(fs.readFileSync(path.join(root, "yo.webmanifest"), "utf8"));
+        expect(manifest.scope).toBe("/portal/conference/yo");
+        expect(manifest.display).toBe("standalone");
+        const layout = fs.readFileSync(path.resolve(__dirname, "../yo/layout.tsx"), "utf8");
+        expect(layout).toContain('manifest: "/portal/conference/yo.webmanifest"');
+    });
+    it("every bus-notice text of the admin exists in es / en / pt", () => {
+        const keys = Object.keys(translations.es).filter((k) => k.startsWith("transport.notice."));
+        expect(keys.length).toBeGreaterThanOrEqual(25);
+        for (const lang of ["en", "pt"] as const) for (const k of keys) expect((translations as any)[lang][k], `${lang} ${k}`).toBeTruthy();
+    });
+});
+
+describe("a shared badge link (2.28.0)", () => {
+    it("goes to «Mi inscripción» when the plugin says so — only to that page, never to an address it is handed", () => {
+        const src = fs.readFileSync(path.resolve(__dirname, "../badge/page.tsx"), "utf8");
+        expect(src).toContain("window.location.replace(body.self)");
+        expect(src).toContain("SELF.test(body.self)");
+        expect(src).toContain("conference\\/yo#c=[A-Z0-9]{10}$/;");
+        expect(src, "the link page draws no badge any more").not.toContain("BadgeCard");
+    });
+});
+
+// ── The free-form designer (2.29.0) ──
+describe("the badge designer", () => {
+    const req = createRequire(import.meta.url);
+    const SERVER = path.resolve(__dirname, "../../../../../../marketplace/plugins/conference-manager/server");
+    const designLib = req(path.join(SERVER, "badge-design.js"));
+    const fontLib = req(path.join(SERVER, "badge-font.js"));
+    const metrics = fontLib.createMetrics(() => null);
+    it("every template is a valid design with its one QR, and lays out with the server's code", async () => {
+        const { TEMPLATES } = await import("../../../../../../marketplace/plugins/conference-manager/client/lib/badgeEditor");
+        expect(TEMPLATES.length).toBeGreaterThanOrEqual(6);
+        for (const t of TEMPLATES) {
+            const d = designLib.normalizeDesignV2(t.make());
+            expect(d.elements.filter((e: any) => e.type === "qr").length, t.id).toBe(1);
+            expect(d.elements.length, t.id).toBe(t.make().elements.length);
+            const qr = d.elements.find((e: any) => e.type === "qr");
+            const card = designLib.cardOf(d.layout);
+            expect(qr.x >= 0 && qr.y >= 0 && qr.x + qr.w <= card.w && qr.y + qr.h <= card.h, `${t.id}: the QR is on the card`).toBe(true);
+            const badge = designLib.layoutDesign(d, { data: { "@name": "Ana", "@code": "ABCD2345EF", "@conference": "Congreso" }, qr: "ABCD2345EF", metrics, images: {} });
+            expect(badge.items.some((i: any) => i.t === "qr")).toBe(true);
+            expect(badge.items.some((i: any) => i.t === "text" && i.text.includes("Ana"))).toBe(true);
+        }
+    });
+    it("a pre-2.29 design opens converted: its title, name, fields and code in place, the QR where it was", async () => {
+        const { fromLegacy } = await import("../../../../../../marketplace/plugins/conference-manager/client/lib/badgeEditor");
+        const zonesOf = req(path.join(SERVER, "badge-layout.js")).zonesOf;
+        for (const layout of ["horizontal", "vertical"]) {
+            const old = { layout, title: "", colors: { background: "#0f766e", text: "#ffffff", label: "#bfdbfe", accent: "#fbbf24" }, panel: "dark", fields: [{ key: "@location", show_label: true }] };
+            const d = fromLegacy(old, { horizontal: zonesOf("horizontal"), vertical: zonesOf("vertical") }, { bg: { id: "a".repeat(16) }, logo: null }, () => "Localidad", 3);
+            expect(d.version).toBe(2);
+            expect(d.layout).toBe(layout);
+            expect(d.background).toBe("#0f766e");
+            expect(d.elements[0]).toMatchObject({ type: "image", asset: "a".repeat(16), x: 0, y: 0 });
+            const texts = d.elements.filter((e: any) => e.type === "text").map((e: any) => e.text);
+            expect(texts).toEqual(expect.arrayContaining(["{{@conference}}", "{{@name}}", "LOCALIDAD  {{@location}}", "{{@code}}"]));
+            expect(d.elements.filter((e: any) => e.type === "qr").length).toBe(1);
+        }
+    });
+    it("the admin and the portal draw a free-form badge alike: shapes, rotation, opacity, images and faces", () => {
+        const d = designLib.normalizeDesignV2({ version: 2, layout: "horizontal", background: "#0f172a", elements: [
+            { type: "shape", shape: "ellipse", x: 60, y: 2, w: 20, h: 8, fill: null, stroke: "#ffffff", sw: 0.5, op: 0.6 },
+            { type: "image", asset: "b".repeat(16), x: 3, y: 2, w: 8, h: 8, mask: "circle" },
+            { type: "text", x: 4, y: 16, w: 50, h: 14, text: "{{@name}}", font: "montserrat", bold: true, size: 20, color: "#ffffff", rot: 10, ls: 0.5 },
+            { type: "line", x: 4, y: 30, w: 50, h: 1, stroke: "#f59e0b", sw: 0.4 },
+        ] });
+        const badge = designLib.layoutDesign(d, { data: { "@name": "María José" }, qr: "ABCD2345EF", metrics, images: { ["b".repeat(16)]: { w: 4, h: 2 } } });
+        const images = { ["b".repeat(16)]: "data:image/png;base64,AAAA" };
+        const a = renderToStaticMarkup(<BadgeSvg badge={badge} images={images} title="X" />);
+        const b = renderToStaticMarkup(<BadgeCard badge={badge} images={images} title="X" />);
+        expect(a).toBe(b);
+        expect(a).toContain("<ellipse");
+        expect(a).toContain('opacity="0.6"');
+        expect(a).toContain("rotate(10 ");
+        expect(a).toContain("clip-path=");
+        expect(a).toContain("cmb-montserrat-700");
+        expect(a).toContain("María José");
+    });
+    it("every designer text exists in es / en / pt", () => {
+        const keys = Object.keys(translations.es).filter((k) => k.startsWith("badges.ed."));
+        expect(keys.length).toBeGreaterThanOrEqual(100);
+        for (const lang of ["en", "pt"] as const) for (const k of keys) expect((translations as any)[lang][k], `${lang} ${k}`).toBeTruthy();
     });
 });

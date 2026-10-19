@@ -42,6 +42,15 @@ export const LODGING_NO_WAIT = 'now';
 /** A location's own closing: the general one (null), none, or a date. */
 export const LODGING_NO_CLOSE = 'never';
 
+/** POST /transport/check (2.25.0). */
+export type BoardingCheck = {
+    result: 'ok' | 'other_bus' | 'no_ticket' | 'cancelled' | 'unknown';
+    bus: { id: number; name: string };
+    person?: { id: number; name: string; location: string | null; reg_code: string | null };
+    ticket?: { payment_status: string; price: number; amount_paid: number; balance: number };
+    buses?: { id: number; name: string }[];
+};
+
 export interface Hotel {
     id: number;
     name: string;
@@ -455,7 +464,16 @@ export interface TransportTicket {
     amount_paid: number;
     payment_status: 'paid' | 'partial' | 'unpaid' | string;
     created_at?: string;
+    /** 2.26.0: the package sale this seat belongs to — price / paid / status above are the SALE's. */
+    sale_id?: number | null;
+    package_id?: number | null;
+    package_name?: string | null;
 }
+/** A sale of a transport package to one person (2.26.0): the money of transport. */
+export interface PackageSale { id: number; package_id: number; inscription_id: number; price: number; amount_paid: number; payment_status: string; created_at?: string | null }
+/** A transport package (2.26.0): a fixed list of buses sold together at one price. */
+export interface TransportPackage { id: number; conference_id: number; name: string; price: number; notes?: string | null; buses: { id: number; name: string }[]; sold: number; revenue: number; collected: number; sales: PackageSale[] }
+export interface PackagePayment { id: number; sale_id: number; amount: number; method: string; reference?: string | null; date: string; recorded_by?: string | null }
 export interface Bus {
     id: number;
     conference_id: number;
@@ -473,6 +491,20 @@ export interface Bus {
     /** Sum of the transport payments received. */
     collected: number;
     passengers: TransportTicket[];
+    /** 2.27.0: boarding state — 'scheduled' until the team starts boarding, then 'boarding', then 'departed'. */
+    status?: 'scheduled' | 'boarding' | 'departed';
+    boarding_at?: string | null;
+    departed_at?: string | null;
+    /** Passengers of this bus with the bus notices on (their «Mi inscripción» phones). */
+    alerts?: number;
+}
+/** A bus notice (2.27.0): a step of the boarding or a message, and how many phones it reached. */
+export interface BusNotice { id: number; kind: 'boarding' | 'departed' | 'message'; text: string | null; at: string | null; recipients: number; sent: number; failed: number }
+export interface NoticeResult {
+    success: boolean;
+    bus: { status: 'scheduled' | 'boarding' | 'departed'; boarding_at: string | null; departed_at: string | null };
+    /** Absent for a reset. network = false: the plugin lacks the «network» permission, nothing was pushed. */
+    delivery?: { subscribers: number; sent: number; failed: number; network: boolean };
 }
 export interface TransportPayment {
     id: number;
@@ -733,6 +765,10 @@ export const conferenceApi = {
 
     // Transport (2.11.0)
     getBuses: (conferenceId: number) => apiGet<Bus[]>(`/plugin/conference-manager/buses?conference_id=${conferenceId}`),
+    /** Boarding check (2.25.0): does the scanned badge (code or QR link) travel on this bus? Read only. */
+    busNotice: (busId: number, kind: 'boarding' | 'departed' | 'message' | 'reset', text?: string) => apiPost<NoticeResult>(`/plugin/conference-manager/buses/${busId}/notice`, { kind, text }),
+    getBusNotices: (busId: number) => apiGet<BusNotice[]>(`/plugin/conference-manager/buses/${busId}/notices`),
+    checkBoarding: (busId: number, code: string) => apiPost<BoardingCheck>(`/plugin/conference-manager/transport/check`, { bus_id: busId, code }),
     createBus: (conferenceId: number, data: BusInput) => apiPost<{ success: boolean; id: number }>('/plugin/conference-manager/buses', { ...data, conference_id: conferenceId }),
     updateBus: (id: number, data: Partial<BusInput> & { reprice_tickets?: boolean }) => apiPut(`/plugin/conference-manager/buses/${id}`, data),
     deleteBus: (id: number) => apiDelete(`/plugin/conference-manager/buses/${id}`),
@@ -741,6 +777,16 @@ export const conferenceApi = {
     getTicketPayments: (ticketId: number) => apiGet<TransportPayment[]>(`/plugin/conference-manager/tickets/${ticketId}/payments`),
     addTicketPayment: (ticketId: number, data: { amount: number; method: string; reference?: string; date?: string }) => apiPost(`/plugin/conference-manager/tickets/${ticketId}/payments`, data),
     deleteTransportPayment: (id: number) => apiDelete(`/plugin/conference-manager/transport-payments/${id}`),
+    // Transport packages (2.26.0)
+    getPackages: (conferenceId: number) => apiGet<TransportPackage[]>(`/plugin/conference-manager/transport/packages?conference_id=${conferenceId}`),
+    createPackage: (conferenceId: number, data: { name: string; price: number | string; notes?: string; bus_ids: number[] }) => apiPost<{ success: boolean; id: number }>(`/plugin/conference-manager/transport/packages`, { conference_id: conferenceId, ...data }),
+    updatePackage: (id: number, data: { name?: string; price?: number | string; notes?: string; bus_ids?: number[]; reprice_sales?: boolean }) => apiPut(`/plugin/conference-manager/transport/packages/${id}`, data),
+    deletePackage: (id: number) => apiDelete(`/plugin/conference-manager/transport/packages/${id}`),
+    sellPackage: (id: number, inscriptionIds: number[]) => apiPost<{ success: boolean; added: number; skipped: number }>(`/plugin/conference-manager/transport/packages/${id}/sales`, { inscription_ids: inscriptionIds }),
+    removePackageSale: (saleId: number) => apiDelete(`/plugin/conference-manager/transport/package-sales/${saleId}`),
+    getSalePayments: (saleId: number) => apiGet<PackagePayment[]>(`/plugin/conference-manager/transport/package-sales/${saleId}/payments`),
+    addSalePayment: (saleId: number, data: { amount: number; method: string; reference?: string; date?: string }) => apiPost(`/plugin/conference-manager/transport/package-sales/${saleId}/payments`, data),
+    deletePackagePayment: (id: number) => apiDelete(`/plugin/conference-manager/transport/package-payments/${id}`),
 
     // Accounting (2.12.0) — manual entries; fee and transport payments come back read-only in getLedger.
     getLedger: (conferenceId: number) => apiGet<{ entries: any[]; totals: { income: number; expense: number; balance: number }; categories: { income: string[]; expense: string[] } }>(`/plugin/conference-manager/accounting?conference_id=${conferenceId}`),

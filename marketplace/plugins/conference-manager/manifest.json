@@ -1,7 +1,7 @@
 {
     "id": "conference-manager",
     "name": "Conference Manager",
-    "version": "2.23.0",
+    "version": "2.29.0",
     "description": "Manage conference inscriptions, payments, and lodging assignments.",
     "author": "WordJS",
     "isolated": true,
@@ -49,6 +49,10 @@
             "scope": "settings",
             "access": "read",
             "reason": "Read the site's address, to put the link to each registrant's «Mi inscripción» page in their badge's QR code. Without it the QR carries only the registration code (the meal scanner still reads it)."
+        },
+        {
+            "scope": "network",
+            "reason": "Send the bus notices («Tu bus está embarcando», «Tu bus salió», the transport team's messages) as browser notifications to the passengers who turned them on in «Mi inscripción». Only push services are contacted (fcm.googleapis.com, push.services.mozilla.com, push.apple.com, notify.windows.com). Without it the notices still show on the passengers' open page."
         },
         {
             "scope": "roles",

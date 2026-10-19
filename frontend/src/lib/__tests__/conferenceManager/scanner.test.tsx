@@ -37,6 +37,7 @@ import {
 import { classifyRead, createReadRouter, createScanMeter, isRegCode, normalizeCode, scanLoopDelay } from '../../../../../marketplace/plugins/conference-manager/client/lib/meals';
 import { translations } from '../../../../../marketplace/plugins/conference-manager/client/lib/i18n';
 import { encodeQr } from '../../../../../marketplace/plugins/conference-manager/client/lib/qr';
+import { BoardingScanner, boardingLines } from '../../../../../marketplace/plugins/conference-manager/client/admin/BoardingScanner';
 
 const es = makeTx((k: string) => translations.es[k] ?? k);
 const flat = (html: string) => html.replace(/<!-- -->/g, '');
@@ -408,3 +409,32 @@ describe('MealScanner: the overlay is black, full screen and above the admin chr
         expect(html).toContain('@keyframes cm-scan-sweep');
     });
 });
+
+// ── «Verificar abordaje» (2.25.0) ────────────────────────────────────────────────────────────────────
+
+describe('boarding check: the verdict in words, and the screen', () => {
+    const person = { id: 1, name: 'Ana Pérez', location: 'Norte', reg_code: 'EUVWPL73N7' };
+    it('says plainly whether the person goes on this bus', () => {
+        expect(boardingLines(es, { result: 'ok', person, ticket: { balance: 0 } })).toEqual({ title: 'Sí va en este bus', lines: ['Ana Pérez', 'Norte'] });
+        expect(boardingLines(es, { result: 'ok', person, ticket: { balance: 50000 } }).lines[2]).toMatch(/^Pasaje con saldo pendiente: .*50\.000/);
+        expect(boardingLines(es, { result: 'other_bus', person, buses: [{ id: 2, name: 'Bus 2' }] })).toEqual({ title: 'Va en otro bus', lines: ['Ana Pérez', 'Su bus: Bus 2'] });
+        expect(boardingLines(es, { result: 'no_ticket', person }).title).toBe('No tiene pasaje');
+        expect(boardingLines(es, { result: 'cancelled', person }).title).toBe('Inscripción cancelada');
+        expect(boardingLines(es, { result: 'unknown' }).title).toBe('Código desconocido');
+        expect(boardingLines(es, { result: 'error', message: 'x' })).toEqual({ title: 'No se pudo comprobar', lines: ['x'] });
+    });
+    it('opens on the chosen bus, with the code box for a reader', () => {
+        const buses = [{ id: 1, name: 'Bus 1', origin: 'Barranquilla', destination: 'Santa Marta' }, { id: 2, name: 'Bus 2' }];
+        const html = renderToStaticMarkup(<I18nProvider><BoardingScanner buses={buses} busId={2} onClose={() => {}} /></I18nProvider>);
+        expect(html).toContain('data-boarding-scanner=""');
+        expect(html).toMatch(/<option value="2" selected="">Bus 2<\/option>/);
+        expect(html).toContain('Bus 1 · Barranquilla → Santa Marta');
+        expect(html).toContain('data-boarding-input=""');
+    });
+    it('every boarding text exists in es / en / pt', () => {
+        const keys = Object.keys(translations.es).filter((k) => k.startsWith('transport.board.'));
+        expect(keys.length).toBe(21);
+        for (const lang of ['en', 'pt'] as const) for (const k of keys) expect((translations as any)[lang][k], `${lang} ${k}`).toBeTruthy();
+    });
+});
+

@@ -18,6 +18,7 @@ import AccountingPage from "./AccountingPage";
 import MealsPage from "./MealsPage";
 import { qrSvg, qrPng } from "../lib/qr";
 import { parseGeo, GEO_MESSAGES, mapsUrl } from "../lib/geo";
+import { PlacePicker } from "./PlacePicker";
 import { buildXlsx, downloadXlsx } from "../lib/xlsx";
 import { availableColumns, defaultColumnKeys, filterRoster, buildRosterSheet, buildHotelReport, exportFilename, transportByPerson, withoutColumn } from "../lib/exports";
 import { StatCard } from "../../../../../frontend/src/components/ui/StatCard";
@@ -2687,7 +2688,7 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
 
             {showHotelModal && (
                 <Overlay layer={1}>
-                    <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-md border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200">
+                    <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-lg border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200">
                         <div className="bg-gray-50/50 px-10 py-8 border-b border-gray-100 flex items-center justify-between">
                             <div>
                                 <h3 className="font-black text-2xl text-gray-900 italic tracking-tighter">{editHotelId ? tx('hotel.edit', 'Editar hotel') : t('add.hotel')}</h3>
@@ -2721,32 +2722,10 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                                     />
                                 </div>
                             </div>
-                            {(() => {
-                                // 2.23.0: the hotel's position for the map on each guest's «Mi inscripción» page.
-                                const g = parseGeo(hotelForm.location);
-                                return (
-                                    <div className="space-y-2" data-hotel-location="">
-                                        <label htmlFor="cm-hotel-location" className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{tx('hotel.location', 'Ubicación en el mapa')}</label>
-                                        <input
-                                            id="cm-hotel-location"
-                                            placeholder={tx('hotel.location.placeholder', 'Enlace de Google Maps o coordenadas')}
-                                            className="w-full border-2 border-gray-100 rounded-2xl px-5 py-4 bg-gray-50/50 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-bold placeholder:text-gray-300 text-sm"
-                                            value={hotelForm.location || ''}
-                                            onChange={e => setHotelForm({ ...hotelForm, location: e.target.value })}
-                                            autoComplete="off" inputMode="url"
-                                        />
-                                        {g.ok ? (
-                                            <p className="text-[11px] font-bold text-emerald-700 ml-1" data-hotel-geo={g.geo}>
-                                                <i className="fa-solid fa-location-dot mr-1" aria-hidden="true"></i>{g.geo.replace(',', ', ')} · <a href={mapsUrl(g.geo)} target="_blank" rel="noopener noreferrer" className="underline">{tx('hotel.location.check', 'Comprobar en Google Maps')}</a>
-                                            </p>
-                                        ) : g.code === 'empty' ? (
-                                            <p className="text-[11px] text-gray-500 ml-1">{tx('hotel.location.help', 'En Google Maps (en el computador) busca el hotel y copia la dirección completa de la barra del navegador, o haz clic derecho sobre el hotel y copia las coordenadas. El botón «Compartir» da un enlace corto que no sirve. Es para el mapa que ve cada huésped.')}</p>
-                                        ) : (
-                                            <p className="text-[11px] font-bold text-amber-700 ml-1" role="alert">{GEO_MESSAGES[g.code]}</p>
-                                        )}
-                                    </div>
-                                );
-                            })()}
+                            {/* 2.23.0 / 2.24.0: the hotel's place for the map on each guest's «Mi inscripción» page — search, map, pin. */}
+                            <PlacePicker location={hotelForm.location || ''} onLocation={(v) => setHotelForm(f => ({ ...f, location: v }))}
+                                initialQuery={[hotelForm.name, hotelForm.address].filter(Boolean).join(', ')}
+                                onAddress={(a) => setHotelForm(f => (f.address ? f : { ...f, address: a }))} tx={tx} />
                             <div className="space-y-2">
                                 <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{t('capacity') || 'Capacidad'}</label>
                                 <input

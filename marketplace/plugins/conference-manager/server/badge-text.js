@@ -149,4 +149,7 @@ function fit(text, { minPt, maxPt, bold, maxMm, maxLines, maxHeightMm, lineFacto
     return { sizePt: minPt, lines: wrap(text, minPt, bold, maxMm, linesAt(minPt)) };
 }
 
-module.exports = { toWinAnsi, printable, textWidthMm, ellipsize, wrap, fit };
+/** Helvetica / Helvetica-Bold advance of one cp1252 byte, in 1/1000 em (2.29.0: the badge designer's measurer). */
+const charWidthUnits = (byte, bold) => charWidth(byte, bold);
+
+module.exports = { toWinAnsi, printable, textWidthMm, ellipsize, wrap, fit, charWidthUnits };

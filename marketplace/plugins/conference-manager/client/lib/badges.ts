@@ -30,11 +30,9 @@ export type BadgeConfig = { configured: boolean; design: BadgeDesign; policy: Ba
 export type Zone = { x: number; y: number; w: number; h: number };
 export type Zones = { w: number; h: number; logo: Zone; header: Zone; accent: Zone; panel: Zone; name: Zone; lines: Zone; code: Zone };
 export type AvailableField = { key: string; label: string; builtin: boolean; type?: string; sensitive?: boolean };
-export type DisplayItem =
-    | { t: 'rect'; x: number; y: number; w: number; h: number; fill: string; r?: number }
-    | { t: 'text'; x: number; y: number; size: number; bold: boolean; fill: string; text: string }
-    | { t: 'qr'; x: number; y: number; module: number; size: number; rows: string[] };
-export type DisplayList = { layout: string; w_mm: number; h_mm: number; background: string; plate: { sha: string } | null; items: DisplayItem[] };
+// The display list (v1 layouts and 2.29.0's free-form designs): the renderer's own type.
+export type { DisplayItem, DisplayList } from '../admin/BadgeSvg';
+import type { DisplayList } from '../admin/BadgeSvg';
 export type BadgeLink = { inscription_id: number; token: string; created_at: string | null; view_count: number; last_viewed_at: string | null };
 /** Why the links show nothing right now: badges turned off, or past their expiry date (null = they work). */
 export type LinksState = 'disabled' | 'expired' | null;
@@ -45,7 +43,9 @@ export const badgesApi = {
     getAsset: (conferenceId: number, kind: string) => apiGet<{ data_url: string; width: number | null; height: number | null; sha: string }>(`${BASE}/badges/assets/${kind}?conference_id=${conferenceId}`),
     putAsset: (conferenceId: number, kind: string, dataUrl: string, width: number, height: number) => apiPut<{ success: boolean; sha: string }>(`${BASE}/badges/assets`, { conference_id: conferenceId, kind, data_url: dataUrl, width, height }),
     deleteAsset: (conferenceId: number, kind: string) => apiDelete<{ success: boolean }>(`${BASE}/badges/assets?conference_id=${conferenceId}&kind=${encodeURIComponent(kind)}`),
-    preview: (conferenceId: number, design?: BadgeDesign | null, inscriptionId?: number | null) => apiPost<{ badge: DisplayList }>(`${BASE}/badges/preview`, { conference_id: conferenceId, ...(design ? { design } : {}), ...(inscriptionId ? { inscription_id: inscriptionId } : {}) }),
+    preview: (conferenceId: number, design?: BadgeDesign | null, inscriptionId?: number | null) => apiPost<{ badge: DisplayList; images?: Record<string, string> }>(`${BASE}/badges/preview`, { conference_id: conferenceId, ...(design ? { design } : {}), ...(inscriptionId ? { inscription_id: inscriptionId } : {}) }),
+    /** 2.29.0: one image for the free-form designer (stored once by its content) → its id, as image elements use it. */
+    putImage: (conferenceId: number, dataUrl: string, width: number, height: number) => apiPut<{ success: boolean; id: string; width: number; height: number }>(`${BASE}/badges/assets`, { conference_id: conferenceId, kind: 'image', data_url: dataUrl, width, height }),
     /** The links that exist (none is created): the person list refreshes with it after a regenerate or a revoke. */
     existingLinks: (conferenceId: number) => apiGet<{ links: BadgeLink[] }>(`${BASE}/badges/links?conference_id=${conferenceId}`),
     links: (conferenceId: number, scope: { inscription_ids?: number[]; location_id?: number; all?: boolean }) => apiPost<{ links: BadgeLink[]; state: LinksState; country_code: string }>(`${BASE}/badges/links`, { conference_id: conferenceId, ...scope }),
@@ -58,6 +58,12 @@ export const badgesApi = {
 /** The credential page of a token — the token in the FRAGMENT, so it never reaches a log or a link preview. */
 export const badgeUrl = (token: string, origin?: string): string =>
     `${origin || (typeof window !== 'undefined' ? window.location.origin : '')}/portal/conference/badge#t=${token}`;
+/**
+ * What is opened, copied and sent for a link (2.28.0): the person's «Mi inscripción» page (`self`, where they
+ * confirm their document) — the bare badge link no longer shows a badge.
+ */
+export const linkUrl = (l: { token: string; self?: string | null }, origin?: string): string =>
+    l.self ? `${origin || (typeof window !== 'undefined' ? window.location.origin : '')}${l.self}` : badgeUrl(l.token, origin);
 /** The core portal's file route for a ticket. */
 export const badgeFileUrl = (d: string): string => `/portal/conference/badge/file?d=${encodeURIComponent(d)}`;
 

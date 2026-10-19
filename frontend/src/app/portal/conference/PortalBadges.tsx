@@ -10,7 +10,7 @@
  */
 import React, { useEffect, useState } from "react";
 import { Button } from "./ui";
-import { badgePageUrl, copyLater, copyText, openPortalBadgePdf, portalBadgeLink, portalBadgeLinks, publicBase, waNumber, whatsappUrl, type PortalBadgeLink } from "./badges";
+import { portalLinkUrl, copyLater, copyText, openPortalBadgePdf, portalBadgeLink, portalBadgeLinks, publicBase, waNumber, whatsappUrl, type PortalBadgeLink } from "./badges";
 
 type Headers = (extra?: Record<string, string>) => Record<string, string>;
 const linkBtn = "inline-flex items-center justify-center gap-2 min-h-11 font-black uppercase tracking-widest transition-all active:scale-95 bg-white text-gray-700 border-2 border-gray-100 hover:border-blue-500 hover:text-blue-600 shadow-sm px-4 py-3 text-[10px] rounded-2xl";
@@ -38,7 +38,7 @@ export function PortalBadgeSection({ inscriptionId, phone, conferenceName, authH
         setBusy(what); setNote(null);
         try { await fn(); } catch (e) { setNote({ text: (e as Error)?.message || "Error", error: true }); } finally { setBusy(""); }
     };
-    const url = link ? badgePageUrl(link.token, base) : "";
+    const url = link ? portalLinkUrl(link, base) : "";
     const conf = conferenceName || confName;
     const message = `Tu escarapela${conf ? ` de ${conf}` : ""}: ${url}`;
     const number = waNumber(phone, cc);
@@ -94,7 +94,7 @@ export function PortalBadgeBulk({ authHeaders, nameOf }: { authHeaders: Headers;
                         const text = (async () => {
                             const [links, base] = await Promise.all([portalBadgeLinks(authHeaders), publicBase()]);
                             n = links.length;
-                            return links.map((l) => `${nameOf(l.inscription_id)}: ${badgePageUrl(l.token, base)}`).join("\n");
+                            return links.map((l) => `${nameOf(l.inscription_id)}: ${portalLinkUrl(l, base)}`).join("\n");
                         })();
                         if (await copyLater(text)) setNote({ text: `${n} enlaces copiados.` });
                         else setManual(await text);

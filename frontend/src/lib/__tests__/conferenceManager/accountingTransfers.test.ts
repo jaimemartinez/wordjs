@@ -10,7 +10,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { buildLedgerWorkbook, filterLedger, lineParticipant, locationShare, summarizeLedger } from '../../../../../marketplace/plugins/conference-manager/client/lib/accounting';
-import { availableColumns, buildFeePaymentsWorkbook, columnValue } from '../../../../../marketplace/plugins/conference-manager/client/lib/exports';
+import { availableColumns, buildBusManifest, buildFeePaymentsWorkbook, columnValue, transportByPerson } from '../../../../../marketplace/plugins/conference-manager/client/lib/exports';
 
 const L = (e: any) => ({ kind: 'income', source: 'inscription', readonly: true, category: 'Inscripciones', method: 'Transferencia', reference: null, ...e });
 const ENTRIES: any[] = [
@@ -122,3 +122,35 @@ describe('exports', () => {
         expect(sheets[2].rows[0][7]).toEqual({ money: 380 });
     });
 });
+
+describe('transport packages (2.26.0): a package is counted once, never once per bus', () => {
+    const seat = (id: number, inscription_id: number, sale_id: number, package_name: string, price: number, amount_paid: number) =>
+        ({ id, inscription_id, sale_id, package_name, price, amount_paid, payment_status: amount_paid >= price ? 'paid' : amount_paid > 0 ? 'partial' : 'unpaid' });
+    // Ana bought «Ida y regreso» (Bus 1 + Bus 2) for 120; Beto «Solo ida» (Bus 1) for 60.
+    const buses = [
+        { id: 1, name: 'Bus 1', capacity: 40, price: 0, passengers: [seat(1, 10, 100, 'Ida y regreso', 120, 50), seat(2, 11, 101, 'Solo ida', 60, 0)] },
+        { id: 2, name: 'Bus 2', capacity: 40, price: 0, passengers: [seat(3, 10, 100, 'Ida y regreso', 120, 50)] },
+    ];
+    it('per person: the package once, by its name', () => {
+        const map = transportByPerson(buses as any);
+        expect(map.get(10)).toEqual({ labels: ['Ida y regreso'], due: 120, paid: 50 });
+        expect(map.get(11)).toEqual({ labels: ['Solo ida'], due: 60, paid: 0 });
+    });
+    it('the workbook: seats per bus, money per package, the package on each passenger row', () => {
+        const packages = [
+            { id: 100, name: 'Ida y regreso', price: 120, buses: [{ id: 1, name: 'Bus 1' }, { id: 2, name: 'Bus 2' }], sold: 1, revenue: 120, collected: 50 },
+            { id: 101, name: 'Solo ida', price: 60, buses: [{ id: 1, name: 'Bus 1' }], sold: 1, revenue: 60, collected: 0 },
+        ];
+        const people = [{ id: 10, first_name: 'Ana', last_name: 'Pérez' }, { id: 11, first_name: 'Beto', last_name: 'Núñez' }];
+        const sheets = buildBusManifest({ buses: buses as any, people: people as any, fields: [], packages });
+        expect(sheets.map((x) => x.name)).toEqual(['Resumen', 'Paquetes', 'Bus 1', 'Bus 2']);
+        expect(sheets[0].columns.map((c) => c.header)).toEqual(['Bus', 'Trayecto', 'Salida', 'Capacidad', 'Vendidos', 'Libres']);
+        expect(sheets[0].rows.at(-1)).toEqual(['TOTAL', '', '', 80, 3, 77]);
+        expect(sheets[1].rows.at(-1)).toEqual(['TOTAL', '', '', 2, { money: 180 }, { money: 50 }, { money: 130 }]);
+        expect(sheets[1].rows[0][1]).toBe('Bus 1, Bus 2');
+        expect(sheets[3].rows[0][5]).toBe('Ida y regreso');
+        // One bus only: just its passenger list.
+        expect(buildBusManifest({ buses: buses as any, people: people as any, fields: [], onlyBusId: 2, packages }).map((x) => x.name)).toEqual(['Bus 2']);
+    });
+});
+

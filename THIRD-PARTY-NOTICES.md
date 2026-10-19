@@ -47,6 +47,7 @@ with its license next to it.
 | Code | License | Where | Notes |
 |---|---|---|---|
 | `jsQR` 1.4.0 (`dist/jsQR.js` of the npm package `jsqr`) | `Apache-2.0` | `marketplace/plugins/conference-manager/client/lib/vendor/jsQR.js` (license: `jsQR.LICENSE.txt` beside it) | The QR reader of the meal scanner on phones whose browser has no `BarcodeDetector` for QR (iPhone Safari). Bundled into the plugin's admin script. |
+| Badge typefaces: Montserrat, Poppins, Lato, Raleway, Open Sans, Roboto, Nunito, Oswald, Bebas Neue, Playfair Display, Merriweather, Lora, Dancing Script (static TrueType files, unmodified) | `OFL-1.1` | `marketplace/plugins/conference-manager/fonts/` (one base64 module per face; copyright lines in `fonts/README.md`, licence in `fonts/OFL.txt`) | The free-form badge designer (2.29.0): drawn by the browser and embedded in the badge PDFs. |
 
 ## Network-copyleft
 

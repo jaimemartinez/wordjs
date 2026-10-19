@@ -4,7 +4,7 @@
  * «Mi inscripción» (conference-manager 2.23.0) — the page a registrant's badge QR opens:
  * /portal/conference/yo#c=<registration code>. The code is read from the FRAGMENT (no request ever carries it).
  * The person confirms their identity document (type and number, as registered); the plugin then answers their
- * own registration — badge, answers, payment, meals delivered (and when) and to come, hotel, room and a map —
+ * own registration — badge, answers, meals delivered (and when) and to come, hotel, room and a map —
  * and a session token this phone keeps (localStorage) so the document is not asked again here, until it expires
  * or they leave. Nothing personal is rendered on the server; the layout marks the page noindex / no-referrer.
  */
@@ -12,15 +12,17 @@ import React, { useCallback, useEffect, useState } from "react";
 import { csrfHeaders } from "@/lib/csrf";
 import { BadgeCard, type DisplayList } from "../badge/BadgeCard";
 import { OsmMap } from "./OsmMap";
+import { BusAlerts, dropPushSubscription, type Bus } from "./BusAlerts";
 
 type Meal = { date: string; meal: string; label: string | null; start_time: string | null; end_time: string | null; delivered_at?: string | null };
 type View = {
     name: string; conference: string; location: string | null; code: string;
     answers: { label: string; value: string }[];
-    payment: { status: string; total_due: number; amount_paid: number };
     meals: { delivered: Meal[]; pending: Meal[] };
     lodging: { hotel: string; room: string; address: string | null; lat: number | null; lng: number | null } | null;
-    badge: { badge: DisplayList; plate: string | null } | null;
+    badge: { badge: DisplayList; plate: string | null; images?: Record<string, string> } | null;
+    transport?: Bus[];
+    push_key?: string | null;
     expires_on: string | null;
 };
 type Form = { code: string; fromLink: boolean; conference: string | null; docTypes: string[] | null; needsType: boolean; numberLabel: string };
@@ -76,9 +78,6 @@ const whenLabel = (iso: string | null | undefined) => {
     const t = new Date(iso);
     if (Number.isNaN(t.getTime())) return "";
     try { return new Intl.DateTimeFormat("es", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }).format(t); } catch { return t.toLocaleString(); }
-};
-const money = (n: number) => {
-    try { return new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(n || 0); } catch { return `$${Math.round(n || 0)}`; }
 };
 const mealName = (m: Meal) => m.label || MEAL_NAMES[m.meal] || m.meal;
 
@@ -158,6 +157,7 @@ export default function MyRegistrationPage() {
         if (state.kind !== "ok") return;
         const session = state.session;
         writeStored(null);
+        dropPushSubscription();
         post("logout", { session }).catch(() => { /* gone on this phone anyway */ });
         setDocType(""); setDocNumber(""); setNote("");
         await startWith(state.view.code, true);
@@ -201,7 +201,7 @@ export default function MyRegistrationPage() {
             <main className="min-h-dvh bg-gray-100 px-4 py-8 sm:py-14" data-self-page="form">
                 <form onSubmit={submit} className="mx-auto w-full max-w-sm bg-white rounded-3xl border border-gray-100 shadow-sm p-6 sm:p-8 space-y-5" noValidate>
                     <div className="text-center space-y-1">
-                        <div className="w-14 h-14 mx-auto rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center text-2xl"><i className="fa-solid fa-id-card" aria-hidden="true"></i></div>
+                        <div className="w-14 h-14 shrink-0 mx-auto rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center text-2xl"><i className="fa-solid fa-id-card" aria-hidden="true"></i></div>
                         <h1 className="text-xl font-black text-gray-900">Mi inscripción</h1>
                         {form.conference && <p className="text-[11px] font-black uppercase tracking-widest text-gray-500">{form.conference}</p>}
                         <p className="text-sm text-gray-600">{form.conference ? "Para ver tu información, confirma tu documento." : "Escribe el código de tu escarapela."}</p>
@@ -251,7 +251,6 @@ export default function MyRegistrationPage() {
     const h2 = "text-[11px] font-black uppercase tracking-widest text-gray-500 flex items-center gap-2";
     const lodging = view.lodging;
     const geo = lodging && lodging.lat != null && lodging.lng != null ? `${lodging.lat},${lodging.lng}` : null;
-    const balance = Math.max(0, (view.payment.total_due || 0) - (view.payment.amount_paid || 0));
     return (
         <main className="min-h-dvh bg-gray-100 px-4 py-6 sm:py-10" data-self-page="ok">
             <div className="mx-auto w-full max-w-md space-y-4">
@@ -264,11 +263,15 @@ export default function MyRegistrationPage() {
                     <button type="button" onClick={leave} className="shrink-0 min-h-[40px] px-3 rounded-xl bg-white border-2 border-gray-200 text-gray-700 font-black text-[10px] uppercase tracking-widest" data-self-leave="">Salir</button>
                 </header>
 
+                {view.transport && view.transport.length > 0 && (
+                    <BusAlerts session={state.session} initial={view.transport} pushKey={view.push_key || null} post={post} code={view.code} />
+                )}
+
                 {view.badge && (
                     <section className={section} data-self-badge="">
                         <h2 className={h2}><i className="fa-solid fa-id-badge" aria-hidden="true"></i>Mi escarapela</h2>
                         <div className={`mx-auto ${view.badge.badge.layout === "vertical" ? "max-w-[260px]" : ""} rounded-[14px] overflow-hidden shadow-lg ring-1 ring-black/5 bg-white`}>
-                            <BadgeCard badge={view.badge.badge} plate={view.badge.plate} title={`Escarapela de ${view.name}`} />
+                            <BadgeCard badge={view.badge.badge} plate={view.badge.plate} images={view.badge.images || null} title={`Escarapela de ${view.name}`} />
                         </div>
                         <button type="button" onClick={downloadPdf} disabled={busy} className="w-full min-h-[44px] rounded-2xl bg-white border-2 border-gray-200 text-gray-800 font-black text-[11px] uppercase tracking-widest flex items-center justify-center gap-2 disabled:opacity-60" data-self-pdf="">
                             <i className={`fa-solid ${busy ? "fa-spinner animate-spin" : "fa-file-pdf"}`} aria-hidden="true"></i>Descargar PDF
@@ -342,20 +345,6 @@ export default function MyRegistrationPage() {
                             )}
                         </>
                     )}
-                </section>
-
-                <section className={section} data-self-payment="">
-                    <h2 className={h2}><i className="fa-solid fa-wallet" aria-hidden="true"></i>Mi pago</h2>
-                    <div className="grid grid-cols-2 gap-2">
-                        <div className="rounded-2xl bg-gray-50 border border-gray-100 px-3 py-2.5 min-w-0">
-                            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Pagado</p>
-                            <p className="text-sm font-black text-gray-900">{money(view.payment.amount_paid)}</p>
-                        </div>
-                        <div className={`rounded-2xl px-3 py-2.5 min-w-0 border ${balance > 0 ? "bg-amber-50 border-amber-100" : "bg-emerald-50 border-emerald-100"}`}>
-                            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">{balance > 0 ? "Pendiente" : "Estado"}</p>
-                            <p className={`text-sm font-black ${balance > 0 ? "text-amber-800" : "text-emerald-700"}`}>{balance > 0 ? money(balance) : "Al día"}</p>
-                        </div>
-                    </div>
                 </section>
 
                 {view.answers.length > 0 && (

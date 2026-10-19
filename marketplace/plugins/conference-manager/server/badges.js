@@ -32,12 +32,22 @@
 const { buildBadge, zonesOf, rowsOf, LAYOUTS, DEFAULT_COLORS } = require('./badge-layout');
 const crypto = require('crypto');
 const { buildBadgePdf } = require('./badge-pdf');
+const { normalizeDesignV2, layoutDesign, assetsOfDesign, keysOfDesign } = require('./badge-design');
+const { createMetrics, isFace } = require('./badge-font');
+const { faceBytes, faceBase64, faceParsed } = require('./badge-font-files');
 const { docFieldsOf } = require('./selfpage');
 
 const MAX_FIELDS = 8;
 const LABEL_MAX = 40;
 const TITLE_MAX = 80;
 const ASSET_KINDS = new Set(['background_src', 'logo_src', 'plate_print', 'plate_screen']);
+// 2.29.0: the free-form designer's images, one row each: kind 'img_' + the first 16 hex of their sha256 (the
+// id the design's image elements use).
+const IMAGE_KIND = /^img_[0-9a-f]{16}$/;
+const IMAGES_MAX = 40;
+const isAssetKind = (k) => ASSET_KINDS.has(k) || IMAGE_KIND.test(k);
+// The server measures with every face loaded (the layout and the PDF agree with the browser's).
+const METRICS = createMetrics((face) => faceParsed(face));
 const ASSET_MAX_CHARS = 2 * 1024 * 1024;               // a data URL, ~1.5 MB of image
 const TICKET_TTL_S = 120, TICKET_MAX_USES = 3;
 const PDF_MAX_BADGES = 1000;
@@ -57,6 +67,7 @@ const DEFAULT_DESIGN = Object.freeze({
 const DEFAULT_POLICY = Object.freeze({ enabled: true, portal_enabled: true, expires_on: null, country_code: '57' });
 const MSG = {
     not_found: 'Escarapela no encontrada.',
+    self_off: 'Este enlace ya no muestra la escarapela: ábrela en «Mi inscripción» con tu documento (el código QR de tu escarapela lleva allí).',
     inactive: 'Esta escarapela ya no está activa.',
     expired: 'Esta escarapela venció.',
     disabled: 'Las escarapelas de esta conferencia no están activas.',
@@ -140,7 +151,9 @@ function createBadges(base) {
     const clip = (v, n) => String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, n);
     // A design as stored: unknown keys dropped, every value bounded. `known` (a Set of field keys) drops
     // fields the form no longer has; null keeps them (reading a stored design).
-    function normalizeDesign(d, known) {
+    function normalizeDesign(d, known, assetIds) {
+        // 2.29.0: a free-form design (server/badge-design.js) — its own model, bounded there.
+        if (d && typeof d === 'object' && d.version === 2) return normalizeDesignV2(d, { assets: assetIds || null });
         const src = d && typeof d === 'object' ? d : {};
         const colors = {};
         for (const k of Object.keys(DEFAULT_COLORS)) {
@@ -227,9 +240,10 @@ function createBadges(base) {
     };
     // The design + data of one inscription's badge, and its display list.
     async function badgeFor(ins, conf, cfg, assets, labels, sample = false) {
+        if (cfg.design.version === 2) return badgeForV2(ins, conf, cfg, assets, labels, sample);
         const loc = ins.location_id != null ? await db.get(`SELECT name FROM ${T.locations} WHERE id = ?`, [ins.location_id]) : null;
         let room = null;
-        if (cfg.design.fields.some(f => f.key === '@room') && ins.room_id != null) {
+        if ((cfg.design.fields || []).some(f => f.key === '@room') && ins.room_id != null) {
             room = await db.get(`SELECT r.room_number, h.name AS hotel_name FROM ${T.rooms} r LEFT JOIN ${T.hotels} h ON h.id = r.hotel_id WHERE r.id = ?`, [ins.room_id]);
         }
         const lines = [];
@@ -254,12 +268,53 @@ function createBadges(base) {
         const qr = code && D.qrText ? await D.qrText(code, conf.id, cfg) : code;
         return buildBadge(design, { title: cfg.design.title || conf.name, name, lines, code, qr });
     }
+    // 2.29.0: a free-form design — the person's values for the tokens its texts use, then the shared layout.
+    const SAMPLE = { '@name': 'María Fernanda Gómez', '@location': 'Localidad', '@room': 'Hotel Central · 204', '@code': 'ABCD2345EF' };
+    async function badgeForV2(ins, conf, cfg, assets, labels, sample) {
+        const keys = new Set(keysOfDesign(cfg.design));
+        const data = {};
+        const name = (await D.personWithName(ins)).name || '';
+        data['@name'] = sample ? SAMPLE['@name'] : name;
+        data['@code'] = ins.reg_code || (sample ? SAMPLE['@code'] : '');
+        data['@conference'] = conf.name || '';
+        if (keys.has('@dates')) data['@dates'] = datesOf(conf) || (sample ? '12 – 14 oct 2026' : '');
+        if (keys.has('@location')) {
+            const loc = ins.location_id != null ? await db.get(`SELECT name FROM ${T.locations} WHERE id = ?`, [ins.location_id]) : null;
+            data['@location'] = loc ? loc.name : (sample ? SAMPLE['@location'] : '');
+        }
+        if (keys.has('@room')) {
+            const room = ins.room_id != null ? await db.get(`SELECT r.room_number, h.name AS hotel_name FROM ${T.rooms} r LEFT JOIN ${T.hotels} h ON h.id = r.hotel_id WHERE r.id = ?`, [ins.room_id]) : null;
+            data['@room'] = room ? [room.hotel_name, room.room_number].filter(Boolean).join(' · ') : (sample ? SAMPLE['@room'] : '');
+        }
+        for (const k of keys) {
+            if (k.startsWith('@') || !D.isFieldColumn(k)) continue;
+            data[k] = ins[k] != null && String(ins[k]).trim() ? String(ins[k]) : (sample ? (labels.get(k) || k) : '');
+        }
+        const images = {};
+        for (const id of assetsOfDesign(cfg.design)) {
+            const a = assets.get(`img_${id}`);
+            if (a) images[id] = { w: Number(a.width) || 0, h: Number(a.height) || 0 };
+        }
+        const code = ins.reg_code || '';
+        const qr = code && D.qrText ? await D.qrText(code, conf.id, cfg) : (code || data['@code']);
+        return layoutDesign(cfg.design, { data, qr, metrics: METRICS, images });
+    }
+    /** The data URLs of a v2 badge's images (for the page and the designer to draw them): id → data URL. */
+    async function imagesOf(cid, badge) {
+        const out = {};
+        for (const id of (badge && badge.images) || []) {
+            const row = await db.get(`SELECT data FROM ${T.badgeAssets} WHERE conference_id = ? AND kind = ?`, [cid, `img_${id}`]);
+            if (row && row.data) out[id] = row.data;
+        }
+        return out;
+    }
     // «Mi inscripción» (server/selfpage.js): the person's own badge for the page, or null while the badges are
     // off or not designed yet; and a PDF ticket for it.
     async function selfBadge(ins, conf, cfg) {
         if (!cfg.configured || !cfg.policy.enabled) return null;
         const assets = await assetsOf(Number(conf.id), false);
         const badge = await badgeFor(ins, conf, cfg, assets, await labelsOf(Number(conf.id)));
+        if (badge.version === 2) return { badge, plate: null, images: await imagesOf(Number(conf.id), badge) };
         const plate = assets.has('plate_screen')
             ? (await db.get(`SELECT data FROM ${T.badgeAssets} WHERE conference_id = ? AND kind = ?`, [conf.id, 'plate_screen']) || {}).data || null
             : null;
@@ -292,7 +347,14 @@ function createBadges(base) {
         const plates = new Map();
         const plate = assets.get('plate_print');
         if (plate) plates.set(plate.sha, dataUrlBytes(plate.data));
-        return { conf, list, plates };
+        // 2.29.0: the free-form design's images, by id.
+        const images = new Map();
+        for (const b of list) for (const id of b.images || []) {
+            if (images.has(id)) continue;
+            const a = assets.get(`img_${id}`);
+            if (a) images.set(id, { bytes: dataUrlBytes(a.data) });
+        }
+        return { conf, list, plates, images };
     }
     const dataUrlBytes = (url) => {
         const m = /^data:[^;]+;base64,(.*)$/.exec(String(url || ''));
@@ -320,7 +382,7 @@ function createBadges(base) {
                 if (l) out.set(id, l);
             }
         }
-        return ids.map(id => out.get(Number(id))).filter(Boolean).map(linkOut);
+        return withSelf(cid, ids.map(id => out.get(Number(id))).filter(Boolean).map(linkOut));
     }
     const linkOut = (l) => ({ inscription_id: Number(l.inscription_id), token: l.token, created_at: l.created_at || null, view_count: Number(l.view_count) || 0, last_viewed_at: l.last_viewed_at || null });
 
@@ -383,6 +445,40 @@ function createBadges(base) {
     const clientOf = (req) => String((req && (req.clientKey || req.ip)) || 'anon');
     // The link a public call names, or an answer already sent (null): 404 for a miss (429 once this client
     // — or everybody — has missed too often), 410 for a link that exists but shows nothing right now.
+    /**
+     * 2.28.0: a link never shows the badge (nor its PDF) to whoever holds it — it carried no check at all. While the
+     * conference's «Mi inscripción» page works (on, with a document field to ask), the link sends the person there
+     * — `/portal/conference/yo#c=` + their code — where the badge shows only after they confirm their document.
+     * null = that page is off or has no document to ask: the link then shows nothing.
+     */
+    async function selfUsable(cid, cfg) {
+        if (!cfg.policy.self_page.enabled) return false;
+        const form = await db.all(`SELECT name, label, type, options, is_unique FROM ${T.fields} WHERE conference_id = ? ORDER BY sort_order ASC, id ASC`, [cid]);
+        return !!docFieldsOf(form, cfg.policy.self_page, D.isFieldColumn).number;
+    }
+    const SELF_PATH = '/portal/conference/yo#c=';
+    async function selfPageOf(st) {
+        if (!st.ins.reg_code || !await selfUsable(Number(st.link.conference_id), st.cfg)) return null;
+        return `${SELF_PATH}${st.ins.reg_code}`;
+    }
+    /**
+     * The links as the admin and the coordinators share them: each with `self`, the «Mi inscripción» address
+     * (path) of that person, so what is opened, copied and sent is that page itself; null while the page is off.
+     */
+    async function withSelf(cid, links) {
+        if (!links.length) return links;
+        const usable = await selfUsable(cid, await configOf(cid));
+        const codes = new Map();
+        if (usable) {
+            const ids = links.map(l => l.inscription_id);
+            for (let i = 0; i < ids.length; i += 400) {
+                const chunk = ids.slice(i, i + 400);
+                for (const r of await db.all(`SELECT id, reg_code FROM ${T.inscriptions} WHERE id IN (${chunk.map(() => '?').join(', ')})`, chunk)) codes.set(Number(r.id), r.reg_code);
+            }
+        }
+        return links.map(l => ({ ...l, self: usable && codes.get(l.inscription_id) ? `${SELF_PATH}${codes.get(l.inscription_id)}` : null }));
+    }
+
     async function publicLink(req, res) {
         const key = clientOf(req);
         const st = await linkState((req.body || {}).token);
@@ -459,8 +555,9 @@ function createBadges(base) {
                 if (!await confOf(cid)) return res.status(404).json({ error: 'Conferencia no encontrada.' });
                 const known = new Set((await availableFields(cid)).map(f => f.key));
                 const cur = await configOf(cid);
+                const assetIds = new Set([...(await assetsOf(cid, false)).keys()].filter(k => IMAGE_KIND.test(k)).map(k => k.slice(4)));
                 const next = {
-                    design: normalizeDesign(body.design || cur.design, known),
+                    design: normalizeDesign(body.design || cur.design, known, assetIds),
                     policy: normalizePolicy(body.policy || cur.policy),
                     rev: cur.rev + 1,
                 };
@@ -474,7 +571,7 @@ function createBadges(base) {
             try {
                 const cid = positiveInt(req.query.conference_id);
                 const kind = String(req.params.kind || '');
-                if (!cid || !ASSET_KINDS.has(kind)) return res.status(404).json({ error: 'Imagen no encontrada.' });
+                if (!cid || !isAssetKind(kind)) return res.status(404).json({ error: 'Imagen no encontrada.' });
                 const a = await db.get(`SELECT data, width, height, sha FROM ${T.badgeAssets} WHERE conference_id = ? AND kind = ?`, [cid, kind]);
                 if (!a) return res.status(404).json({ error: 'Imagen no encontrada.' });
                 res.json({ data_url: a.data, width: a.width, height: a.height, sha: a.sha });
@@ -488,7 +585,8 @@ function createBadges(base) {
                 const cid = positiveInt(body.conference_id);
                 const kind = String(body.kind || '');
                 if (!await confOf(cid)) return res.status(404).json({ error: 'Conferencia no encontrada.' });
-                if (!ASSET_KINDS.has(kind)) return res.status(400).json({ error: 'Tipo de imagen desconocido.' });
+                // 2.29.0: kind 'image' = one of the free-form designer's images (its row's kind comes from its sha).
+                if (!ASSET_KINDS.has(kind) && kind !== 'image') return res.status(400).json({ error: 'Tipo de imagen desconocido.' });
                 const url = String(body.data_url || '');
                 if (url.length > ASSET_MAX_CHARS) return res.status(413).json({ error: 'La imagen es demasiado grande (máximo 1,5 MB).' });
                 const m = /^data:(image\/(?:jpeg|png));base64,([A-Za-z0-9+/=]+)$/.exec(url);
@@ -501,6 +599,18 @@ function createBadges(base) {
                 if ((kind === 'plate_print' || kind === 'plate_screen') && !isJpeg) return res.status(400).json({ error: 'La plantilla debe ser JPEG.' });
                 const width = positiveInt(body.width), height = positiveInt(body.height);
                 const sha = crypto.createHash('sha256').update(bytes).digest('hex');
+                if (kind === 'image') {
+                    if (!width || !height) return res.status(400).json({ error: 'Falta el tamaño de la imagen.' });
+                    const id = sha.slice(0, 16), rowKind = `img_${id}`;
+                    const have = await db.get(`SELECT COUNT(*) AS n FROM ${T.badgeAssets} WHERE conference_id = ? AND kind LIKE ?`, [cid, 'img_%']);
+                    const exists = await db.get(`SELECT id FROM ${T.badgeAssets} WHERE conference_id = ? AND kind = ?`, [cid, rowKind]);
+                    if (!exists && have && Number(have.n) >= IMAGES_MAX) return res.status(409).json({ error: `Máximo ${IMAGES_MAX} imágenes por conferencia: borra alguna de la galería.` });
+                    if (!exists) {
+                        await db.run(`INSERT INTO ${T.badgeAssets} (conference_id, kind, sha, mime, width, height, data) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                            [cid, rowKind, sha, m[1], width, height, url]);
+                    }
+                    return res.json({ success: true, kind: rowKind, sha, id, width, height });
+                }
                 await db.run(`DELETE FROM ${T.badgeAssets} WHERE conference_id = ? AND kind = ?`, [cid, kind]);
                 await db.run(`INSERT INTO ${T.badgeAssets} (conference_id, kind, sha, mime, width, height, data) VALUES (?, ?, ?, ?, ?, ?, ?)`,
                     [cid, kind, sha, m[1], width || null, height || null, url]);
@@ -513,7 +623,12 @@ function createBadges(base) {
             try {
                 const cid = positiveInt(req.query.conference_id);
                 const kind = String(req.query.kind || '');
-                if (!cid || !ASSET_KINDS.has(kind)) return res.status(400).json({ error: 'Tipo de imagen desconocido.' });
+                if (!cid || !isAssetKind(kind)) return res.status(400).json({ error: 'Tipo de imagen desconocido.' });
+                // An image the saved design draws stays (the designer removes it from the design first).
+                if (IMAGE_KIND.test(kind)) {
+                    const cfg = await configOf(cid);
+                    if (cfg.design.version === 2 && assetsOfDesign(cfg.design).includes(kind.slice(4))) return res.status(409).json({ error: 'La escarapela guardada usa esta imagen: quítala del diseño y guarda primero.' });
+                }
                 await db.run(`DELETE FROM ${T.badgeAssets} WHERE conference_id = ? AND kind = ?`, [cid, kind]);
                 res.json({ success: true });
             } catch (e) { send(res, e); }
@@ -530,7 +645,10 @@ function createBadges(base) {
                 if (!conf) return res.status(404).json({ error: 'Conferencia no encontrada.' });
                 const known = new Set((await availableFields(cid)).map(f => f.key));
                 const cfg = await configOf(cid);
-                if (body.design) cfg.design = normalizeDesign(body.design, known);
+                if (body.design) {
+                    const assetIds = new Set([...(await assetsOf(cid, false)).keys()].filter(k => IMAGE_KIND.test(k)).map(k => k.slice(4)));
+                    cfg.design = normalizeDesign(body.design, known, assetIds);
+                }
                 const assets = await assetsOf(cid, false);
                 const labels = await labelsOf(cid);
                 const iid = positiveInt(body.inscription_id);
@@ -540,7 +658,8 @@ function createBadges(base) {
                 const sample = !ins;
                 if (!ins) ins = { id: 0, first_name: 'Nombre', last_name: 'Apellido', location_id: null, reg_code: 'ABC234', status: 'active' };
                 const badge = await badgeFor(ins, conf, cfg, assets, labels, sample);
-                res.json({ badge });
+                // 2.29.0: a free-form badge comes with its images unless the designer already has them.
+                res.json(badge.version === 2 && !body.no_images ? { badge, images: await imagesOf(cid, badge) } : { badge });
             } catch (e) { send(res, e); }
         });
         // GET /badges/links?conference_id&location_id? → the existing links.
@@ -553,7 +672,7 @@ function createBadges(base) {
                 const rows = await db.all(
                     `SELECT l.inscription_id, l.token, l.rev, l.created_at, l.view_count, l.last_viewed_at FROM ${T.badgeLinks} l JOIN ${T.inscriptions} i ON i.id = l.inscription_id
                      WHERE l.conference_id = ?${lid ? ' AND i.location_id = ?' : ''} ORDER BY l.inscription_id`, lid ? [cid, lid] : [cid]);
-                res.json({ links: rows.map(linkOut) });
+                res.json({ links: await withSelf(cid, rows.map(linkOut)) });
             } catch (e) { send(res, e); }
         });
         // POST /badges/links { conference_id, inscription_ids? | location_id? | all? } → create the missing ones.
@@ -586,7 +705,7 @@ function createBadges(base) {
                     return res.json({ link: made[0] || null });
                 }
                 const l = await db.get(`SELECT inscription_id, token, rev, created_at, view_count, last_viewed_at FROM ${T.badgeLinks} WHERE inscription_id = ?`, [iid]);
-                res.json({ link: l ? linkOut(l) : null });
+                res.json({ link: l ? (await withSelf(Number(ins.conference_id), [linkOut(l)]))[0] : null });
             } catch (e) { send(res, e); }
         });
         // DELETE /badges/links/:iid — revoke. badges:manage.
@@ -680,35 +799,36 @@ function createBadges(base) {
         });
 
         // ── public (the token holder) ──
-        // POST /public/badge/view { token } → { badge, plate, name, title, expires_on } | 404 | 410.
+        // POST /public/badge/view { token } → { self } | 404 | 410. 2.28.0: never the badge — only where the person
+        // confirms their document (selfPageOf); with «Mi inscripción» off, the link leads nowhere (410 self_off).
         http.route('post', '/public/badge/view', async (req, res) => {
             if (!await ensureReady()) return res.status(503).json({ error: 'Las escarapelas no están disponibles todavía.' });
             await (async () => {
                 try {
                     const st = await publicLink(req, res);
                     if (!st) return;
-                    const conf = await confOf(Number(st.link.conference_id));
-                    const assets = await assetsOf(Number(st.link.conference_id), false);
-                    const badge = await badgeFor(st.ins, conf, st.cfg, assets, await labelsOf(Number(st.link.conference_id)));
-                    const plate = assets.has('plate_screen')
-                        ? (await db.get(`SELECT data FROM ${T.badgeAssets} WHERE conference_id = ? AND kind = ?`, [st.link.conference_id, 'plate_screen']) || {}).data || null
-                        : null;
+                    const self = await selfPageOf(st);
+                    if (!self) return res.status(410).json({ error: MSG.self_off, code: 'self_off' });
                     try { await db.run(`UPDATE ${T.badgeLinks} SET view_count = view_count + 1, last_viewed_at = CURRENT_TIMESTAMP WHERE id = ?`, [st.link.id]); } catch (e) { /* counting is best effort */ }
-                    const name = (await D.personWithName(st.ins)).name || '';
-                    res.json({ badge, plate, name, conference: conf ? conf.name : '', code: st.ins.reg_code || '', expires_on: st.cfg.policy.expires_on });
+                    res.json({ self });
                 } catch (e) { send(res, e); }
             })();
         });
-        // POST /public/badge/ticket { token, sheet? } → { d }.
+        // POST /public/badge/ticket { token } → 410 always (2.28.0): a link no longer gives the PDF; «Mi inscripción»
+        // does, after the document.
         http.route('post', '/public/badge/ticket', async (req, res) => {
-            if (!await ensureReady()) return res.status(503).json({ error: 'Las escarapelas no están disponibles todavía.' });
-            await (async () => {
-                try {
-                    const st = await publicLink(req, res);
-                    if (!st) return;
-                    res.json({ d: await mintTicket(Number(st.link.conference_id), { ids: [Number(st.ins.id)], sheet: sheetOf((req.body || {}).sheet), name: null }) });
-                } catch (e) { send(res, e); }
-            })();
+            res.status(410).json({ error: MSG.self_off, code: 'self_off' });
+        });
+        // GET /public/badge/font?f=<face> → { face, b64 } — one of the shipped typefaces (SIL OFL, fonts/README.md),
+        // for the designer and the credential pages to draw a badge exactly as its PDF prints it. Public: the files
+        // are the plugin's own, the same for everyone.
+        http.route('get', '/public/badge/font', async (req, res) => {
+            const face = String((req.query || {}).f || '');
+            if (!isFace(face)) return res.status(404).json({ error: 'Fuente desconocida.' });
+            const b64 = faceBase64(face);
+            if (!b64) return res.status(404).json({ error: 'Fuente desconocida.' });
+            try { res.set({ 'Cache-Control': 'public, max-age=86400' }); } catch (e) { /* a bridge without headers */ }
+            res.json({ face, b64 });
         });
         // GET /public/badge/file?d= → { mime, filename, b64 } — for the core portal's file route, which
         // answers the bytes. The ticket is the only credential (128 random bits, 120 s, 3 uses), so no per-client
@@ -719,9 +839,9 @@ function createBadges(base) {
                 try {
                     const t = await useTicket(String((req.query || {}).d || ''));
                     if (!t) return res.status(410).json({ error: MSG.ticket, code: 'ticket' });
-                    const { list, plates, conf } = await badgesFor(t.conference_id, (t.scope.ids || []).map(Number).filter(Boolean));
+                    const { list, plates, images, conf } = await badgesFor(t.conference_id, (t.scope.ids || []).map(Number).filter(Boolean));
                     if (!list.length) return res.status(410).json({ error: MSG.inactive, code: 'inactive' });
-                    const pdf = buildBadgePdf({ badges: list, plates, sheet: t.scope.sheet, title: conf.name });
+                    const pdf = buildBadgePdf({ badges: list, plates, images, fontBytes: faceBytes, sheet: t.scope.sheet, title: conf.name });
                     const one = list.length === 1 && t.scope.ids.length === 1
                         ? (await D.personWithName(await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ?`, [t.scope.ids[0]]))).name : null;
                     res.json({ mime: 'application/pdf', filename: pdfName(one ? `Escarapela ${one}` : `Escarapelas ${t.scope.name || conf.name}`), b64: pdf.toString('base64') });

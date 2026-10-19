@@ -60,6 +60,8 @@ async function world() {
     const p = await bootPlugin({ users: [DESIGNER, VIEWER, NOCODES] });
     const cid = ok(await p.call('post', '/create', { body: { name: 'Congreso Nacional de Jóvenes', slug: `badges-${++seq}` } })).id as number;
     for (const template of ['first_name', 'last_name']) ok(await p.call('post', '/fields', { body: { conference_id: cid, template } }), template);
+    // A document to ask: badge links lead to «Mi inscripción» (2.28.0).
+    ok(await p.call('post', '/fields', { body: { conference_id: cid, label: 'Número de documento', type: 'text' } }), 'documento');
     ok(await p.call('post', '/publish', { body: { conference_id: cid, published: true } }));
     const norte = ok(await p.call('post', '/locations', { body: { conference_id: cid, name: 'Norte', capacity: 50 } })).id as number;
     const sur = ok(await p.call('post', '/locations', { body: { conference_id: cid, name: 'Sur', capacity: 50 } })).id as number;
@@ -81,6 +83,7 @@ async function world() {
 type W = Awaited<ReturnType<typeof world>>;
 const linkFor = async (w: W, iid: number, user?: HarnessUser) => ok(await w.p.call('post', '/badges/links', { user, body: { conference_id: w.cid, inscription_ids: [iid] } }), 'link').links[0];
 const view = (w: W, token: string) => pub(w.p, 'post', '/public/badge/view', { token });
+const preview = async (w: W, iid: number) => ok(await w.p.call('post', '/badges/preview', { body: { conference_id: w.cid, inscription_id: iid } }), 'preview').badge;
 const texts = (badge: any) => badge.items.filter((i: any) => i.t === 'text').map((i: any) => i.text);
 
 test('the design is validated and bounded; only «Escarapelas: administrar» changes it', async () => {
@@ -126,7 +129,7 @@ test('images: JPEG / PNG by their bytes, the plates JPEG only, size-capped', asy
     assert.ok(texts(prev).includes('Ana Pérez'));
 });
 
-test('links: the public view shows the badge; wrong tokens 404 (throttled), cancelled / expired / disabled 410', async () => {
+test('links: the public view leads to «Mi inscripción»; wrong tokens 404 (throttled), cancelled / expired / disabled 410', async () => {
     const w = await world();
     const { p } = w;
     ok(await p.call('put', '/badges/config', { body: { conference_id: w.cid, design: { fields: [{ key: '@location', show_label: true }] } } }));
@@ -135,11 +138,12 @@ test('links: the public view shows the badge; wrong tokens 404 (throttled), canc
     assert.strictEqual((await linkFor(w, w.ana)).token, link.token, 'one link per inscription');
 
     const v = ok(await view(w, link.token), 'view');
-    assert.strictEqual(v.name, 'Ana Pérez');
-    assert.strictEqual(v.code, w.codeOf(w.ana));
-    assert.deepStrictEqual(texts(v.badge).slice(0, 4), ['Congreso Nacional de Jóvenes', 'Ana Pérez', 'LOCALIDAD', 'Norte']);
+    // 2.28.0: the link shows no badge (it carried no check) — only where the person confirms their document.
+    assert.deepStrictEqual(v, { self: `/portal/conference/yo#c=${w.codeOf(w.ana)}` });
+    const badge = await preview(w, w.ana);
+    assert.deepStrictEqual(texts(badge).slice(0, 4), ['Congreso Nacional de Jóvenes', 'Ana Pérez', 'LOCALIDAD', 'Norte']);
     // 2.22.0: the code is a QR; 2.23.0: it carries the «Mi inscripción» link (a bigger symbol than the bare code's 21×21).
-    assert.ok(v.badge.items.some((i: any) => i.t === 'qr' && i.size > 21 && i.rows.length === i.size && i.rows.every((r: string) => r.length === i.size && /^[01]+$/.test(r))));
+    assert.ok(badge.items.some((i: any) => i.t === 'qr' && i.size > 21 && i.rows.length === i.size && i.rows.every((r: string) => r.length === i.size && /^[01]+$/.test(r))));
     assert.strictEqual(p.one(`SELECT view_count FROM ${T('badge_links')} WHERE inscription_id = ?`, w.ana).view_count, 1);
 
     // Cancelled → 410, and back on reactivation.
@@ -199,7 +203,8 @@ test('files: a ticket (120 s, 3 uses) turns into a real PDF — one badge, or a 
     ok(await p.call('put', '/badges/config', { body: { conference_id: w.cid, design: {} } }));
     ok(await p.call('put', '/badges/assets', { body: { conference_id: w.cid, kind: 'plate_print', data_url: dataUrl('image/jpeg', JPEG), width: 2, height: 2 } }));
     const link = await linkFor(w, w.beto);
-    const d = ok(await pub(p, 'post', '/public/badge/ticket', { token: link.token })).d;
+    assert.strictEqual((await pub(p, 'post', '/public/badge/ticket', { token: link.token })).status, 410, '2.28.0: no PDF through a link');
+    const d = ok(await p.call('post', '/badges/ticket', { body: { conference_id: w.cid, inscription_ids: [w.beto] } })).d;
     const file = async (nonce: string) => p.call('get', `/public/badge/file?d=${nonce}`, { anonymous: true });
     const f1 = ok(await file(d), 'file');
     assert.strictEqual(f1.mime, 'application/pdf');
@@ -270,10 +275,9 @@ test('a badge shows the live location: none once the location is deleted', async
     const w = await world();
     const { p } = w;
     ok(await p.call('put', '/badges/config', { body: { conference_id: w.cid, design: { fields: [{ key: '@location', show_label: true }] } } }));
-    const link = await linkFor(w, w.carla);
-    assert.ok(texts(ok(await view(w, link.token)).badge).includes('Sur'));
+    assert.ok(texts(await preview(w, w.carla)).includes('Sur'));
     ok(await p.call('delete', `/locations/${w.sur}`), 'delete Sur');
-    const after = texts(ok(await view(w, link.token)).badge);
+    const after = texts(await preview(w, w.carla));
     assert.ok(!after.includes('Sur') && !after.includes('LOCALIDAD'), JSON.stringify(after));
 });
 
@@ -417,4 +421,400 @@ test('«Mi inscripción»: wrong documents lock only that code for a while; no s
     const prev = ok(await bare.p.call('post', '/badges/preview', { body: { conference_id: bare.cid, inscription_id: bare.ana } })).badge;
     assert.strictEqual(qrTextOf(prev), bare.codeOf(bare.ana));
     assert.strictEqual(ok(await bare.p.call('get', `/qr-link?conference_id=${bare.cid}`)).prefix, null);
+});
+
+test('boarding check: the scanned badge says whether the person travels on THIS bus', async () => {
+    const w = await selfWorld();
+    const { p } = w;
+    const ana = w.codeOf(w.ana), beto = w.codeOf(w.beto);
+    const bus1 = ok(await p.call('post', '/buses', { body: { conference_id: w.cid, name: 'Bus 1', capacity: 40 } }), 'bus1').id;
+    const bus2 = ok(await p.call('post', '/buses', { body: { conference_id: w.cid, name: 'Bus 2', capacity: 40 } }), 'bus2').id;
+    // 2.26.0: what is sold is a package of buses.
+    const pkg = ok(await p.call('post', '/transport/packages', { body: { conference_id: w.cid, name: 'Ida', price: 50000, bus_ids: [bus1] } }), 'package').id;
+    ok(await p.call('post', `/transport/packages/${pkg}/sales`, { body: { inscription_ids: [w.ana] } }), 'sale');
+    const check = (bus_id: number, code: string) => p.call('post', '/transport/check', { body: { bus_id, code } });
+
+    // Ana's QR (the «Mi inscripción» link) on her bus → ok, with what her ticket still owes.
+    const okRes = ok(await check(bus1, `https://congreso.example.org/portal/conference/yo#c=${ana}`), 'ok');
+    assert.strictEqual(okRes.result, 'ok');
+    assert.strictEqual(okRes.person.name, 'Ana Pérez');
+    assert.deepStrictEqual(okRes.ticket, { payment_status: 'unpaid', price: 50000, amount_paid: 0, balance: 50000, package_name: 'Ida' });
+    // On the other bus → other_bus, naming hers.
+    const other = ok(await check(bus2, ana), 'other');
+    assert.strictEqual(other.result, 'other_bus');
+    assert.deepStrictEqual(other.buses, [{ id: bus1, name: 'Bus 1' }]);
+    // Beto has no ticket; a code nobody has is unknown; a cancelled registration says so.
+    assert.strictEqual(ok(await check(bus1, beto)).result, 'no_ticket');
+    assert.strictEqual(ok(await check(bus1, 'ZZZZZZZZZZ')).result, 'unknown');
+    ok(await p.call('put', `/inscriptions/${w.beto}`, { body: { status: 'cancelled' } }), 'cancel');
+    assert.strictEqual(ok(await check(bus1, beto)).result, 'cancelled');
+    // A code of ANOTHER conference is unknown here; a bus that does not exist is a 404.
+    const elsewhere = await selfWorld();
+    assert.strictEqual(ok(await elsewhere.p.call('post', '/buses', { body: { conference_id: elsewhere.cid, name: 'X', capacity: 1 } })).id > 0, true);
+    assert.strictEqual((await check(9999, ana)).status, 404);
+    // Nothing was written: the check is read only.
+    assert.strictEqual(p.one(`SELECT COUNT(*) AS n FROM ${T('transport_tickets')}`).n, 1);
+});
+
+// ── Transport packages (2.26.0): packages of buses are sold, paid per package ──
+
+test('packages: a sale seats the person on every bus of the package, all-or-nothing; one price, its own payments', async () => {
+    const w = await selfWorld();
+    const { p } = w;
+    const bus = async (name: string, capacity: number) => ok(await p.call('post', '/buses', { body: { conference_id: w.cid, name, capacity } }), name).id;
+    const ida = await bus('Ida 1', 40), regreso = await bus('Regreso 1', 1), otro = await bus('Otro', 40);
+    // A package = a fixed list of buses and one price.
+    assert.strictEqual((await p.call('post', '/transport/packages', { body: { conference_id: w.cid, name: 'X', price: 10, bus_ids: [] } })).status, 400);
+    const pkg = ok(await p.call('post', '/transport/packages', { body: { conference_id: w.cid, name: 'Ida y regreso', price: 120000, bus_ids: [ida, regreso] } }), 'pkg').id;
+    // Selling it to two people when «Regreso 1» has one seat: refused, nothing written.
+    const full = await p.call('post', `/transport/packages/${pkg}/sales`, { body: { inscription_ids: [w.ana, w.beto] } });
+    assert.strictEqual(full.status, 409);
+    assert.match(full.body.error, /Regreso 1 \(quedan 1\)/);
+    assert.strictEqual(p.one(`SELECT COUNT(*) AS n FROM ${T('transport_tickets')}`).n, 0);
+    // To Ana: one sale, a seat on each bus.
+    ok(await p.call('post', `/transport/packages/${pkg}/sales`, { body: { inscription_ids: [w.ana] } }), 'sell');
+    assert.deepStrictEqual(p.q(`SELECT bus_id FROM ${T('transport_tickets')} WHERE inscription_id = ? ORDER BY bus_id`, w.ana).map((r: any) => r.bus_id), [ida, regreso]);
+    // A second package that also uses «Ida 1» cannot be sold to her (she already sits there).
+    const pkg2 = ok(await p.call('post', '/transport/packages', { body: { conference_id: w.cid, name: 'Ida sola', price: 60000, bus_ids: [ida, otro] } })).id;
+    const twice = await p.call('post', `/transport/packages/${pkg2}/sales`, { body: { inscription_ids: [w.ana] } });
+    assert.strictEqual(twice.status, 409);
+    assert.match(twice.body.error, /Ida 1/);
+    // The list of a sold package is locked; its price changes for new sales, and with reprice_sales for the sold one.
+    assert.strictEqual((await p.call('put', `/transport/packages/${pkg}`, { body: { bus_ids: [ida] } })).status, 409);
+    ok(await p.call('put', `/transport/packages/${pkg}`, { body: { price: 100000 } }), 'price');
+    let pk = (ok(await p.call('get', `/transport/packages?conference_id=${w.cid}`)) as any[]).find((x: any) => x.id === pkg);
+    assert.strictEqual(pk.price, 100000);
+    assert.strictEqual(pk.sales[0].price, 120000, 'a sold sale keeps its price');
+    // Payments go to the sale, never beyond its balance; the bus lists show the package and its status.
+    const sale = pk.sales[0].id;
+    assert.strictEqual((await p.call('post', `/transport/package-sales/${sale}/payments`, { body: { amount: 130000, method: 'Efectivo' } })).status, 400);
+    ok(await p.call('post', `/transport/package-sales/${sale}/payments`, { body: { amount: 20000, method: 'Efectivo' } }), 'pay');
+    assert.strictEqual((await p.call('put', `/transport/packages/${pkg}`, { body: { price: 10000, reprice_sales: true } })).status, 409, 'not below what was paid');
+    ok(await p.call('put', `/transport/packages/${pkg}`, { body: { price: 100000, reprice_sales: true } }), 'reprice');
+    pk = (ok(await p.call('get', `/transport/packages?conference_id=${w.cid}`)) as any[]).find((x: any) => x.id === pkg);
+    assert.deepStrictEqual([pk.sales[0].price, pk.sales[0].amount_paid, pk.sales[0].payment_status, pk.revenue, pk.collected], [100000, 20000, 'partial', 100000, 20000]);
+    const buses = ok(await p.call('get', `/buses?conference_id=${w.cid}`));
+    const seat = buses.find((b: any) => b.id === regreso).passengers[0];
+    assert.deepStrictEqual([seat.package_name, seat.price, seat.amount_paid, seat.payment_status], ['Ida y regreso', 100000, 20000, 'partial']);
+    // Accounting: the package payment is transport income.
+    const led = ok(await p.call('get', `/accounting?conference_id=${w.cid}`));
+    assert.deepStrictEqual(led.entries.filter((e: any) => e.source === 'transport').map((e: any) => [e.amount, e.description]), [[20000, 'Paquete de transporte — Ida y regreso']]);
+    // Single tickets are no longer sold; a seat of a package is removed by removing the package.
+    assert.strictEqual((await p.call('post', `/buses/${otro}/passengers`, { body: { inscription_ids: [w.beto] } })).status, 410);
+    assert.strictEqual((await p.call('delete', `/buses/${ida}/passengers/${w.ana}`)).status, 409);
+    // With a payment: the sale, the package and a bus in it stay.
+    assert.strictEqual((await p.call('delete', `/transport/package-sales/${sale}`)).status, 409);
+    assert.strictEqual((await p.call('delete', `/transport/packages/${pkg}`)).status, 409);
+    assert.strictEqual((await p.call('delete', `/buses/${ida}`)).status, 409);
+    // Without it, the sale goes and its seats free up.
+    const payId = (ok(await p.call('get', `/transport/package-sales/${sale}/payments`)) as any[])[0].id;
+    ok(await p.call('delete', `/transport/package-payments/${payId}`), 'unpay');
+    ok(await p.call('delete', `/transport/package-sales/${sale}`), 'unsell');
+    assert.strictEqual(p.one(`SELECT COUNT(*) AS n FROM ${T('transport_tickets')}`).n, 0);
+});
+
+test('packages: tickets sold before packages become one-bus package sales, with their payments, once', async () => {
+    const w = await selfWorld();
+    const { p } = w;
+    const bus = ok(await p.call('post', '/buses', { body: { conference_id: w.cid, name: 'Bus viejo', capacity: 10, price: 30000 } })).id;
+    // The old way: a ticket at the bus price with a payment of its own.
+    p.exec(`INSERT INTO ${T('transport_tickets')} (bus_id, inscription_id, price, amount_paid, payment_status) VALUES (?, ?, 30000, 10000, 'partial')`, bus, w.ana);
+    const ticket = p.one(`SELECT id FROM ${T('transport_tickets')} WHERE inscription_id = ?`, w.ana).id;
+    p.exec(`INSERT INTO ${T('transport_payments')} (ticket_id, amount, method, reference, date) VALUES (?, 10000, 'Efectivo', 'R-1', '2026-10-01')`, ticket);
+    await p.reboot();
+    await p.reboot();   // twice: nothing is converted again
+    const pk = ok(await p.call('get', `/transport/packages?conference_id=${w.cid}`)) as any[];
+    assert.strictEqual(pk.length, 1);
+    assert.deepStrictEqual([pk[0].name, pk[0].price, pk[0].buses.map((b: any) => b.id)], ['Bus viejo', 30000, [bus]]);
+    assert.deepStrictEqual(pk[0].sales.map((s: any) => [s.inscription_id, s.price, s.amount_paid, s.payment_status]), [[w.ana, 30000, 10000, 'partial']]);
+    const pays = ok(await p.call('get', `/transport/package-sales/${pk[0].sales[0].id}/payments`)) as any[];
+    assert.deepStrictEqual(pays.map((x: any) => [x.amount, x.method, x.reference]), [[10000, 'Efectivo', 'R-1']]);
+    assert.strictEqual(p.one(`SELECT COUNT(*) AS n FROM ${T('transport_payments')}`).n, 0, 'the payment moved, it is not counted twice');
+    const led = ok(await p.call('get', `/accounting?conference_id=${w.cid}`));
+    assert.deepStrictEqual(led.entries.filter((e: any) => e.source === 'transport').map((e: any) => e.amount), [10000]);
+});
+
+// ── 2.27.0: boarding and bus notices, by Web Push ──
+const pushLib = require(path.join(PLUGIN_DIR, 'server', 'transport-push.js'));
+const b64u = (b: Buffer) => b.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const unb64u = (s: string) => Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+/** The phone's side of RFC 8291: decrypt an aes128gcm body with the phone's ECDH key and auth secret. */
+function uaDecrypt(body: Buffer, ua: any, auth: Buffer): string {
+    const crypto = require('crypto');
+    const salt = body.subarray(0, 16), idlen = body[20], asPublic = body.subarray(21, 21 + idlen), ct = body.subarray(21 + idlen);
+    const shared = ua.computeSecret(asPublic);
+    const ikm = Buffer.from(crypto.hkdfSync('sha256', shared, auth, Buffer.concat([Buffer.from('WebPush: info\0'), ua.getPublicKey(), asPublic]), 32));
+    const cek = Buffer.from(crypto.hkdfSync('sha256', ikm, salt, Buffer.from('Content-Encoding: aes128gcm\0'), 16));
+    const nonce = Buffer.from(crypto.hkdfSync('sha256', ikm, salt, Buffer.from('Content-Encoding: nonce\0'), 12));
+    const d = crypto.createDecipheriv('aes-128-gcm', cek, nonce);
+    d.setAuthTag(ct.subarray(ct.length - 16));
+    const plain = Buffer.concat([d.update(ct.subarray(0, ct.length - 16)), d.final()]);
+    assert.strictEqual(plain[plain.length - 1], 2, 'the last record delimiter');
+    return plain.subarray(0, plain.length - 1).toString('utf8');
+}
+function phone() {
+    const crypto = require('crypto');
+    const ua = crypto.createECDH('prime256v1');
+    ua.generateKeys();
+    const auth = crypto.randomBytes(16);
+    return { ua, auth, keys: { p256dh: b64u(ua.getPublicKey()), auth: b64u(auth) } };
+}
+
+test('web push: the payload is encrypted as RFC 8291 says (its own test vector) and the VAPID JWT verifies', async () => {
+    const crypto = require('crypto');
+    // RFC 8291 Appendix A.
+    const as = crypto.createECDH('prime256v1');
+    as.setPrivateKey(unb64u('yfWPiYE-n46HLnH0KqZOF1fJJU3MYrct3AELtAQ-oRw'));
+    const out = pushLib.encryptPayload('When I grow up, I want to be a watermelon',
+        { p256dh: 'BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4', auth: 'BTBZMqHH6r4Tts7J_aSIgg' },
+        { ecdh: as, salt: unb64u('DGv6ra1nlYgDCS1FRnbzlw') });
+    assert.strictEqual(b64u(out), 'DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A_yl95bQpu6cVPTpK4Mqgkf1CXztLVBSt2Ks3oZwbuwXPXLWyouBWLVWGNWQexSgSxsj_Qulcy4a-fN');
+    // A fresh phone decrypts what is sent to it.
+    const ph = phone();
+    assert.strictEqual(uaDecrypt(pushLib.encryptPayload('{"title":"Tu bus está embarcando"}', ph.keys), ph.ua, ph.auth), '{"title":"Tu bus está embarcando"}');
+    // VAPID: an ES256 JWT for the push service's origin, signed by the key whose public half is `k`.
+    const key = pushLib.newVapidKey();
+    const h = pushLib.vapidHeader(new URL('https://fcm.googleapis.com/fcm/send/abc'), key, 'https://congreso.example.org');
+    const m = /^vapid t=([^.]+)\.([^.]+)\.([^,]+), k=(.+)$/.exec(h)!;
+    assert.ok(m, h);
+    assert.strictEqual(m[4], key.publicKey);
+    const claims = JSON.parse(unb64u(m[2]).toString());
+    assert.strictEqual(claims.aud, 'https://fcm.googleapis.com');
+    assert.strictEqual(claims.sub, 'https://congreso.example.org');
+    const pub65 = unb64u(key.publicKey);
+    const pubKey = crypto.createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: b64u(pub65.subarray(1, 33)), y: b64u(pub65.subarray(33)) }, format: 'jwk' });
+    assert.ok(crypto.verify('sha256', Buffer.from(`${m[1]}.${m[2]}`), { key: pubKey, dsaEncoding: 'ieee-p1363' }, unb64u(m[3])));
+    // Only push services' hosts, over https, are endpoints.
+    assert.ok(pushLib.pushEndpoint('https://fcm.googleapis.com/fcm/send/x'));
+    assert.ok(pushLib.pushEndpoint('https://web.push.apple.com/QA'));
+    assert.ok(pushLib.pushEndpoint('https://updates.push.services.mozilla.com/wpush/v2/x'));
+    for (const bad of ['http://fcm.googleapis.com/x', 'https://evil.example/fcm.googleapis.com', 'https://fcm.googleapis.com.evil.example/x', 'https://127.0.0.1/x', 'https://u:p@fcm.googleapis.com/x']) {
+        assert.strictEqual(pushLib.pushEndpoint(bad), null, bad);
+    }
+});
+
+test('boarding: the admin starts boarding / marks the departure / messages a bus; its passengers\' phones are notified', async () => {
+    const w = await selfWorld();
+    const { p } = w;
+    const ida = ok(await p.call('post', '/buses', { body: { conference_id: w.cid, name: 'Bus Norte', origin: 'Medellín', destination: 'Cartagena', capacity: 40 } })).id;
+    const pkg = ok(await p.call('post', '/transport/packages', { body: { conference_id: w.cid, name: 'Ida', price: 10, bus_ids: [ida] } })).id;
+    ok(await p.call('post', `/transport/packages/${pkg}/sales`, { body: { inscription_ids: [w.ana] } }), 'sell');
+    const session = ok(await pub(p, 'post', '/public/me/verify', { code: w.codeOf(w.ana), doc_type: 'Cédula', doc_number: '1045678901' })).session;
+    const beto = ok(await pub(p, 'post', '/public/me/verify', { code: w.codeOf(w.beto), doc_type: 'Pasaporte', doc_number: 'AB123456' })).session;
+
+    // Her page shows the bus (scheduled) and the key to turn the notices on.
+    const v = ok(await pub(p, 'post', '/public/me/view', { session })).view;
+    assert.strictEqual(v.transport.length, 1);
+    assert.strictEqual(v.transport[0].name, 'Bus Norte');
+    assert.strictEqual(v.transport[0].status, 'scheduled');
+    assert.match(v.push_key, /^B[A-Za-z0-9_-]{86}$/);
+    assert.deepStrictEqual(ok(await pub(p, 'post', '/public/me/view', { session: beto })).view.transport, [], 'no bus, no transport');
+
+    // Subscribing: only a push service's endpoint with well-formed keys, and only with a live session.
+    const ph = phone();
+    const endpoint = 'https://fcm.googleapis.com/fcm/send/ana-phone';
+    assert.strictEqual((await pub(p, 'post', '/public/me/push/subscribe', { session, subscription: { endpoint: 'https://evil.example/x', keys: ph.keys } })).status, 400);
+    assert.strictEqual((await pub(p, 'post', '/public/me/push/subscribe', { session, subscription: { endpoint, keys: { p256dh: 'AAAA', auth: ph.keys.auth } } })).status, 400);
+    assert.strictEqual((await pub(p, 'post', '/public/me/push/subscribe', { session: 'f'.repeat(32), subscription: { endpoint, keys: ph.keys } })).status, 401);
+    ok(await pub(p, 'post', '/public/me/push/subscribe', { session, subscription: { endpoint, keys: ph.keys } }), 'subscribe');
+    ok(await pub(p, 'post', '/public/me/push/subscribe', { session, subscription: { endpoint, keys: ph.keys } }), 'again: the same phone, once');
+    assert.strictEqual(p.one(`SELECT COUNT(*) AS n FROM ${T('push_subs')}`).n, 1);
+    const bus = ok(await p.call('get', `/buses?conference_id=${w.cid}`))[0];
+    assert.strictEqual(bus.alerts, 1);
+    assert.strictEqual(bus.status, 'scheduled');
+
+    // «Iniciar embarque»: the push service receives an encrypted, VAPID-signed notice her phone can read.
+    const sent: { url: string; init: any }[] = [];
+    let answer = 201;
+    const realFetch = (globalThis as any).fetch;
+    (globalThis as any).fetch = async (url: string, init: any) => { sent.push({ url, init }); return new Response(null, { status: answer }); };
+    try {
+        assert.strictEqual((await p.call('post', `/buses/${ida}/notice`, { body: { kind: 'nope' } })).status, 400);
+        const r = ok(await p.call('post', `/buses/${ida}/notice`, { body: { kind: 'boarding' } }), 'boarding');
+        assert.strictEqual(r.bus.status, 'boarding');
+        assert.deepStrictEqual(r.delivery, { subscribers: 1, sent: 1, failed: 0, network: true });
+        assert.strictEqual(sent.length, 1);
+        assert.strictEqual(sent[0].url, endpoint);
+        assert.strictEqual(sent[0].init.headers['Content-Encoding'], 'aes128gcm');
+        assert.match(sent[0].init.headers.Authorization, /^vapid t=[^.]+\.[^.]+\.[^,]+, k=B/);
+        const payload = JSON.parse(uaDecrypt(sent[0].init.body, ph.ua, ph.auth));
+        assert.strictEqual(payload.kind, 'boarding');
+        assert.match(payload.title, /embarcando: Bus Norte/);
+        assert.match(payload.body, /Medellín → Cartagena/);
+
+        // A message needs its text; it goes to the same phones.
+        assert.strictEqual((await p.call('post', `/buses/${ida}/notice`, { body: { kind: 'message', text: '   ' } })).status, 400);
+        assert.strictEqual((await p.call('post', `/buses/${ida}/notice`, { body: { kind: 'message', text: 'x'.repeat(241) } })).status, 400);
+        ok(await p.call('post', `/buses/${ida}/notice`, { body: { kind: 'message', text: 'Salimos desde la puerta 3' } }), 'message');
+        assert.strictEqual(JSON.parse(uaDecrypt(sent[1].init.body, ph.ua, ph.auth)).body, 'Salimos desde la puerta 3');
+
+        // Her page lists the state and the notices, newest first (also without push: /public/me/transport).
+        const t = ok(await pub(p, 'post', '/public/me/transport', { session })).transport[0];
+        assert.strictEqual(t.status, 'boarding');
+        assert.ok(t.boarding_at);
+        assert.deepStrictEqual(t.notices.map((n: any) => n.kind), ['message', 'boarding']);
+
+        // «Marcar salida»; the push service says the subscription is gone → it is dropped.
+        answer = 410;
+        const d = ok(await p.call('post', `/buses/${ida}/notice`, { body: { kind: 'departed' } }), 'departed');
+        assert.strictEqual(d.bus.status, 'departed');
+        assert.strictEqual(d.delivery.failed, 1);
+        assert.strictEqual(p.one(`SELECT COUNT(*) AS n FROM ${T('push_subs')}`).n, 0);
+        const notices = ok(await p.call('get', `/buses/${ida}/notices`));
+        assert.deepStrictEqual(notices.map((n: any) => [n.kind, n.sent]), [['departed', 0], ['message', 1], ['boarding', 1]]);
+        // Reset back to scheduled: no notice.
+        ok(await p.call('post', `/buses/${ida}/notice`, { body: { kind: 'reset' } }), 'reset');
+        assert.strictEqual(ok(await p.call('get', `/buses?conference_id=${w.cid}`))[0].status, 'scheduled');
+        assert.strictEqual(sent.length, 3);
+
+        // Without «network» (the sandbox's fetch getter throws): nothing sent, the admin is told; the page still has it.
+        answer = 201;
+        ok(await pub(p, 'post', '/public/me/push/subscribe', { session, subscription: { endpoint, keys: ph.keys } }), 'resubscribe');
+        Object.defineProperty(globalThis, 'fetch', { configurable: true, get() { throw new Error('[sandbox] network blocked'); } });
+        const nn = ok(await p.call('post', `/buses/${ida}/notice`, { body: { kind: 'boarding' } }), 'no network');
+        assert.deepStrictEqual(nn.delivery, { subscribers: 1, sent: 0, failed: 1, network: false });
+        assert.strictEqual(ok(await pub(p, 'post', '/public/me/transport', { session })).transport[0].status, 'boarding');
+    } finally {
+        Object.defineProperty(globalThis, 'fetch', { configurable: true, writable: true, value: realFetch });
+    }
+    // Only transport:manage sends; leaving «Mi inscripción» drops the phone.
+    assert.strictEqual((await p.call('post', `/buses/${ida}/notice`, { user: VIEWER, body: { kind: 'boarding' } })).status, 403);
+    ok(await pub(p, 'post', '/public/me/logout', { session }), 'logout');
+    assert.strictEqual(p.one(`SELECT COUNT(*) AS n FROM ${T('push_subs')}`).n, 0);
+});
+
+test('a shared badge link leads to «Mi inscripción» (the document first); with that page off it leads nowhere', async () => {
+    const w = await selfWorld();
+    const { p } = w;
+    const link = ok(await p.call('post', '/badges/links', { body: { conference_id: w.cid, inscription_ids: [w.ana] } }), 'link').links[0];
+    const r = ok(await pub(p, 'post', '/public/badge/view', { token: link.token }), 'view');
+    assert.deepStrictEqual(r, { self: `/portal/conference/yo#c=${w.codeOf(w.ana)}` }, 'only where to go: no badge, no name');
+    // What the admin and the coordinators open, copy and send is that page itself.
+    assert.strictEqual(link.self, r.self);
+    assert.strictEqual(ok(await p.call('get', `/badges/links?conference_id=${w.cid}`)).links[0].self, r.self);
+    const t = await pub(p, 'post', '/public/badge/ticket', { token: link.token });
+    assert.strictEqual(t.status, 410, 'no PDF through the link either');
+    assert.strictEqual(p.one(`SELECT view_count FROM ${T('badge_links')} WHERE token = ?`, link.token).view_count, 1, 'the open still counts');
+    // The page turned off: the link shows nothing at all.
+    const cfg = ok(await p.call('get', `/badges/config?conference_id=${w.cid}`)).config;
+    ok(await p.call('put', '/badges/config', { body: { conference_id: w.cid, design: cfg.design, policy: { ...cfg.policy, self_page: { ...cfg.policy.self_page, enabled: false } } } }), 'off');
+    const off = await pub(p, 'post', '/public/badge/view', { token: link.token });
+    assert.strictEqual(ok(await p.call('get', `/badges/links?conference_id=${w.cid}`)).links[0].self, null, 'no page to send to');
+    assert.strictEqual(off.status, 410);
+    assert.strictEqual(off.body.code, 'self_off');
+    assert.ok(!off.body.badge && !off.body.self);
+});
+
+// ── 2.29.0: the free-form («Canva») designer ──
+const designLib = require(path.join(PLUGIN_DIR, 'server', 'badge-design.js'));
+/** A real 2×2 RGBA PNG (one pixel half transparent). */
+const REAL_PNG = (() => {
+    const zlib = require('zlib');
+    const chunk = (tag: string, data: Buffer) => {
+        const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+        const td = Buffer.concat([Buffer.from(tag, 'latin1'), data]);
+        const crc = Buffer.alloc(4); crc.writeUInt32BE(zlib.crc32(td) >>> 0);
+        return Buffer.concat([len, td, crc]);
+    };
+    const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(2, 0); ihdr.writeUInt32BE(2, 4); ihdr[8] = 8; ihdr[9] = 6;
+    const rows = Buffer.from([0, 255, 0, 0, 255, 0, 0, 255, 128, 0, 0, 255, 0, 255, 255, 255, 0, 255]);
+    return Buffer.concat([Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(rows)), chunk('IEND', Buffer.alloc(0))]);
+})();
+const fontLib = require(path.join(PLUGIN_DIR, 'server', 'badge-font.js'));
+const V2 = (imageId: string) => ({
+    version: 2, layout: 'horizontal', background: '#0f172a',
+    elements: [
+        { type: 'shape', x: 0, y: 0, w: 85.6, h: 12, fill: '#f59e0b' },
+        { type: 'image', asset: imageId, x: 3, y: 2, w: 8, h: 8, mask: 'circle' },
+        { type: 'text', x: 14, y: 2, w: 44, h: 8, text: '{{@conference}}', font: 'oswald', bold: true, size: 11, color: '#0f172a', valign: 'middle', upper: true },
+        { type: 'text', x: 4, y: 16, w: 50, h: 14, text: '{{@name}}', font: 'montserrat', bold: true, size: 20, color: '#ffffff', valign: 'middle' },
+        { type: 'text', x: 4, y: 33, w: 50, h: 6, text: 'Hab. {{@room}}', font: 'poppins', size: 8, color: '#cbd5e1' },
+        { type: 'text', x: 4, y: 41, w: 50, h: 6, text: '{{@location}}', font: 'playfair', size: 10, color: '#fbbf24', rot: -8, op: 0.8 },
+        { type: 'line', x: 4, y: 30, w: 50, h: 1, stroke: '#f59e0b', sw: 0.4 },
+        { type: 'qr', x: 60, y: 26, w: 23, h: 23 },
+    ],
+});
+
+test('free-form designs: bounded, one QR always, tokens resolved, texts fitted; fonts measured the same way everywhere', () => {
+    const d = designLib.normalizeDesignV2({ version: 2, layout: 'vertical', background: '#FFF', elements: [
+        { type: 'qr', x: 1, y: 1, w: 200 }, { type: 'qr', x: 5, y: 5, w: 20 }, { type: 'nope' },
+        { type: 'text', text: 'x'.repeat(900), font: 'comic-sans', size: 999, color: 'red' },
+        { type: 'image', asset: 'not-a-sha' },
+    ] });
+    assert.strictEqual(d.background, '#ffffff');
+    assert.strictEqual(d.elements.filter((e: any) => e.type === 'qr').length, 1, 'one QR');
+    assert.strictEqual(d.elements[0].w, 54, 'the QR fits the card');
+    const t = d.elements.find((e: any) => e.type === 'text');
+    assert.strictEqual(t.text.length, 400);
+    assert.strictEqual(t.font, 'helvetica');
+    assert.strictEqual(t.size, 120);
+    assert.strictEqual(t.color, '#111827');
+    assert.ok(!d.elements.some((e: any) => e.type === 'image'), 'an image without a valid asset is dropped');
+    // No QR at all → one is added (the meal scanner needs it).
+    assert.strictEqual(designLib.normalizeDesignV2({ version: 2, elements: [] }).elements[0].type, 'qr');
+
+    const parsed = new Map<string, any>();
+    const metrics = fontLib.createMetrics((f: string) => {
+        if (!parsed.has(f)) parsed.set(f, fontLib.parseTtf(Buffer.from(require(path.join(PLUGIN_DIR, 'fonts', `${f}.js`)), 'base64')));
+        return parsed.get(f);
+    });
+    const v2 = designLib.normalizeDesignV2(V2('a'.repeat(16)));
+    const badge = designLib.layoutDesign(v2, { data: { '@name': 'María Fernanda Gómez de la Torre', '@conference': 'Congreso', '@location': 'Soledad' }, qr: 'ABCDEFGHJK', metrics, images: { ['a'.repeat(16)]: { w: 100, h: 50 } } });
+    const texts = badge.items.filter((i: any) => i.t === 'text');
+    assert.deepStrictEqual(texts.filter((i: any) => i.face === 'montserrat-700').map((i: any) => i.text), ['María Fernanda', 'Gómez de la Torre'], 'the long name wraps');
+    assert.ok(texts.find((i: any) => i.face === 'montserrat-700').size < 20, 'and shrinks to fit its box');
+    assert.ok(!texts.some((i: any) => /Hab\./.test(i.text)), 'a text whose only token is empty is not drawn');
+    assert.strictEqual(texts.find((i: any) => i.face === 'oswald-700').text, 'CONGRESO');
+    const loc = texts.find((i: any) => i.face === 'playfair-400');
+    assert.strictEqual(loc.rot, 352);
+    assert.strictEqual(loc.op, 0.8);
+    const img = badge.items.find((i: any) => i.t === 'image');
+    assert.deepStrictEqual([img.clip, img.dw, img.dh], ['ellipse', 16, 8], 'cover: the 2:1 image fills the 8 mm circle');
+    assert.deepStrictEqual(badge.faces.sort(), ['montserrat-700', 'oswald-700', 'playfair-400']);
+    // Every text sits inside its box (horizontally).
+    for (const it of texts) {
+        const el = v2.elements.find((e: any) => e.id === it.el);
+        assert.ok(it.x >= el.x - 0.01 && it.x + metrics.widthMm(it.text, it.face, it.bold, it.size, it.ls || 0) <= el.x + el.w + 0.05, it.text);
+    }
+});
+
+test('free-form designs: saved with their images, previewed, printed with embedded fonts, shown on «Mi inscripción»', async () => {
+    const w = await selfWorld();
+    const { p } = w;
+    // An image for the designer (PNG, 2×2), stored once by its sha.
+    const up = ok(await p.call('put', '/badges/assets', { body: { conference_id: w.cid, kind: 'image', data_url: dataUrl('image/png', REAL_PNG), width: 2, height: 2 } }), 'image');
+    assert.match(up.id, /^[0-9a-f]{16}$/);
+    assert.strictEqual(ok(await p.call('put', '/badges/assets', { body: { conference_id: w.cid, kind: 'image', data_url: dataUrl('image/png', REAL_PNG), width: 2, height: 2 } })).id, up.id, 'the same image once');
+    assert.strictEqual((await p.call('put', '/badges/assets', { body: { conference_id: w.cid, kind: 'image', data_url: dataUrl('image/png', REAL_PNG) } })).status, 400, 'its size is required');
+    // The design saved: an image id that does not exist is dropped.
+    const saved = ok(await p.call('put', '/badges/config', { body: { conference_id: w.cid, design: { ...V2(up.id), elements: [...V2(up.id).elements, { type: 'image', asset: 'b'.repeat(16), x: 0, y: 0, w: 5, h: 5 }] } } }), 'save').config;
+    assert.strictEqual(saved.design.version, 2);
+    assert.strictEqual(saved.design.elements.filter((e: any) => e.type === 'image').length, 1);
+    // The preview of a real person, with the images it draws.
+    const prev = ok(await p.call('post', '/badges/preview', { body: { conference_id: w.cid, inscription_id: w.ana } }), 'preview');
+    assert.strictEqual(prev.badge.version, 2);
+    assert.ok(prev.badge.items.some((i: any) => i.t === 'text' && i.text === 'Ana Pérez'));
+    assert.ok(prev.badge.items.some((i: any) => i.t === 'qr'));
+    assert.match(prev.images[up.id], /^data:image\/png;base64,/);
+    // A saved design's image cannot be deleted from the gallery.
+    assert.strictEqual((await p.call('delete', `/badges/assets?conference_id=${w.cid}&kind=img_${up.id}`)).status, 409);
+    // The PDF: one page per badge, the three faces embedded once each.
+    const d = ok(await p.call('post', '/badges/ticket', { body: { conference_id: w.cid, inscription_ids: [w.ana, w.beto] } })).d;
+    const f = ok(await p.call('get', `/public/badge/file?d=${d}`, { anonymous: true }), 'file');
+    const pdf = Buffer.from(f.b64, 'base64').toString('latin1');
+    assert.strictEqual((pdf.match(/\/Type \/Page\b/g) || []).length, 2);
+    assert.strictEqual((pdf.match(/\/FontFile2/g) || []).length, 3);
+    assert.ok(/\/BaseFont \/Montserrat-Bold/.test(pdf) && /\/BaseFont \/Oswald-Bold/.test(pdf) && /\/BaseFont \/PlayfairDisplay-Regular/.test(pdf));
+    assert.strictEqual((pdf.match(/\/Subtype \/Image/g) || []).length, 2, 'the image once, with its soft mask');
+    assert.strictEqual((pdf.match(/\/SMask/g) || []).length, 1);
+    // «Mi inscripción»: the badge with its images.
+    const session = ok(await pub(p, 'post', '/public/me/verify', { code: w.codeOf(w.ana), doc_type: 'Cédula', doc_number: '1045678901' })).session;
+    const view = ok(await pub(p, 'post', '/public/me/view', { session })).view;
+    assert.strictEqual(view.badge.badge.version, 2);
+    assert.match(view.badge.images[up.id], /^data:image\/png/);
+    // The faces are public.
+    const font = ok(await pub(p, 'get', '/public/badge/font?f=montserrat-700'), 'font');
+    assert.strictEqual(fontLib.parseTtf(Buffer.from(font.b64, 'base64')).psName, 'Montserrat-Bold');
+    assert.strictEqual((await pub(p, 'get', '/public/badge/font?f=../index')).status, 404);
+    assert.strictEqual((await pub(p, 'get', '/public/badge/font?f=helvetica-400')).status, 404);
 });

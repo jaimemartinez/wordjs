@@ -85,15 +85,24 @@ export function defaultColumnKeys(fields: ExportField[]): string[] {
 /** Per-attendee transport totals (built from GET /buses by transportByPerson). */
 export type PersonTransport = { labels: string[]; due: number; paid: number };
 
-/** Index the buses' tickets by attendee: bus names, ticket prices and payments summed. */
-export function transportByPerson(buses: { name: string; passengers?: { inscription_id: number; price: number; amount_paid: number }[] }[]): Map<number, PersonTransport> {
+/**
+ * Index the buses' seats by attendee. 2.26.0: a seat belongs to a package sale (`sale_id`, `package_name`, and the
+ * sale's price / paid) — the same sale sits on every bus of its package, so each sale is counted ONCE and labelled
+ * by its package; a seat without a sale (none since the packages' migration) counts as before, by its bus.
+ */
+export function transportByPerson(buses: { name: string; passengers?: { inscription_id: number; price: number; amount_paid: number; sale_id?: number | null; package_name?: string | null }[] }[]): Map<number, PersonTransport> {
     const out = new Map<number, PersonTransport>();
+    const counted = new Set<number>();
     for (const b of buses) {
         for (const t of b.passengers || []) {
             const k = Number(t.inscription_id);
+            if (t.sale_id != null) {
+                if (counted.has(Number(t.sale_id))) continue;
+                counted.add(Number(t.sale_id));
+            }
             if (!out.has(k)) out.set(k, { labels: [], due: 0, paid: 0 });
             const e = out.get(k)!;
-            e.labels.push(b.name);
+            e.labels.push(t.sale_id != null && t.package_name ? t.package_name : b.name);
             e.due = round2(e.due + num(t.price));
             e.paid = round2(e.paid + num(t.amount_paid));
         }
@@ -277,41 +286,62 @@ export function buildHotelReport(opts: { hotels: ReportHotel[]; people: ExportPe
     return opts.onlyHotelId != null ? sheets : [summary, ...sheets];
 }
 
-export type ManifestBus = { id: number; name: string; origin?: string | null; destination?: string | null; departure?: string | null; capacity: number; price: number; sold?: number; revenue?: number; collected?: number; passengers?: { inscription_id: number; price: number; amount_paid: number; payment_status: string }[] };
+export type ManifestBus = { id: number; name: string; origin?: string | null; destination?: string | null; departure?: string | null; capacity: number; price: number; sold?: number; revenue?: number; collected?: number; passengers?: { inscription_id: number; price: number; amount_paid: number; payment_status: string; package_name?: string | null }[] };
+/** A package for the transport workbook's «Paquetes» sheet (GET /transport/packages). */
+export type ManifestPackage = { id: number; name: string; price: number; buses: { id: number; name: string }[]; sold: number; revenue: number; collected: number };
 
 const route = (b: ManifestBus) => [b.origin, b.destination].filter(Boolean).join(' → ');
 const when = (v?: string | null) => { const m = String(v || '').match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/); return m ? `${m[3]}/${m[2]}/${m[1]}${m[4] ? ` ${m[4]}:${m[5]}` : ''}` : String(v || ''); };
 
-/** Transport workbook: "Resumen" (one row per bus) + one passenger list per bus (or only `onlyBusId`). */
-export function buildBusManifest(opts: { buses: ManifestBus[]; people: ExportPerson[]; fields: ExportField[]; onlyBusId?: number | null }): XlsxSheet[] {
+/**
+ * Transport workbook: "Resumen" (one row per bus: its seats), "Paquetes" (2.26.0: what was sold — one row per
+ * package with its money, counted once), and one passenger list per bus (or only `onlyBusId`). A passenger's row
+ * shows their package and that package's payment (the same package appears on each of its buses' lists).
+ */
+export function buildBusManifest(opts: { buses: ManifestBus[]; people: ExportPerson[]; fields: ExportField[]; onlyBusId?: number | null; packages?: ManifestPackage[] }): XlsxSheet[] {
     const byId = new Map(opts.people.map((p) => [Number(p.id), p]));
     const buses = opts.buses.filter((b) => opts.onlyBusId == null || Number(b.id) === Number(opts.onlyBusId));
     const summary: XlsxSheet = {
         name: 'Resumen',
-        columns: [{ header: 'Bus', width: 24 }, { header: 'Trayecto', width: 30 }, { header: 'Salida', width: 18 }, { header: 'Capacidad', width: 11 }, { header: 'Vendidos', width: 10 }, { header: 'Libres', width: 9 }, { header: 'Precio', width: 11 }, { header: 'Vendido $', width: 13 }, { header: 'Recaudado $', width: 13 }, { header: 'Por cobrar $', width: 13 }],
+        columns: [{ header: 'Bus', width: 24 }, { header: 'Trayecto', width: 30 }, { header: 'Salida', width: 18 }, { header: 'Capacidad', width: 11 }, { header: 'Vendidos', width: 10 }, { header: 'Libres', width: 9 }],
         rows: [], boldRows: [],
     };
     const sheets: XlsxSheet[] = [];
-    let tCap = 0, tSold = 0, tRev = 0, tCol = 0;
+    let tCap = 0, tSold = 0;
     for (const b of buses) {
         const tickets = b.passengers || [];
-        const rev = round2(tickets.reduce((a, t) => a + num(t.price), 0));
-        const col = round2(tickets.reduce((a, t) => a + num(t.amount_paid), 0));
-        tCap += num(b.capacity); tSold += tickets.length; tRev += rev; tCol += col;
-        summary.rows.push([b.name, route(b), when(b.departure), num(b.capacity), tickets.length, Math.max(0, num(b.capacity) - tickets.length), { money: num(b.price) }, { money: rev }, { money: col }, { money: round2(rev - col) }]);
+        tCap += num(b.capacity); tSold += tickets.length;
+        summary.rows.push([b.name, route(b), when(b.departure), num(b.capacity), tickets.length, Math.max(0, num(b.capacity) - tickets.length)]);
         const rows: XlsxCell[][] = tickets
             .map((t) => ({ t, p: byId.get(Number(t.inscription_id)) || { id: t.inscription_id } }))
             .sort((x, y) => displayName(x.p, opts.fields).localeCompare(displayName(y.p, opts.fields), 'es'))
-            .map(({ t, p }, i) => [i + 1, displayName(p, opts.fields), String(p.location || ''), String(p.reg_code || ''), String(fieldValue(p, 'phone') ?? ''), { money: num(t.price) }, { money: num(t.amount_paid) }, { money: round2(num(t.price) - num(t.amount_paid)) }, PAYMENT_LABEL[String(t.payment_status || 'unpaid')] || String(t.payment_status || '')]);
+            .map(({ t, p }, i) => [i + 1, displayName(p, opts.fields), String(p.location || ''), String(p.reg_code || ''), String(fieldValue(p, 'phone') ?? ''), String(t.package_name || ''), { money: num(t.price) }, { money: num(t.amount_paid) }, { money: round2(num(t.price) - num(t.amount_paid)) }, PAYMENT_LABEL[String(t.payment_status || 'unpaid')] || String(t.payment_status || '')]);
         sheets.push({
             name: b.name,
-            columns: [{ header: '#', width: 5 }, { header: 'Pasajero', width: 30 }, { header: 'Localidad', width: 18 }, { header: 'Código', width: 14 }, { header: 'Teléfono', width: 15 }, { header: 'Precio', width: 11 }, { header: 'Pagado', width: 11 }, { header: 'Saldo', width: 11 }, { header: 'Estado', width: 11 }],
+            columns: [{ header: '#', width: 5 }, { header: 'Pasajero', width: 30 }, { header: 'Localidad', width: 18 }, { header: 'Código', width: 14 }, { header: 'Teléfono', width: 15 }, { header: 'Paquete', width: 22 }, { header: 'Precio paquete', width: 14 }, { header: 'Pagado', width: 11 }, { header: 'Saldo', width: 11 }, { header: 'Estado', width: 11 }],
             rows: rows.length ? rows : [['', '(sin pasajeros)']],
         });
     }
     summary.boldRows!.push(summary.rows.length);
-    summary.rows.push(['TOTAL', '', '', tCap, tSold, Math.max(0, tCap - tSold), '', { money: round2(tRev) }, { money: round2(tCol) }, { money: round2(tRev - tCol) }]);
-    return opts.onlyBusId != null ? sheets : [summary, ...sheets];
+    summary.rows.push(['TOTAL', '', '', tCap, tSold, Math.max(0, tCap - tSold)]);
+    if (opts.onlyBusId != null) return sheets;
+    const out: XlsxSheet[] = [summary];
+    if (opts.packages) {
+        const pk: XlsxSheet = {
+            name: 'Paquetes',
+            columns: [{ header: 'Paquete', width: 26 }, { header: 'Buses', width: 34 }, { header: 'Precio', width: 12 }, { header: 'Vendidos', width: 10 }, { header: 'Vendido $', width: 13 }, { header: 'Recaudado $', width: 13 }, { header: 'Por cobrar $', width: 13 }],
+            rows: [], boldRows: [],
+        };
+        let pRev = 0, pCol = 0, pSold = 0;
+        for (const p of opts.packages) {
+            pRev += num(p.revenue); pCol += num(p.collected); pSold += num(p.sold);
+            pk.rows.push([p.name, p.buses.map((b) => b.name).join(', '), { money: num(p.price) }, num(p.sold), { money: num(p.revenue) }, { money: num(p.collected) }, { money: round2(num(p.revenue) - num(p.collected)) }]);
+        }
+        pk.boldRows!.push(pk.rows.length);
+        pk.rows.push(['TOTAL', '', '', pSold, { money: round2(pRev) }, { money: round2(pCol) }, { money: round2(pRev - pCol) }]);
+        out.push(pk);
+    }
+    return [...out, ...sheets];
 }
 
 /** `inscripciones-<slug>-2026-10-05.xlsx` */

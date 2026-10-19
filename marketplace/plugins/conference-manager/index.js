@@ -26,12 +26,15 @@ const { createBadges } = require('./server/badges');
 // «Mi inscripción» (2.23.0): the registrant's own page behind their badge's QR; hotel positions.
 const { createSelfPage } = require('./server/selfpage');
 const { parseGeo, GEO_MESSAGES } = require('./server/geo');
+// Transport packages (2.26.0): what is sold is a package of buses, never a single bus ticket.
+const { createPackages } = require('./server/transport-packages');
+const { createPush } = require('./server/transport-push');
 // Room packing (2.20.0): the fewest rooms and empty beds — the engine's and «Sugerir reparto»'s arithmetic.
 const pack = require('./server/lodging-pack');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.23.0',
+    version: '2.29.0',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -777,6 +780,9 @@ exports.init = async function (wordjs) {
     // routes are installed later (badges.install), once the request-time helpers exist.
     const badges = createBadges({ db, T, P, addColumnIfMissing, createIndex, createUniqueIndex, httpError });
     const selfPage = createSelfPage({ db, T, P, createIndex, createUniqueIndex });
+    const packages = createPackages({ db, T, P, addColumnIfMissing, createIndex, createUniqueIndex });
+    // Boarding and bus notices (2.27.0): bus state, the passengers' phones and Web Push live in server/transport-push.js.
+    const push = createPush({ db, T, P, addColumnIfMissing, createIndex, createUniqueIndex });
     /**
      * Set-based payment recompute: ONE statement for a set of inscriptions. `where` is 'id = ?' |
      * 'id IN (?, ?, …)' | 'conference_id = ?' | '1 = 1'. amount_paid / payment_status come from VALIDATED
@@ -970,6 +976,16 @@ exports.init = async function (wordjs) {
         await selfPage.migrate();
     } catch (e) {
         console.warn('[conference-manager] self page migration failed — «Mi inscripción» is unavailable until it succeeds:', e.message);
+    }
+    try {
+        await packages.migrate();
+    } catch (e) {
+        console.warn('[conference-manager] transport packages migration failed:', e.message);
+    }
+    try {
+        await push.migrate();
+    } catch (e) {
+        console.warn('[conference-manager] bus notices migration failed — boarding notices are unavailable until it succeeds:', e.message);
     }
 
     // ── one-time data hygiene (idempotent, safe to run every boot) ───────────────────────────────
@@ -3728,9 +3744,23 @@ exports.init = async function (wordjs) {
             const buses = (await db.all(`${busSelect} WHERE b.conference_id = ? ORDER BY b.departure, b.name`, [cid])).map(busRow);
             const tickets = await db.all(
                 `SELECT t.* FROM ${T.tickets} t JOIN ${T.buses} b ON t.bus_id = b.id WHERE b.conference_id = ? ORDER BY t.id`, [cid]);
+            // 2.26.0: a seat is part of a package sale — the money, the status and the package's name come from it.
+            const sales = await packages.salesBySeat(cid);
             const byBus = new Map();
-            for (const t of tickets) { if (!byBus.has(t.bus_id)) byBus.set(t.bus_id, []); byBus.get(t.bus_id).push(ticketRow(t)); }
-            for (const b of buses) b.passengers = byBus.get(b.id) || [];
+            for (const t of tickets) {
+                const sale = sales.get(Number(t.id));
+                const row = sale ? { ...ticketRow(t), sale_id: sale.id, package_id: sale.package_id, package_name: sale.package_name, price: sale.price, amount_paid: sale.amount_paid, payment_status: sale.payment_status } : ticketRow(t);
+                if (!byBus.has(t.bus_id)) byBus.set(t.bus_id, []);
+                byBus.get(t.bus_id).push(row);
+            }
+            // 2.27.0: the boarding state and how many passengers have the bus notices on (their phones).
+            const alerts = await push.busSummaries(cid);
+            for (const b of buses) {
+                b.passengers = byBus.get(b.id) || [];
+                Object.assign(b, push.busState(b));
+                b.alerts = alerts.get(Number(b.id)) || 0;
+                delete b.boarding_status; delete b.boarding_s; delete b.departed_s;
+            }
             res.json(buses);
         } catch (e) { sendError(res, e); }
     });
@@ -3757,11 +3787,9 @@ exports.init = async function (wordjs) {
             const id = positiveInt(req.params.id);
             // The sold-seats check and the write run under the assignment lock, the lock ticket sales
             // (POST /buses/:id/passengers) check the seats left under: a sale landing between this
-            // check and the write otherwise left more tickets sold than the capacity just set. A
-            // reprice writes the tickets' new price under it too, the lock transport payments check
-            // what a ticket still owes under: written after the lock was released, a payment landing
-            // in between was accepted against the old price, and the ticket ended up paid beyond the
-            // new one — what the check below refuses.
+            // check and the write otherwise left more tickets sold than the capacity just set.
+            // 2.26.0: what is sold is a package (its own price): a bus price prices nothing sold, so it is never
+            // pushed onto the seats (`reprice_tickets` is ignored).
             const outcome = await withAssignmentLock(async () => {
                 const bus = id ? await db.get(`${busSelect} WHERE b.id = ?`, [id]) : null;
                 if (!bus) throw httpError(404, 'Bus no encontrado.');
@@ -3769,18 +3797,8 @@ exports.init = async function (wordjs) {
                 if (v.capacity !== undefined && v.capacity < (Number(bus.sold) || 0)) {
                     return { status: 409, body: { error: `La capacidad no puede ser menor que los ${bus.sold} pasajes vendidos.`, sold: Number(bus.sold) } };
                 }
-                // Repricing may never leave a ticket paid beyond its new price (money already received is not
-                // silently turned into a credit): refuse before writing anything.
-                if (req.body && req.body.reprice_tickets && v.price !== undefined) {
-                    const over = await db.get(`SELECT COUNT(*) AS n FROM ${T.tickets} WHERE bus_id = ? AND amount_paid > ? + 0.005`, [id, v.price]);
-                    if (Number(over && over.n) > 0) return { status: 409, body: { error: `El nuevo precio es menor que lo ya pagado en ${over.n} pasaje(s); ajusta esos pagos primero o aplica el precio solo a las próximas ventas.` } };
-                }
                 const keys = Object.keys(v);
                 if (keys.length) await db.run(`UPDATE ${T.buses} SET ${keys.map(k => `${k} = ?`).join(', ')} WHERE id = ?`, [...keys.map(k => v[k]), id]);
-                if (req.body && req.body.reprice_tickets && v.price !== undefined) {
-                    await db.run(`UPDATE ${T.tickets} SET price = ? WHERE bus_id = ?`, [v.price, id]);
-                    await recomputeTickets('bus_id = ?', [id]);
-                }
                 return {};
             });
             if (outcome.status) return res.status(outcome.status).json(outcome.body);
@@ -3800,7 +3818,11 @@ exports.init = async function (wordjs) {
                 if (!bus) return { status: 404, body: { error: 'Bus no encontrado.' } };
                 const paid = await db.get(`SELECT COUNT(*) AS n FROM ${T.transportPayments} WHERE ticket_id IN (SELECT id FROM ${T.tickets} WHERE bus_id = ? )`, [id]);
                 if (Number(paid && paid.n) > 0) return { status: 409, body: { error: 'El bus tiene pasajes con pagos registrados; elimina esos pagos antes de borrar el bus.' } };
+                // 2.26.0: seats sold in a package keep the bus (the package would lose a trip it was paid for).
+                const inSales = await db.get(`SELECT COUNT(*) AS n FROM ${T.tickets} WHERE bus_id = ? AND sale_id IS NOT NULL`, [id]);
+                if (Number(inSales && inSales.n) > 0) return { status: 409, body: { error: `El bus está en paquetes ya vendidos (${inSales.n} puesto(s)); quita esas ventas antes de borrarlo.` } };
                 const released = await db.run(`DELETE FROM ${T.tickets} WHERE bus_id = ?`, [id]);
+                await db.run(`DELETE FROM ${T.packageBuses} WHERE bus_id = ?`, [id]);
                 await db.run(`DELETE FROM ${T.buses} WHERE id = ?`, [id]);
                 return { released: (released && released.changes) || 0 };
             });
@@ -3814,6 +3836,9 @@ exports.init = async function (wordjs) {
     // lock so two admins cannot both sell the last seat.
     http.route('post', '/buses/:id/passengers', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'transport', 'manage')) return;
+        // 2.26.0: only packages are sold (a one-bus trip is a one-bus package).
+        return res.status(410).json({ error: 'Ahora se venden paquetes de buses: vende el paquete en «Paquetes».', code: 'packages' });
+        // eslint-disable-next-line no-unreachable
         try {
             const id = positiveInt(req.params.id);
             const raw = req.body && req.body.inscription_ids;
@@ -3849,8 +3874,9 @@ exports.init = async function (wordjs) {
             const id = positiveInt(req.params.id), iid = positiveInt(req.params.inscriptionId);
             // Same as the bus delete: the no-payments check and the delete under the payments' lock.
             const outcome = await withAssignmentLock(async () => {
-                const ticket = id && iid ? await db.get(`SELECT id FROM ${T.tickets} WHERE bus_id = ? AND inscription_id = ?`, [id, iid]) : null;
+                const ticket = id && iid ? await db.get(`SELECT id, sale_id FROM ${T.tickets} WHERE bus_id = ? AND inscription_id = ?`, [id, iid]) : null;
                 if (!ticket) return { status: 404, body: { error: 'Pasaje no encontrado.' } };
+                if (ticket.sale_id != null) return { status: 409, body: { error: 'Este puesto es parte de un paquete: quita el paquete a la persona en «Paquetes».', code: 'package' } };
                 const paid = await db.get(`SELECT COUNT(*) AS n FROM ${T.transportPayments} WHERE ticket_id = ?`, [ticket.id]);
                 if (Number(paid && paid.n) > 0) return { status: 409, body: { error: 'El pasaje tiene pagos registrados; elimínalos antes de quitar al pasajero.' } };
                 await db.run(`DELETE FROM ${T.tickets} WHERE id = ?`, [ticket.id]);
@@ -3858,6 +3884,40 @@ exports.init = async function (wordjs) {
             });
             if (outcome.status) return res.status(outcome.status).json(outcome.body);
             res.json({ success: true });
+        } catch (e) { sendError(res, e); }
+    });
+
+    // Boarding check (2.25.0): POST /transport/check { bus_id, code } — does the person whose badge was scanned
+    // (the code, the «Mi inscripción» link of the QR, or a typed code: findByScanCode) travel on THIS bus?
+    // Read only, never records anything. → { result, person?, ticket?, buses? }:
+    //   ok        — a ticket on this bus (with its payment state, shown as information only);
+    //   other_bus — tickets on other buses of the same conference (named, so the person can be sent there);
+    //   no_ticket — registered, no ticket on any bus;  cancelled — the inscription is cancelled;
+    //   unknown   — no registration of this conference has that code.
+    http.route('post', '/transport/check', { auth: true }, async (req, res) => {
+        if (!await allowAny(req, res, [['transport', 'view'], ['transport', 'manage']])) return;
+        try {
+            const body = req.body || {};
+            const busId = positiveInt(body.bus_id);
+            const bus = busId ? await db.get(`SELECT id, conference_id, name FROM ${T.buses} WHERE id = ?`, [busId]) : null;
+            if (!bus) return res.status(404).json({ error: 'Bus no encontrado.' });
+            const row = await findByScanCode(body.code);
+            if (!row || Number(row.conference_id) !== Number(bus.conference_id)) return res.json({ result: 'unknown', bus: { id: bus.id, name: bus.name } });
+            const p = await personWithName(row);
+            const person = { id: p.id, name: p.name, location: p.location, reg_code: p.reg_code };
+            if (row.status === 'cancelled') return res.json({ result: 'cancelled', bus: { id: bus.id, name: bus.name }, person });
+            const tickets = await db.all(
+                `SELECT t.id, t.bus_id, COALESCE(s.price, t.price) AS price, COALESCE(s.amount_paid, t.amount_paid) AS amount_paid, COALESCE(s.payment_status, t.payment_status) AS payment_status, b.name AS bus_name, p.name AS package_name`
+                + ` FROM ${T.tickets} t JOIN ${T.buses} b ON b.id = t.bus_id LEFT JOIN ${T.packageSales} s ON s.id = t.sale_id LEFT JOIN ${T.packages} p ON p.id = s.package_id`
+                + ` WHERE t.inscription_id = ? AND b.conference_id = ? ORDER BY b.departure, b.name`, [row.id, bus.conference_id]);
+            const mine = tickets.find(t => Number(t.bus_id) === Number(bus.id));
+            if (mine) {
+                const price = roundMoney(Number(mine.price) || 0), paid = roundMoney(Number(mine.amount_paid) || 0);
+                return res.json({ result: 'ok', bus: { id: bus.id, name: bus.name }, person,
+                    ticket: { payment_status: mine.payment_status || 'unpaid', price, amount_paid: paid, balance: roundMoney(Math.max(0, price - paid)), package_name: mine.package_name || null } });
+            }
+            if (tickets.length) return res.json({ result: 'other_bus', bus: { id: bus.id, name: bus.name }, person, buses: tickets.map(t => ({ id: t.bus_id, name: t.bus_name })) });
+            res.json({ result: 'no_ticket', bus: { id: bus.id, name: bus.name }, person });
         } catch (e) { sendError(res, e); }
     });
 
@@ -3874,6 +3934,9 @@ exports.init = async function (wordjs) {
     });
     http.route('post', '/tickets/:id/payments', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'transport', 'manage')) return;
+        // 2.26.0: payments belong to the package sale (POST /transport/package-sales/:id/payments).
+        return res.status(410).json({ error: 'Los pagos ahora se registran al paquete.', code: 'packages' });
+        // eslint-disable-next-line no-unreachable
         try {
             const id = positiveInt(req.params.id);
             const { amount, method, reference, date } = req.body || {};
@@ -3964,8 +4027,14 @@ exports.init = async function (wordjs) {
                 `SELECT tp.id, tp.amount, tp.method, tp.reference, tp.date, t.inscription_id, b.name AS bus_name, i.location_id`
                 + ` FROM ${T.transportPayments} tp JOIN ${T.tickets} t ON tp.ticket_id = t.id JOIN ${T.buses} b ON t.bus_id = b.id`
                 + ` LEFT JOIN ${T.inscriptions} i ON i.id = t.inscription_id WHERE b.conference_id = ?`, [cid]);
+            // 2.26.0: transport income = the package sales' payments.
+            const packageRides = await db.all(
+                `SELECT pp.id, pp.amount, pp.method, pp.reference, pp.date, s.inscription_id, p.name AS package_name, i.location_id`
+                + ` FROM ${T.packagePayments} pp JOIN ${T.packageSales} s ON pp.sale_id = s.id JOIN ${T.packages} p ON s.package_id = p.id`
+                + ` LEFT JOIN ${T.inscriptions} i ON i.id = s.inscription_id WHERE p.conference_id = ?`, [cid]);
             const auto = [
                 ...feeLines,
+                ...packageRides.map(r => ({ id: `transport-pkg-${r.id}`, kind: 'income', date: r.date, category: 'Transporte', description: `Paquete de transporte — ${r.package_name}`, amount: roundMoney(Number(r.amount) || 0), method: r.method || null, reference: r.reference || null, inscription_id: r.inscription_id, location_id: r.location_id == null ? null : r.location_id, source: 'transport', readonly: true })),
                 ...rides.map(r => ({ id: `transport-${r.id}`, kind: 'income', date: r.date, category: 'Transporte', description: `Pasaje — ${r.bus_name}`, amount: roundMoney(Number(r.amount) || 0), method: r.method || null, reference: r.reference || null, inscription_id: r.inscription_id, location_id: r.location_id == null ? null : r.location_id, source: 'transport', readonly: true })),
             ];
             const entries = [...manual, ...auto].sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')) || String(b.id).localeCompare(String(a.id)));
@@ -5242,7 +5311,8 @@ exports.init = async function (wordjs) {
                 // FIRST: such a role gets this generic answer, never the payment numbers, statuses and sizes of
                 // the shared-payment answer below — payment data belongs to Pagos (D-P20).
                 const fee = await db.get(`SELECT COUNT(*) AS n FROM ${T.payments} WHERE inscription_id = ?`, [req.params.id]);
-                const rides = await db.get(`SELECT COUNT(*) AS n FROM ${T.transportPayments} WHERE ticket_id IN (SELECT id FROM ${T.tickets} WHERE inscription_id = ? )`, [req.params.id]);
+                const rides = await db.get(`SELECT (SELECT COUNT(*) FROM ${T.transportPayments} WHERE ticket_id IN (SELECT id FROM ${T.tickets} WHERE inscription_id = ? ))`
+                    + ` + (SELECT COUNT(*) FROM ${T.packagePayments} WHERE sale_id IN (SELECT id FROM ${T.packageSales} WHERE inscription_id = ? )) AS n`, [req.params.id, req.params.id]);
                 if ((Number(fee && fee.n) > 0 && !hasLevel(perms, 'payments', 'manage')) || (Number(rides && rides.n) > 0 && !hasLevel(perms, 'transport', 'manage'))) {
                     throw httpError(409, 'La inscripción tiene pagos registrados: pide a quien gestiona los pagos que los anule, o cancela la inscripción en lugar de eliminarla.');
                 }
@@ -5274,6 +5344,8 @@ exports.init = async function (wordjs) {
                 }
                 await db.run(`DELETE FROM ${T.transportPayments} WHERE ticket_id IN (SELECT id FROM ${T.tickets} WHERE inscription_id = ? )`, [req.params.id]);
                 await db.run(`DELETE FROM ${T.tickets} WHERE inscription_id = ?`, [req.params.id]);
+                await db.run(`DELETE FROM ${T.packagePayments} WHERE sale_id IN (SELECT id FROM ${T.packageSales} WHERE inscription_id = ? )`, [req.params.id]);
+                await db.run(`DELETE FROM ${T.packageSales} WHERE inscription_id = ?`, [req.params.id]);
                 // Meals (2.14.0): the attendee first, then its meal rows (the FKs cascade; the explicit deletes
                 // keep it so with foreign keys off). Under the meals lock an override write cannot slip in for a
                 // deleted attendee, and a scan racing this re-checks the attendee after its INSERT. `onlyIfRoomless`
@@ -5432,10 +5504,18 @@ exports.init = async function (wordjs) {
         http, allow, positiveInt, actorOf, resolvePortalLocation, personWithName, isFieldColumn, hasLevel,
         randomToken: (n) => wordjs.crypto.randomToken(n), qrText,
     });
+    packages.install({
+        http, allow, allowAny, positiveInt, withAssignmentLock, sendError, httpError, roundMoney, assertMoneyRange, runBatched, MAX_MONEY,
+        assertPaymentMethod, normDate, shortText, reviewerOf, toCents, fromCents,
+    });
     selfPage.install({
         http, isFieldColumn, personWithName, badges, mealsOf: mealsOfPerson,
         randomToken: (n) => wordjs.crypto.randomToken(n),
+        transportOf: (ins) => push.transportOf(ins),
+        pushKey: async () => (await push.siteKey()).publicKey,
+        onSessionEnd: (id) => push.dropSession(id),
     });
+    push.install({ http, allow, positiveInt, sendError, actorOf, siteLinkBase, selfPage, selfMessages: selfPage.MSG });
     // GET /qr-link?conference_id → { prefix } — what the admin's code viewer and the Excel QR column put before
     // a code (null = the bare code). inscriptions:view, like the codes themselves.
     http.route('get', '/qr-link', { auth: true }, async (req, res) => {

@@ -1,0 +1,9 @@
+{
+    "name": "Mi inscripción",
+    "short_name": "Mi inscripción",
+    "description": "Tu escarapela, tus comidas, tu alojamiento y los avisos de tu bus.",
+    "scope": "/portal/conference/yo",
+    "display": "standalone",
+    "background_color": "#f3f4f6",
+    "theme_color": "#111827"
+}
