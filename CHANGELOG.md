@@ -8,16 +8,15 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Changed
 
-- **AI agents: other people's content needs its own grant.** The new grant word `content:others`
-  (off by default, never implied by another word) is what lets an agent read other authors' private
-  entries and drafts and, together with `content:draft`, edit them. Without it an agent works on its
-  bound user's own entries and on published content. Stored grants are kept as they are; grant
-  `content:others` to a connection that should work on the whole site's content.
-- **AI provider base URL goes through the egress guard.** It may carry no query string or fragment, it
-  is checked at save time and before every request, and the request connects to the checked address.
-  Local and private-network servers stay available on single-site installs and on a network's primary
-  site; other sites of a network need `WORDJS_AI_ALLOW_PRIVATE_PROVIDER=1`. Link-local and metadata
-  addresses are never accepted (`ai_provider_address_blocked`).
+- **Database TLS verifies the server certificate.** With `dbSsl: true`, Postgres and MySQL connections
+  (including the per-plugin MySQL pools and the installer's connection test) now check the server
+  certificate chain and host name instead of accepting any certificate. New settings: `dbSslCa` (the CA
+  that signed the server certificate, as a PEM file path or PEM text) and `dbSslRejectUnauthorized: false`
+  as an explicit, logged opt-out. A site whose database presents a certificate Node cannot verify stops at
+  boot with a message explaining both options — see [database.md](documentation/database.md). The install
+  wizard and **Admin → Database migration** offer both settings when *Use SSL* is ticked (the opt-out with
+  a warning), and the Docker/Helm entrypoint reads `WORDJS_DB_SSL`, `WORDJS_DB_SSL_CA` and
+  `WORDJS_DB_SSL_REJECT_UNAUTHORIZED`.
 
 ### Security
 

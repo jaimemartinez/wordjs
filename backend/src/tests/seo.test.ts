@@ -575,7 +575,7 @@ describe('the sitemap and the feeds over the real routes', () => {
             "INSERT INTO users (user_login, user_pass, user_email, display_name) VALUES ('root', 'x', 'root@example.test', 'Root')",
         );
         await dbAsync.run(
-            "INSERT INTO users (user_login, user_pass, user_email, display_name) VALUES ('ana', 'x', 'ana@example.test', 'Ana Autora')",
+            "INSERT INTO users (user_login, user_pass, user_email, display_name, user_nicename) VALUES ('ana', 'x', 'ana@example.test', 'Ana Autora', 'ana-autora')",
         );
 
         const express = require('express');
@@ -680,7 +680,7 @@ describe('the sitemap and the feeds over the real routes', () => {
         const suyo = await publish('de-ana', { title: 'De Ana' });
         await dbAsync.run('UPDATE posts SET author_id = ? WHERE id = ?', [ana.id, suyo]);
 
-        const res = await ok('/api/v1/seo/author/ana/feed.xml');
+        const res = await ok('/api/v1/seo/author/ana-autora/feed.xml');
         assert.deepStrictEqual(rssItemsOf(res.text).map((i: any) => i.link), [`${SITE}/de-ana`]);
         assert.match(res.text, /<title>Sitio — Ana Autora<\/title>/);
 
@@ -697,8 +697,8 @@ describe('the sitemap and the feeds over the real routes', () => {
     /**
      * ONE CHANNEL, ONE ADDRESS — whichever spelling of the URL the reader arrived by.
      *
-     * An author is reachable by two spellings (nicename, numeric id — login only while the nicename
-     * is empty) and a term by however
+     * An author is reachable by two spellings (nicename, numeric id — never the login) and a term by
+     * however
      * many the database's collation treats as equal. Both routes used to print the RAW REQUEST SEGMENT
      * into `<link>` and into the `rel=self`, so the channel identified itself differently depending on
      * how it was asked for. A reader that follows the archive's autodiscovery and a reader that was
@@ -716,16 +716,17 @@ describe('the sitemap and the feeds over the real routes', () => {
     it('a scoped channel names the row it resolved, never the segment it was asked for', async () => {
         // ── the author half: three spellings, one channel identity ────────────────────────────────
         const ana = await dbAsync.get("SELECT id FROM users WHERE user_login = 'ana'");
-        // user_nicename is WordPress's public author slug and this install leaves it empty, so set it
-        // here: with it populated the canonical spelling differs from BOTH the login and the id, which
-        // is what makes this assertion falsifiable rather than a tautology.
-        // While the nicename is empty the login IS the identity (a legacy row): it must resolve …
-        assert.strictEqual((await get('/api/v1/seo/author/ana/feed.xml')).status, 200);
-        await dbAsync.run('UPDATE users SET user_nicename = ? WHERE id = ?', ['ana-autora', ana.id]);
-        // … and once a nicename exists the login must NOT: a public feed that answered 200/404 by whether
-        // a LOGIN exists would be a login-enumeration oracle for the sign-in form.
+        // The LOGIN is never an author address — not with a nicename, and not without one either: a
+        // public feed that answered 200/404 by whether a LOGIN exists would be a login-enumeration
+        // oracle for the sign-in form. A row with no nicename is addressed by its id.
         assert.strictEqual((await get('/api/v1/seo/author/ana/feed.xml')).status, 404,
             'a user with a nicename must not be reachable by login');
+        await dbAsync.run("UPDATE users SET user_nicename = '' WHERE id = ?", [ana.id]);
+        assert.strictEqual((await get('/api/v1/seo/author/ana/feed.xml')).status, 404,
+            'a user WITHOUT a nicename must not be reachable by login either');
+        assert.ok((await ok(`/api/v1/seo/author/${ana.id}/feed.xml`)).text.includes(`<link>${SITE}/author/${ana.id}</link>`),
+            'a nicename-less author is addressed by id');
+        await dbAsync.run('UPDATE users SET user_nicename = ? WHERE id = ?', ['ana-autora', ana.id]);
 
         for (const segment of ['ana-autora', String(ana.id)]) {
             const res = await ok(`/api/v1/seo/author/${segment}/feed.xml`);
@@ -739,9 +740,6 @@ describe('the sitemap and the feeds over the real routes', () => {
                 `/author/${segment}/feed.xml self-identified at a second URL`,
             );
         }
-
-        // Put the fixture back the way the other tests expect it (login-addressable, nicename empty).
-        await dbAsync.run("UPDATE users SET user_nicename = '' WHERE id = ?", [ana.id]);
 
         // ── the term half: a case-insensitive collation resolves a row the segment does not spell ──
         const driver = require('../config/database').getDbAsync();
@@ -925,7 +923,7 @@ it('below the threshold the sitemap is the single urlset it always was', async (
             '/api/v1/seo/feed.xml', '/api/v1/seo/feed.atom', '/api/v1/seo/feed.json',
             '/api/v1/seo/comments/feed.xml',
             '/api/v1/seo/category/noticias/feed.xml', '/api/v1/seo/tag/verde/feed.xml',
-            '/api/v1/seo/author/ana/feed.xml',
+            '/api/v1/seo/author/ana-autora/feed.xml',
         ];
         for (const url of documents) {
             const res = await ok(url);

@@ -4,6 +4,7 @@
  */
 
 const { db, dbAsync } = require('../config/database');
+const { clampLimit, clampOffset } = require('../core/pagination');
 const { sanitizeContent, currentTimeGMT, currentTime } = require('../core/formatting');
 const { doAction } = require('../core/hooks');
 
@@ -320,7 +321,7 @@ class Comment {
         sql += ` ORDER BY ${safeOrderBy} ${safeOrder}`;
 
         sql += ' LIMIT ? OFFSET ?';
-        params.push(limit, offset);
+        params.push(clampLimit(limit, 20), clampOffset(offset));
 
         const rows = await dbAsync.all(sql, params);
         return rows.map((row: any) => new Comment(row));

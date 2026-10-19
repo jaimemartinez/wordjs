@@ -22,7 +22,12 @@ export default function DbMigrationPage() {
         dbPort: '5432',
         dbUser: 'postgres',
         dbPassword: '',
-        dbName: 'wordjs'
+        dbName: 'wordjs',
+        // TLS: the server certificate is verified; a private CA is pasted as PEM, and skipping
+        // verification is an explicit, warned opt-out.
+        dbSsl: false,
+        dbSslCa: '',
+        dbSslSkipVerify: false
     });
 
     const { confirm } = useModal();
@@ -98,7 +103,11 @@ export default function DbMigrationPage() {
 
         const payload: any = { targetDriver: target };
         if (target === 'postgres' || target === 'mysql') {
-            Object.assign(payload, pgConfig);
+            const { dbSslSkipVerify, dbSslCa, ...conn } = pgConfig;
+            Object.assign(payload, conn, pgConfig.dbSsl ? {
+                ...(dbSslCa.trim() ? { dbSslCa: dbSslCa.trim() } : {}),
+                dbSslRejectUnauthorized: !dbSslSkipVerify,
+            } : {});
         }
 
         try {
@@ -517,6 +526,39 @@ export default function DbMigrationPage() {
                                                 placeholder="••••••"
                                             />
                                         </div>
+                                    </div>
+                                    <div className="mt-4 space-y-3">
+                                        <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
+                                            <input type="checkbox" checked={pgConfig.dbSsl} onChange={e => setPgConfig({ ...pgConfig, dbSsl: e.target.checked })} />
+                                            Use SSL (the server certificate is verified)
+                                        </label>
+                                        {pgConfig.dbSsl && (
+                                            <>
+                                                <div>
+                                                    <label htmlFor="migration-db-ssl-ca" className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">CA certificate (PEM, optional)</label>
+                                                    <textarea
+                                                        id="migration-db-ssl-ca"
+                                                        rows={4}
+                                                        spellCheck={false}
+                                                        disabled={pgConfig.dbSslSkipVerify}
+                                                        value={pgConfig.dbSslCa}
+                                                        onChange={e => setPgConfig({ ...pgConfig, dbSslCa: e.target.value })}
+                                                        className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-100 rounded-xl focus:border-indigo-500 focus:ring-0 font-mono text-xs transition-colors"
+                                                        placeholder={'-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----'}
+                                                    />
+                                                    <p className="mt-1 text-xs text-gray-500">For a private CA, a managed database&apos;s own CA or a self-signed server.</p>
+                                                </div>
+                                                <label className="flex items-start gap-2 text-sm text-gray-700">
+                                                    <input type="checkbox" className="mt-0.5" checked={pgConfig.dbSslSkipVerify} onChange={e => setPgConfig({ ...pgConfig, dbSslSkipVerify: e.target.checked })} />
+                                                    <span>Skip certificate verification (not recommended)</span>
+                                                </label>
+                                                {pgConfig.dbSslSkipVerify && (
+                                                    <p role="alert" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                                                        The connection is encrypted but the server is not authenticated: anyone on the network path could impersonate the database.
+                                                    </p>
+                                                )}
+                                            </>
+                                        )}
                                     </div>
                                 </div>
                                 <button

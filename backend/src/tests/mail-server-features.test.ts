@@ -110,9 +110,24 @@ async function call(b: Boot, key: string, user: any, req: any = {}) {
     return out;
 }
 
-function inbound(b: Boot, raw: string, mailFrom = 'ext@outside.example'): Promise<any> {
+// The SMTP envelope decides who receives a copy (the headers are display only), so the RCPT TO list
+// is derived from the raw message's To:/Cc: lines unless the test names the envelope itself.
+function headerRcpts(raw: string): string[] {
+    const out: string[] = [];
+    for (const m of raw.matchAll(/^(?:To|Cc):(.*)$/gim)) {
+        for (const part of m[1].split(',')) {
+            const a = /<([^>]+)>/.exec(part);
+            const addr = (a ? a[1] : part).trim();
+            if (addr) out.push(addr);
+        }
+    }
+    return out;
+}
+
+function inbound(b: Boot, raw: string, mailFrom = 'ext@outside.example', rcpts?: string[]): Promise<any> {
     return new Promise((resolve) => {
-        const session: any = { remoteAddress: '127.0.0.1', envelope: { mailFrom: { address: mailFrom }, rcptTo: [] } };
+        const rcptTo = (rcpts || headerRcpts(raw)).map(address => ({ address }));
+        const session: any = { remoteAddress: '127.0.0.1', envelope: { mailFrom: { address: mailFrom }, rcptTo } };
         b.smtp.options.onData(Readable.from([raw]), session, (err: any) => resolve(err || null));
     });
 }

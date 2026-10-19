@@ -22,7 +22,7 @@
 
 exports.metadata = {
     name: 'Newsletter',
-    version: '1.0.1',
+    version: '1.0.2',
     description: 'Newsletter subscriptions (double opt-in) + HTML campaigns with unsubscribe links',
     author: 'WordJS',
 };
@@ -90,15 +90,6 @@ exports.init = async function (wordjs) {
         return wordjs.crypto.randomToken(16); // 32 hex chars
     }
 
-    /** Escape a value for interpolation into email HTML. */
-    function escapeHtml(v) {
-        return String(v == null ? '' : v)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;');
-    }
-
     /**
      * Sanitize the page URL the visitor subscribed from: must parse as http(s), keep only
      * origin + pathname (drops query/hash/credentials), capped at 500 chars. Returns '' when invalid.
@@ -145,7 +136,9 @@ exports.init = async function (wordjs) {
         };
     };
     const allowSubscribeFrom = makeLimiter(10, 60 * 1000);           // subscribe requests per client per minute
-    const allowConfirmMailTo = makeLimiter(3, 60 * 60 * 1000);       // confirmation mails per address per hour
+    const allowConfirmMailHourly = makeLimiter(3, 60 * 60 * 1000);   // confirmation mails per address per hour
+    const allowConfirmMailDaily = makeLimiter(6, 24 * 60 * 60 * 1000); // ... and per day
+    const allowConfirmMailTo = (email) => allowConfirmMailHourly(email) && allowConfirmMailDaily(email);
 
     /** Spec footer appended to every campaign email, personalized per subscriber. */
     function buildUnsubFooter(unsubUrl) {
@@ -153,9 +146,12 @@ exports.init = async function (wordjs) {
             '<a href="' + unsubUrl + '">cancela tu suscripción aquí</a>.</p>';
     }
 
-    /** Confirmation (double opt-in) email body. */
-    function buildConfirmEmail(name, confirmUrl) {
-        const hello = name ? 'Hola ' + escapeHtml(name) + ',' : 'Hola,';
+    /**
+     * Confirmation (double opt-in) email body. It goes to an address nobody has verified yet, so it
+     * carries nothing the visitor typed (not even the name): only the site's own text and link.
+     */
+    function buildConfirmEmail(confirmUrl) {
+        const hello = 'Hola,';
         const html = '<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;color:#111">' +
             '<h2 style="margin:0 0 12px">Confirma tu suscripción</h2>' +
             '<p>' + hello + ' gracias por suscribirte a nuestro boletín. Haz clic en el botón para confirmar tu correo:</p>' +
@@ -240,7 +236,7 @@ exports.init = async function (wordjs) {
                 const siteBase = String((await wordjs.site.url()) || '').replace(/\/+$/, '');
                 if (!siteBase) throw new Error('no site url');
                 const confirmUrl = `${siteBase}/api/v1/plugin/newsletter/public/confirm?token=${token}`;
-                const msg = buildConfirmEmail(name, confirmUrl);
+                const msg = buildConfirmEmail(confirmUrl);
                 await mail({ to: email, subject: 'Confirma tu suscripción al boletín', html: msg.html, text: msg.text });
             } catch (e) {
                 const reason = String((e && e.message) || e || 'unknown error').slice(0, 300);

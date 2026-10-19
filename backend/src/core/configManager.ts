@@ -136,7 +136,9 @@ function resolveWriteTarget(target: string): string {
  * `expectText` is the compare half of compare-and-swap: when given, the target is re-read right before
  * the rename and the write is abandoned ('changed') if its bytes are no longer the ones the caller
  * decided on (null = "the file must not exist"). The temporary file inherits the existing file's
- * permission bits, so a config other services read (the frontend, the gateway) stays readable to them.
+ * owner and group permission bits, so a config other services read (the frontend, the gateway, run as
+ * the same user or group) stays readable to them. The bits for OTHER users are always cleared and a
+ * new file is created 0600: the config holds jwtSecret, dbPassword and gatewaySecret.
  *
  * If the rename keeps failing with a sharing violation, the last resort is an in-place write: not
  * atomic, but the only write a locked file on Windows accepts, and still better than failing the save.
@@ -146,9 +148,10 @@ function writeFileAtomic(target: string, text: string, expectText?: string | nul
     const dir = path.dirname(real);
     const tmp = path.join(dir, `.${path.basename(real)}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 10)}.tmp`);
     let mode: number | undefined;
-    try { mode = fs.statSync(real).mode & 0o777; } catch { /* new file: default permissions */ }
+    try { mode = fs.statSync(real).mode & 0o770; } catch { /* new file: owner-only */ }
+    if (mode === undefined) mode = 0o600;
 
-    const fd = fs.openSync(tmp, 'wx', mode === undefined ? 0o666 : mode);
+    const fd = fs.openSync(tmp, 'wx', mode);
     try {
         fs.writeSync(fd, text);
         fs.fsyncSync(fd);
@@ -157,7 +160,7 @@ function writeFileAtomic(target: string, text: string, expectText?: string | nul
     }
     try {
         // The umask may have narrowed the creation mode; the replacement keeps the original's bits.
-        if (mode !== undefined) { try { fs.chmodSync(tmp, mode); } catch { /* Windows: no POSIX bits */ } }
+        try { fs.chmodSync(tmp, mode); } catch { /* Windows: no POSIX bits */ }
         if (expectText !== undefined && readTextOrNull(real) !== expectText) {
             fs.rmSync(tmp, { force: true });
             return 'changed';
@@ -172,7 +175,8 @@ function writeFileAtomic(target: string, text: string, expectText?: string | nul
                     sleepSync(RENAME_RETRY_DELAYS_MS[attempt]);
                     continue;
                 }
-                fs.writeFileSync(real, text);
+                fs.writeFileSync(real, text, { mode });
+                try { fs.chmodSync(real, mode); } catch { /* Windows: no POSIX bits */ }
                 fs.rmSync(tmp, { force: true });
                 break;
             }

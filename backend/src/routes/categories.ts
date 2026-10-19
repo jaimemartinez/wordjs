@@ -14,6 +14,7 @@ const { can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 // THE SCALAR QUERY RULE — see core/query-params.
 const { requireScalarQuery, requireRouteId } = require('../core/query-params');
+const { perPageParam, pageOffset } = require('../core/pagination');
 
 const TAXONOMY = 'category';
 
@@ -73,8 +74,8 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
         order = 'asc'
     } = req.query;
 
-    const limit = Math.min(parseInt(String(per_page), 10) || 100, 100);
-    const offset = (Math.max(parseInt(String(page), 10) || 1, 1) - 1) * limit;
+    const limit = perPageParam(per_page, 100);
+    const offset = pageOffset(page, limit);
 
     const terms = await Term.findAll({
         taxonomy: TAXONOMY,

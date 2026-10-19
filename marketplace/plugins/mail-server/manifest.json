@@ -1,7 +1,7 @@
 {
     "id": "mail-server",
     "name": "Mail Server",
-    "version": "3.0.2",
+    "version": "3.0.3",
     "description": "Complete mail server: responsive webmail (filters, blocked senders, templates, scheduled send, auto-forward) and a server console (mailboxes and quotas, aliases, outbound queue, policies) on a real MTA with DKIM/SPF/DNS tooling",
     "author": "WordJS",
     "isolated": true,
@@ -87,7 +87,7 @@
         },
         {
             "scope": "network",
-            "reason": "Resolve MX records (DNS) and deliver mail directly to remote MTAs / a configured relay (NET/TLS)."
+            "reason": "Resolve MX records and the TXT records that authenticate inbound mail (SPF, DKIM keys, DMARC policies) over the host DNS bridge, and deliver mail directly to remote MTAs / a configured relay (NET/TLS)."
         },
         {
             "scope": "smtp",

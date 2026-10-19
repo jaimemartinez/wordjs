@@ -153,6 +153,13 @@ extraEnv:
     value: info
 ```
 
+**Database TLS** (with `WORDJS_PRESEED_CONFIG=1` and an external database): `WORDJS_DB_SSL=true` connects
+over TLS and **verifies** the server certificate. For a private or managed-database CA, mount its PEM from
+a Secret and set `WORDJS_DB_SSL_CA` to that path. `WORDJS_DB_SSL_REJECT_UNAUTHORIZED=false` skips
+verification (encrypted but unauthenticated, logged as a warning); prefer the CA. The setup wizard offers
+the same two settings when you pick PostgreSQL or MySQL there. See
+[`documentation/database.md`](../../../documentation/database.md).
+
 **Media offload.** With the `WORDJS_MEDIA_*` variables (`WORDJS_MEDIA_STORAGE=s3`, `WORDJS_MEDIA_S3_BUCKET`,
 `WORDJS_MEDIA_S3_REGION`, `WORDJS_MEDIA_S3_ENDPOINT`, `WORDJS_MEDIA_S3_ACCESS_KEY_ID`,
 `WORDJS_MEDIA_S3_SECRET_ACCESS_KEY`, `WORDJS_MEDIA_PUBLIC_URL`, …) public media is written to an

@@ -51,6 +51,9 @@ x-app-env: &app-env
   WORDJS_DB_USER: wordjs
   WORDJS_DB_PASSWORD: wordjs
   WORDJS_DB_NAME: wordjs
+  # TLS to an external database (verified by default): WORDJS_DB_SSL: "true", plus WORDJS_DB_SSL_CA:
+  # /run/secrets/db-ca.pem for a private CA. WORDJS_DB_SSL_REJECT_UNAUTHORIZED: "false" skips verification
+  # (warned at boot). The bundled postgres service below is reached over the compose network, without TLS.
   # Redis — shared, enabled (turns on cross-node coherence + shared rate limiting + SSE fan-out).
   WORDJS_REDIS_ENABLED: "true"
   WORDJS_REDIS_HOST: redis

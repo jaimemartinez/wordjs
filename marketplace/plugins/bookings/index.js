@@ -44,7 +44,7 @@
 
 exports.metadata = {
     name: 'Bookings',
-    version: '1.0.1',
+    version: '1.0.2',
     description: 'Services with weekly availability, public slot picker, race-safe reservations, email confirmation, admin agenda.',
     author: 'WordJS',
 };
@@ -344,6 +344,26 @@ exports.init = async function (wordjs) {
         };
     };
     const allowBook = makeLimiter(5, 60000);     // reservation attempts per client per minute
+
+    // Confirmation mails to one address are bounded whatever clients ask (rotating clients defeat a
+    // per-client limit, and an expired booking frees its place under the per-email cap): past
+    // MAIL_PER_ADDRESS_MAX in the window the booking is released and the visitor asked to retry later.
+    const MAIL_PER_ADDRESS_MAX = 5;
+    const MAIL_PER_ADDRESS_WINDOW_MS = 60 * 60 * 1000;
+    const mailSentTo = new Map(); // lower-cased address -> timestamps[]
+    const mailBudget = (email) => {
+        const key = String(email || '').trim().toLowerCase();
+        const now = Date.now();
+        if (!mailSentTo.has(key) && mailSentTo.size >= 10000) {
+            for (const [k, ts] of mailSentTo) if (!ts.length || now - ts[ts.length - 1] >= MAIL_PER_ADDRESS_WINDOW_MS) mailSentTo.delete(k);
+            while (mailSentTo.size >= 10000) mailSentTo.delete(mailSentTo.keys().next().value);
+        }
+        const ts = (mailSentTo.get(key) || []).filter((t) => now - t < MAIL_PER_ADDRESS_WINDOW_MS);
+        if (ts.length >= MAIL_PER_ADDRESS_MAX) { mailSentTo.set(key, ts); return false; }
+        ts.push(now);
+        mailSentTo.set(key, ts);
+        return true;
+    };
     const allowLookup = makeLimiter(60, 60000);  // token lookups / cancellations / confirmations / slot queries per client
 
     // A status change that frees the slot frees every claim in the same UPDATE.
@@ -731,7 +751,11 @@ exports.init = async function (wordjs) {
             const booking = { date: dateStr, time, token, customer_name: customerName, customer_email: customerEmail, customer_phone: customerPhone, notes };
             let mailed = false;
             let noTransport = false;
+            let throttled = false;
+            // The address is not verified yet: the mail carries only the site's own text (never the
+            // name or notes typed here).
             try {
+                if (!mailBudget(customerEmail)) { throttled = true; throw new Error('per-address mail budget spent'); }
                 const base = await confirmBaseUrl(body.page_url);
                 const link = base ? `${base}${base.includes('?') ? '&' : '?'}booking=${token}&confirm=1` : '';
                 await wordjs.mail({
@@ -739,7 +763,7 @@ exports.init = async function (wordjs) {
                     subject: `Confirma tu reserva: ${service.name} — ${dateStr} ${time}`,
                     html: `
                         <h2 style="margin:0 0 12px">Confirma tu reserva</h2>
-                        <p style="margin:4px 0">Hola ${escHtml(customerName)},</p>
+                        <p style="margin:4px 0">Hola,</p>
                         <p style="margin:4px 0">Recibimos una solicitud de reserva con este correo:</p>
                         <p style="margin:4px 0"><strong>${escHtml(service.name)}</strong></p>
                         <p style="margin:4px 0">Fecha: <strong>${dateStr}</strong> a las <strong>${time}</strong> (${service.duration_min} min)</p>
@@ -752,8 +776,8 @@ exports.init = async function (wordjs) {
                 });
                 mailed = true;
             } catch (e) {
-                noTransport = isNoMailTransport(e);
-                console.warn('[bookings] confirmation email failed:', e && e.message);
+                noTransport = !throttled && isNoMailTransport(e);
+                if (!throttled) console.warn('[bookings] confirmation email failed:', e && e.message);
             }
 
             if (mailed) {
@@ -777,6 +801,11 @@ exports.init = async function (wordjs) {
                 try {
                     await db.run(`UPDATE ${T.bookings} SET status = 'expired', ${RELEASE_CLAIMS_SQL} WHERE token = ? AND status = 'pending'`, [token]);
                 } catch (e) { /* expires with the TTL */ }
+                if (throttled) {
+                    return res.status(429).json({
+                        error: 'Ya enviamos varios correos de confirmación a esa dirección. Revisa tu bandeja o inténtalo de nuevo más tarde.',
+                    });
+                }
                 return res.status(422).json({
                     error: 'No pudimos enviar el correo de confirmación a esa dirección. Revisa el email e inténtalo de nuevo.',
                 });

@@ -4,14 +4,14 @@
  * Found by a red-team pass. The verification mail of POST /auth/register and the reset mail of POST
  * /auth/forgot-password put the account's login and the site name into their `html` body raw, and the
  * Auctions marketplace plugin did the same with a bidder's name and the auction title in its "you have
- * been outbid" mail. Any of those values can carry markup — `</code><a href="https://evil.example">…` —
+ * been outbid" mail (that mail now leaves the stored name out entirely: whoever placed a bid typed it). Any of those values can carry markup — `</code><a href="https://evil.example">…` —
  * which then arrives as a working link inside a message the site itself sent: phishing with the site's
  * own sender. The core mails now go through one helper (core/formatting escHtml); the plugin uses the
  * same local escHtml the other marketplace plugins (bookings, job-board, donations) already had.
  *
- * MUTATION PROOF: drop escHtml() around siteName (or the login) in routes/auth.ts, or around
- * prevTop.bidder_name / a.title in marketplace/plugins/auctions/index.js, and the matching case fails
- * with the raw <a href> in the captured mail.
+ * MUTATION PROOF: drop escHtml() around siteName (or the login) in routes/auth.ts, or around a.title
+ * in marketplace/plugins/auctions/index.js, and the matching case fails with the raw <a href> in the
+ * captured mail; put prevTop.bidder_name back into the outbid mail and the auctions case fails.
  */
 
 const { describe, it, before, after } = require('node:test');
@@ -130,6 +130,8 @@ describe('the Auctions plugin\'s outbid mail escapes the bidder name and the auc
         console.log = () => {};
         try { await plugin.init(wordjs); } finally { console.log = savedLog; }
 
+        // Open bidding (no address proof): this case is about what the outbid mail carries.
+        await wordjs.db.run(`INSERT INTO wjp_auctions_settings (name, value) VALUES ('bid_verification', 'none')`);
         const ends = new Date(Date.now() + 24 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
         const ins = await wordjs.db.run(
             `INSERT INTO wjp_auctions_auctions (title, slug, start_price_cents, min_increment_cents, ends_at, anti_snipe_min, status, is_published, created_at)
@@ -151,7 +153,7 @@ describe('the Auctions plugin\'s outbid mail escapes the bidder name and the auc
         assert.strictEqual(mails[0].to, 'first@gmail.com');
         const html = String(mails[0].html);
         assertEscaped(html, 'outbid mail');
-        assert.ok(html.includes('Hola Mallory &lt;/code&gt;'), 'the bidder name must appear escaped');
+        assert.ok(!html.includes('Mallory') && !String(mails[0].text).includes('Mallory'), 'the stored bidder name stays out of the mail');
         assert.ok(html.includes('"Lot &lt;/code&gt;'), 'the title must appear escaped');
         try { if (plugin.deactivate) plugin.deactivate(); } catch { /* best effort */ }
         mem.close();

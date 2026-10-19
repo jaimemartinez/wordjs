@@ -28,6 +28,7 @@ const { asyncHandler } = require('../middleware/errorHandler');
 // THE SCALAR QUERY RULE — see core/query-params. A parameter this router declares scalar arrives
 // once, as a string, or the request is a 400 (the same answer routes/posts.ts already gives).
 const { scalarQueryParam, requireScalarQuery, requireRouteId } = require('../core/query-params');
+const { perPageParam, pageOffset } = require('../core/pagination');
 const { stripTags, escUrl, sanitizeContent, currentTime, currentTimeGMT } = require('../core/formatting');
 // THE COMMENT ABUSE POSTURE (see the block below the query-field table) needs three more things: the
 // limiter constructor, the one honest per-request IP every limiter on this server keys on, and the
@@ -51,6 +52,7 @@ router.param('id', requireRouteId({ code: 'rest_comment_invalid_id', message: 'I
 // Shared, length-capped email validator (the one shape rule) — guards against ReDoS on unbounded input.
 const { isValidAddress } = require('../core/mailbox');
 const { recordAudit } = require('../core/audit');
+const { publicDisplayName } = require('../core/public-identity');
 
 /**
  * One audit row per moderation write, naming the most specific transition — `comment.approve`,
@@ -543,8 +545,8 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
     // A query value is never plainly a string: `?per_page[]=5` makes it an Array and `?per_page[x]=5`
     // an object. parseInt already ToString()s its argument, so String() here is that same coercion
     // written where the compiler can see it - identical result for every shape, junk included.
-    const limit = Math.min(parseInt(String(per_page), 10) || 10, 100);
-    const offset = (Math.max(parseInt(String(page), 10) || 1, 1) - 1) * limit;
+    const limit = perPageParam(per_page, 10);
+    const offset = pageOffset(page, limit);
 
     // Only comment moderators can see non-approved comments AND the private commenter PII (email/IP
     // are gated in toJSON(canModerate) below).
@@ -878,7 +880,9 @@ router.post('/', optionalAuth, commentLimiter, asyncHandler(async (req: Request,
     let userId = 0;
 
     if (req.user) {
-        author = req.user.displayName;
+        // The name a signed-in commenter is stored (and publicly shown) under is their PUBLIC identity,
+        // never the login — core/public-identity's rule, the same one every byline follows.
+        author = publicDisplayName(req.user.id, req.user.displayName, req.user.userLogin);
         email = req.user.userEmail;
         // SECURITY: a logged-in user's stored profile URL is also rendered as a clickable comment-author
         // link (admin moderation UI + public post page), so hold it to the SAME http(s)-only rule the

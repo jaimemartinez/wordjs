@@ -18,7 +18,7 @@
 import React, { useEffect, useRef, useState } from "react";
 
 const API = "/api/v1/plugin/auctions";
-const LS_KEY = "wjau_bidder_v1"; // { profile: {name,email}, bids: { [auctionId]: {token, amountCents} } }
+const LS_KEY = "wjau_bidder_v1"; // { profile: {name,email}, bids: { [auctionId]: {token, amountCents} }, keys: { [email]: bidderKey } }
 
 const STYLES = `
 .wjau { --wjau-a: var(--wjau-accent, #b45309); color: var(--wjs-color-text, #1f2937); }
@@ -68,6 +68,24 @@ const STYLES = `
 `;
 
 // ---- module-level helpers (never define components inside components) ------------------------------
+
+/**
+ * `{ "X-CSRF-Token": <wjs_csrf cookie> }`, or `{}` with no cookie. A visitor who is signed in to the
+ * site sends the session cookie with every request, and the host refuses a cookie-carrying POST that
+ * does not echo this token (double-submit CSRF) — even on a public route. Read fresh per call (the
+ * cookie rotates with the session); a plugin bundle cannot import the frontend's own reader.
+ */
+function csrfHeaders() {
+    if (typeof document === "undefined") return {};
+    for (const part of document.cookie.split(";")) {
+        const raw = part.trim();
+        if (!raw.startsWith("wjs_csrf=")) continue;
+        const value = raw.slice("wjs_csrf=".length);
+        if (!value) return {};
+        try { return { "X-CSRF-Token": decodeURIComponent(value) }; } catch { return { "X-CSRF-Token": value }; }
+    }
+    return {};
+}
 
 function readLs() {
     if (typeof window === "undefined") return {};
@@ -148,7 +166,9 @@ function AuctionDetail({ slug, onBack }) {
     const [amount, setAmount] = useState("");
     const [hp, setHp] = useState("");
     const [busy, setBusy] = useState(false);
-    const [banner, setBanner] = useState(null); // { kind: 'win'|'out'|'err', text }
+    const [banner, setBanner] = useState(null); // { kind: 'win'|'out'|'err'|'info', text }
+    const [codeStep, setCodeStep] = useState(false); // the server mailed a code to prove the address
+    const [code, setCode] = useState("");
     const myBidRef = useRef(null);              // { amountCents } — my last accepted bid on this auction
 
     // Prefill from previous participation on this browser.
@@ -188,62 +208,118 @@ function AuctionDetail({ slug, onBack }) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [slug]);
 
+    const loginMode = !!(data && data.bidVerification === "login");
+
+    const sendBid = async (cents) => {
+        const st = readLs();
+        const keyFor = (st.keys || {})[String(email).trim().toLowerCase()] || "";
+        // A signed-in bidder bids through the account route (the address is the account's own).
+        const res = await fetch(loginMode ? `${API}/bid-user` : `${API}/public/bid`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...csrfHeaders() },
+            body: JSON.stringify({
+                auction_id: data.auction.id,
+                bidder_name: name,
+                bidder_email: email,
+                bidder_key: keyFor,
+                amount_cents: cents,
+                hp,
+                elapsed: Date.now() - mountedAtRef.current,
+            }),
+        });
+        const body = await res.json().catch(() => null);
+        return { res, body };
+    };
+
+    const amountCents = () => Math.round(parseFloat(String(amount).replace(",", ".")) * 100);
+
     const submit = async (e) => {
         e.preventDefault();
         if (!data || !data.auction) return;
         setBanner(null);
-        const cents = Math.round(parseFloat(String(amount).replace(",", ".")) * 100);
+        const cents = amountCents();
         if (!Number.isFinite(cents) || cents <= 0) {
             setBanner({ kind: "err", text: "Escribe un monto válido." });
             return;
         }
         setBusy(true);
         try {
-            const res = await fetch(`${API}/public/bid`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    auction_id: data.auction.id,
-                    bidder_name: name,
-                    bidder_email: email,
-                    amount_cents: cents,
-                    hp,
-                    elapsed: Date.now() - mountedAtRef.current,
-                }),
-            });
-            const body = await res.json().catch(() => null);
-            if (res.ok && body && body.success) {
-                const st = readLs();
-                st.profile = { name, email };
-                st.bids = st.bids || {};
-                st.bids[String(data.auction.id)] = { token: body.token, amountCents: cents };
-                writeLs(st);
-                if (body.isTop) {
-                    myBidRef.current = { amountCents: cents };
-                    setBanner({ kind: "win", text: `¡Vas ganando! Tu puja de ${fmtMoney(cents, data.currencySymbol)} es la más alta.` });
-                } else {
-                    myBidRef.current = null;
-                    setBanner({ kind: "out", text: `Alguien pujó más alto… el precio actual es ${fmtMoney(body.currentPriceCents, data.currencySymbol)}.` });
-                }
-                setAmount("");
-                // Refresh price/history/countdown right away (anti-snipe may have moved ends_at).
-                try {
-                    const r2 = await fetch(`${API}/public/auction?slug=${encodeURIComponent(slug)}`);
-                    if (r2.ok) {
-                        const b2 = await r2.json();
-                        if (b2 && b2.auction) {
-                            setOffsetMs((b2.serverNowMs || Date.now()) - Date.now());
-                            setData(b2);
-                        }
-                    }
-                } catch { /* keep current view */ }
-            } else {
-                setBanner({ kind: "err", text: (body && body.error) || "No se pudo registrar la puja. Inténtalo de nuevo." });
-            }
+            await bidAndReport(cents);
         } catch {
             setBanner({ kind: "err", text: "Error de conexión. Inténtalo de nuevo." });
         } finally {
             setBusy(false);
+        }
+    };
+
+    // Prove the address with the mailed code, keep the bidder key, then place the pending bid.
+    const confirmCode = async (e) => {
+        e.preventDefault();
+        if (!data || !data.auction) return;
+        setBusy(true);
+        try {
+            const res = await fetch(`${API}/public/verify-bidder`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", ...csrfHeaders() },
+                body: JSON.stringify({ bidder_email: email, code: String(code).trim() }),
+            });
+            const body = await res.json().catch(() => null);
+            if (!res.ok || !body || !body.bidder_key) {
+                setBanner({ kind: "err", text: (body && body.error) || "No se pudo verificar el código." });
+                return;
+            }
+            const st = readLs();
+            st.keys = st.keys || {};
+            st.keys[String(email).trim().toLowerCase()] = body.bidder_key;
+            writeLs(st);
+            setCodeStep(false);
+            setCode("");
+            const cents = amountCents();
+            if (Number.isFinite(cents) && cents > 0) await bidAndReport(cents);
+            else setBanner({ kind: "info", text: "Correo confirmado. Ya puedes pujar." });
+        } catch {
+            setBanner({ kind: "err", text: "Error de conexión. Inténtalo de nuevo." });
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const bidAndReport = async (cents) => {
+        const { res, body } = await sendBid(cents);
+        if (res.status === 202 && body && body.needsVerification) {
+            setCodeStep(true);
+            setBanner({ kind: "info", text: body.message || "Te enviamos un código a tu correo." });
+            return;
+        }
+        if (res.ok && body && body.success) {
+            const st = readLs();
+            st.profile = { name, email };
+            st.bids = st.bids || {};
+            st.bids[String(data.auction.id)] = { token: body.token, amountCents: cents };
+            writeLs(st);
+            if (body.isTop) {
+                myBidRef.current = { amountCents: cents };
+                setBanner({ kind: "win", text: `¡Vas ganando! Tu puja de ${fmtMoney(cents, data.currencySymbol)} es la más alta.` });
+            } else {
+                myBidRef.current = null;
+                setBanner({ kind: "out", text: `Alguien pujó más alto… el precio actual es ${fmtMoney(body.currentPriceCents, data.currencySymbol)}.` });
+            }
+            setAmount("");
+            // Refresh price/history/countdown right away (anti-snipe may have moved ends_at).
+            try {
+                const r2 = await fetch(`${API}/public/auction?slug=${encodeURIComponent(slug)}`);
+                if (r2.ok) {
+                    const b2 = await r2.json();
+                    if (b2 && b2.auction) {
+                        setOffsetMs((b2.serverNowMs || Date.now()) - Date.now());
+                        setData(b2);
+                    }
+                }
+            } catch { /* keep current view */ }
+        } else if (res.status === 401 && loginMode) {
+            setBanner({ kind: "err", text: "Inicia sesión para pujar en esta subasta." });
+        } else {
+            setBanner({ kind: "err", text: (body && body.error) || "No se pudo registrar la puja. Inténtalo de nuevo." });
         }
     };
 
@@ -300,7 +376,9 @@ function AuctionDetail({ slug, onBack }) {
                         <form className="wjau-form" onSubmit={submit}>
                             <p className="wjau-section-t" style={{ margin: 0 }}>Haz tu puja</p>
                             <input className="wjau-input" type="text" placeholder="Tu nombre" value={name} onChange={(e) => setName(e.target.value)} required maxLength={120} />
-                            <input className="wjau-input" type="email" placeholder="Tu correo electrónico" value={email} onChange={(e) => setEmail(e.target.value)} required maxLength={200} />
+                            {!loginMode && (
+                                <input className="wjau-input" type="email" placeholder="Tu correo electrónico" value={email} onChange={(e) => { setEmail(e.target.value); setCodeStep(false); }} required maxLength={200} />
+                            )}
                             <input
                                 className="wjau-input"
                                 type="number"
@@ -311,15 +389,37 @@ function AuctionDetail({ slug, onBack }) {
                                 onChange={(e) => setAmount(e.target.value)}
                                 required
                             />
-                            <p className="wjau-hint">Puja mínima: {fmtMoney(a.minNextBidCents, symbol)} (precio actual + incremento de {fmtMoney(a.min_increment_cents, symbol)}).</p>
+                            <p className="wjau-hint">
+                                Puja mínima: {fmtMoney(a.minNextBidCents, symbol)} (precio actual + incremento de {fmtMoney(a.min_increment_cents, symbol)}).
+                                {a.maxNextBidCents ? ` Puja máxima: ${fmtMoney(a.maxNextBidCents, symbol)}.` : ""}
+                                {loginMode ? " Pujas con tu cuenta." : ""}
+                            </p>
                             {/* Honeypot: hidden from humans; bots that fill it are rejected server-side. */}
                             <input className="wjau-hp" type="text" tabIndex={-1} autoComplete="off" value={hp} onChange={(e) => setHp(e.target.value)} aria-hidden="true" />
                             <button type="submit" className="wjau-btn" disabled={busy}>{busy ? "Enviando…" : "Pujar"}</button>
                         </form>
                     )}
 
+                    {canBid && codeStep && (
+                        <form className="wjau-form" onSubmit={confirmCode}>
+                            <p className="wjau-section-t" style={{ margin: 0 }}>Confirma tu correo</p>
+                            <input
+                                className="wjau-input"
+                                type="text"
+                                inputMode="numeric"
+                                autoComplete="one-time-code"
+                                placeholder="Código de 8 dígitos"
+                                value={code}
+                                onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 8))}
+                                required
+                                pattern="\d{8}"
+                            />
+                            <button type="submit" className="wjau-btn" disabled={busy || code.length !== 8}>{busy ? "Comprobando…" : "Confirmar y pujar"}</button>
+                        </form>
+                    )}
+
                     {banner && (
-                        <div className={`wjau-banner ${banner.kind === "win" ? "wjau-banner-win" : banner.kind === "out" ? "wjau-banner-out" : "wjau-banner-err"}`}>
+                        <div className={`wjau-banner ${banner.kind === "win" ? "wjau-banner-win" : banner.kind === "out" ? "wjau-banner-out" : banner.kind === "info" ? "wjau-banner-end" : "wjau-banner-err"}`}>
                             {banner.text}
                         </div>
                     )}

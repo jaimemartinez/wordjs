@@ -417,6 +417,13 @@ exports.cleanup = (req, res) => {
 
 exports.runMigration = async (req, res) => {
     const { targetDriver, dbHost, dbUser, dbPassword, dbName, dbPort } = req.body;
+    // TLS to a server target: verified unless explicitly opted out; a CA is accepted inline (PEM) only,
+    // the same rule as the installer — a path would make this request read a file of the caller's choice.
+    const dbTls = {
+        ssl: req.body.dbSsl === true,
+        ...(typeof req.body.dbSslCa === 'string' && req.body.dbSslCa.includes('-----BEGIN') ? { sslCa: req.body.dbSslCa } : {}),
+        sslRejectUnauthorized: req.body.dbSslRejectUnauthorized !== false,
+    };
     let targetFile = null;
     let targetDriverModule = null;
 
@@ -581,7 +588,7 @@ exports.runMigration = async (req, res) => {
         if (isAsyncTarget) {
             // Dynamic init for an async client-server driver (Postgres / MySQL).
             await targetDriverModule.init({
-                dbConfig: { host: dbHost, user: dbUser, password: dbPassword, name: dbName, port: dbPort }
+                dbConfig: { host: dbHost, user: dbUser, password: dbPassword, name: dbName, port: dbPort, ...dbTls }
             });
             await targetDriverModule.connect();
 
@@ -721,7 +728,8 @@ exports.runMigration = async (req, res) => {
                 name: dbName,
                 // Password is usually saved in .env OR config.
                 // We'll pass it to saveConfig to decide.
-                password: dbPassword
+                password: dbPassword,
+                ...dbTls
             };
         }
 
@@ -729,7 +737,9 @@ exports.runMigration = async (req, res) => {
         const backupConfig = configManager.getConfig();
         if (backupConfig) {
             const backupFile = path.resolve('wordjs-config.backup.json');
-            require('fs').writeFileSync(backupFile, JSON.stringify(backupConfig, null, 2));
+            // The backup is a full copy of the config (jwtSecret, dbPassword…): owner-only, like the config.
+            require('fs').writeFileSync(backupFile, JSON.stringify(backupConfig, null, 2), { mode: 0o600 });
+            try { require('fs').chmodSync(backupFile, 0o600); } catch { /* Windows: no POSIX bits */ }
         }
 
         configManager.saveConfig(newConfig);

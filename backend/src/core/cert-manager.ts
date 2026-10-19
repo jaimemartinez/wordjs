@@ -544,7 +544,8 @@ class CertManager {
             const gwCfgPath = path.join(gwDir, 'gateway-config.json');
             const gwCfg = fs.existsSync(gwCfgPath) ? JSON.parse(fs.readFileSync(gwCfgPath, 'utf8')) : {};
             gwCfg.ssl = { ...(gwCfg.ssl || {}), key: './ssl/live/imported/privkey.pem', cert: './ssl/live/imported/fullchain.pem', enabled: true };
-            fs.writeFileSync(gwCfgPath, JSON.stringify(gwCfg, null, 2));
+            // gateway-config.json holds gatewaySecret: owner-only, like the gateway's own writes.
+            writePrivateKey(gwCfgPath, JSON.stringify(gwCfg, null, 2));
         } catch (e: any) {
             log.warn({ err: e }, '[CertManager] embedded: could not update gateway-config.json');
         }

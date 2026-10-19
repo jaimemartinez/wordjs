@@ -43,6 +43,7 @@ const { asyncHandler } = require('../middleware/errorHandler');
 // or the request is a 400. Same rule firstNonStringField()/invalidParamType() below apply to this
 // file's list and body fields — this is that rule for a single value, reusable by the other routers.
 const { scalarQueryParam, requireRouteId, isRouteId } = require('../core/query-params');
+const { perPageParam, pageOffset } = require('../core/pagination');
 const { saveRevision, isRevisionableMeta } = require('../core/revisions');
 const sanitizeHtml = require('sanitize-html');
 
@@ -438,7 +439,7 @@ const LIST_QUERY_STRING_FIELDS: readonly string[] = Object.freeze([
  * THE IDENTITY-LIST GRAMMAR of `?categories=`, `?tags=` and `?author=`.
  *
  * One comma-separated list per parameter. An element is either a row ID (all digits) or a SLUG — a
- * term's `slug`, or an author's `user_nicename`/`user_login` — split by shape, which is the same rule
+ * term's `slug`, or an author's `user_nicename` (never the login) — split by shape, which is the same rule
  * `routes/seo.ts` applies to the `/author/<segment>/feed.xml` path segment so the two surfaces cannot
  * disagree about what `2` means.
  *
@@ -736,7 +737,7 @@ async function serializeVisibleContent(post: any, user?: ContentRouteUser) {
  *       - in: query
  *         name: author
  *         description: >-
- *           Comma-separated author IDs and/or slugs (user_nicename; a login matches only an account with no nicename) — the
+ *           Comma-separated author IDs and/or slugs (user_nicename; never a login) — the
  *           same identity the author feed resolves, so a public author archive can be listed without
  *           an authenticated users endpoint. Authorization may still narrow the result to the calling
  *           user's own posts when a non-published status is requested.
@@ -828,8 +829,8 @@ router.get('/', optionalAuth, asyncHandler(async (req: MaybeAuthenticatedRequest
         });
     }
 
-    const limit = Math.min(parseInt(String(per_page), 10) || 10, 100);
-    const offset = (Math.max(parseInt(String(page), 10) || 1, 1) - 1) * limit;
+    const limit = perPageParam(per_page, 10);
+    const offset = pageOffset(page, limit);
 
     // Map orderby to database column.
     //

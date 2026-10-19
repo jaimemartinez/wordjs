@@ -270,6 +270,7 @@ const { can } = require('../middleware/permissions');
 const { asyncHandler, UploadRejectedError } = require('../middleware/errorHandler');
 // THE SCALAR QUERY RULE — see core/query-params.
 const { requireScalarQuery, requireRouteId } = require('../core/query-params');
+const { perPageParam, pageOffset } = require('../core/pagination');
 
 // THE ROUTE-ID CONTRACT — see core/query-params. `:id` is an attachment's post id, parsed with a bare
 // `parseInt` at all three sites and handed to `Media.findById` → `Post.findById`, the same sink
@@ -452,8 +453,8 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
     // values: a query parameter is `string | string[] | ParsedQs | ...`, and parseInt's first step is
     // ToString on whatever it is given. `?per_page[]=5` still parses as 5, `?per_page=a&per_page=b`
     // still stringifies to 'a,b' and falls back to the default — identical to the untyped path.
-    const limit = Math.min(parseInt(String(per_page), 10) || 20, 100);
-    const offset = (Math.max(parseInt(String(page), 10) || 1, 1) - 1) * limit;
+    const limit = perPageParam(per_page, 20);
+    const offset = pageOffset(page, limit);
 
     // Same pair of request-value defects as routes/comments.ts (see the note there):
     //  · Object.create(null) so `?orderby=constructor` finds no inherited key and `|| 'post_date'` fires.

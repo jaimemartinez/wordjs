@@ -855,6 +855,100 @@ const MIGRATIONS: Migration[] = [
             await ctx.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_connections_hash ON agent_connections (token_hash)');
             await ctx.exec('CREATE INDEX IF NOT EXISTS idx_agent_connections_user ON agent_connections (user_id)');
         }
+    },
+    {
+        // THE PUBLIC IDENTITY IS NOT THE LOGIN — for the accounts created while it was.
+        //
+        // `display_name` defaulted to the login (User.create, self-registration, a WordPress export's
+        // own default) and migration 0015 then derived `user_nicename` from that display name, so on an
+        // upgraded install most bylines, author slugs, author feeds and signed-in commenters' names were
+        // the sign-in name of the account. User.create no longer writes one (core/public-identity is the
+        // rule); this repairs the rows written before:
+        //   - a display name that is empty or IS the login (case-insensitive) becomes the placeholder
+        //     `User <id>`, and the comments that account left under its login are renamed with it;
+        //   - a nicename that is the login, or what the login slugifies to, is re-derived from the
+        //     (now public) display name — the placeholder's `user-<id>` when that would be the login
+        //     again — with 0015's all-digit guard and -2/-3 de-duplication.
+        // AN AUTHOR'S OLD ARCHIVE URL KEEPS WORKING: for an account that has published, the slug it is
+        // moved off is kept as `previous_nicename` user meta (a protected key), which the author lookups
+        // (Post._authorCondition, the author feed) still resolve — to the same posts, under the new
+        // canonical slug. An account that never published has no public URL to keep, so none is kept.
+        //
+        // RE-RUNNABLE and NEVER FATAL, like 0015: a repaired row no longer matches, and the read-side
+        // guard in Post.getAuthorsForIds already keeps a login-equal display name off the byline if this
+        // is skipped.
+        id: '0017_public_identity_not_login',
+        up: async (ctx: MigrationCtx) => {
+            try {
+                const { sanitizeTitle } = require('./formatting');
+                const { isLoginDerivedName, isLoginDerivedSlug, placeholderDisplayName } = require('./public-identity');
+                const PREVIOUS = 'previous_nicename';
+                const rows = (await ctx.all('SELECT id, user_login, display_name, user_nicename FROM users ORDER BY id')) || [];
+                const trimmed = (v: any): string => (v == null ? '' : String(v).trim());
+
+                const taken = new Set<string>();
+                for (const row of rows) {
+                    const existing = trimmed(row.user_nicename);
+                    if (existing) taken.add(existing);
+                }
+                for (const m of (await ctx.all('SELECT meta_value FROM user_meta WHERE meta_key = ?', [PREVIOUS])) || []) {
+                    if (trimmed(m.meta_value)) taken.add(trimmed(m.meta_value));
+                }
+                const published = new Set<string>(
+                    ((await ctx.all("SELECT DISTINCT author_id FROM posts WHERE post_status = 'publish'")) || [])
+                        .map((r: any) => String(r.author_id)),
+                );
+
+                let renamed = 0;
+                let reslugged = 0;
+                for (const row of rows) {
+                    const login = row.user_login;
+                    const display = trimmed(row.display_name);
+                    let publicName = display;
+                    if (!display || isLoginDerivedName(display, login)) {
+                        publicName = placeholderDisplayName(row.id);
+                        await ctx.run('UPDATE users SET display_name = ? WHERE id = ?', [publicName, row.id]);
+                        await ctx.run(
+                            'UPDATE comments SET comment_author = ? WHERE user_id = ? AND LOWER(TRIM(comment_author)) = LOWER(?)',
+                            [publicName, row.id, String(login == null ? '' : login).trim()],
+                        );
+                        renamed++;
+                    }
+
+                    const nicename = trimmed(row.user_nicename);
+                    const loginSlug = nicename !== '' && isLoginDerivedSlug(nicename, login);
+                    // An EMPTY slug is only filled when the display name was just replaced — an empty one
+                    // next to a real (non-latin) name is 0015's deliberate "addressed by id".
+                    if (!loginSlug && !(nicename === '' && publicName !== display)) continue;
+
+                    let base = sanitizeTitle(publicName);
+                    if (!base || isLoginDerivedSlug(base, login)) base = sanitizeTitle(placeholderDisplayName(row.id));
+                    // TWIN of models/User.ts NUMERIC_NICENAME_PREFIX (see migration 0015).
+                    const seed = /^[0-9]+$/.test(base) ? `user-${base}` : base;
+                    let candidate = seed;
+                    let counter = 1;
+                    while (taken.has(candidate)) {
+                        counter++;
+                        candidate = `${seed}-${counter}`;
+                    }
+                    await ctx.run('UPDATE users SET user_nicename = ? WHERE id = ?', [candidate, row.id]);
+                    taken.add(candidate);
+                    if (loginSlug && published.has(String(row.id))) {
+                        const kept = await ctx.get('SELECT user_id FROM user_meta WHERE user_id = ? AND meta_key = ? AND meta_value = ?', [row.id, PREVIOUS, nicename]);
+                        if (!kept) {
+                            await ctx.run('INSERT INTO user_meta (user_id, meta_key, meta_value) VALUES (?, ?, ?)', [row.id, PREVIOUS, nicename]);
+                        }
+                    }
+                    reslugged++;
+                }
+
+                if (renamed > 0 || reslugged > 0) {
+                    log.info({ renamed, reslugged }, `   ✓ [migration 0017] public identity separated from the login for ${renamed} display name(s) and ${reslugged} author slug(s)`);
+                }
+            } catch (e: any) {
+                log.warn({ err: e }, '⚠️  [migration 0017] public-identity repair skipped (non-fatal — bylines still never print a login-equal display name)');
+            }
+        }
     }
 ];
 
