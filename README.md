@@ -290,7 +290,7 @@ Before exposing WordJS to the internet: have it **independently audited**, **rot
 - **Communication:** REST + JWT + scoped API tokens + WebSockets/SSE
 - **Gateway:** Express + Node `cluster`, http-proxy, mTLS internal channel
 - **Sandbox:** `child_process` OS-process isolation + native kernel confinement (Landlock/seccomp-bpf, AppContainer, Seatbelt) + `acorn` code scanning + runtime require proxies + layered memory caps (cgroup / Windows Job Object / RSS-poll) + a reactive per-plugin CPU watchdog (`sandbox.cpuBurstSeconds`, default 60 s at ≥ 95% of one core)
-- **TLS:** `acme-client` (Let's Encrypt HTTP-01 / DNS-01)
+- **TLS:** a built-in RFC 8555 ACME client (Let's Encrypt HTTP-01 / DNS-01) and X.509 toolkit on Node's own `crypto` — no third-party crypto code
 - **Database:** SQLite (`better-sqlite3` / `sql.js`), PostgreSQL (`pg`), or MySQL/MariaDB (`mysql2`)
 - **Tooling:** ESLint + Prettier, `node:test`, GitHub Actions CI
 

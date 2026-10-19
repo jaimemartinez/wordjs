@@ -23,7 +23,7 @@ const os = require('os');
 const path = require('path');
 const https = require('https');
 const crypto = require('crypto');
-const forge = require('node-forge');
+const x509 = require('../core/x509');
 
 const ORIGINAL_CWD = process.cwd();
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), `wjs-cm-gateway-${process.pid}-`));
@@ -37,52 +37,48 @@ delete process.env.WORDJS_EMBEDDED;
 
 const configManager = require('../core/configManager');
 const certManager = require('../core/cert-manager');
-const acme = require('acme-client');
+const acme = require('../core/acme-client');
 
 // ─── a throwaway cluster PKI ───────────────────────────────────────────────────────────────────────
 
 function keyPair() {
     const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
-    return {
-        pub: forge.pki.publicKeyFromPem(publicKey.export({ type: 'spki', format: 'pem' })),
-        priv: forge.pki.privateKeyFromPem(privateKey.export({ type: 'pkcs1', format: 'pem' })),
-        pem: privateKey.export({ type: 'pkcs1', format: 'pem' }) as string,
-    };
+    return { pub: publicKey, priv: privateKey, pem: privateKey.export({ type: 'pkcs1', format: 'pem' }) as string };
 }
 
-function certificate(cn: string, keys: any, issuer: { cert: any; key: any } | null, altNames: any[] = [], days = 30) {
-    const cert = forge.pki.createCertificate();
-    cert.publicKey = keys.pub;
-    cert.serialNumber = crypto.randomBytes(8).toString('hex');
-    cert.validity.notBefore = new Date(Date.now() - 60000);
-    cert.validity.notAfter = new Date(Date.now() + days * 864e5);
-    cert.setSubject([{ name: 'commonName', value: cn }]);
-    cert.setIssuer(issuer ? issuer.cert.subject.attributes : [{ name: 'commonName', value: cn }]);
-    cert.setExtensions(issuer
-        ? [{ name: 'basicConstraints', cA: false }, { name: 'keyUsage', digitalSignature: true, keyEncipherment: true },
-            { name: 'extKeyUsage', serverAuth: true, clientAuth: true }, ...(altNames.length ? [{ name: 'subjectAltName', altNames }] : [])]
-        : [{ name: 'basicConstraints', cA: true }, { name: 'keyUsage', keyCertSign: true, cRLSign: true }]);
-    cert.sign(issuer ? issuer.key : keys.priv, forge.md.sha256.create());
-    return { cert, pem: forge.pki.certificateToPem(cert) as string };
+function certificate(cn: string, keys: any, issuer: { cert: string; key: any } | null, altNames: string[] = [], days = 30) {
+    const pem: string = x509.createCertificate({
+        subject: [['CN', cn]],
+        ...(issuer ? { issuerCertPem: issuer.cert } : {}),
+        publicKey: keys.pub,
+        signingKey: issuer ? issuer.key : keys.priv,
+        serialHex: crypto.randomBytes(8).toString('hex'),
+        notBefore: new Date(Date.now() - 60000),
+        notAfter: new Date(Date.now() + days * 864e5),
+        ...(issuer
+            ? { ca: false, keyUsage: ['digitalSignature', 'keyEncipherment'], extKeyUsage: ['serverAuth', 'clientAuth'], altNames }
+            : { ca: true, keyUsage: ['keyCertSign', 'cRLSign'] }),
+    });
+    return { cert: pem, pem };
 }
 
 const caKeys = keyPair();
 const ca = certificate('Test Cluster CA', caKeys, null);
 const issuer = { cert: ca.cert, key: caKeys.priv };
 const gwKeys = keyPair();
-const gatewayCert = certificate('gateway-internal', gwKeys, issuer, [{ type: 2, value: 'localhost' }, { type: 7, ip: '127.0.0.1' }]);
+const gatewayCert = certificate('gateway-internal', gwKeys, issuer, ['localhost', '127.0.0.1']);
 // The same identity, naming ONLY its IP: tells "verified by its own name" apart from "verified as localhost".
-const ipOnlyCert = certificate('gateway-internal', gwKeys, issuer, [{ type: 7, ip: '127.0.0.1' }]);
+const ipOnlyCert = certificate('gateway-internal', gwKeys, issuer, ['127.0.0.1']);
 const beKeys = keyPair();
-const backendCert = certificate('backend', beKeys, issuer, [{ type: 2, value: 'localhost' }]);
+const backendCert = certificate('backend', beKeys, issuer, ['localhost']);
 const rogueCaKeys = keyPair();
 const rogueCa = certificate('Rogue CA', rogueCaKeys, null);
 const rogueKeys = keyPair();
-const rogueCert = certificate('gateway-internal', rogueKeys, { cert: rogueCa.cert, key: rogueCaKeys.priv }, [{ type: 2, value: 'localhost' }, { type: 7, ip: '127.0.0.1' }]);
+const rogueCert = certificate('gateway-internal', rogueKeys, { cert: rogueCa.cert, key: rogueCaKeys.priv }, ['localhost', '127.0.0.1']);
 // Issued by the RIGHT cluster CA, to another service: every service certificate names localhost and
 // 127.0.0.1, so a process holding frontend.key that binds the control-plane port passes the name check.
 const feKeys = keyPair();
-const frontendCert = certificate('frontend', feKeys, issuer, [{ type: 2, value: 'localhost' }, { type: 7, ip: '127.0.0.1' }]);
+const frontendCert = certificate('frontend', feKeys, issuer, ['localhost', '127.0.0.1']);
 
 const CERTS = path.join(TMP, 'certs');
 fs.mkdirSync(CERTS);
@@ -273,15 +269,15 @@ describe('one certificate for several names', () => {
     beforeEach(() => {
         calls = [];
         for (const k of ['initClient', 'client', 'writeChallengeFile', 'pushCertToGateway']) saved[k] = certManager[k];
-        saved.createCsr = acme.forge.createCsr;
+        saved.createCsr = acme.crypto.createCsr;
         certManager.initClient = async () => { /* no network */ };
         certManager.writeChallengeFile = async (token: string) => { calls.push(['writeChallengeFile', token]); };
         certManager.pushCertToGateway = async () => { calls.push(['push']); };
-        acme.forge.createCsr = async (opts: any) => { calls.push(['createCsr', opts]); return [Buffer.from('key'), Buffer.from('csr')]; };
+        acme.crypto.createCsr = async (opts: any) => { calls.push(['createCsr', opts]); return [Buffer.from('key'), Buffer.from('csr')]; };
     });
     afterEach(() => {
         for (const k of Object.keys(saved)) {
-            if (k === 'createCsr') acme.forge.createCsr = saved.createCsr; else certManager[k] = saved[k];
+            if (k === 'createCsr') acme.crypto.createCsr = saved.createCsr; else certManager[k] = saved[k];
         }
         for (const d of [A, B]) fs.rmSync(path.join(LIVE, d), { recursive: true, force: true });
     });
@@ -341,7 +337,7 @@ describe('one certificate for several names', () => {
         try {
             // A live certificate for A only, 60 days left — not due by date.
             const leafKeys = keyPair();
-            const leaf = certificate(A, leafKeys, issuer, [{ type: 2, value: A }], 60);
+            const leaf = certificate(A, leafKeys, issuer, [A], 60);
             fs.mkdirSync(path.join(LIVE, A), { recursive: true });
             fs.writeFileSync(path.join(LIVE, A, 'fullchain.pem'), leaf.pem);
             assert.deepStrictEqual(certManager.readLocalCert(A).names, [A]);

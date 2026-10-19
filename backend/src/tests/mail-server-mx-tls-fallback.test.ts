@@ -34,7 +34,7 @@ import path from 'path';
 import tls from 'tls';
 import vm from 'vm';
 
-const forge = require('node-forge');
+const x509 = require('../core/x509');
 const realNodemailer = require('nodemailer');
 const { SMTPServer } = require('smtp-server');
 
@@ -47,7 +47,7 @@ const MAIL = { fromEmail: 'news@site.example', fromName: 'Site', subject: 'Hello
 
 // --- Certificates -------------------------------------------------------------------------------
 
-type Cert = { key: string; pem: string; priv: any; cert: any };
+type Cert = { key: string; pem: string };
 
 function makeCert(o: { cn: string; san?: string; issuer?: Cert; ca?: boolean; notBefore?: Date; notAfter?: Date }): Cert {
     const pair = crypto.generateKeyPairSync('rsa', {
@@ -55,21 +55,19 @@ function makeCert(o: { cn: string; san?: string; issuer?: Cert; ca?: boolean; no
         privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
         publicKeyEncoding: { type: 'spki', format: 'pem' },
     });
-    const priv = forge.pki.privateKeyFromPem(pair.privateKey);
-    const cert = forge.pki.createCertificate();
-    cert.publicKey = forge.pki.publicKeyFromPem(pair.publicKey);
-    cert.serialNumber = '01' + crypto.randomBytes(8).toString('hex');
-    cert.validity.notBefore = o.notBefore || new Date(Date.now() - 86400000);
-    cert.validity.notAfter = o.notAfter || new Date(Date.now() + 86400000);
-    const subject = [{ name: 'commonName', value: o.cn }];
-    cert.setSubject(subject);
-    cert.setIssuer(o.issuer ? o.issuer.cert.subject.attributes : subject);
-    const extensions: any[] = [{ name: 'basicConstraints', cA: !!o.ca }];
-    if (o.ca) extensions.push({ name: 'keyUsage', keyCertSign: true, cRLSign: true, digitalSignature: true });
-    if (o.san) extensions.push({ name: 'subjectAltName', altNames: [{ type: 2, value: o.san }] });
-    cert.setExtensions(extensions);
-    cert.sign(o.issuer ? o.issuer.priv : priv, forge.md.sha256.create());
-    return { key: pair.privateKey, pem: forge.pki.certificateToPem(cert), priv, cert };
+    const pem = x509.createCertificate({
+        subject: [['CN', o.cn]],
+        ...(o.issuer ? { issuerCertPem: o.issuer.pem } : {}),
+        publicKey: pair.publicKey,
+        signingKey: o.issuer ? o.issuer.key : pair.privateKey,
+        serialHex: '01' + crypto.randomBytes(8).toString('hex'),
+        notBefore: o.notBefore || new Date(Date.now() - 86400000),
+        notAfter: o.notAfter || new Date(Date.now() + 86400000),
+        ca: !!o.ca,
+        ...(o.ca ? { keyUsage: ['keyCertSign', 'cRLSign', 'digitalSignature'] } : {}),
+        ...(o.san ? { altNames: [o.san] } : {}),
+    });
+    return { key: pair.privateKey, pem };
 }
 
 const TRUSTED_CA = makeCert({ cn: 'Suite Trusted Root', ca: true });

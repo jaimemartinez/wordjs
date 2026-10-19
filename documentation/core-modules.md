@@ -61,7 +61,7 @@ Manages SSL/TLS certificates via Let's Encrypt (ACME) or manual uploads.
 *   **Custom Certs:** Supports uploading existing `.pem` files via the Admin UI.
 *   **Configuration:** Updates `wordjs-config.json` with paths to the active keys and certs.
 
-> **Not to be confused with `backend/src/core/certManager.ts`.** That module (camel-case, `node-forge`) generates the **internal** mTLS material, not public certificates: `generateClusterCA()` mints a self-signed cluster root CA and `generateServiceCert(name, caKey, caCert, altNames)` issues a service identity signed by it, writing private keys `0600` into `backend/certs/` (`0700`). Its caller is the install wizard (`issueLocalClusterIdentity()` in `routes/setup.ts`), which issues the single-host internal identities (`localhost` and `127.0.0.1` are always in their SANs). Separate-mode clusters use the gateway's own CA instead (§10).
+> **Not to be confused with `backend/src/core/certManager.ts`.** That module (camel-case, built on `core/x509.js`, Node's `crypto`) generates the **internal** mTLS material, not public certificates: `generateClusterCA()` mints a self-signed cluster root CA and `generateServiceCert(name, caKey, caCert, altNames)` issues a service identity signed by it, writing private keys `0600` into `backend/certs/` (`0700`). Its caller is the install wizard (`issueLocalClusterIdentity()` in `routes/setup.ts`), which issues the single-host internal identities (`localhost` and `127.0.0.1` are always in their SANs). Separate-mode clusters use the gateway's own CA instead (§10).
 
 ---
 

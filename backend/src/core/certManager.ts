@@ -1,8 +1,9 @@
-const forge = require('node-forge');
 const fs = require('fs');
 const path = require('path');
 const log = require('./module-logger').moduleLogger('core/certManager');
-const { pki, md } = forge;
+// Certificates are built and signed with Node's crypto (./x509.js — the toolkit the gateway's cluster CA
+// and setup/ use too), so every cluster PKI WordJS makes has the same shape whoever made it.
+const x509 = require('./x509');
 
 const CERTS_DIR = path.resolve(__dirname, '../../certs');
 
@@ -25,47 +26,21 @@ function writePrivateKey(filePath: string, content: string) {
 function generateClusterCA() {
     log.info('🔐 Generating Cluster Root CA...');
 
-    // 1. Generate Keypair
-    const keys = pki.rsa.generateKeyPair(2048);
+    const keys = x509.generateRsaKeyPair(2048);
+    const notBefore = new Date();
+    const notAfter = new Date(notBefore);
+    notAfter.setFullYear(notBefore.getFullYear() + 10); // 10 years
 
-    // 2. Create Certificate
-    const cert = pki.createCertificate();
-    cert.publicKey = keys.publicKey;
-    cert.serialNumber = '01';
-
-    // Validity
-    cert.validity.notBefore = new Date();
-    cert.validity.notAfter = new Date();
-    cert.validity.notAfter.setFullYear(cert.validity.notBefore.getFullYear() + 10); // 10 years
-
-    // Identifiers
-    const attrs = [{
-        name: 'commonName',
-        value: 'WordJS Cluster Root CA'
-    }, {
-        name: 'organizationName',
-        value: 'WordJS Internal Cluster'
-    }];
-
-    cert.setSubject(attrs);
-    cert.setIssuer(attrs); // Self-signed
-
-    // Extensions
-    cert.setExtensions([{
-        name: 'basicConstraints',
-        cA: true
-    }, {
-        name: 'keyUsage',
-        keyCertSign: true,
-        cRLSign: true
-    }]);
-
-    // Sign
-    cert.sign(keys.privateKey, md.sha256.create());
-
-    // Save
-    const caKeyPem = pki.privateKeyToPem(keys.privateKey);
-    const caCertPem = pki.certificateToPem(cert);
+    const caCertPem: string = x509.createCertificate({
+        subject: [['CN', 'WordJS Cluster Root CA'], ['O', 'WordJS Internal Cluster']], // self-signed
+        publicKey: keys.publicKey,
+        signingKey: keys.privateKey,
+        notBefore,
+        notAfter,
+        ca: true,
+        keyUsage: ['keyCertSign', 'cRLSign'],
+    });
+    const caKeyPem: string = keys.privateKeyPem;
 
     writePrivateKey(path.join(CERTS_DIR, 'cluster-ca.key'), caKeyPem);
     fs.writeFileSync(path.join(CERTS_DIR, 'cluster-ca.crt'), caCertPem);
@@ -74,74 +49,34 @@ function generateClusterCA() {
 }
 
 /**
- * Generate a Service Certificate signed by the CA
+ * Generate a Service Certificate signed by the CA. The issuer is the CA certificate's subject, copied
+ * byte for byte, so a CA made by an older release keeps issuing certificates that chain to it.
  * @param {string} serviceName
  * @param {string} caKeyPem
  * @param {string} caCertPem
- * @param {Array<{type: number, value?: string, ip?: string}>} additionalAltNames
+ * @param {string[]} additionalAltNames extra DNS names / IP literals for the subjectAltName
  */
-function generateServiceCert(serviceName: string, caKeyPem: string, caCertPem: string, additionalAltNames = []) {
+function generateServiceCert(serviceName: string, caKeyPem: string, caCertPem: string, additionalAltNames: string[] = []) {
     log.info({ serviceName }, `🔐 Generating Certificate for service: ${serviceName}...`);
 
-    const caKey = pki.privateKeyFromPem(caKeyPem);
-    const caCert = pki.certificateFromPem(caCertPem);
+    const keys = x509.generateRsaKeyPair(2048);
+    const notBefore = new Date();
+    const notAfter = new Date(notBefore);
+    notAfter.setFullYear(notBefore.getFullYear() + 2); // 2 years
 
-    // 1. Generate Keypair
-    const keys = pki.rsa.generateKeyPair(2048);
-
-    // 2. Create Certificate
-    const cert = pki.createCertificate();
-    cert.publicKey = keys.publicKey;
-    cert.serialNumber = new Date().getTime().toString(); // Random serial
-
-    // Validity
-    cert.validity.notBefore = new Date();
-    cert.validity.notAfter = new Date();
-    cert.validity.notAfter.setFullYear(cert.validity.notBefore.getFullYear() + 2); // 2 years
-
-    // Subject
-    const attrs = [{
-        name: 'commonName',
-        value: serviceName
-    }, {
-        name: 'organizationName',
-        value: 'WordJS Service'
-    }];
-    cert.setSubject(attrs);
-
-    // Issuer (The CA)
-    cert.setIssuer(caCert.subject.attributes);
-
-    // Prepare Alt Names
-    const altNames = [
-        { type: 2, value: 'localhost' },
-        { type: 7, ip: '127.0.0.1' },
-        ...additionalAltNames
-    ];
-
-    // Extensions
-    cert.setExtensions([{
-        name: 'basicConstraints',
-        cA: false
-    }, {
-        name: 'keyUsage',
-        digitalSignature: true,
-        keyEncipherment: true
-    }, {
-        name: 'extKeyUsage',
-        serverAuth: true,
-        clientAuth: true
-    }, {
-        name: 'subjectAltName',
-        altNames: altNames
-    }]);
-
-    // Sign with CA Private Key
-    cert.sign(caKey, md.sha256.create());
-
-    // Save
-    const keyPem = pki.privateKeyToPem(keys.privateKey);
-    const certPem = pki.certificateToPem(cert);
+    const certPem: string = x509.createCertificate({
+        subject: [['CN', serviceName], ['O', 'WordJS Service']],
+        issuerCertPem: caCertPem,
+        publicKey: keys.publicKey,
+        signingKey: caKeyPem,
+        notBefore,
+        notAfter,
+        ca: false,
+        keyUsage: ['digitalSignature', 'keyEncipherment'],
+        extKeyUsage: ['serverAuth', 'clientAuth'],
+        altNames: [...new Set(['localhost', '127.0.0.1', ...additionalAltNames])],
+    });
+    const keyPem: string = keys.privateKeyPem;
 
     writePrivateKey(path.join(CERTS_DIR, `${serviceName}.key`), keyPem);
     fs.writeFileSync(path.join(CERTS_DIR, `${serviceName}.crt`), certPem);

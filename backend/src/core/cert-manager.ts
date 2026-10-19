@@ -1,9 +1,8 @@
-const acme = require('acme-client');
+// The RFC 8555 client (./acme-client). It bounds every outbound ACME HTTP attempt — directory, order,
+// finalize AND the http-01 local pre-verify fetch — at 10 s: unbounded, an unreachable port 80 left each
+// verify attempt hanging on the OS TCP timeout and the admin request froze for minutes.
+const acme = require('./acme-client');
 const log = require('./module-logger').moduleLogger('core/cert-manager');
-// Bound every outbound ACME HTTP attempt (directory/order/finalize AND the http-01 local pre-verify
-// fetch). Without this, an unreachable port 80 left each verify attempt hanging on the OS TCP
-// timeout and the admin request froze for minutes.
-acme.axios.defaults.timeout = 10000;
 const fs = require('fs');
 const path = require('path');
 const dns = require('dns').promises;
@@ -194,7 +193,7 @@ class CertManager {
             accountKey = fs.readFileSync(this.accountKeyPath);
         } else {
             log.info('[CertManager] Generatng new Account Key...');
-            accountKey = await acme.forge.createPrivateKey(); // ECDSA by default in newer lib or RSA
+            accountKey = await acme.crypto.createPrivateKey(); // RSA 2048, PKCS#1 — the format existing account keys have
             writePrivateKey(this.accountKeyPath, accountKey);
         }
 
@@ -202,7 +201,8 @@ class CertManager {
         this.client = new acme.Client({
             directoryUrl: this.directoryUrl,
             accountKey: accountKey,
-            // acme-client's default backoff (10 attempts, 5s→30s) lets verifyChallenge /
+            timeout: 10000,
+            // The client's default backoff (10 attempts, 5s→30s) lets verifyChallenge /
             // waitForValidStatus spin ~4 minutes INSIDE an admin HTTP request — the UI just hangs on
             // "Processing...". 5 attempts at 3s→10s caps each phase under ~40s of backoff while still
             // riding out normal CA validation latency.
@@ -232,7 +232,7 @@ class CertManager {
     /**
      * Finalize an order we hold only the URL of, and return the finalized order.
      *
-     * WHY THIS EXISTS: acme-client's finalizeOrder(order, csr) requires `order.finalize` — the URL the
+     * WHY THIS EXISTS: the ACME client's finalizeOrder(order, csr) requires `order.finalize` — the URL the
      * CA hands back when the order is created. Both call sites used to pass a hand-made `{ url }` stub,
      * which has no `finalize`, so the library threw "Unable to finalize order, URL not found" and NO
      * certificate could ever be issued — by HTTP-01 or DNS-01. Re-READING the order from its URL is
@@ -340,7 +340,7 @@ class CertManager {
             }
 
             // 4. Finalize — every name in the CSR, or the CA refuses an order whose identifiers differ.
-            const [key, csr] = await acme.forge.createCsr({
+            const [key, csr] = await acme.crypto.createCsr({
                 commonName: domain,
                 ...(domains.length > 1 ? { altNames: domains } : {}),
             });
@@ -401,7 +401,7 @@ class CertManager {
             }
 
             // getChallengeKeyAuthorization() ALREADY returned the RFC 8555 §8.4 TXT value for dns-01
-            // (base64url(sha256(`token.thumbprint`))) — acme-client digests it internally. The old
+            // (base64url(sha256(`token.thumbprint`))) — the ACME client digests it internally. The old
             // getDNSDigest() hashed it a SECOND time, so the UI displayed a value no CA could ever
             // match and DNS-01 issuance was permanently broken.
             const txtValue = orderData.keyAuthorization;
@@ -472,7 +472,7 @@ class CertManager {
             }
 
             // Create CSR and finalize
-            const [key, csr] = await acme.forge.createCsr({
+            const [key, csr] = await acme.crypto.createCsr({
                 commonName: step1Data.domain,
             });
 

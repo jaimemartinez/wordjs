@@ -136,7 +136,7 @@ test('checkDNSPropagation trims the expected value and rejects an empty one', as
  * challenge URL only exists at the one that minted it.
  */
 test('initClient does not stay pinned to staging once a staging order has run', async () => {
-    const acmeLib = require('acme-client');
+    const acmeLib = require('../core/acme-client');
     const OrigClient = acmeLib.Client;
     const origKeyPath = certManager.accountKeyPath;
     const tmpKey = path.join(require('os').tmpdir(), `wjs-acct-${Date.now()}.key`);

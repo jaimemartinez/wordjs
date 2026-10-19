@@ -147,7 +147,7 @@ It is the same flow the npx commands automate.
 
 ```bash
 cd wordjs
-npm run install:gateway            # gateway deps (includes node-forge for the CA)
+npm run install:gateway            # gateway deps (the CA itself needs none: Node's crypto)
 node scripts/cluster.js init --host <gateway-ip>
 #   → mints the cluster CA + the gateway's own identity + public cert,
 #     writes gateway/gateway-config.json (routable internal bind, ports, shared secret),
