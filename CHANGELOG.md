@@ -6,48 +6,38 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
-### Changed
+### Fixed
 
-- **AI agents: other people's content needs its own grant.** The new grant word `content:others`
-  (off by default, never implied by another word) is what lets an agent read other authors' private
-  entries and drafts and, together with `content:draft`, edit them. Without it an agent works on its
-  bound user's own entries and on published content. Stored grants are kept as they are; grant
-  `content:others` to a connection that should work on the whole site's content.
-- **AI provider base URL goes through the egress guard.** It may carry no query string or fragment, it
-  is checked at save time and before every request, and the request connects to the checked address.
-  Local and private-network servers stay available on single-site installs and on a network's primary
-  site; other sites of a network need `WORDJS_AI_ALLOW_PRIVATE_PROVIDER=1`. Link-local and metadata
-  addresses are never accepted (`ai_provider_address_blocked`).
-
-### Security
-
-- **Mail Server 3.0.3: delivery hardening.**
-  - The retry and scheduled-send queues deliver only messages that are still waiting to go out (never a
-    draft or a message in the trash), and both now stay inside the per-user outbound limit — a message
-    over the limit is postponed, not dropped, and a send already counted when it was queued is not
-    counted twice. Changing a message's recipients or content clears its delivery state, and a draft
-    may hold no more recipients than a send allows (50).
-  - Inbound mail is delivered to the SMTP envelope recipients the server accepted, not to the addresses
-    in the `To:`/`Cc:` headers, which are display only. Cc, Bcc and mailing-list copies addressed to a
-    mailbox only in the envelope are now stored.
-  - Inbound mail is checked with **DKIM and DMARC**. DKIM signatures are verified (rsa-sha256 and
-    ed25519-sha256, simple and relaxed canonicalization; rsa-sha1 and RSA keys under 1024 bits are not
-    accepted), and the sender domain's DMARC policy is applied using the SPF result and the DKIM `d=`
-    domain, with relaxed or strict alignment, `sp=` for subdomains and `pct=`. A message that fails
-    DMARC under `p=reject` is refused with `550 5.7.1`; under `p=quarantine` it is filed in Spam and not
-    forwarded. A DNS failure never rejects. The verdict is stored with the message as an
-    `Authentication-Results` line, and the reading pane shows **Verified sender**, **Signed by
-    <domain>**, **DKIM fail**, **DMARC fail** or **Quarantined (DMARC)**. **Server → Policies → Verify
-    DKIM and apply DMARC on inbound mail** (`mail_security_dmarc_enabled`, on by default) turns it off.
-  - Mail arriving from outside that claims to be from the server's own mail domain (header `From` or
-    envelope sender) is refused with `550 5.7.1` unless SPF or a valid DKIM signature of that domain
-    authenticated it. Devices on the LAN that send as the domain should relay through the site, sign
-    with its DKIM key or be covered by its SPF record. The reading pane shows **Unverified sender** when
-    the From domain differs from the domain SPF checked and DMARC did not pass.
-  - A reply joins a conversation only when the message it answers belongs to the replying mailbox, in
-    the composer and when threading inbound replies by `In-Reply-To`/`References`.
-  - The webmail's link and image filter keeps only `http`, `https`, `mailto`, `cid` and inline images,
-    ignores control characters inside a URL scheme, and removes SVG animation elements.
+- **Marketplace payment and public-form plugins: charge amounts, return pages, seat holds, bidding
+  and visitor mail.** Regression tests boot each real plugin (`backend/src/tests/payment-plugins-hardening.test.ts`).
+  - **donations 1.0.2, restaurant-menu 2.0.2** — a zero-decimal currency (JPY, KRW, CLP…) was sent to
+    Stripe in cents, so the charge was 100 times the price. Both now convert the amount the way
+    online-store already did; a donation in such a currency records the whole amount it charges.
+  - **online-store 2.0.2, donations 1.0.2, restaurant-menu 2.0.2** — the Stripe Checkout `success_url`
+    and `cancel_url` follow the visitor's page only when it is on this site (same origin, under the site
+    path); any other `page_url` returns to the site URL, as bookings already did.
+  - **event-tickets 1.1.0** — a paid order now holds its seats only after the buyer types the 8-digit code
+    mailed to the address (`POST /public/order/verify`); an unconfirmed order holds nothing and expires
+    after 15 minutes. Confirmed unpaid orders may hold at most `pendingHoldPercent` of a ticket type
+    (default 50 %) and expire after `pendingTtlMinutes` (default 20, was a fixed 30) — both in
+    **Entradas → Configuración**. Unpaid orders no longer count in the site-wide order window. On a site
+    with no mail transport at all, a paid order holds its seats right away, as before.
+  - **auctions 1.1.0** — a bid may raise the price by at most `max_bid_jump_percent` of the current
+    price (default 100 %, `0` = no cap), and always by at least ten increments. Who may bid is a setting
+    (`bid_verification`): `email` (default) — the bidder confirms the address once per browser with a
+    code mailed to it (`POST /public/verify-bidder`); `login` — signed-in accounts only, bidding as their
+    account address (`POST /bid-user`); `none` — anyone, the previous behaviour. A site with no mail
+    transport keeps open bidding. A client's first bid on an auction in its window is no longer held to
+    the shared per-auction and site-wide windows.
+  - **online-store, donations, event-tickets, bookings 1.0.2, newsletter 1.0.2, auctions** — the mails the
+    public forms send to an address nobody has verified yet carry only the site's own text, never the
+    name (or message) the visitor typed, and each is bounded per recipient address (5 an hour; the
+    newsletter opt-in 3 an hour and 6 a day; auction outbid notices 10 an hour).
+  - **The public blocks of these seven plugins send the CSRF token with their form posts.** A visitor
+    who was also signed in to the site carries the session cookie, and the host refuses a cookie-carrying
+    POST without the double-submit token — so ordering tickets, donating, booking, subscribing or ordering
+    food answered 403 for signed-in visitors, and online-store's account checkout silently fell back to
+    the anonymous route (the order was not linked to the account).
 
 ## [2.7.0] - 2026-10-17
 

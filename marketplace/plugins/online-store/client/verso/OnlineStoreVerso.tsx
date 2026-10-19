@@ -136,6 +136,24 @@ const STYLES = `
 // ---- module-level cart helpers (localStorage, guarded for SSR) --------------------------------
 // v2 lines: { id, variant_id, name, variant_name, price_cents, image_url, qty }.
 // v1 lines (no variant_id) hydrate as variant_id 0 and stay valid.
+/**
+ * `{ "X-CSRF-Token": <wjs_csrf cookie> }`, or `{}` with no cookie. A visitor who is signed in to the
+ * site sends the session cookie with every request, and the host refuses a cookie-carrying POST that
+ * does not echo this token (double-submit CSRF) — even on a public route. Read fresh per call (the
+ * cookie rotates with the session); a plugin bundle cannot import the frontend's own reader.
+ */
+function csrfHeaders() {
+    if (typeof document === "undefined") return {};
+    for (const part of document.cookie.split(";")) {
+        const raw = part.trim();
+        if (!raw.startsWith("wjs_csrf=")) continue;
+        const value = raw.slice("wjs_csrf=".length);
+        if (!value) return {};
+        try { return { "X-CSRF-Token": decodeURIComponent(value) }; } catch { return { "X-CSRF-Token": value }; }
+    }
+    return {};
+}
+
 function readCart() {
     if (typeof window === "undefined") return [];
     try {
@@ -665,7 +683,7 @@ export default function OnlineStoreVerso({ category, columns, showSearch, showFi
         const timer = setTimeout(() => {
             fetch(`${BASE}/public/validate-coupon`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...csrfHeaders() },
                 body: JSON.stringify({ code: appliedCode, subtotal_cents: subtotal }),
             })
                 .then((res) => (res.ok ? res.json() : null))
@@ -714,7 +732,7 @@ export default function OnlineStoreVerso({ category, columns, showSearch, showFi
         if (!code) { setCouponMsg({ ok: false, text: "Ingresa un código de cupón." }); return; }
         fetch(`${BASE}/public/validate-coupon`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", ...csrfHeaders() },
             body: JSON.stringify({ code, subtotal_cents: subtotal }),
         })
             .then((res) => (res.ok ? res.json() : null))
@@ -746,7 +764,7 @@ export default function OnlineStoreVerso({ category, columns, showSearch, showFi
         };
         const post = (path) => fetch(`${BASE}${path}`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", ...csrfHeaders() },
             body: JSON.stringify(payload),
         });
         // Logged-in customers post to the authed route so the order links to their account; any

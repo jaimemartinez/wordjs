@@ -61,6 +61,24 @@ export const versoComponentDef = {
     },
 };
 
+/**
+ * `{ "X-CSRF-Token": <wjs_csrf cookie> }`, or `{}` with no cookie. A visitor who is signed in to the
+ * site sends the session cookie with every request, and the host refuses a cookie-carrying POST that
+ * does not echo this token (double-submit CSRF) — even on a public route. Read fresh per call (the
+ * cookie rotates with the session); a plugin bundle cannot import the frontend's own reader.
+ */
+function csrfHeaders() {
+    if (typeof document === "undefined") return {};
+    for (const part of document.cookie.split(";")) {
+        const raw = part.trim();
+        if (!raw.startsWith("wjs_csrf=")) continue;
+        const value = raw.slice("wjs_csrf=".length);
+        if (!value) return {};
+        try { return { "X-CSRF-Token": decodeURIComponent(value) }; } catch { return { "X-CSRF-Token": value }; }
+    }
+    return {};
+}
+
 export default function NewsletterVerso({ title, description, buttonLabel, placeholder, showName, elementId }) {
     const [email, setEmail] = useState("");
     const [name, setName] = useState("");
@@ -117,7 +135,7 @@ export default function NewsletterVerso({ title, description, buttonLabel, place
         try {
             const res = await fetch(API_BASE + "/public/subscribe", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...csrfHeaders() },
                 body: JSON.stringify({
                     email: cleanEmail,
                     name: showName ? name.trim() : "",
