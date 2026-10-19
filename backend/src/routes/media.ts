@@ -668,7 +668,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
     // upload leaves nothing behind. No quota (site 1, a single site, none set) costs no query.
     const quotaCheck = await require('../core/site-upload-quota').checkUploadFits(uploaded.size);
     if (!quotaCheck.ok) {
-        try { fs.unlinkSync(uploaded.path); } catch { /* best effort */ }
+        discardUploadedFile(uploaded.path);
         return res.status(413).json(require('../core/site-upload-quota').quotaExceededBody(quotaCheck));
     }
 
