@@ -24,7 +24,7 @@ const {
 // The history of an ATTACHMENT follows the attachment rule (core/attachment-visibility): hidden from who may
 // not read the entry it hangs off, and restored or purged only by who may edit that entry.
 const { attachmentReadable, attachmentWriteRefusal } = require('../core/attachment-visibility');
-const { requireRouteId, routeIdOrNull } = require('../core/query-params');
+const { requireRouteId, routeIdOrNull, scalarQueryParam } = require('../core/query-params');
 const { perPageParam, offsetParam } = require('../core/pagination');
 
 // THE ROUTE-ID CONTRACT — see core/query-params.
@@ -169,8 +169,8 @@ router.get('/post/:postId', authenticate, asyncHandler(async (req: Request, res:
     // in-range integer by the time this line runs; the parse can no longer produce NaN or a value the
     // `posts.id` column cannot hold.
     const postId = routeIdOrNull(req.params.postId);
-    const limit = perPageParam(req.query.limit, 10, 1000);
-    const offset = offsetParam(req.query.offset);
+    const limit = perPageParam(scalarQueryParam(req.query.limit, 'limit'), 10, 1000);
+    const offset = offsetParam(scalarQueryParam(req.query.offset, 'offset'));
 
     const auth = await authorizeForPost(req, postId);
     if (auth.error) {
