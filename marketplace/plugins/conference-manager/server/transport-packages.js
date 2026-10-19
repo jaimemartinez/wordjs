@@ -375,10 +375,15 @@ function createPackages(base) {
             if (!await allow(req, res, 'transport', 'manage')) return;
             try {
                 const id = positiveInt(req.params.id);
-                const pay = id ? await db.get(`SELECT id, sale_id FROM ${T.packagePayments} WHERE id = ?`, [id]) : null;
-                if (!pay) return res.status(404).json({ error: 'Pago no encontrado.' });
-                await db.run(`DELETE FROM ${T.packagePayments} WHERE id = ?`, [id]);
-                await recomputeSales('id = ?', [pay.sale_id]);
+                // Under the lock the sale's payments are recorded and recomputed under.
+                const found = await withAssignmentLock(async () => {
+                    const pay = id ? await db.get(`SELECT id, sale_id FROM ${T.packagePayments} WHERE id = ?`, [id]) : null;
+                    if (!pay) return false;
+                    await db.run(`DELETE FROM ${T.packagePayments} WHERE id = ?`, [id]);
+                    await recomputeSales('id = ?', [pay.sale_id]);
+                    return true;
+                });
+                if (!found) return res.status(404).json({ error: 'Pago no encontrado.' });
                 res.json({ success: true });
             } catch (e) { sendError(res, e); }
         });

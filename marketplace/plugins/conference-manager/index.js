@@ -34,7 +34,7 @@ const pack = require('./server/lodging-pack');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.29.0',
+    version: '2.30.0',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -2401,6 +2401,9 @@ exports.init = async function (wordjs) {
         { section: 'transport', what: 'pagos de transporte',
             sql: `SELECT 1 FROM ${T.transportPayments} tp JOIN ${T.tickets} t ON t.id = tp.ticket_id`
                 + ` WHERE t.bus_id IN (SELECT id FROM ${T.buses} WHERE conference_id = ?) OR t.inscription_id IN (SELECT id FROM ${T.inscriptions} WHERE conference_id = ?)`, args: 2 },
+        // 2.26.0: what is sold is a package of buses; its payments are transport money too.
+        { section: 'transport', what: 'pagos de transporte',
+            sql: `SELECT 1 FROM ${T.packagePayments} pp JOIN ${T.packageSales} s ON s.id = pp.sale_id JOIN ${T.packages} k ON k.id = s.package_id WHERE k.conference_id = ?`, args: 1 },
         { section: 'accounting', what: 'movimientos de contabilidad',
             sql: `SELECT 1 FROM ${T.ledger} WHERE conference_id = ?`, args: 1 },
     ];
@@ -2422,6 +2425,9 @@ exports.init = async function (wordjs) {
             // parts go with the inscriptions; a part left without its header never counts (fees.EFFECTIVE).
             // Meals (2.14.0): the FKs cascade; the explicit deletes keep it so with foreign keys off too.
             const held = await fees.withPaymentsLock(() => withAssignmentLock(() => withMealsLock(async () => {
+                // The fee payments' history is found through their headers, which the delete cascades away: their
+                // ids are read first (no new one can appear: payments are recorded under the lock held here).
+                const transferIds = fees.ready ? (await db.all(`SELECT id FROM ${T.transfers} WHERE conference_id = ?`, [id])).map(t => Number(t.id)) : [];
                 const r = await db.run(
                     `DELETE FROM ${T.conferences} WHERE id = ?${guards.map(g => ` AND NOT EXISTS (${g.sql})`).join('')}`,
                     [id, ...guards.flatMap(argsOf)]);
@@ -2430,7 +2436,7 @@ exports.init = async function (wordjs) {
                     for (const g of guards) if (await db.get(g.sql, argsOf(g))) found.push(g);
                     return found.length ? found : guards;
                 }
-                await fees.deleteConference(id);
+                await fees.deleteConference(id, transferIds);
                 await deleteMealsOfConference(id);
                 return null;
             })));
@@ -3895,7 +3901,8 @@ exports.init = async function (wordjs) {
     //   no_ticket — registered, no ticket on any bus;  cancelled — the inscription is cancelled;
     //   unknown   — no registration of this conference has that code.
     http.route('post', '/transport/check', { auth: true }, async (req, res) => {
-        if (!await allowAny(req, res, [['transport', 'view'], ['transport', 'manage']])) return;
+        const perms = await allowAny(req, res, [['transport', 'view'], ['transport', 'manage']]);
+        if (!perms) return;
         try {
             const body = req.body || {};
             const busId = positiveInt(body.bus_id);
@@ -3904,7 +3911,8 @@ exports.init = async function (wordjs) {
             const row = await findByScanCode(body.code);
             if (!row || Number(row.conference_id) !== Number(bus.conference_id)) return res.json({ result: 'unknown', bus: { id: bus.id, name: bus.name } });
             const p = await personWithName(row);
-            const person = { id: p.id, name: p.name, location: p.location, reg_code: p.reg_code };
+            // The registration code only with inscriptions:view, as on every other surface (the scanner shows the name).
+            const person = { id: p.id, name: p.name, location: p.location, reg_code: canSeeRegCodes(perms) ? p.reg_code : null };
             if (row.status === 'cancelled') return res.json({ result: 'cancelled', bus: { id: bus.id, name: bus.name }, person });
             const tickets = await db.all(
                 `SELECT t.id, t.bus_id, COALESCE(s.price, t.price) AS price, COALESCE(s.amount_paid, t.amount_paid) AS amount_paid, COALESCE(s.payment_status, t.payment_status) AS payment_status, b.name AS bus_name, p.name AS package_name`
@@ -5299,12 +5307,12 @@ exports.init = async function (wordjs) {
             if (!fees.ready) await fees.ensureReady();
             let adjusted = [];
             // Under the payments lock: no payment of THIS node can take this person in between the checks and the
-            // delete (another node's: see the «tombstone» below).
-            // Inside it, the assignment lock (the lock transport payments are recorded under, and where the lodging
-            // status transitions run): a transport payment landing between the check below and the deletes was
-            // either erased by a role that may not erase it, or answered as recorded and then erased with its ticket.
-            // Lock order: payments, then assignment, then meals (nothing takes them the other way).
-            await fees.withPaymentsLock(() => withAssignmentLock(async () => {
+            // delete (another node's: see the «tombstone» below). Transport is sold and paid under the ASSIGNMENT
+            // lock, which is also where the lodging status transitions run: a person with a seat, a package or a
+            // bed is deleted under it too (below) — a transport payment landing between the check and the delete
+            // was otherwise erased by a role that may not erase it, or answered as recorded and then erased with
+            // its seat. Lock order: payments, then assignment, then meals (nothing takes them the other way).
+            await fees.withPaymentsLock(async () => {
                 // Deleting the attendee deletes its money too (fee payments, transport payments below). That is a
                 // payments / transport decision: a role that may only manage inscriptions must not erase validated
                 // income through this door (DELETE /fee-payments/:id and DELETE /buses/:id refuse it). Checked
@@ -5342,34 +5350,51 @@ exports.init = async function (wordjs) {
                     if (marked) await db.run(`UPDATE ${T.inscriptions} SET status = ? WHERE id = ? AND status = 'cancelled'`, [was.status, req.params.id]);
                     throw e;
                 }
-                await db.run(`DELETE FROM ${T.transportPayments} WHERE ticket_id IN (SELECT id FROM ${T.tickets} WHERE inscription_id = ? )`, [req.params.id]);
-                await db.run(`DELETE FROM ${T.tickets} WHERE inscription_id = ?`, [req.params.id]);
-                await db.run(`DELETE FROM ${T.packagePayments} WHERE sale_id IN (SELECT id FROM ${T.packageSales} WHERE inscription_id = ? )`, [req.params.id]);
-                await db.run(`DELETE FROM ${T.packageSales} WHERE inscription_id = ?`, [req.params.id]);
                 // Meals (2.14.0): the attendee first, then its meal rows (the FKs cascade; the explicit deletes
                 // keep it so with foreign keys off). Under the meals lock an override write cannot slip in for a
-                // deleted attendee, and a scan racing this re-checks the attendee after its INSERT. `onlyIfRoomless`
-                // makes the attendee's DELETE conditional on holding no bed (and then nothing else runs when no
-                // row went). Answers whether the attendee's row went.
-                const deleteAttendee = (onlyIfRoomless) => withMealsLock(async () => {
-                    const r = await db.run(`DELETE FROM ${T.inscriptions} WHERE id = ?${onlyIfRoomless ? ' AND room_id IS NULL' : ''}`, [req.params.id]);
+                // deleted attendee, and a scan racing this re-checks the attendee after its INSERT. `onlyIfFree`
+                // makes the attendee's DELETE conditional on holding no bed, no seat and no package (and then
+                // nothing else runs when no row went). Answers whether the attendee's row went.
+                const FREE_SQL = ` AND room_id IS NULL AND NOT EXISTS (SELECT 1 FROM ${T.tickets} t WHERE t.inscription_id = ? )`
+                    + ` AND NOT EXISTS (SELECT 1 FROM ${T.packageSales} s WHERE s.inscription_id = ? )`;
+                const deleteAttendee = (onlyIfFree) => withMealsLock(async () => {
+                    const r = await db.run(`DELETE FROM ${T.inscriptions} WHERE id = ?${onlyIfFree ? FREE_SQL : ''}`,
+                        onlyIfFree ? [req.params.id, req.params.id, req.params.id] : [req.params.id]);
                     const gone = !!(r && r.changes);
-                    if (onlyIfRoomless && !gone) return false;
+                    if (onlyIfFree && !gone) return false;
                     await db.run(`DELETE FROM ${T.mealDeliveries} WHERE inscription_id = ?`, [req.params.id]);
                     await db.run(`DELETE FROM ${T.mealOverrides} WHERE inscription_id = ?`, [req.params.id]);
                     return gone;
                 });
-                // Lodging (2.17.0) — the bed rule of PUT /inscriptions/:id: deleting someone who holds a bed
-                // changes the arrangement of THEIR location when it is submitted / validated — an administration
-                // adjustment, stamped here under the assignment lock (where the status transitions run), with
-                // inscriptions:manage alone, like a cancellation (invariant 2 frees the bed). Someone WITHOUT a bed
-                // changes nobody's arrangement: never stamped, whatever their location's state — the same as moving
-                // them in or out of it. The fee «tombstone» above only changes the status: a bed, if any, is still
-                // held here, so the stamp sees it.
-                const victim = await db.get(`SELECT location_id, room_id FROM ${T.inscriptions} WHERE id = ?`, [req.params.id]);
-                const gone = await deleteAttendee(false);
-                adjusted = gone && victim && victim.room_id != null && victim.location_id != null ? await stampAdminAdjustment(req, [victim.location_id]) : [];
-            }));
+                // Someone with no bed, no seat and no package touches neither transport nor lodging: deleted without
+                // the assignment lock (a conference-wide run holds it while it loads and flushes, and must not stall
+                // it) — conditional, in ONE statement, on still having none, so a seat sold or a bed given meanwhile
+                // falls to the locked path.
+                if (await deleteAttendee(true)) return;
+                adjusted = await withAssignmentLock(async () => {
+                    // Transport, again under the lock its payments are recorded under (a sale and its payment may have
+                    // landed since the first check).
+                    const ridesNow = await db.get(`SELECT (SELECT COUNT(*) FROM ${T.transportPayments} WHERE ticket_id IN (SELECT id FROM ${T.tickets} WHERE inscription_id = ? ))`
+                        + ` + (SELECT COUNT(*) FROM ${T.packagePayments} WHERE sale_id IN (SELECT id FROM ${T.packageSales} WHERE inscription_id = ? )) AS n`, [req.params.id, req.params.id]);
+                    if (Number(ridesNow && ridesNow.n) > 0 && !hasLevel(perms, 'transport', 'manage')) {
+                        if (marked) await db.run(`UPDATE ${T.inscriptions} SET status = ? WHERE id = ? AND status = 'cancelled'`, [was.status, req.params.id]);
+                        throw httpError(409, 'La inscripción tiene pagos registrados: pide a quien gestiona los pagos que los anule, o cancela la inscripción en lugar de eliminarla.');
+                    }
+                    await db.run(`DELETE FROM ${T.transportPayments} WHERE ticket_id IN (SELECT id FROM ${T.tickets} WHERE inscription_id = ? )`, [req.params.id]);
+                    await db.run(`DELETE FROM ${T.tickets} WHERE inscription_id = ?`, [req.params.id]);
+                    await db.run(`DELETE FROM ${T.packagePayments} WHERE sale_id IN (SELECT id FROM ${T.packageSales} WHERE inscription_id = ? )`, [req.params.id]);
+                    await db.run(`DELETE FROM ${T.packageSales} WHERE inscription_id = ?`, [req.params.id]);
+                    // Lodging (2.17.0) — the bed rule of PUT /inscriptions/:id: deleting someone who holds a bed
+                    // changes the arrangement of THEIR location when it is submitted / validated — an administration
+                    // adjustment, stamped here under the assignment lock (where the status transitions run), with
+                    // inscriptions:manage alone, like a cancellation (invariant 2 frees the bed). Someone WITHOUT a
+                    // bed changes nobody's arrangement: never stamped, whatever their location's state. The fee
+                    // «tombstone» above only changes the status: a bed, if any, is still held here, so the stamp sees it.
+                    const victim = await db.get(`SELECT location_id, room_id FROM ${T.inscriptions} WHERE id = ?`, [req.params.id]);
+                    const gone = await deleteAttendee(false);
+                    return gone && victim && victim.room_id != null && victim.location_id != null ? stampAdminAdjustment(req, [victim.location_id]) : [];
+                });
+            });
             res.json({ success: true, lodging_adjusted: adjusted });
         } catch (e) { fees.sendFeeError(res, e); }
     });
@@ -5385,21 +5410,22 @@ exports.init = async function (wordjs) {
         const { room_id: rawRoomId } = req.body || {};
         try {
             const id = positiveInt(req.params.id);
-            if (!id || !await db.get(`SELECT id FROM ${T.inscriptions} WHERE id = ?`, [id])) return res.status(404).json({ error: 'Inscripción no encontrada.' });
+            const ins = id ? await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ?`, [id]) : null;
+            if (!ins) return res.status(404).json({ error: 'Inscripción no encontrada.' });
             const unassign = rawRoomId === null || rawRoomId === undefined || rawRoomId === '';
             const roomId = unassign ? null : positiveInt(rawRoomId);
             if (!unassign && !roomId) return res.status(400).json({ error: 'Habitación inválida.' });
             // Check-then-write under the assignment lock: two concurrent assigns into the last bed (or an
             // assign racing an engine run's load→flush window) would otherwise overbook the room. The
-            // attendee is read INSIDE the lock, where an edit (PUT /inscriptions) cannot cancel or move
-            // them between the read and the write: read before the lock, a cancellation landing in
-            // between left the cancelled attendee holding the bed. The UPDATE is conditional on the
-            // capacity as well, so a lost race answers "llena" instead of writing.
+            // attendee's room, location and status are read again INSIDE the lock, where an edit (PUT
+            // /inscriptions) cannot cancel or move them between the read and the write: read only before the
+            // lock, a cancellation landing in between left the cancelled attendee holding the bed. The UPDATE is
+            // conditional on the capacity as well, so a lost race answers "llena" instead of writing.
             const adjusted = await withAssignmentLock(async () => {
                 // What the stamp and the "already here / nothing to free" no-ops look at is what the write lands on.
-                const cur = await db.get(`SELECT * FROM ${T.inscriptions} WHERE id = ?`, [id]);
+                const cur = await db.get(`SELECT room_id, location_id, status FROM ${T.inscriptions} WHERE id = ?`, [id]);
                 if (!cur) throw httpError(404, 'Inscripción no encontrada.');
-                const person = cur;
+                const person = { ...ins, ...cur };
                 if (unassign) {
                     if (cur.room_id == null) return [];
                     // Out of the room, a fixed person is fixed nowhere (see «HELD BY THE ADMINISTRATION»).

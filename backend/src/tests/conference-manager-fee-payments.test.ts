@@ -1975,7 +1975,8 @@ test('R4-L2: several nodes — DELETE /inscriptions racing a shared payment on a
         const p = await bootPlugin();
         const w = await world(p);
         const nodeB = await bootPlugin({ raw: p.raw });
-        const b = pauseAt(p, /^DELETE FROM \S+transport_payments WHERE ticket_id IN/, () =>
+        // (paused right before Ana's own row goes: she is already marked)
+        const b = pauseAt(p, /^DELETE FROM \S+inscriptions WHERE id = \?/, () =>
             nodeB.call('post', '/fee-payments', { body: { conference_id: w.cid, amount: 200, method: 'Efectivo', allocations: [{ inscription_id: w.a1, amount: 100 }, { inscription_id: w.a2, amount: 100 }] } }));
         ok(await p.call('delete', `/inscriptions/${w.a1}`));
         p.onSql(null);

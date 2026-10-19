@@ -1651,9 +1651,22 @@ function createFeePayments(base) {
         await db.run(`DELETE FROM ${T.payments} WHERE inscription_id = ?`, [inscriptionId]);
         return deleted;
     }
-    async function deleteConference(conferenceId) {
+    /**
+     * A deleted conference's payments and their history. `transferIds`: the conference's headers read BEFORE its
+     * row was deleted (with foreign keys on, that delete has already cascaded them away, and the history is
+     * found through them); without it, the headers still present.
+     */
+    async function deleteConference(conferenceId, transferIds = null) {
         if (!ready) return;   // no headers to delete (the boot hygiene removes a deleted conference's later)
-        await db.run(`DELETE FROM ${T.transferEvents} WHERE transfer_id IN (SELECT x.id FROM ${T.transfers} x WHERE x.conference_id = ? )`, [conferenceId]);
+        const ids = Array.isArray(transferIds) ? transferIds.filter(n => Number.isInteger(n) && n > 0) : null;
+        if (ids) {
+            for (let i = 0; i < ids.length; i += 400) {
+                const chunk = ids.slice(i, i + 400);
+                await db.run(`DELETE FROM ${T.transferEvents} WHERE transfer_id IN (${chunk.map(() => '?').join(', ')})`, chunk);
+            }
+        } else {
+            await db.run(`DELETE FROM ${T.transferEvents} WHERE transfer_id IN (SELECT x.id FROM ${T.transfers} x WHERE x.conference_id = ? )`, [conferenceId]);
+        }
         await db.run(`DELETE FROM ${T.transfers} WHERE conference_id = ?`, [conferenceId]);
     }
     /** DELETE /locations/:id: a payment that location's portal recorded keeps its people and money. */
